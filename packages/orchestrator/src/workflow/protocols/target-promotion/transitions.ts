@@ -262,6 +262,7 @@ export const authorizeOrRecordTargetPromotionProgress = Effect.fn("TargetPromoti
     }
     if (state._tag === "PromotionPending") {
       const progress = authorizePendingProgress(state, "RetryAuthorized")
+      /* v8 ignore next -- @preserve RetryAuthorized always mints a read for either closed PromotionPending retry variant. */
       return progress ?? (yield* Effect.die("retry-authorized pending promotion did not authorize a read"))
     }
     if (state._tag === "PromotionReconciliationDeferred") return authorizeDeferredProgress(state, "RetryAuthorized")

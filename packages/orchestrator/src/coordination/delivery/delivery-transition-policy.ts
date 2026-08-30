@@ -24,9 +24,9 @@ export const deliveryTransitionPolicy = {
   CommitFreshTaskClaimIntent: policy("FreshProvenance", "None"),
   CommitTaskClaimReacquisitionIntent: policy("NewOperation", "None"),
   ContinueFreshWorkflowOperation: policy("FreshProvenance", "None"),
-  ContinuePlannedAttemptExecutorWork: policy("IdentityFree", "PlannedAttempt"),
-  ContinuePlannedAttemptExecutorWorkAfterCurrentFacts: policy("IdentityFree", "PlannedAttempt"),
-  ObservePlannedAttemptContinuationExecutor: policy("IdentityFree", "PlannedAttempt"),
+  ObservePlannedAttemptExecutorWork: policy("IdentityFree", "PlannedAttempt"),
+  ResumePlannedAttemptExecutorWorkAfterCurrentFacts: policy("IdentityFree", "PlannedAttempt"),
+  ReconcilePlannedAttemptExecutorWork: policy("IdentityFree", "PlannedAttempt"),
   ObserveAttemptStoppageExecutor: policy("IdentityFree", "StopSubject"),
   ObserveCancelledAttemptClaim: policy("Observation", "None"),
   FixIntegratorSuccessorSession: policy("IdentityFree", "None"),
@@ -62,7 +62,7 @@ export const deliveryTransitionPolicy = {
   RetryCancelledAttemptClaimRelease: policy("AcceptedOperation", "None"),
   RetryStoppedAttemptClaimRelease: policy("AcceptedOperation", "None"),
   ReleaseStartedIntegrationTarget: policy("IdentityFree", "None"),
-  StartPlannedAttemptExecutorWork: policy("FreshProvenance", "PlannedAttempt"),
+  BeginPlannedAttemptExecutorWork: policy("FreshProvenance", "PlannedAttempt"),
   StartQueuedIntegration: policy("IdentityFree", "None"),
   SuspendPlannedAttemptExecutorWork: policy("IdentityFree", "PlannedAttempt")
 } as const satisfies Record<RunnableFrontierTransition["_tag"], DeliveryTransitionPolicy>

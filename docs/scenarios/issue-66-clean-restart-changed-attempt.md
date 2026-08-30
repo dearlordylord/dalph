@@ -30,8 +30,7 @@ This scenario uses `PlannedAttemptReplaced` for the workflow event
 that atomically makes one exact pre-integration planned task attempt no longer
 unsettled and records its one exact successor. Its exact premises are the
 recorded applied Restart choice, current executor quiescence evidence from
-the unbroken exact safe-suspension report or the accepted late-terminal rule
-below,
+the unbroken exact safe-suspension report,
 the recorded current exact `Planned worktree ready` observation containing
 W1's current HEAD and proof that B1 is its ancestor, and the required current
 tracker and target-head facts. It preserves P1's immutable plan and resources.
@@ -50,8 +49,9 @@ recorded in [`CONTEXT.md`](../CONTEXT.md).
 ## Settled maintainer decision: Restart requires exact safe suspension
 
 The maintainer accepted this decision on 2026-08-09: Alice may choose Restart
-only after issue #136 has obtained an exact `SafelySuspended` planned-attempt
-executor-work report for P1. Alice cannot choose Restart while P1 is `Running`.
+only after issue #136 has obtained an exact `ExecutorWorkSafelySuspended` planned-attempt
+executor-work report for P1. Alice cannot choose Restart while P1 is
+`ExecutorWorkExecuting`.
 Issue #66 owns no new interruption, writer-termination, or partial-evidence-
 sealing protocol.
 
@@ -103,7 +103,7 @@ activation before it performs another action.
 The maintainer accepted this decision on 2026-08-09: after Git proves P2's
 planned worktree is ready, P2 follows ordinary bounded admission. Admission
 gives P2 one task-work position before Dalph calls the existing executor
-`startOrContinue` boundary for exact `(RunId, AttemptId)`. Alice sends no second
+`begin` boundary for exact `(RunId, AttemptId)`. Alice sends no second
 command.
 
 This is the same activation surface after every process loss. A later process
@@ -120,28 +120,25 @@ This choice does not bypass capacity, pause, or another ordinary admission
 constraint. P2 may wait visibly until a task-work position is available, but
 the wait creates no new Operator command or alternate startup entry.
 
-## Accepted maintainer decision: a late Accepted report for P1
+## Issue #264 amendment: a terminal choice cancels an unissued Resume
 
-After the Restart choice correlated with D1 is committed in the Journal but
-before the atomic `PlannedAttemptReplaced` event is appended, a later
-start-or-continue command
-may break the unbroken safe-suspension proof and an exact terminal `Accepted`
-report for P1 may arrive. The accepted safe-suspension rule means that the
-terminal report does not by itself authorize P2, and it never creates issue
-#56's integration responsibility. Dalph preserves P1's accepted commit and
-evidence. The terminal report ends P1's planned-attempt executor-work
-responsibility and may replace the earlier safe-suspension report as the
-current quiescence fact: it proves that no P1 writer remains, while preserving
-the distinct accepted result.
+Issue #264 supersedes the former late-Resume amendment in this file. Restart is
+available only while the latest accepted lifecycle report is
+`ExecutorWorkSafelySuspended` and no executor command is unsettled. If a Resume
+delivery owner was admitted but has not contacted the executor, applying Stop
+or Restart cancels that owner before it can record a Resume intent or cross the
+boundary. A Resume that already recorded an intent makes the terminal choice
+unavailable; a settled executing response replaces the accepted Safe report
+and also makes the choice unavailable.
 
-Dalph then performs fresh task-tracker and Git reads. If they still prove the
-exact F2 task facts, K1 claim, current P1 worktree readiness, and H2 target
-head, the already committed Restart choice remains honored. Dalph appends
-the atomic `PlannedAttemptReplaced` event for P1 and P2 and gives P2 ordinary
-bounded admission; Alice does not choose Restart again. If those fresh reads
-do not authorize replacement, no P2 is recorded and the exact reason remains
-visible. In either outcome, P1's accepted result stays preserved evidence and
-no P1 integration responsibility is created.
+Consequently, current Restart authorization retains the accepted Safe report
+through the fresh task and Git reads. A passive Safe-to-Executing projection,
+an unaccepted terminal projection, a raw command response, or a merely admitted
+Resume owner cannot replace that accepted report or authorize P2. The former
+`StartOrContinue` vocabulary remains historical documentation and proof
+terminology only. The current journal schema does not decode the ambiguous
+command; a retained provisional journal needs an explicit offline migration
+before use and cannot supply live replacement permission.
 
 ## Alice replaces P1 from F2 without carrying W1 into P2
 
@@ -156,7 +153,7 @@ The journal records immutable planned attempt P1 for A at fingerprint F1, Base
 SHA B1, branch `attempt-P1`, worktree W1, and one executor locator. It also
 records the later complete tracker observation and focused specification read
 that proved F2 differs from F1. The exact executor report for R and P1 says
-`SafelySuspended`; no later start-or-continue command exists. P1 holds no
+`ExecutorWorkSafelySuspended`; no later Resume command exists. P1 holds no
 task-work position.
 
 Git reports W1 registered to `attempt-P1`, with its commits and uncommitted WIP
@@ -211,7 +208,7 @@ P2 branch, or P2 worktree exists.
    discovers only exact W2. It never copies, merges, resets, or mounts W1 into
    W2. P2 then enters ordinary bounded admission. When capacity and the other
    ordinary constraints permit it, admission gives P2 one task-work position
-   before Dalph calls the executor's existing `startOrContinue` boundary for
+   before Dalph calls the executor's existing `begin` boundary for
    exact R/P2. C remains selectable throughout.
 
 W1, its old WIP, and P1's journal evidence remain available for inspection.
@@ -282,15 +279,15 @@ results as tracker completion (D24), and restoring a capability after
 integration starts (D46).
 
 The delivery specification states that only the exact applied Restart
-direction, current executor quiescence evidence (the unbroken
-`SafelySuspended` report or a durably published late terminal `Accepted` report
-as described below), the recorded current exact W1 `Planned worktree ready`
+direction, current executor quiescence evidence from the unbroken latest
+accepted `ExecutorWorkSafelySuspended` report with no unsettled command, the
+recorded current exact W1 `Planned worktree ready`
 observation containing H1 and the B1-ancestry proof, and the recorded F2, K1,
 and H2 facts may authorize the one `PlannedAttemptReplaced` event that
-simultaneously makes P1 no longer unsettled and records P2. `Completed` and
-`Failed` do not authorize that event, and terminal `Accepted` authorizes it
-only after the fresh task and Git checks; no terminal report creates P1
-integration responsibility. Restart retains K1 and sends no claim mutation,
+simultaneously makes P1 no longer unsettled and records P2. A distinct terminal
+report does not authorize that event. Terminal `Accepted` follows ordinary
+integration admission; `Completed` and `Failed` remain their exact terminal
+outcomes. Restart retains K1 and sends no claim mutation,
 and W2 receives no content from W1 while W1 remains preserved for a separately
 authorized disposition. D49 covers exact Restart redelivery and
 first-journaled arbitration with Continue and Stop.
@@ -398,90 +395,18 @@ that missing WIP is disposable, or turn A's local wait into a Run-wide stop.
 - authored and recorded cassette `changedAttemptRestartClaimUnavailable`
 - authored and recorded cassette `changedAttemptRestartWorktreeNotReady`
 
-## A late terminal report does not discard an already applied Restart
+## Superseded historical late-Resume chronology
 
-### Starting situation and executor result
-
-Dalph has durably recorded the applied Restart choice correlated with D1, but a
-later start-or-continue command for P1 means the earlier #136 safe-suspension
-proof is no longer unbroken. Dalph records the exact suspension command intent
-and asks the executor to suspend exact R/P1 through the existing
-planned-attempt executor protocol. Its direct result or later projection may
-report P1 `Running`, `SafelySuspended`, or `Terminal` with `Completed`,
-`Failed`, or `Accepted`; report a different Run or attempt; or be unreadable.
-
-### Ordered behavior, crash, and retry
-
-Dalph records the exact readable executor result. While P1 is `Running`, the
-correlation contradicts R/P1, or the executor is unreadable, Dalph retains P1's
-planned-attempt executor-work responsibility, K1, W1, WIP, and every Journal
-fact. The Journal does not say P1 was superseded, and no planned task attempt P2
-exists. C continues. A later activation may ask the executor for exact R/P1
-evidence under the existing bounded suspension protocol.
-
-An exact `SafelySuspended` report supplies the safe-suspension evidence used by
-the first scenario. Exact terminal `Completed` and `Failed` reports end only
-P1's planned-attempt executor-work responsibility and remain preserved under
-their distinct results, but they do not authorize replacement. They do not
-prove A completed in the tracker, supply an accepted Git result, or create P2.
-
-An exact late terminal `Accepted` report is different in one bounded respect:
-it preserves its exact commit and evidence, creates no issue #56 integration
-responsibility, and ends P1's planned-attempt executor-work responsibility.
-Once that report is durably published, it may replace the earlier
-safe-suspension report as the current executor quiescence fact because it proves
-that no P1 writer remains. It does not by itself authorize P2 or prove Run
-completion. Dalph performs fresh task-tracker and Git reads. If those reads
-still prove F2, K1, the exact current P1 worktree readiness, and H2, D1 remains
-honored and Dalph appends the atomic `PlannedAttemptReplaced` event for P1 and
-P2. P2 then follows ordinary bounded admission; Alice does not choose Restart
-again. If any fresh fact is missing, unreadable, or changed, no P2 is recorded
-and the exact wait or contradiction remains visible without creating an
-integration responsibility.
-
-After a crash, the next invocation establishes the Run through the same entry,
-reconstructs the unresolved suspension command or the durable terminal report,
-and checks the executor before another state-changing request. A durable late
-`Accepted` report remains evidence across restart, and fresh task/Git checks
-still decide whether the already applied D1 can produce P2. In the controlled
-fake composition, the fake dies with Dalph and is recreated for the same R/P1
-protocol; Dalph does not claim an old response survived. Process loss, timeout,
-missing session data, and a report for another attempt prove no writer stopped.
-
-### Visible and forbidden result
-
-When the executor reports `Running`, Alice sees “Restart is waiting because P1
-is still running.” A report for another Run or attempt produces a typed
-correlation contradiction naming expected R/P1 and the reported pair. An
-unreadable executor produces a typed “Restart is waiting for an exact P1
-report” result. Alice sees `Completed` and `Failed` preserved under their own
-names with no replacement. For late `Accepted`, she sees the exact commit and
-evidence preserved, no integration responsibility, and—when fresh F2/K1/Git
-facts still authorize it—the same applied Restart produce P2 without another
-command. Dalph must not release K1, discard W1, integrate the late commit,
-record P2 from a running, contradictory, or unreadable report, or ask Alice to
-reapply D1 merely because the accepted report arrived late. It must not call A
-completed from `Completed` or `Failed`.
-
-### Acceptance-test and cassette mapping
-
-- `preserves P1 and records no planned task attempt P2 while an exact writer
-  may remain`
-- `checks the executor after process loss before repeating P1 suspension`
-- `does not treat process loss or an unrelated terminal report as safe
-  suspension evidence`
-- `preserves Completed and Failed separately without completing A in the
-  tracker`
-- `ends only P1 executor-work responsibility after each exact terminal report`
-- `does not authorize PlannedAttemptReplaced from Completed or Failed`
-- `uses a late Accepted report as current quiescence evidence after fresh
-  checks and honors the already applied Restart without a second command`
-- `preserves a late Accepted commit without creating integration after the
-  Restart choice correlated with D1 was committed`
-- `does not append issue 56's integration responsibility when the Restart
-  choice correlated with D1 was committed before a late Accepted terminal`
-- authored and recorded cassette `changedAttemptRestartRemainsUnproved`
-- authored and recorded cassette `changedAttemptRestartLateAccepted`
+Pre-#264 journals may contain a Restart followed by the former
+`StartOrContinue`/suspension chronology. That vocabulary remains historical
+documentation and proof terminology only. The current journal schema does not
+decode it, because an ambiguous conversion to Begin or Resume could grant
+false authority; a retained provisional journal requires an explicit offline
+migration outside issue #264. Current recovery is governed by issue #264: a
+durable Resume intent makes Restart unavailable, and a distinct accepted
+Terminal after an applied Restart is absorbing and follows ordinary
+integration admission. There is no maintained authored cassette for the
+superseded path.
 
 ## Alice requests Restart after integration has begun
 
@@ -518,39 +443,26 @@ Implementation of this accepted scenario requires extending
 `specs/taskFactReconciliation.qnt`, its collected tests, and its executable
 production adapter. The model seam must add Restart as the third exact F1/F2
 choice, represent one `PlannedAttemptReplaced` event separately from preserved
-W1 and K1, and allow that event only after exact unbroken `SafelySuspended`
-evidence or a durably published late `Accepted` report serving as current
-quiescence evidence, a recorded current exact W1 `Planned worktree ready`
-observation containing H1
+W1 and K1, and allow that event only after exact unbroken `ExecutorWorkSafelySuspended`
+evidence, a recorded current exact W1 `Planned worktree ready` observation containing H1
 and B1 ancestry, and recorded F2/K1/H2 facts. Its properties must state that
 the first valid Continue, Restart, or Stop choice committed in the Journal
 wins; no state contains superseded P1 without P2; P1 and P2 never both remain
 unsettled; P2 carries no W1 content; F3 needs a new choice; unreadable facts
-authorize no successor; the three terminal result variants remain distinct; a
-non-ready W1 authorizes no successor; a late Accepted commit starts no
-integration after the Restart choice correlated with D1 was committed; no
-terminal variant alone authorizes `PlannedAttemptReplaced` (late `Accepted`
-may supply current quiescence only when D1 and fresh facts also authorize the
-event); and integration start removes the Restart capability.
-The executable conformance path must compose that model with the existing
-`specs/plannedAttemptExecutor.qnt` suspension protocol. It must reject a
-Restart request while P1 is `Running`. If a later command breaks the retained
-safe-suspension proof after Restart was applied, the composition may use only
-the existing planned-attempt executor-work suspension protocol. It must not add
-an evidence-bearing executor result or inspect executor-internal work.
+authorize no successor; a non-ready W1 authorizes no successor; and integration
+start removes the Restart capability. It must also prove that Stop and Restart
+cancel an admitted-but-unissued Resume before executor contact, retain the
+accepted Safe report, and make a newly admitted or newly issued Resume invalid.
+The executable conformance path must reject a Restart request while P1 is
+`ExecutorWorkExecuting`; it must not synthesize a Safe-to-Executing transition,
+issue a replacement-specific Suspend, or inspect executor-internal work.
 
-The late-`Accepted` branch is also an amendment to
-`docs/scenarios/issue-56-queue-accepted-integration.md`. Its implementation
-must change that scenario, `specs/acceptedResultIntegration.qnt`,
-`packages/dalph/test/conformance/accepted-result-integration.mbt.test.ts`, and
-the production protocol under
-`packages/orchestrator/src/workflow/protocols/integration-admission/` together.
-Their composition must prove `does not append issue 56's integration
-responsibility when the Restart choice correlated with D1 was committed before a
-late Accepted terminal`, while unchanged accepted terminals still receive one
-responsibility exactly once.
-The authored and recorded `changedAttemptRestartLateAccepted` cassette is
-the controlled-fake boundary record for that branch.
+Issue #264 also supersedes the former late-`Accepted` amendment to
+`docs/scenarios/issue-56-queue-accepted-integration.md`. A current accepted
+terminal result follows ordinary integration admission unless a separately
+accepted current rule says otherwise; an artifact produced by a future
+explicit offline migration is not itself live integration or replacement
+authority. No legacy command enters the current journal schema directly.
 
 The accepted vocabulary section above is also recorded in `docs/CONTEXT.md`;
 the three-choice request identity expansion and `PlannedAttemptReplaced` must

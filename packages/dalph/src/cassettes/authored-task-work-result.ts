@@ -7,7 +7,7 @@ export const taskWorkResultFor = (
   event: JournalRecord["event"],
   taskByAttempt: ReadonlyMap<AttemptId, TaskId>
 ): ReadonlyArray<AuthoredTaskWorkResult> => {
-  if (event._tag !== "PlannedAttemptExecutorWorkReported" || event.report._tag !== "Terminal") return []
+  if (event._tag !== "PlannedAttemptExecutorWorkReported" || event.report._tag !== "ExecutorWorkTerminal") return []
   const taskId = Option.getOrThrow(Option.fromUndefinedOr(taskByAttempt.get(event.report.correlation.attemptId)))
   return [
     event.report.result._tag === "Accepted"

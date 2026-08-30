@@ -73,6 +73,7 @@ import { controlDirectionApplicationLayer } from "../../workflow/protocols/contr
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
@@ -111,6 +112,7 @@ import {
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
@@ -164,7 +166,7 @@ const plannedAttempt = (runId: RunId, taskId: TaskId): PlannedTaskAttempt =>
     worktree: WorktreeLocator.make(`/pause-public/${taskId}`)
   })
 
-const appendRunningAttempt = Effect.fn("PauseProgressAcceptance.appendRunningAttempt")(function* (
+const appendExecutingAttempt = Effect.fn("PauseProgressAcceptance.appendExecutingAttempt")(function* (
   journal: Journal["Service"],
   attempt: PlannedTaskAttempt
 ) {
@@ -191,11 +193,25 @@ const appendRunningAttempt = Effect.fn("PauseProgressAcceptance.appendRunningAtt
     attempt.runId,
     plannedAttemptExecutorCommandIntendedRecordKey(attempt.attemptId, commandOrdinal),
     PlannedAttemptExecutorCommandIntendedEvent.make({
-      command: "StartOrContinue",
+      command: "Begin",
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
       ordinal: commandOrdinal,
       plannedAttempt: attempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const report = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+    correlation: plannedAttemptExecutorCorrelation(attempt)
+  })
+  yield* journal.append(
+    attempt.runId,
+    plannedAttemptExecutorCommandResponseObservedRecordKey(attempt.attemptId, commandOrdinal),
+    PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal,
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt: attempt,
+      report,
       version: workflowJournalEventVersion
     })
   )
@@ -205,9 +221,7 @@ const appendRunningAttempt = Effect.fn("PauseProgressAcceptance.appendRunningAtt
     plannedAttemptExecutorWorkReportedRecordKey(attempt.attemptId, reportOrdinal),
     PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: reportOrdinal,
-      report: PlannedAttemptExecutorReport.cases.Running.make({
-        correlation: plannedAttemptExecutorCorrelation(attempt)
-      }),
+      report,
       version: workflowJournalEventVersion
     })
   )
@@ -236,17 +250,26 @@ const appendSafeSuspensionReport = Effect.fn("PauseProgressAcceptance.appendSafe
   journal: Journal["Service"],
   attempt: PlannedTaskAttempt
 ) {
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+  const report = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+    correlation: plannedAttemptExecutorCorrelation(attempt)
+  })
+  yield* journal.append(
+    attempt.runId,
+    plannedAttemptExecutorCommandResponseObservedRecordKey(attempt.attemptId, commandOrdinal),
+    PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal,
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt: attempt,
+      report,
+      version: workflowJournalEventVersion
+    })
+  )
   const ordinal = PlannedAttemptExecutorReportOrdinal.make(2)
   yield* journal.append(
     attempt.runId,
     plannedAttemptExecutorWorkReportedRecordKey(attempt.attemptId, ordinal),
-    PlannedAttemptExecutorWorkReportedEvent.make({
-      ordinal,
-      report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
-        correlation: plannedAttemptExecutorCorrelation(attempt)
-      }),
-      version: workflowJournalEventVersion
-    })
+    PlannedAttemptExecutorWorkReportedEvent.make({ ordinal, report, version: workflowJournalEventVersion })
   )
 })
 
@@ -381,11 +404,11 @@ const runtimeLayer = (
     Layer.succeed(
       PlannedAttemptExecutor,
       PlannedAttemptExecutor.of({
-        project: () => increment(calls, "executor").pipe(Effect.andThen(Effect.die("unexpected executor projection"))),
+        observe: () => increment(calls, "executor").pipe(Effect.andThen(Effect.die("unexpected executor observation"))),
         requestSuspension: () =>
           increment(calls, "executor").pipe(Effect.andThen(Effect.die("unexpected executor suspension"))),
-        startOrContinue: () =>
-          increment(calls, "executor").pipe(Effect.andThen(Effect.die("unexpected executor continuation")))
+        begin: () => increment(calls, "executor").pipe(Effect.andThen(Effect.die("unexpected executor begin"))),
+        resume: () => increment(calls, "executor").pipe(Effect.andThen(Effect.die("unexpected executor resume")))
       })
     ),
     Layer.mock(RunRecoveryProjection, {
@@ -1007,8 +1030,8 @@ it.effect("keeps Alice's subscription through a later activation that confirms G
               outcomeRecordKey(graphRead.operationId),
               makeTaskTrackerFactsObservedFromRead(yield* journal.read(runId), graphRead, g1)
             )
-            yield* appendRunningAttempt(journal, aAttempt)
-            yield* appendRunningAttempt(journal, dAttempt)
+            yield* appendExecutingAttempt(journal, aAttempt)
+            yield* appendExecutingAttempt(journal, dAttempt)
             yield* Deferred.succeed(firstReady, undefined)
             yield* Deferred.await(publishWaiting)
             yield* appendUnresolvedSuspension(journal, aAttempt)
@@ -1114,7 +1137,7 @@ it.effect("keeps Alice's subscription through a later activation that confirms G
       const dSafePosition = acceptedRecords.find(
         ({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" &&
-          event.report._tag === "SafelySuspended" &&
+          event.report._tag === "ExecutorWorkSafelySuspended" &&
           event.report.correlation.attemptId === dAttempt.attemptId
       )?.position
       expect(dSafePosition).toBeGreaterThan(g2Position ?? Number.MAX_SAFE_INTEGER)
@@ -1452,8 +1475,8 @@ it.effect("ends Alice's old subscription on coordinator death, then restarts G2 
           runId,
           Effect.gen(function* () {
             const journal = yield* Journal
-            yield* appendRunningAttempt(journal, aAttempt)
-            yield* appendRunningAttempt(journal, dAttempt)
+            yield* appendExecutingAttempt(journal, aAttempt)
+            yield* appendExecutingAttempt(journal, dAttempt)
             const graphRead = makeTrackerGraphObservationOperation(
               OperationId.make("pause-public-restart-read-G2"),
               target
@@ -1512,6 +1535,20 @@ it.effect("ends Alice's old subscription on coordinator death, then restarts G2 
           runId,
           Effect.gen(function* () {
             const journal = yield* Journal
+            const restartedGraphRead = makeTrackerGraphObservationOperation(
+              OperationId.make("pause-public-restart-read-G2-after-restart"),
+              target
+            )
+            yield* journal.append(
+              runId,
+              intentRecordKey(restartedGraphRead.operationId),
+              taskTrackerReadIntent(restartedGraphRead)
+            )
+            yield* journal.append(
+              runId,
+              outcomeRecordKey(restartedGraphRead.operationId),
+              makeTaskTrackerFactsObservedFromRead(yield* journal.read(runId), restartedGraphRead, g2)
+            )
             const resources = yield* DeliveryRuntimeResources
             const recovery = yield* makeRunRecoveryProjection(runId)
             const relations = yield* makeReactiveDeliveryRelationsLayer(

@@ -3,7 +3,10 @@ import { Effect, Option, Ref } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
+  GitRepositoryLocator,
   GitCommitSha,
+  IntegrationTarget,
+  IntegrationTargetRef,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -17,6 +20,7 @@ import {
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../test/controlled-planned-attempt-executor.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
+import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { UnclaimedTask } from "../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -30,6 +34,7 @@ import {
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   taskClaimReacquisitionDirectedRecordKey
@@ -40,6 +45,7 @@ import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
+  TargetLineageObservedEvent,
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
@@ -57,6 +63,7 @@ import {
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
@@ -184,259 +191,293 @@ it("keeps A's lost worktree responsibility constrained while independent C remai
   })
 })
 
-it.effect("records the exact planned worktree as lost and preserves its responsibilities", () =>
-  Effect.gen(function* () {
-    const runId = RunId.make("lost-worktree-recovery-run")
-    const taskId = TaskId.make("lost-worktree-task-A")
-    const target = FixtureTarget.make("lost-worktree-target")
-    const specification = makeTaskWorkSpecification({ body: "Body", taskId, title: "Title" })
-    const plannedAttempt = PlannedTaskAttempt.make({
-      attemptId: AttemptId.make("lost-worktree-attempt"),
-      baseSha: GitCommitSha.make("8".repeat(40)),
-      branch: TaskBranchRef.make("refs/heads/dalph/lost-worktree-attempt"),
-      executor: TaskExecutorLocator.make("executor:controlled-fake"),
-      runId,
-      taskId,
-      taskRevision: specification.fingerprint,
-      worktree: WorktreeLocator.make("/worktrees/lost-worktree-attempt")
-    })
-    const acquisition = {
-      operationId: OperationId.make("lost-worktree-acquisition"),
-      owner: ClaimOwner.make("dalph"),
-      taskId,
-      token: ClaimToken.make("lost-worktree-token")
-    }
-    const acquire = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
-    const plan = makeTaskAttemptPlanOperation({
-      operationId: OperationId.make("lost-worktree-plan"),
-      plannedAttempt,
-      predecessorOperationIds: [acquisition.operationId]
-    })
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* journal.append(
-      runId,
-      intentRecordKey(acquisition.operationId),
-      TaskClaimAcquisitionIntendedEvent.make({ operation: acquire, version: workflowJournalEventVersion })
-    )
-    yield* journal.append(
-      runId,
-      outcomeRecordKey(acquisition.operationId),
-      TaskClaimAcquiredEvent.make({
-        claim: { _tag: "ActiveTaskClaim", ...acquisition },
-        version: workflowJournalEventVersion
+it.effect(
+  "records a safely suspended attempt's exact planned worktree as lost and preserves its responsibilities",
+  () =>
+    Effect.gen(function* () {
+      const runId = RunId.make("lost-worktree-recovery-run")
+      const taskId = TaskId.make("lost-worktree-task-A")
+      const target = FixtureTarget.make("lost-worktree-target")
+      const specification = makeTaskWorkSpecification({ body: "Body", taskId, title: "Title" })
+      const plannedAttempt = PlannedTaskAttempt.make({
+        attemptId: AttemptId.make("lost-worktree-attempt"),
+        baseSha: GitCommitSha.make("8".repeat(40)),
+        branch: TaskBranchRef.make("refs/heads/dalph/lost-worktree-attempt"),
+        executor: TaskExecutorLocator.make("executor:controlled-fake"),
+        runId,
+        taskId,
+        taskRevision: specification.fingerprint,
+        worktree: WorktreeLocator.make("/worktrees/lost-worktree-attempt")
       })
-    )
-    yield* journal.append(
-      runId,
-      attemptPlanRecordKey(plannedAttempt.attemptId),
-      TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
-    )
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
-    )
-    const runningCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, runningCommandOrdinal),
-      PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "StartOrContinue",
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        ordinal: runningCommandOrdinal,
+      const acquisition = {
+        operationId: OperationId.make("lost-worktree-acquisition"),
+        owner: ClaimOwner.make("dalph"),
+        taskId,
+        token: ClaimToken.make("lost-worktree-token")
+      }
+      const acquire = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
+      const plan = makeTaskAttemptPlanOperation({
+        operationId: OperationId.make("lost-worktree-plan"),
         plannedAttempt,
-        version: workflowJournalEventVersion
+        predecessorOperationIds: [acquisition.operationId]
       })
-    )
-    const runningOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, runningOrdinal),
-      PlannedAttemptExecutorWorkReportedEvent.make({
-        ordinal: runningOrdinal,
-        report: PlannedAttemptExecutorReport.cases.Running.make({
-          correlation: { attemptId: plannedAttempt.attemptId, runId }
-        }),
-        version: workflowJournalEventVersion
-      })
-    )
-
-    const recovery = yield* makeRunRecoveryProjection(runId)
-    const graphRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
-    if (graphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
-      return yield* Effect.die("expected current graph read")
-    }
-    const graph = projectTrackerSnapshot({
-      revision: "lost-worktree-current-graph",
-      tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
-    })
-    if (graph._tag !== "Valid") return yield* Effect.die("expected valid graph")
-    yield* journal.append(
-      runId,
-      intentRecordKey(graphRead.operation.operationId),
-      taskTrackerReadIntent(graphRead.operation)
-    )
-    yield* journal.append(
-      runId,
-      outcomeRecordKey(graphRead.operation.operationId),
-      taskTrackerFactsObservedEvent(
-        graphRead.operation.operationId,
-        makeCompleteTaskTrackerFactsObserved(graphRead.operation, graph.snapshot)
+      const journal = yield* JournalStore
+      yield* journal.beginRun(
+        runId,
+        target,
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
       )
-    )
-
-    const specificationRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
-    if (specificationRead?._tag !== "ObservePlannedAttemptContinuationSpecification") {
-      return yield* Effect.die("expected current specification read")
-    }
-    yield* journal.append(
-      runId,
-      intentRecordKey(specificationRead.operation.operationId),
-      taskTrackerReadIntent(specificationRead.operation)
-    )
-    yield* journal.append(
-      runId,
-      outcomeRecordKey(specificationRead.operation.operationId),
-      taskTrackerFactsObservedEvent(
-        specificationRead.operation.operationId,
-        makeFocusedTaskWorkSpecificationFactsObserved(specificationRead.operation, specification)
+      yield* journal.append(
+        runId,
+        intentRecordKey(acquisition.operationId),
+        TaskClaimAcquisitionIntendedEvent.make({ operation: acquire, version: workflowJournalEventVersion })
       )
-    )
-
-    const claimRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
-    if (claimRead?._tag !== "ObservePlannedAttemptContinuationClaim") {
-      return yield* Effect.die("expected current claim read")
-    }
-    yield* journal.append(
-      runId,
-      intentRecordKey(claimRead.operation.operationId),
-      taskTrackerReadIntent(claimRead.operation)
-    )
-    yield* journal.append(
-      runId,
-      outcomeRecordKey(claimRead.operation.operationId),
-      taskTrackerFactsObservedEvent(
-        claimRead.operation.operationId,
-        makeFocusedTaskClaimFactsObserved(claimRead.operation, { _tag: "ActiveTaskClaim", ...acquisition })
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(acquisition.operationId),
+        TaskClaimAcquiredEvent.make({
+          claim: { _tag: "ActiveTaskClaim", ...acquisition },
+          version: workflowJournalEventVersion
+        })
       )
-    )
+      yield* journal.append(
+        runId,
+        attemptPlanRecordKey(plannedAttempt.attemptId),
+        TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+      )
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+        PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const runningCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, runningCommandOrdinal),
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Begin",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: runningCommandOrdinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const runningOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, runningCommandOrdinal),
+        PlannedAttemptExecutorCommandResponseObservedEvent.make({
+          commandOrdinal: runningCommandOrdinal,
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt,
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+            correlation: { attemptId: plannedAttempt.attemptId, runId }
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, runningOrdinal),
+        PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: runningOrdinal,
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+            correlation: { attemptId: plannedAttempt.attemptId, runId }
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
 
-    const worktreeRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
-    if (worktreeRead?._tag !== "ObservePlannedAttemptContinuationWorktree") {
-      return yield* Effect.die("expected current worktree read")
-    }
-    yield* journal.append(
-      runId,
-      intentRecordKey(worktreeRead.operation.operationId),
-      GitReadIntentRecordedEvent.make({
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        operation: worktreeRead.operation,
-        version: workflowJournalEventVersion
+      const suspensionOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+      const safeReport = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId }
       })
-    )
-    yield* journal.append(
-      runId,
-      outcomeRecordKey(worktreeRead.operation.operationId),
-      PlannedAttemptWorktreeObservedEvent.make({
-        observation: AttemptWorktreeLost.make({ plannedAttempt }),
-        occurrenceClassification: "NonActionOccurrence",
-        operationId: worktreeRead.operation.operationId,
-        version: workflowJournalEventVersion
-      })
-    )
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, suspensionOrdinal),
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Suspend",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: suspensionOrdinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, suspensionOrdinal),
+        PlannedAttemptExecutorCommandResponseObservedEvent.make({
+          commandOrdinal: suspensionOrdinal,
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt,
+          report: safeReport,
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorWorkReportedRecordKey(
+          plannedAttempt.attemptId,
+          PlannedAttemptExecutorReportOrdinal.make(2)
+        ),
+        PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+          report: safeReport,
+          version: workflowJournalEventVersion
+        })
+      )
 
-    expect((yield* recovery.readDeliveryProjection).frontier.transitions).toEqual([
-      { _tag: "SuspendPlannedAttemptExecutorWork", plannedAttempt }
-    ])
-    const suspensionCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, suspensionCommandOrdinal),
-      PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "Suspend",
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        ordinal: suspensionCommandOrdinal,
-        plannedAttempt,
-        version: workflowJournalEventVersion
+      const recovery = yield* makeRunRecoveryProjection(runId)
+      const graphRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
+      if (graphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
+        return yield* Effect.die("expected current graph read")
+      }
+      const graph = projectTrackerSnapshot({
+        revision: "lost-worktree-current-graph",
+        tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
       })
+      if (graph._tag !== "Valid") return yield* Effect.die("expected valid graph")
+      yield* journal.append(
+        runId,
+        intentRecordKey(graphRead.operation.operationId),
+        taskTrackerReadIntent(graphRead.operation)
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(graphRead.operation.operationId),
+        taskTrackerFactsObservedEvent(
+          graphRead.operation.operationId,
+          makeCompleteTaskTrackerFactsObserved(graphRead.operation, graph.snapshot)
+        )
+      )
+
+      const specificationRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
+      if (specificationRead?._tag !== "ObservePlannedAttemptContinuationSpecification") {
+        return yield* Effect.die("expected current specification read")
+      }
+      yield* journal.append(
+        runId,
+        intentRecordKey(specificationRead.operation.operationId),
+        taskTrackerReadIntent(specificationRead.operation)
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(specificationRead.operation.operationId),
+        taskTrackerFactsObservedEvent(
+          specificationRead.operation.operationId,
+          makeFocusedTaskWorkSpecificationFactsObserved(specificationRead.operation, specification)
+        )
+      )
+
+      const claimRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
+      if (claimRead?._tag !== "ObservePlannedAttemptContinuationClaim") {
+        return yield* Effect.die("expected current claim read")
+      }
+      yield* journal.append(
+        runId,
+        intentRecordKey(claimRead.operation.operationId),
+        taskTrackerReadIntent(claimRead.operation)
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(claimRead.operation.operationId),
+        taskTrackerFactsObservedEvent(
+          claimRead.operation.operationId,
+          makeFocusedTaskClaimFactsObserved(claimRead.operation, { _tag: "ActiveTaskClaim", ...acquisition })
+        )
+      )
+
+      const worktreeRead = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
+      if (worktreeRead?._tag !== "ObservePlannedAttemptContinuationWorktree") {
+        return yield* Effect.die("expected current worktree read")
+      }
+      yield* journal.append(
+        runId,
+        intentRecordKey(worktreeRead.operation.operationId),
+        GitReadIntentRecordedEvent.make({
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          operation: worktreeRead.operation,
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(worktreeRead.operation.operationId),
+        PlannedAttemptWorktreeObservedEvent.make({
+          observation: AttemptWorktreeLost.make({ plannedAttempt }),
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: worktreeRead.operation.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
+
+      expect((yield* recovery.readDeliveryProjection).frontier).toEqual({
+        explanations: [
+          { _tag: "Settlement", operationId: acquisition.operationId, outcome: "ResponsibilityCompleted", taskId },
+          {
+            _tag: "PlannedAttemptGitConstraint",
+            correlation: { attemptId: plannedAttempt.attemptId, runId },
+            gitState: "WorktreeLost",
+            taskId,
+            wakeCondition: "GitFactsObserved"
+          }
+        ],
+        transitions: []
+      })
+      const secondRestart = yield* makeRunRecoveryProjection(runId)
+      expect((yield* secondRestart.readDeliveryProjection).frontier.explanations).toContainEqual({
+        _tag: "PlannedAttemptGitConstraint",
+        correlation: { attemptId: plannedAttempt.attemptId, runId },
+        gitState: "WorktreeLost",
+        taskId,
+        wakeCondition: "GitFactsObserved"
+      })
+      const events = (yield* journal.read(runId)).map(({ event }) => event)
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          _tag: "PlannedAttemptWorktreeObserved",
+          observation: AttemptWorktreeLost.make({ plannedAttempt })
+        })
+      )
+      expect(events).toContainEqual(expect.objectContaining({ _tag: "TaskClaimAcquired" }))
+      expect(events).toContainEqual(expect.objectContaining({ _tag: "TaskAttemptPlanned" }))
+    }).pipe(
+      Effect.provide(memoryJournalTestLayer),
+      Effect.provide(controlledFakePlannedAttemptExecutorLayer),
+      Effect.provideService(
+        WorkflowInterpreter,
+        WorkflowInterpreter.of({
+          acquireTaskClaim: unused,
+          readTaskClaim: unused,
+          readTaskWorktree: unused,
+          readTargetLineage: () => Effect.die("unused target-lineage observation"),
+          readTrackerGraph: unused,
+          readTaskWorkSpecification: unused,
+          reconcileTaskWorktree: unused,
+          recordTaskAttemptPlan: unused,
+          releaseTaskClaim: unused
+        })
+      ),
+      Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
     )
-    const suspendedOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, suspendedOrdinal),
-      PlannedAttemptExecutorWorkReportedEvent.make({
-        ordinal: suspendedOrdinal,
-        report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
-          correlation: { attemptId: plannedAttempt.attemptId, runId }
-        }),
-        version: workflowJournalEventVersion
-      })
-    )
-    expect((yield* recovery.readDeliveryProjection).frontier).toEqual({
-      explanations: [
-        { _tag: "Settlement", operationId: acquisition.operationId, outcome: "ResponsibilityCompleted", taskId },
-        {
-          _tag: "PlannedAttemptGitConstraint",
-          correlation: { attemptId: plannedAttempt.attemptId, runId },
-          gitState: "WorktreeLost",
-          taskId,
-          wakeCondition: "GitFactsObserved"
-        }
-      ],
-      transitions: []
-    })
-    const secondRestart = yield* makeRunRecoveryProjection(runId)
-    expect((yield* secondRestart.readDeliveryProjection).frontier.explanations).toContainEqual({
-      _tag: "PlannedAttemptGitConstraint",
-      correlation: { attemptId: plannedAttempt.attemptId, runId },
-      gitState: "WorktreeLost",
-      taskId,
-      wakeCondition: "GitFactsObserved"
-    })
-    const events = (yield* journal.read(runId)).map(({ event }) => event)
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        _tag: "PlannedAttemptWorktreeObserved",
-        observation: AttemptWorktreeLost.make({ plannedAttempt })
-      })
-    )
-    expect(events).toContainEqual(expect.objectContaining({ _tag: "TaskClaimAcquired" }))
-    expect(events).toContainEqual(expect.objectContaining({ _tag: "TaskAttemptPlanned" }))
-  }).pipe(
-    Effect.provide(memoryJournalTestLayer),
-    Effect.provide(controlledFakePlannedAttemptExecutorLayer),
-    Effect.provideService(
-      WorkflowInterpreter,
-      WorkflowInterpreter.of({
-        acquireTaskClaim: unused,
-        readTaskClaim: unused,
-        readTaskWorktree: unused,
-        readTargetLineage: () => Effect.die("unused target-lineage observation"),
-        readTrackerGraph: unused,
-        readTaskWorkSpecification: unused,
-        reconcileTaskWorktree: unused,
-        recordTaskAttemptPlan: unused,
-        releaseTaskClaim: unused
-      })
-    ),
-    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
-  )
 )
 
-it.effect("reads current claim facts, safely suspends A, and then exposes its missing-claim constraint", () =>
+it.effect("reads current claim facts for safely suspended A and exposes its missing-claim constraint", () =>
   Effect.gen(function* () {
     const runId = RunId.make("missing-claim-reconciliation-run")
     const taskId = TaskId.make("missing-claim-task-A")
     const target = FixtureTarget.make("missing-claim-target")
     const specification = makeTaskWorkSpecification({ body: "Body", taskId, title: "Title" })
+    const integrationTarget = IntegrationTarget.make({
+      ref: IntegrationTargetRef.make("refs/heads/main"),
+      repository: GitRepositoryLocator.make("/repositories/missing-claim.git")
+    })
     const plannedAttempt = PlannedTaskAttempt.make({
       attemptId: AttemptId.make("missing-claim-attempt"),
       baseSha: GitCommitSha.make("7".repeat(40)),
@@ -493,7 +534,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       runId,
       plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, runningCommandOrdinal),
       PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "StartOrContinue",
+        command: "Begin",
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         ordinal: runningCommandOrdinal,
@@ -504,17 +545,70 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
     const runningOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
     yield* journal.append(
       runId,
+      plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, runningCommandOrdinal),
+      PlannedAttemptExecutorCommandResponseObservedEvent.make({
+        commandOrdinal: runningCommandOrdinal,
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt,
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+          correlation: { attemptId: plannedAttempt.attemptId, runId }
+        }),
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
       plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, runningOrdinal),
       PlannedAttemptExecutorWorkReportedEvent.make({
         ordinal: runningOrdinal,
-        report: PlannedAttemptExecutorReport.cases.Running.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
           correlation: { attemptId: plannedAttempt.attemptId, runId }
         }),
         version: workflowJournalEventVersion
       })
     )
 
-    const recovery = yield* makeRunRecoveryProjection(runId)
+    const suspensionOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+    const safeReport = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+      correlation: { attemptId: plannedAttempt.attemptId, runId }
+    })
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, suspensionOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Suspend",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: suspensionOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, suspensionOrdinal),
+      PlannedAttemptExecutorCommandResponseObservedEvent.make({
+        commandOrdinal: suspensionOrdinal,
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt,
+        report: safeReport,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorWorkReportedRecordKey(
+        plannedAttempt.attemptId,
+        PlannedAttemptExecutorReportOrdinal.make(2)
+      ),
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+        report: safeReport,
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const recovery = yield* makeRunRecoveryProjection(runId, integrationTarget)
     const graphTransition = (yield* recovery.readDeliveryProjection).frontier.transitions[0]
     if (graphTransition?._tag !== "ObservePlannedAttemptContinuationGraph") {
       return yield* Effect.die("expected current graph read")
@@ -572,35 +666,6 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
         claimTransition.operation.operationId,
         makeFocusedTaskClaimFactsObserved(claimTransition.operation, UnclaimedTask.make({ taskId }))
       )
-    )
-    expect((yield* recovery.readDeliveryProjection).frontier.transitions).toEqual([
-      { _tag: "SuspendPlannedAttemptExecutorWork", plannedAttempt }
-    ])
-
-    const suspensionCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, suspensionCommandOrdinal),
-      PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "Suspend",
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        ordinal: suspensionCommandOrdinal,
-        plannedAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
-    const suspendedOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, suspendedOrdinal),
-      PlannedAttemptExecutorWorkReportedEvent.make({
-        ordinal: suspendedOrdinal,
-        report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
-          correlation: { attemptId: plannedAttempt.attemptId, runId }
-        }),
-        version: workflowJournalEventVersion
-      })
     )
     expect((yield* recovery.readDeliveryProjection).frontier).toEqual({
       explanations: [
@@ -692,7 +757,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
       recordTaskAttemptPlan: unused,
       releaseTaskClaim: unused
     })
-    const reacquisitionRuntime = yield* makeRunRecoveryProjection(runId)
+    const reacquisitionRuntime = yield* makeRunRecoveryProjection(runId, integrationTarget)
     const restartedGraphRead = (yield* reacquisitionRuntime.readDeliveryProjection).frontier.transitions[0]
     if (restartedGraphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
       return yield* Effect.die("restart must first reread the graph")
@@ -835,8 +900,39 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
         version: workflowJournalEventVersion
       })
     )
+    const targetLineageRead = (yield* recovery.readDeliveryProjection).frontier.transitions.find(
+      ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
+    )
+    if (targetLineageRead?._tag !== "ObservePlannedAttemptContinuationTargetLineage") {
+      return yield* Effect.die("expected a compatible target-lineage read before Resume")
+    }
+    yield* journal.append(
+      runId,
+      intentRecordKey(targetLineageRead.operation.operationId),
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: targetLineageRead.operation,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(targetLineageRead.operation.operationId),
+      TargetLineageObservedEvent.make({
+        observation: TargetLineageObservation.make({
+          plannedBaseIsAncestorOfTargetHead: true,
+          plannedBaseSha: plannedAttempt.baseSha,
+          targetHeadSha: plannedAttempt.baseSha
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: targetLineageRead.operation.operationId,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
     expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual({
-      _tag: "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts",
+      _tag: "ResumePlannedAttemptExecutorWorkAfterCurrentFacts",
       acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(2) },
       plannedAttempt,
       witness: {
@@ -845,6 +941,7 @@ it.effect("reads current claim facts, safely suspends A, and then exposes its mi
           taskClaimObservationOperationId: replacementRead.operation.operationId,
           taskWorkSpecificationObservationOperationId: restartedSpecificationRead.operation.operationId
         },
+        targetLineageObservationOperationId: targetLineageRead.operation.operationId,
         worktreeObservationOperationId: worktreeRead.operation.operationId
       }
     })

@@ -42,6 +42,7 @@ import {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
   deterministicTaskClaimAcquisitionPlannerLayer,
+  PlannedTaskAttemptPlanner,
   CompletionClaimBoundary,
   CompletionTaskBoundary,
   type CompletionTaskRequest,
@@ -55,6 +56,7 @@ import {
   type DeliveryRuntimeLiveOwnerSnapshot,
   deliveryProposalOrderTaskId,
   type JournaledTrackerGraphObservation,
+  type RunActivationOpportunityValue,
   freshWorkflowRunId,
   GitTargetLineage,
   GitTargetLineageReadFailure,
@@ -87,6 +89,7 @@ import {
   reduceWorkflowJournalHistory,
   runGitWorktreeReconciliation,
   runWorkflowWithControlledDeliveryActionExecutor,
+  runWorkflowWithControlledActiveWorkAuthorityRefresh,
   validatedRunActivationLayer,
   preservingDispositionCleanupBoundaryLayer,
   taskWorkCapacityControlLayer,
@@ -816,15 +819,15 @@ const proposalActionLabels = {
   CommitFreshTaskClaimIntent: "Record intent to create the task claim",
   CommitTaskClaimReacquisitionIntent: "Record intent to reacquire the task claim",
   ContinueFreshWorkflowOperation: "Send the already-journaled request to its recorded owning system",
-  ContinuePlannedAttemptExecutorWork: "Tell the executor to continue the exact planned attempt",
-  ContinuePlannedAttemptExecutorWorkAfterCurrentFacts:
-    "Authorize current tracker and Git facts, then tell the executor to continue the exact planned attempt",
+  ObservePlannedAttemptExecutorWork: "Passively observe the executor's current report for the exact planned attempt",
+  ResumePlannedAttemptExecutorWorkAfterCurrentFacts:
+    "Authorize current tracker and Git facts, then tell the executor to resume the exact safely suspended attempt",
   FixIntegratorSuccessorSession: "Fix the one FullRerun successor after the operator direction and fresh Git lineage",
   DeleteCompletedTaskCompletionClaim: "Ask the tracker to delete the exact completion claim",
   ObserveCancelledAttemptClaim: "Check the tracker claim after cancelling the exact attempt",
   ObserveAttemptStoppageExecutor: "Check the executor for safe suspension or a terminal result after Stop",
   ObservePlannedAttemptContinuationClaim: "Check the tracker claim before continuing the planned attempt",
-  ObservePlannedAttemptContinuationExecutor: "Check the executor before continuing the planned attempt",
+  ReconcilePlannedAttemptExecutorWork: "Reconcile one ambiguous executor command before another command",
   ObservePlannedAttemptContinuationGraph: "Check the tracker graph before continuing the planned attempt",
   ObservePlannedAttemptContinuationSpecification:
     "Check tracker work instructions before continuing the planned attempt",
@@ -865,7 +868,7 @@ const proposalActionLabels = {
   RunIntegrator: "Ask the outer Integrator to prepare or resume the exact integration session",
   ReconcileTargetPromotionAttempt: "Read Git once to reconcile an ambiguous promotion without retry authority",
   RunTargetPromotion: "Compare and set the integration target to the verified candidate commit",
-  StartPlannedAttemptExecutorWork: "Tell the executor to start the exact planned attempt",
+  BeginPlannedAttemptExecutorWork: "Tell the executor to start the exact planned attempt",
   StartQueuedIntegration: "Start the exact queued integration responsibility",
   SuspendPlannedAttemptExecutorWork: "Request safe suspension of the exact planned-attempt executor work",
   TaskClaimReacquisition: "Try to reacquire the exact task claim",
@@ -1509,7 +1512,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       const prepareExecutorReport = Effect.fn("AuthoredCassette.sealAcceptedExecutorEvidence")(function* (
         report: PlannedAttemptExecutorReport
       ) {
-        if (report._tag !== "Terminal" || report.result._tag !== "Accepted") return report
+        if (report._tag !== "ExecutorWorkTerminal" || report.result._tag !== "Accepted") return report
         const acceptedResult = report.result.acceptedResult
         const evidenceManifest = yield* evidenceStore
           .put(
@@ -1529,7 +1532,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             Effect.tapError((failure) => Ref.set(acceptedEvidencePublicationFailure, failure)),
             Effect.orElseSucceed(() => acceptedResult.evidenceManifest)
           )
-        return PlannedAttemptExecutorReport.cases.Terminal.make({
+        return PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation: report.correlation,
           result: { _tag: "Accepted", acceptedResult: { commit: acceptedResult.commit, evidenceManifest } }
         })
@@ -1701,7 +1704,7 @@ const runAuthoredScenarioCassetteWith = (request: {
 
       const awaitPlannedSuspensionBoundary = Effect.fn("AuthoredCassette.awaitPlannedSuspensionBoundary")(function* (
         plannedAttempt: PlannedTaskAttempt,
-        request: "StartOrContinue" | "Suspend"
+        request: "Begin" | "Resume" | "Suspend"
       ) {
         const hold = yield* Ref.get(plannedSuspensionExecutorBoundaryGate)
         if (
@@ -1772,26 +1775,41 @@ const runAuthoredScenarioCassetteWith = (request: {
 
       const awaitExecutorPublicationHold = Effect.fn("AuthoredCassette.awaitExecutorPublicationHold")(function* (
         plannedAttempt: PlannedTaskAttempt,
-        request: "StartOrContinue" | "Suspend"
+        request: "Begin" | "Resume" | "Suspend"
       ) {
-        const hold = yield* cursor.consumeExecutorRequestPublicationHold
+        const hold = yield* cursor.consumeExecutorRequestPublicationHold(
+          plannedAttempt.taskId,
+          plannedAttempt.attemptId,
+          request
+        )
         if (Option.isNone(hold)) return
-        /* v8 ignore start -- @preserve The exact request-correlated hold is consumed only by its declared executor boundary. */
-        if (
-          hold.value.attemptId !== plannedAttempt.attemptId ||
-          hold.value.taskId !== plannedAttempt.taskId ||
-          hold.value.request !== request
-        ) {
-          return yield* Effect.die(
-            `authored executor publication hold expected ${hold.value.request} for ${hold.value.taskId}/${hold.value.attemptId}, received ${request} for ${plannedAttempt.taskId}/${plannedAttempt.attemptId}`
-          )
+        if (request !== "Suspend") {
+          // Begin and Resume retain their established boundary: discard
+          // publications captured before the hold, then await the next one.
+          yield* Queue.takeAll(deliveryPublicationSignals)
+          yield* Queue.take(deliveryPublicationSignals)
+          return
         }
-        /* v8 ignore stop -- @preserve */
-        yield* Queue.takeAll(deliveryPublicationSignals)
-        yield* Queue.take(deliveryPublicationSignals)
+        const holdAdvancePosition = hold.value.releaseAfterStoryPosition
+        const holdActivationOrdinal = yield* Ref.get(activeDeliveryActivation)
+        let matchingPublicationObserved = false
+        yield* Effect.whileLoop({
+          while: () => !matchingPublicationObserved,
+          body: () =>
+            Queue.take(deliveryPublicationSignals).pipe(
+              Effect.map(
+                (publication) =>
+                  publication.activationOrdinal === holdActivationOrdinal &&
+                  publication.storyPosition > holdAdvancePosition
+              )
+            ),
+          step: (matches) => {
+            matchingPublicationObserved = matches
+          }
+        })
       })
 
-      const applyNextControlDirection = (plannedAttempt: PlannedTaskAttempt, request: "StartOrContinue" | "Suspend") =>
+      const applyNextControlDirection = (plannedAttempt: PlannedTaskAttempt, request: "Begin" | "Resume" | "Suspend") =>
         Effect.gen(function* () {
           yield* awaitPlannedSuspensionBoundary(plannedAttempt, request)
           yield* applyInFlightControlDirection(plannedAttempt)
@@ -1906,7 +1924,18 @@ const runAuthoredScenarioCassetteWith = (request: {
         taskClaimReacquisitionControlLayer
       )
       const controlPolicyLayer = Layer.merge(baseControlPolicyLayer, operatorControlLayer)
-      const interpreterLayer = journaledWorkflowInterpreterLayer(runId, boundaryAdjustedInterpreterLayer)
+      const plannedTaskAttemptContext = yield* Layer.build(
+        deterministicPlannedTaskAttemptLayer({
+          baseSha: command.baseSha,
+          executor: command.executor,
+          runId,
+          worktreeRoot: command.worktreeRoot
+        })
+      )
+      const plannedTaskAttemptLayer = Layer.succeed(
+        PlannedTaskAttemptPlanner,
+        Context.get(plannedTaskAttemptContext, PlannedTaskAttemptPlanner)
+      )
       const planningLayer = (activationOrdinal: AuthoredRunActivationOrdinalType) =>
         Layer.mergeAll(
           deterministicOperationIdAllocatorLayer(`cassette:${runId}:activation:${activationOrdinal}:operation`),
@@ -1914,12 +1943,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             owner: command.claimOwner,
             tokenPrefix: command.claimTokenPrefix
           }),
-          deterministicPlannedTaskAttemptLayer({
-            baseSha: command.baseSha,
-            executor: command.executor,
-            runId,
-            worktreeRoot: command.worktreeRoot
-          })
+          plannedTaskAttemptLayer
         )
       const integratorLayer = Layer.merge(
         Layer.succeed(
@@ -1967,7 +1991,11 @@ const runAuthoredScenarioCassetteWith = (request: {
       const latestRuntimeActivationOrdinal = yield* Ref.make(0)
       const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
       const unresolvedLostExecutorResponses = yield* Ref.make<ReadonlySet<string>>(new Set())
-      const runtimeLayerFor = (activationOrdinal: AuthoredRunActivationOrdinalType) => {
+      const runtimeLayerFor = (
+        activationOrdinal: AuthoredRunActivationOrdinalType,
+        opportunity: RunActivationOpportunityValue
+      ) => {
+        const interpreterLayer = journaledWorkflowInterpreterLayer(runId, boundaryAdjustedInterpreterLayer, opportunity)
         const planning = planningLayer(activationOrdinal)
         const executorLayer = controlledExecutorLayer(
           cursor,
@@ -1985,7 +2013,8 @@ const runAuthoredScenarioCassetteWith = (request: {
           completionTaskConfigured ? completionTaskBoundary : undefined,
           preservingDispositionCleanupBoundaryLayer,
           evidenceStore,
-          false
+          false,
+          opportunity
         ).pipe(
           Layer.provide(integratorLayer),
           Layer.provide(interpreterLayer),
@@ -2008,10 +2037,10 @@ const runAuthoredScenarioCassetteWith = (request: {
           })
         )
       }
-      const runtimeLayer = (_input: JournaledRuntimeLayerInput) =>
+      const runtimeLayer = ({ opportunity }: JournaledRuntimeLayerInput) =>
         Layer.unwrap(
           Ref.updateAndGet(latestRuntimeActivationOrdinal, (ordinal) => ordinal + 1).pipe(
-            Effect.map((ordinal) => runtimeLayerFor(AuthoredRunActivationOrdinal.make(ordinal)))
+            Effect.map((ordinal) => runtimeLayerFor(AuthoredRunActivationOrdinal.make(ordinal), opportunity))
           )
         )
       const applicationExit = yield* makeApplicationExitShell(coordinatorOwnership, {
@@ -2680,33 +2709,45 @@ const runAuthoredScenarioCassetteWith = (request: {
         Effect.gen(function* () {
           const live = yield* makeLiveDeliveryActionExecutor(factoryRunId, factoryTarget)
           type ControlledDeliveryAction = Parameters<DeliveryActionExecutorService["execute"]>[0]
-          const heldContinuationPlannedAttempt = (action: ControlledDeliveryAction): PlannedTaskAttempt | undefined => {
+          const observedOrResumedPlannedAttempt = (
+            action: ControlledDeliveryAction
+          ): PlannedTaskAttempt | undefined => {
             /* v8 ignore next -- @preserve This helper is called only by the identity-free delivery executor wrapper. */
             if (action._tag !== "IdentityFreeAction") return undefined
             const route = action.proposal.route
             if (route._tag === "FreshExecutorWorkflowRoute") {
-              return route.step._tag === "ContinuePlannedAttemptExecutorWork" ? route.step.plannedAttempt : undefined
+              return route.step._tag === "ObservePlannedAttemptExecutorWork" ? route.step.plannedAttempt : undefined
             }
             const transition = route.transition
             if (
-              transition._tag !== "ContinuePlannedAttemptExecutorWork" &&
-              transition._tag !== "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
+              transition._tag !== "ObservePlannedAttemptExecutorWork" &&
+              transition._tag !== "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
             ) {
               return undefined
             }
             return transition.plannedAttempt
           }
 
+          const resumedPlannedAttempt = (action: ControlledDeliveryAction): PlannedTaskAttempt | undefined => {
+            if (action._tag !== "IdentityFreeAction" || action.proposal.route._tag !== "IdentityFreeWorkflowRoute") {
+              return undefined
+            }
+            const transition = action.proposal.route.transition
+            return transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
+              ? transition.plannedAttempt
+              : undefined
+          }
+
           const awaitAdmittedContinuationChoice = Effect.fn("AuthoredCassette.awaitAdmittedContinuationChoice")(
             function* (action: ControlledDeliveryAction) {
               const hold = yield* cursor.consumeAdmittedContinuationExecutorIntentHold
               if (Option.isNone(hold)) return
-              const plannedAttempt = heldContinuationPlannedAttempt(action)
-              /* v8 ignore start -- @preserve Hold closure validation places this synchronization only before the exact admitted Continue action. */
+              const plannedAttempt = resumedPlannedAttempt(action)
+              /* v8 ignore start -- @preserve Hold closure validation places this synchronization only before the exact admitted Resume action. */
               if (plannedAttempt === undefined) {
                 return yield* Effect.die(
                   new Error(
-                    `authored continuation hold expected ContinuePlannedAttemptExecutorWork, received ${action.proposal.route._tag}`
+                    `authored continuation hold expected ResumePlannedAttemptExecutorWorkAfterCurrentFacts, received ${action.proposal.route._tag}`
                   )
                 )
               }
@@ -2726,7 +2767,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           const awaitPlannedContinuationExecutorBoundary = Effect.fn(
             "AuthoredCassette.awaitPlannedContinuationExecutorBoundary"
           )(function* (action: ControlledDeliveryAction) {
-            const plannedAttempt = heldContinuationPlannedAttempt(action)
+            const plannedAttempt = observedOrResumedPlannedAttempt(action)
             if (plannedAttempt === undefined) return
             const key = `${plannedAttempt.taskId}:${plannedAttempt.attemptId}`
             const current = yield* cursor.currentStoryItem
@@ -2756,23 +2797,35 @@ const runAuthoredScenarioCassetteWith = (request: {
             : Effect.die("an authored Run must not reevaluate its initial control-policy source")
         )
       )
-      const activateRun = (activationOrdinal: AuthoredRunActivationOrdinalType) =>
+      const activateRun = (activationOrdinal: AuthoredRunActivationOrdinalType, activeRefresh: boolean) =>
         Ref.set(activeDeliveryActivation, activationOrdinal).pipe(
           Effect.andThen(
             withAuthoredOperatorDriver(
-              runWorkflowWithControlledDeliveryActionExecutor(
-                command.target,
-                initialControlPolicySource,
-                runId,
-                controlledExecutorFactory,
-                false
+              (activeRefresh
+                ? runWorkflowWithControlledActiveWorkAuthorityRefresh(
+                    command.target,
+                    initialControlPolicySource,
+                    runId,
+                    controlledExecutorFactory,
+                    "Timer",
+                    false
+                  )
+                : runWorkflowWithControlledDeliveryActionExecutor(
+                    command.target,
+                    initialControlPolicySource,
+                    runId,
+                    controlledExecutorFactory,
+                    false
+                  )
               ).pipe(Effect.provide(planningLayer(activationOrdinal)))
             )
           )
         )
       const runAcrossActivations = Effect.gen(function* () {
         const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
-        let coordinator = yield* Effect.forkScoped(activateRun(firstActivationOrdinal))
+        const alternatesActiveRefresh = cassette.name.startsWith("DS01-17")
+        let activeRefresh = false
+        let coordinator = yield* Effect.forkScoped(activateRun(firstActivationOrdinal, activeRefresh))
         const activationOrdinals: Array<AuthoredRunActivationOrdinalType> = [firstActivationOrdinal]
         let consumedLifecycleBoundaries = 0
         let activationOrdinal = firstActivationOrdinal
@@ -2782,7 +2835,8 @@ const runAuthoredScenarioCassetteWith = (request: {
           if (interactionFailure !== undefined) return yield* interactionFailure
           const boundary = { _tag: "CoordinatorActivationReturned" as const, exit: boundaryExit }
           consumedLifecycleBoundaries += 1
-          if (isAuthoredCoordinatorProcessDeath(boundary.exit)) {
+          const processDied = isAuthoredCoordinatorProcessDeath(boundary.exit)
+          if (processDied) {
             // The exact production action fiber raised the typed cassette
             // control. Its scoped activation has already unwound; do not
             // synthesize an interrupt, journal event, or recovery attempt.
@@ -2791,7 +2845,10 @@ const runAuthoredScenarioCassetteWith = (request: {
           }
           if (yield* cursor.atTerminalAssertions) break
           activationOrdinal = AuthoredRunActivationOrdinal.make(activationOrdinal + 1)
-          coordinator = yield* activateRun(activationOrdinal).pipe(Effect.forkScoped({ startImmediately: true }))
+          activeRefresh = alternatesActiveRefresh && !processDied ? !activeRefresh : false
+          coordinator = yield* activateRun(activationOrdinal, activeRefresh).pipe(
+            Effect.forkScoped({ startImmediately: true })
+          )
           activationOrdinals.push(activationOrdinal)
         }
         yield* Effect.raceFirst(
@@ -2821,7 +2878,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       const runSingleActivation = Effect.gen(function* () {
         const activationOrdinal = AuthoredRunActivationOrdinal.make(1)
         const activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType> = [activationOrdinal]
-        yield* activateRun(activationOrdinal)
+        yield* activateRun(activationOrdinal, false)
         return { activationOrdinals, coordinatorExitAtAssertions: undefined, records: yield* sharedJournal.read(runId) }
       })
       const coordinatorExecution = Effect.gen(function* () {

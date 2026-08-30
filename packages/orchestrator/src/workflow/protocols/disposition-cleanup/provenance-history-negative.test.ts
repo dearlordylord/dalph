@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
+  AttemptId,
   EvidenceDigest,
   EvidenceReference,
   GitCommitSha,
@@ -18,8 +19,10 @@ import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.
 import { ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
-import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { JournalDatabaseLocator, JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { sqliteJournalTestLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
+import { integratorSuccessorSessionFixedRecordKey } from "../../../workflow-journal/record-key.js"
 import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 import {
@@ -49,6 +52,7 @@ import {
 import {
   IntegratorCandidateCleanupMutationResult,
   IntegratorCandidateCleanupObservation,
+  TestIntegratorCandidateCleanupBoundary,
   integratorCandidateCleanupTestLayer,
   runIntegratorCandidateCleanup
 } from "./integrator-candidate.js"
@@ -61,12 +65,14 @@ import {
 import {
   IntegratorCandidateResourceLocator,
   IntegratorSessionCorrelation,
-  IntegratorSessionId
+  IntegratorSessionId,
+  IntegratorSuccessorSessionFixedEvent
 } from "../integrator/events.js"
 import type {
   CompleteTaskTrackerFactsObserved,
   FocusedTaskClaimFactsObserved,
-  FocusedTaskWorkSpecificationFactsObserved
+  FocusedTaskWorkSpecificationFactsObserved,
+  TaskTrackerFactsObservedEvent
 } from "../../task-tracker-facts/observation.js"
 import {
   validateBranchCleanupHistory,
@@ -82,25 +88,18 @@ type JournalEvent = JournalRecord["event"]
 type JournalEventTag = JournalEvent["_tag"]
 type TaggedEvent<Tag extends JournalEventTag> = Extract<JournalEvent, { readonly _tag: Tag }>
 type TaggedRecord<Tag extends JournalEventTag> = Omit<JournalRecord, "event"> & { readonly event: TaggedEvent<Tag> }
-type CompleteFactsRecord = TaggedRecord<"TaskTrackerFactsObserved"> & {
-  readonly event: TaggedEvent<"TaskTrackerFactsObserved"> & { readonly observation: CompleteTaskTrackerFactsObserved }
-}
-type SpecificationFactsRecord = TaggedRecord<"TaskTrackerFactsObserved"> & {
-  readonly event: TaggedEvent<"TaskTrackerFactsObserved"> & {
+type RecordWithEvent<Event> = Omit<JournalRecord, "event"> & { readonly event: Event }
+type CompleteFactsRecord = RecordWithEvent<
+  Omit<TaskTrackerFactsObservedEvent, "observation"> & { readonly observation: CompleteTaskTrackerFactsObserved }
+>
+type SpecificationFactsRecord = RecordWithEvent<
+  Omit<TaskTrackerFactsObservedEvent, "observation"> & {
     readonly observation: FocusedTaskWorkSpecificationFactsObserved
   }
-}
-type ClaimFactsRecord = TaggedRecord<"TaskTrackerFactsObserved"> & {
-  readonly event: TaggedEvent<"TaskTrackerFactsObserved"> & { readonly observation: FocusedTaskClaimFactsObserved }
-}
-type WorktreeReadIntentRecord = TaggedRecord<"GitReadIntentRecorded"> & {
-  readonly event: TaggedEvent<"GitReadIntentRecorded"> & {
-    readonly operation: Extract<
-      TaggedEvent<"GitReadIntentRecorded">["operation"],
-      { readonly _tag: "ReadTaskWorktree" }
-    >
-  }
-}
+>
+type ClaimFactsRecord = RecordWithEvent<
+  Omit<TaskTrackerFactsObservedEvent, "observation"> & { readonly observation: FocusedTaskClaimFactsObserved }
+>
 
 const foreignKey = JournalRecordKey.make("provenance-history-foreign-key")
 
@@ -119,9 +118,6 @@ const hasSpecificationFacts = (record: JournalRecord): record is SpecificationFa
 
 const hasClaimFacts = (record: JournalRecord): record is ClaimFactsRecord =>
   hasTag("TaskTrackerFactsObserved")(record) && record.event.observation._tag === "FocusedTaskClaimFacts"
-
-const hasReadTaskWorktreeIntent = (record: JournalRecord): record is WorktreeReadIntentRecord =>
-  hasTag("GitReadIntentRecorded")(record) && record.event.operation._tag === "ReadTaskWorktree"
 
 const nthTag = <Tag extends JournalEventTag>(name: Tag, ordinal: number) => {
   let seen = 0
@@ -489,6 +485,23 @@ it.effect("rejects malformed, foreign, duplicate, and reordered worktree settlem
     expect(
       validateWorktreeCleanupProvenance(move(records, tag("WorktreeCleanupAuthorized"), 1), authorization)._tag
     ).toBe("Invalid")
+    const forgedBeginToSafe = records.filter(
+      ({ event }) =>
+        !(
+          (event._tag === "PlannedAttemptExecutorWorkReported" && event.ordinal === 1) ||
+          (event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend") ||
+          event._tag === "PlannedAttemptExecutorCommandResponseObserved"
+        )
+    )
+    expect(validateWorktreeCleanupProvenance(forgedBeginToSafe, authorization)._tag).toBe("Invalid")
+    for (const command of ["Begin", "Suspend"] as const) {
+      const forgedCommandKey = replace(
+        records,
+        (record) => record.event._tag === "PlannedAttemptExecutorCommandIntended" && record.event.command === command,
+        (record) => ({ ...record, key: foreignKey })
+      )
+      expect(validateWorktreeCleanupProvenance(forgedCommandKey, authorization)._tag).toBe("Invalid")
+    }
   }).pipe(
     Effect.provide(
       worktreeCleanupTestLayer({
@@ -812,18 +825,18 @@ it.effect("rejects malformed, foreign, mis-keyed, duplicate, and reordered P2 wi
       })
       expect(validateWorktreeCleanupProvenance(alteredRecords, alteredAuthorization)._tag).toBe("Invalid")
       const foreignPredecessorAttempt = { ...attempt, taskId: TaskId.make("foreign-predecessor-attempt") }
-      const foreignPredecessorRecords = replace(
-        records,
-        (record): record is WorktreeReadIntentRecord =>
-          hasReadTaskWorktreeIntent(record) &&
-          record.event.operation.operationId === authorization.observationOperationId,
-        (record) => ({
-          ...record,
-          event: {
-            ...record.event,
-            operation: { ...record.event.operation, plannedAttempt: foreignPredecessorAttempt }
-          }
-        })
+      const foreignPredecessorRecords = records.map((record) =>
+        record.event._tag === "GitReadIntentRecorded" &&
+        record.event.operation._tag === "ReadTaskWorktree" &&
+        record.event.operation.operationId === authorization.observationOperationId
+          ? {
+              ...record,
+              event: {
+                ...record.event,
+                operation: { ...record.event.operation, plannedAttempt: foreignPredecessorAttempt }
+              }
+            }
+          : record
       )
       const foreignPredecessorAuthorization = WorktreeCleanupAuthorization.make({
         ...authorization,
@@ -1301,3 +1314,78 @@ it.effect("rejects foreign, duplicate, and reordered FullRerun candidate provena
     Effect.provide(memoryJournalTestLayer)
   )
 )
+
+it.effect("preserves a foreign FullRerun relation without boundary calls after memory and SQLite reads", () => {
+  const preservationReason = "multiple FullRerun successors describe one Integrator predecessor"
+  const validateForeignHistory = (target: string) =>
+    Effect.gen(function* () {
+      const journal = yield* begin(target)
+      yield* appendCandidateProvenance(
+        candidatePredecessor,
+        candidateSuccessor,
+        "issue-69-provenance-history-full-rerun"
+      )
+      const records = yield* journal.read(runId)
+      const successorRecord = records.find(tag("IntegratorSuccessorSessionFixed"))
+      expect(successorRecord).toBeDefined()
+      if (successorRecord === undefined) {
+        return { calls: undefined, outcome: undefined, validation: undefined }
+      }
+
+      const foreignPredecessor = IntegratorSessionCorrelation.make({
+        ...candidatePredecessor,
+        candidateResource: IntegratorCandidateResourceLocator.make("candidate:foreign-predecessor"),
+        plannedAttempt: { ...attempt, attemptId: AttemptId.make("issue-69-foreign-predecessor") }
+      })
+      const foreignSuccessor = IntegratorSessionCorrelation.make({
+        ...candidateSuccessor,
+        candidateResource: IntegratorCandidateResourceLocator.make("candidate:foreign-successor"),
+        plannedAttempt: foreignPredecessor.plannedAttempt
+      })
+      const foreignSuccessorEvent = IntegratorSuccessorSessionFixedEvent.make({
+        ...successorRecord.event,
+        predecessor: foreignPredecessor,
+        successor: foreignSuccessor
+      })
+      yield* journal.append(
+        runId,
+        integratorSuccessorSessionFixedRecordKey(
+          foreignPredecessor,
+          foreignSuccessorEvent.quarantineAt,
+          foreignSuccessorEvent.directionAppliedAt
+        ),
+        foreignSuccessorEvent
+      )
+
+      const foreignHistory = yield* journal.read(runId)
+      const validation = validateIntegratorCandidateCleanupProvenance(foreignHistory, candidateAuthorization)
+      const outcome = yield* runIntegratorCandidateCleanup(candidateAuthorization)
+      const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
+      return { calls, outcome, validation }
+    })
+
+  return Effect.gen(function* () {
+    const [memoryResult, sqliteResult] = yield* Effect.all(
+      [
+        validateForeignHistory("issue-69-foreign-full-rerun-memory").pipe(
+          Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
+          Effect.provide(memoryJournalTestLayer)
+        ),
+        validateForeignHistory("issue-69-foreign-full-rerun-sqlite").pipe(
+          Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
+          Effect.provide(sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }))
+        )
+      ],
+      { concurrency: 1 }
+    )
+    for (const result of [memoryResult, sqliteResult]) {
+      expect(result.validation).toEqual({ _tag: "Invalid", detail: preservationReason })
+      expect(result.outcome).toEqual({
+        _tag: "Preserved",
+        authorization: candidateAuthorization,
+        reason: preservationReason
+      })
+      expect(result.calls).toEqual([])
+    }
+  })
+})

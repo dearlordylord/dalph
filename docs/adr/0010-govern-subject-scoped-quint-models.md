@@ -8,12 +8,12 @@ own executable conformance adapter under
 
 | Model | Owns | Issues |
 |---|---|---|
-| `specs/taskFactReconciliation.qnt` | subject-local decisions after tracker facts change while one exact planned attempt owns unfinished executor work: membership, lifecycle, specification, external success, Continue/Restart/Stop choice identity and cutoff, fresh Continue authority for the immutable attempt, clean replacement from exact Restart plus current quiescence and fresh task/Git facts, and exact/absent/foreign/unreadable stopped-claim disposition. Executable seam: `packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts` invokes `AttemptChoiceControl`, recovery/frontier reads, executor continuation/stoppage, clean replacement, and stopped-claim observation/release protocols. | 65, 66, 136, 137 |
+| `specs/taskFactReconciliation.qnt` | subject-local decisions after tracker facts change while one exact planned attempt owns unfinished executor work: membership, lifecycle, specification, external success, Continue/Restart/Stop choice identity and cutoff, fresh Continue authority for the immutable attempt, clean replacement from exact Restart plus the latest accepted Safe report with no later command intent and fresh task/Git facts, absorbing Terminal, and exact/absent/foreign/unreadable stopped-claim disposition. Executable seam: `packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts` invokes `AttemptChoiceControl`, recovery/frontier reads, the Resume and accepted-report protocols, clean replacement, and stopped-claim observation/release protocols. | 65, 66, 136, 137, 264 |
 | `specs/gitReconciliation.qnt` | provider-neutral Git decisions: lineage, worktree loss, registration conflict, result-commit eligibility, and the stale and ambiguous target head | 139 |
 | `specs/acceptedResultIntegration.qnt` | accepted-result admission and one fixed integration session accepting only an explicit submitted commit whose ordered direct parents are the current target head and the accepted result | 56, 57 |
 | `specs/integrationFinality.qnt` | post-promotion completion-claim replacement and deletion, focused task-completion success, task-scoped settlement, and retention of unrelated Run responsibility | #141 (`integrationFinality`); executable seam: `packages/dalph/test/conformance/integration-finality.mbt.test.ts` invokes the production completion-claim protocols and Run finality decision |
 | `specs/controlDirectionApplication.qnt` | receiving a Pause or Unpause as ephemeral against applying one exact run-or-task direction as a durable Operator-initiated action | 155, 166 |
-| `specs/plannedAttemptExecutor.qnt` | the same-process executor boundary: responsibility, durable command intent, exact response versus command/state projection evidence, correlation and ordinal settlement, bounded continuation and Stop suspension commands, recovery reconciliation, and task-work position ownership. Executable seam: `packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts` invokes the production executor protocol and admission controller. | 65, 158 |
+| `specs/plannedAttemptExecutor.qnt` | the same-process executor boundary: responsibility, durable Begin, Suspend, and Resume command intent, passive Observe evidence, exact response versus command/state projection evidence, correlation and ordinal settlement, the retained three-command Suspend bound, Safe-authorized Resume, recovery reconciliation, and task-work position ownership. Executable seam: `packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts` invokes the production executor protocol and admission controller. | 65, 158, 264 |
 | `specs/runActivation.qnt` | one idempotent Run-entry boundary: exact target and Run identity, lazy first policy versus the latest durable policy, reduction of exactly one unfinished history, independent reconstruction of every retained task-work position before new admission, and identical quiescence/finality handling after a new or reconstructed beginning. Process loss clears only process-local activation state; the same ordinary entry establishes the Run again from durable history. Executable seam: `packages/dalph/test/conformance/run-activation.mbt.test.ts` invokes production lifecycle, startup inspection, history reduction, recovery projection, the ordinary delivery relation's admission basis, admission, planned-attempt ambiguity reconciliation, and finality seams. | 195 |
 | `specs/applicationExit.qnt` | one process-local graceful application Exit decision boundary: cutoff-linearized admission, joined requests, typed owner disposition, exact executor evidence, enumerated quick drain actions, five monotonic ticks, distinct success/failure/timeout/unexpected-death outcomes, forced termination, no Run-journal Exit facts, and fresh restart state. Executable seam: `packages/dalph/test/conformance/application-exit.mbt.test.ts` invokes the production lifecycle-decision kernel without becoming a second runtime. | 203 |
 
@@ -61,14 +61,63 @@ the same gate and retains
 `packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts` as its
 production seam; it is not an eighth model or an implementation input.
 
+Its `historicalTaskFactStopRecoveryProof` module deliberately retains the
+pre-#264 `StartOrContinue` chronology only as negative design-history evidence:
+accepted executing evidence must break the old Stop quiescence premise. The
+current journal and cassette schemas do not decode that command, and the proof
+cannot authorize runtime behavior or an offline migration. Keeping the finite
+TLC graph spends model-gate time to guard against reintroducing the rejected
+authority rule; that explicit regression value is the trade-off for retaining
+otherwise non-runtime vocabulary.
+
+The same proof projection also owns the narrow active-work authority-refresh
+slice accepted by issues #218 and #281. Its `Running` establishment is a
+separate action from the later `TrackerNotification`/`Timer` offer; source
+provenance is explicit, healthy and unreadable observations retain the exact
+Running position without an executor action, and ordinary unreadable facts
+still select the existing safe-suspension route. The canonical
+`taskFactReconciliation` model and its production-backed MBT remain the source
+of runtime behavior; the projection's positive/negative tests, witnesses, and
+exhaustive check only measure this accepted proof slice. The runtime keeps a
+successful Git read's refresh source process-local and persists only the typed
+failure outcome; its operation/ordinal chronology is covered by the Dalph
+journal tests rather than by an additional proof-state cardinality claim.
+
 `specs/plannedAttemptExecutor_proof.qnt` applies the same exception to the
-canonical executor model's resettable command cycles. Three finite graphs keep
-the exact intent/call/evidence chronology, one-read-per-activation recovery,
-three-command Start and Suspend bounds, and post-limit read-only recovery. The
-canonical model still owns their shared vocabulary and
+canonical executor model's evidence and bounded-suspension cycles. One finite
+graph keeps exact Begin, passive Observe, Suspend, and safe-authorized Resume
+intent/call/evidence chronology; a separate finite graph owns the retained
+three-command Suspend bound and post-limit read-only recovery. Passive
+observations and Resume have no shared command budget. The canonical model
+still owns their shared vocabulary and
 `packages/dalph/test/conformance/planned-attempt-executor.mbt.test.ts` remains
 the production seam. The projections have collected positive and negative
 tests, sampled witnesses, and complete TLC enumeration without a depth token.
+
+This proof projection is deliberately a stage/counter abstraction. It does not
+duplicate tracker targets or executor correlation: the canonical
+`plannedAttemptExecutor.qnt` model owns the RunId, AttemptId, command-ordinal,
+and foreign-value negative controls, while
+`plannedAttemptExecutor_proof.qnt` proves the corresponding stage and counter
+properties. The obligation manifest records both projection profiles, so
+removing an identity or ordinal obligation cannot silently leave mutation
+analysis or conformance checking on a stale list.
+
+Issue #264's tracker-read freshness outcomes are deliberately not encoded as a
+second finite state machine in `taskFactReconciliation.qnt`. That model keeps
+the successful fresh-authority branch; `pending`, `TaskTrackerFactsReadFailed`,
+and unreadable outcomes depend on journal operation IDs, predecessor plans,
+task coverage, and immutable targets owned by continuation authorization and
+recovery. The executable obligation for that omitted state is the exact
+Graph/Specification/Claim pending-and-failed-or-unreadable matrix in
+`packages/orchestrator/src/coordination/run/recovery-activation.test.ts` and
+the zero-contact authority matrix in
+`packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts`.
+This keeps the formal state finite without weakening the production
+fail-closed rule. The same model does encode the controller race: a held
+process-local Resume owner is canceled before its durable `commitIntent`, while
+the controller append-boundary test proves that choice-before-commit produces
+no Resume intent or contact and that a Resume winner excludes the choice.
 
 `specs/applicationExit_proof.qnt` applies the exception to the canonical Exit
 model's two-owner, two-attempt, five-tick, result, death, and restart product.

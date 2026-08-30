@@ -285,8 +285,8 @@ it.effect("rejects nonterminal executor reports as terminal delivery evidence", 
   Effect.gen(function* () {
     const correlation = { attemptId: AttemptId.make("attempt-A"), runId: RunId.make("run-A") }
     const reports = [
-      PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
-      PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+      PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
+      PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
     ]
 
     for (const report of reports) {
@@ -298,6 +298,23 @@ it.effect("rejects nonterminal executor reports as terminal delivery evidence", 
       )
       expect(Exit.isFailure(decoded)).toBe(true)
     }
+  })
+)
+
+it.effect("accepts the normalized terminal executor report as terminal delivery evidence", () =>
+  Effect.gen(function* () {
+    const correlation = { attemptId: AttemptId.make("attempt-terminal"), runId: RunId.make("run-terminal") }
+    const report = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+      correlation,
+      result: { _tag: "Completed" }
+    })
+
+    const decoded = yield* Schema.decodeUnknownEffect(PlannedAttemptExecutorTerminalEvidence)({
+      _tag: "PlannedAttemptExecutorTerminal",
+      report
+    })
+
+    expect(decoded).toEqual({ _tag: "PlannedAttemptExecutorTerminal", report })
   })
 )
 
@@ -339,6 +356,70 @@ it.effect("keeps a proposed delivery unsettled until ordinary evidence advances 
           }
         },
         { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        { _tag: "TrackerReconfirmationAllowed" }
+      )
+    ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+  })
+)
+
+it.effect("keeps an incomplete graph with no work active without inferring termination", () =>
+  Effect.gen(function* () {
+    const relation = yield* deliveryRuntime.pipe(
+      Effect.provide(
+        makeDeliveryRelationsLayer({
+          exactEvidence: currentSignalOf([]),
+          graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
+          policy: currentSignalOf(policy)
+        })
+      )
+    )
+    const current = Option.getOrThrow(
+      yield* relation.changes.pipe(
+        Stream.map(({ current }) => current),
+        Stream.runHead
+      )
+    )
+
+    expect(current.ticketDeliveries.deliveries).toEqual([])
+    expect(
+      deliveryFinalityOf(
+        current,
+        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        { _tag: "TrackerReconfirmationAllowed" }
+      )
+    ).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
+  })
+)
+
+it.effect("keeps an isolated proposal derivation issue active without inferring termination", () =>
+  Effect.gen(function* () {
+    const taskId = TaskId.make("isolated-finality-issue")
+    const relation = yield* deliveryRuntime.pipe(
+      Effect.provide(
+        makeDeliveryRelationsLayer({
+          exactEvidence: currentSignalOf([]),
+          graph: currentSignalOf(journaledGraphState(journaledGraph("isolated-finality-issue"))),
+          policy: currentSignalOf(policy)
+        })
+      )
+    )
+    const current = Option.getOrThrow(
+      yield* relation.changes.pipe(
+        Stream.map(({ current }) => current),
+        Stream.runHead
+      )
+    )
+
+    expect(
+      deliveryFinalityOf(
+        current,
+        {
+          _tag: "DeliveryProposalsAvailable",
+          isolatedIssues: [
+            { _tag: "FreshRouteProvenanceMissing", taskId, transition: "BeginPlannedAttemptExecutorWork" }
+          ],
+          proposals: []
+        },
         { _tag: "TrackerReconfirmationAllowed" }
       )
     ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })

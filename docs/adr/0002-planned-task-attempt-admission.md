@@ -113,20 +113,19 @@ applied Restart choice for P1 and its F1/F2 pair, and after fresh evidence
 records all of the following:
 
 - claimed-task eligibility for A at F2 with the exact current claim K1;
-- current executor quiescence for R/P1, supplied by the unbroken exact
-  `SafelySuspended` report or by a durably published late terminal `Accepted`
-  report that arrives after the Restart choice and ends P1's writer
-  responsibility;
+- current executor quiescence for R/P1, supplied only by the unbroken latest
+  accepted `ExecutorWorkSafelySuspended` report with no unsettled command;
 - the exact current P1 worktree W1, including its current HEAD H1 and proof
   that B1 is an ancestor; and
 - the configured target head H2 used as P2's Base SHA.
 
 One Journal record atomically makes P1 no longer unsettled and records
 immutable successor P2. It preserves P1's branch, worktree, commits,
-uncommitted work, claim, and Journal evidence. It creates no integration
-responsibility for a terminal `Accepted` report that arrived after the
-Restart choice; the report remains P1 evidence. P2 still requires ordinary
-task-work admission before Dalph asks the executor to start or continue it.
+uncommitted work, claim, and Journal evidence. If a distinct terminal
+`Accepted` report arrives first, it replaces Safe as the current lifecycle
+fact, makes replacement unavailable, and follows ordinary integration
+admission. P2 still requires ordinary task-work admission before Dalph asks
+the executor to begin it.
 
 The replacement action is not `RecordTaskAttemptPlan` with a different
 operation identity. A matching eligibility outcome alone, a terminal executor
@@ -176,11 +175,12 @@ No ordinary current outcome authorizes a replacement planned task attempt.
 Recovery continues an acknowledged attempt, recognizes its terminal
 disposition, or returns a typed recovery result. Issue #66's dedicated
 `PlannedAttemptReplaced` action is the only replacement capability, and its
-exact Restart choice, current-quiescence, task, claim, worktree, and target-head
-evidence is required as specified above. An executor failure, loss of a planned
-Git worktree, coordinator process death, a late terminal result without the
-fresh checks, and a new operation identity do not imply replacement
-authorization.
+exact Restart choice, latest accepted safely-suspended report with no later
+executor command intent, task, claim, worktree, and target-head evidence is
+required as specified above. An executor terminal result, loss of a planned Git
+worktree, coordinator process death, and a new operation identity do not imply
+replacement authorization. A terminal result supersedes Safe; `Accepted`
+follows ordinary integration admission.
 
 ## Layer composition
 

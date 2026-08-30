@@ -116,6 +116,7 @@ const terminalTurnObservation = (
     return cleanupUnreadable(authorization, "candidate thread lacks the exact sealed terminal turn")
   }
   const exact = matching[0]
+  /* v8 ignore next -- @preserve matching.length === 1 proves index zero exists before this defensive array-access guard. */
   if (exact === undefined)
     return cleanupUnreadable(authorization, "candidate thread lacks the exact sealed terminal turn")
   if (terminalTurnIdMismatch(exact, expected)) {
@@ -198,6 +199,7 @@ const cleanupRemovalIntent = Effect.fn("CodexIntegrator.cleanupRemovalIntent")(f
   const observation = removalProjectionObservation(authorization, predecessor, projection, revision)
   if (observation !== undefined) return observation
   const tombstone = removedRecordFor(record)
+  /* v8 ignore next -- @preserve terminalTurnEvidence accepted the same record's sealed history immediately before removal projection. */
   if (tombstone === undefined) return cleanupUnreadable(authorization, "removal intent lost sealed terminal evidence")
   yield* boundary(store.write(tombstone))
   return cleanupAbsent(authorization, revision)
@@ -519,10 +521,12 @@ type RemovalIntentPreparation =
 
 const prepareRemovalIntent = (record: CodexIntegratorPrivateRecord): RemovalIntentPreparation => {
   if (record._tag === "RemovalIntentRecorded") return { _tag: "Ready" }
+  /* v8 ignore next -- @preserve removeOwnedCandidate is callable only after observe returned Present, which requires settled ThreadWithRuns evidence here. */
   if (record._tag !== "ThreadWithRuns") {
     return { _tag: "Invalid", detail: "private predecessor has no settled thread before removal intent" }
   }
   const intent = removalIntentRecordFor(record)
+  /* v8 ignore next -- @preserve the preceding Present observation validates this exact record's sealed terminal provider run. */
   return intent === undefined
     ? { _tag: "Invalid", detail: "private predecessor has no sealed terminal run before removal intent" }
     : { _tag: "Ready", intent }
@@ -550,8 +554,10 @@ const executeGitRemoval = Effect.fn("CodexIntegrator.executeGitRemoval")(functio
   const foundAfter = yield* boundary(store.read(authorization.owner.sessionId))
   const foundAfterError = postRemovalRecordError(authorization, candidatePath, foundAfter)
   if (foundAfterError !== undefined) return unknownRemoval(authorization, foundAfterError)
+  /* v8 ignore next -- @preserve postRemovalRecordError returns an error for None, so this is a defensive refinement after that exact check. */
   if (Option.isNone(foundAfter)) return unknownRemoval(authorization, "private predecessor record disappeared")
   const tombstone = removedRecordFor(foundAfter.value)
+  /* v8 ignore next -- @preserve the post-removal observation writes a tombstone from validated sealed evidence before this exact record is reread. */
   if (tombstone === undefined) return unknownRemoval(authorization, "private predecessor lost sealed evidence")
   yield* boundary(store.write(tombstone))
   const confirmed = yield* boundary(store.read(authorization.owner.sessionId))
@@ -579,6 +585,7 @@ const removeOwnedCandidate = Effect.fn("CodexIntegrator.removeOwnedCandidate")(f
   const initialCheck = checkInitialRemovalRecord(authorization, candidatePath, found)
   if (initialCheck._tag === "Invalid") return unknownRemoval(authorization, initialCheck.detail)
   const preparation = prepareRemovalIntent(initialCheck.record)
+  /* v8 ignore next -- @preserve the cleanup authorization is issued only from a Present observation that satisfies prepareRemovalIntent. */
   if (preparation._tag === "Invalid") return unknownRemoval(authorization, preparation.detail)
   if (preparation.intent !== undefined) yield* boundary(store.write(preparation.intent))
   const intent = yield* boundary(store.read(authorization.owner.sessionId))

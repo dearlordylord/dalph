@@ -24,37 +24,52 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { ConflictingWorktreeRegistration, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
+import {
+  ConflictingWorktreeRegistration,
+  GitWorktreeReadFailure,
+  PlannedWorktreeReady
+} from "../../authorities/git/worktree.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
+  activeWorkAuthorityRefreshGitReadFailedRecordKey,
   attemptPlanRecordKey,
   attemptChoiceAppliedRecordKey,
   controlDirectionAppliedRecordKey,
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandProjectionObservedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   plannedAttemptContinuationAuthorizedRecordKey,
   plannedAttemptReplacedRecordKey,
-  taskClaimReacquisitionDirectedRecordKey
+  taskClaimReacquisitionDirectedRecordKey,
+  stoppedAttemptClaimNoReleaseRecordKey
 } from "../../workflow-journal/record-key.js"
 import { type JournalRecord } from "../../workflow-journal/store.js"
 import {
+  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimAcquisitionRejectedEvent,
+  TaskClaimReleaseIntendedEvent,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
   TargetLineageObservedEvent,
   taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
-import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
+import {
+  AttemptChoiceAppliedEvent,
+  AttemptChoiceRequestId,
+  AttemptImplementationAbandonedEvent,
+  StoppedAttemptClaimNoReleaseObservedEvent
+} from "../../workflow/protocols/attempt-choice/events.js"
 import {
   PlannedAttemptReplacedEvent,
   PlannedAttemptReplacementWitness
@@ -66,6 +81,10 @@ import { reduceWorkflowJournalHistory } from "./history.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionObservation,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorStateObservation,
@@ -92,6 +111,8 @@ import {
   makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
+  makeTaskClaimReleaseOperation,
+  TaskClaimReleaseAuthority,
   WorkflowOperation
 } from "../../workflow/registry/operation.js"
 import { AttemptWorktreeLost } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
@@ -112,6 +133,12 @@ import {
   makeFocusedTaskClaimFactsUnreadable,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
+import {
+  ActiveWorkAuthorityRefreshAuthority,
+  ActiveWorkAuthorityRefreshGitReadFailedEvent,
+  ActiveWorkAuthorityRefreshOrdinal,
+  makeActiveWorkAuthorityRefreshGitReadOperation
+} from "../../workflow/protocols/active-work-authority-refresh/events.js"
 
 const runId = RunId.make("workflow-journal-history")
 const taskId = TaskId.make("task-A")
@@ -159,6 +186,13 @@ const proof = PlannedWorktreeReady.make({
   worktree: plannedAttempt.worktree
 })
 const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+const foreignCorrelation = plannedAttemptExecutorCorrelation({
+  ...plannedAttempt,
+  attemptId: AttemptId.make("attempt-foreign")
+})
+const foreignExecuting = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+  correlation: foreignCorrelation
+})
 
 const eventRows = [
   { event: taskTrackerReadIntent(initial), key: intentRecordKey(initial.operationId) },
@@ -207,7 +241,7 @@ const eventRows = [
   },
   {
     event: PlannedAttemptExecutorCommandIntendedEvent.make({
-      command: "StartOrContinue",
+      command: "Begin",
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
       ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
@@ -220,9 +254,22 @@ const eventRows = [
     )
   },
   {
+    event: PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
+      version: workflowJournalEventVersion
+    }),
+    key: plannedAttemptExecutorCommandResponseObservedRecordKey(
+      plannedAttempt.attemptId,
+      PlannedAttemptExecutorCommandOrdinal.make(1)
+    )
+  },
+  {
     event: PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-      report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
       version: workflowJournalEventVersion
     }),
     key: plannedAttemptExecutorWorkReportedRecordKey(
@@ -245,9 +292,22 @@ const eventRows = [
     )
   },
   {
+    event: PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(2),
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }),
+      version: workflowJournalEventVersion
+    }),
+    key: plannedAttemptExecutorCommandResponseObservedRecordKey(
+      plannedAttempt.attemptId,
+      PlannedAttemptExecutorCommandOrdinal.make(2)
+    )
+  },
+  {
     event: PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
-      report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }),
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }),
       version: workflowJournalEventVersion
     }),
     key: plannedAttemptExecutorWorkReportedRecordKey(
@@ -257,7 +317,7 @@ const eventRows = [
   },
   {
     event: PlannedAttemptExecutorCommandIntendedEvent.make({
-      command: "StartOrContinue",
+      command: "Resume",
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
       ordinal: PlannedAttemptExecutorCommandOrdinal.make(3),
@@ -270,9 +330,28 @@ const eventRows = [
     )
   },
   {
+    event: PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(3),
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation,
+        result: { _tag: "Completed" }
+      }),
+      version: workflowJournalEventVersion
+    }),
+    key: plannedAttemptExecutorCommandResponseObservedRecordKey(
+      plannedAttempt.attemptId,
+      PlannedAttemptExecutorCommandOrdinal.make(3)
+    )
+  },
+  {
     event: PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(3),
-      report: PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } }),
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation,
+        result: { _tag: "Completed" }
+      }),
       version: workflowJournalEventVersion
     }),
     key: plannedAttemptExecutorWorkReportedRecordKey(
@@ -294,8 +373,136 @@ const claimOutcomeRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[3]))
 const planRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[6]))
 const startRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[9]))
 const firstCommandRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[10]))
-const firstReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[11]))
-const terminalReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[15]))
+const firstResponseRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[11]))
+const firstReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[12]))
+const terminalReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[18]))
+
+const executorCommandRow = (
+  command: "Begin" | "Resume" | "Suspend",
+  ordinal: number
+): { readonly event: JournalRecord["event"]; readonly key: JournalRecord["key"] } => {
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(ordinal)
+  return {
+    event: PlannedAttemptExecutorCommandIntendedEvent.make({
+      command,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: commandOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    }),
+    key: plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal)
+  }
+}
+
+const executorResponseRow = (
+  report: PlannedAttemptExecutorReport,
+  ordinal: number
+): { readonly event: JournalRecord["event"]; readonly key: JournalRecord["key"] } => {
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(ordinal)
+  return {
+    event: PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal,
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      report,
+      version: workflowJournalEventVersion
+    }),
+    key: plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal)
+  }
+}
+
+const executorProjectionRow = (
+  report: PlannedAttemptExecutorReport,
+  commandOrdinalValue: number,
+  projectionOrdinalValue = 1
+): { readonly event: JournalRecord["event"]; readonly key: JournalRecord["key"] } => {
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(commandOrdinalValue)
+  const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(projectionOrdinalValue)
+  return {
+    event: PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+      commandOrdinal,
+      observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({ report }),
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      projectionOrdinal,
+      version: workflowJournalEventVersion
+    }),
+    key: plannedAttemptExecutorCommandProjectionObservedRecordKey(
+      plannedAttempt.attemptId,
+      commandOrdinal,
+      projectionOrdinal
+    )
+  }
+}
+
+const executorStateRow = (
+  observation: PlannedAttemptExecutorStateObservation,
+  ordinalValue = 1
+): { readonly event: JournalRecord["event"]; readonly key: JournalRecord["key"] } => {
+  const ordinal = PlannedAttemptExecutorStateObservationOrdinal.make(ordinalValue)
+  return {
+    event: PlannedAttemptExecutorStateObservedEvent.make({
+      observation,
+      occurrenceClassification: "NonActionOccurrence",
+      ordinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    }),
+    key: plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, ordinal)
+  }
+}
+
+const executorReportRow = (
+  report: PlannedAttemptExecutorReport,
+  ordinalValue: number
+): { readonly event: JournalRecord["event"]; readonly key: JournalRecord["key"] } => {
+  const ordinal = PlannedAttemptExecutorReportOrdinal.make(ordinalValue)
+  return {
+    event: PlannedAttemptExecutorWorkReportedEvent.make({ ordinal, report, version: workflowJournalEventVersion }),
+    key: plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal)
+  }
+}
+
+const activeWorktreeFailureRows = (
+  attempt: PlannedTaskAttempt,
+  operationId: OperationId,
+  ordinal: number
+): ReadonlyArray<{ readonly event: JournalRecord["event"]; readonly key: JournalRecord["key"] }> => {
+  const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: attempt.attemptId, runId: attempt.runId })
+  const activeOrdinal = ActiveWorkAuthorityRefreshOrdinal.make(ordinal)
+  const operation = makeActiveWorkAuthorityRefreshGitReadOperation(
+    makeTaskWorktreeObservationOperation({ operationId, plannedAttempt: attempt, predecessorOperationIds: [] }),
+    authority,
+    activeOrdinal
+  )
+  return [
+    {
+      event: ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation,
+        version: workflowJournalEventVersion
+      }),
+      key: intentRecordKey(operationId)
+    },
+    {
+      event: ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
+        authority,
+        failure: new GitWorktreeReadFailure({
+          detail: "controlled active-refresh worktree read failure",
+          worktree: attempt.worktree
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operation,
+        ordinal: activeOrdinal,
+        source: "TrackerNotification",
+        version: workflowJournalEventVersion
+      }),
+      key: activeWorkAuthorityRefreshGitReadFailedRecordKey(operationId, activeOrdinal)
+    }
+  ]
+}
 
 it("accepts every chronological workflow-journal-history boundary prefix", () => {
   for (let length = 0; length <= records.length; length += 1) {
@@ -307,11 +514,63 @@ it("accepts every chronological workflow-journal-history boundary prefix", () =>
   if (final._tag !== "ValidWorkflowJournalHistory") return
   expect(final.runState.appliedThrough).toBe(records.length)
   expect(final.runState.graphKnowledge.taskTrackerFacts).toHaveLength(2)
-  const running = reconstructRunState(runId, records.slice(0, 12))
+  const running = reconstructRunState(runId, records.slice(0, 13))
   expect(running._tag).toBe("ValidReconstructedRun")
   if (running._tag !== "ValidReconstructedRun") return
   expect(hasUnfinishedRunResponsibility(running.state)).toBe(true)
   expect(hasUnfinishedRunResponsibility(final.runState)).toBe(false)
+})
+
+it("accepts exact Running active-refresh failure chronology and rejects mismatched authority chronology", () => {
+  const runningRows = eventRows.slice(0, 13)
+  const exactFailureRows = activeWorktreeFailureRows(
+    plannedAttempt,
+    OperationId.make("active-refresh-exact-running-failure"),
+    1
+  )
+  const exactReduction = reduceWorkflowJournalHistory(runId, recordsFrom([...runningRows, ...exactFailureRows]))
+  expect(exactReduction).toMatchObject({
+    _tag: "ValidWorkflowJournalHistory",
+    runState: { appliedThrough: runningRows.length + exactFailureRows.length }
+  })
+
+  const foreignRunAttempt = PlannedTaskAttempt.make({
+    ...plannedAttempt,
+    attemptId: AttemptId.make("active-refresh-foreign-run-attempt"),
+    runId: RunId.make("active-refresh-foreign-run")
+  })
+  const histories = [
+    {
+      detail: "binds another Run",
+      rows: [
+        ...runningRows,
+        ...activeWorktreeFailureRows(foreignRunAttempt, OperationId.make("active-refresh-foreign-run-failure"), 1)
+      ]
+    },
+    {
+      detail: "requires the latest exact Running executor report",
+      rows: [
+        ...eventRows.slice(0, 10),
+        ...activeWorktreeFailureRows(plannedAttempt, OperationId.make("active-refresh-without-running-report"), 1)
+      ]
+    },
+    {
+      detail: "must exceed prior durable ordinal 1, found 1",
+      rows: [
+        ...runningRows,
+        ...activeWorktreeFailureRows(plannedAttempt, OperationId.make("active-refresh-first-durable-ordinal"), 1),
+        ...activeWorktreeFailureRows(plannedAttempt, OperationId.make("active-refresh-reused-durable-ordinal"), 1)
+      ]
+    }
+  ] as const
+
+  for (const history of histories) {
+    const reduction = reduceWorkflowJournalHistory(runId, recordsFrom(history.rows))
+    expect(reduction).toMatchObject({
+      _tag: "InvalidWorkflowJournalHistory",
+      issues: expect.arrayContaining([expect.objectContaining({ detail: expect.stringContaining(history.detail) })])
+    })
+  }
 })
 
 it("rejects Git outcomes that do not match the exact read intent and planned attempt", () => {
@@ -429,17 +688,378 @@ it("describes every current journal identity", () => {
     "PlannedAttemptExecutorEventDescriptor",
     "PlannedAttemptExecutorEventDescriptor",
     "PlannedAttemptExecutorEventDescriptor",
+    "PlannedAttemptExecutorEventDescriptor",
+    "PlannedAttemptExecutorEventDescriptor",
+    "PlannedAttemptExecutorEventDescriptor",
     "PlannedAttemptExecutorEventDescriptor"
   ])
 })
 
 it("rejects an executor response without an exact outstanding command intent", () => {
+  const reduction = reduceWorkflowJournalHistory(runId, recordsFrom([planRow, startRow, firstResponseRow]))
+
+  expect(reduction).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("does not name its unmatched command intent") })
+    ])
+  })
+})
+
+it("rejects an accepted executor lifecycle report without matching unaccepted boundary evidence", () => {
   const reduction = reduceWorkflowJournalHistory(runId, recordsFrom([planRow, startRow, firstReportRow]))
 
   expect(reduction).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: expect.arrayContaining([
-      expect.objectContaining({ detail: expect.stringContaining("has no outstanding command intent") })
+      expect.objectContaining({
+        detail: expect.stringContaining("lacks a matching unaccepted command response or observation")
+      })
+    ])
+  })
+})
+
+it("does not authorize an attempt choice from an exact Safe state crash prefix before WorkReported", () => {
+  const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+  const requestId = AttemptChoiceRequestId.make({ nonce: "unaccepted-safe-choice", runId })
+  const reduction = reduceWorkflowJournalHistory(
+    runId,
+    recordsFrom([
+      ...eventRows.slice(0, 13),
+      executorStateRow(PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: safe })),
+      {
+        event: AttemptChoiceAppliedEvent.make({
+          choice: "ContinueExistingAttempt",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          requestId,
+          subject: { observedTaskRevision: TaskRevision.make("unaccepted-safe-choice-revision"), plannedAttempt },
+          version: workflowJournalEventVersion
+        }),
+        key: attemptChoiceAppliedRecordKey(requestId)
+      }
+    ])
+  )
+
+  expect(reduction).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({
+        detail: expect.stringContaining("requires the latest accepted safely-suspended executor report")
+      })
+    ])
+  })
+})
+
+it.each(["StateObserved", "SuspendResponse"] as const)(
+  "rejects accepted Safe-to-Executing lifecycle advancement caused by %s rather than Resume",
+  (source) => {
+    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    const unacceptedRows =
+      source === "StateObserved"
+        ? [
+            executorStateRow(
+              PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: executing })
+            )
+          ]
+        : [executorCommandRow("Suspend", 3), executorResponseRow(executing, 3)]
+    const reduction = reduceWorkflowJournalHistory(
+      runId,
+      recordsFrom([...eventRows.slice(0, 16), ...unacceptedRows, executorReportRow(executing, 3)])
+    )
+
+    expect(reduction).toMatchObject({
+      _tag: "InvalidWorkflowJournalHistory",
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          detail: expect.stringContaining("requires its matching Resume command response or projection")
+        })
+      ])
+    })
+  }
+)
+
+it.each(["CommandResponse", "CommandProjection"] as const)(
+  "accepts Safe-to-Executing lifecycle advancement from its exact Resume %s",
+  (source) => {
+    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    const unaccepted =
+      source === "CommandResponse" ? executorResponseRow(executing, 3) : executorProjectionRow(executing, 3)
+    const reduction = reduceWorkflowJournalHistory(
+      runId,
+      recordsFrom([
+        ...eventRows.slice(0, 16),
+        executorCommandRow("Resume", 3),
+        unaccepted,
+        executorReportRow(executing, 3)
+      ])
+    )
+
+    expect(reduction._tag).toBe("ValidWorkflowJournalHistory")
+  }
+)
+
+it("validates a typed passive lifecycle contradiction without treating it as exact evidence", () => {
+  const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+  const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+  const contradiction = executorStateRow(
+    PlannedAttemptExecutorStateObservation.cases.ExecutorLifecycleTransitionContradiction.make({
+      accepted: safe,
+      observed: executing
+    })
+  )
+  const valid = reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 16), contradiction]))
+  expect(valid._tag).toBe("ValidWorkflowJournalHistory")
+
+  const malformed = executorStateRow(
+    PlannedAttemptExecutorStateObservation.cases.ExecutorLifecycleTransitionContradiction.make({
+      accepted: executing,
+      observed: safe
+    })
+  )
+  expect(reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 16), malformed]))).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("does not name its latest accepted report") })
+    ])
+  })
+
+  const foreignCorrelationContradiction = executorStateRow(
+    PlannedAttemptExecutorStateObservation.cases.ExecutorLifecycleTransitionContradiction.make({
+      accepted: safe,
+      observed: foreignExecuting
+    })
+  )
+  expect(
+    reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 16), foreignCorrelationContradiction]))
+  ).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("contains a contradictory correlation") })
+    ])
+  })
+})
+
+it("validates a typed first-report causality contradiction only before an exact Begin settlement", () => {
+  const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+  const contradiction = executorStateRow(
+    PlannedAttemptExecutorStateObservation.cases.ExecutorInitialReportCausalityContradiction.make({
+      observed: executing
+    })
+  )
+  expect(reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 10), contradiction]))._tag).toBe(
+    "ValidWorkflowJournalHistory"
+  )
+
+  expect(reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 13), contradiction]))).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("does not describe a missing exact Begin settlement") })
+    ])
+  })
+
+  const foreignContradiction = executorStateRow(
+    PlannedAttemptExecutorStateObservation.cases.ExecutorInitialReportCausalityContradiction.make({
+      observed: foreignExecuting
+    })
+  )
+  expect(
+    reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 10), foreignContradiction]))
+  ).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("contains a contradictory correlation") })
+    ])
+  })
+})
+
+it("rejects Safe as the first lifecycle report even when it matches a settled Begin", () => {
+  const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+  const reduction = reduceWorkflowJournalHistory(
+    runId,
+    recordsFrom([...eventRows.slice(0, 11), executorResponseRow(safe, 1), executorReportRow(safe, 1)])
+  )
+
+  expect(reduction).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("PlannedAttemptExecutorBeginReportContradiction") })
+    ])
+  })
+})
+
+it("rejects a Safe-to-Executing report without a later command-boundary witness", () => {
+  const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+  expect(
+    reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 16), executorReportRow(executing, 3)]))
+  ).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({
+        detail: expect.stringContaining("requires its matching Resume command response or projection")
+      })
+    ])
+  })
+})
+
+it("rejects an unchanged executor lifecycle report as a duplicate accepted observation", () => {
+  const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+  expect(
+    reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 13), executorReportRow(executing, 2)]))
+  ).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("repeats an unchanged lifecycle report") })
+    ])
+  })
+})
+
+it("rejects a command response whose report belongs to another attempt", () => {
+  expect(
+    reduceWorkflowJournalHistory(
+      runId,
+      recordsFrom([...eventRows.slice(0, 11), executorResponseRow(foreignExecuting, 1)])
+    )
+  ).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({
+        detail: expect.stringContaining("executor command response for attempt attempt-A is foreign")
+      })
+    ])
+  })
+})
+
+it("rejects a stopped-claim release intent after a prior no-release disposition", () => {
+  const requestId = AttemptChoiceRequestId.make({ nonce: "history-stopped-terminal", runId })
+  const expectedClaim = ActiveTaskClaim.make(claim.acquisition)
+  const subject = { observedTaskRevision: TaskRevision.make("history-stopped-observed-revision"), plannedAttempt }
+  const appliedStop = AttemptChoiceAppliedEvent.make({
+    choice: "StopTaskImplementation",
+    initiatedBy: { _tag: "Operator" },
+    occurrenceClassification: "InitiatedAction",
+    requestId,
+    subject,
+    version: workflowJournalEventVersion
+  })
+  const abandonment = AttemptImplementationAbandonedEvent.make({
+    expectedClaim,
+    initiatedBy: { _tag: "DalphCoordinator" },
+    occurrenceClassification: "InitiatedAction",
+    proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2) },
+    requestId,
+    subject,
+    version: workflowJournalEventVersion
+  })
+  const claimRead = makeTaskClaimObservationOperation(
+    OperationId.make("history-stopped-terminal-claim-read"),
+    target,
+    taskId,
+    [claim.acquisition.operationId]
+  )
+  const noReleaseObservation = UnclaimedTask.make({ taskId })
+  const noRelease = StoppedAttemptClaimNoReleaseObservedEvent.make({
+    expectedClaim,
+    observation: noReleaseObservation,
+    observationOperationId: claimRead.operationId,
+    occurrenceClassification: "NonActionOccurrence",
+    requestId,
+    subject,
+    version: workflowJournalEventVersion
+  })
+  const release = makeTaskClaimReleaseOperation({
+    authority: TaskClaimReleaseAuthority.cases.StoppedAttemptClaimReleaseAuthority.make({
+      observationOperationId: claimRead.operationId,
+      requestId
+    }),
+    predecessorOperationIds: [claim.acquisition.operationId, claimRead.operationId],
+    release: { claim: expectedClaim, operationId: OperationId.make("history-stopped-terminal-release") }
+  })
+  const reduction = reduceWorkflowJournalHistory(
+    runId,
+    recordsFrom([
+      ...eventRows.slice(0, 16),
+      { event: appliedStop, key: attemptChoiceAppliedRecordKey(requestId) },
+      { event: abandonment, key: describeJournalEvent(abandonment).expectedKey },
+      { event: taskTrackerReadIntent(claimRead), key: intentRecordKey(claimRead.operationId) },
+      {
+        event: taskTrackerFactsObservedEvent(
+          claimRead.operationId,
+          makeFocusedTaskClaimFactsObserved(claimRead, noReleaseObservation)
+        ),
+        key: outcomeRecordKey(claimRead.operationId)
+      },
+      { event: noRelease, key: stoppedAttemptClaimNoReleaseRecordKey(requestId) },
+      {
+        event: TaskClaimReleaseIntendedEvent.make({ operation: release, version: workflowJournalEventVersion }),
+        key: intentRecordKey(release.release.operationId)
+      }
+    ])
+  )
+  expect(reduction).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: "stopped-attempt claim disposition is already terminal" })
+    ])
+  })
+})
+
+it("rejects a Suspend intent without latest accepted Executing authority", () => {
+  const reduction = reduceWorkflowJournalHistory(
+    runId,
+    recordsFrom([...eventRows.slice(0, 10), executorCommandRow("Suspend", 1)])
+  )
+
+  expect(reduction).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("lacks latest accepted executing-work authority") })
+    ])
+  })
+})
+
+it("rejects Resume after later raw evidence supersedes the accepted Safe report", () => {
+  const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+  const reduction = reduceWorkflowJournalHistory(
+    runId,
+    recordsFrom([
+      ...eventRows.slice(0, 16),
+      executorStateRow(PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: executing })),
+      executorCommandRow("Resume", 3)
+    ])
+  )
+
+  expect(reduction).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining("lacks an unconsumed accepted safe suspension") })
+    ])
+  })
+})
+
+it("rejects a lifecycle report when a later unavailable read supersedes its exact evidence", () => {
+  const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+  const unavailable = {
+    event: PlannedAttemptExecutorStateObservedEvent.make({
+      observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateTemporarilyUnavailable.make({}),
+      occurrenceClassification: "NonActionOccurrence" as const,
+      ordinal: observationOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    }),
+    key: plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, observationOrdinal)
+  }
+  const reduction = reduceWorkflowJournalHistory(
+    runId,
+    recordsFrom([...eventRows.slice(0, 12), unavailable, firstReportRow])
+  )
+
+  expect(reduction).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({
+        detail: expect.stringContaining("lacks a matching unaccepted command response or observation")
+      })
     ])
   })
 })
@@ -481,6 +1101,7 @@ it("rejects continuation authorization when its run and current witnesses are no
       taskClaimObservationOperationId: OperationId.make("continuation-claim"),
       taskWorkSpecificationObservationOperationId: OperationId.make("continuation-specification")
     },
+    targetLineageObservationOperationId: OperationId.make("continuation-target-lineage"),
     worktreeObservationOperationId: OperationId.make("continuation-worktree")
   }
   const event = PlannedAttemptContinuationAuthorizedEvent.make({
@@ -490,17 +1111,7 @@ it("rejects continuation authorization when its run and current witnesses are no
   })
   const reduction = reduceWorkflowJournalHistory(
     runId,
-    recordsFrom([
-      {
-        event,
-        key: plannedAttemptContinuationAuthorizedRecordKey(otherAttempt.attemptId, [
-          witness.activeTaskContinuationRead.graphObservationOperationId,
-          witness.activeTaskContinuationRead.taskClaimObservationOperationId,
-          witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId,
-          witness.worktreeObservationOperationId
-        ])
-      }
-    ])
+    recordsFrom([{ event, key: plannedAttemptContinuationAuthorizedRecordKey(otherAttempt.attemptId, witness) }])
   )
   expect(reduction).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
@@ -564,7 +1175,7 @@ it("records the superseded attempt before rejecting its later executor responsib
     graphObservationOperationId: graphRead.operationId,
     oldWorktreeObservationOperationId: worktreeRead.operationId,
     oldWorktreeProof: proof,
-    quiescenceProof: { _tag: "CommandResponse", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+    quiescenceProof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
     specificationObservationOperationId: specificationRead.operationId,
     targetHeadSha: successor.baseSha,
     targetLineageObservationOperationId: targetRead.operationId
@@ -651,7 +1262,7 @@ it("rejects a generic executor-state observation while an exact command remains 
       {
         event: PlannedAttemptExecutorStateObservedEvent.make({
           observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
-            report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+            report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
           }),
           occurrenceClassification: "NonActionOccurrence",
           ordinal: observationOrdinal,
@@ -671,46 +1282,54 @@ it("rejects a generic executor-state observation while an exact command remains 
   })
 })
 
-it("rejects more than three settled executor commands in one safe-suspension epoch", () => {
-  for (const command of ["StartOrContinue", "Suspend"] as const) {
-    const commandAndReports = Array.from({ length: 4 }, (_, index) => {
-      const ordinal = index + 1
-      const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(ordinal)
-      const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(ordinal)
-      return [
-        {
-          event: PlannedAttemptExecutorCommandIntendedEvent.make({
-            command,
-            initiatedBy: { _tag: "DalphCoordinator" },
-            occurrenceClassification: "InitiatedAction",
-            ordinal: commandOrdinal,
-            plannedAttempt,
-            version: workflowJournalEventVersion
-          }),
-          key: plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal)
-        },
-        {
-          event: PlannedAttemptExecutorWorkReportedEvent.make({
-            ordinal: reportOrdinal,
-            report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
-            version: workflowJournalEventVersion
-          }),
-          key: plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal)
-        }
-      ] as const
-    }).flat()
-    const reduction = reduceWorkflowJournalHistory(
-      runId,
-      recordsFrom([...eventRows.slice(0, 10), ...commandAndReports])
-    )
+it("does not reset the suspension-command epoch from an unaccepted exact Safe state observation", () => {
+  const commandAndResponses = Array.from({ length: 4 }, (_, index) => {
+    const ordinal = index + 2
+    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(ordinal)
+    return [
+      {
+        event: PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Suspend",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: commandOrdinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        }),
+        key: plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal)
+      },
+      {
+        event: PlannedAttemptExecutorCommandResponseObservedEvent.make({
+          commandOrdinal,
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt,
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
+          version: workflowJournalEventVersion
+        }),
+        key: plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal)
+      }
+    ] as const
+  }).flat()
+  const reduction = reduceWorkflowJournalHistory(
+    runId,
+    recordsFrom([
+      ...eventRows.slice(0, 13),
+      ...commandAndResponses.slice(0, 6),
+      executorStateRow(
+        PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+        })
+      ),
+      ...commandAndResponses.slice(6)
+    ])
+  )
 
-    expect(reduction).toMatchObject({
-      _tag: "InvalidWorkflowJournalHistory",
-      issues: expect.arrayContaining([
-        expect.objectContaining({ detail: expect.stringContaining(`exceeds durable limit 3`) })
-      ])
-    })
-  }
+  expect(reduction).toMatchObject({
+    _tag: "InvalidWorkflowJournalHistory",
+    issues: expect.arrayContaining([
+      expect.objectContaining({ detail: expect.stringContaining(`exceeds durable limit 3`) })
+    ])
+  })
 })
 
 it("rejects malformed envelopes, causal links, claims, plans, and executor reports", () => {
@@ -752,7 +1371,7 @@ it("rejects malformed envelopes, causal links, claims, plans, and executor repor
       {
         event: PlannedAttemptExecutorWorkReportedEvent.make({
           ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
-          report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
           version: workflowJournalEventVersion
         }),
         key: plannedAttemptExecutorWorkReportedRecordKey(
@@ -768,7 +1387,7 @@ it("rejects malformed envelopes, causal links, claims, plans, and executor repor
       {
         event: PlannedAttemptExecutorWorkReportedEvent.make({
           ordinal: PlannedAttemptExecutorReportOrdinal.make(4),
-          report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
           version: workflowJournalEventVersion
         }),
         key: plannedAttemptExecutorWorkReportedRecordKey(

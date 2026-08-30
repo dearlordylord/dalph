@@ -12,7 +12,6 @@ import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import {
   AcceptedResultEvidenceUnavailable,
   AcceptedResultNotDurable,
-  AcceptedResultSuppressedByRestart,
   IntegrationTargetSelection,
   QueuedIntegrationResponsibility,
   StartedIntegrationResponsibility,
@@ -104,7 +103,7 @@ const acceptedReportAt = (position: number): JournalRecordType =>
     PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(position),
       report: {
-        _tag: "Terminal",
+        _tag: "ExecutorWorkTerminal",
         correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId },
         result: { _tag: "Accepted", acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult }
       },
@@ -117,7 +116,10 @@ const runningReportAt = (position: number): JournalRecordType =>
     position,
     PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(position),
-      report: { _tag: "Running", correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId } },
+      report: {
+        _tag: "ExecutorWorkExecuting",
+        correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId }
+      },
       version: workflowJournalEventVersion
     })
   )
@@ -265,7 +267,7 @@ it("derives one unqueued accepted result from matching executor responsibility a
     event: PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
       report: {
-        _tag: "Terminal",
+        _tag: "ExecutorWorkTerminal",
         correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId },
         result: { _tag: "Accepted", acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult }
       },
@@ -300,7 +302,7 @@ it("derives sibling successors from one persistent prefix index without leaking 
     event: PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
       report: {
-        _tag: "Terminal",
+        _tag: "ExecutorWorkTerminal",
         correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId },
         result: { _tag: "Accepted", acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult }
       },
@@ -360,15 +362,8 @@ it("derives sibling successors from one persistent prefix index without leaking 
   )
 })
 
-it("retains repeated executor, accepted-terminal, and restart facts without sharing branch state", () => {
-  const records = [
-    responsibilityRecordAt(1),
-    responsibilityRecordAt(2),
-    acceptedReportAt(3),
-    acceptedReportAt(4),
-    restartChoiceAt(5),
-    restartChoiceAt(6)
-  ]
+it("retains repeated executor and accepted-terminal facts without sharing branch state", () => {
+  const records = [responsibilityRecordAt(1), responsibilityRecordAt(2), acceptedReportAt(3), acceptedReportAt(4)]
 
   expect(deriveUnqueuedAcceptedResults(records)).toHaveLength(2)
   expect(deriveUnqueuedAcceptedResults(records)).toEqual(deriveUnqueuedAcceptedResults([...records]))
@@ -438,7 +433,7 @@ it("settles an exact finality prefix, rejects a mismatch, and suppresses a later
   expect(deriveIntegrationAdmission(unrelatedAppend).responsibilities).toHaveLength(0)
 })
 
-it("incrementally preserves accepted-result suppression for queued, unknown, and restarted reports", () => {
+it("incrementally suppresses only queued and unknown accepted reports", () => {
   const appendAndDerive = (
     prior: ReadonlyArray<JournalRecordType>,
     appended: JournalRecordType
@@ -468,27 +463,15 @@ it("incrementally preserves accepted-result suppression for queued, unknown, and
   expect(appendAndDerive(queuedPrior, acceptedReportAt(3))).toEqual([])
   expect(appendAndDerive([], acceptedReportAt(1))).toEqual([])
   expect(appendAndDerive([responsibilityRecordAt(1)], runningReportAt(2))).toEqual([])
-  expect(appendAndDerive([responsibilityRecordAt(1), restartChoiceAt(2)], acceptedReportAt(3))).toEqual([])
+  expect(appendAndDerive([responsibilityRecordAt(1), restartChoiceAt(2)], acceptedReportAt(3))).toHaveLength(1)
   expect(appendAndDerive([responsibilityRecordAt(1)], acceptedReportAt(2))).toHaveLength(1)
 })
 
-it.effect("queues only a durable accepted result after restart and evidence checks", () =>
+it.effect("queues only a durable accepted result after evidence checks", () =>
   Effect.gen(function* () {
     const acceptedResult = fixture.qualifiedCandidate.run.session.acceptedResult
     const durable = [responsibilityRecordAt(1), acceptedReportAt(2)]
-    const suppressed = [responsibilityRecordAt(1), restartChoiceAt(2), acceptedReportAt(3)]
-
-    const restartFailure = yield* Effect.flip(
-      queueAcceptedResultIntegrationResponsibility(
-        fixture.plannedAttempt,
-        acceptedResult,
-        fixture.integrationTarget
-      ).pipe(Effect.provideService(InRunJournal, journalWith(suppressed)))
-    )
-    expect(restartFailure).toEqual(
-      new AcceptedResultSuppressedByRestart({ attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId })
-    )
-
+    const afterRestart = [responsibilityRecordAt(1), restartChoiceAt(2), acceptedReportAt(3)]
     const evidenceFailure = yield* Effect.flip(
       queueAcceptedResultIntegrationResponsibility(
         fixture.plannedAttempt,
@@ -520,6 +503,22 @@ it.effect("queues only a durable accepted result after restart and evidence chec
       )
     )
     expect(queuedResult.acceptedResult).toEqual(acceptedResult)
+
+    const queuedAfterRestart = yield* queueAcceptedResultIntegrationResponsibility(
+      fixture.plannedAttempt,
+      acceptedResult,
+      fixture.integrationTarget
+    ).pipe(
+      Effect.provideService(InRunJournal, journalWith(afterRestart)),
+      Effect.provideService(
+        EvidenceStore,
+        EvidenceStore.of({
+          put: () => Effect.die("unused"),
+          read: () => Effect.succeed(new TextEncoder().encode(JSON.stringify(manifest)))
+        })
+      )
+    )
+    expect(queuedAfterRestart.acceptedResult).toEqual(acceptedResult)
 
     const notDurable = yield* Effect.flip(
       queueAcceptedResultIntegrationResponsibility(

@@ -1,6 +1,6 @@
 import { strict as assert } from "node:assert"
 import { Schema } from "effect"
-import { coordinatorProcessDeathContinuesAuthoredCassette } from "../../../packages/dalph/src/cassettes/catalog.ts"
+import { taskUnpauseAfterSafeSuspensionAuthoredCassette } from "../../../packages/dalph/src/cassettes/catalog.ts"
 import { AttemptId } from "../../../packages/contracts/src/planned-attempt.ts"
 import { TaskId } from "../../../packages/contracts/src/task-identity.ts"
 import { JournalPosition } from "../../../packages/orchestrator/src/workflow-journal/identity.ts"
@@ -14,54 +14,56 @@ import {
 import { runMaintainedCassette } from "./cassette-lab.ts"
 import { continuationAuthorizationSummaryItems } from "./cassette-lab-view.ts"
 
-const cassetteKey = "authored:coordinatorProcessDeathContinues" as const
+const cassetteKey = "authored:taskUnpauseAfterSafeSuspension" as const
 
 const result = await runMaintainedCassette(cassetteKey)
 if (result._tag !== "Completed") throw new Error(result.detail)
 
 const projection = continuationAuthorizationProjectionOf(result)
 assert.notEqual(projection, null)
-if (projection === null) throw new Error("The maintained recovery cassette must expose continuation prefixes")
+if (projection === null) throw new Error("The maintained safely suspended Resume cassette must expose continuation prefixes")
 
 assert.equal(projection.catalogKey, cassetteKey)
 assert.equal(projection.runId, result.runId)
 assert.equal(projection.attemptId, "attempt:A:0")
 assert.deepEqual(
   projection.prefixes.map(({ _tag }) => _tag),
-  ["BeforeAuthorization", "AfterAuthorizationBeforeReport", "AfterTerminal"]
+  ["BeforeAuthorization", "AfterAuthorizationBeforeReport", "AfterTerminalReport"]
 )
 const beforeAuthorization = projection.prefixes.find(({ _tag }) => _tag === "BeforeAuthorization")
 assert.notEqual(beforeAuthorization, undefined)
 if (beforeAuthorization === undefined) throw new Error("The pre-authorization prefix is missing")
-assert.equal(beforeAuthorization.throughPosition, 25)
+assert.equal(beforeAuthorization.throughPosition, 39)
 assert.equal(beforeAuthorization.authorizationPosition, null)
 assert.equal(beforeAuthorization.executorReport, null)
-assert.equal(beforeAuthorization.witnesses?.activeTask.graph.intentPosition, 16)
-assert.equal(beforeAuthorization.witnesses?.activeTask.graph.observationPosition, 17)
-assert.equal(beforeAuthorization.witnesses?.activeTask.specification.intentPosition, 18)
-assert.equal(beforeAuthorization.witnesses?.activeTask.specification.observationPosition, 19)
-assert.equal(beforeAuthorization.witnesses?.activeTask.claim.intentPosition, 20)
-assert.equal(beforeAuthorization.witnesses?.activeTask.claim.observationPosition, 21)
-assert.equal(beforeAuthorization.witnesses?.worktree.intentPosition, 22)
-assert.equal(beforeAuthorization.witnesses?.worktree.observationPosition, 23)
+assert.equal(beforeAuthorization.witnesses?.activeTask.graph.intentPosition, 30)
+assert.equal(beforeAuthorization.witnesses?.activeTask.graph.observationPosition, 31)
+assert.equal(beforeAuthorization.witnesses?.activeTask.specification.intentPosition, 32)
+assert.equal(beforeAuthorization.witnesses?.activeTask.specification.observationPosition, 33)
+assert.equal(beforeAuthorization.witnesses?.activeTask.claim.intentPosition, 34)
+assert.equal(beforeAuthorization.witnesses?.activeTask.claim.observationPosition, 35)
+assert.equal(beforeAuthorization.witnesses?.worktree.intentPosition, 36)
+assert.equal(beforeAuthorization.witnesses?.worktree.observationPosition, 37)
+assert.equal(beforeAuthorization.witnesses?.targetLineage.intentPosition, 38)
+assert.equal(beforeAuthorization.witnesses?.targetLineage.observationPosition, 39)
 
 const afterAuthorization = projection.prefixes.find(({ _tag }) => _tag === "AfterAuthorizationBeforeReport")
 assert.notEqual(afterAuthorization, undefined)
 if (afterAuthorization === undefined) throw new Error("The post-authorization prefix is missing")
-assert.equal(afterAuthorization.throughPosition, 26)
-assert.equal(afterAuthorization.authorizationPosition, 26)
+assert.equal(afterAuthorization.throughPosition, 40)
+assert.equal(afterAuthorization.authorizationPosition, 40)
 assert.equal(afterAuthorization.executorReport, null)
 assert.equal(afterAuthorization.runId, projection.runId)
 assert.equal(afterAuthorization.attemptId, projection.attemptId)
 
-const terminal = projection.prefixes.find(({ _tag }) => _tag === "AfterTerminal")
+const terminal = projection.prefixes.find(({ _tag }) => _tag === "AfterTerminalReport")
 assert.notEqual(terminal, undefined)
 if (terminal === undefined) throw new Error("The terminal prefix is missing")
-assert.deepEqual(terminal.executorReport, { _tag: "Terminal", position: 28 })
-assert.equal(terminal.authorizationPosition, 26)
+assert.deepEqual(terminal.executorReport, { _tag: "ExecutorWorkTerminal", position: 43 })
+assert.equal(terminal.authorizationPosition, 40)
 assert.equal(terminal.runId, projection.runId)
 assert.equal(terminal.attemptId, projection.attemptId)
-assert.deepEqual(projection.executorBoundary, { _tag: "ExecutorReportObserved", position: 28 })
+assert.deepEqual(projection.executorBoundary, { _tag: "ExecutorReportObserved", position: 43 })
 
 assert.equal(projection.identity.responsibilityCount, 1)
 assert.equal(projection.identity.authorizationCount, 1)
@@ -69,7 +71,13 @@ assert.deepEqual(projection.identity.plannedAttemptIds, [projection.attemptId])
 assert.deepEqual(projection.identity.plannedAttemptCorrelations, [{ runId: projection.runId, attemptId: projection.attemptId }])
 assert.deepEqual(projection.identity.responsibilityCorrelations, [{ runId: projection.runId, attemptId: projection.attemptId }])
 assert.deepEqual(projection.identity.authorizationCorrelations, [{ runId: projection.runId, attemptId: projection.attemptId }])
-assert.deepEqual(projection.identity.reportCorrelations, [{ runId: projection.runId, attemptId: projection.attemptId }])
+assert.equal(projection.identity.reportCorrelations.length, 3)
+assert.equal(
+  projection.identity.reportCorrelations.every(
+    ({ attemptId, runId }) => attemptId === projection.attemptId && runId === projection.runId
+  ),
+  true
+)
 
 const records = continuationAuthorizationJournalRecordsOf(result)
 assert.equal(records.length, result.journalRecordCount)
@@ -109,7 +117,7 @@ if (identityProjection === null) throw new Error("The replacement-attempt identi
 assert.equal(identityProjection.identity.plannedAttemptCorrelations.length, 2)
 assert.equal(identityProjection.identity.responsibilityCorrelations.length, 2)
 assert.equal(identityProjection.identity.authorizationCorrelations.length, 2)
-assert.equal(identityProjection.identity.reportCorrelations.length, 2)
+assert.equal(identityProjection.identity.reportCorrelations.length, 6)
 assert.deepEqual(identityProjection.identity.plannedAttemptIds, [projection.attemptId, replacementAttempt.attemptId])
 const identitySummary = continuationAuthorizationSummaryItems(identityProjection).find(({ term }) => term === "Identity check")
 assert.notEqual(identitySummary, undefined)
@@ -131,11 +139,24 @@ for (const family of [
 const witness = projection.authorization.witness
 const plannedAttempt = projection.plannedAttempt
 const preAuthorizationRecords = records.filter(({ position }) => position <= beforeAuthorization.throughPosition)
-const executorBoundaryEvidenceTags = new Set([
-  "PlannedAttemptExecutorWorkReported",
-  "PlannedAttemptExecutorCommandIntended"
-])
-assert.equal(preAuthorizationRecords.some(({ event }) => executorBoundaryEvidenceTags.has(event._tag)), false)
+const acceptedSafeReport = preAuthorizationRecords.findLast(
+  ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkSafelySuspended"
+)
+assert.notEqual(acceptedSafeReport, undefined)
+if (acceptedSafeReport === undefined || acceptedSafeReport.event._tag !== "PlannedAttemptExecutorWorkReported") {
+  throw new Error("The continuation fixture must retain its accepted safely suspended authority")
+}
+assert.equal(acceptedSafeReport.position, 29)
+assert.deepEqual(acceptedSafeReport.event.report.correlation, {
+  attemptId: projection.attemptId,
+  runId: projection.runId
+})
+assert.equal(
+  preAuthorizationRecords.some(
+    ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Resume"
+  ),
+  false
+)
 const authorizedDecision = continuationAuthorizationContactDecision(preAuthorizationRecords, plannedAttempt, witness)
 assert.equal(authorizedDecision._tag, "ExecutorContactAvailable", "fresh witnesses must permit the existing executor command gate")
 if (authorizedDecision._tag === "ExecutorContactAvailable") {
@@ -144,7 +165,7 @@ if (authorizedDecision._tag === "ExecutorContactAvailable") {
 const observedExecutorReportDecision = continuationAuthorizationContactDecision(records, plannedAttempt, witness)
 assert.equal(observedExecutorReportDecision._tag, "ExecutorContactUnavailable")
 if (observedExecutorReportDecision._tag === "ExecutorContactUnavailable") {
-  assert.deepEqual(observedExecutorReportDecision.executorBoundary, { _tag: "ExecutorReportObserved", position: 28 })
+  assert.deepEqual(observedExecutorReportDecision.executorBoundary, { _tag: "ExecutorReportObserved", position: 43 })
 }
 const commandIntentOnlyDecision = continuationAuthorizationContactDecision(
   records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"),
@@ -153,14 +174,15 @@ const commandIntentOnlyDecision = continuationAuthorizationContactDecision(
 )
 assert.equal(commandIntentOnlyDecision._tag, "ExecutorContactUnavailable")
 if (commandIntentOnlyDecision._tag === "ExecutorContactUnavailable") {
-  assert.deepEqual(commandIntentOnlyDecision.executorBoundary, { _tag: "CommandIntentRecorded", position: 27 })
+  assert.deepEqual(commandIntentOnlyDecision.executorBoundary, { _tag: "CommandIntentRecorded", position: 41 })
 }
 assert.equal(
-  coordinatorProcessDeathContinuesAuthoredCassette.story.some(({ _tag }) => _tag === "CoordinatorProcessDies"),
+  taskUnpauseAfterSafeSuspensionAuthoredCassette.story.some(
+    (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.request === "Resume"
+  ),
   true,
-  "The exact authored lifecycle control must remain in the cassette story"
+  "The exact authored Resume boundary must remain in the cassette story"
 )
-assert.equal(records.some(({ event }) => String(event._tag) === "CoordinatorProcessDies"), false)
 const staleGraphObservationOperationId = records.flatMap(({ event }) =>
   event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "CompleteTaskTrackerFacts"
     ? [event.operationId]
@@ -198,7 +220,10 @@ const decisions = [
         && record.event.operation._tag === "ReadTrackerGraph"
         && record.event.operation.operationId === witness.activeTaskContinuationRead.graphObservationOperationId
       ) {
-        return { ...record, position: JournalPosition.make(18) }
+        return {
+          ...record,
+          position: JournalPosition.make((beforeAuthorization.witnesses.activeTask.graph.observationPosition as number) + 1)
+        }
       }
       return record
     }),
@@ -235,7 +260,20 @@ const decisions = [
 ] as const
 
 for (const { name, records: variantRecords, witness: variantWitness } of decisions) {
-  assert.equal(variantRecords.some(({ event }) => executorBoundaryEvidenceTags.has(event._tag)), false, `${name} fixture must stop before executor contact evidence`)
+  assert.equal(
+    variantRecords.some(
+      ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Resume"
+    ),
+    false,
+    `${name} fixture must stop before Resume intent`
+  )
+  assert.equal(
+    variantRecords.some(
+      ({ event, position }) => event._tag === "PlannedAttemptExecutorWorkReported" && position > acceptedSafeReport.position
+    ),
+    false,
+    `${name} fixture must contain no report after its accepted safely suspended authority`
+  )
   const decision = continuationAuthorizationContactDecision(variantRecords, plannedAttempt, variantWitness)
   assert.equal(decision._tag, "ExecutorContactUnavailable", `${name} witness must fail closed`)
   if (decision._tag === "ExecutorContactUnavailable") {

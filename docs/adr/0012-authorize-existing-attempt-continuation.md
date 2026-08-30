@@ -17,22 +17,25 @@ activation, is absent from the workflow journal and occurrence projection, and
 cannot be reconstructed as production history.
 
 Startup recovery reconstructs the unfinished responsibility from the ordinary
-Journal-backed Run entry. Before the executor is contacted, recovery performs
-the existing journaled task-tracker reads for the current graph, authored
-task-work specification, and exact claim. An unchanged graph uses the compact
-task-tracker reconfirmation. Recovery separately performs the ordinary Git
-read for the exact planned worktree. A generic durable
-`PlannedAttemptContinuationAuthorized` fact then names the four observation
-operation identities and the exact planned attempt. The action adapter accepts
-the continuation only when the witnesses are after the latest executor
-evidence, causally ordered after their own intents, and correctly correlated.
+Journal-backed Run entry. Passive observation may reconcile an ambiguous
+command, but only the latest current accepted
+`ExecutorWorkSafelySuspended` report can authorize Resume. Recovery then
+performs the existing journaled task-tracker reads for the current graph,
+authored task-work specification, and exact claim. An unchanged graph uses the
+compact task-tracker reconfirmation. Recovery separately performs the ordinary
+Git reads for the exact planned worktree and compatible target lineage. A
+generic durable `PlannedAttemptContinuationAuthorized` fact then names the five
+observation operation identities and the exact planned attempt. The action
+adapter accepts the continuation only when the witnesses follow the accepted
+safe report and their own intents, remain current, and are correctly
+correlated.
 
 The authorization is an internal workflow fact rather than a recovery event;
 it changes no reconstructed state and is not projected as a workflow
-occurrence. Missing, stale, later, or wrong-attempt witnesses fail with the
-owner's typed diagnostic before the executor boundary. The executor's later
-`Running` or `Terminal` report remains a report for the retained exact
-correlation.
+occurrence. Missing, stale, superseded, or wrong-attempt witnesses fail with
+the owner's typed diagnostic before the executor boundary. The executor's
+later `ExecutorWorkExecuting` or `ExecutorWorkTerminal` report remains a report
+for the retained exact correlation.
 
 ## Rejected alternatives
 

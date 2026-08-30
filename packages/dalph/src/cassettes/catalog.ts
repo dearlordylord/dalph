@@ -2,23 +2,11 @@
 import { makeTaskWorkSpecification, TaskId } from "@dalph/contracts"
 import { Option, Schema } from "effect"
 import { AuthoredScenarioCassette, type AuthoredScenarioCassette as ScenarioCassette } from "./authored.js"
-import { AuthoredCassetteStoryItem } from "./authored-domain.js"
+import { AuthoredCassetteStoryItem, type AuthoredOrchestrationEvidence } from "./authored-domain.js"
 import { deliveryStoryCapstoneAuthoredCassette } from "./delivery-story-capstone.js"
 
 const decodeStoryItem = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)
 const terminalStoryItemOffset = -1
-
-const requiredOccurrenceIndex = <Item>(
-  items: ReadonlyArray<Item>,
-  description: string,
-  matches: (item: Item) => boolean
-): number => {
-  const index = items.findIndex(matches)
-  return Option.some(index).pipe(
-    Option.filter((position) => position !== terminalStoryItemOffset),
-    Option.getOrThrowWith(() => new Error(`Missing maintained authored occurrence: ${description}`))
-  )
-}
 
 const authoredReconcileProposal = (taskId: "A" | "B", attemptId: "attempt:A:0" | "attempt:B:1") => ({
   _tag: "FreshWorkflowRoute" as const,
@@ -37,13 +25,6 @@ const authoredSuspendProposal = (taskId: "A" | "D", attemptId: "attempt:A:0" | "
     null,
     taskId
   ]),
-  taskId
-})
-
-const authoredStartExecutorProposal = (taskId: "A", attemptId: "attempt:A:0") => ({
-  _tag: "FreshExecutorWorkflowRoute" as const,
-  attemptId,
-  proposalId: JSON.stringify(["FreshExecutorWorkflowRoute", "StartPlannedAttemptExecutorWork", attemptId, taskId]),
   taskId
 })
 
@@ -184,7 +165,7 @@ export const singletonTaskCompletesAuthoredCassette: ScenarioCassette = Schema.d
   AuthoredScenarioCassette
 )({
   _tag: "AuthoredScenarioCassette",
-  name: "one open task completes its coarse executor work",
+  name: "one open task starts its coarse executor work",
   schemaVersion: 1,
   startingFacts: {
     executorWork: "NoPriorReport",
@@ -226,123 +207,56 @@ export const singletonTaskCompletesAuthoredCassette: ScenarioCassette = Schema.d
     { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
+      request: "Begin"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
     {
-      _tag: "TaskWorkSpecificationReadReturned",
-      body: "Implement the accepted singleton behavior.",
-      taskId: "A",
-      title: "Implement singleton"
-    },
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
-      request: "StartOrContinue"
-    },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    singletonExpectedBehavior
+      ...singletonExpectedBehavior,
+      taskWork: { absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "B" }], results: [] }
+    }
   ]
 })
 
-const singletonRunningExecutorReportAt = singletonTaskCompletesAuthoredCassette.story.findIndex(
-  (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running"
+const singletonExecutingExecutorReportAt = singletonTaskCompletesAuthoredCassette.story.findIndex(
+  (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "ExecutorWorkExecuting"
 )
-const singletonStoryBeforeRunningExecutorReport = singletonTaskCompletesAuthoredCassette.story.slice(
+const singletonStoryBeforeExecutingExecutorReport = singletonTaskCompletesAuthoredCassette.story.slice(
   0,
-  singletonRunningExecutorReportAt
+  singletonExecutingExecutorReportAt
 )
 type SingletonStoryItem = (typeof singletonTaskCompletesAuthoredCassette.story)[number]
 const isExecutorReport = (
   item: SingletonStoryItem | undefined
 ): item is Extract<SingletonStoryItem, { readonly _tag: "PlannedAttemptExecutorWorkReported" }> =>
   item?._tag === "PlannedAttemptExecutorWorkReported"
-const singletonRunningExecutorReport = Option.getOrThrow(
-  Option.fromUndefinedOr(singletonTaskCompletesAuthoredCassette.story[singletonRunningExecutorReportAt]).pipe(
+const singletonExecutingExecutorReport = Option.getOrThrow(
+  Option.fromUndefinedOr(singletonTaskCompletesAuthoredCassette.story[singletonExecutingExecutorReportAt]).pipe(
     Option.filter(isExecutorReport)
   )
 )
-const twoEligibleStoryBeforeRunningExecutorReport = singletonStoryBeforeRunningExecutorReport
-  .flatMap((item) => [
-    ...(item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim"
-      ? [
-          {
-            _tag: "DalphSelects" as const,
-            operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" }
-          },
-          { _tag: "TrackerGraphReadReturned" as const, graph: twoEligibleTasksGraph }
-        ]
-      : []),
-    item._tag === "TrackerGraphReadReturned" ? { ...item, graph: twoEligibleTasksGraph } : item
-  ])
-  .flatMap((item) => [
-    item,
-    ...(item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim"
-      ? [
-          { _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "B" } },
-          {
-            _tag: "DalphSelects" as const,
-            operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" }
-          },
-          { _tag: "TrackerGraphReadReturned" as const, graph: twoEligibleTasksGraph }
-        ]
-      : [])
-  ])
-  .flatMap((item) => [
-    item,
-    ...(item._tag === "TaskWorkSpecificationReadReturned" && item.taskId === "A"
-      ? [
-          { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: "B" } },
-          {
-            _tag: "TaskWorkSpecificationReadReturned" as const,
-            body: "Implement the second eligible behavior.",
-            taskId: "B",
-            title: "Implement second task"
-          }
-        ]
-      : [])
-  ])
-  .flatMap((item) => [
-    item,
-    ...(item._tag === "DalphSelects" && item.operation._tag === "RecordTaskAttemptPlan"
-      ? [
-          {
-            _tag: "DalphSelects" as const,
-            operation: { _tag: "RecordTaskAttemptPlan" as const, attemptId: "attempt:B:1", taskId: "B" }
-          }
-        ]
-      : [])
-  ])
-  .flatMap((item) => [
-    item,
-    ...(item._tag === "DalphSelects" && item.operation._tag === "ReconcileTaskWorktree"
-      ? [
-          {
-            _tag: "DalphSelects" as const,
-            operation: { _tag: "ReconcileTaskWorktree" as const, attemptId: "attempt:B:1", taskId: "B" }
-          }
-        ]
-      : [])
-  ])
-const twoEligiblePlannedStoryBeforeRunningExecutorReport = twoEligibleStoryBeforeRunningExecutorReport
+const twoEligibleStoryBeforeExecutingExecutorReport = singletonStoryBeforeExecutingExecutorReport.flatMap((item) => [
+  ...(item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim"
+    ? [
+        { _tag: "DalphSelects" as const, operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned" as const, graph: twoEligibleTasksGraph }
+      ]
+    : []),
+  item._tag === "TrackerGraphReadReturned" ? { ...item, graph: twoEligibleTasksGraph } : item
+])
+const twoEligiblePlannedStoryBeforeExecutingExecutorReport = twoEligibleStoryBeforeExecutingExecutorReport
 const runPauseExpectedBehavior = {
   _tag: "ExpectedBehavior",
   orchestration: [
     { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-    { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
-    { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" }
+    { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkExecuting" },
+    { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkSafelySuspended" }
   ],
   protocol: [
     { _tag: "TaskClaimAcquired", taskId: "A" },
-    { _tag: "TaskClaimAcquired", taskId: "B" },
     { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
-    { _tag: "TaskAttemptPlanned", attemptId: "attempt:B:1", taskId: "B" },
     { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
-    { _tag: "TaskWorktreeReady", attemptId: "attempt:B:1", taskId: "B" },
     { _tag: "ControlDirectionApplied", direction: "Pause", subject: { _tag: "Run" } }
   ],
   taskWork: { absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "B" }], results: [] }
@@ -363,7 +277,7 @@ export const runPauseSafelySuspendsAuthoredCassette: ScenarioCassette = Schema.d
     trackerGraph: twoEligibleTasksGraph
   },
   story: [
-    ...twoEligiblePlannedStoryBeforeRunningExecutorReport,
+    ...twoEligiblePlannedStoryBeforeExecutingExecutorReport,
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
@@ -371,10 +285,10 @@ export const runPauseSafelySuspendsAuthoredCassette: ScenarioCassette = Schema.d
       outcome: { _tag: "Applied" },
       subject: { _tag: "Run" }
     },
-    singletonRunningExecutorReport,
+    singletonExecutingExecutorReport,
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:0" },
       request: "Suspend"
     },
     runPauseExpectedBehavior
@@ -481,7 +395,7 @@ export const runPauseRestartsPassivelyAuthoredCassette: ScenarioCassette = Schem
   ...runPauseSafelySuspendsAuthoredCassette,
   name: "a confirmed paused Run restarts without run-specific polling",
   story: [
-    ...twoEligiblePlannedStoryBeforeRunningExecutorReport,
+    ...twoEligiblePlannedStoryBeforeExecutingExecutorReport,
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
@@ -489,11 +403,11 @@ export const runPauseRestartsPassivelyAuthoredCassette: ScenarioCassette = Schem
       outcome: { _tag: "Applied" },
       subject: { _tag: "Run" }
     },
-    singletonRunningExecutorReport,
+    singletonExecutingExecutorReport,
     { _tag: "CoordinatorProcessDies" },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:0" },
       request: "Suspend"
     },
     runPauseExpectedBehavior
@@ -591,7 +505,7 @@ export const taskPauseLetsIndependentTaskContinueAuthoredCassette: ScenarioCasse
     ]
   },
   story: [
-    ...singletonStoryBeforeRunningExecutorReport,
+    ...singletonStoryBeforeExecutingExecutorReport,
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
@@ -600,14 +514,14 @@ export const taskPauseLetsIndependentTaskContinueAuthoredCassette: ScenarioCasse
       subject: { _tag: "Task", taskId: "A" }
     },
     ...taskControlMembershipRead(twoEligibleTasksGraph),
-    singletonRunningExecutorReport,
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
-      request: "Suspend"
-    },
+    singletonExecutingExecutorReport,
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: twoEligibleTasksGraph },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: twoEligibleTasksGraph },
     { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "B" } },
@@ -624,23 +538,26 @@ export const taskPauseLetsIndependentTaskContinueAuthoredCassette: ScenarioCasse
     { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:B:1" },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:B:1" },
+      request: "Begin"
     },
     {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Terminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } },
-      request: "StartOrContinue"
+      _tag: "PlannedAttemptExecutorProjectionReturned",
+      report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } }
     },
     {
       _tag: "ExpectedBehavior",
       orchestration: [
         { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkExecuting" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkSafelySuspended" },
         { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:B:1", taskId: "B" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:B:1", report: "Running" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:B:1", report: "TerminalCompleted" }
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:B:1", report: "ExecutorWorkExecuting" },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          attemptId: "attempt:B:1",
+          report: "ExecutorWorkTerminalCompleted"
+        }
       ],
       protocol: [
         { _tag: "TaskClaimAcquired", taskId: "A" },
@@ -664,7 +581,7 @@ export const taskPauseCoversGroupingChildAuthoredCassette: ScenarioCassette = Sc
   name: "Alice pauses task A and current grouping child B",
   startingFacts: { ...runPauseSafelySuspendsAuthoredCassette.startingFacts, trackerGraph: groupingChildTasksGraph },
   story: [
-    ...twoEligiblePlannedStoryBeforeRunningExecutorReport.map((item) =>
+    ...twoEligiblePlannedStoryBeforeExecutingExecutorReport.map((item) =>
       item._tag === "TrackerGraphReadReturned" ? { ...item, graph: groupingChildTasksGraph } : item
     ),
     {
@@ -678,10 +595,10 @@ export const taskPauseCoversGroupingChildAuthoredCassette: ScenarioCassette = Sc
     {
       _tag: "DalphHoldsExecutorRequestThroughNextDeliveryPublication",
       attemptId: "attempt:A:0",
-      request: "StartOrContinue",
+      request: "Begin",
       taskId: "A"
     },
-    singletonRunningExecutorReport,
+    singletonExecutingExecutorReport,
     { _tag: "OperatorStartsPauseObservation", subject: { _tag: "Task", taskId: "A" } },
     {
       _tag: "PauseProgressObserved",
@@ -692,15 +609,12 @@ export const taskPauseCoversGroupingChildAuthoredCassette: ScenarioCassette = Sc
           {
             blockers: [
               { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:A:0" },
-              {
-                _tag: "LiveDeliveryAction",
-                owner: authoredAdmittedOwner(authoredStartExecutorProposal("A", "attempt:A:0"))
-              }
+              { _tag: "ProposedDeliveryAction", proposal: authoredSuspendProposal("A", "attempt:A:0") }
             ],
             responsibility: {
               _tag: "PlannedAttemptExecutorWork",
               attemptId: "attempt:A:0",
-              beganAt: 26,
+              beganAt: 17,
               coverage: { _tag: "ExactTaskPauseCoverage" },
               taskId: "A"
             }
@@ -713,18 +627,15 @@ export const taskPauseCoversGroupingChildAuthoredCassette: ScenarioCassette = Sc
     { _tag: "TrackerGraphReadReturned", graph: groupingChildTasksGraph },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:0" },
       request: "Suspend"
     },
     {
       ...runPauseExpectedBehavior,
       protocol: [
         { _tag: "TaskClaimAcquired", taskId: "A" },
-        { _tag: "TaskClaimAcquired", taskId: "B" },
         { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
-        { _tag: "TaskAttemptPlanned", attemptId: "attempt:B:1", taskId: "B" },
         { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
-        { _tag: "TaskWorktreeReady", attemptId: "attempt:B:1", taskId: "B" },
         { _tag: "ControlDirectionApplied", direction: "Pause", subject: { _tag: "Task", taskId: "A" } }
       ]
     }
@@ -737,11 +648,6 @@ type ExpectedBehaviorStoryItem = Extract<AuthoredCassetteStoryItem, { readonly _
 
 const unpauseTerminalStory = (item: ExpectedBehaviorStoryItem): ReadonlyArray<AuthoredCassetteStoryItem> => [
   decodeStoryItem({
-    _tag: "PlannedAttemptExecutorWorkReported",
-    report: { _tag: "Terminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } },
-    request: "StartOrContinue"
-  }),
-  decodeStoryItem({
     ...item,
     orchestration:
       /* v8 ignore next -- @preserve This helper receives the accepted unpause ExpectedBehavior item with authored orchestration evidence. */
@@ -749,9 +655,18 @@ const unpauseTerminalStory = (item: ExpectedBehaviorStoryItem): ReadonlyArray<Au
         ? null
         : [
             ...item.orchestration,
-            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalCompleted" },
             { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:B:1", taskId: "B" },
-            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:B:1", report: "TerminalCompleted" }
+            { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:B:1", report: "ExecutorWorkExecuting" },
+            {
+              _tag: "PlannedAttemptExecutorWorkReported",
+              attemptId: "attempt:B:1",
+              report: "ExecutorWorkTerminalCompleted"
+            },
+            {
+              _tag: "PlannedAttemptExecutorWorkReported",
+              attemptId: "attempt:A:0",
+              report: "ExecutorWorkTerminalCompleted"
+            }
           ],
     protocol:
       /* v8 ignore next -- @preserve This helper receives the accepted unpause ExpectedBehavior item with authored protocol evidence. */
@@ -759,33 +674,24 @@ const unpauseTerminalStory = (item: ExpectedBehaviorStoryItem): ReadonlyArray<Au
         ? null
         : [
             { _tag: "TaskClaimAcquired", taskId: "A" },
-            { _tag: "TaskClaimAcquired", taskId: "B" },
             { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
-            { _tag: "TaskAttemptPlanned", attemptId: "attempt:B:1", taskId: "B" },
             { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
-            { _tag: "TaskWorktreeReady", attemptId: "attempt:B:1", taskId: "B" },
             { _tag: "ControlDirectionApplied", direction: "Pause", subject: { _tag: "Task", taskId: "A" } },
-            { _tag: "ControlDirectionApplied", direction: "Unpause", subject: { _tag: "Task", taskId: "A" } }
+            { _tag: "ControlDirectionApplied", direction: "Unpause", subject: { _tag: "Task", taskId: "A" } },
+            { _tag: "TaskClaimAcquired", taskId: "B" },
+            { _tag: "TaskAttemptPlanned", attemptId: "attempt:B:1", taskId: "B" },
+            { _tag: "TaskWorktreeReady", attemptId: "attempt:B:1", taskId: "B" },
+            { _tag: "TaskClaimObserved", claimState: "Exact", taskId: "A" }
           ],
     taskWork: {
       ...item.taskWork,
       absences: [],
       results: [
-        { _tag: "PlannedWorkForTaskCompleted", taskId: "A" },
-        { _tag: "PlannedWorkForTaskCompleted", taskId: "B" }
+        { _tag: "PlannedWorkForTaskCompleted", taskId: "B" },
+        { _tag: "PlannedWorkForTaskCompleted", taskId: "A" }
       ]
     }
   })
-]
-
-const unpauseAfterSafeStory: ReadonlyArray<AuthoredCassetteStoryItem> = [
-  decodeStoryItem({
-    _tag: "PlannedAttemptExecutorWorkReported",
-    report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
-    request: "StartOrContinue"
-  }),
-  decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }),
-  decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: groupingChildTasksGraph })
 ]
 
 const graphSelectionFollowsBasePauseObservation = (
@@ -844,7 +750,7 @@ const unpauseWaitingStory = (): ReadonlyArray<AuthoredCassetteStoryItem> => [
           responsibility: {
             _tag: "PlannedAttemptExecutorWork" as const,
             attemptId: "attempt:A:0",
-            beganAt: 26,
+            beganAt: 17,
             coverage: { _tag: "ExactTaskPauseCoverage" as const },
             taskId: "A"
           }
@@ -861,8 +767,61 @@ const unpauseStoryItem = (
   index: number,
   story: ReadonlyArray<AuthoredCassetteStoryItem>
 ): ReadonlyArray<AuthoredCassetteStoryItem> => {
-  if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "SafelySuspended") {
-    return [item, ...unpauseAfterSafeStory]
+  if (item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "ExecutorWorkSafelySuspended") {
+    return [
+      item,
+      decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }),
+      decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: groupingChildTasksGraph }),
+      decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "B" } }),
+      decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }),
+      decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: groupingChildTasksGraph }),
+      decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" } }),
+      decodeStoryItem({
+        _tag: "TaskWorkSpecificationReadReturned",
+        body: "Implement the second eligible behavior.",
+        taskId: "B",
+        title: "Implement second task"
+      }),
+      decodeStoryItem({
+        _tag: "DalphSelects",
+        operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:B:1", taskId: "B" }
+      }),
+      decodeStoryItem({
+        _tag: "DalphSelects",
+        operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:B:1", taskId: "B" }
+      }),
+      decodeStoryItem({
+        _tag: "PlannedAttemptExecutorWorkReported",
+        report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:B:1" },
+        request: "Begin"
+      }),
+      decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } }),
+      decodeStoryItem({
+        _tag: "TaskWorkSpecificationReadReturned",
+        body: "Implement the accepted singleton behavior.",
+        taskId: "A",
+        title: "Implement singleton"
+      }),
+      decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } }),
+      decodeStoryItem({ _tag: "TaskClaimCurrentReadReturned", taskId: "A" }),
+      decodeStoryItem({
+        _tag: "DalphSelects",
+        operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" }
+      }),
+      decodeStoryItem({
+        _tag: "DalphSelects",
+        operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" }
+      }),
+      decodeStoryItem({
+        _tag: "PlannedAttemptExecutorProjectionReturned",
+        report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } }
+      }),
+      decodeStoryItem({
+        _tag: "PlannedAttemptExecutorWorkReported",
+        report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+        request: "Resume"
+      })
+    ]
   }
   if (item._tag === "ExpectedBehavior") return unpauseTerminalStory(item)
   if (item._tag === "OperatorStartsPauseObservation" || followsBasePauseObservation(item, index, story)) return []
@@ -878,21 +837,7 @@ export const taskPauseObservationUnpausedAuthoredCassette: ScenarioCassette = Sc
 })
 
 /** G2 newly covers D, so only a post-G2 exact executor report can settle its Pause obligation. */
-const groupingPauseAExecutor = {
-  _tag: "PlannedAttemptExecutorWork" as const,
-  attemptId: "attempt:A:0",
-  beganAt: 21,
-  coverage: { _tag: "ExactTaskPauseCoverage" as const },
-  taskId: "A"
-}
-const groupingPauseDExecutor = {
-  _tag: "PlannedAttemptExecutorWork" as const,
-  attemptId: "attempt:D:1",
-  beganAt: 2,
-  coverage: { _tag: "GroupingDescendantPauseCoverage" as const, groupingObservedAt: 3, pausedTaskId: "A" },
-  taskId: "D"
-}
-const groupingFactsAddedBeforeRunningA = [
+const groupingFactsAddedBeforeExecutingA = [
   { _tag: "InitialControlPolicy", policy: { taskExecutionCapacity: 2 } },
   {
     _tag: "RunCoordinator",
@@ -914,7 +859,6 @@ const groupingFactsAddedBeforeRunningA = [
   { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "D" } },
   { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
   { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
-  { _tag: "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary", taskId: "D" },
   { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
   { _tag: "TrackerGraphReadReturned", graph: pauseGroupingIndependentG1 },
   { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
@@ -924,10 +868,20 @@ const groupingFactsAddedBeforeRunningA = [
     taskId: "A",
     title: "Implement singleton"
   },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "D" } },
+  {
+    _tag: "TaskWorkSpecificationReadReturned",
+    body: "Implement the grouping descendant behavior.",
+    taskId: "D",
+    title: "Implement grouping descendant"
+  },
   { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:0", taskId: "A" } },
-  { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } }
+  { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:D:1", taskId: "D" } },
+  { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+  { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:D:1", taskId: "D" } }
 ].map((item) => decodeStoryItem(item))
 
+/** G2 is read after Alice's explicit Pause, and that independent control signal admits D's exact suspension. */
 export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
@@ -947,12 +901,7 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
     trackerGraph: pauseGroupingIndependentG1
   },
   story: [
-    ...groupingFactsAddedBeforeRunningA,
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "StartOrContinue"
-    },
+    ...groupingFactsAddedBeforeExecutingA,
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
@@ -963,40 +912,14 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
     ...taskControlMembershipRead(pauseGroupingIndependentG1),
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "StartOrContinue"
-    },
-    { _tag: "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary", attemptId: "attempt:A:0", taskId: "A" },
-    { _tag: "CassetteReleasesHeldTaskWorkSpecificationRead", taskId: "D" },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "D" } },
-    {
-      _tag: "TaskWorkSpecificationReadReturned",
-      body: "Implement the grouping descendant behavior.",
-      taskId: "D",
-      title: "Implement grouping descendant"
-    },
-    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:D:1", taskId: "D" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:D:1", taskId: "D" } },
-    {
-      _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
-      direction: "Pause",
-      duringAttemptId: "attempt:D:1",
-      outcome: { _tag: "Applied" },
-      subject: { _tag: "Task", taskId: "D" }
-    },
-    ...taskControlMembershipRead(pauseGroupingIndependentG1),
-    {
-      _tag: "DalphHoldsExecutorRequestThroughNextDeliveryPublication",
-      attemptId: "attempt:D:1",
-      request: "StartOrContinue",
-      taskId: "D"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
+      request: "Begin"
     },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:D:1" },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:D:1" },
+      request: "Begin"
     },
-    { _tag: "CassetteReleasesHeldPlannedAttemptSuspension", attemptId: "attempt:A:0", taskId: "A" },
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Unpause",
@@ -1007,7 +930,7 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
     ...taskControlMembershipRead(pauseGroupingIndependentG1),
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:0" },
       request: "Suspend"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -1015,10 +938,26 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
     {
       _tag: "TaskWorkSpecificationReadReturned",
-      body: "Implement the prerequisite behavior.",
+      body: "Implement the accepted singleton behavior.",
       taskId: "A",
-      title: "Implement prerequisite"
+      title: "Implement singleton"
     },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
+      request: "Resume"
+    },
+    {
+      _tag: "OperatorAppliesControlDirection",
+      direction: "Pause",
+      outcome: { _tag: "Applied" },
+      subject: { _tag: "Task", taskId: "D" }
+    },
+    ...taskControlMembershipRead(pauseGroupingIndependentG1),
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Unpause",
@@ -1029,7 +968,7 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
     ...taskControlMembershipRead(pauseGroupingIndependentG1),
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "SafelySuspended", attemptId: "attempt:D:1" },
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:D:1" },
       request: "Suspend"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -1052,13 +991,19 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
       outcome: { _tag: "Applied" },
       subject: { _tag: "Task", taskId: "A" }
     },
-    ...taskControlMembershipRead(pauseGroupingIndependentG1),
+    ...taskControlMembershipRead(pauseGroupingAddedG2),
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:D:1" },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:D:1" },
+      request: "Resume"
     },
-    { _tag: "OperatorStartsPauseObservation", subject: { _tag: "Task", taskId: "A" } },
+    { _tag: "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary", attemptId: "attempt:D:1", taskId: "D" },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:0" },
+      request: "Suspend"
+    },
+    { _tag: "CassetteReleasesHeldPlannedAttemptSuspension", attemptId: "attempt:D:1", taskId: "D" },
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
@@ -1069,96 +1014,52 @@ export const taskPauseGroupingFactsAddedAuthoredCassette: ScenarioCassette = Sch
     ...taskControlMembershipRead(pauseGroupingAddedG2),
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "SafelySuspended", attemptId: "attempt:D:1" },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:D:1" },
+      request: "Suspend"
     },
-    {
-      _tag: "OperatorAwaitsPauseProgress",
-      subject: { _tag: "Task", taskId: "A" },
-      result: {
-        _tag: "PauseWaiting",
-        atBoundary: [],
-        preventing: [
-          {
-            blockers: [{ _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:A:0" }],
-            responsibility: groupingPauseAExecutor
-          }
-        ]
-      }
-    },
-    {
-      _tag: "OperatorAwaitsPauseProgress",
-      subject: { _tag: "Task", taskId: "A" },
-      result: {
-        _tag: "PauseWaiting",
-        atBoundary: [],
-        preventing: [
-          {
-            blockers: [{ _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:A:0" }],
-            responsibility: groupingPauseAExecutor
-          },
-          {
-            blockers: [
-              { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:D:1" },
-              {
-                _tag: "LiveDeliveryAction",
-                owner: {
-                  _tag: "AdmittedDeliveryAction",
-                  proposal: {
-                    _tag: "FreshExecutorWorkflowRoute",
-                    attemptId: "attempt:D:1",
-                    proposalId: '["FreshExecutorWorkflowRoute","ContinuePlannedAttemptExecutorWork","attempt:D:1","D"]',
-                    taskId: "D"
-                  }
-                }
-              }
-            ],
-            responsibility: groupingPauseDExecutor
-          }
-        ]
-      }
-    },
-    {
-      _tag: "OperatorAwaitsPauseProgress",
-      subject: { _tag: "Task", taskId: "A" },
-      result: { _tag: "PauseConfirmed", atBoundary: [groupingPauseAExecutor, groupingPauseDExecutor] }
-    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: pauseGroupingAddedG2 },
     { _tag: "ExpectedBehavior", orchestration: null, protocol: null, taskWork: { absences: [], results: [] } }
   ]
 })
 
-const singletonTerminalExecutorReportAt = requiredOccurrenceIndex(
-  singletonTaskCompletesAuthoredCassette.story,
-  "singleton terminal executor report",
-  (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Terminal"
-)
-const singletonExpectedBehaviorAt = requiredOccurrenceIndex(
-  singletonTaskCompletesAuthoredCassette.story,
-  "singleton expected behavior",
-  (item) => item._tag === "ExpectedBehavior"
-)
-const safelySuspendedRestartStoryBeforeAssertions = [
-  ...singletonTaskCompletesAuthoredCassette.story.slice(0, singletonTerminalExecutorReportAt),
-  { _tag: "CoordinatorProcessDies" as const },
-  ...singletonTaskCompletesAuthoredCassette.story.slice(
-    singletonTerminalExecutorReportAt + 1,
-    singletonExpectedBehaviorAt
-  ),
-  {
-    _tag: "PlannedAttemptExecutorWorkReported" as const,
-    report: { _tag: "SafelySuspended" as const, attemptId: "attempt:A:0" },
-    request: "StartOrContinue" as const
-  }
+const safelySuspendedStoryBeforeAssertions: ReadonlyArray<AuthoredCassetteStoryItem> = [
+  ...singletonStoryBeforeExecutingExecutorReport,
+  decodeStoryItem({
+    _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+    direction: "Pause",
+    duringAttemptId: "attempt:A:0",
+    outcome: { _tag: "Applied" },
+    subject: { _tag: "Run" }
+  }),
+  singletonExecutingExecutorReport,
+  decodeStoryItem({
+    _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+    direction: "Unpause",
+    duringAttemptId: "attempt:A:0",
+    outcome: { _tag: "Applied" },
+    subject: { _tag: "Run" }
+  }),
+  decodeStoryItem({ _tag: "CoordinatorProcessDies" }),
+  decodeStoryItem({
+    _tag: "PlannedAttemptExecutorWorkReported",
+    report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:0" },
+    request: "Suspend"
+  }),
+  decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }),
+  decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: singletonGraph }),
+  decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }),
+  decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: singletonGraph })
 ]
 
-/** After process death, the executing attempt reports safe; current reads then record its disappeared worktree without repair. */
+/** After reconciling a durable Suspend intent, the restarted coordinator records the disappeared worktree. */
 export const lostPlannedWorktreeSafelySuspendsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
   ...singletonTaskCompletesAuthoredCassette,
-  name: "a disappeared planned worktree safely suspends only the same attempt after process death",
+  name: "a causally suspended attempt records its disappeared worktree after process death",
   story: [
-    ...safelySuspendedRestartStoryBeforeAssertions,
+    ...safelySuspendedStoryBeforeAssertions,
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
     {
       _tag: "TaskWorkSpecificationReadReturned",
@@ -1176,13 +1077,20 @@ export const lostPlannedWorktreeSafelySuspendsAuthoredCassette: ScenarioCassette
       ...singletonExpectedBehavior,
       orchestration: [
         { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" }
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkExecuting" },
+        {
+          _tag: "PlannedAttemptExecutorCommandProjectionObserved",
+          attemptId: "attempt:A:0",
+          report: "ExecutorWorkExecuting"
+        },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkSafelySuspended" }
       ],
       protocol: [
         { _tag: "TaskClaimAcquired", taskId: "A" },
         { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
         { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "ControlDirectionApplied", direction: "Pause", subject: { _tag: "Run" } },
+        { _tag: "ControlDirectionApplied", direction: "Unpause", subject: { _tag: "Run" } },
         { _tag: "TaskClaimObserved", claimState: "Exact", taskId: "A" },
         { _tag: "AttemptWorktreeLost", attemptId: "attempt:A:0", taskId: "A" }
       ],
@@ -1205,72 +1113,62 @@ const targetLineagePostDeathReads = [
   { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } }
 ] as const
 
-const targetLineageReadSelectedAt = requiredOccurrenceIndex(
-  targetLineagePostDeathReads,
-  "post-death target-lineage read selection",
-  (item) => item._tag === "DalphSelects" && item.operation._tag === "ReadTargetLineage"
-)
-
-const targetLineageReadsAfterRecoveredSafeReport = (graph: unknown) => [
-  ...targetLineagePostDeathReads.slice(0, targetLineageReadSelectedAt),
-  ...taskControlMembershipRead(graph),
-  ...targetLineagePostDeathReads
-]
+const targetLineageReadsAfterRecoveredSafeReport = () => targetLineagePostDeathReads
 
 const targetLineageProtocolPrefix = [
   { _tag: "TaskClaimAcquired", taskId: "A" },
   { _tag: "TaskAttemptPlanned", attemptId: "attempt:A:0", taskId: "A" },
   { _tag: "TaskWorktreeReady", attemptId: "attempt:A:0", taskId: "A" },
+  { _tag: "ControlDirectionApplied", direction: "Pause", subject: { _tag: "Run" } },
+  { _tag: "ControlDirectionApplied", direction: "Unpause", subject: { _tag: "Run" } },
   { _tag: "TaskClaimObserved", claimState: "Exact", taskId: "A" }
 ] as const
 
-const targetLineageAfterRecoveredSafeProtocolPrefix = [
-  ...targetLineageProtocolPrefix,
-  { _tag: "TaskClaimObserved" as const, claimState: "Exact" as const, taskId: "A" }
-]
-
-/** A fresh activation keeps the same Run/attempt after a typed death immediately before the first report. */
+/** A fresh activation reconciles the same Run/attempt after typed death before the Begin response. */
+const targetLineageAfterRecoveredSafeProtocolPrefix = targetLineageProtocolPrefix
 export const coordinatorProcessDeathContinuesAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
   ...singletonTaskCompletesAuthoredCassette,
-  name: "a fresh activation continues the same planned attempt after coordinator death before its first report",
-  startingFacts: {
-    ...singletonTaskCompletesAuthoredCassette.startingFacts,
-    targetLineageObservation: {
-      plannedBaseIsAncestorOfTargetHead: true,
-      plannedBaseSha: "1111111111111111111111111111111111111111",
-      targetHeadSha: "2222222222222222222222222222222222222222"
-    }
-  },
+  name: "a fresh activation reconciles the same planned attempt after coordinator death before its Begin response",
   story: [
-    ...singletonStoryBeforeRunningExecutorReport,
-    { _tag: "CoordinatorProcessDies" },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    ...targetLineagePostDeathReads,
+    ...singletonStoryBeforeExecutingExecutorReport,
     {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
-      request: "StartOrContinue"
+      _tag: "PlannedAttemptExecutorResponseLost",
+      detail: "the executor accepted Begin but the coordinator lost its response",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
+      request: "Begin"
+    },
+    { _tag: "CoordinatorProcessDies" },
+    {
+      _tag: "PlannedAttemptExecutorProjectionReturned",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" }
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    {
+      _tag: "PlannedAttemptExecutorProjectionReturned",
+      report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } }
+    },
     {
       ...singletonExpectedBehavior,
       orchestration: [
         { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalCompleted" }
-      ],
-      protocol: [
-        ...targetLineageProtocolPrefix,
         {
-          _tag: "CompatibleTargetAdvance",
-          plannedBaseSha: "1111111111111111111111111111111111111111",
-          targetHeadSha: "2222222222222222222222222222222222222222",
-          taskId: "A"
+          _tag: "PlannedAttemptExecutorCommandProjectionObserved",
+          attemptId: "attempt:A:0",
+          report: "ExecutorWorkExecuting"
+        },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkExecuting" },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          attemptId: "attempt:A:0",
+          report: "ExecutorWorkTerminalCompleted"
         }
-      ]
+      ],
+      protocol: null
     }
   ]
 })
@@ -1283,7 +1181,15 @@ const changedAttemptChoiceExposureReads = [
 const changedAttemptContinuationReads = [
   { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
   { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-  ...changedAttemptChoiceExposureReads,
+  { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+  { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+  { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+  {
+    _tag: "TaskWorkSpecificationReadReturned",
+    body: "Implement the accepted singleton behavior.",
+    taskId: "A",
+    title: "Implement singleton"
+  },
   { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
   { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
   { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
@@ -1314,7 +1220,7 @@ export const changedAttemptContinuesAuthoredCassette: ScenarioCassette = Schema.
   name: "Alice continues the exact changed attempt only after fresh authority reads",
   startingFacts: attemptChoiceStartingFacts,
   story: [
-    ...safelySuspendedRestartStoryBeforeAssertions,
+    ...safelySuspendedStoryBeforeAssertions,
     ...changedAttemptChoiceExposureReads,
     {
       _tag: "OperatorContinuesAttempt",
@@ -1344,8 +1250,8 @@ export const changedAttemptContinuesAuthoredCassette: ScenarioCassette = Schema.
     ...changedAttemptContinuationReads,
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+      request: "Resume"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
@@ -1374,7 +1280,7 @@ const changedAttemptRestartAuthorityReads = [
 ] as const
 
 const changedAttemptRestartStoryThroughChoice = [
-  ...safelySuspendedRestartStoryBeforeAssertions,
+  ...safelySuspendedStoryBeforeAssertions,
   ...changedAttemptChoiceExposureReads,
   changedAttemptRestartRequest
 ] as const
@@ -1383,19 +1289,21 @@ const changedAttemptSuccessorStory = [
   { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:1", taskId: "A" } },
   {
     _tag: "PlannedAttemptExecutorWorkReported",
-    report: { _tag: "Running", attemptId: "attempt:A:1" },
-    request: "StartOrContinue"
+    report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:1" },
+    request: "Begin"
   },
   { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
   { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
   { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
   { _tag: "TaskWorkSpecificationReadReturned", ...changedAttemptSpecification },
   {
-    _tag: "PlannedAttemptExecutorWorkReported",
-    report: { _tag: "Terminal", attemptId: "attempt:A:1", result: { _tag: "Completed" } },
-    request: "StartOrContinue"
+    _tag: "PlannedAttemptExecutorProjectionReturned",
+    report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:A:1", result: { _tag: "Completed" } }
   }
 ] as const
+
+const successorStoryBeforeExecutorReportItemCount = 2
+const successorStoryThroughWorktreeItemCount = 4
 
 /** Alice replaces exact safely suspended P1, then ordinary worktree reconciliation and admission start clean P2. */
 export const changedAttemptRestartsCleanlyAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
@@ -1407,11 +1315,12 @@ export const changedAttemptRestartsCleanlyAuthoredCassette: ScenarioCassette = S
   story: [
     ...changedAttemptRestartStoryThroughChoice,
     ...changedAttemptRestartAuthorityReads,
-    ...changedAttemptSuccessorStory,
+    ...changedAttemptSuccessorStory.slice(0, successorStoryBeforeExecutorReportItemCount),
     {
-      ...attemptChoiceExpectedBehavior,
-      taskWork: { absences: [], results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: "A" }] }
-    }
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    attemptChoiceExpectedBehavior
   ]
 })
 
@@ -1427,13 +1336,12 @@ export const changedAttemptRestartAfterSupersessionCrashAuthoredCassette: Scenar
     { _tag: "CoordinatorProcessDies" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    ...changedAttemptSuccessorStory,
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    ...changedAttemptSuccessorStory.slice(0, successorStoryThroughWorktreeItemCount),
     {
-      ...attemptChoiceExpectedBehavior,
-      taskWork: { absences: [], results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: "A" }] }
-    }
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
+    attemptChoiceExpectedBehavior
   ]
 })
 
@@ -1504,6 +1412,8 @@ export const changedAgainAttemptRequiresNewChoiceAuthoredCassette: ScenarioCasse
     ...changedAttemptContinuesAuthoredCassette.story.slice(0, changedAttemptContinueRestartAt + 1),
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
     { _tag: "TaskWorkSpecificationReadReturned", ...changedAgainAttemptSpecification },
     {
@@ -1528,7 +1438,7 @@ export const changedAttemptStopsAndReleasesAuthoredCassette: ScenarioCassette = 
   name: "Alice stops the exact changed attempt and releases only its current exact claim",
   startingFacts: attemptChoiceStartingFacts,
   story: [
-    ...safelySuspendedRestartStoryBeforeAssertions,
+    ...safelySuspendedStoryBeforeAssertions,
     ...changedAttemptChoiceExposureReads,
     {
       _tag: "OperatorStopsAttempt",
@@ -1658,7 +1568,7 @@ export const changedAttemptReacquisitionForeignConflictAuthoredCassette: Scenari
   ...singletonTaskCompletesAuthoredCassette,
   name: "a missing claim reacquisition preserves a foreign claim and never retries after restart",
   story: [
-    ...safelySuspendedRestartStoryBeforeAssertions,
+    ...safelySuspendedStoryBeforeAssertions,
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
     {
       _tag: "TaskWorkSpecificationReadReturned",
@@ -1695,6 +1605,8 @@ export const changedAttemptReacquisitionForeignConflictAuthoredCassette: Scenari
       }
     },
     { _tag: "CoordinatorProcessDies" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
@@ -1795,7 +1707,7 @@ export const runUnpauseAfterSafeSuspensionAuthoredCassette: ScenarioCassette = S
     }
   },
   story: [
-    ...singletonStoryBeforeRunningExecutorReport,
+    ...singletonStoryBeforeExecutingExecutorReport,
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Pause",
@@ -1803,7 +1715,7 @@ export const runUnpauseAfterSafeSuspensionAuthoredCassette: ScenarioCassette = S
       outcome: { _tag: "Applied" },
       subject: { _tag: "Run" }
     },
-    singletonRunningExecutorReport,
+    singletonExecutingExecutorReport,
     {
       _tag: "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
       direction: "Unpause",
@@ -1813,7 +1725,7 @@ export const runUnpauseAfterSafeSuspensionAuthoredCassette: ScenarioCassette = S
     },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:0" },
       request: "Suspend"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -1821,8 +1733,8 @@ export const runUnpauseAfterSafeSuspensionAuthoredCassette: ScenarioCassette = S
     ...targetLineagePostDeathReads,
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+      request: "Resume"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
@@ -1830,9 +1742,13 @@ export const runUnpauseAfterSafeSuspensionAuthoredCassette: ScenarioCassette = S
       ...singletonExpectedBehavior,
       orchestration: [
         { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalCompleted" }
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkExecuting" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkSafelySuspended" },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          attemptId: "attempt:A:0",
+          report: "ExecutorWorkTerminalCompleted"
+        }
       ],
       protocol: [
         { _tag: "TaskClaimAcquired", taskId: "A" },
@@ -1855,8 +1771,8 @@ export const runUnpauseAfterSafeSuspensionAuthoredCassette: ScenarioCassette = S
 const runUnpauseContinuationReportAt = runUnpauseAfterSafeSuspensionAuthoredCassette.story.findIndex(
   (item) =>
     item._tag === "PlannedAttemptExecutorWorkReported" &&
-    item.request === "StartOrContinue" &&
-    item.report._tag === "Terminal"
+    item.request === "Resume" &&
+    item.report._tag === "ExecutorWorkTerminal"
 )
 
 const changedAttemptRestartWithHeldContinuationThroughChoice = [
@@ -1875,39 +1791,16 @@ const changedAttemptRestartWithHeldContinuationThroughChoice = [
   { ...changedAttemptRestartRequest, requestNonce: "restart-held-continuation-A" }
 ] as const
 
-/** An already admitted P1 continuation breaks safe suspension and leaves Restart visibly waiting while P1 runs. */
-export const changedAttemptRestartRemainsUnprovedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+/** A terminal Restart choice cancels an admitted but unissued Resume, then ordinary authority starts P2. */
+export const changedAttemptRestartCancelsHeldResumeAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
   ...runUnpauseAfterSafeSuspensionAuthoredCassette,
-  name: "Alice sees Restart remain unproved while the exact old attempt still runs",
+  name: "Alice restarts after Dalph cancels the admitted but unissued Resume",
   story: [
     ...changedAttemptRestartWithHeldContinuationThroughChoice,
-    {
-      _tag: "PlannedAttemptExecutorResponseLost",
-      detail: "the admitted continuation reached Running after Restart, but its response was lost",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "StartOrContinue"
-    },
-    { _tag: "CoordinatorProcessDies" },
-    { _tag: "PlannedAttemptExecutorProjectionReturned", report: { _tag: "Running", attemptId: "attempt:A:0" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    },
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "Suspend"
-    },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    ...changedAttemptRestartAuthorityReads,
+    ...changedAttemptSuccessorStory.slice(0, successorStoryBeforeExecutorReportItemCount),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
@@ -1916,136 +1809,52 @@ export const changedAttemptRestartRemainsUnprovedAuthoredCassette: ScenarioCasse
   ]
 })
 
-/** A late Accepted P1 report remains evidence but starts no integration; fresh authority still records exact P2. */
-export const changedAttemptRestartLateAcceptedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
-  AuthoredScenarioCassette
-)({
-  ...runUnpauseAfterSafeSuspensionAuthoredCassette,
-  name: "Dalph honors the applied Restart after preserving a late Accepted P1 result",
-  story: [
-    ...changedAttemptRestartWithHeldContinuationThroughChoice,
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: {
-        _tag: "Terminal",
-        attemptId: "attempt:A:0",
-        result: { _tag: "Accepted", acceptedResult: { commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } }
-      },
-      request: "StartOrContinue"
-    },
-    ...changedAttemptRestartAuthorityReads,
-    ...changedAttemptSuccessorStory,
-    {
-      ...attemptChoiceExpectedBehavior,
-      orchestration: [
-        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalAccepted" },
-        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:1", taskId: "A" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:1", report: "Running" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:1", report: "TerminalCompleted" }
-      ],
-      taskWork: {
-        absences: [],
-        results: [
-          { _tag: "PlannedWorkForTaskAccepted", commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", taskId: "A" },
-          { _tag: "PlannedWorkForTaskCompleted", taskId: "A" }
-        ]
-      }
-    }
-  ]
-})
+/** A terminal Restart choice cancels an admitted Resume but still fails closed when the current specification changes again. */
+export const changedAttemptRestartCancelsHeldResumeBeforeChangedFactsAuthoredCassette: ScenarioCassette =
+  Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+    ...runUnpauseAfterSafeSuspensionAuthoredCassette,
+    name: "Alice sees changed-again facts block Restart after Dalph cancels the held Resume",
+    story: [
+      ...changedAttemptRestartWithHeldContinuationThroughChoice,
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "TaskWorkSpecificationReadReturned", ...changedAgainAttemptSpecification },
+      attemptChoiceExpectedBehavior
+    ]
+  })
+
+const finalStoryEntryCount = 1
+
+const changedAttemptStopWithHeldContinuationThroughChoice = [
+  ...changedAttemptRestartWithHeldContinuationThroughChoice.slice(
+    0,
+    changedAttemptRestartWithHeldContinuationThroughChoice.length - finalStoryEntryCount
+  ),
+  {
+    _tag: "OperatorStopsAttempt",
+    attemptId: "attempt:A:0",
+    expected: { _tag: "Applied", status: "AwaitingQuiescence" },
+    observedTaskRevision: changedAttemptRevision,
+    requestNonce: "stop-admitted-continuation-A",
+    taskId: "A"
+  }
+] as const
 
 /**
- * Alice stops after F2 while an already admitted continuation is held before intent;
- * later activations settle its lost response and the lost third Suspend without a duplicate command.
+ * Alice stops after F2 while an already admitted continuation is held before
+ * intent. The terminal choice cancels Resume before executor contact, then the
+ * already accepted safe report authorizes exact abandonment and claim release.
  */
-export const changedAttemptStopLostThirdSuspensionAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+export const changedAttemptStopCancelsHeldResumeAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
   ...runUnpauseAfterSafeSuspensionAuthoredCassette,
-  name: "Alice stops an admitted continuation and Dalph reconciles the lost third suspension response",
+  name: "Alice stops after Dalph cancels the admitted but unissued Resume",
   story: [
-    ...runUnpauseAfterSafeSuspensionAuthoredCassette.story.slice(0, runUnpauseContinuationReportAt),
-    { _tag: "DalphHoldsAdmittedContinuationBeforeExecutorIntent", attemptId: "attempt:A:0", taskId: "A" },
-    { _tag: "OperatorAppliesControlDirection", direction: "Pause", subject: { _tag: "Task", taskId: "A" } },
+    ...changedAttemptStopWithHeldContinuationThroughChoice,
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "OperatorAppliesControlDirection", direction: "Unpause", subject: { _tag: "Task", taskId: "A" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
-    { _tag: "TaskWorkSpecificationReadReturned", ...changedAttemptSpecification },
-    {
-      _tag: "OperatorStopsAttempt",
-      attemptId: "attempt:A:0",
-      expected: { _tag: "Applied", status: "AwaitingQuiescence" },
-      observedTaskRevision: changedAttemptRevision,
-      requestNonce: "stop-admitted-continuation-A",
-      taskId: "A"
-    },
-    {
-      _tag: "PlannedAttemptExecutorResponseLost",
-      detail: "the admitted continuation reached Running after Stop, but its response was lost",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "StartOrContinue"
-    },
-    { _tag: "CoordinatorProcessDies" },
-    { _tag: "PlannedAttemptExecutorProjectionReturned", report: { _tag: "Running", attemptId: "attempt:A:0" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    },
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "Suspend"
-    },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    },
-    {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "Suspend"
-    },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    },
-    {
-      _tag: "PlannedAttemptExecutorResponseLost",
-      detail: "the third suspension request reached Running, but its response was lost",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "Suspend"
-    },
-    { _tag: "CoordinatorProcessDies" },
-    { _tag: "PlannedAttemptExecutorProjectionReturned", report: { _tag: "Running", attemptId: "attempt:A:0" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    },
-    { _tag: "PlannedAttemptExecutorProjectionReturned", report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
     { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
     { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
@@ -2057,41 +1866,44 @@ export const changedAttemptStopLostThirdSuspensionAuthoredCassette: ScenarioCass
       requestNonce: "stop-admitted-continuation-A",
       taskId: "A"
     },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
-    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     attemptChoiceExpectedBehavior
   ]
 })
 
-const admittedContinuationResponseLostAt = changedAttemptStopLostThirdSuspensionAuthoredCassette.story.findIndex(
-  (item) => item._tag === "PlannedAttemptExecutorResponseLost" && item.request === "StartOrContinue"
-)
-const unprovedStoppageActivationReturnAt = changedAttemptStopLostThirdSuspensionAuthoredCassette.story.findIndex(
-  (item, index) => index > admittedContinuationResponseLostAt && item._tag === "CoordinatorActivationReturned"
-)
+/** A canceled held Resume cannot prevent exact Stop from preserving a foreign claim. */
+export const changedAttemptStopCancelsHeldResumeWithForeignClaimAuthoredCassette: ScenarioCassette =
+  Schema.decodeUnknownSync(AuthoredScenarioCassette)({
+    ...changedAttemptStopCancelsHeldResumeAuthoredCassette,
+    name: "Alice stops after Dalph cancels held Resume and preserves the foreign claim",
+    story: [
+      ...changedAttemptStopWithHeldContinuationThroughChoice,
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+      {
+        _tag: "TaskClaimReadReturned",
+        observation: {
+          _tag: "ActiveTaskClaim",
+          operationId: "foreign-claim-operation",
+          owner: "foreign-owner",
+          taskId: "A",
+          token: "foreign-token"
+        }
+      },
+      {
+        _tag: "OperatorStopsAttempt",
+        attemptId: "attempt:A:0",
+        expected: { _tag: "Applied", status: "ImplementationAbandonedClaimDispositionPending" },
+        observedTaskRevision: changedAttemptRevision,
+        requestNonce: "stop-admitted-continuation-A",
+        taskId: "A"
+      },
+      attemptChoiceExpectedBehavior
+    ]
+  })
 
-/** A projected Running writer leaves Stop visibly pending and preserves every exact attempt resource. */
-export const changedAttemptStopRemainsUnprovedAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
-  AuthoredScenarioCassette
-)({
-  ...changedAttemptStopLostThirdSuspensionAuthoredCassette,
-  name: "Alice sees exact Stop remain pending while the projected executor writer may still be Running",
-  story: [
-    ...changedAttemptStopLostThirdSuspensionAuthoredCassette.story.slice(0, unprovedStoppageActivationReturnAt),
-    {
-      _tag: "OperatorStopsAttempt",
-      attemptId: "attempt:A:0",
-      expected: { _tag: "Applied", status: "AwaitingQuiescence" },
-      observedTaskRevision: changedAttemptRevision,
-      requestNonce: "stop-admitted-continuation-A",
-      taskId: "A"
-    },
-    changedAttemptStopLostThirdSuspensionAuthoredCassette.story[unprovedStoppageActivationReturnAt],
-    attemptChoiceExpectedBehavior
-  ]
-})
+const secondStoryItemOffset = 2
+const thirdStoryItemOffset = 3
 
 const suspensionResponseLostAcrossRestart = (
   story: ReadonlyArray<AuthoredCassetteStoryItem>,
@@ -2101,7 +1913,7 @@ const suspensionResponseLostAcrossRestart = (
     if (
       item._tag === "PlannedAttemptExecutorWorkReported" &&
       item.request === "Suspend" &&
-      item.report._tag === "SafelySuspended"
+      item.report._tag === "ExecutorWorkSafelySuspended"
     ) {
       return [
         decodeStoryItem({
@@ -2111,17 +1923,21 @@ const suspensionResponseLostAcrossRestart = (
           request: "Suspend"
         }),
         decodeStoryItem({ _tag: "CoordinatorProcessDies" }),
-        decodeStoryItem({ _tag: "PlannedAttemptExecutorProjectionReturned", report: item.report })
+        decodeStoryItem({ _tag: "PlannedAttemptExecutorProjectionReturned", report: item.report }),
+        decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }),
+        decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: singletonGraph })
       ]
     }
     if (item._tag !== "ExpectedBehavior" || item.orchestration === null) return [item]
     return [
+      decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }),
+      decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: singletonGraph }),
       decodeStoryItem({
         ...item,
-        orchestration: item.orchestration.map((evidence) =>
-          evidence._tag === "PlannedAttemptExecutorWorkReported" && evidence.report === "SafelySuspended"
-            ? { ...evidence, _tag: "PlannedAttemptExecutorCommandProjectionObserved" }
-            : evidence
+        orchestration: item.orchestration.flatMap<AuthoredOrchestrationEvidence>((evidence) =>
+          evidence._tag === "PlannedAttemptExecutorWorkReported" && evidence.report === "ExecutorWorkSafelySuspended"
+            ? [{ ...evidence, _tag: "PlannedAttemptExecutorCommandProjectionObserved" }, evidence]
+            : [evidence]
         )
       })
     ]
@@ -2137,6 +1953,34 @@ export const runUnpauseDuringSuspensionRestartsAuthoredCassette: ScenarioCassett
     runUnpauseAfterSafeSuspensionAuthoredCassette.story,
     "the exact Run suspension succeeded after Unpause, but the coordinator lost its response"
   )
+    .flatMap((item, index, story) =>
+      item._tag === "DalphSelects" &&
+      item.operation._tag === "ReadTrackerGraph" &&
+      story[index - 1]?._tag === "TrackerGraphReadReturned" &&
+      story[index - secondStoryItemOffset]?._tag === "DalphSelects" &&
+      story[index - thirdStoryItemOffset]?._tag === "PlannedAttemptExecutorWorkReported"
+        ? [
+            {
+              _tag: "CoordinatorActivationReturned" as const,
+              decision: { _tag: "RunMustRemainActive" as const, reason: "TrackerTargetUnsettled" as const }
+            },
+            item
+          ]
+        : [item]
+    )
+    .flatMap(
+      (item): ReadonlyArray<AuthoredCassetteStoryItem> =>
+        item._tag === "ExpectedBehavior"
+          ? [
+              decodeStoryItem({
+                _tag: "DalphSelects" as const,
+                operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" }
+              }),
+              decodeStoryItem({ _tag: "TrackerGraphReadReturned" as const, graph: singletonGraph }),
+              item
+            ]
+          : [item]
+    )
 })
 
 /** Task Unpause finishes its in-flight suspension, then rereads the preserved attempt's authorities. */
@@ -2146,7 +1990,29 @@ export const taskUnpauseAfterSafeSuspensionAuthoredCassette: ScenarioCassette = 
   ...runUnpauseAfterSafeSuspensionAuthoredCassette,
   name: "Alice unpauses task A while its exact executor suspension is in flight",
   story: runUnpauseAfterSafeSuspensionAuthoredCassette.story.flatMap(
-    (item): ReadonlyArray<AuthoredCassetteStoryItem> => {
+    (item, index, story): ReadonlyArray<AuthoredCassetteStoryItem> => {
+      if (
+        (item._tag === "DalphSelects" &&
+          item.operation._tag === "ReadTrackerGraph" &&
+          story[index + 1]?._tag === "TrackerGraphReadReturned" &&
+          story[index + secondStoryItemOffset]?._tag === "ExpectedBehavior") ||
+        (item._tag === "TrackerGraphReadReturned" &&
+          story[index - 1]?._tag === "DalphSelects" &&
+          story[index + 1]?._tag === "ExpectedBehavior")
+      ) {
+        return []
+      }
+      if (
+        item._tag === "PlannedAttemptExecutorWorkReported" &&
+        item.request === "Begin" &&
+        item.report._tag === "ExecutorWorkExecuting"
+      ) {
+        return [
+          item,
+          decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }),
+          decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: singletonGraph })
+        ]
+      }
       if (item._tag === "OperatorAppliesControlDirectionWhileExecutorRequestInFlight") {
         return [
           decodeStoryItem({ ...item, subject: { _tag: "Task", taskId: "A" } }),
@@ -2177,6 +2043,20 @@ export const taskUnpauseDuringSuspensionRestartsAuthoredCassette: ScenarioCasset
   story: suspensionResponseLostAcrossRestart(
     taskUnpauseAfterSafeSuspensionAuthoredCassette.story,
     "the exact task suspension succeeded after Unpause, but the coordinator lost its response"
+  ).flatMap((item, index, story) =>
+    item._tag === "DalphSelects" &&
+    item.operation._tag === "ReadTrackerGraph" &&
+    story[index - 1]?._tag === "TrackerGraphReadReturned" &&
+    story[index - secondStoryItemOffset]?._tag === "DalphSelects" &&
+    story[index - thirdStoryItemOffset]?._tag === "PlannedAttemptExecutorWorkReported"
+      ? [
+          {
+            _tag: "CoordinatorActivationReturned" as const,
+            decision: { _tag: "RunMustRemainActive" as const, reason: "TrackerTargetUnsettled" as const }
+          },
+          item
+        ]
+      : [item]
   )
 })
 
@@ -2195,12 +2075,12 @@ export const compatibleTargetAdvanceContinuesAuthoredCassette: ScenarioCassette 
     }
   },
   story: [
-    ...safelySuspendedRestartStoryBeforeAssertions,
-    ...targetLineageReadsAfterRecoveredSafeReport(singletonGraph),
+    ...safelySuspendedStoryBeforeAssertions,
+    ...targetLineageReadsAfterRecoveredSafeReport(),
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Terminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
+      request: "Resume"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
@@ -2208,9 +2088,18 @@ export const compatibleTargetAdvanceContinuesAuthoredCassette: ScenarioCassette 
       ...singletonExpectedBehavior,
       orchestration: [
         { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalCompleted" }
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkExecuting" },
+        {
+          _tag: "PlannedAttemptExecutorCommandProjectionObserved",
+          attemptId: "attempt:A:0",
+          report: "ExecutorWorkExecuting"
+        },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkSafelySuspended" },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          attemptId: "attempt:A:0",
+          report: "ExecutorWorkTerminalCompleted"
+        }
       ],
       protocol: [
         ...targetLineageAfterRecoveredSafeProtocolPrefix,
@@ -2245,10 +2134,10 @@ export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette: ScenarioCa
     trackerGraph: independentPostDeathStartingGraph
   },
   story: [
-    ...safelySuspendedRestartStoryBeforeAssertions.map((item) =>
+    ...safelySuspendedStoryBeforeAssertions.map((item) =>
       item._tag === "TrackerGraphReadReturned" ? { ...item, graph: independentPostDeathStartingGraph } : item
     ),
-    ...targetLineageReadsAfterRecoveredSafeReport(independentPostDeathStartingGraph),
+    ...targetLineageReadsAfterRecoveredSafeReport(),
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: independentPostDeathGraph },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -2263,27 +2152,35 @@ export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette: ScenarioCa
       taskId: "C",
       title: "Complete C"
     },
-    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:C:0", taskId: "C" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:0", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:C:1", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:1", taskId: "C" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:C:0" },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:C:1" },
+      request: "Begin"
     },
     {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Terminal", attemptId: "attempt:C:0", result: { _tag: "Completed" } },
-      request: "StartOrContinue"
+      _tag: "PlannedAttemptExecutorProjectionReturned",
+      report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:C:1", result: { _tag: "Completed" } }
     },
     {
       _tag: "ExpectedBehavior",
       orchestration: [
         { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "Running" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "SafelySuspended" },
-        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:C:0", taskId: "C" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:C:0", report: "Running" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:C:0", report: "TerminalCompleted" }
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkExecuting" },
+        {
+          _tag: "PlannedAttemptExecutorCommandProjectionObserved",
+          attemptId: "attempt:A:0",
+          report: "ExecutorWorkExecuting"
+        },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkSafelySuspended" },
+        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:C:1", taskId: "C" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:C:1", report: "ExecutorWorkExecuting" },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          attemptId: "attempt:C:1",
+          report: "ExecutorWorkTerminalCompleted"
+        }
       ],
       protocol: [
         ...targetLineageAfterRecoveredSafeProtocolPrefix,
@@ -2294,8 +2191,8 @@ export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette: ScenarioCa
           taskId: "A"
         },
         { _tag: "TaskClaimAcquired", taskId: "C" },
-        { _tag: "TaskAttemptPlanned", attemptId: "attempt:C:0", taskId: "C" },
-        { _tag: "TaskWorktreeReady", attemptId: "attempt:C:0", taskId: "C" }
+        { _tag: "TaskAttemptPlanned", attemptId: "attempt:C:1", taskId: "C" },
+        { _tag: "TaskWorktreeReady", attemptId: "attempt:C:1", taskId: "C" }
       ],
       taskWork: {
         absences: [{ _tag: "NoPlannedWorkUndertakenForTask", taskId: "B" }],
@@ -2315,10 +2212,13 @@ const pipelineGraphRead = (
   { _tag: "TrackerGraphReadReturned" as const, graph }
 ]
 
-const pipelineAcceptedReport = (attemptId: "attempt:A:0" | "attempt:B:0", commit: string) => ({
-  _tag: "PlannedAttemptExecutorWorkReported" as const,
-  report: { _tag: "Terminal" as const, attemptId, result: { _tag: "Accepted" as const, acceptedResult: { commit } } },
-  request: "StartOrContinue" as const
+const pipelineAcceptedReport = (attemptId: "attempt:A:0" | "attempt:B:1", commit: string) => ({
+  _tag: "PlannedAttemptExecutorProjectionReturned" as const,
+  report: {
+    _tag: "ExecutorWorkTerminal" as const,
+    attemptId,
+    result: { _tag: "Accepted" as const, acceptedResult: { commit } }
+  }
 })
 
 const targetPromotionGitReadReturned = (repository: string, candidateCommit: string, observation: unknown) => ({
@@ -2329,13 +2229,13 @@ const targetPromotionGitReadReturned = (repository: string, candidateCommit: str
 })
 
 const pipelineIntegrationPositions = {
-  A: { queuedAt: 20, startedAt: 21, targetLineageObservedAt: 31 },
-  B: { queuedAt: 81, startedAt: 82, targetLineageObservedAt: 92 }
+  A: { queuedAt: 21, startedAt: 22, targetLineageObservedAt: 32 },
+  B: { queuedAt: 83, startedAt: 84, targetLineageObservedAt: 94 }
 } as const
 
 const pipelineIntegrationFinality = (
   taskId: "A" | "B",
-  attemptId: "attempt:A:0" | "attempt:B:0",
+  attemptId: "attempt:A:0" | "attempt:B:1",
   graph: typeof blockedPipelineGraph | typeof releasedPipelineGraph,
   acceptedResultCommit: string,
   candidateCommit: string
@@ -2467,8 +2367,8 @@ export const dependentTasksCompleteInOneRunAuthoredCassette: ScenarioCassette = 
     { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
+      request: "Begin"
     },
     pipelineAcceptedReport("attempt:A:0", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
     ...pipelineGraphRead(blockedPipelineGraph),
@@ -2496,14 +2396,14 @@ export const dependentTasksCompleteInOneRunAuthoredCassette: ScenarioCassette = 
     { _tag: "TrackerGraphReadReturned", graph: releasedPipelineGraph },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" } },
     { _tag: "TaskWorkSpecificationReadReturned", body: "Complete task B after A.", taskId: "B", title: "Complete B" },
-    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:B:0", taskId: "B" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:B:0", taskId: "B" } },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:B:1", taskId: "B" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:B:0" },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:B:1" },
+      request: "Begin"
     },
-    pipelineAcceptedReport("attempt:B:0", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
+    pipelineAcceptedReport("attempt:B:1", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
     ...pipelineGraphRead(releasedPipelineGraph),
     {
       _tag: "CoordinatorActivationReturned",
@@ -2511,7 +2411,7 @@ export const dependentTasksCompleteInOneRunAuthoredCassette: ScenarioCassette = 
     },
     ...pipelineIntegrationFinality(
       "B",
-      "attempt:B:0",
+      "attempt:B:1",
       releasedPipelineGraph,
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "dddddddddddddddddddddddddddddddddddddddd"
@@ -2539,27 +2439,75 @@ export const dependentTasksCompleteInOneRunAuthoredCassette: ScenarioCassette = 
 })
 
 /**
- * A capacity contraction retains two already-running attempts across process
- * death and admits C only after both exact responsibilities settle.
+ * A capacity contraction retains two already-running attempts until their
+ * independently admitted passive observations report terminal transitions.
  */
 const contractedCapacityRecoveredExecutorReports = [
   {
-    _tag: "PlannedAttemptExecutorWorkReported" as const,
-    report: { _tag: "Terminal" as const, attemptId: "attempt:A:0", result: { _tag: "Completed" as const } },
-    request: "StartOrContinue" as const
+    _tag: "PlannedAttemptExecutorProjectionReturned" as const,
+    report: { _tag: "ExecutorWorkTerminal" as const, attemptId: "attempt:A:0", result: { _tag: "Completed" as const } }
   },
   {
-    _tag: "PlannedAttemptExecutorWorkReported" as const,
-    report: { _tag: "Terminal" as const, attemptId: "attempt:B:1", result: { _tag: "Completed" as const } },
-    request: "StartOrContinue" as const
+    _tag: "PlannedAttemptExecutorProjectionReturned" as const,
+    report: { _tag: "ExecutorWorkTerminal" as const, attemptId: "attempt:B:1", result: { _tag: "Completed" as const } }
   }
 ]
+
+const twoEligibleConcurrentlyPlannedStoryBeforeExecutingExecutorReport =
+  twoEligiblePlannedStoryBeforeExecutingExecutorReport
+    .flatMap((item) => [
+      item,
+      ...(item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim"
+        ? [{ _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "B" } }]
+        : [])
+    ])
+    .flatMap((item) => [
+      item,
+      ...(item._tag === "TaskWorkSpecificationReadReturned" && item.taskId === "A"
+        ? [
+            {
+              _tag: "DalphSelects" as const,
+              operation: { _tag: "ReadTrackerGraph" as const, target: "cassette-target" }
+            },
+            { _tag: "TrackerGraphReadReturned" as const, graph: twoEligibleTasksGraph },
+            { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: "B" } },
+            {
+              _tag: "TaskWorkSpecificationReadReturned" as const,
+              body: "Implement the second eligible behavior.",
+              taskId: "B",
+              title: "Implement second task"
+            }
+          ]
+        : [])
+    ])
+    .flatMap((item) => [
+      item,
+      ...(item._tag === "DalphSelects" && item.operation._tag === "RecordTaskAttemptPlan"
+        ? [
+            {
+              _tag: "DalphSelects" as const,
+              operation: { _tag: "RecordTaskAttemptPlan" as const, attemptId: "attempt:B:1", taskId: "B" }
+            }
+          ]
+        : [])
+    ])
+    .flatMap((item) => [
+      item,
+      ...(item._tag === "DalphSelects" && item.operation._tag === "ReconcileTaskWorktree"
+        ? [
+            {
+              _tag: "DalphSelects" as const,
+              operation: { _tag: "ReconcileTaskWorktree" as const, attemptId: "attempt:B:1", taskId: "B" }
+            }
+          ]
+        : [])
+    ])
 
 export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
 )({
   ...singletonTaskCompletesAuthoredCassette,
-  name: "capacity contraction retains A and B across process death before C starts",
+  name: "capacity contraction retains A and B until terminal observations release C",
   startingFacts: {
     ...singletonTaskCompletesAuthoredCassette.startingFacts,
     taskWorkSpecifications: [
@@ -2570,18 +2518,18 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCasse
     trackerGraph: twoEligibleTasksGraph
   },
   story: [
-    ...twoEligiblePlannedStoryBeforeRunningExecutorReport.map((item) =>
+    ...twoEligibleConcurrentlyPlannedStoryBeforeExecutingExecutorReport.map((item) =>
       item._tag === "InitialControlPolicy" ? { ...item, policy: { taskExecutionCapacity: 2 } } : item
     ),
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
+      request: "Begin"
     },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:B:1" },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:B:1" },
+      request: "Begin"
     },
     { _tag: "SetTaskExecutionCapacity", capacity: 1 },
     { _tag: "CoordinatorProcessDies" },
@@ -2597,12 +2545,16 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCasse
       taskId: "C",
       title: "Implement third task"
     },
-    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:C:0", taskId: "C" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:0", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:C:2", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:2", taskId: "C" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Terminal", attemptId: "attempt:C:0", result: { _tag: "Completed" } },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:C:2" },
+      request: "Begin"
+    },
+    {
+      _tag: "PlannedAttemptExecutorProjectionReturned",
+      report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:C:2", result: { _tag: "Completed" } }
     },
     ...taskControlMembershipRead(threeEligibleTasksGraph),
     {
@@ -2670,12 +2622,16 @@ export const acceptedResultRestartsIntoIntegrationAuthoredCassette: ScenarioCass
     { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
+      request: "Begin"
+    },
+    {
+      _tag: "PlannedAttemptExecutorProjectionReturned",
       report: {
-        _tag: "Terminal",
+        _tag: "ExecutorWorkTerminal",
         attemptId: "attempt:A:0",
         result: { _tag: "Accepted", acceptedResult: { commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } }
-      },
-      request: "StartOrContinue"
+      }
     },
     { _tag: "CoordinatorProcessDies" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -2688,7 +2644,12 @@ export const acceptedResultRestartsIntoIntegrationAuthoredCassette: ScenarioCass
       _tag: "ExpectedBehavior",
       orchestration: [
         { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
-        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "TerminalAccepted" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkExecuting" },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          attemptId: "attempt:A:0",
+          report: "ExecutorWorkTerminalAccepted"
+        },
         {
           _tag: "AcceptedResultIntegrationResponsibilityBegan",
           attemptId: "attempt:A:0",
@@ -2797,7 +2758,7 @@ const outerIntegratorAcceptedCommit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const outerIntegratorCandidateText = "refs/heads/dalph/integrator-candidate-A"
 const outerIntegratorCandidateCommit = "cccccccccccccccccccccccccccccccccccccccc"
 const outerIntegratorSessionSuffix =
-  `$authored-run:attempt:A:0:23:27:${outerIntegratorExpectedHead}:${outerIntegratorAcceptedCommit}` +
+  `$authored-run:attempt:A:0:26:30:${outerIntegratorExpectedHead}:${outerIntegratorAcceptedCommit}` +
   ":/dalph/cassettes/integration.git:refs/heads/master"
 const outerIntegratorSessionCorrelationA = {
   acceptedResult: {
@@ -2818,10 +2779,10 @@ const outerIntegratorSessionCorrelationA = {
       "tr1.eyJib2R5IjoiUHJvZHVjZSBhbiBhY2NlcHRlZCBjb21taXQuIiwidGl0bGUiOiJQcm9kdWNlIGFjY2VwdGVkIHJlc3VsdCJ9",
     worktree: "/dalph/cassettes/integration/attempt-A-0"
   },
-  queuedAt: 22,
+  queuedAt: 25,
   sessionId: `integrator-session:${outerIntegratorSessionSuffix}`,
-  startedAt: 23,
-  targetLineageObservedAt: 27
+  startedAt: 26,
+  targetLineageObservedAt: 30
 } as const
 
 const outerIntegratorRequestForA = {
@@ -2894,7 +2855,7 @@ const pauseExecutorAndPromotionAcceptedResult = {
 } as const
 
 const pauseExecutorAndPromotionSessionSuffix =
-  `$authored-run:attempt:D:0:23:27:${promotionExpectedHead}:${pauseExecutorAndPromotionAcceptedResult.commit}` +
+  `$authored-run:attempt:D:0:26:30:${promotionExpectedHead}:${pauseExecutorAndPromotionAcceptedResult.commit}` +
   ":/dalph/cassettes/pause-boundaries.git:refs/heads/master"
 
 const pauseExecutorAndPromotionRequestD = {
@@ -2918,29 +2879,29 @@ const pauseExecutorAndPromotionRequestD = {
           taskRevision: "tr1.eyJib2R5IjoiUHJvZHVjZSBEJ3MgYWNjZXB0ZWQgY29tbWl0LiIsInRpdGxlIjoiSW50ZWdyYXRlIEQifQ",
           worktree: "/dalph/cassettes/pause-boundaries/attempt-D-0"
         },
-        queuedAt: 22,
+        queuedAt: 25,
         sessionId: `integrator-session:${pauseExecutorAndPromotionSessionSuffix}`,
-        startedAt: 23,
-        targetLineageObservedAt: 27
+        startedAt: 26,
+        targetLineageObservedAt: 30
       }
     },
     directParents: [promotionExpectedHead, pauseExecutorAndPromotionAcceptedResult.commit],
-    qualifiedAt: 32
+    qualifiedAt: 35
   },
   requestId: `target-promotion:integrator-session:${pauseExecutorAndPromotionSessionSuffix}:1:${promotionCandidateCommit}`
 } as const
 
 const pauseExecutorAndPromotionSuspendA = {
   _tag: "IdentityFreeWorkflowRoute",
-  correlation: { _tag: "PlannedAttempt", attemptId: "attempt:A:0" },
-  proposalId: '["IdentityFreeWorkflowRoute","SuspendPlannedAttemptExecutorWork","attempt:A:0",null,"A"]',
+  correlation: { _tag: "PlannedAttempt", attemptId: "attempt:A:1" },
+  proposalId: '["IdentityFreeWorkflowRoute","SuspendPlannedAttemptExecutorWork","attempt:A:1",null,"A"]',
   taskId: "A"
 } as const
 
 const pauseExecutorAndPromotionContinueA = {
   _tag: "FreshExecutorWorkflowRoute",
-  attemptId: "attempt:A:0",
-  proposalId: '["FreshExecutorWorkflowRoute","ContinuePlannedAttemptExecutorWork","attempt:A:0","A"]',
+  attemptId: "attempt:A:1",
+  proposalId: '["FreshExecutorWorkflowRoute","ObservePlannedAttemptExecutorWork","attempt:A:1","A"]',
   taskId: "A"
 } as const
 
@@ -2949,17 +2910,17 @@ const pauseExecutorAndPromotionRunD = {
   correlation: {
     _tag: "TargetPromotion",
     attemptId: "attempt:D:0",
-    queuedAt: 22,
+    queuedAt: 25,
     request: pauseExecutorAndPromotionRequestD
   },
-  proposalId: '["IdentityFreeWorkflowRoute","RunTargetPromotion",null,22,"D"]',
+  proposalId: '["IdentityFreeWorkflowRoute","RunTargetPromotion",null,25,"D"]',
   taskId: "D"
 } as const
 
 const pauseExecutorResponsibilityA = {
   _tag: "PlannedAttemptExecutorWork",
-  attemptId: "attempt:A:0",
-  beganAt: 65,
+  attemptId: "attempt:A:1",
+  beganAt: 68,
   coverage: { _tag: "ExactTaskPauseCoverage" },
   taskId: "A"
 } as const
@@ -2967,13 +2928,13 @@ const pauseExecutorResponsibilityA = {
 const pausePromotionResponsibilityD = {
   _tag: "StartedIntegration",
   attemptId: "attempt:D:0",
-  coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 72, pausedTaskId: "A" },
-  queuedAt: 22,
-  startedAt: 23,
+  coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 77, pausedTaskId: "A" },
+  queuedAt: 25,
+  startedAt: 26,
   taskId: "D"
 } as const
 
-const pauseExecutorSafeA = { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:A:0" } as const
+const pauseExecutorSafeA = { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:A:1" } as const
 const pauseContinueLiveA = {
   _tag: "LiveDeliveryAction",
   owner: { _tag: "AdmittedDeliveryAction", proposal: pauseExecutorAndPromotionContinueA }
@@ -2995,12 +2956,13 @@ const pausePromotionRequiredD = {
   _tag: "TargetPromotionResultRequired",
   request: pauseExecutorAndPromotionRequestD
 } as const
-const pausePromotionHeldD = { _tag: "HeldIntegrationTarget", queuedAt: 22 } as const
-const pausePromotionActiveD = { _tag: "ActiveIntegrationTarget", queuedAt: 22 } as const
+const pausePromotionHeldD = { _tag: "HeldIntegrationTarget", queuedAt: 25 } as const
+const pausePromotionActiveD = { _tag: "ActiveIntegrationTarget", queuedAt: 25 } as const
 const pausePromotionLiveD = {
   _tag: "LiveDeliveryAction",
   owner: { _tag: "AdmittedDeliveryAction", proposal: pauseExecutorAndPromotionRunD }
 } as const
+const pausePromotionProposedD = { _tag: "ProposedDeliveryAction", proposal: pauseExecutorAndPromotionRunD } as const
 const pausePromotionPendingD = {
   _tag: "AcceptedOutcomePublicationPending",
   proposal: pauseExecutorAndPromotionRunD
@@ -3018,16 +2980,6 @@ const pauseExecutorAndPromotionWaiting = (
       { blockers: executorBlockers, responsibility: pauseExecutorResponsibilityA },
       { blockers: promotionBlockers, responsibility: pausePromotionResponsibilityD }
     ]
-  },
-  subject: { _tag: "Task" as const, taskId: "A" }
-})
-
-const pauseExecutorAtBoundaryAndPromotionWaiting = (promotionBlockers: ReadonlyArray<unknown>) => ({
-  _tag: "PauseProgressObserved" as const,
-  result: {
-    _tag: "PauseWaiting" as const,
-    atBoundary: [pauseExecutorResponsibilityA],
-    preventing: [{ blockers: promotionBlockers, responsibility: pausePromotionResponsibilityD }]
   },
   subject: { _tag: "Task" as const, taskId: "A" }
 })
@@ -3107,12 +3059,16 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
     { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:D:0", taskId: "D" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:D:0" },
+      request: "Begin"
+    },
+    {
+      _tag: "PlannedAttemptExecutorProjectionReturned",
       report: {
-        _tag: "Terminal",
+        _tag: "ExecutorWorkTerminal",
         attemptId: "attempt:D:0",
         result: { _tag: "Accepted", acceptedResult: { commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } }
-      },
-      request: "StartOrContinue"
+      }
     },
     { _tag: "CoordinatorProcessDies" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
@@ -3156,19 +3112,19 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
     { _tag: "TaskWorkSpecificationReadReturned", body: "Keep executor A running.", taskId: "A", title: "Run A" },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "C" } },
     { _tag: "TaskWorkSpecificationReadReturned", body: "Keep independent C running.", taskId: "C", title: "Run C" },
-    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:0", taskId: "A" } },
-    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:C:1", taskId: "C" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
-    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:1", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:A:1", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:C:2", taskId: "C" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:1", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:2", taskId: "C" } },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:1" },
+      request: "Begin"
     },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:C:1" },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:C:2" },
+      request: "Begin"
     },
     {
       _tag: "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
@@ -3177,29 +3133,24 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
     },
     ...taskControlMembershipRead(pauseExecutorAndPromotionG1),
     { _tag: "OperatorStartsPauseObservation", subject: { _tag: "Task", taskId: "A" } },
-    { _tag: "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary", attemptId: "attempt:C:1", taskId: "C" },
-    { _tag: "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary", attemptId: "attempt:A:0", taskId: "A" },
+    { _tag: "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary", attemptId: "attempt:C:2", taskId: "C" },
+    { _tag: "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary", attemptId: "attempt:A:1", taskId: "A" },
     pauseExecutorAndPromotionWaiting(
       [pauseExecutorSafeA, pauseSuspendProposedA, pauseContinueLiveA],
       [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
     ),
     {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "StartOrContinue"
+      _tag: "PlannedAttemptExecutorProjectionReturned",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:1" }
     },
-    pauseExecutorAndPromotionWaiting(
-      [pauseExecutorSafeA, pauseContinueLiveA],
-      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
-    ),
-    { _tag: "CassetteReleasesHeldPlannedAttemptSuspension", attemptId: "attempt:A:0", taskId: "A" },
+    { _tag: "CassetteReleasesHeldPlannedAttemptSuspension", attemptId: "attempt:A:1", taskId: "A" },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:1" },
       request: "Suspend"
     },
     pauseExecutorAndPromotionWaiting(
-      [pauseExecutorSafeA, pauseContinuePendingA],
+      [pauseExecutorSafeA, pauseSuspendProposedA, pauseContinuePendingA],
       [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
     ),
     { _tag: "CassetteReleasesHeldTargetPromotionReconciliationRead", request: pauseExecutorAndPromotionRequestD },
@@ -3207,18 +3158,13 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
       _tag: "CandidateCurrent",
       currentHeadSha: promotionCandidateCommit
     }),
-    { _tag: "CassetteReleasesHeldPlannedAttemptContinuation", attemptId: "attempt:C:1", taskId: "C" },
+    { _tag: "CassetteReleasesHeldPlannedAttemptContinuation", attemptId: "attempt:C:2", taskId: "C" },
     {
-      _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Terminal", attemptId: "attempt:C:1", result: { _tag: "Completed" } },
-      request: "StartOrContinue"
+      _tag: "PlannedAttemptExecutorProjectionReturned",
+      report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:C:2", result: { _tag: "Completed" } }
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: pauseExecutorAndPromotionG1 },
-    pauseExecutorAndPromotionWaiting(
-      [pauseExecutorSafeA],
-      [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
-    ),
     pauseExecutorAndPromotionWaiting(
       [pauseExecutorSafeA, pauseSuspendProposedA],
       [pausePromotionRequiredD, pausePromotionHeldD, pausePromotionActiveD, pausePromotionLiveD]
@@ -3239,14 +3185,14 @@ export const taskPauseExecutorAndPromotionBoundariesAuthoredCassette: ScenarioCa
       [pauseExecutorSafeA, pauseSuspendPendingA],
       [pausePromotionRequiredD, pausePromotionLiveD]
     ),
-    pauseExecutorAndPromotionWaiting([pauseExecutorSafeA], [pausePromotionRequiredD, pausePromotionLiveD]),
-    pauseExecutorAndPromotionWaiting([pauseExecutorSafeA], [pausePromotionRequiredD, pausePromotionPendingD]),
-    pauseExecutorAtBoundaryAndPromotionWaiting([
-      pausePromotionRequiredD,
-      pausePromotionHeldD,
-      pausePromotionActiveD,
-      pausePromotionLiveD
-    ]),
+    pauseExecutorAndPromotionWaiting(
+      [pauseExecutorSafeA, pauseSuspendPendingA],
+      [pausePromotionRequiredD, pausePromotionPendingD]
+    ),
+    pauseExecutorAndPromotionWaiting(
+      [pauseExecutorSafeA, pauseSuspendPendingA],
+      [pausePromotionRequiredD, pausePromotionProposedD]
+    ),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
@@ -3755,17 +3701,16 @@ const deliveryFinalityBase = (() => {
         taskId: "B",
         title: "Implement released dependant"
       },
-      { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:B:0", taskId: "B" } },
-      { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:B:0", taskId: "B" } },
+      { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:B:1", taskId: "B" } },
+      { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
       {
         _tag: "PlannedAttemptExecutorWorkReported",
-        report: { _tag: "Running", attemptId: "attempt:B:0" },
-        request: "StartOrContinue"
+        report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:B:1" },
+        request: "Begin"
       },
       {
-        _tag: "PlannedAttemptExecutorWorkReported",
-        report: { _tag: "Terminal", attemptId: "attempt:B:0", result: { _tag: "Completed" } },
-        request: "StartOrContinue"
+        _tag: "PlannedAttemptExecutorProjectionReturned",
+        report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } }
       },
       { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
       { _tag: "TrackerGraphReadReturned", graph: deliveryFinalityReleasedGraph },
@@ -3777,9 +3722,17 @@ const deliveryFinalityBase = (() => {
             ? null
             : [
                 ...item.orchestration,
-                { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:B:0", taskId: "B" },
-                { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:B:0", report: "Running" },
-                { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:B:0", report: "TerminalCompleted" }
+                { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:B:1", taskId: "B" },
+                {
+                  _tag: "PlannedAttemptExecutorWorkReported",
+                  attemptId: "attempt:B:1",
+                  report: "ExecutorWorkExecuting"
+                },
+                {
+                  _tag: "PlannedAttemptExecutorWorkReported",
+                  attemptId: "attempt:B:1",
+                  report: "ExecutorWorkTerminalCompleted"
+                }
               ],
         taskWork: {
           ...item.taskWork,
@@ -3815,9 +3768,9 @@ export const deliveryFinalitySpineAuthoredCassette: ScenarioCassette = Schema.de
 })
 
 const isCompletedPrerequisiteAttempt = (item: DeliveryFinalityStoryItem): boolean =>
-  item._tag === "PlannedAttemptExecutorWorkReported" &&
-  item.report.attemptId === "attempt:B:0" &&
-  item.report._tag === "Terminal" &&
+  item._tag === "PlannedAttemptExecutorProjectionReturned" &&
+  item.report.attemptId === "attempt:B:1" &&
+  item.report._tag === "ExecutorWorkTerminal" &&
   item.report.result._tag === "Completed"
 
 const isDeliveryFinalityGraphReadAt = (item: DeliveryFinalityStoryItem, revision: string): boolean =>
@@ -3938,7 +3891,7 @@ const deliveryFinalityBlockedStoryItem = (item: DeliveryFinalityStoryItem): Read
             item.orchestration?.filter(
               (evidence) =>
                 (!("taskId" in evidence) || evidence.taskId !== "B") &&
-                (!("attemptId" in evidence) || evidence.attemptId !== "attempt:B:0")
+                (!("attemptId" in evidence) || evidence.attemptId !== "attempt:B:1")
             ) ?? null,
           taskWork: {
             absences: item.taskWork.absences,
@@ -4005,30 +3958,35 @@ const completionTaskConflictExpandedGraph = {
 
 const completionConflictStory = (() => {
   let independentStartRefreshInserted = false
-  let independentClaimRefreshInserted = false
-  let independentSpecificationReadInserted = false
-  let independentPlanInserted = false
+  let independentClaimRefreshInserted = true
+  let independentSpecificationReadInserted = true
+  let independentPlanInserted = true
   let restartSeen = false
   let postRestartClaimObserved = false
   let independentRunningInserted = false
+  let skipGraphReturnAfterIndependentCompletion = false
   let rejectionSeen = false
   let terminalConflictSeen = false
   // eslint-disable-next-line complexity -- This authored chronology keeps C's independent concurrent steps ordered around A's restart and conflict.
   return deliveryFinalitySpineAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+    if (skipGraphReturnAfterIndependentCompletion && item._tag === "TrackerGraphReadReturned") {
+      skipGraphReturnAfterIndependentCompletion = false
+      return []
+    }
     if (item._tag === "IntegratorRequestReceived") {
       const correlation = item.correlation
       const oldPositions = `:${correlation.startedAt}:${correlation.targetLineageObservedAt}:`
-      const newPositions = ":39:43:"
+      const newPositions = ":32:45:"
       return [
         {
           ...item,
           correlation: {
             ...correlation,
             candidateResource: correlation.candidateResource.replace(oldPositions, newPositions),
-            queuedAt: 36,
+            queuedAt: 29,
             sessionId: correlation.sessionId.replace(oldPositions, newPositions),
-            startedAt: 39,
-            targetLineageObservedAt: 43
+            startedAt: 32,
+            targetLineageObservedAt: 45
           }
         }
       ]
@@ -4047,8 +4005,7 @@ const completionConflictStory = (() => {
       return [
         { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
         { _tag: "TrackerGraphReadReturned", graph: completionTaskConflictStartingGraph },
-        item,
-        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "C" } }
+        item
       ]
     }
     if (
@@ -4102,18 +4059,29 @@ const completionConflictStory = (() => {
       item.operation._tag === "ReadTrackerGraph"
     ) {
       independentRunningInserted = true
+      skipGraphReturnAfterIndependentCompletion = true
       return [
+        { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "C" } },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+        { _tag: "TrackerGraphReadReturned", graph: completionTaskConflictStartingGraph },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "C" } },
+        {
+          _tag: "TaskWorkSpecificationReadReturned",
+          body: "Implement independent task C while A needs operator repair.",
+          taskId: "C",
+          title: "Implement independent C"
+        },
+        { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:C:1", taskId: "C" } },
+        { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:1", taskId: "C" } },
         {
           _tag: "PlannedAttemptExecutorWorkReported",
-          report: { _tag: "Running", attemptId: "attempt:C:1" },
-          request: "StartOrContinue"
+          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:C:1" },
+          request: "Begin"
         },
         {
-          _tag: "PlannedAttemptExecutorWorkReported",
-          report: { _tag: "Terminal", attemptId: "attempt:C:1", result: { _tag: "Completed" } },
-          request: "StartOrContinue"
-        },
-        item
+          _tag: "PlannedAttemptExecutorProjectionReturned",
+          report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:C:1", result: { _tag: "Completed" } }
+        }
       ]
     }
     if (!terminalConflictSeen && item._tag === "TrackerGraphReadReturned") {
@@ -4138,6 +4106,8 @@ const completionConflictStory = (() => {
     if (!terminalConflictSeen) return [item]
     if (item._tag !== "ExpectedBehavior") return []
     return [
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: completionTaskConflictExpandedGraph },
       {
         ...item,
         orchestration:
@@ -4148,12 +4118,13 @@ const completionConflictStory = (() => {
                 .filter(
                   (evidence) =>
                     !("taskId" in evidence && evidence.taskId === "B") &&
-                    !("attemptId" in evidence && evidence.attemptId === "attempt:B:0")
+                    !("attemptId" in evidence && evidence.attemptId === "attempt:B:1")
                 )
                 .flatMap(
                   (evidence): ReadonlyArray<unknown> =>
-                    evidence._tag === "AcceptedResultIntegrationResponsibilityBegan"
+                    evidence._tag === "AcceptedResultIntegrationStarted"
                       ? [
+                          evidence,
                           {
                             _tag: "PlannedAttemptExecutorWorkResponsibilityBegan" as const,
                             attemptId: "attempt:C:1",
@@ -4162,22 +4133,18 @@ const completionConflictStory = (() => {
                           {
                             _tag: "PlannedAttemptExecutorWorkReported" as const,
                             attemptId: "attempt:C:1",
-                            report: "Running" as const
+                            report: "ExecutorWorkExecuting" as const
                           },
-                          evidence,
                           {
                             _tag: "PlannedAttemptExecutorWorkReported" as const,
                             attemptId: "attempt:C:1",
-                            report: "TerminalCompleted" as const
+                            report: "ExecutorWorkTerminalCompleted" as const
                           }
                         ]
                       : [evidence]
                 ),
         taskWork: {
-          absences: [
-            ...item.taskWork.absences.filter(({ taskId }) => taskId !== "B"),
-            { _tag: "NoPlannedWorkUndertakenForTask", taskId: "B" }
-          ],
+          absences: item.taskWork.absences.filter(({ taskId }) => taskId !== "B"),
           results: [
             ...item.taskWork.results.filter(({ taskId }) => taskId !== "B"),
             { _tag: "PlannedWorkForTaskCompleted", taskId: "C" }
@@ -4300,14 +4267,20 @@ const doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems = (
   deferredTasks: ReadonlyArray<{
     readonly attemptId: string
     readonly taskId: (typeof doubleDiamondTaskIds)[number]
-  }> = []
+  }> = [],
+  preClaimGraphReadCount: number = claimTasks.length + 1,
+  claimAfterRefreshTasks: ReadonlyArray<{ readonly taskId: (typeof doubleDiamondTaskIds)[number] }> = []
 ) => [
-  ...Array.from({ length: claimTasks.length + 1 }, () => doubleDiamondGraphRead(graph)).flat(),
+  ...Array.from({ length: preClaimGraphReadCount }, () => doubleDiamondGraphRead(graph)).flat(),
   ...claimTasks.map(({ taskId }) => ({
     _tag: "DalphSelects" as const,
     operation: { _tag: "AcquireTaskClaim" as const, taskId }
   })),
   ...Array.from({ length: claimTasks.length }, () => doubleDiamondGraphRead(graph)).flat(),
+  ...claimAfterRefreshTasks.map(({ taskId }) => ({
+    _tag: "DalphSelects" as const,
+    operation: { _tag: "AcquireTaskClaim" as const, taskId }
+  })),
   ...specificationTasks.flatMap(({ taskId }) => [
     { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId } },
     { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification(taskId) }
@@ -4336,17 +4309,13 @@ const doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems = (
 const hexadecimalRadix = 16
 const gitShaCharacterLength = 40
 
-const doubleDiamondExecutorReport = (
-  attempt: { readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] },
-  report: "Running" | "Terminal"
-) => ({
+const doubleDiamondExecutorReport = (attempt: {
+  readonly attemptId: string
+  readonly taskId: (typeof doubleDiamondTaskIds)[number]
+}) => ({
   _tag: "PlannedAttemptExecutorWorkReported" as const,
-  report:
-    /* v8 ignore next -- @preserve The double-diamond catalog requests running reports here; terminal acceptance uses doubleDiamondAcceptedReport. */
-    report === "Running"
-      ? { _tag: "Running" as const, attemptId: attempt.attemptId }
-      : { _tag: "Terminal" as const, attemptId: attempt.attemptId, result: { _tag: "Completed" as const } },
-  request: "StartOrContinue" as const
+  report: { _tag: "ExecutorWorkExecuting" as const, attemptId: attempt.attemptId },
+  request: "Begin" as const
 })
 
 const doubleDiamondAcceptedCommit = (taskId: (typeof doubleDiamondTaskIds)[number]) =>
@@ -4360,13 +4329,12 @@ const doubleDiamondAcceptedReport = (attempt: {
   readonly attemptId: string
   readonly taskId: (typeof doubleDiamondTaskIds)[number]
 }) => ({
-  _tag: "PlannedAttemptExecutorWorkReported" as const,
+  _tag: "PlannedAttemptExecutorProjectionReturned" as const,
   report: {
-    _tag: "Terminal" as const,
+    _tag: "ExecutorWorkTerminal" as const,
     attemptId: attempt.attemptId,
     result: { _tag: "Accepted" as const, acceptedResult: { commit: doubleDiamondAcceptedCommit(attempt.taskId) } }
-  },
-  request: "StartOrContinue" as const
+  }
 })
 
 type DoubleDiamondTaskId = (typeof doubleDiamondTaskIds)[number]
@@ -4377,17 +4345,17 @@ type DoubleDiamondIntegrationPositions = {
 }
 
 const defaultDiamondIntegrationPositions = {
-  queuedAt: 20,
-  startedAt: 21,
-  targetLineageObservedAt: 31
+  queuedAt: 21,
+  startedAt: 22,
+  targetLineageObservedAt: 32
 } as const satisfies DoubleDiamondIntegrationPositions
 
 const fiveTaskDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 108, startedAt: 115, targetLineageObservedAt: 130 },
-  C: { queuedAt: 112, startedAt: 162, targetLineageObservedAt: 164 },
-  D: { queuedAt: 248, startedAt: 249, targetLineageObservedAt: 259 },
-  E: { queuedAt: 116, startedAt: 196, targetLineageObservedAt: 198 },
+  B: { queuedAt: 100, startedAt: 103, targetLineageObservedAt: 134 },
+  C: { queuedAt: 119, startedAt: 166, targetLineageObservedAt: 168 },
+  D: { queuedAt: 253, startedAt: 254, targetLineageObservedAt: 264 },
+  E: { queuedAt: 120, startedAt: 200, targetLineageObservedAt: 202 },
   F: defaultDiamondIntegrationPositions,
   G: defaultDiamondIntegrationPositions,
   H: defaultDiamondIntegrationPositions,
@@ -4396,16 +4364,16 @@ const fiveTaskDiamondIntegrationPositions = {
 } as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
 
 const doubleDiamondIntegrationPositions = {
-  A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 105, startedAt: 113, targetLineageObservedAt: 118 },
-  C: { queuedAt: 110, startedAt: 158, targetLineageObservedAt: 160 },
-  D: { queuedAt: 211, startedAt: 253, targetLineageObservedAt: 255 },
-  E: { queuedAt: 321, startedAt: 323, targetLineageObservedAt: 335 },
-  F: { queuedAt: 322, startedAt: 367, targetLineageObservedAt: 369 },
-  G: { queuedAt: 533, startedAt: 534, targetLineageObservedAt: 544 },
-  H: { queuedAt: 435, startedAt: 437, targetLineageObservedAt: 449 },
-  I: { queuedAt: 436, startedAt: 481, targetLineageObservedAt: 483 },
-  X: { queuedAt: 146, startedAt: 192, targetLineageObservedAt: 221 }
+  A: { queuedAt: 27, startedAt: 28, targetLineageObservedAt: 32 },
+  B: { queuedAt: 108, startedAt: 114, targetLineageObservedAt: 121 },
+  C: { queuedAt: 113, startedAt: 162, targetLineageObservedAt: 164 },
+  D: { queuedAt: 216, startedAt: 258, targetLineageObservedAt: 260 },
+  E: { queuedAt: 336, startedAt: 338, targetLineageObservedAt: 342 },
+  F: { queuedAt: 337, startedAt: 374, targetLineageObservedAt: 376 },
+  G: { queuedAt: 549, startedAt: 550, targetLineageObservedAt: 554 },
+  H: { queuedAt: 452, startedAt: 454, targetLineageObservedAt: 458 },
+  I: { queuedAt: 453, startedAt: 490, targetLineageObservedAt: 492 },
+  X: { queuedAt: 150, startedAt: 196, targetLineageObservedAt: 226 }
 } as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
 
 const integrationPositionsForDiamondTask = (
@@ -4541,15 +4509,15 @@ const doubleDiamondIntegrationFinality = (
 
 const doubleDiamondAttempts = {
   a: { attemptId: "attempt:A:0", taskId: "A" },
-  b: { attemptId: "attempt:B:0", taskId: "B" },
-  c: { attemptId: "attempt:C:1", taskId: "C" },
-  d: { attemptId: "attempt:D:1", taskId: "D" },
-  x: { attemptId: "attempt:X:0", taskId: "X" },
-  e: { attemptId: "attempt:E:0", taskId: "E" },
-  f: { attemptId: "attempt:F:1", taskId: "F" },
-  h: { attemptId: "attempt:H:0", taskId: "H" },
-  i: { attemptId: "attempt:I:1", taskId: "I" },
-  g: { attemptId: "attempt:G:0", taskId: "G" }
+  b: { attemptId: "attempt:B:1", taskId: "B" },
+  c: { attemptId: "attempt:C:2", taskId: "C" },
+  d: { attemptId: "attempt:D:4", taskId: "D" },
+  x: { attemptId: "attempt:X:3", taskId: "X" },
+  e: { attemptId: "attempt:E:5", taskId: "E" },
+  f: { attemptId: "attempt:F:6", taskId: "F" },
+  h: { attemptId: "attempt:H:7", taskId: "H" },
+  i: { attemptId: "attempt:I:8", taskId: "I" },
+  g: { attemptId: "attempt:G:9", taskId: "G" }
 } as const
 const doubleDiamondExecutionOrder = ["A", "B", "C", "X", "D", "E", "F", "H", "I", "G"] as const
 
@@ -4594,7 +4562,7 @@ const doubleDiamondRestartedBIntegrationFinality = () =>
               })
             ]
           : item._tag === "TargetPromotionCompareAndSetReturned"
-            ? [decodeStoryItem(item), decodeStoryItem(doubleDiamondExecutorReport(doubleDiamondAttempts.x, "Running"))]
+            ? [decodeStoryItem(item), decodeStoryItem(doubleDiamondExecutorReport(doubleDiamondAttempts.x))]
             : item._tag === "CompletionTaskRequestReturned"
               ? [decodeStoryItem(item), decodeStoryItem(doubleDiamondAcceptedReport(doubleDiamondAttempts.x))]
               : [decodeStoryItem(item)]
@@ -4630,17 +4598,26 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.initialAEligible, [
       doubleDiamondAttempts.a
     ]),
-    doubleDiamondExecutorReport(doubleDiamondAttempts.a, "Running"),
-    ...doubleDiamondGraphRead(doubleDiamondGraphs.initialAEligible),
-    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: doubleDiamondAttempts.a.taskId } },
-    { _tag: "TaskWorkSpecificationReadReturned", ...doubleDiamondSpecification(doubleDiamondAttempts.a.taskId) },
-    doubleDiamondAcceptedReport(doubleDiamondAttempts.a),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.a),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.initialAEligible),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
     },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.a, doubleDiamondGraphs.initialAEligible),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.initialAEligible),
+    doubleDiamondAcceptedReport(doubleDiamondAttempts.a),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: doubleDiamondAttempts.a.taskId } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: doubleDiamondAttempts.a.taskId },
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.initialAEligible),
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReadTargetLineage",
+        attemptId: doubleDiamondAttempts.a.attemptId,
+        taskId: doubleDiamondAttempts.a.taskId
+      }
+    },
+    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.a, doubleDiamondGraphs.initialAEligible, [], true),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -4649,8 +4626,8 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
       doubleDiamondAttempts.b,
       doubleDiamondAttempts.c
     ]),
-    doubleDiamondExecutorReport(doubleDiamondAttempts.b, "Running"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts.c, "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.b),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.c),
     { _tag: "CoordinatorProcessDies" },
     ...doubleDiamondGraphRead(doubleDiamondGraphs.xObservedDuringRestart),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.b),
@@ -4669,7 +4646,7 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.middlePairComplete, [
       doubleDiamondAttempts.d
     ]),
-    doubleDiamondExecutorReport(doubleDiamondAttempts.d, "Running"),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.d),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.d),
     {
       _tag: "CoordinatorActivationReturned",
@@ -4696,23 +4673,38 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
       doubleDiamondAttempts.e,
       doubleDiamondAttempts.f
     ]),
-    doubleDiamondExecutorReport(doubleDiamondAttempts.e, "Running"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts.f, "Running"),
-    ...doubleDiamondGraphRead(doubleDiamondGraphs.dAndXComplete),
-    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.e.taskId),
-    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.f.taskId),
-    doubleDiamondAcceptedReport(doubleDiamondAttempts.e),
-    doubleDiamondAcceptedReport(doubleDiamondAttempts.f),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.e),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.f),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.dAndXComplete),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
     },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.e, doubleDiamondGraphs.dAndXComplete, [
-      doubleDiamondAttempts.e,
-      doubleDiamondAttempts.f
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.dAndXComplete),
+    doubleDiamondAcceptedReport(doubleDiamondAttempts.e),
+    doubleDiamondAcceptedReport(doubleDiamondAttempts.f),
+    ...[doubleDiamondAttempts.e, doubleDiamondAttempts.f].flatMap(({ taskId }) => [
+      { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
+      { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
     ]),
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:F:1", taskId: "F" } },
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.dAndXComplete),
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReadTargetLineage",
+        attemptId: doubleDiamondAttempts.e.attemptId,
+        taskId: doubleDiamondAttempts.e.taskId
+      }
+    },
+    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.e, doubleDiamondGraphs.dAndXComplete, [], true),
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReadTargetLineage",
+        attemptId: doubleDiamondAttempts.f.attemptId,
+        taskId: doubleDiamondAttempts.f.taskId
+      }
+    },
     ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.f, doubleDiamondGraphs.eComplete, [], true),
     {
       _tag: "CoordinatorActivationReturned",
@@ -4722,23 +4714,38 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
       doubleDiamondAttempts.h,
       doubleDiamondAttempts.i
     ]),
-    doubleDiamondExecutorReport(doubleDiamondAttempts.h, "Running"),
-    doubleDiamondExecutorReport(doubleDiamondAttempts.i, "Running"),
-    ...doubleDiamondGraphRead(doubleDiamondGraphs.lowerPairComplete),
-    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.h.taskId),
-    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.i.taskId),
-    doubleDiamondAcceptedReport(doubleDiamondAttempts.h),
-    doubleDiamondAcceptedReport(doubleDiamondAttempts.i),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.h),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.i),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.lowerPairComplete),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
     },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.h, doubleDiamondGraphs.lowerPairComplete, [
-      doubleDiamondAttempts.h,
-      doubleDiamondAttempts.i
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.lowerPairComplete),
+    doubleDiamondAcceptedReport(doubleDiamondAttempts.h),
+    doubleDiamondAcceptedReport(doubleDiamondAttempts.i),
+    ...[doubleDiamondAttempts.h, doubleDiamondAttempts.i].flatMap(({ taskId }) => [
+      { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
+      { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
     ]),
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:I:1", taskId: "I" } },
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.lowerPairComplete),
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReadTargetLineage",
+        attemptId: doubleDiamondAttempts.h.attemptId,
+        taskId: doubleDiamondAttempts.h.taskId
+      }
+    },
+    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.h, doubleDiamondGraphs.lowerPairComplete, [], true),
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReadTargetLineage",
+        attemptId: doubleDiamondAttempts.i.attemptId,
+        taskId: doubleDiamondAttempts.i.taskId
+      }
+    },
     ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.i, doubleDiamondGraphs.hComplete, [], true),
     {
       _tag: "CoordinatorActivationReturned",
@@ -4747,16 +4754,26 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.deepPairComplete, [
       doubleDiamondAttempts.g
     ]),
-    doubleDiamondExecutorReport(doubleDiamondAttempts.g, "Running"),
-    ...doubleDiamondGraphRead(doubleDiamondGraphs.deepPairComplete),
-    ...doubleDiamondFocusedSpecificationRead(doubleDiamondAttempts.g.taskId),
-    doubleDiamondAcceptedReport(doubleDiamondAttempts.g),
+    doubleDiamondExecutorReport(doubleDiamondAttempts.g),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.deepPairComplete),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
     },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.g, doubleDiamondGraphs.allComplete),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.deepPairComplete),
+    doubleDiamondAcceptedReport(doubleDiamondAttempts.g),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: doubleDiamondAttempts.g.taskId } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: doubleDiamondAttempts.g.taskId },
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.allComplete),
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReadTargetLineage",
+        attemptId: doubleDiamondAttempts.g.attemptId,
+        taskId: doubleDiamondAttempts.g.taskId
+      }
+    },
+    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.g, doubleDiamondGraphs.allComplete, [], true),
     { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },
     {
       _tag: "ExpectedBehavior",
@@ -4797,14 +4814,16 @@ const fiveTaskDiamondGraphs = {
   allComplete: fiveTaskDiamondGraph("five-task-diamond-G4", new Set(["A", "B", "C", "D", "E"]))
 } as const
 
+const fiveTaskMiddleWavePreClaimGraphReadCount = 4
+
 const fiveTaskDiamondTaskIds = ["A", "B", "C", "E", "D"] as const
 
 const fiveTaskDiamondAttempts = {
   a: { attemptId: "attempt:A:0", taskId: "A" },
-  b: { attemptId: "attempt:B:0", taskId: "B" },
-  c: { attemptId: "attempt:C:1", taskId: "C" },
-  e: { attemptId: "attempt:E:2", taskId: "E" },
-  d: { attemptId: "attempt:D:0", taskId: "D" }
+  b: { attemptId: "attempt:B:1", taskId: "B" },
+  c: { attemptId: "attempt:C:2", taskId: "C" },
+  e: { attemptId: "attempt:E:3", taskId: "E" },
+  d: { attemptId: "attempt:D:4", taskId: "D" }
 } as const
 
 /** Capacity two consumes A -> (B, C, E) -> D only after exact tracker-confirmed finality. */
@@ -4837,7 +4856,7 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(fiveTaskDiamondGraphs.noneComplete, [
       fiveTaskDiamondAttempts.a
     ]),
-    doubleDiamondExecutorReport(fiveTaskDiamondAttempts.a, "Running"),
+    doubleDiamondExecutorReport(fiveTaskDiamondAttempts.a),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.a),
     ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.noneComplete),
     {
@@ -4859,16 +4878,35 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(
       fiveTaskDiamondGraphs.aComplete,
       [fiveTaskDiamondAttempts.b, fiveTaskDiamondAttempts.c],
-      [fiveTaskDiamondAttempts.b, fiveTaskDiamondAttempts.c, fiveTaskDiamondAttempts.e],
-      [fiveTaskDiamondAttempts.b, fiveTaskDiamondAttempts.c, fiveTaskDiamondAttempts.e],
-      [fiveTaskDiamondAttempts.e]
+      [fiveTaskDiamondAttempts.b, fiveTaskDiamondAttempts.c],
+      [fiveTaskDiamondAttempts.b, fiveTaskDiamondAttempts.c],
+      [],
+      fiveTaskMiddleWavePreClaimGraphReadCount
     ),
-    doubleDiamondExecutorReport(fiveTaskDiamondAttempts.b, "Running"),
-    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:E:2", taskId: "E" } },
-    doubleDiamondExecutorReport(fiveTaskDiamondAttempts.c, "Running"),
+    doubleDiamondExecutorReport(fiveTaskDiamondAttempts.b),
+    doubleDiamondExecutorReport(fiveTaskDiamondAttempts.c),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.b),
+    { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: fiveTaskDiamondAttempts.e.taskId } },
+    ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.aComplete),
+    ...doubleDiamondFocusedSpecificationRead(fiveTaskDiamondAttempts.e.taskId),
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "RecordTaskAttemptPlan",
+        attemptId: fiveTaskDiamondAttempts.e.attemptId,
+        taskId: fiveTaskDiamondAttempts.e.taskId
+      }
+    },
+    {
+      _tag: "DalphSelects",
+      operation: {
+        _tag: "ReconcileTaskWorktree",
+        attemptId: fiveTaskDiamondAttempts.e.attemptId,
+        taskId: fiveTaskDiamondAttempts.e.taskId
+      }
+    },
+    doubleDiamondExecutorReport(fiveTaskDiamondAttempts.e),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.c),
-    doubleDiamondExecutorReport(fiveTaskDiamondAttempts.e, "Running"),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.e),
     ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.aComplete),
     {
@@ -4883,7 +4921,10 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
       [fiveTaskDiamondAttempts.b],
       "/dalph/cassettes/five-task-diamond.git"
     ),
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:C:1", taskId: "C" } },
+    {
+      _tag: "DalphSelects",
+      operation: { _tag: "ReadTargetLineage", attemptId: fiveTaskDiamondAttempts.c.attemptId, taskId: "C" }
+    },
     ...doubleDiamondIntegrationFinality(
       fiveTaskDiamondAttempts.c,
       fiveTaskDiamondGraphs.abcComplete,
@@ -4892,7 +4933,10 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
       undefined,
       "/dalph/cassettes/five-task-diamond.git"
     ),
-    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:E:2", taskId: "E" } },
+    {
+      _tag: "DalphSelects",
+      operation: { _tag: "ReadTargetLineage", attemptId: fiveTaskDiamondAttempts.e.attemptId, taskId: "E" }
+    },
     ...doubleDiamondIntegrationFinality(
       fiveTaskDiamondAttempts.e,
       fiveTaskDiamondGraphs.abceComplete,
@@ -4908,7 +4952,7 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(fiveTaskDiamondGraphs.abceComplete, [
       fiveTaskDiamondAttempts.d
     ]),
-    doubleDiamondExecutorReport(fiveTaskDiamondAttempts.d, "Running"),
+    doubleDiamondExecutorReport(fiveTaskDiamondAttempts.d),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.d),
     ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.abceComplete),
     {
@@ -5048,15 +5092,15 @@ type MaintainedAuthoredCassetteName =
   | "changedAttemptRestartAfterSupersessionCrash"
   | "changedAttemptRestartClaimUnavailable"
   | "changedAttemptRestartFactsChanged"
-  | "changedAttemptRestartLateAccepted"
+  | "changedAttemptRestartCancelsHeldResumeBeforeChangedFacts"
   | "changedAttemptRestartPastIntegrationRejected"
-  | "changedAttemptRestartRemainsUnproved"
+  | "changedAttemptRestartCancelsHeldResume"
   | "changedAttemptRestartsCleanly"
   | "changedAttemptRestartWorktreeNotReady"
   | "changedAttemptChoiceRace"
   | "changedAgainAttemptRequiresNewChoice"
-  | "changedAttemptStopLostThirdSuspension"
-  | "changedAttemptStopRemainsUnproved"
+  | "changedAttemptStopCancelsHeldResume"
+  | "changedAttemptStopCancelsHeldResumeWithForeignClaim"
   | "changedAttemptStopsAndReleases"
   | "changedAttemptStopReleaseResponseLost"
   | "changedAttemptStopsWithAbsentClaim"
@@ -5114,15 +5158,17 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     changedAttemptRestartAfterSupersessionCrash: changedAttemptRestartAfterSupersessionCrashAuthoredCassette,
     changedAttemptRestartClaimUnavailable: changedAttemptRestartClaimUnavailableAuthoredCassette,
     changedAttemptRestartFactsChanged: changedAttemptRestartFactsChangedAuthoredCassette,
-    changedAttemptRestartLateAccepted: changedAttemptRestartLateAcceptedAuthoredCassette,
+    changedAttemptRestartCancelsHeldResumeBeforeChangedFacts:
+      changedAttemptRestartCancelsHeldResumeBeforeChangedFactsAuthoredCassette,
     changedAttemptRestartPastIntegrationRejected: changedAttemptRestartPastIntegrationRejectedAuthoredCassette,
-    changedAttemptRestartRemainsUnproved: changedAttemptRestartRemainsUnprovedAuthoredCassette,
+    changedAttemptRestartCancelsHeldResume: changedAttemptRestartCancelsHeldResumeAuthoredCassette,
     changedAttemptRestartsCleanly: changedAttemptRestartsCleanlyAuthoredCassette,
     changedAttemptRestartWorktreeNotReady: changedAttemptRestartWorktreeNotReadyAuthoredCassette,
     changedAttemptChoiceRace: changedAttemptChoiceRaceAuthoredCassette,
     changedAgainAttemptRequiresNewChoice: changedAgainAttemptRequiresNewChoiceAuthoredCassette,
-    changedAttemptStopLostThirdSuspension: changedAttemptStopLostThirdSuspensionAuthoredCassette,
-    changedAttemptStopRemainsUnproved: changedAttemptStopRemainsUnprovedAuthoredCassette,
+    changedAttemptStopCancelsHeldResume: changedAttemptStopCancelsHeldResumeAuthoredCassette,
+    changedAttemptStopCancelsHeldResumeWithForeignClaim:
+      changedAttemptStopCancelsHeldResumeWithForeignClaimAuthoredCassette,
     changedAttemptStopsAndReleases: changedAttemptStopsAndReleasesAuthoredCassette,
     changedAttemptStopReleaseResponseLost: changedAttemptStopReleaseResponseLostAuthoredCassette,
     changedAttemptStopsWithAbsentClaim: changedAttemptStopsWithAbsentClaimAuthoredCassette,

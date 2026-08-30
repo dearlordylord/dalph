@@ -107,7 +107,7 @@ worktree, and claim-token values may be renamed only by exhaustive typed
 renamers that preserve their causal relationships. Tracker identities and
 revisions, task revisions, and Git commit SHAs are never renamed.
 
-In the illegal-order case, executor-work responsibility and the first Running
+In the illegal-order case, executor-work responsibility and the first `ExecutorWorkExecuting`
 report both appear before worktree readiness. The final operational state can
 converge, but workflow history and an earlier selection checkpoint still
 disagree. No outside call, crash, or retry occurs during this pure projection.
@@ -122,7 +122,7 @@ Acceptance tests:
   after every non-empty prefix`
 - `alpha-renames every Dalph-generated identity and preserves tracker
   revisions, task revisions, and Git SHAs`
-- `detects responsibility and Running before worktree readiness even when
+- `detects responsibility and ExecutorWorkExecuting before worktree readiness even when
   final operational state converges`
 - `has no recording for an empty unidentified journal`
 

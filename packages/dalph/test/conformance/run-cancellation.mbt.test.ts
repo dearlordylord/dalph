@@ -127,7 +127,11 @@ import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
@@ -143,6 +147,8 @@ import {
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
+  plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../orchestrator/src/workflow-journal/record-key.js"
@@ -186,7 +192,7 @@ const PhaseVariant = Schema.Struct({
   value: Schema.Unknown
 })
 const ExecutorVariant = Schema.Struct({
-  tag: Schema.Literals(["NoExecutor", "Running", "StopIntentRecorded", "SafelySuspended", "ExecutorUnreadable"]),
+  tag: Schema.Literals(["NoExecutor", "Executing", "StopIntentRecorded", "SafelySuspended", "ExecutorUnreadable"]),
   value: Schema.Unknown
 })
 const ClaimVariant = Schema.Struct({
@@ -270,7 +276,7 @@ type PhaseTag =
   | "ProcessLost"
   | "Rejected"
   | "TerminalHistory"
-type ExecutorTag = "NoExecutor" | "Running" | "StopIntentRecorded" | "SafelySuspended" | "ExecutorUnreadable"
+type ExecutorTag = "NoExecutor" | "Executing" | "StopIntentRecorded" | "SafelySuspended" | "ExecutorUnreadable"
 type ClaimTag = "NoClaim" | "Held" | "ReleaseIntentRecorded" | "Released" | "ForeignClaim" | "ClaimUnreadable"
 type IntegrationTag =
   | "NoIntegration"
@@ -334,7 +340,7 @@ type SettlementPlannedTransition = Extract<
   {
     readonly _tag:
       | "SuspendPlannedAttemptExecutorWork"
-      | "ObservePlannedAttemptContinuationExecutor"
+      | "ReconcilePlannedAttemptExecutorWork"
       | "RelinquishCancelledAttemptImplementation"
       | "RecordCancelledAttemptClaimNoRelease"
   }
@@ -351,7 +357,7 @@ type RuntimeCommand =
       readonly completed: Deferred.Deferred<void>
       readonly operationNumber: number
     }
-  | { readonly _tag: "SeedRunningAttempt"; readonly completed: Deferred.Deferred<void> }
+  | { readonly _tag: "SeedExecutingAttempt"; readonly completed: Deferred.Deferred<void> }
   | {
       readonly _tag: "ExecutePlannedSettlement"
       readonly action: { readonly _tag: "IdentityFreeAction"; readonly proposal: IdentityFreeDeliveryProposal }
@@ -617,7 +623,7 @@ const makeRunCancellationActions = {
   init: {},
   selectIdleRun: {},
   selectAlreadyPausedRun: {},
-  selectRunningExecutor: {},
+  selectExecutingExecutor: {},
   selectIntegrationOwned: {},
   selectTemporaryWait: {},
   selectApplicationExitCutoff: {},
@@ -807,7 +813,7 @@ const makeCancellationDriverImplementation = () => {
   let durable = makeInitialDurable()
   let process = makeInitialProcess()
   let effectivePause: "RunPaused" | "RunUnpaused" | undefined
-  let executorAuthority: "Running" | "SafelySuspended" | "Unreadable" = "Running"
+  let executorAuthority: "Executing" | "SafelySuspended" | "Unreadable" = "Executing"
   let claimHeld = true
   let claimObservationMode: "Absent" | "Exact" | "Foreign" | "Unreadable" = "Exact"
   let promotionReadCount = 0
@@ -882,20 +888,23 @@ const makeCancellationDriverImplementation = () => {
   })
 
   const executorReportFor = (correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>) =>
-    executorAuthority === "Running"
-      ? PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-      : PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+    executorAuthority === "Executing"
+      ? PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+      : PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
 
   const executorForSettlement = PlannedAttemptExecutor.of({
-    project: (correlation) =>
+    observe: (correlation) =>
       executorAuthority === "Unreadable"
         ? Effect.succeed(PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation }))
         : Effect.succeed(PlannedAttemptExecutorProjection.cases.Exact.make({ report: executorReportFor(correlation) })),
     requestSuspension: (attempt) =>
       Effect.succeed(
-        PlannedAttemptExecutorReport.cases.Running.make({ correlation: plannedAttemptExecutorCorrelation(attempt) })
+        PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+          correlation: plannedAttemptExecutorCorrelation(attempt)
+        })
       ),
-    startOrContinue: () => Effect.die("cancellation conformance must not continue executor work")
+    resume: () => Effect.die("cancellation conformance must not resume executor work"),
+    begin: () => Effect.die("cancellation conformance must not continue executor work")
   })
 
   const graphSnapshotFor = (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) => {
@@ -1072,11 +1081,98 @@ const makeCancellationDriverImplementation = () => {
           latestClassificationGraph = result
           return result
         })
+      const appendAcceptedTerminalExecutorHistory = Effect.fn("RunCancellation.appendAcceptedTerminalExecutorHistory")(
+        function* (input: {
+          readonly acceptedResult: AcceptedResult
+          readonly planOperation: typeof integrationPlanOperation
+          readonly plannedAttempt: PlannedTaskAttempt
+        }) {
+          const { acceptedResult, plannedAttempt: terminalAttempt, planOperation: terminalPlanOperation } = input
+          const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+          const executingReportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+          const terminalObservationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+          const terminalReportOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
+          yield* journal.append(
+            runId,
+            attemptPlanRecordKey(terminalAttempt.attemptId),
+            TaskAttemptPlannedEvent.make({ operation: terminalPlanOperation, version: workflowJournalEventVersion })
+          )
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorWorkResponsibilityBeganRecordKey(terminalAttempt.attemptId),
+            PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+              plannedAttempt: terminalAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorCommandIntendedRecordKey(terminalAttempt.attemptId, beginOrdinal),
+            PlannedAttemptExecutorCommandIntendedEvent.make({
+              command: "Begin",
+              initiatedBy: { _tag: "DalphCoordinator" },
+              occurrenceClassification: "InitiatedAction",
+              ordinal: beginOrdinal,
+              plannedAttempt: terminalAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+          const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+            correlation: plannedAttemptExecutorCorrelation(terminalAttempt)
+          })
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorCommandResponseObservedRecordKey(terminalAttempt.attemptId, beginOrdinal),
+            PlannedAttemptExecutorCommandResponseObservedEvent.make({
+              commandOrdinal: beginOrdinal,
+              occurrenceClassification: "NonActionOccurrence",
+              plannedAttempt: terminalAttempt,
+              report: executingReport,
+              version: workflowJournalEventVersion
+            })
+          )
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorWorkReportedRecordKey(terminalAttempt.attemptId, executingReportOrdinal),
+            PlannedAttemptExecutorWorkReportedEvent.make({
+              ordinal: executingReportOrdinal,
+              report: executingReport,
+              version: workflowJournalEventVersion
+            })
+          )
+          const terminalReport = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+            correlation: plannedAttemptExecutorCorrelation(terminalAttempt),
+            result: { _tag: "Accepted", acceptedResult }
+          })
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorStateObservedRecordKey(terminalAttempt.attemptId, terminalObservationOrdinal),
+            PlannedAttemptExecutorStateObservedEvent.make({
+              observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+                report: terminalReport
+              }),
+              occurrenceClassification: "NonActionOccurrence",
+              ordinal: terminalObservationOrdinal,
+              plannedAttempt: terminalAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorWorkReportedRecordKey(terminalAttempt.attemptId, terminalReportOrdinal),
+            PlannedAttemptExecutorWorkReportedEvent.make({
+              ordinal: terminalReportOrdinal,
+              report: terminalReport,
+              version: workflowJournalEventVersion
+            })
+          )
+        }
+      )
       yield* Deferred.succeed(ready, undefined)
       // oxlint-disable-next-line typescript/no-unnecessary-condition -- the runtime remains leased until crash or init.
       while (true) {
         const command = yield* Queue.take(commands)
-        if (command._tag === "SeedRunningAttempt") {
+        if (command._tag === "SeedExecutingAttempt") {
           yield* journal.append(
             runId,
             intentRecordKey(activeClaim.operationId),
@@ -1100,6 +1196,45 @@ const makeCancellationDriverImplementation = () => {
             plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
             PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
               plannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+          const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, beginOrdinal),
+            PlannedAttemptExecutorCommandIntendedEvent.make({
+              command: "Begin",
+              initiatedBy: { _tag: "DalphCoordinator" },
+              occurrenceClassification: "InitiatedAction",
+              ordinal: beginOrdinal,
+              plannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+          const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+            correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+          })
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, beginOrdinal),
+            PlannedAttemptExecutorCommandResponseObservedEvent.make({
+              commandOrdinal: beginOrdinal,
+              occurrenceClassification: "NonActionOccurrence",
+              plannedAttempt,
+              report: executingReport,
+              version: workflowJournalEventVersion
+            })
+          )
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorWorkReportedRecordKey(
+              plannedAttempt.attemptId,
+              PlannedAttemptExecutorReportOrdinal.make(1)
+            ),
+            PlannedAttemptExecutorWorkReportedEvent.make({
+              ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+              report: executingReport,
               version: workflowJournalEventVersion
             })
           )
@@ -1164,7 +1299,7 @@ const makeCancellationDriverImplementation = () => {
           yield* Deferred.succeed(command.completed, proof.disposition)
           return proof
         } else if (command._tag === "ObserveUnreadableExecutor") {
-          const transition = RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({ plannedAttempt })
+          const transition = RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt })
           const result = yield* executePlannedAttemptTransition(
             identityFreeActionFor(transition),
             transition,
@@ -1185,52 +1320,11 @@ const makeCancellationDriverImplementation = () => {
         } else if (command._tag === "PrepareIntegrationQualification") {
           const currentFixture = integrationFixture
           if (currentFixture === undefined) {
-            yield* journal.append(
-              runId,
-              attemptPlanRecordKey(integrationPlannedAttempt.attemptId),
-              TaskAttemptPlannedEvent.make({
-                operation: integrationPlanOperation,
-                version: workflowJournalEventVersion
-              })
-            )
-            yield* journal.append(
-              runId,
-              plannedAttemptExecutorWorkResponsibilityBeganRecordKey(integrationPlannedAttempt.attemptId),
-              PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-                plannedAttempt: integrationPlannedAttempt,
-                version: workflowJournalEventVersion
-              })
-            )
-            yield* journal.append(
-              runId,
-              plannedAttemptExecutorCommandIntendedRecordKey(
-                integrationPlannedAttempt.attemptId,
-                PlannedAttemptExecutorCommandOrdinal.make(1)
-              ),
-              PlannedAttemptExecutorCommandIntendedEvent.make({
-                command: "StartOrContinue",
-                initiatedBy: { _tag: "DalphCoordinator" },
-                occurrenceClassification: "InitiatedAction",
-                ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
-                plannedAttempt: integrationPlannedAttempt,
-                version: workflowJournalEventVersion
-              })
-            )
-            yield* journal.append(
-              runId,
-              plannedAttemptExecutorWorkReportedRecordKey(
-                integrationPlannedAttempt.attemptId,
-                PlannedAttemptExecutorReportOrdinal.make(1)
-              ),
-              PlannedAttemptExecutorWorkReportedEvent.make({
-                ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-                report: PlannedAttemptExecutorReport.cases.Terminal.make({
-                  correlation: plannedAttemptExecutorCorrelation(integrationPlannedAttempt),
-                  result: { _tag: "Accepted", acceptedResult: integrationAcceptedResult }
-                }),
-                version: workflowJournalEventVersion
-              })
-            )
+            yield* appendAcceptedTerminalExecutorHistory({
+              acceptedResult: integrationAcceptedResult,
+              planOperation: integrationPlanOperation,
+              plannedAttempt: integrationPlannedAttempt
+            })
             const began = yield* journal.append(
               runId,
               integrationResponsibilityBeganRecordKey(integrationPlannedAttempt.attemptId),
@@ -1347,52 +1441,11 @@ const makeCancellationDriverImplementation = () => {
           if (integrationQuarantineFixture === undefined) {
             const preparedFixture = integrationFixture
             if (preparedFixture === undefined) return yield* Effect.die("normal integration fixture was not prepared")
-            yield* journal.append(
-              runId,
-              attemptPlanRecordKey(quarantinePlannedAttempt.attemptId),
-              TaskAttemptPlannedEvent.make({
-                operation: quarantineIntegrationPlanOperation,
-                version: workflowJournalEventVersion
-              })
-            )
-            yield* journal.append(
-              runId,
-              plannedAttemptExecutorWorkResponsibilityBeganRecordKey(quarantinePlannedAttempt.attemptId),
-              PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-                plannedAttempt: quarantinePlannedAttempt,
-                version: workflowJournalEventVersion
-              })
-            )
-            yield* journal.append(
-              runId,
-              plannedAttemptExecutorCommandIntendedRecordKey(
-                quarantinePlannedAttempt.attemptId,
-                PlannedAttemptExecutorCommandOrdinal.make(1)
-              ),
-              PlannedAttemptExecutorCommandIntendedEvent.make({
-                command: "StartOrContinue",
-                initiatedBy: { _tag: "DalphCoordinator" },
-                occurrenceClassification: "InitiatedAction",
-                ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
-                plannedAttempt: quarantinePlannedAttempt,
-                version: workflowJournalEventVersion
-              })
-            )
-            yield* journal.append(
-              runId,
-              plannedAttemptExecutorWorkReportedRecordKey(
-                quarantinePlannedAttempt.attemptId,
-                PlannedAttemptExecutorReportOrdinal.make(1)
-              ),
-              PlannedAttemptExecutorWorkReportedEvent.make({
-                ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-                report: PlannedAttemptExecutorReport.cases.Terminal.make({
-                  correlation: plannedAttemptExecutorCorrelation(quarantinePlannedAttempt),
-                  result: { _tag: "Accepted", acceptedResult: quarantineAcceptedResult }
-                }),
-                version: workflowJournalEventVersion
-              })
-            )
+            yield* appendAcceptedTerminalExecutorHistory({
+              acceptedResult: quarantineAcceptedResult,
+              planOperation: quarantineIntegrationPlanOperation,
+              plannedAttempt: quarantinePlannedAttempt
+            })
             const quarantineBegan = yield* journal.append(
               runId,
               integrationResponsibilityBeganRecordKey(quarantinePlannedAttempt.attemptId),
@@ -1748,29 +1801,28 @@ const makeCancellationDriverImplementation = () => {
       yield* awaitSettlementCommand(completed)
     })
 
-  const seedRunningAttempt = Effect.gen(function* () {
+  const seedExecutingAttempt = Effect.gen(function* () {
     const commands = runtimeCommands
     if (commands === undefined) return yield* Effect.die("cancellation runtime is not active")
     const completed = yield* Deferred.make<void>()
-    yield* Queue.offer(commands, { _tag: "SeedRunningAttempt", completed })
+    yield* Queue.offer(commands, { _tag: "SeedExecutingAttempt", completed })
     yield* awaitSettlementCommand(completed)
   })
 
   const relinquishCancelledAttempt = Effect.gen(function* () {
-    const safeObservation = records.findLast(
+    const safeReport = records.findLast(
       ({ event }) =>
-        event._tag === "PlannedAttemptExecutorStateObserved" &&
-        event.observation._tag === "ExactExecutorReport" &&
-        event.observation.report._tag === "SafelySuspended" &&
-        event.plannedAttempt.attemptId === plannedAttempt.attemptId
+        event._tag === "PlannedAttemptExecutorWorkReported" &&
+        event.report._tag === "ExecutorWorkSafelySuspended" &&
+        event.report.correlation.attemptId === plannedAttempt.attemptId
     )
-    if (safeObservation === undefined || safeObservation.event._tag !== "PlannedAttemptExecutorStateObserved") {
-      return yield* Effect.die("cancelled-attempt relinquishment requires the exact safe executor projection")
+    if (safeReport === undefined || safeReport.event._tag !== "PlannedAttemptExecutorWorkReported") {
+      return yield* Effect.die("cancelled-attempt relinquishment requires the accepted safe executor report")
     }
     yield* executePlannedSettlement(
       RunnableFrontierTransition.RelinquishCancelledAttemptImplementation({
         plannedAttempt,
-        proof: { _tag: "StateProjection", observationOrdinal: safeObservation.event.ordinal }
+        proof: { _tag: "AcceptedReport", reportOrdinal: safeReport.event.ordinal }
       })
     )
     if (
@@ -1870,7 +1922,7 @@ const makeCancellationDriverImplementation = () => {
         durable = makeInitialDurable()
         process = makeInitialProcess()
         effectivePause = undefined
-        executorAuthority = "Running"
+        executorAuthority = "Executing"
         claimHeld = true
         claimObservationMode = "Exact"
         promotionReadCount = 0
@@ -1907,10 +1959,10 @@ const makeCancellationDriverImplementation = () => {
           graph: "NotAllSucceeded"
         }
       }),
-    selectRunningExecutor: () =>
+    selectExecutingExecutor: () =>
       Effect.gen(function* () {
-        yield* seedRunningAttempt
-        durable = { ...durable, executor: "Running", claim: "Held", integration: "NoIntegration" }
+        yield* seedExecutingAttempt
+        durable = { ...durable, executor: "Executing", claim: "Held", integration: "NoIntegration" }
         process = { ...process, executorPositionHeld: true, responsibilitiesSettled: false }
       }),
     selectIntegrationOwned: () =>
@@ -1985,7 +2037,7 @@ const makeCancellationDriverImplementation = () => {
           !records.some(
             ({ event }) =>
               event._tag === "PlannedAttemptExecutorWorkReported" &&
-              event.report._tag === "Running" &&
+              event.report._tag === "ExecutorWorkExecuting" &&
               event.report.correlation.attemptId === plannedAttempt.attemptId
           )
         ) {
@@ -1998,14 +2050,14 @@ const makeCancellationDriverImplementation = () => {
       Effect.gen(function* () {
         executorAuthority = "SafelySuspended"
         yield* executePlannedSettlement(
-          RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({ plannedAttempt })
+          RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt })
         )
         if (
           !records.some(
             ({ event }) =>
               event._tag === "PlannedAttemptExecutorStateObserved" &&
               event.observation._tag === "ExactExecutorReport" &&
-              event.observation.report._tag === "SafelySuspended" &&
+              event.observation.report._tag === "ExecutorWorkSafelySuspended" &&
               event.plannedAttempt.attemptId === plannedAttempt.attemptId
           )
         ) {
@@ -2212,19 +2264,26 @@ const makeCancellationDriverImplementation = () => {
       Effect.gen(function* () {
         executorAuthority = "SafelySuspended"
         yield* executePlannedSettlement(
-          RunnableFrontierTransition.ObservePlannedAttemptContinuationExecutor({ plannedAttempt })
+          RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt })
         )
         if (
           records.filter(
             ({ event }) =>
               event._tag === "PlannedAttemptExecutorCommandIntended" &&
+              event.command === "Begin" &&
+              event.plannedAttempt.attemptId === plannedAttempt.attemptId
+          ).length !== 1 ||
+          records.filter(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorCommandIntended" &&
+              event.command === "Suspend" &&
               event.plannedAttempt.attemptId === plannedAttempt.attemptId
           ).length !== 1 ||
           !records.some(
             ({ event }) =>
               event._tag === "PlannedAttemptExecutorStateObserved" &&
               event.observation._tag === "ExactExecutorReport" &&
-              event.observation.report._tag === "SafelySuspended"
+              event.observation.report._tag === "ExecutorWorkSafelySuspended"
           )
         ) {
           return yield* Effect.die("restart executor reconciliation duplicated the command or lost safe evidence")
@@ -2346,8 +2405,8 @@ const makeCancellationDriverImplementation = () => {
       }),
     admitForwardWork: () =>
       Effect.gen(function* () {
-        yield* seedRunningAttempt
-        durable = { ...durable, executor: "Running", claim: "Held", integration: "NoIntegration" }
+        yield* seedExecutingAttempt
+        durable = { ...durable, executor: "Executing", claim: "Held", integration: "NoIntegration" }
         process = {
           ...process,
           executorPositionHeld: true,
@@ -2551,7 +2610,7 @@ it.effect("records an unreadable executor projection through the production obse
   withCancellationDriver((driver) =>
     Effect.gen(function* () {
       yield* driver.init()
-      yield* driver.selectRunningExecutor()
+      yield* driver.selectExecutingExecutor()
       yield* driver.applyCancellation()
       yield* driver.recordExecutorStopIntent()
       yield* driver.markExecutorUnreadable()
@@ -2600,7 +2659,7 @@ it.effect("observes absent, foreign, and unreadable claims without a forbidden r
   withCancellationDriver((driver) =>
     Effect.gen(function* () {
       yield* driver.init()
-      yield* driver.selectRunningExecutor()
+      yield* driver.selectExecutingExecutor()
       yield* driver.applyCancellation()
       yield* driver.recordExecutorStopIntent()
       yield* driver.reportExecutorSafe()
@@ -2612,7 +2671,7 @@ it.effect("observes absent, foreign, and unreadable claims without a forbidden r
       expect(foreign.eventTags.filter((tag) => tag === "WorkflowRunTerminated")).toHaveLength(0)
 
       yield* driver.init()
-      yield* driver.selectRunningExecutor()
+      yield* driver.selectExecutingExecutor()
       yield* driver.applyCancellation()
       yield* driver.recordExecutorStopIntent()
       yield* driver.reportExecutorSafe()
@@ -2624,7 +2683,7 @@ it.effect("observes absent, foreign, and unreadable claims without a forbidden r
       expect(unreadable.eventTags.filter((tag) => tag === "WorkflowRunTerminated")).toHaveLength(0)
 
       yield* driver.init()
-      yield* driver.selectRunningExecutor()
+      yield* driver.selectExecutingExecutor()
       yield* driver.applyCancellation()
       yield* driver.recordExecutorStopIntent()
       yield* driver.reportExecutorSafe()
@@ -2677,7 +2736,7 @@ it.effect("reconstructs the exact applied cancellation after process loss", () =
   withCancellationDriver((driver) =>
     Effect.gen(function* () {
       yield* driver.init()
-      yield* driver.selectRunningExecutor()
+      yield* driver.selectExecutingExecutor()
       yield* driver.applyCancellation()
       yield* driver.recordExecutorStopIntent()
       yield* driver.crashBeforeSettlement()

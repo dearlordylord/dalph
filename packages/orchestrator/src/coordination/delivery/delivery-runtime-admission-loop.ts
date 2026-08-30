@@ -32,7 +32,7 @@ type DeliveryRuntimeReservationResult =
 type DeliveryRuntimeAdmissionLoopState = {
   readonly admission: DeliveryRuntimeAdmissionController
   readonly deferredAt: Ref.Ref<ReadonlyMap<DeliveryProposalId, JournalPosition | null>>
-  /** Capacity deferrals are cleared when the same accepted facts publish a new task-work basis. */
+  readonly deferTaskWorkUntilLocalOrAcceptedChange: boolean
   readonly taskWorkDeferredAt: Ref.Ref<ReadonlyMap<DeliveryProposalId, JournalPosition | null>>
   readonly latest: Ref.Ref<Option.Option<DeliveryRuntimeEvaluation>>
   readonly owners: Ref.Ref<ReadonlyMap<DeliveryProposalId, LiveOwner>>
@@ -90,6 +90,7 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
   const {
     admission,
     deferredAt,
+    deferTaskWorkUntilLocalOrAcceptedChange,
     emit,
     latest,
     owners,
@@ -152,13 +153,9 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
         if (proposal === undefined) return false
         const reservation = yield* reserveAndStart(proposal)
         if (reservation._tag === "Deferred") {
-          const taskWorkDeferralAllowed = current.quiescence._tag === "TrackerReconfirmationAllowed"
+          const taskWorkDeferralAllowed =
+            deferTaskWorkUntilLocalOrAcceptedChange && current.quiescence._tag === "TrackerReconfirmationAllowed"
           if (taskWorkDeferralAllowed && reservation.reason === "TaskWorkPositionUnavailable") {
-            // A retained accepted attempt can fill every task-work position
-            // while ordinary reads and the Run-level reconfirmation still
-            // need to make progress. Remember this proposal against the
-            // exact accepted journal facts; a later accepted observation
-            // clears it and retries admission.
             yield* Ref.update(deferredAt, (deferred) => new Map(deferred).set(proposal.id, current.acceptedAt))
             yield* Ref.update(taskWorkDeferredAt, (deferred) => new Map(deferred).set(proposal.id, current.acceptedAt))
           }

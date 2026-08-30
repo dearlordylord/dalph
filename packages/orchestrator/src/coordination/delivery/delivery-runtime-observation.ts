@@ -212,7 +212,7 @@ export const makeObservedDeliveryActionLease = (
   bindPlannedAttemptPosition: (correlation) => {
     const requirement = owner.proposal.admission.taskWorkPosition
     return requirement._tag === "TaskWorkPositionRequired"
-      ? admission.bindPlannedAttemptPosition(requirement.taskId, correlation)
+      ? admission.bindPlannedAttemptPosition(requirement.taskId, correlation, owner.proposal.id)
       : (() => {
           const taskId = deliveryProposalOrderTaskId(owner.proposal.order)
           return taskId === null

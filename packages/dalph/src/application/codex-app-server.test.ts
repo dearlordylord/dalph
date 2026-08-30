@@ -669,14 +669,14 @@ it.effect("closes the application-scoped server only after the shared executor d
       const secondDrainStarted = yield* Deferred.make<void>()
       const releaseDrain = yield* Deferred.make<void>()
       yield* shell.registerExecutorDrain({
-        suspendRunningExecutorWork: Deferred.succeed(drainStarted, undefined).pipe(
+        suspendExecutingExecutorWork: Deferred.succeed(drainStarted, undefined).pipe(
           Effect.andThen(Deferred.await(releaseDrain)),
           Effect.as([])
         )
       })
       // Two Run bootstraps register with this one application shell/server.
       yield* shell.registerExecutorDrain({
-        suspendRunningExecutorWork: Deferred.succeed(secondDrainStarted, undefined).pipe(
+        suspendExecutingExecutorWork: Deferred.succeed(secondDrainStarted, undefined).pipe(
           Effect.andThen(Deferred.await(releaseDrain)),
           Effect.as([])
         )
@@ -923,7 +923,7 @@ it.effect("reports executor drain failure while still attempting app-server clea
         { requestEnd: () => Effect.void }
       )
       yield* shell.registerExecutorDrain({
-        suspendRunningExecutorWork: Effect.fail(
+        suspendExecutingExecutorWork: Effect.fail(
           new ApplicationExitDrainFailure({ diagnostics: [ApplicationExitDiagnostic.make("executor failed")] })
         )
       })
@@ -972,7 +972,7 @@ it.effect("reports process-local app-server cleanup failure through the Exit bou
         CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation }),
         { requestEnd: () => Effect.void }
       )
-      yield* shell.registerExecutorDrain({ suspendRunningExecutorWork: Effect.succeed([]) })
+      yield* shell.registerExecutorDrain({ suspendExecutingExecutorWork: Effect.succeed([]) })
       let stopCalls = 0
       const appLayer = codexAppServerLayer({ executable }).pipe(
         Layer.provide(

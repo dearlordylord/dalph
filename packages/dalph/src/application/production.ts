@@ -4,6 +4,7 @@ import {
   AllocatedWorkflowRunId,
   JournaledRunBootstrap,
   type JournaledRuntimeLayerInput,
+  type RunActivationOpportunityValue,
   type TrackerGraphReader,
   attemptChoiceControlLayer,
   controlDirectionApplicationLayer,
@@ -18,6 +19,8 @@ import {
   journaledWorkflowInterpreterLayer,
   ApplicationExitRequestBoundary,
   CoordinatorOwnership,
+  type JournalStore,
+  type RunLifecycleJournal,
   nodeGitCommandLayer,
   nodeGitIntegratorCandidateLayer,
   nodeGitTargetLineageLayer,
@@ -42,6 +45,7 @@ import {
   IntegratorCandidateProviderAuthority,
   type IntegratorCandidateProviderAuthorityService,
   runReactivationOwnerLayer,
+  runWorkflowWithActiveWorkAuthorityRefresh,
   runWorkflow,
   type InitialControlPolicySource,
   type CurrentSignal,
@@ -82,6 +86,12 @@ export interface ProductionRunReactivationOptions {
 
 /** Optional production boundaries that advance one accepted result through delivery and finality. */
 export interface ProductionWorkflowRuntimeBoundaries {
+  /** Optional journal implementation for process-boundary acceptance tests. */
+  readonly journalStoreLayer?: Layer.Layer<
+    JournalStore | RunLifecycleJournal,
+    Layer.Error<typeof productionJournalStoreLayer>,
+    never
+  >
   readonly targetPromotion?: TargetPromotionRuntimeInput
   readonly integrationFinality?: CompletionClaimBoundaryService
   readonly completionTask?: CompletionTaskBoundaryService
@@ -109,13 +119,22 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
   runId: RunId,
   options: ProductionRunReactivationOptions
 ) => {
-  const activation = runWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId))
+  const activation = (opportunity: RunActivationOpportunityValue) =>
+    runWorkflow(target, initialControlPolicySource, AllocatedWorkflowRunId.make(runId), opportunity)
+  const activateActiveWorkAuthorityRefresh = (source: "TrackerNotification" | "Timer") =>
+    runWorkflowWithActiveWorkAuthorityRefresh(
+      target,
+      initialControlPolicySource,
+      AllocatedWorkflowRunId.make(runId),
+      source
+    )
   const readControl = Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
     return yield* bootstrap.readRunReactivationControl(target, runId)
   })
   const ownerLayer = runReactivationOwnerLayer({
     activate: activation,
+    activateActiveWorkAuthorityRefresh,
     activationInterval: options.activationInterval ?? defaultProductionRunReactivationInterval,
     failureCooldown: options.failureCooldown ?? defaultProductionRunReactivationCooldown,
     installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
@@ -191,7 +210,9 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     Layer.provide(nodeGitCommandLayer),
     Layer.provide(NodeServices.layer)
   )
-  const journalLayer = productionJournalStoreLayer.pipe(Layer.provide(ownershipLayer))
+  const journalLayer = (runtimeBoundaries.journalStoreLayer ?? productionJournalStoreLayer).pipe(
+    Layer.provide(ownershipLayer)
+  )
   const baseInterpreterLayer = workflowInterpreterLayer.pipe(
     Layer.provide(trackerMutationLayer),
     Layer.provide(gitTargetLineageLayer),
@@ -219,10 +240,11 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
       const applicationExit = yield* ApplicationExitShell
-      const runtimeLayer = ({ runId: activeRunId }: JournaledRuntimeLayerInput) => {
+      const runtimeLayer = ({ opportunity, runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const interpreterLayer = journaledWorkflowInterpreterLayer(
           activeRunId,
-          Layer.succeed(WorkflowInterpreter, interpreter)
+          Layer.succeed(WorkflowInterpreter, interpreter),
+          opportunity
         )
         const operatorControlLayer = Layer.mergeAll(
           attemptChoiceControlLayer,
@@ -237,7 +259,9 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           integrationFinality,
           completionTask,
           cleanupBoundaryLayer,
-          acceptedResultEvidenceStore
+          acceptedResultEvidenceStore,
+          true,
+          opportunity
         ).pipe(
           Layer.provide(integratorLayer),
           Layer.provide(interpreterLayer),

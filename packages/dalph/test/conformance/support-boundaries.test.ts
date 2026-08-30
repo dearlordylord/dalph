@@ -101,13 +101,16 @@ it("keeps the Codex replacement seam callable from the package root", () => {
     detail: "controlled authority unavailable"
   })
   const replacement = DalphPublicApi.CodexProviderWorkUnitReplacement.of({
-    replacePurgedProviderWorkUnit: (_request) => Effect.succeed(result)
+    replacePurgedProviderWorkUnit: (_request: DalphPublicApi.CodexProviderWorkUnitReplacementRequest) =>
+      Effect.succeed(result)
   })
   const failure = new DalphPublicApi.CodexReplacementAuthorityFailure({
     detail: "controlled authority unavailable",
     kind: "ProviderTemporarilyUnreadable"
   })
-  const authority = DalphPublicApi.CodexReplacementAuthority.of({ observe: (_request) => Effect.fail(failure) })
+  const authority = DalphPublicApi.CodexReplacementAuthority.of({
+    observe: (_request: DalphPublicApi.CodexProviderWorkUnitReplacementRequest) => Effect.fail(failure)
+  })
 
   expect(request.requestId).toBe(requestId)
   expect(result._tag).toBe("ProviderTemporarilyUnreadable")

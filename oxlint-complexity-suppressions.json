@@ -1,7 +1,7 @@
 {
   "packages/dalph/src/cassettes/catalog.ts": {
     "complexity": {
-      "count": 1
+      "count": 4
     }
   },
   "packages/dalph/src/cassettes/disposition-cleanup-cassette.ts": {
@@ -9,14 +9,69 @@
       "count": 6
     }
   },
+  "packages/orchestrator/src/coordination/delivery/delivery-proposal-identity.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/delivery-runtime-phase.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/reactive-delivery-relations.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/coordination/frontier/task-claim-authority.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/reconstruction/history.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/run/recovery-activation.ts": {
+    "complexity": {
+      "count": 9
+    }
+  },
+  "packages/orchestrator/src/coordination/run/run-reactivation-owner.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/coordination/run/run-stabilization.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
   "packages/orchestrator/src/workflow/claim-authority-history.ts": {
     "complexity": {
       "count": 6
     }
   },
-  "packages/orchestrator/src/workflow/protocols/attempt-choice/restart-authority-evidence.ts": {
+  "packages/orchestrator/src/workflow/protocols/active-work-authority-refresh/events.ts": {
     "complexity": {
       "count": 2
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/attempt-choice/restart-authority-evidence.ts": {
+    "complexity": {
+      "count": 1
     }
   },
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/boundaries.ts": {
@@ -42,11 +97,6 @@
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/loop.ts": {
     "complexity": {
       "count": 2
-    }
-  },
-  "packages/orchestrator/src/workflow/protocols/disposition-cleanup/provenance-fixtures.ts": {
-    "complexity": {
-      "count": 1
     }
   },
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/provenance.ts": {
@@ -85,6 +135,11 @@
     }
   },
   "packages/orchestrator/src/workflow/protocols/integrator/successor-history.ts": {
+    "complexity": {
+      "count": 2
+    }
+  },
+  "packages/orchestrator/src/workflow/registry/occurrence-projection.ts": {
     "complexity": {
       "count": 2
     }

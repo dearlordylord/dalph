@@ -181,16 +181,16 @@ const makeLargeProductionTrace = () => Effect.runPromise(
       plannedAttempt,
       version: workflowJournalEventVersion
     })
-    const runningReport = (ordinal: number) => PlannedAttemptExecutorWorkReportedEvent.make({
+    const executingReport = (ordinal: number) => PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(ordinal),
-      report: PlannedAttemptExecutorReport.cases.Running.make({
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
         correlation: { attemptId: plannedAttempt.attemptId, runId }
       }),
       version: workflowJournalEventVersion
     })
     const executorReport = PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: PlannedAttemptExecutorReportOrdinal.make(3),
-      report: PlannedAttemptExecutorReport.cases.Terminal.make({
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
         correlation: { attemptId: plannedAttempt.attemptId, runId },
         result: { _tag: "Accepted", acceptedResult }
       }),
@@ -211,8 +211,8 @@ const makeLargeProductionTrace = () => Effect.runPromise(
     })
     for (const event of [
       executorResponsibility,
-      runningReport(1),
-      runningReport(2),
+      executingReport(1),
+      executingReport(2),
       executorReport,
       integrationResponsibility,
       integrationStarted
@@ -490,10 +490,10 @@ await scenario("runs maintained application Exit stories through the production 
 
 await scenario("runs maintained Codex executor stories through the concrete production executor", () => {
   for (const key of [
-    "codex-executor:firstTurnRunning",
+    "codex-executor:firstTurnExecutorWorkExecuting",
     "codex-executor:lostTurnResponseReconciled",
-    "codex-executor:acceptedTerminal",
-    "codex-executor:safelySuspended"
+    "codex-executor:acceptedExecutorWorkTerminal",
+    "codex-executor:executorWorkSafelySuspended"
   ] as const) {
     const result = everyResult.find(({ catalogKey }) => catalogKey === key)
     assert(result?._tag === "Completed", `${key} must complete through the concrete executor`)
@@ -645,7 +645,7 @@ await scenario("keeps a paused task held until the exact safe-suspension report"
   if (result?._tag !== "Completed" || result.deliveryFrames === null) return
   const safeSuspensionPosition = maintainedAuthoredCassetteCatalog.taskPauseLetsIndependentTaskContinue.story
     .findIndex((item) =>
-      item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "SafelySuspended"
+      item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "ExecutorWorkSafelySuspended"
     )
   assert(safeSuspensionPosition >= 0, "The maintained pause story must declare safe suspension")
   const beforeSafeSuspension = result.deliveryFrames.find(({ storyPosition }) =>
@@ -656,11 +656,11 @@ await scenario("keeps a paused task held until the exact safe-suspension report"
   )
   assert(
     beforeSafeSuspension?.heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0") === true,
-    "Pause direction and a Running report must leave A holding its exact position"
+    "Pause direction and an ExecutorWorkExecuting report must leave A holding its exact position"
   )
   assert(
     afterSafeSuspension?.heldPositions.some(({ attemptId }) => attemptId === "attempt:A:0") === false,
-    "Only the exact SafelySuspended report may release A's position"
+    "Only the exact ExecutorWorkSafelySuspended report may release A's position"
   )
 })
 
@@ -1392,8 +1392,8 @@ await scenario("shows represented and off-graph responsibilities without inventi
   const capacity = document.querySelector("[data-role='delivery-capacity-positions']")
   const rail = document.querySelector("[data-role='delivery-off-graph-responsibilities']")
   assert(capacity?.textContent?.includes("2 held of capacity 2") === true, "The capacity strip must show both reconstructed positions")
-  assert(capacity?.textContent?.includes("B · attempt:B:0") === true, "The capacity strip must correlate B's exact attempt")
-  assert(capacity?.textContent?.includes("C · attempt:C:1") === true, "The capacity strip must correlate C's exact attempt")
+  assert(capacity?.textContent?.includes("B · attempt:B:1") === true, "The capacity strip must correlate B's exact attempt")
+  assert(capacity?.textContent?.includes("C · attempt:C:2") === true, "The capacity strip must correlate C's exact attempt")
   assert(capacity?.textContent?.toLowerCase().includes("anonymous") === true, "The capacity strip must not invent durable slot identities")
   assert(rail?.textContent?.includes("B") === true && rail.textContent.includes("C"), "The off-graph rail must retain both responsibilities")
   assert(rail?.textContent?.includes("graph not established") === true, "The rail must explain why the responsibilities are outside the graph")
@@ -1721,7 +1721,7 @@ await scenario("shows graph observation provenance quiescence and planned action
   assert(facts.includes("planned action proposals") || facts.includes("planning fails closed"), "The downstream action plan must be summarized without implying execution")
   assert(facts.includes("Operator paused the Run"), "A batched publication must retain the concrete operator Pause landmark")
   assert(
-    facts.includes("Attempt attempt:A:0 reported Running"),
+    facts.includes("Attempt attempt:A:0 reported ExecutorWorkExecuting"),
     "A batched publication must retain the exact executor-attempt landmark after Pause"
   )
   assert(document.querySelector("[data-role='delivery-action-planning']") !== null, "Exact action proposals and isolated planning issues must remain inspectable")
@@ -1813,9 +1813,7 @@ await scenario("shows integration order separately from task-work capacity", asy
 
 await scenario("separates every coordinator activation in a multi-restart delivery timeline", async () => {
   const { document, root, settled } = installDom()
-  const row = maintainedCassetteRows.find(({ catalogKey }) =>
-    catalogKey === "authored:changedAttemptStopLostThirdSuspension"
-  )
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:changedAttemptStopReleaseResponseLost")
   const result = row === undefined ? undefined : resultByKey.get(row.catalogKey)
   if (row === undefined || result?._tag !== "Completed" || result.deliveryFrames === null) {
     throw new Error("The multi-restart delivery fixture is missing")
@@ -1823,7 +1821,7 @@ await scenario("separates every coordinator activation in a multi-restart delive
   const boundaryIndexes = result.deliveryFrames.flatMap((frame, index) =>
     index > 0 && frame.activationOrdinal !== result.deliveryFrames?.[index - 1]?.activationOrdinal ? [index] : []
   )
-  assert(boundaryIndexes.length === 6, "Every recovered coordinator process must retain a distinct frame boundary")
+  assert(boundaryIndexes.length === 4, "Every recovered coordinator process must retain a distinct frame boundary")
   mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
   const done = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article .selected-cassette-controls button") as HTMLButtonElement | null)?.click()
@@ -1987,7 +1985,7 @@ await scenario("distinguishes competing claim reads and exact responsibilities a
 await scenario("uses production authored prose for current story items", () => {
   const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:changedAttemptChoiceRace")
   const projectionRow = maintainedCassetteRows.find(({ catalogKey }) =>
-    catalogKey === "authored:changedAttemptStopRemainsUnproved"
+    catalogKey === "authored:coordinatorProcessDeathContinues"
   )
   if (row === undefined || projectionRow === undefined) throw new Error("The authored prose fixtures are missing")
   const raceIndex = row.storyItemTags.indexOf("OperatorRacesContinueAndStop")
@@ -2345,29 +2343,32 @@ await scenario("presents concise execution proof before chronological journal an
 
 await scenario("shows continuation authorization prefixes and retained Run/attempt identity", async () => {
   const { document, root, settled } = installDom()
-  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:coordinatorProcessDeathContinues")
+  const row = maintainedCassetteRows.find(({ catalogKey }) => catalogKey === "authored:taskUnpauseAfterSafeSuspension")
   if (row === undefined) throw new Error("The continuation-authorization cassette row is missing")
   mountCassetteLab({ revision: "acceptance-revision", root, rows: [row], runCassette: cannedRunner })
   const done = settled(singleCassetteSettledEvent)
   ;(document.querySelector("article button") as HTMLButtonElement | null)?.click()
   await done
   const authorization = document.querySelector("[data-role='continuation-authorization']")
-  assert(authorization !== null, "The selected recovery result must render continuation authorization evidence")
+  assert(authorization !== null, "The selected safely suspended Resume result must render continuation authorization evidence")
   if (authorization === null) return
   const prefixRows = [...authorization.querySelectorAll("[data-role='continuation-prefixes'] tbody tr")]
-  assert(prefixRows.length === 3, "The maintained recovery cassette must render pre-auth, post-auth, and terminal prefixes")
+  assert(prefixRows.length === 3, "The maintained Resume cassette must render pre-auth, post-auth, and terminal prefixes")
   const prefixText = prefixRows.map(({ textContent }) => textContent ?? "").join("|")
-  assert(prefixText.includes("BeforeAuthorization") && prefixText.includes("AfterAuthorizationBeforeReport") && prefixText.includes("AfterTerminal"), "Each durable continuation prefix must remain named")
-  assert(authorization.textContent?.includes("no recovery event is inferred") === true, "The Lab must explain that coordinator death is not a journal event")
+  assert(prefixText.includes("BeforeAuthorization") && prefixText.includes("AfterAuthorizationBeforeReport") && prefixText.includes("AfterTerminalReport"), "Each durable continuation prefix must remain named")
+  assert(
+    authorization.textContent?.includes("no replacement attempt or executor invocation is inferred") === true,
+    "The Lab must keep continuation authorization distinct from attempt and executor-invocation identity"
+  )
   assert(
     authorization.textContent?.includes("all correlations retain structured Run/attempt identity") === true,
     "The Lab must show structured Run/attempt identity without inventing invocation identities"
   )
   assert(
-    authorization.textContent?.includes("ExecutorReportObserved at journal 28") === true,
+    authorization.textContent?.includes("ExecutorReportObserved at journal 43") === true,
     "The Lab must distinguish an observed executor report from a command intent"
   )
-  assert(authorization.querySelectorAll("[data-role='continuation-witness-operations'] li").length === 4, "All four witness operation identities must be visible")
+  assert(authorization.querySelectorAll("[data-role='continuation-witness-operations'] li").length === 5, "All five witness operation identities must be visible")
 })
 
 await scenario("links, reveals, and retries cassette failures and Lab defects", async () => {

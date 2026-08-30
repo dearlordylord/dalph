@@ -107,11 +107,15 @@ describe("hosted formal-model contract", () => {
         await symlink(join(repositoryRoot, "node_modules"), join(directory, "node_modules"), "dir")
 
         const originalSelectedModel = await readFile(selectedModel, "utf8")
-        const selectedObligation = "not(isCommandProjectionEvidence(state.evidence)) or and {"
+        const selectedObligation =
+          "val boundaryEvidenceUsesExactCommandIdentity: bool = commandEvidenceMatchesActive(state)"
         expect(originalSelectedModel).toContain(selectedObligation)
         await writeFile(
           selectedModel,
-          originalSelectedModel.replace(selectedObligation, "isCommandProjectionEvidence(state.evidence) or and {")
+          originalSelectedModel.replace(
+            selectedObligation,
+            "val boundaryEvidenceUsesExactCommandIdentity: bool = false"
+          )
         )
 
         let failure: unknown
@@ -133,7 +137,7 @@ describe("hosted formal-model contract", () => {
 
         expect(failure).toMatchObject({
           message: "hosted formal model gate with broken selected obligation failed with exit 1",
-          output: expect.stringContaining("commandProjectionBelongsToCalledCommand"),
+          output: expect.stringContaining("boundaryEvidenceUsesExactCommandIdentity"),
           outputLineCount: expect.any(Number)
         })
 

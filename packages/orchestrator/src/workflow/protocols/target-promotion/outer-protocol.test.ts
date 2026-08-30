@@ -61,6 +61,8 @@ import {
   TargetPromotionResultContradiction
 } from "./protocol.js"
 import {
+  authorizeOrRecordTargetPromotionProgress,
+  authorizeTargetPromotionProgress,
   observeTargetPromotionRead,
   recordTargetPromotionAttemptIntent,
   recordTargetPromotionIntent,
@@ -147,6 +149,126 @@ targetPromotionContract({
   request: targetPromotionGitRequestFor(request)
 })
 
+it.effect("authorizes promotion progress only after the exact durable intent and with retry authority", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const layer = Layer.mergeAll(
+      journalLayer(records),
+      gitLayer(
+        () => Effect.die("authorization-only scenario crossed compare-and-set"),
+        () => Effect.die("authorization-only scenario crossed read")
+      )
+    )
+
+    const absent = yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
+      Effect.provide(layer),
+      Effect.flip
+    )
+    expect(absent).toBeInstanceOf(TargetPromotionResultContradiction)
+
+    yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(Effect.provide(layer))
+    const duplicateIntent = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(
+      Effect.provide(layer),
+      Effect.flip
+    )
+    expect(duplicateIntent).toBeInstanceOf(TargetPromotionResultContradiction)
+    const readOnly = yield* authorizeTargetPromotionProgress(qualifiedCandidate, "ReadOnly").pipe(
+      Effect.provide(layer),
+      Effect.flip
+    )
+    expect(readOnly).toBeInstanceOf(TargetPromotionResultContradiction)
+    expect(
+      (yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(Effect.provide(layer)))._tag
+    ).toBe("TargetPromotionReadAuthorized")
+
+    const freshRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    expect(
+      (yield* authorizeOrRecordTargetPromotionProgress(qualifiedCandidate).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            journalLayer(freshRecords),
+            gitLayer(
+              () => Effect.die("unused"),
+              () => Effect.die("unused")
+            )
+          )
+        )
+      ))._tag
+    ).toBe("TargetPromotionReadAuthorized")
+  })
+)
+
+it.effect("keeps deferred reconciliation read-only and resumes only with the matching authority", () =>
+  Effect.gen(function* () {
+    const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)
+    const prefix = (deferral: TargetPromotionReconciliationDeferral): ReadonlyArray<JournalRecord> => [
+      {
+        event: TargetPromotionIntendedEvent.make({ correlation: request, version: workflowJournalEventVersion }),
+        key: targetPromotionIntentRecordKey(request.requestId),
+        position: JournalPosition.make(1),
+        runId
+      },
+      {
+        event: TargetPromotionAttemptIntendedEvent.make({
+          attemptOrdinal,
+          correlation: request,
+          reason: TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: expectedHead }),
+          version: workflowJournalEventVersion
+        }),
+        key: targetPromotionAttemptIntentRecordKey(request.requestId, attemptOrdinal),
+        position: JournalPosition.make(2),
+        runId
+      },
+      {
+        event: TargetPromotionReconciliationDeferredEvent.make({
+          afterAttemptOrdinal: attemptOrdinal,
+          correlation: request,
+          deferral,
+          version: workflowJournalEventVersion
+        }),
+        key: targetPromotionReconciliationDeferredRecordKey(request.requestId, attemptOrdinal),
+        position: JournalPosition.make(3),
+        runId
+      }
+    ]
+    const layerFor = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
+      Layer.mergeAll(
+        journalLayer(records),
+        gitLayer(
+          () => Effect.die("unused"),
+          () => Effect.die("unused")
+        )
+      )
+
+    const retryRecords = yield* Ref.make(
+      prefix(TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({ observedHeadSha: expectedHead }))
+    )
+    expect(
+      (yield* authorizeTargetPromotionProgress(qualifiedCandidate, "ReadOnly").pipe(
+        Effect.provide(layerFor(retryRecords))
+      ))._tag
+    ).toBe("PromotionReconciliationDeferred")
+    expect(
+      (yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
+        Effect.provide(layerFor(retryRecords))
+      ))._tag
+    ).toBe("TargetPromotionAttemptAuthorized")
+    expect(
+      (yield* authorizeOrRecordTargetPromotionProgress(qualifiedCandidate).pipe(Effect.provide(layerFor(retryRecords))))
+        ._tag
+    ).toBe("TargetPromotionAttemptAuthorized")
+
+    const failedReadRecords = yield* Ref.make(
+      prefix(TargetPromotionReconciliationDeferral.cases.TargetReadFailed.make({ detail: "read unavailable" }))
+    )
+    expect(
+      (yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
+        Effect.provide(layerFor(failedReadRecords))
+      ))._tag
+    ).toBe("TargetPromotionReadAuthorized")
+  })
+)
+
 const run = (service: TargetPromotionGitService, records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
   runFor(qualifiedCandidate, service, records)
 
@@ -194,6 +316,11 @@ it.effect("promotes exact M once and records its Integrator correlation and ance
       "TargetPromotionAttemptIntended",
       "TargetPromotionObservedSuccess"
     ])
+    expect(
+      (yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
+        Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
+      ))._tag
+    ).toBe("PromotionSucceeded")
     expect((yield* run(service, records))._tag).toBe("PromotionSucceeded")
     expect(yield* Ref.get(requests)).toEqual([targetPromotionGitRequestFor(request)])
   })
@@ -217,11 +344,38 @@ it.effect("consumes one read permission before Git and performs no second read",
     )
 
     const authorization = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(Effect.provide(layer))
-    expect((yield* observeTargetPromotionRead(authorization).pipe(Effect.provide(layer)))._tag).toBe(
+    const competingRead = yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
+      Effect.provide(layer)
+    )
+    expect(competingRead._tag).toBe("TargetPromotionReadAuthorized")
+    if (competingRead._tag !== "TargetPromotionReadAuthorized") return
+    const competingAttempt = yield* observeTargetPromotionRead(competingRead).pipe(Effect.provide(layer))
+    expect(competingAttempt._tag).toBe("TargetPromotionAttemptAuthorized")
+    if (competingAttempt._tag !== "TargetPromotionAttemptAuthorized") return
+    yield* recordTargetPromotionAttemptIntent(competingAttempt).pipe(Effect.provide(layer))
+    const staleAuthorization = yield* observeTargetPromotionRead(authorization).pipe(Effect.provide(layer), Effect.flip)
+    expect(staleAuthorization).toBeInstanceOf(TargetPromotionResultContradiction)
+
+    yield* Ref.set(readCalls, 0)
+    const freshRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const freshLayer = Layer.mergeAll(
+      journalLayer(freshRecords),
+      gitLayer(
+        () => Effect.die("read permission requested a compare-and-set"),
+        () =>
+          Ref.update(readCalls, (count) => count + 1).pipe(
+            Effect.as(
+              TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+            )
+          )
+      )
+    )
+    const consumable = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(Effect.provide(freshLayer))
+    expect((yield* observeTargetPromotionRead(consumable).pipe(Effect.provide(freshLayer)))._tag).toBe(
       "TargetPromotionAttemptAuthorized"
     )
 
-    const duplicate = yield* observeTargetPromotionRead(authorization).pipe(Effect.provide(layer), Effect.flip)
+    const duplicate = yield* observeTargetPromotionRead(consumable).pipe(Effect.provide(freshLayer), Effect.flip)
     expect(duplicate._tag).toBe("TargetPromotionResultContradiction")
     if (duplicate._tag !== "TargetPromotionResultContradiction") return
     expect(duplicate.detail).toContain("already consumed")
@@ -250,6 +404,12 @@ it.effect("consumes one attempt authorization before one intent append", () =>
     if (attemptAuthorization._tag !== "TargetPromotionAttemptAuthorized") return
     yield* Ref.set(appendCalls, [])
 
+    const forged = yield* recordTargetPromotionAttemptIntent({ ...attemptAuthorization }).pipe(
+      Effect.provide(layer),
+      Effect.flip
+    )
+    expect(forged).toBeInstanceOf(TargetPromotionResultContradiction)
+
     const intended = yield* recordTargetPromotionAttemptIntent(attemptAuthorization).pipe(Effect.provide(layer))
     expect(intended._tag).toBe("TargetPromotionAttemptIntended")
     const duplicate = yield* recordTargetPromotionAttemptIntent(attemptAuthorization).pipe(
@@ -264,7 +424,7 @@ it.effect("consumes one attempt authorization before one intent append", () =>
   })
 )
 
-it.effect("consumes one intended attempt before Git and performs no second compare-and-set", () =>
+it.effect("consumes one intended attempt before Git and rejects it after durable settlement", () =>
   Effect.gen(function* () {
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
     const compareAndSetCalls = yield* Ref.make(0)
@@ -285,14 +445,18 @@ it.effect("consumes one intended attempt before Git and performs no second compa
     expect(attemptAuthorization._tag).toBe("TargetPromotionAttemptAuthorized")
     if (attemptAuthorization._tag !== "TargetPromotionAttemptAuthorized") return
     const intended = yield* recordTargetPromotionAttemptIntent(attemptAuthorization).pipe(Effect.provide(layer))
+    const forged = yield* sendTargetPromotionAttempt({ ...intended }).pipe(Effect.provide(layer), Effect.flip)
+    expect(forged).toBeInstanceOf(TargetPromotionResultContradiction)
     const observed = yield* sendTargetPromotionAttempt(intended).pipe(Effect.provide(layer))
     expect(observed._tag).toBe("TargetPromotionAttemptObserved")
     expect(yield* Ref.get(compareAndSetCalls)).toBe(1)
+    if (observed._tag !== "TargetPromotionAttemptObserved") return
+    yield* settleTargetPromotionAttempt(observed).pipe(Effect.provide(layer))
 
     const duplicate = yield* sendTargetPromotionAttempt(intended).pipe(Effect.provide(layer), Effect.flip)
     expect(duplicate._tag).toBe("TargetPromotionResultContradiction")
     if (duplicate._tag !== "TargetPromotionResultContradiction") return
-    expect(duplicate.detail).toContain("already consumed")
+    expect(duplicate.detail).toContain("no longer matches")
     expect(yield* Ref.get(compareAndSetCalls)).toBe(1)
   })
 )

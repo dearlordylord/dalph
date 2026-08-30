@@ -4,6 +4,7 @@ import { Context, Deferred, Effect, Exit, Layer, Option, Ref, Schema, Semaphore,
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
+import type { InitialControlPolicy } from "../../control/policy.js"
 import {
   ControlDirectionApplication,
   controlDirectionApplicationLayer
@@ -65,10 +66,11 @@ import {
   journalMaintenanceDiagnosticFor,
   type JournalMaintenanceObservationService
 } from "../../workflow-journal/maintenance.js"
+import type { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
 import { ApplicationExitAdmission, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
 import { ApplicationExitDiagnostic } from "../application-exit/lifecycle-decision.js"
 import { ApplicationExitDrainFailure, type ApplicationExitShellService } from "../application-exit/application-shell.js"
-import { suspendRunningExecutorWorkForApplicationExit } from "../application-exit/executor-drain.js"
+import { suspendExecutingExecutorWorkForApplicationExit } from "../application-exit/executor-drain.js"
 import {
   AppliedRunCancellation,
   ApplyRunCancellationRequest,
@@ -77,9 +79,15 @@ import {
 import { runCancellationAppliedRecordKey } from "../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import type { IntegratorCandidateCleanupEvidenceReadFailure } from "../../workflow/protocols/disposition-cleanup/integrator-candidate.js"
+import {
+  activeWorkAuthorityRefreshForOwner,
+  activeWorkAuthorityRefreshSubjectsForRunState,
+  RunActivationOpportunity
+} from "./run-activation-opportunity.js"
 
 export interface JournaledRuntimeLayerInput {
   readonly runId: RunId
+  readonly opportunity: RunActivationOpportunity
 }
 
 export type JournaledRuntimeLayer = Layer.Layer<
@@ -327,7 +335,8 @@ export const journaledRunBootstrapLayer = (
         runId: RunId,
         target: Parameters<JournaledRunBootstrapService["activate"]>[0],
         initial: ValidWorkflowJournalHistory,
-        program: Effect.Effect<RunFinalityProof, E, R>
+        program: Effect.Effect<RunFinalityProof, E, R>,
+        opportunity: RunActivationOpportunity
       ) =>
         Effect.scoped(
           Effect.uninterruptibleMask((restore) =>
@@ -340,7 +349,7 @@ export const journaledRunBootstrapLayer = (
                     onSome: ({ acceptedFactPublication }) => acceptedFactPublication()
                   })
               })
-              const downstream = runtimeLayer({ runId }).pipe(
+              const downstream = runtimeLayer({ runId, opportunity }).pipe(
                 Layer.provide(Layer.succeed(DeliveryRelationPublicationObserver, publicationObserver)),
                 Layer.provideMerge(processRuntimeLayer),
                 Layer.provide(Layer.succeed(ApplicationExitAdmission, admission)),
@@ -355,7 +364,9 @@ export const journaledRunBootstrapLayer = (
                 InRunJournal.of({ append: journal.append, read: journal.read })
               )
               yield* applicationExit.registerExecutorDrain({
-                suspendRunningExecutorWork: suspendRunningExecutorWorkForApplicationExit().pipe(Effect.provide(context))
+                suspendExecutingExecutorWork: suspendExecutingExecutorWorkForApplicationExit().pipe(
+                  Effect.provide(context)
+                )
               })
               const controls: RuntimeControls = {
                 attemptChoice: Context.get(context, AttemptChoiceControl),
@@ -458,7 +469,15 @@ export const journaledRunBootstrapLayer = (
         })
       })
 
-      const activate: JournaledRunBootstrapService["activate"] = (target, initialControlPolicySource, runId, program) =>
+      type ActivationProgram<E, R> = (opportunity: RunActivationOpportunity) => Effect.Effect<RunFinalityProof, E, R>
+
+      const activateWithOpportunity = <EInitial, RInitial, E, R>(
+        target: TrackerTarget,
+        initialControlPolicySource: Effect.Effect<InitialControlPolicy, EInitial, RInitial>,
+        runId: AllocatedWorkflowRunId,
+        program: ActivationProgram<E, R>,
+        opportunityFor: (initial: ValidWorkflowJournalHistory) => RunActivationOpportunity
+      ) =>
         activation.withPermit(
           Effect.acquireUseRelease(
             admission.acquireForwardOwner("RunActivation"),
@@ -500,10 +519,42 @@ export const journaledRunBootstrapLayer = (
                 }
                 yield* lifecycle.readRunForRecovery(runId, target)
                 const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
-                return yield* finish(runId, target, yield* runWithJournal(runId, target, initial, program))
+                const opportunity = opportunityFor(initial)
+                const activationProgram = program(opportunity)
+                return yield* finish(
+                  runId,
+                  target,
+                  yield* runWithJournal(runId, target, initial, activationProgram, opportunity)
+                )
               }),
             (activationOwner) => activationOwner.release
           )
+        )
+
+      const activate: JournaledRunBootstrapService["activate"] = (
+        target,
+        initialControlPolicySource,
+        runId,
+        program,
+        opportunity = RunActivationOpportunity.OrdinaryRunEntry()
+      ) =>
+        activateWithOpportunity(
+          target,
+          initialControlPolicySource,
+          runId,
+          () => program,
+          () => opportunity
+        )
+
+      const activateActiveWorkAuthorityRefresh: JournaledRunBootstrapService["activateActiveWorkAuthorityRefresh"] = (
+        target,
+        initialControlPolicySource,
+        runId,
+        program,
+        source
+      ) =>
+        activateWithOpportunity(target, initialControlPolicySource, runId, program, (initial) =>
+          activeWorkAuthorityRefreshForOwner(source, activeWorkAuthorityRefreshSubjectsForRunState(initial.runState))
         )
 
       const readRunReactivationControl: JournaledRunBootstrapService["readRunReactivationControl"] = (target, runId) =>
@@ -683,6 +734,7 @@ export const journaledRunBootstrapLayer = (
 
       return JournaledRunBootstrap.of({
         activate,
+        activateActiveWorkAuthorityRefresh,
         readRunReactivationControl,
         registerAcceptedRunReactivationObservers,
         operatorControl

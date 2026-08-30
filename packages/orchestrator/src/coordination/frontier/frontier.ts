@@ -95,13 +95,13 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly taskId: TaskId
   }
   ContinueFreshWorkflowOperation: { readonly operationId: OperationId; readonly taskId: TaskId }
-  StartPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
-  ContinuePlannedAttemptExecutorWork: {
+  BeginPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
+  ObservePlannedAttemptExecutorWork: {
     readonly acceptedProgress: AcceptedPlannedAttemptExecutorProgress
     readonly plannedAttempt: PlannedTaskAttempt
   }
   /** Continue one retained responsibility only after the named current tracker and Git facts are authorized. */
-  ContinuePlannedAttemptExecutorWorkAfterCurrentFacts: {
+  ResumePlannedAttemptExecutorWorkAfterCurrentFacts: {
     readonly acceptedProgress: AcceptedPlannedAttemptExecutorProgress
     readonly plannedAttempt: PlannedTaskAttempt
     readonly witness: PlannedAttemptContinuationWitness
@@ -126,7 +126,7 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly operation: typeof WorkflowOperation.cases.ReadTargetLineage.Type
     readonly plannedAttempt: PlannedTaskAttempt
   }
-  ObservePlannedAttemptContinuationExecutor: { readonly plannedAttempt: PlannedTaskAttempt }
+  ReconcilePlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
   ObserveAttemptStoppageExecutor: { readonly requestId: AttemptChoiceRequestId; readonly subject: AttemptChoiceSubject }
   ObserveResponsibleTaskClaim: {
     readonly operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
@@ -314,8 +314,8 @@ const transitionTrackerGraphRequirements = {
   CommitFreshTaskClaimIntent: "CurrentTrackerGraphRequired",
   CommitTaskClaimReacquisitionIntent: "AcceptedHistorySufficient",
   ContinueFreshWorkflowOperation: "CurrentTrackerGraphRequired",
-  ContinuePlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
-  ContinuePlannedAttemptExecutorWorkAfterCurrentFacts: "CurrentTrackerGraphRequired",
+  ObservePlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
+  ResumePlannedAttemptExecutorWorkAfterCurrentFacts: "CurrentTrackerGraphRequired",
   RecordChangedHeadRetryQuarantine: "CurrentTrackerGraphRequired",
   RecordPromotionStaleIntegrationQuarantine: "CurrentTrackerGraphRequired",
   RecordInitialConclusiveIntegrationQuarantine: "AcceptedHistorySufficient",
@@ -332,7 +332,7 @@ const transitionTrackerGraphRequirements = {
   DeleteCompletedTaskCompletionClaim: "CurrentTrackerGraphRequired",
   ObservePlannedAttemptContinuationClaim: "AcceptedHistorySufficient",
   ObserveAttemptStoppageExecutor: "AcceptedHistorySufficient",
-  ObservePlannedAttemptContinuationExecutor: "AcceptedHistorySufficient",
+  ReconcilePlannedAttemptExecutorWork: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationGraph: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationSpecification: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationTargetLineage: "AcceptedHistorySufficient",
@@ -353,7 +353,7 @@ const transitionTrackerGraphRequirements = {
   RetryCancelledAttemptClaimRelease: "AcceptedHistorySufficient",
   RetryStoppedAttemptClaimRelease: "AcceptedHistorySufficient",
   ReleaseStartedIntegrationTarget: "AcceptedHistorySufficient",
-  StartPlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
+  BeginPlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
   StartQueuedIntegration: "CurrentTrackerGraphRequired",
   SuspendPlannedAttemptExecutorWork: "AcceptedHistorySufficient"
 } as const satisfies Record<RunnableFrontierTransition["_tag"], TransitionTrackerGraphRequirement>
@@ -376,7 +376,7 @@ export type FrontierExplanation = Data.TaggedEnum<{
   }
   AttemptStoppageWait: {
     readonly correlation: PlannedAttemptExecutorCorrelation
-    readonly reason: "ExecutorContradictory" | "ExecutorRunning" | "ExecutorUnavailable"
+    readonly reason: "ExecutorContradictory" | "ExecutorExecuting" | "ExecutorUnavailable"
     readonly taskId: TaskId
     readonly wakeCondition: "ProcessRestartedOrAcceptedFactsChanged"
   }
@@ -436,7 +436,7 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly taskId: TaskId
   }
   PlannedAttemptExecutorWorkTerminal: {
-    readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "Terminal" }>
+    readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "ExecutorWorkTerminal" }>
     readonly taskId: TaskId
   }
   PlannedAttemptExecutorProjectionWait: {
@@ -519,6 +519,13 @@ export type FrontierExplanation = Data.TaggedEnum<{
       | "WorktreeLost"
     readonly taskId: TaskId
     readonly wakeCondition: "GitFactsObserved"
+  }
+  /** A planned-attempt boundary was unreadable; retain the exact responsibility until a later reread. */
+  PlannedAttemptUnreadableFactWait: {
+    readonly boundary: "Executor" | "Git" | "TaskTracker"
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly taskId: TaskId
+    readonly wakeCondition: "BoundaryRereadSucceeded"
   }
   PlannedAttemptTaskExternalSuccessConstraint: {
     readonly correlation: PlannedAttemptExecutorCorrelation
@@ -799,6 +806,14 @@ const executorDecisionFor = (
           wakeCondition: "GitFactsObserved"
         })
       }),
+      UnreadableFactWait: ({ boundary }) => ({
+        explanation: FrontierExplanation.PlannedAttemptUnreadableFactWait({
+          boundary,
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "BoundaryRereadSucceeded"
+        })
+      }),
       TaskExternalSuccessConstraint: () => ({
         explanation: FrontierExplanation.PlannedAttemptTaskExternalSuccessConstraint({
           correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
@@ -878,10 +893,15 @@ const executorDecisionFor = (
       // the accepted disposition is terminal and remains available to passive status.
       Relinquished: () => ({}),
       Ready: ({ acceptedProgress }) => ({
-        transition: RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
-          acceptedProgress,
-          plannedAttempt: facts.responsibility.plannedAttempt
-        })
+        transition:
+          acceptedProgress._tag === "ExecutorResponsibilityBegan"
+            ? RunnableFrontierTransition.BeginPlannedAttemptExecutorWork({
+                plannedAttempt: facts.responsibility.plannedAttempt
+              })
+            : RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+                acceptedProgress,
+                plannedAttempt: facts.responsibility.plannedAttempt
+              })
       })
     }),
     Match.exhaustive
@@ -1014,8 +1034,9 @@ export const deriveRunnableFrontier = (input: RunnableFrontierInput): RunnableFr
   })
   const responsibleTaskIds = new Set(input.responsibility.entries.map(workflowResponsibilityTaskId))
   const isExecutorTransition = (transition: RunnableFrontierTransition): boolean =>
-    transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-    transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts" ||
+    transition._tag === "BeginPlannedAttemptExecutorWork" ||
+    transition._tag === "ObservePlannedAttemptExecutorWork" ||
+    transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts" ||
     transition._tag === "SuspendPlannedAttemptExecutorWork"
   const executorTransitionPriority = (transition: RunnableFrontierTransition): number =>
     transition._tag === "SuspendPlannedAttemptExecutorWork" ? 0 : 1

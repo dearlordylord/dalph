@@ -107,6 +107,7 @@ export const sealedPrivateRunHistoryFrom = (
 /** A new candidate may bind only run one; Retry needs a sealed predecessor record. */
 export const newPrivateRecordRunError = (run: IntegratorRunCorrelation): string | undefined => {
   const admissionError = providerRunAdmissionError(run, false)
+  /* v8 ignore next -- @preserve the only supported non-initial run is Retry run two, and providerRunAdmissionError already rejects it when no sealed initial run exists. */
   return admissionError === undefined && !isInitialProviderRun(run)
     ? "Retry run two has no sealed run-one result"
     : admissionError

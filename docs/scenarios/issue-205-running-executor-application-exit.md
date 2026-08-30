@@ -9,7 +9,7 @@ Status: implemented from the accepted executor chronology in
 
 Alice is the Operator. One activated Run retains an unfinished executor-work
 responsibility for task A's immutable planned attempt. Its latest exact
-`(RunId, AttemptId)` report is `Running`, so Dalph retains its task-work
+`(RunId, AttemptId)` report is `ExecutorWorkExecuting`, so Dalph retains its task-work
 position. The tracker owns A's claim, Git owns its branch and worktree, the
 executor owns whether all activity is safely suspended, and the Run journal
 contains the attempt plan, responsibility, commands, and reports. The
@@ -18,21 +18,21 @@ application lifecycle contains no Run workflow fact.
 Alice submits the transport-neutral Exit request. The application shell closes
 forward-progress admission before starting its executor-family drain. The
 active Run derives every exact attempt whose newest journaled executor evidence
-is `Running`; it does not allocate an executor identity, operation identity, or
+is `ExecutorWorkExecuting`; it does not allocate an executor identity, operation identity, or
 replacement attempt. For each attempt, Dalph uses the ordinary executor
 protocol to append `PlannedAttemptExecutorCommandIntended` with command
 `Suspend` before it calls `requestSuspension`. That boundary cannot call
-`startOrContinue` or ask the executor to finish. How the executor implementation
+`begin` or `resume` or ask the executor to finish. How the executor implementation
 handles the suspension request is outside the generic Dalph protocol.
 
-When the executor returns the same correlation with `SafelySuspended` or
-`Terminal`, Dalph appends the ordinary report. That evidence makes the exact
+When the executor returns the same correlation with `ExecutorWorkSafelySuspended` or
+`ExecutorWorkTerminal`, Dalph appends the ordinary report. That evidence makes the exact
 task-work position no longer required. Only after every running attempt reaches
 that boundary may the shell finish its ordinary owner, resource, and
 coordinator-lock release and report `Succeeded`. The claim, planned worktree,
 WIP, evidence, attempt, and later workflow obligations remain unchanged.
 
-If the call returns `Running`, the attempt remains unsafe and the drain waits
+If the call returns `ExecutorWorkExecuting`, the attempt remains unsafe and the drain waits
 only until the original five-second application deadline. A foreign or
 contradictory report is recorded by the ordinary executor protocol and becomes
 a typed drain diagnostic rather than safe evidence. If response loss or process

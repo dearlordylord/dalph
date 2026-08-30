@@ -2,7 +2,9 @@
 
 Issue: [Cancel or continue an exact pre-integration attempt](https://github.com/dearlordylord/dalph/issues/65)
 
-Status: accepted on 2026-08-01 before behavior-changing implementation.
+Status: accepted on 2026-08-01 before behavior-changing implementation. Issue
+#264 supersedes the post-choice writer-stoppage branch: current Stop is exposed
+only by the latest accepted safe report with no unsettled executor command.
 
 These scenarios begin after issue #136 has proved that tracker-authored task
 instructions changed while one immutable planned attempt remains unfinished.
@@ -138,11 +140,11 @@ logs, and evidence remain readable resources, not disposable cleanup targets.
    belongs to R and P and that no later executor start or continuation request
    was sent. That unbroken evidence is sufficient proof that no executor-owned
    writer remains; Stop does not require a redundant executor request.
-4. If that proof is incomplete, or a later executor request has an ambiguous
-   outcome, Dalph records the exact suspension or stoppage intent and inspects
-   the executor. It accepts stoppage only from an exact terminal or safely-
-   suspended report for R and P.
-5. Dalph records that P's implementation responsibility is abandoned while
+4. If a durable Resume intent or any later accepted executor report exists,
+   Stop is unavailable; Dalph does not append the choice or contact the
+   executor to recreate safe authority.
+5. With the unchanged latest accepted Safe authority, Dalph records that P's
+   implementation responsibility is abandoned while
    leaving worktree, WIP, session history, logs, and evidence preserved for
    separately authorized disposition.
 6. Dalph freshly reads the tracker claim. Only if K1 is still the exact current
@@ -156,10 +158,10 @@ logs, and evidence remain readable resources, not disposable cleanup targets.
    integration, tracker-completion, generic cleanup, or replacement-attempt
    operation.
 
-If Dalph crashes after either state-changing intent, restart checks the owning
-executor or tracker boundary before repeating the same exact request. A lost
-response is not evidence that stoppage or claim release did not happen. If
-implementation stoppage is proved but claim release remains unreadable, Dalph
+If Dalph crashes after the claim-release intent, restart checks the tracker
+boundary before repeating the same exact request. A lost response is not
+evidence that claim release did not happen. If implementation abandonment is
+recorded but claim release remains unreadable, Dalph
 durably retains a separate unresolved claim-release responsibility. Each
 activation makes only a bounded reconciliation attempt; restart or a later
 activation reconstructs the same responsibility and checks the tracker before
@@ -167,20 +169,10 @@ retrying. When the tracker eventually supplies readable evidence, Dalph
 durably records the release or no-release result. Exact redelivery of D2 returns
 the recorded direction and its current result without applying another Stop.
 Reusing D2 with different contents is a typed contradiction, and a new choice
-request after D2 was applied is stale.
-
-The maintained later-command ambiguity story uses ordinary production routes
-to make that race concrete. Dalph admits P's continuation and pauses it
-immediately before the executor command intent. Alice applies Task Pause and
-then Task Unpause; each control request performs its normal current-membership
-tracker read. The live owner of the already-admitted continuation remains held
-while Unpause makes P ready again. After the ordinary delivery graph refresh,
-Dalph's next activation requests and records a fresh task-work-specification
-read returning F2. Alice then applies Stop for F1/F2, Dalph releases the held
-continuation, and its later executor command makes the earlier safe proof
-stale. No harness appends F2 or selects that read outside the production
-delivery route. `releases only the freshly confirmed exact claim after Stop`
-in `scenario.test.ts` exercises this production selection and recording path.
+request after D2 was applied is stale. If a distinct accepted terminal report
+is recorded after Stop but before abandonment, Terminal supersedes Safe: Dalph
+does not abandon implementation or release K1 under D2, and an Accepted result
+follows ordinary integration admission.
 
 Alice sees P stopped and its implementation artifacts preserved. If exact claim
 release remains unresolved, she sees that separately instead of seeing the
@@ -196,11 +188,16 @@ evidence, start #66 clean restart, or start destructive cleanup.
 - `releases only the freshly confirmed exact claim after Stop`
 - `stops implementation without mutating an absent or foreign claim`
 - `preserves worktree WIP session history and evidence after Stop`
-- `reconciles ambiguous stoppage and claim release across later activations without duplicates`
 - `durably reconciles an unresolved claim release through bounded later activations`
 - `coalesces exact Stop redelivery and rejects request identity reuse`
 
-## Dalph cannot prove that active writers stopped
+## Superseded historical unproved-writer chronology
+
+This section describes only compatibility handling for a historical journal in
+which Stop was applied before current safe-report gating existed. It is not a
+current authoring path or live authorization. Current Stop cancels any admitted
+but unissued Resume before executor contact; a recorded Resume intent or an
+accepted executing report makes Stop unavailable.
 
 ### Starting situation
 

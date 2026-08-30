@@ -9,6 +9,8 @@ import {
 import { Data, Effect, Match } from "effect"
 import { type PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 import { isExactTaskClaim, type ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+import type { TrackerTarget } from "../../../authorities/task-tracker/target.js"
+import { exactWorkflowRunTargetFor } from "../../../workflow-journal/run-target.js"
 import {
   attemptRestartAuthorityReadFailedRecordKey,
   plannedAttemptReplacedRecordKey
@@ -24,7 +26,7 @@ import {
   makeTaskWorktreeObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../registry/operation.js"
-import { type PlannedAttemptExecutorEvidence } from "../planned-attempt-executor-work/evidence.js"
+import { type AcceptedPlannedAttemptExecutorEvidence } from "../planned-attempt-executor-work/evidence.js"
 import {
   PlannedAttemptProtocolController,
   type PlannedAttemptProtocolPermit,
@@ -54,7 +56,7 @@ import {
   restartChoiceWasInvalidatedByLaterSpecification,
   type PlannedAttemptReplacementRecord,
   type RestartApplicationRecord,
-  terminalOrSafeRestartQuiescence
+  currentRestartQuiescence
 } from "./restart-authority.js"
 import type { AttemptRestartPendingReason } from "./restart-reasons.js"
 import {
@@ -139,7 +141,8 @@ const unreadableTaskFacts = (
   ).pipe(Effect.as({ _tag: "Unreadable" as const }))
 
 interface RestartBasis extends ExactRestartContext {
-  readonly quiescenceEvidence: PlannedAttemptExecutorEvidence
+  readonly immutableRunTarget: TrackerTarget
+  readonly quiescenceEvidence: AcceptedPlannedAttemptExecutorEvidence
 }
 
 interface RestartPrepared extends RestartBasis {
@@ -178,21 +181,26 @@ interface RestartAuthorityFacts extends RestartBasis {
   readonly worktreeOperation: ReturnType<typeof makeTaskWorktreeObservationOperation>
 }
 
-type EstablishedRestartQuiescence = Effect.Success<ReturnType<typeof terminalOrSafeRestartQuiescence>>
+type EstablishedRestartQuiescence = Effect.Success<ReturnType<typeof currentRestartQuiescence>>
 type RestartQuiescence =
   | Exclude<EstablishedRestartQuiescence, { readonly _tag: "Pending" }>
   | { readonly _tag: "Pending"; readonly reason: AttemptRestartPendingReason }
 
-const executorContradictory = () =>
-  Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorContradictory" as const })
-const executorUnavailable = () => Effect.succeed({ _tag: "Pending" as const, reason: "ExecutorUnavailable" as const })
-
-const preparedRestartFrom = (quiescence: RestartQuiescence, application: RestartApplicationRecord) => {
+const preparedRestartFrom = (
+  quiescence: RestartQuiescence,
+  application: RestartApplicationRecord,
+  immutableRunTarget: TrackerTarget
+) => {
   const { requestId, subject } = application.event
   return Match.valueTags(quiescence, {
     Pending: ({ reason }) => Effect.succeed({ _tag: "AttemptRestartPending" as const, reason }),
     Proof: ({ evidence }) =>
-      Effect.succeed({ _tag: "RestartPrepared" as const, application, quiescenceEvidence: evidence }),
+      Effect.succeed({
+        _tag: "RestartPrepared" as const,
+        application,
+        immutableRunTarget,
+        quiescenceEvidence: evidence
+      }),
     Rejected: ({ reason }) => Effect.succeed({ _tag: "AttemptRestartRejected" as const, reason }),
     /* v8 ignore next -- @preserve The closed quiescence interpreter returns Pending, Proof, or Rejected for every accepted executor report. */
     Unproved: () =>
@@ -209,10 +217,18 @@ const preparedRestartFrom = (quiescence: RestartQuiescence, application: Restart
 const prepareAttemptRestart = Effect.fn("AttemptRestart.prepare")(function* (
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject,
-  permit: PlannedAttemptProtocolPermit
+  _permit: PlannedAttemptProtocolPermit
 ) {
   const journal = yield* InRunJournal
   const records = yield* journal.read(subject.plannedAttempt.runId)
+  const immutableRunTarget = exactWorkflowRunTargetFor(records)
+  if (immutableRunTarget === undefined) {
+    return yield* new AttemptRestartAuthorityContradiction({
+      detail: "exact Run beginning target is missing",
+      requestId,
+      subject
+    })
+  }
   const existing = exactRecordedReplacement(records, requestId, subject)
   if (existing._tag === "Contradictory") {
     return yield* new AttemptRestartChoiceContradiction({ requestId, subject })
@@ -223,22 +239,11 @@ const prepareAttemptRestart = Effect.fn("AttemptRestart.prepare")(function* (
   const application = exactAppliedRestart(records, requestId, subject)
   /* v8 ignore next -- @preserve The protocol controller exposes Restart only from its exact durable application record. */
   if (application === undefined) return yield* new AttemptRestartChoiceContradiction({ requestId, subject })
-  if (restartChoiceWasInvalidatedByLaterSpecification(records, application.position, subject)) {
+  if (restartChoiceWasInvalidatedByLaterSpecification(records, application.position, subject, immutableRunTarget)) {
     return { _tag: "AttemptRestartRejected" as const, reason: "NewFingerprintChoiceRequired" as const }
   }
-  const quiescence = yield* terminalOrSafeRestartQuiescence(records, application, subject, permit).pipe(
-    Effect.catchTags({
-      PlannedAttemptExecutorCorrelationMismatch: executorContradictory,
-      PlannedAttemptExecutorProjectionCorrelationMismatch: executorContradictory,
-      PlannedAttemptExecutorProjectionNoCurrentReport: executorUnavailable,
-      PlannedAttemptExecutorProjectionTemporarilyUnavailable: executorUnavailable,
-      PlannedAttemptExecutorProjectionUnreadable: executorUnavailable,
-      PlannedAttemptExecutorStateNoCurrentReport: executorUnavailable,
-      PlannedAttemptExecutorStateTemporarilyUnavailable: executorUnavailable,
-      PlannedAttemptExecutorStateUnreadable: executorUnavailable
-    })
-  )
-  return yield* preparedRestartFrom(quiescence, application)
+  const quiescence = yield* currentRestartQuiescence(records, subject)
+  return yield* preparedRestartFrom(quiescence, application, immutableRunTarget)
 })
 
 const readRestartGraph = Effect.fn("AttemptRestart.readGraph")(function* (prepared: RestartPrepared) {
@@ -246,10 +251,6 @@ const readRestartGraph = Effect.fn("AttemptRestart.readGraph")(function* (prepar
   const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
   const records = yield* journal.read(subject.plannedAttempt.runId)
-  const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
-  if (began?.event._tag !== "WorkflowRunBegan") {
-    return yield* new AttemptRestartAuthorityContradiction({ detail: "Run target is missing", requestId, subject })
-  }
   const graphOperation = makeTrackerGraphObservationOperation(
     nextRestartReadOperationId(
       records,
@@ -258,7 +259,7 @@ const readRestartGraph = Effect.fn("AttemptRestart.readGraph")(function* (prepar
       /* v8 ignore next -- @preserve The applied Restart record is already present in this non-empty journal. */
       records.at(lastRecordOffset)?.position ?? prepared.application.position
     ),
-    began.event.target,
+    prepared.immutableRunTarget,
     [],
     [subject.plannedAttempt.taskId]
   )
@@ -476,7 +477,12 @@ const replacementDispositionBeforeAllocation = Effect.fn("AttemptRestart.disposi
   if (recorded._tag === "Exact") {
     return { _tag: "PlannedAttemptReplacementRecorded" as const, replacement: recorded.replacement }
   }
-  return restartChoiceWasInvalidatedByLaterSpecification(records, facts.application.position, subject)
+  return restartChoiceWasInvalidatedByLaterSpecification(
+    records,
+    facts.application.position,
+    subject,
+    facts.immutableRunTarget
+  )
     ? { _tag: "AttemptRestartRejected" as const, reason: "NewFingerprintChoiceRequired" as const }
     : undefined
 })

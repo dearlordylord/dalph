@@ -236,6 +236,26 @@ it.effect("classifies HTTP and JSON failures", () =>
   })
 )
 
+it.effect("maps malformed GraphQL bodies after checking deterministic throttle evidence", () =>
+  Effect.gen(function* () {
+    const mutation = GithubGraphqlRequest.cases.CloseIssue.make({
+      issueNodeId: GithubIssueNodeId.make("malformed-throttle-issue"),
+      operationId: OperationId.make("malformed-throttle-close")
+    })
+    const throttled = yield* executeResponse(
+      new Response("not-json", { headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "2300" }, status: 403 }),
+      mutation
+    ).pipe(Effect.flip, Effect.orDie)
+
+    expect(throttled).toMatchObject({
+      _tag: "GithubGraphqlClient.Throttled",
+      kind: "Primary",
+      operation: "CloseIssue",
+      timingEvidence: { _tag: "ResetAt", epochSeconds: 2_300 }
+    })
+  })
+)
+
 it.effect("classifies primary and secondary GitHub read throttling before generic HTTP failures", () =>
   Effect.gen(function* () {
     const failures = yield* Effect.forEach(
@@ -371,6 +391,30 @@ it.effect("keeps throttled GitHub reads in the read-only classifier with only sa
       retry: { _tag: "RateLimitResetEpochSeconds", epochSeconds: 2_100 }
     })
     expect(JSON.stringify(failures)).not.toContain(unsafeHeader)
+  })
+)
+
+it.effect("decodes read throttle timing from GraphQL error bodies when HTTP status remains successful", () =>
+  Effect.gen(function* () {
+    const body = JSON.stringify({ errors: [{ message: "You have exceeded a secondary rate limit." }] })
+    const request = GithubGraphqlRequest.cases.ReadIssue.make({
+      issueNodeId: GithubIssueNodeId.make("successful-status-throttled-read")
+    })
+    const failures = yield* Effect.forEach(
+      [new Response(body, { status: 200 }), new Response(body, { headers: { "retry-after": "19" }, status: 200 })],
+      (response) => executeResponse(response, request).pipe(Effect.flip, Effect.orDie)
+    )
+
+    expect(failures[0]).toMatchObject({
+      _tag: "GithubGraphqlClient.ReadThrottled",
+      operation: "ReadIssue",
+      retry: { _tag: "Unavailable" }
+    })
+    expect(failures[1]).toMatchObject({
+      _tag: "GithubGraphqlClient.ReadThrottled",
+      operation: "ReadIssue",
+      retry: { _tag: "RetryAfterSeconds", seconds: 19 }
+    })
   })
 )
 

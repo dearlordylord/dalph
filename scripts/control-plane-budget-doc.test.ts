@@ -12,7 +12,7 @@ const budgetPolicies = [
   ],
   [
     "Execution start and stop observation",
-    "Observation/cancellation bound plus bounded command retries; remote execution latency is metrics only."
+    "Passive observation has no retry budget; suspension retains its bounded command attempts; remote execution latency is metrics only."
   ],
   ["Coordinator ownership contradiction", "Observation/cancellation bound."],
   ["Cancellation and application drain", "Hard timeout."],

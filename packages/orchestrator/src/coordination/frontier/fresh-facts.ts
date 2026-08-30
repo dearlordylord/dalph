@@ -29,11 +29,10 @@ import type {
 import type { OperationId } from "../../workflow/identity.js"
 import type { PlannedAttemptExecutorProjectionWaitReason } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 
-/** Exact accepted executor fact from which one continuation is authorized. */
+/** Exact accepted executor fact that identifies one durable observation proposal. */
 export type AcceptedPlannedAttemptExecutorProgress =
   | { readonly _tag: "ExecutorResponsibilityBegan"; readonly acceptedAt: JournalPosition }
   | { readonly _tag: "ExecutorReportAccepted"; readonly ordinal: PlannedAttemptExecutorReportOrdinal }
-  | { readonly _tag: "ExecutorProjectionAccepted"; readonly observedAt: JournalPosition }
 
 /** Fresh boundary facts governing one unfinished workflow responsibility. */
 export type ResponsibilityDisposition = Data.TaggedEnum<{
@@ -53,7 +52,7 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
     readonly requestId: AttemptChoiceRequestId
     readonly subject: AttemptChoiceSubject
   }
-  AttemptStoppageWait: { readonly reason: "ExecutorContradictory" | "ExecutorRunning" | "ExecutorUnavailable" }
+  AttemptStoppageWait: { readonly reason: "ExecutorContradictory" | "ExecutorExecuting" | "ExecutorUnavailable" }
   /** Cancellation has proved exact executor quiescence; relinquishment is the next durable action. */
   CancelledAttemptRelinquishmentRequired: {
     readonly plannedAttempt: PlannedTaskAttempt
@@ -85,7 +84,7 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
   FinalOutcome: { readonly outcome: "Blocked" | "Cancelled" | "Completed" | "Failed" }
   PlannedAttemptExecutorWorkSafelySuspended: { readonly correlation: PlannedAttemptExecutorCorrelation }
   PlannedAttemptExecutorWorkTerminal: {
-    readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "Terminal" }>
+    readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "ExecutorWorkTerminal" }>
   }
   /** A normalized executor projection was not trusted; retain the exact responsibility and resources. */
   PlannedAttemptExecutorProjectionWait: { readonly reason: PlannedAttemptExecutorProjectionWaitReason }
@@ -200,6 +199,7 @@ export type PlannedAttemptExecutorDisposition =
           | "TaskLifecycleConstraint"
           | "TaskMembershipConstraint"
           | "TaskSpecificationChangeConstraint"
+          | "UnreadableFactWait"
       }
     >
   | ExecutorReadyDisposition

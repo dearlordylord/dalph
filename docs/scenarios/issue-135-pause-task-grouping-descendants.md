@@ -61,7 +61,7 @@ claim, or clean up preserved work.
 ### Starting situation
 
 Run R has planned attempts for A and grouping child D. Each holds one task-work
-position and has reported Running. Independent C is eligible. Dalph may also
+position and has reported `ExecutorWorkExecuting`. Independent C is eligible. Dalph may also
 have already sent one bounded tracker, Git, or integration request for covered
 work. Exact claims, worktrees, sessions, work in progress, and responsibilities
 are retained. The current coarse-executor milestone has no separate
@@ -81,7 +81,7 @@ boundary for task Pause to interrupt or finish.
    A and D. It preserves each exact Run ID, Attempt ID, claim, worktree,
    session, and work in progress.
 4. A task-work position remains held until the executor freshly reports
-   `SafelySuspended` or a terminal result for that exact attempt. Dalph then
+   `ExecutorWorkSafelySuspended` or a terminal result for that exact attempt. Dalph then
    releases only that attempt's position.
 5. Integration already holding the serialized target resource reaches its
    known Git result and releases that resource. It starts no later cleanup or

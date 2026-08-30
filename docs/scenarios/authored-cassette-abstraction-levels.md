@@ -15,7 +15,8 @@ The maintainer asks Dalph to coordinate the cassette's tracker target. Dalph
 reads the tracker graph, rereads A around the claim request, obtains A's work
 specification, records one immutable planned attempt, prepares its worktree,
 assumes responsibility for asking the executor to perform that planned work,
-and receives Running followed by Terminal Completed for the same attempt.
+and receives `ExecutorWorkExecuting` followed by `ExecutorWorkTerminal`
+Completed for the same attempt.
 
 The authored task-work results say, in order, that the planned work for A
 completed. A separate assertion says that Dalph undertook no planned work for
@@ -24,7 +25,7 @@ is checked after the story finishes by looking for any journaled executor-work
 responsibility for a planned attempt belonging to B.
 
 The story may omit attempt planning, claim acquisition, worktree readiness,
-executor-work responsibility, and Running from its assertion vocabulary. Dalph
+executor-work responsibility, and `ExecutorWorkExecuting` from its assertion vocabulary. Dalph
 still performs and journals those occurrences. Omission does not let the
 cassette runner skip or search ahead through an explicitly authored tracker
 response, executor response, or Dalph-selected operation: every authored
@@ -60,7 +61,8 @@ scenario.
 The task-work assertions still say that A's planned work completed and that no
 planned work was undertaken for B. The optional orchestration lens additionally
 names, in exact order, that Dalph assumed executor-work responsibility for A's
-planned attempt and received Running then Terminal Completed for that attempt.
+planned attempt and received `ExecutorWorkExecuting` then
+`ExecutorWorkTerminal` Completed for that attempt.
 The optional protocol lens names, in exact order, that A's claim was acquired,
 the attempt was planned, and its worktree became ready.
 

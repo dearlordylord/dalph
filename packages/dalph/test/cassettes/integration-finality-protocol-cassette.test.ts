@@ -3,11 +3,11 @@ import { NodeCrypto } from "@effect/platform-node"
 import { Effect, Schema } from "effect"
 import { expect } from "vitest"
 import {
+  AttemptQuiescenceProof,
   JournalPosition,
   JournalRecord,
-  JournalRecordKey,
-  PlannedAttemptReplacedEvent,
-  workflowJournalEventVersion
+  PlannedAttemptExecutorWorkReportedEvent,
+  reduceWorkflowJournalHistory
 } from "@dalph/orchestrator"
 import {
   maintainedAuthoredCassetteCatalog,
@@ -19,80 +19,39 @@ import { IntegrationFinalityProtocolCassette } from "../../src/cassettes/integra
 
 const runAuthored = (input: unknown) => runAuthoredScenarioCassette(input).pipe(Effect.provide(NodeCrypto.layer))
 
-const replacementEventFor = Effect.fn("IntegrationFinalityProtocolCassetteTest.replacementEventFor")(function* (
+type ReplacementRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>
+}
+
+type ExecutorWorkReportedRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorWorkReported" }>
+}
+
+const replacementRecordFor = Effect.fn("IntegrationFinalityProtocolCassetteTest.replacementRecordFor")(function* (
   records: ReadonlyArray<JournalRecord>
 ) {
-  const plan = records.find(({ event }) => event._tag === "TaskAttemptPlanned")?.event
-  const acquisition = records.find(({ event }) => event._tag === "TaskClaimAcquired")?.event
-  if (plan?._tag !== "TaskAttemptPlanned" || acquisition?._tag !== "TaskClaimAcquired") {
-    return yield* Effect.die("promoted fixture did not record its plan and exact active claim")
+  const replacement = records.findLast(
+    (record): record is ReplacementRecord => record.event._tag === "PlannedAttemptReplaced"
+  )
+  if (replacement?.event._tag !== "PlannedAttemptReplaced") {
+    return yield* Effect.die("replacement fixture did not record its replacement event")
   }
-  const prior = plan.operation.plannedAttempt
-  const successor = {
-    ...prior,
-    attemptId: `${prior.attemptId}:replacement-fixture`,
-    branch: "refs/heads/dalph/integration-finality-replacement-fixture",
-    taskRevision: `${prior.taskRevision}:replacement-fixture`,
-    worktree: "/dalph/cassettes/integration-finality-replacement-fixture"
-  }
-  const observationIds = {
-    claim: "integration-finality-replacement-claim-read",
-    graph: "integration-finality-replacement-graph-read",
-    specification: "integration-finality-replacement-specification-read",
-    target: "integration-finality-replacement-target-read",
-    worktree: "integration-finality-replacement-worktree-read"
-  }
-  const predecessorOperationIds = [
-    acquisition.claim.operationId,
-    observationIds.claim,
-    observationIds.graph,
-    observationIds.specification,
-    observationIds.target,
-    observationIds.worktree
-  ]
-  return yield* Schema.decodeUnknownEffect(PlannedAttemptReplacedEvent)({
-    _tag: "PlannedAttemptReplaced",
-    initiatedBy: { _tag: "DalphCoordinator" },
-    occurrenceClassification: "InitiatedAction",
-    requestId: { nonce: "integration-finality-replacement-fixture", runId: prior.runId },
-    subject: { observedTaskRevision: successor.taskRevision, plannedAttempt: prior },
-    successorPlan: {
-      _tag: "RecordTaskAttemptPlan",
-      operationId: "integration-finality-replacement-plan",
-      plannedAttempt: successor,
-      predecessorOperationIds
-    },
-    version: workflowJournalEventVersion,
-    witness: {
-      claimObservationOperationId: observationIds.claim,
-      expectedClaim: acquisition.claim,
-      graphObservationOperationId: observationIds.graph,
-      oldWorktreeObservationOperationId: observationIds.worktree,
-      oldWorktreeProof: {
-        _tag: "PlannedWorktreeReady",
-        baseSha: prior.baseSha,
-        branch: prior.branch,
-        headSha: prior.baseSha,
-        worktree: prior.worktree
-      },
-      quiescenceProof: { _tag: "CommandResponse", reportOrdinal: 1 },
-      specificationObservationOperationId: observationIds.specification,
-      targetHeadSha: successor.baseSha,
-      targetLineageObservationOperationId: observationIds.target
-    }
-  }).pipe(Effect.orDie)
+  return replacement
 })
 
 it.effect("accepts a promoted history containing a replacement plan while selecting the promoted plan", () =>
   Effect.gen(function* () {
     const promoted = yield* runAuthored(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
-    const replacement = yield* replacementEventFor(promoted.records)
+    const unrelated = yield* runAuthored(maintainedAuthoredCassetteCatalog.changedAttemptRestartsCleanly)
+    const replacement = yield* replacementRecordFor(unrelated.records)
+
+    expect(unrelated.history._tag).toBe("ValidWorkflowJournalHistory")
 
     const replacementRecord = JournalRecord.make({
-      event: replacement,
-      key: JournalRecordKey.make("integration-finality-replacement-fixture"),
+      event: replacement.event,
+      key: replacement.key,
       position: JournalPosition.make(promoted.records.length + 1),
-      runId: promoted.runId
+      runId: unrelated.runId
     })
     const finalized = yield* runIntegrationFinalityProtocolCassetteFromPromotedRecords(
       maintainedIntegrationFinalityProtocolCassetteCatalog.deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess,
@@ -101,6 +60,90 @@ it.effect("accepts a promoted history containing a replacement plan while select
 
     expect(finalized.failureTag).toBeNull()
     expect(finalized.records.some(({ event }) => event._tag === "IntegrationFinalitySettled")).toBe(true)
+  })
+)
+
+it.effect("rejects Executing and terminal reports as replacement quiescence witnesses", () =>
+  Effect.gen(function* () {
+    const safelyReplaced = yield* runAuthored(maintainedAuthoredCassetteCatalog.changedAttemptRestartsCleanly)
+    const replacement = yield* replacementRecordFor(safelyReplaced.records)
+    const executing = safelyReplaced.records.find(
+      (record): record is ExecutorWorkReportedRecord =>
+        record.event._tag === "PlannedAttemptExecutorWorkReported" &&
+        record.event.report._tag === "ExecutorWorkExecuting"
+    )
+    const safelySuspended = safelyReplaced.records.find(
+      (record): record is ExecutorWorkReportedRecord =>
+        record.event._tag === "PlannedAttemptExecutorWorkReported" &&
+        record.event.report._tag === "ExecutorWorkSafelySuspended"
+    )
+    if (
+      executing === undefined ||
+      safelySuspended === undefined ||
+      safelySuspended.event.report._tag !== "ExecutorWorkSafelySuspended"
+    ) {
+      return yield* Effect.die("replacement fixture did not record its executor lifecycle reports")
+    }
+
+    const executingWitness = safelyReplaced.records.map((record) =>
+      record === replacement
+        ? {
+            ...record,
+            event: {
+              ...replacement.event,
+              witness: {
+                ...replacement.event.witness,
+                quiescenceProof: Schema.decodeUnknownSync(AttemptQuiescenceProof)({
+                  _tag: "AcceptedReport",
+                  reportOrdinal: executing.event.ordinal
+                })
+              }
+            }
+          }
+        : record
+    )
+    const executingReduction = reduceWorkflowJournalHistory(safelyReplaced.runId, executingWitness)
+    expect(executingReduction).toMatchObject({
+      _tag: "InvalidWorkflowJournalHistory",
+      issues: expect.arrayContaining([
+        expect.objectContaining({ detail: expect.stringContaining("current unbroken accepted Safe suspension") })
+      ])
+    })
+
+    const terminal = yield* runAuthored(maintainedAuthoredCassetteCatalog.targetPromotionSuccess)
+    const terminalReport = terminal.records.find(
+      (record): record is ExecutorWorkReportedRecord =>
+        record.event._tag === "PlannedAttemptExecutorWorkReported" &&
+        record.event.report._tag === "ExecutorWorkTerminal" &&
+        record.event.report.result._tag === "Accepted"
+    )
+    if (
+      terminalReport === undefined ||
+      terminalReport.event.report._tag !== "ExecutorWorkTerminal" ||
+      terminalReport.event.report.result._tag !== "Accepted"
+    ) {
+      return yield* Effect.die("terminal fixture did not record its accepted terminal report")
+    }
+    const terminalWitness = safelyReplaced.records.map((record) => {
+      if (
+        record.event._tag !== "PlannedAttemptExecutorWorkReported" ||
+        record.event.report._tag !== "ExecutorWorkSafelySuspended"
+      ) {
+        return record
+      }
+      const event = Schema.decodeUnknownSync(PlannedAttemptExecutorWorkReportedEvent)({
+        ...record.event,
+        report: { ...terminalReport.event.report, correlation: record.event.report.correlation }
+      })
+      return { ...record, event }
+    })
+    const terminalReduction = reduceWorkflowJournalHistory(safelyReplaced.runId, terminalWitness)
+    expect(terminalReduction).toMatchObject({
+      _tag: "InvalidWorkflowJournalHistory",
+      issues: expect.arrayContaining([
+        expect.objectContaining({ detail: expect.stringContaining("current unbroken accepted Safe suspension") })
+      ])
+    })
   })
 )
 

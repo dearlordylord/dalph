@@ -138,12 +138,12 @@ export const idleRunCancellationRecoveryAuthoredCassette = Schema.decodeUnknownS
   story: idleCancellationRecoveryStory
 })
 
-const singletonRunningExecutorReportAt = singletonTaskCompletesAuthoredCassette.story.findIndex(
-  (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "Running"
+const singletonExecutingExecutorReportAt = singletonTaskCompletesAuthoredCassette.story.findIndex(
+  (item) => item._tag === "PlannedAttemptExecutorWorkReported" && item.report._tag === "ExecutorWorkExecuting"
 )
 
 const singletonRunningPrefix = singletonTaskCompletesAuthoredCassette.story
-  .slice(0, singletonRunningExecutorReportAt)
+  .slice(0, singletonExecutingExecutorReportAt)
   .map((item) => (item._tag === "TrackerGraphReadReturned" ? { ...item, graph: singletonCancellationGraph } : item))
 
 /**
@@ -160,12 +160,12 @@ export const runningAttemptRunCancellationAuthoredCassette = Schema.decodeUnknow
     { _tag: "OperatorAppliesRunCancellationWhileExecutorRequestInFlight", duringAttemptId: "attempt:A:0" },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "Running", attemptId: "attempt:A:0" },
-      request: "StartOrContinue"
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
+      request: "Begin"
     },
     {
       _tag: "PlannedAttemptExecutorWorkReported",
-      report: { _tag: "SafelySuspended", attemptId: "attempt:A:0" },
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:0" },
       request: "Suspend"
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
@@ -253,7 +253,7 @@ export const integrationRunCancellationAuthoredCassette = Schema.decodeUnknownSy
         deliveryFinalityExpectedBehavior.orchestration === null
           ? null
           : deliveryFinalityExpectedBehavior.orchestration.filter(
-              (evidence) => !("attemptId" in evidence && evidence.attemptId === "attempt:B:0")
+              (evidence) => !("attemptId" in evidence && evidence.attemptId === "attempt:B:1")
             ),
       taskWork: {
         ...deliveryFinalityExpectedBehavior.taskWork,

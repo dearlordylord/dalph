@@ -197,15 +197,13 @@ it.effect("covers authored cursor terminal and cleanup outcomes", () =>
     const candidateText = "refs/heads/cursor" as IntegratorCandidateText
 
     const emptyExecutor = yield* makeStoryCursor([])
-    const emptyExecutorExit = yield* Effect.exit(emptyExecutor.consumeExecutorReportFor("StartOrContinue", attemptId))
+    const emptyExecutorExit = yield* Effect.exit(emptyExecutor.consumeExecutorReportFor("Begin", attemptId))
     expect(Exit.isFailure(emptyExecutorExit)).toBe(true)
 
     const ordinaryExecutor = yield* makeStoryCursor([
       decodeDalphSelection({ _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } })
     ])
-    const ordinaryExecutorExit = yield* Effect.exit(
-      ordinaryExecutor.consumeExecutorReportFor("StartOrContinue", attemptId)
-    )
+    const ordinaryExecutorExit = yield* Effect.exit(ordinaryExecutor.consumeExecutorReportFor("Begin", attemptId))
     expect(Exit.isFailure(ordinaryExecutorExit)).toBe(true)
 
     const emptyIntegratorRequest = yield* makeStoryCursor([])
@@ -233,7 +231,7 @@ it.effect("covers authored cursor terminal and cleanup outcomes", () =>
     )
     expect(Exit.isFailure(mismatchedSelectionExit)).toBe(true)
 
-    yield* emptyExecutor.endExecutorReportRequest("StartOrContinue", attemptId)
+    yield* emptyExecutor.endExecutorReportRequest("Begin", attemptId)
 
     const emptyPromotionGit = yield* makeStoryCursor([])
     const emptyPromotionGitExit = yield* Effect.exit(

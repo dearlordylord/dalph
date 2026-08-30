@@ -6,7 +6,7 @@ import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
-import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
 import {
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorCommandProjectionObservedRecordKey,
@@ -42,7 +42,9 @@ const begin = Effect.gen(function* () {
   return journal
 })
 
-type RestartApplication = NonNullable<Parameters<typeof exactExecutorQuiescenceEvidence>[5]>
+type RestartApplication = Omit<JournalRecord, "event"> & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
+}
 
 const restartApplication = (records: ReadonlyArray<JournalRecord>): RestartApplication | undefined =>
   records.find((record): record is RestartApplication => record.event._tag === "AttemptChoiceApplied")
@@ -51,7 +53,7 @@ const restartWindow = (records: ReadonlyArray<JournalRecord>) => {
   const application = restartApplication(records)
   const replacement = records.find(({ event }) => event._tag === "PlannedAttemptReplaced")
   if (application === undefined || replacement === undefined) expect.fail("replacement fixture is incomplete")
-  return { after: application.position, before: replacement.position }
+  return { before: replacement.position }
 }
 
 type ProjectionKind = "CommandProjection" | "StateProjection"
@@ -63,7 +65,9 @@ const replaceReportWithProjection = (
   kind: ProjectionKind,
   observation: ProjectionObservation = "ExactExecutorReport"
 ): ReadonlyArray<JournalRecord> => {
-  const reportRecord = records.find(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")
+  const reportRecord = records.find(
+    ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.ordinal === 2
+  )
   if (reportRecord?.event._tag !== "PlannedAttemptExecutorWorkReported") expect.fail("executor report is missing")
   const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
   const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(1)
@@ -111,72 +115,33 @@ const replaceReport = (
   report: PlannedAttemptExecutorReport
 ): ReadonlyArray<JournalRecord> =>
   records.map((record) =>
-    record.event._tag === "PlannedAttemptExecutorWorkReported"
+    record.event._tag === "PlannedAttemptExecutorWorkReported" && record.event.ordinal === 2
       ? { ...record, event: { ...record.event, report } }
       : record
   )
 
-const expectedCommandResponse = AttemptQuiescenceProof.cases.CommandResponse.make({
-  reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1)
+const expectedCommandResponse = AttemptQuiescenceProof.cases.AcceptedReport.make({
+  reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2)
 })
 
-const exact = (
-  records: ReadonlyArray<JournalRecord>,
-  expected: AttemptQuiescenceProof = expectedCommandResponse,
-  application?: Parameters<typeof exactExecutorQuiescenceEvidence>[5]
-) => {
+const exact = (records: ReadonlyArray<JournalRecord>, expected: AttemptQuiescenceProof = expectedCommandResponse) => {
   const window = restartWindow(records)
-  return exactExecutorQuiescenceEvidence(records, attempt, window.after, window.before, expected, application)
+  return exactExecutorQuiescenceEvidence(records, attempt, window.before, expected)
 }
 
-it.effect("accepts exact command-response, command-projection, and state-projection witnesses", () =>
+it.effect("accepts an exact lifecycle report and rejects command or state observations as substitutes", () =>
   Effect.gen(function* () {
     yield* begin
     const records = yield* (yield* JournalStore).read(runId)
-    const application = restartApplication(records)
-    expect(application).toBeDefined()
-    expect(exact(records)).toBe(true)
+    expect(exact(records, expectedCommandResponse)).toBe(true)
     const commandRecords = replaceReportWithProjection(records, attempt, "CommandProjection")
-    expect(
-      exact(
-        commandRecords,
-        AttemptQuiescenceProof.cases.CommandProjection.make({
-          commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
-          projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1)
-        })
-      )
-    ).toBe(true)
-    expect(
-      exact(
-        commandRecords.map((record) =>
-          record.event._tag === "PlannedAttemptExecutorCommandProjectionObserved"
-            ? { ...record, key: JournalRecordKey.make("foreign-projection-key") }
-            : record
-        ),
-        AttemptQuiescenceProof.cases.CommandProjection.make({
-          commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
-          projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1)
-        })
-      )
-    ).toBe(false)
-    const stateRecords = replaceReportWithProjection(records, attempt, "StateProjection")
-    expect(
-      exact(
-        stateRecords,
-        AttemptQuiescenceProof.cases.StateProjection.make({
-          observationOrdinal: PlannedAttemptExecutorStateObservationOrdinal.make(1)
-        })
-      )
-    ).toBe(true)
     expect(exact(commandRecords, expectedCommandResponse)).toBe(false)
+    const stateRecords = replaceReportWithProjection(records, attempt, "StateProjection")
     expect(exact(stateRecords, expectedCommandResponse)).toBe(false)
-    if (application !== undefined) {
-      expect(exact(records, expectedCommandResponse, application)).toBe(true)
-    }
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
-it.effect("rejects executor witnesses with missing responsibility, command, projection, or exact proof", () =>
+it.effect("rejects executor witnesses with missing responsibility, command, accepted report, or exact proof", () =>
   Effect.gen(function* () {
     yield* begin
     const records = yield* (yield* JournalStore).read(runId)
@@ -184,29 +149,47 @@ it.effect("rejects executor witnesses with missing responsibility, command, proj
       false
     )
     expect(exact(records.filter(({ event }) => event._tag !== "PlannedAttemptExecutorCommandIntended"))).toBe(false)
+    expect(
+      exact(
+        records.filter(
+          ({ event }) =>
+            !(
+              (event._tag === "PlannedAttemptExecutorWorkReported" && event.ordinal === 1) ||
+              (event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend") ||
+              event._tag === "PlannedAttemptExecutorCommandResponseObserved"
+            )
+        )
+      )
+    ).toBe(false)
+    expect(
+      exact(
+        records.filter(
+          ({ event }) => !(event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend")
+        )
+      )
+    ).toBe(false)
     expect(exact(replaceReportWithProjection(records, attempt, "CommandProjection", "Unavailable"))).toBe(false)
     expect(
       exact(
         replaceReportWithProjection(records, attempt, "CommandProjection"),
-        AttemptQuiescenceProof.cases.CommandProjection.make({
-          commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(2),
-          projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1)
-        })
+        AttemptQuiescenceProof.cases.AcceptedReport.make({ reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) })
       )
     ).toBe(false)
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
-it.effect("rejects an executor report followed by another command and rejects completed Restart reports", () =>
+it.effect("rejects an executor report followed by another command and every terminal Restart report", () =>
   Effect.gen(function* () {
     yield* begin
     const records = yield* (yield* JournalStore).read(runId)
     const command = records.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
-    const report = records.find(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")
+    const report = records.find(
+      ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.ordinal === 2
+    )
     if (command?.event._tag !== "PlannedAttemptExecutorCommandIntended" || report === undefined) {
       expect.fail("replacement fixture lacks command or report")
     }
-    const ordinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+    const ordinal = PlannedAttemptExecutorCommandOrdinal.make(3)
     const laterCommand: JournalRecord = {
       ...command,
       event: PlannedAttemptExecutorCommandIntendedEvent.make({ ...command.event, ordinal }),
@@ -216,21 +199,19 @@ it.effect("rejects an executor report followed by another command and rejects co
     expect(exact([...records, laterCommand])).toBe(false)
     const completed = replaceReport(
       records,
-      PlannedAttemptExecutorReport.cases.Terminal.make({
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
         correlation: { attemptId: attempt.attemptId, runId },
         result: { _tag: "Completed" }
       })
     )
-    const application = restartApplication(records)
-    expect(application).toBeDefined()
-    if (application !== undefined) expect(exact(completed, expectedCommandResponse, application)).toBe(false)
+    expect(exact(completed, expectedCommandResponse)).toBe(false)
     const accepted = replaceReport(
       records,
-      PlannedAttemptExecutorReport.cases.Terminal.make({
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
         correlation: { attemptId: attempt.attemptId, runId },
         result: { _tag: "Accepted", acceptedResult: acceptedResultFixture(attempt.baseSha) }
       })
     )
-    if (application !== undefined) expect(exact(accepted, expectedCommandResponse, application)).toBe(true)
+    expect(exact(accepted, expectedCommandResponse)).toBe(false)
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )

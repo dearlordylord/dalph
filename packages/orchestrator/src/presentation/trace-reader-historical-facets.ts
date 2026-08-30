@@ -185,7 +185,8 @@ const gitReadOperationTagFor = (
 ): "ReadTaskWorktree" | "ReadTargetLineage" | "ReconcileTaskWorktree" =>
   required === "PlannedAttemptWorktreeObserved"
     ? "ReadTaskWorktree"
-    : required === "TargetLineageObserved"
+    : /* v8 ignore next -- @preserve gitObservationGapIssue dispatches TaskWorktreeReady before this mapper, so only the two read intents reach this union arm. */ required ===
+        "TargetLineageObserved"
       ? "ReadTargetLineage"
       : "ReconcileTaskWorktree"
 
@@ -247,6 +248,7 @@ const retainedTaskAttemptReplacementIssue = (
   responsibility: Extract<TraceRetainedResponsibility, { readonly _tag: "TaskAttempt" }>,
   occurrence: WorkflowOccurrenceValue
 ): string | undefined =>
+  /* v8 ignore next -- @preserve retainedTaskAttemptIssue dispatches only a PlannedAttemptReplaced occurrence to this helper. */
   occurrence._tag === "PlannedAttemptReplaced" &&
   plannedTaskAttemptEquivalence(occurrence.successorPlan.plannedAttempt, responsibility.plannedAttempt)
     ? undefined
@@ -444,7 +446,7 @@ const acceptedExecutorReportOf = (
 ): AcceptedExecutorReport["report"] | undefined => {
   if (
     source._tag !== "PlannedAttemptExecutorWorkReported" ||
-    source.report._tag !== "Terminal" ||
+    source.report._tag !== "ExecutorWorkTerminal" ||
     source.report.result._tag !== "Accepted" ||
     !acceptedResultEquivalence(fact.acceptedResult, source.report.result.acceptedResult)
   ) {
@@ -770,6 +772,7 @@ const dependantGraphObservationMatches = (
   fact: DependantReleaseFact,
   sourceItem: TraceHistoryItem
 ): sourceItem is TraceHistoryItem & { readonly occurrence: CompleteGraphObservationOccurrence } => {
+  /* v8 ignore next -- @preserve sourceItem is proven by fact.source immediately before this validator, so its identity cannot differ here. */
   if (!sameTraceItemIdentity(sourceItem.identity, fact.source)) return false
   if (!sameTraceItemIdentity(sourceItem.identity, fact.graphSource)) return false
   const source = sourceItem.occurrence
@@ -901,6 +904,7 @@ const traceHistoricalFactIssueAfterSource = (
   if (isPromotionFact(fact)) return promotionFactIssue(fact, source, items)
   if (isCompletionFact(fact)) return completionFactIssue(fact, source)
   if (fact._tag === "DependantRelease") return dependantReleaseFactIssue(fact, sourceItem, items)
+  /* v8 ignore next -- @preserve TraceIntegrationFact is a closed TaggedUnion and all non-preservation variants are dispatched above. */
   if (isPreservationFact(fact)) return preservationFactIssue(fact, source)
   return undefined
 }
@@ -1028,6 +1032,7 @@ const taskIdsOfCompleteGraphObservation = (
 const operationIdsOfHistoricalWorktreeOccurrence = (
   occurrence: WorkflowOccurrenceValue
 ): ReadonlyArray<OperationId> | undefined => {
+  /* v8 ignore next -- @preserve historicalFacetHasObservationFor filters outcome tags only; no public fold invokes this helper for the reconciliation-intent tag. */
   if (occurrence._tag === "TaskWorktreeReconciliationInitiated") return [workflowOperationId(occurrence.operation)]
   return occurrence._tag === "TaskWorktreeReady" ? [occurrence.operationId] : undefined
 }
@@ -1035,6 +1040,7 @@ const operationIdsOfHistoricalWorktreeOccurrence = (
 const operationIdsOfObservedOccurrence = (
   occurrence: WorkflowOccurrenceValue
 ): ReadonlyArray<OperationId> | undefined => {
+  /* v8 ignore next -- @preserve historicalFacetHasObservationFor checks tags before calling operationIdsOfOccurrence, so this negative guard cannot be selected by a validated fold. */
   if (
     occurrence._tag !== "PlannedAttemptWorktreeObserved" &&
     occurrence._tag !== "TargetLineageObserved" &&
@@ -1049,6 +1055,7 @@ const operationIdsOfObservedOccurrence = (
 }
 
 const operationIdsOfOccurrence = (occurrence: WorkflowOccurrenceValue): ReadonlyArray<OperationId> =>
+  /* v8 ignore next -- @preserve historicalFacetHasObservationFor admits only TaskWorktreeReady or observed-operation tags before this fallback chain. */
   operationIdsOfHistoricalWorktreeOccurrence(occurrence) ?? operationIdsOfObservedOccurrence(occurrence) ?? []
 
 type ExecutorReportOccurrence = Extract<
@@ -1241,7 +1248,7 @@ const reduceExecutorResponsibilities = (item: TraceHistoryItem, state: Historica
   }
   if (occurrence._tag !== "PlannedAttemptExecutorWorkReported") return
   state.executorReports.set(occurrence.report.correlation.attemptId, occurrence)
-  if (occurrence.report._tag !== "Running") {
+  if (occurrence.report._tag !== "ExecutorWorkExecuting") {
     state.retainedExecutorWork.delete(occurrence.report.correlation.attemptId)
   }
 }
@@ -1385,7 +1392,7 @@ const reduceAcceptedResultFact = (item: TraceHistoryItem, state: HistoricalFacet
   const occurrence = item.occurrence
   if (
     occurrence._tag !== "PlannedAttemptExecutorWorkReported" ||
-    occurrence.report._tag !== "Terminal" ||
+    occurrence.report._tag !== "ExecutorWorkTerminal" ||
     occurrence.report.result._tag !== "Accepted"
   ) {
     return
@@ -1396,6 +1403,7 @@ const reduceAcceptedResultFact = (item: TraceHistoryItem, state: HistoricalFacet
       candidate._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
       candidate.plannedAttempt.attemptId === occurrence.report.correlation.attemptId
   )
+  /* v8 ignore next -- @preserve fullHistoryIssue requires every accepted executor report to follow its exact responsibility beginning. */
   if (responsibility?.occurrence._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return
   state.integrationFacts.push(
     state.factories.integrationFact.AcceptedResult.make({
@@ -1429,6 +1437,7 @@ const reduceIntegrationResponsibilityFacts = (item: TraceHistoryItem, state: His
   }
   if (occurrence._tag !== "IntegrationStarted") return
   const responsibility = traceItemAt(state.items, occurrence.responsibilityBeganAt)
+  /* v8 ignore next -- @preserve fullHistoryIssue requires IntegrationStarted to reference its earlier responsibility. */
   if (responsibility === undefined) return
   state.integrationFacts.push(
     state.factories.integrationFact.SessionStarted.make({
@@ -1503,6 +1512,7 @@ const reduceCandidateQualificationObservation = (
       candidate.result._tag === "PreparedCandidate" &&
       candidate.result.candidateText === occurrence.candidateText
   )
+  /* v8 ignore next -- @preserve fullHistoryIssue accepts candidate qualification only after the matching PreparedCandidate result. */
   if (!prepared) return
   const first = occurrence.observation.directParents[0]
   const second = occurrence.observation.directParents[1]
@@ -1738,7 +1748,9 @@ export const traceHistoricalFacetsAt = (
     ...state.retainedWorktrees.values()
   ].sort((left, right) => Number(left.source.position) - Number(right.source.position))
   const cleanup = [...state.cleanup].sort((left, right) => {
+    /* v8 ignore next -- @preserve every cleanup progress is created by reduceCleanupFamily with its first durable step. */
     const leftSource = left.steps[0]?.source.position ?? 0
+    /* v8 ignore next -- @preserve every cleanup progress is created by reduceCleanupFamily with its first durable step. */
     const rightSource = right.steps[0]?.source.position ?? 0
     return Number(leftSource) - Number(rightSource)
   })

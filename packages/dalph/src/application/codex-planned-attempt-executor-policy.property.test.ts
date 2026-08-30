@@ -141,14 +141,14 @@ it("normalizes text, status, and command failures at their pure boundaries", () 
   expect(isActiveThread(thread([]), turn())).toBe(true)
   expect(isActiveThread(thread([]), turn({ status: "completed" }))).toBe(false)
   expect(commandFailure("Suspend", correlation, new Error("failed")).detail).toBe("failed")
-  expect(commandFailure("StartOrContinue", correlation, "failed").detail).toBe("failed")
+  expect(commandFailure("Begin", correlation, "failed").detail).toBe("failed")
   const existingFailure = new PlannedAttemptExecutorCommandFailure({
     command: "Suspend",
     correlation,
     detail: "already classified"
   })
   expect(preserveCommandFailure("Suspend", correlation, existingFailure)).toBe(existingFailure)
-  expect(preserveCommandFailure("StartOrContinue", correlation, new Error("wrapped")).detail).toBe("wrapped")
+  expect(preserveCommandFailure("Begin", correlation, new Error("wrapped")).detail).toBe("wrapped")
   expect(
     (
       [

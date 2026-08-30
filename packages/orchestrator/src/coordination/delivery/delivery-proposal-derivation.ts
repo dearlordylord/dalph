@@ -6,6 +6,10 @@ import type {
   IntegrationResponsibility,
   StartedIntegrationResponsibility
 } from "../../workflow/protocols/integration-admission/protocol.js"
+import {
+  activeWorkAuthorityRefreshGitReadOperationMatchesBoundary,
+  type ActiveWorkAuthorityRefreshGitReadOperation
+} from "../../workflow/protocols/active-work-authority-refresh/events.js"
 import { makeSelectedTransitionIdentity, selectedTransitionKey } from "../activation/selected-transition.js"
 import {
   runnableTransitionOperationId,
@@ -83,7 +87,7 @@ const freshStepTaskWorkPositionFor = (
   freshStep: FreshWorkflowStep,
   claimOperationId: OperationId | undefined
 ): TaskWorkPositionRequirement | undefined => {
-  if (freshStep._tag === "StartPlannedAttemptExecutorWork") {
+  if (freshStep._tag === "BeginPlannedAttemptExecutorWork") {
     return { _tag: "TaskWorkPositionRequired", mode: "Existing", taskId: freshStep.task.id }
   }
   const mode = freshStepTaskWorkModeFor(freshStep)
@@ -106,12 +110,6 @@ const taskWorkPositionFor = (
   freshStep: FreshWorkflowStep | undefined,
   claimOperationId: OperationId | undefined
 ): TaskWorkPositionRequirement | undefined => {
-  // This recovered continuation is admitted from the accepted executor
-  // projection. A concurrent fresh-stage decision must not erase its exact
-  // task-work requirement.
-  if (transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts") {
-    return { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId: transition.plannedAttempt.taskId }
-  }
   if (freshStep !== undefined) {
     const freshPosition = freshStepTaskWorkPositionFor(freshStep, claimOperationId)
     if (freshPosition !== undefined) return freshPosition
@@ -339,8 +337,8 @@ const freshProposalOf = (
   fresh: FreshDecision
 ): Extract<DerivedProposal, { readonly _tag: "ProposalDerived" }> => {
   if (
-    fresh.step._tag === "StartPlannedAttemptExecutorWork" ||
-    fresh.step._tag === "ContinuePlannedAttemptExecutorWork"
+    fresh.step._tag === "BeginPlannedAttemptExecutorWork" ||
+    fresh.step._tag === "ObservePlannedAttemptExecutorWork"
   ) {
     const route: IdentityFreeWorkflowRoute = { _tag: "FreshExecutorWorkflowRoute", step: fresh.step }
     return {
@@ -370,7 +368,7 @@ const missingProvenance = (
   transition: Extract<
     RunnableFrontierTransition,
     {
-      readonly _tag: "CommitFreshTaskClaimIntent" | "ContinueFreshWorkflowOperation" | "StartPlannedAttemptExecutorWork"
+      readonly _tag: "CommitFreshTaskClaimIntent" | "ContinueFreshWorkflowOperation" | "BeginPlannedAttemptExecutorWork"
     }
   >
 ): Extract<DerivedProposal, { readonly _tag: "ProposalIssue" }> => ({
@@ -427,13 +425,18 @@ const recoveredRouteProposalOf = (
   context: ProposalContext,
   newAction: NewRecoveredWorkflowAction | undefined,
   operationId: OperationId | undefined,
-  transition: RunnableFrontierTransition
+  transition: RunnableFrontierTransition,
+  preservePreselectedOperationId = false
 ): DerivedProposal => {
   if (newAction !== undefined) {
     const route: FreshOperationRoute = { _tag: "RecoveredNewActionRoute", action: newAction }
     return {
       _tag: "ProposalDerived",
-      proposal: { ...proposalBase(context, route), actionIdentity: recoveredIdentityFor(newAction), route }
+      proposal: {
+        ...proposalBase(context, route),
+        actionIdentity: recoveredIdentityFor(newAction, operationId, preservePreselectedOperationId),
+        route
+      }
     }
   }
   if (operationId !== undefined) {
@@ -460,10 +463,26 @@ const recoveredRouteProposalOf = (
   }
 }
 
+const activeRefreshPendingGitReadOperationFor = (
+  transition: RunnableFrontierTransition,
+  pendingOperations: ReadonlyArray<ActiveWorkAuthorityRefreshGitReadOperation>
+): ActiveWorkAuthorityRefreshGitReadOperation | undefined => {
+  if (
+    transition._tag !== "ObservePlannedAttemptContinuationWorktree" &&
+    transition._tag !== "ObservePlannedAttemptContinuationTargetLineage"
+  ) {
+    return undefined
+  }
+  return pendingOperations.find((activeOperation) =>
+    activeWorkAuthorityRefreshGitReadOperationMatchesBoundary(activeOperation, transition.operation)
+  )
+}
+
 const recoveredProposalOf = (
   acceptedOperationIds: ReadonlySet<OperationId>,
   context: ProposalContext,
-  transition: RunnableFrontierTransition
+  transition: RunnableFrontierTransition,
+  activeRefreshPendingGitReadOperations: ReadonlyArray<ActiveWorkAuthorityRefreshGitReadOperation>
 ): DerivedProposal => {
   if (isFreshProvenanceTransition(transition)) return missingProvenance(transition)
   if (isAcceptedOperationTransition(transition)) {
@@ -476,6 +495,19 @@ const recoveredProposalOf = (
       : missingAcceptedOperation(operationId, transition)
   }
   const operationId = operationIdOf(transition)
+  const activeRefreshPendingGitReadOperation = activeRefreshPendingGitReadOperationFor(
+    transition,
+    activeRefreshPendingGitReadOperations
+  )
+  if (activeRefreshPendingGitReadOperation !== undefined) {
+    return recoveredRouteProposalOf(
+      context,
+      newRecoveredActionOf(transition),
+      activeRefreshPendingGitReadOperation.operationId,
+      transition,
+      true
+    )
+  }
   const isAcceptedOperation = operationId !== undefined && acceptedOperationIds.has(operationId)
   const newAction = isAcceptedOperation ? undefined : newRecoveredActionOf(transition)
   return recoveredRouteProposalOf(context, newAction, operationId, transition)
@@ -499,6 +531,7 @@ const appendDerived = (contributions: MutableDeliveryProposalContributions, deri
 interface DeliveryProposalDerivationFrame {
   readonly acceptedAt: DeliveryProposalsInput["acceptedAt"]
   readonly acceptedOperationIds: DeliveryProposalsInput["acceptedOperationIds"]
+  readonly activeRefreshPendingGitReadOperations: ReadonlyArray<ActiveWorkAuthorityRefreshGitReadOperation>
   readonly freshByTransition: ReadonlyMap<string, FreshDecision>
   readonly integrationResponsibilities: ReadonlyArray<IntegrationResponsibility>
   readonly responsibilities: ReadonlyArray<WorkflowResponsibilityEntry>
@@ -511,7 +544,11 @@ const appendContributionForTransition = (
   index: number,
   transition: RunnableFrontierTransition
 ): void => {
-  const fresh = frame.freshByTransition.get(transitionKey(frame.runId, transition))
+  const matchingFresh = frame.freshByTransition.get(transitionKey(frame.runId, transition))
+  // Begin, Observe, and Suspend share one executor-protocol identity. A
+  // recovered Suspend is nevertheless the runnable control decision and must
+  // not be replaced by the fresh Observe that describes the same attempt.
+  const fresh = transition._tag === "SuspendPlannedAttemptExecutorWork" ? undefined : matchingFresh
   const claimOperationId = preStartClaimOperationIdFor(runnableTransitionTaskId(transition), frame.responsibilities)
   const admission = admissionFor(transition, fresh?.step, claimOperationId, frame.integrationResponsibilities)
   /* v8 ignore start -- the closed transition maps make an uncorrelated Existing requirement unreachable. */
@@ -548,7 +585,12 @@ const appendContributionForTransition = (
   appendDerived(
     contributions,
     fresh === undefined
-      ? recoveredProposalOf(frame.acceptedOperationIds, context, transition)
+      ? recoveredProposalOf(
+          frame.acceptedOperationIds,
+          context,
+          transition,
+          frame.activeRefreshPendingGitReadOperations
+        )
       : freshProposalOf(context, fresh)
   )
 }
@@ -558,6 +600,7 @@ export const deliveryProposalsOf = (input: DeliveryProposalsInput): DeliveryProp
   const frame: DeliveryProposalDerivationFrame = {
     acceptedAt: input.acceptedAt,
     acceptedOperationIds: input.acceptedOperationIds,
+    activeRefreshPendingGitReadOperations: input.activeRefreshPendingGitReadOperations ?? [],
     freshByTransition: new Map(input.fresh.map((decision) => [freshDecisionKey(input.runId, decision), decision])),
     integrationResponsibilities: input.integrationResponsibilities ?? [],
     responsibilities: input.responsibilities ?? [],

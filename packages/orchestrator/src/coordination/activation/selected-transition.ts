@@ -16,11 +16,11 @@ export const SelectedTransitionIdentity = Schema.Struct({
 export type SelectedTransitionIdentity = typeof SelectedTransitionIdentity.Type
 
 const fingerprintInput = (runId: RunId, transition: RunnableFrontierTransition) =>
-  transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-  transition._tag === "ObservePlannedAttemptContinuationExecutor" ||
+  transition._tag === "ObservePlannedAttemptExecutorWork" ||
+  transition._tag === "ReconcilePlannedAttemptExecutorWork" ||
   transition._tag === "ObservePlannedAttemptContinuationGraph" ||
   transition._tag === "ObservePlannedAttemptContinuationSpecification" ||
-  transition._tag === "StartPlannedAttemptExecutorWork" ||
+  transition._tag === "BeginPlannedAttemptExecutorWork" ||
   transition._tag === "SuspendPlannedAttemptExecutorWork"
     ? { attemptId: transition.plannedAttempt.attemptId, runId: transition.plannedAttempt.runId }
     : { runId, transition }
@@ -35,7 +35,9 @@ export const makeSelectedTransitionIdentity = (
     runId,
     subjectTaskId: runnableTransitionTaskId(transition),
     transitionTag:
-      transition._tag === "StartPlannedAttemptExecutorWork" ? "ContinuePlannedAttemptExecutorWork" : transition._tag
+      transition._tag === "BeginPlannedAttemptExecutorWork" || transition._tag === "SuspendPlannedAttemptExecutorWork"
+        ? "ObservePlannedAttemptExecutorWork"
+        : transition._tag
   })
 
 export const selectedTransitionKey = (selected: SelectedTransitionIdentity): string => JSON.stringify(selected)

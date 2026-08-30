@@ -276,7 +276,7 @@ it.effect(
       const taskWork = run.records.flatMap(({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
           ? [`began:${event.plannedAttempt.taskId}`]
-          : event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "Terminal"
+          : event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkTerminal"
             ? [`terminal:${taskByAttempt.get(event.report.correlation.attemptId)}`]
             : []
       )
@@ -324,7 +324,7 @@ it.effect(
         run.records.some(
           ({ event }) =>
             event._tag === "PlannedAttemptExecutorWorkReported" &&
-            event.report._tag === "Terminal" &&
+            event.report._tag === "ExecutorWorkTerminal" &&
             event.report.result._tag === "Completed"
         )
       ).toBe(false)
@@ -392,9 +392,10 @@ it.effect(
       expect(storyTags).toContain("OperatorAppliesIntegrationQuarantineDirection")
       expect(storyTags).toContain("CompletionClaimDeletionApplied")
 
-      // DS03/DS04: the first crash retains B's exact planned attempt, claim,
-      // worktree, and both task-revision facts. Activation 2 proves these are
-      // reconstructed values, not merely repeated story labels.
+      // DS03/DS04: the timer refresh observes B's changed instructions before
+      // the later crash and suspends that exact attempt. It does not perform
+      // redundant claim, worktree, or lineage reads after the first proven
+      // constraint, and ordinary recovery does not manufacture a second refresh.
       const activationOperation = (operationId: string, activationOrdinal: number): boolean =>
         operationId.includes(`:activation:${activationOrdinal}:`)
       const plannedB = exactlyOne(
@@ -419,17 +420,7 @@ it.effect(
         ),
         "B prepared worktree"
       )
-      const preCrashF2 = exactlyOne(
-        recordsFor(run.records, "TaskTrackerFactsObserved").filter(
-          ({ event }) =>
-            event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
-            event.observation.factFamily.taskId === "B" &&
-            activationOperation(String(event.operationId), 1) &&
-            event.observation.factFamily.fingerprint !== plannedB.event.operation.plannedAttempt.taskRevision
-        ),
-        "B pre-crash F2 task facts"
-      )
-      const restartedF2 = exactlyOne(
+      const refreshedF2 = exactlyOne(
         recordsFor(run.records, "TaskTrackerFactsObserved").filter(
           ({ event }) =>
             event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
@@ -437,61 +428,19 @@ it.effect(
             activationOperation(String(event.operationId), 2) &&
             event.observation.factFamily.fingerprint !== plannedB.event.operation.plannedAttempt.taskRevision
         ),
-        "B restarted F2 task facts"
+        "B active-refresh F2 task facts"
       )
-      const restartedClaim = exactlyOne(
-        recordsFor(run.records, "TaskTrackerFactsObserved").filter(
-          ({ event }) =>
-            event.observation._tag === "FocusedTaskClaimFacts" &&
-            event.observation.observation._tag === "ActiveTaskClaim" &&
-            event.observation.observation.taskId === "B" &&
-            activationOperation(String(event.operationId), 2)
-        ),
-        "B restarted exact claim facts"
-      )
-      const restartedWorktree = exactlyOne(
-        recordsFor(run.records, "PlannedAttemptWorktreeObserved").filter(
-          ({ event }) =>
-            event.observation._tag === "PlannedWorktreeReady" &&
-            event.observation.worktree === plannedB.event.operation.plannedAttempt.worktree &&
-            activationOperation(String(event.operationId), 2)
-        ),
-        "B restarted exact worktree"
-      )
-      const restartedLineage = exactlyOne(
-        recordsFor(run.records, "TargetLineageObserved").filter(
-          ({ event }) => event.plannedAttempt.taskId === "B" && activationOperation(String(event.operationId), 2)
-        ),
-        "B restarted exact planned attempt"
-      )
-      if (
-        preCrashF2.event.observation._tag !== "FocusedTaskWorkSpecificationFacts" ||
-        restartedF2.event.observation._tag !== "FocusedTaskWorkSpecificationFacts" ||
-        restartedClaim.event.observation._tag !== "FocusedTaskClaimFacts" ||
-        restartedClaim.event.observation.observation._tag !== "ActiveTaskClaim" ||
-        restartedWorktree.event.observation._tag !== "PlannedWorktreeReady"
-      ) {
-        return yield* Effect.die("B restart evidence lost its focused typed facts")
+      if (refreshedF2.event.observation._tag !== "FocusedTaskWorkSpecificationFacts") {
+        return yield* Effect.die("B active-refresh evidence lost its focused typed facts")
       }
-      const beforeCrashFingerprints = {
+      const refreshedFingerprints = {
         F1: plannedB.event.operation.plannedAttempt.taskRevision,
-        F2: preCrashF2.event.observation.factFamily.fingerprint
+        F2: refreshedF2.event.observation.factFamily.fingerprint
       }
-      const restartedFingerprints = {
-        F1: restartedLineage.event.plannedAttempt.taskRevision,
-        F2: restartedF2.event.observation.factFamily.fingerprint
-      }
-      expect(restartedLineage.event.plannedAttempt).toEqual(plannedB.event.operation.plannedAttempt)
-      expect(restartedClaim.event.observation.observation.operationId).toBe(
-        intendedB.event.operation.acquisition.operationId
-      )
-      expect(restartedClaim.event.observation.observation).toEqual(acquiredB.event.claim)
-      expect(restartedWorktree.event.observation).toEqual(preparedB.event.proof)
-      expect(restartedFingerprints).toEqual(beforeCrashFingerprints)
-      expect(restartedLineage.event.plannedAttempt.runId).toBe(run.runId)
-      expect(restartedLineage.event.plannedAttempt.attemptId).toBe(plannedB.event.operation.plannedAttempt.attemptId)
-      expect(restartedLineage.event.plannedAttempt.baseSha).toBe(plannedB.event.operation.plannedAttempt.baseSha)
-      expect(restartedLineage.event.plannedAttempt.worktree).toBe(plannedB.event.operation.plannedAttempt.worktree)
+      expect(refreshedFingerprints.F2).not.toBe(refreshedFingerprints.F1)
+      expect(acquiredB.event.claim.operationId).toBe(intendedB.event.operation.acquisition.operationId)
+      expect(preparedB.event.proof.worktree).toBe(plannedB.event.operation.plannedAttempt.worktree)
+      expect(plannedB.event.operation.plannedAttempt.runId).toBe(run.runId)
     }),
   capstoneTimeout
 )
@@ -509,23 +458,16 @@ it.effect(
       const initialCandidateCommit = "cccccccccccccccccccccccccccccccccccccccc"
       const successorCandidateCommit = "dddddddddddddddddddddddddddddddddddddddd"
       const trackerTarget = "ds-probe-target"
-      // DS17's G2 fact is the sole post-quiescence complete graph read. The later
-      // phase uses focused A facts and must not append a synthetic G3 graph read.
+      // DS17 reuses the sole complete G2 graph fact already accepted before
+      // integration. The later phase uses focused A facts and must not append
+      // a report-triggered G2 refresh or a synthetic G3 graph read.
       const g2Facts = exactlyOne(
         recordsFor(records, "TaskTrackerFactsObserved").filter(
-          ({ event, position }) =>
-            position >= 200 &&
+          ({ event }) =>
             event.observation._tag === "CompleteTaskTrackerFacts" &&
             event.observation.factFamilies.some(({ contentIdentity }) => contentIdentity === "ds-probe-G2")
         ),
         "post-quiescence G2 tracker facts"
-      )
-      const g2GraphRead = exactlyOne(
-        recordsFor(records, "TaskTrackerReadIntentRecorded").filter(
-          ({ event }) =>
-            event.operation._tag === "ReadTrackerGraph" && event.operation.operationId === g2Facts.event.operationId
-        ),
-        "post-quiescence G2 tracker graph read"
       )
       expect(recordsFor(records, "TargetPromotionAttemptIntended")).toHaveLength(3)
       expect(recordsFor(records, "TargetPromotionStale")).toHaveLength(1)
@@ -753,15 +695,21 @@ it.effect(
         ),
         "captured release of the held A target-lineage read"
       )
-      const freshLineageSelection = exactlyOne(
+      const killedHeldLineage = exactlyOne(
+        capturedOccurrencesFor(captures, "CassetteKillsCoordinatorWithTargetLineageReadHeld").filter(
+          ({ occurrence }) => occurrence.attemptId === "attempt:A:0"
+        ),
+        "captured coordinator death with the A target-lineage read held"
+      )
+      const replayedLineageSelection = exactlyOne(
         capturedOccurrencesFor(captures, "DalphSelects").filter(
           ({ captureOrder, occurrence }) =>
-            captureOrder > releaseHeldLineage.captureOrder &&
-            captureOrder < successorRequest.captureOrder &&
+            captureOrder > killedHeldLineage.captureOrder &&
+            captureOrder < releaseHeldLineage.captureOrder &&
             occurrence.operation._tag === "ReadTargetLineage" &&
             occurrence.operation.attemptId === "attempt:A:0"
         ),
-        "captured post-direction A target-lineage read"
+        "captured post-direction replay of the held A target-lineage read"
       )
       const freshLineage = exactlyOne(
         recordsFor(records, "TargetLineageObserved").filter(
@@ -788,7 +736,7 @@ it.effect(
       expect(freshLineageIntent.event.operation.operationId).toBe(freshLineage.event.operationId)
       expect(freshLineageIntent.position).toBeLessThan(freshLineage.position)
       expect(freshLineage.position).toBe(successorCorrelation.targetLineageObservedAt)
-      expect(freshLineageSelection.captureOrder).toBeLessThan(successorRequest.captureOrder)
+      expect(replayedLineageSelection.captureOrder).toBeLessThan(releaseHeldLineage.captureOrder)
       expect(direction.position).toBeLessThan(freshLineageIntent.position)
       expect(freshLineage.position).toBeLessThan(successor.position)
       expect(freshLineage.position).toBeLessThan(successorEvidence.session.position)
@@ -1002,21 +950,18 @@ it.effect(
       expect(settled.event.successObservation).toEqual(deletion.event.successObservation)
       expect(settled.event.replacementOperationId).toBe(replacementIntent.event.operationId)
       expect(settled.event.deletionOperationId).toBe(deletionIntent.event.operationId)
-      expect(g2GraphRead.position).toBe(224)
-      expect(g2Facts.position).toBe(225)
       expect(g2Facts.position).toBeLessThan(focusedCompleted.position)
-      const postQuiescenceGraphReadsThroughSettlement = recordsFor(records, "TaskTrackerReadIntentRecorded").filter(
+      const graphReadsAfterSuccessorSessionThroughSettlement = recordsFor(
+        records,
+        "TaskTrackerReadIntentRecorded"
+      ).filter(
         ({ event, position }) =>
-          event.operation._tag === "ReadTrackerGraph" &&
-          position >= g2GraphRead.position &&
-          position <= settled.position
+          event.operation._tag === "ReadTrackerGraph" && position >= successor.position && position <= settled.position
       )
-      expect(postQuiescenceGraphReadsThroughSettlement).toHaveLength(1)
+      expect(graphReadsAfterSuccessorSessionThroughSettlement).toHaveLength(0)
       expect(
         recordsFor(records, "TaskTrackerFactsObserved").filter(
-          ({ event, position }) =>
-            position >= g2GraphRead.position &&
-            position <= settled.position &&
+          ({ event }) =>
             event.observation._tag === "CompleteTaskTrackerFacts" &&
             event.observation.factFamilies.some(({ contentIdentity }) => contentIdentity === "ds-probe-G3")
         )

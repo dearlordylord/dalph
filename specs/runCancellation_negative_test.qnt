@@ -32,7 +32,7 @@ module runCancellationNegativeTest {
 
   action reportSafeWithoutStopIntent: bool = all {
     state.process.phase == Cancelling,
-    state.durable.executor == Running,
+    state.durable.executor == Executing,
     state' = {
       ...state,
       durable: { ...state.durable, executor: SafelySuspended, executorSafeReports: 1 },
@@ -42,7 +42,7 @@ module runCancellationNegativeTest {
 
   action releaseClaimBeforeExecutorSafe: bool = all {
     state.process.phase == Cancelling,
-    state.durable.executor == Running,
+    state.durable.executor == Executing,
     state.durable.claim == Held,
     state' = {
       ...state,
@@ -130,19 +130,19 @@ module runCancellationNegativeTest {
   }
 
   run safeReportWithoutIntentIsDetectedTest = {
-    init.then(selectRunningExecutor).then(applyCancellation)
+    init.then(selectExecutingExecutor).then(applyCancellation)
       .then(reportSafeWithoutStopIntent)
       .expect(not(executorStopIntentPrecedesSafeReport))
   }
 
   run claimReleaseBeforeSafeExecutorIsDetectedTest = {
-    init.then(selectRunningExecutor).then(applyCancellation)
+    init.then(selectExecutingExecutor).then(applyCancellation)
       .then(releaseClaimBeforeExecutorSafe)
       .expect(not(claimReleaseFollowsSafeExecutor))
   }
 
   run duplicateClaimReleaseIsDetectedTest = {
-    init.then(selectRunningExecutor).then(applyCancellation)
+    init.then(selectExecutingExecutor).then(applyCancellation)
       .then(recordExecutorStopIntent).then(reportExecutorSafe)
       .then(recordClaimReleaseIntent).then(observeAndReleaseClaim)
       .then(duplicateClaimRelease)
@@ -157,7 +157,7 @@ module runCancellationNegativeTest {
   }
 
   run unreadableExecutorReleaseIsDetectedTest = {
-    init.then(selectRunningExecutor).then(applyCancellation)
+    init.then(selectExecutingExecutor).then(applyCancellation)
       .then(recordExecutorStopIntent).then(markExecutorUnreadable)
       .then(releaseUnreadableExecutor)
       .expect(not(ambiguousExecutorRetainsResponsibility))
@@ -171,7 +171,7 @@ module runCancellationNegativeTest {
   }
 
   run handoffWithUnsettledResponsibilityIsDetectedTest = {
-    init.then(selectRunningExecutor).then(applyCancellation)
+    init.then(selectExecutingExecutor).then(applyCancellation)
       .then(recordExecutorStopIntent)
       .then(handoffWithUnsettledResponsibility)
       .expect(not(handoffRequiresSettledResponsibilities))

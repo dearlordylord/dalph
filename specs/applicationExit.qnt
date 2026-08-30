@@ -6,7 +6,7 @@
 // Scenario ownership:
 // - cutoff and joined request actions: idle Exit and control/Exit races;
 // - owner actions: in-flight interruptible and admitted atomic boundaries;
-// - executor actions: running executor suspension and exact evidence;
+// - executor actions: executing-work suspension and exact evidence;
 // - ticks, reports, and process endings: success, failure, timeout, and death;
 // - restart: the one ordinary Run-entry path after every process ending.
 //
@@ -40,7 +40,7 @@ module applicationExit {
 
   type ExecutorAttempt =
     | AttemptNotStarted
-    | AttemptRunning
+    | AttemptExecuting
     | SuspensionIntentRecorded
     | FastSuspensionCalled
     | AttemptSafelySuspended
@@ -134,7 +134,7 @@ module applicationExit {
   }
 
   pure def attemptNeedsUsefulQuickWork(attempt: ExecutorAttempt): bool = or {
-    attempt == AttemptRunning,
+    attempt == AttemptExecuting,
     attempt == SuspensionIntentRecorded,
     attempt == FastSuspensionCalled,
   }
@@ -305,13 +305,13 @@ module applicationExit {
   action startAttemptA: bool = all {
     state.phase == Serving,
     state.attemptA == AttemptNotStarted,
-    state' = { ...state, attemptA: AttemptRunning, attemptAPositionHeld: true },
+    state' = { ...state, attemptA: AttemptExecuting, attemptAPositionHeld: true },
   }
 
   action startAttemptB: bool = all {
     state.phase == Serving,
     state.attemptB == AttemptNotStarted,
-    state' = { ...state, attemptB: AttemptRunning, attemptBPositionHeld: true },
+    state' = { ...state, attemptB: AttemptExecuting, attemptBPositionHeld: true },
   }
 
   action produceJournalWrite: bool = all {
@@ -420,7 +420,7 @@ module applicationExit {
 
   action recordAttemptASuspensionIntent: bool = all {
     state.phase == Draining,
-    state.attemptA == AttemptRunning,
+    state.attemptA == AttemptExecuting,
     state' = {
       ...state,
       attemptA: SuspensionIntentRecorded,
@@ -430,7 +430,7 @@ module applicationExit {
 
   action recordAttemptBSuspensionIntent: bool = all {
     state.phase == Draining,
-    state.attemptB == AttemptRunning,
+    state.attemptB == AttemptExecuting,
     state' = {
       ...state,
       attemptB: SuspensionIntentRecorded,
@@ -467,7 +467,7 @@ module applicationExit {
   action reportAttemptATerminal: bool = all {
     state.phase == Draining,
     or {
-      state.attemptA == AttemptRunning,
+      state.attemptA == AttemptExecuting,
       state.attemptA == SuspensionIntentRecorded,
       state.attemptA == FastSuspensionCalled,
     },
@@ -477,7 +477,7 @@ module applicationExit {
   action reportAttemptBTerminal: bool = all {
     state.phase == Draining,
     or {
-      state.attemptB == AttemptRunning,
+      state.attemptB == AttemptExecuting,
       state.attemptB == SuspensionIntentRecorded,
       state.attemptB == FastSuspensionCalled,
     },
@@ -692,14 +692,14 @@ module applicationExit {
   val exactSafeOrTerminalEvidenceControlsPositionRelease: bool = and {
     state.attemptAPositionHeld
       == or {
-        state.attemptA == AttemptRunning,
+        state.attemptA == AttemptExecuting,
         state.attemptA == SuspensionIntentRecorded,
         state.attemptA == FastSuspensionCalled,
         state.attemptA == SuspensionCallFailed,
       },
     state.attemptBPositionHeld
       == or {
-        state.attemptB == AttemptRunning,
+        state.attemptB == AttemptExecuting,
         state.attemptB == SuspensionIntentRecorded,
         state.attemptB == FastSuspensionCalled,
         state.attemptB == SuspensionCallFailed,
@@ -746,10 +746,10 @@ module applicationExit {
         state.ownerB != RegisteredForwardOwner(InterruptibleBoundary),
         state.ownerB != RegisteredForwardOwner(AtomicBoundary),
         state.ownerB != RegisteredForwardOwner(AuthorizedRunTerminationAppend),
-        state.attemptA != AttemptRunning,
+        state.attemptA != AttemptExecuting,
         state.attemptA != SuspensionIntentRecorded,
         state.attemptA != FastSuspensionCalled,
-        state.attemptB != AttemptRunning,
+        state.attemptB != AttemptExecuting,
         state.attemptB != SuspensionIntentRecorded,
         state.attemptB != FastSuspensionCalled,
         state.write != ProducedWritePending,
@@ -847,7 +847,7 @@ module applicationExit {
     registeredOwnerIs(state.ownerA, AuthorizedRunTerminationAppend)
   val joinedRequestReached: bool = state.requestCount == 2
   val recoverableAmbiguityReached: bool = state.ownerAAmbiguous or state.ownerBAmbiguous
-  val runningAttemptReached: bool = state.attemptA == AttemptRunning or state.attemptB == AttemptRunning
+  val executingAttemptReached: bool = state.attemptA == AttemptExecuting or state.attemptB == AttemptExecuting
   val suspensionIntentReached: bool =
     state.attemptA == SuspensionIntentRecorded or state.attemptB == SuspensionIntentRecorded
   val fastSuspensionCalledReached: bool =

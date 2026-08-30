@@ -28,10 +28,13 @@ none of A's facts or resources.
 Alice edits A's title or body in the tracker. The tracker now derives authored
 fingerprint F2, distinct from P1's F1.
 
-Before Dalph next asks the executor to continue P1, it records and performs a
-complete tracker-graph read and a focused authored-instructions read for A. The
-read proves A is open, inside the target closure, exactly claimed by Dalph, and
-has complete blocker facts; the focused read proves F2.
+The tracker's notification, or the existing bounded timer if that notification
+is lost, gives the one Run reactivation owner a refresh opportunity. It
+coalesces that opportunity and enters the existing tracker-observation and
+graph-read stack without starting a concurrent activation. The complete read
+proves A is open, inside the target closure, exactly claimed by Dalph, and has
+complete blocker facts; a usage-earned focused read for the active attempt
+proves F2. Executor reports neither trigger this read nor define its coverage.
 
 Dalph asks the executor to safely suspend P1. It retains A's task-work position
 until the executor reports that P1 has preserved its resumable state and has no

@@ -5,6 +5,7 @@ import {
   acceptedResultIntegrationObligations,
   acceptedResultIntegrationQuarantineProofObligations,
   plannedAttemptExecutorObligations,
+  plannedAttemptExecutorProofObligations,
   runCancellationObligations,
   runActivationObligations,
   taskFactReconciliationObligations
@@ -222,59 +223,10 @@ await runWithQuintGateTiming({
         testMain: "plannedAttemptExecutorEvidenceProofTest",
         negativeTestMain: "plannedAttemptExecutorEvidenceProofNegativeTest",
         title: "planned-attempt executor evidence proof",
-        maxSteps: "10",
+        maxSteps: "16",
         seed: "6511",
-        invariants: [
-          "everyCallHasDurableIntent",
-          "directResponsesAndProjectionsStayDistinct",
-          "settlementUsesExactOrdinalAndCorrelation",
-          "freshStateProjectionNeverSettlesCommand",
-          "oneReconciliationReadPerActivation",
-          "ambiguousOrUnavailableEvidenceRetainsPosition",
-          "positionReleasesOnlyForSafeOrTerminalEvidence",
-          "evidenceProofTypeOk"
-        ],
-        witnesses: [
-          "startIntentReached",
-          "suspendIntentReached",
-          "commandCalledReached",
-          "responseLostReached",
-          "directResponseReached",
-          "commandProjectionReached",
-          "unavailableProjectionReached",
-          "recoveryActivatedReached",
-          "directResponseSettledReached",
-          "commandProjectionSettledReached",
-          "freshSafeStateProjectionReached",
-          "safePositionReleasedReached",
-          "terminalPositionReleasedReached"
-        ]
-      },
-      {
-        main: "plannedAttemptExecutorStartBoundProof",
-        testMain: "plannedAttemptExecutorStartBoundProofTest",
-        negativeTestMain: "plannedAttemptExecutorStartBoundProofNegativeTest",
-        title: "planned-attempt executor Start-bound proof",
-        maxSteps: "18",
-        seed: "6512",
-        invariants: [
-          "everyStartCallHasItsIntent",
-          "everyStartSettlementUsesItsOrdinal",
-          "lostResponsesStillConsumeStartBudget",
-          "startLimitBlocksFourthCommand",
-          "terminalStartReleasesPosition",
-          "startProofTypeOk"
-        ],
-        witnesses: [
-          "firstStartIntentReached",
-          "thirdStartIntentReached",
-          "startCalledReached",
-          "startResponseLostReached",
-          "directStartSettledReached",
-          "projectedStartSettledReached",
-          "thirdStartSettledReached",
-          "terminalStartReached"
-        ]
+        invariants: plannedAttemptExecutorProofObligations.evidence.invariants,
+        witnesses: plannedAttemptExecutorProofObligations.evidence.witnesses
       },
       {
         main: "plannedAttemptExecutorSuspendBoundProof",
@@ -283,28 +235,8 @@ await runWithQuintGateTiming({
         title: "planned-attempt executor Suspend-bound proof",
         maxSteps: "24",
         seed: "6513",
-        invariants: [
-          "everySuspendCallHasItsIntent",
-          "everySuspendSettlementUsesItsOrdinal",
-          "lostResponsesStillConsumeSuspendBudget",
-          "suspendLimitBlocksFourthCommand",
-          "postLimitRecoveryIsReadOnly",
-          "positionReleasesOnlyForSafeOrTerminalEvidence",
-          "suspendProofTypeOk"
-        ],
-        witnesses: [
-          "firstSuspendIntentReached",
-          "thirdSuspendIntentReached",
-          "suspendCalledReached",
-          "suspendResponseLostReached",
-          "directSuspendSettledReached",
-          "projectedSuspendSettledReached",
-          "thirdSuspendSettledReached",
-          "safeSuspendReached",
-          "terminalSuspendReached",
-          "readOnlyRecoveryReached",
-          "readOnlySafeReached"
-        ]
+        invariants: plannedAttemptExecutorProofObligations.suspendBound.invariants,
+        witnesses: plannedAttemptExecutorProofObligations.suspendBound.witnesses
       }
     ]
 
@@ -313,9 +245,8 @@ await runWithQuintGateTiming({
       "specs/plannedAttemptExecutor_proof.qnt"
     ])
     for (const proof of plannedAttemptExecutorProofs) {
-      // TLC enumerates each complete finite projection graph without a depth
-      // token: evidence 109 generated / 45 distinct / depth 8; Start 55 / 52 /
-      // depth 16; Suspend 79 / 76 / depth 19 (Quint 0.32.0, linux-aarch64).
+      // TLC enumerates each complete finite projection graph without imposing the
+      // sampled runner's depth bound; sampled exploration remains a separate seeded check.
       await runFamily([
         {
           name: `${proof.title} deterministic tests`,
@@ -646,10 +577,13 @@ await runWithQuintGateTiming({
     ])
 
     // The canonical subject model deliberately keeps #136/#137 task facts and the
-    // #65 choice, stoppage, claim-disposition, and independent-task sentinels
+    // #65 choice, current terminal-choice cancellation, claim-disposition, and
+    // independent-task sentinels
     // together. Its production-backed MBT and sampled run stay canonical. ADR 0010
-    // permits the following smaller projection of the same accepted #65 chronology
+    // permits the following smaller projections of the same accepted chronology
     // to own exhaustive proof without becoming another runtime behavior source.
+    // The active-work entry is the #218/#281 proof slice: it keeps Running
+    // establishment distinct from a tracker/timer refresh offer.
     const taskFactProofs = [
       {
         main: "taskFactChoiceProof",
@@ -677,14 +611,15 @@ await runWithQuintGateTiming({
         ]
       },
       {
-        main: "taskFactStopProof",
-        testMain: "taskFactStopProofTest",
-        negativeTestMain: "taskFactStopProofNegativeTest",
-        title: "task-fact Stop proof",
+        main: "historicalTaskFactStopRecoveryProof",
+        testMain: "historicalTaskFactStopRecoveryProofTest",
+        negativeTestMain: "historicalTaskFactStopRecoveryProofNegativeTest",
+        title: "historical task-fact Stop recovery proof",
         maxSteps: "22",
         seed: "6502",
         invariants: [
           "stopCallsFollowExactDurableIntents",
+          "historicalExecutingRequiresAcceptedCommandReport",
           "stoppageAndRecoveryAreBounded",
           "thirdRunningResultLeavesOnlyReadOnlyRecovery",
           "abandonmentRequiresExactUnbrokenQuiescence",
@@ -722,14 +657,44 @@ await runWithQuintGateTiming({
           "laterReadAfterAmbiguityReached",
           "unrelatedTaskSelectedReached"
         ]
+      },
+      {
+        main: "taskFactActiveRefreshProof",
+        testMain: "taskFactActiveRefreshProofTest",
+        negativeTestMain: "taskFactActiveRefreshProofNegativeTest",
+        title: "task-fact active-work refresh proof",
+        maxSteps: "8",
+        seed: "6504",
+        invariants: [
+          "activeRefreshUnreadableAuthorizesNoExecutorAction",
+          "healthyActiveRefreshAuthorizesNoExecutorAction",
+          "runningEstablishmentRetainsAuthority",
+          "activeRefreshOfferRequiresRunningEstablished",
+          "activeRefreshSourceIsTrackerOrTimer",
+          "ordinaryUnreadableStillRequestsSafeSuspension",
+          "positionReleasesOnlyOnExactSafeEvidence",
+          "independentTaskRemainsEligible",
+          "activeRefreshProofTypeOk"
+        ],
+        witnesses: [
+          "activeRefreshOfferedReached",
+          "activeRefreshRunningEstablishedReached",
+          "activeRefreshTrackerOfferedReached",
+          "activeRefreshTimerOfferedReached",
+          "activeRefreshHealthyReached",
+          "activeRefreshUnreadableReached",
+          "lifecycleClosedReached",
+          "ordinaryUnreadableReached",
+          "safelySuspendedReached",
+          "lifecycleReopenedReached",
+          "independentTaskSelectedReached"
+        ]
       }
     ]
 
     await run("task-fact proof projection typecheck", ["typecheck", "specs/taskFactReconciliation_proof.qnt"])
     for (const proof of taskFactProofs) {
-      // TLC enumerates the complete finite projection graph with no depth token:
-      // choice 261 generated / 152 distinct / depth 14; Stop 42 / 36 / depth 20;
-      // claim 440 / 279 / depth 16 (Quint 0.32.0, linux-aarch64).
+      // TLC enumerates the complete finite projection graph with no depth token.
       await runFamily([
         {
           name: `${proof.title} deterministic tests`,

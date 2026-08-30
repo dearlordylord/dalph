@@ -102,7 +102,7 @@ const appendDurableAcceptedReport = (result: AcceptedResult) =>
       plannedAttemptExecutorWorkReportedRecordKey(attempt.attemptId, PlannedAttemptExecutorReportOrdinal.make(1)),
       PlannedAttemptExecutorWorkReportedEvent.make({
         ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-        report: PlannedAttemptExecutorReport.cases.Terminal.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation: { attemptId: attempt.attemptId, runId },
           result: { _tag: "Accepted", acceptedResult: result }
         }),

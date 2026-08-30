@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Option, SubscriptionRef, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, SubscriptionRef, Stream } from "effect"
 import { expect } from "vitest"
 import {
   attachCurrentSignal,
@@ -16,6 +16,21 @@ it.effect("currentSignalOf.get equals the current-first value observed from chan
 
     expect(yield* signal.get).toEqual(Option.getOrThrow(observed))
   })
+)
+
+it.effect("fails fast when the exported current-first adapter receives an empty stream", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const result = yield* Effect.exit(attachCurrentSignal(currentSignalFromCurrentFirstStream(Stream.empty)))
+
+      expect(Exit.isFailure(result)).toBe(true)
+      if (Exit.isFailure(result)) {
+        expect(Cause.squash(result.cause)).toMatchObject({
+          message: "CurrentSignal ended before publishing its current value"
+        })
+      }
+    })
+  )
 )
 
 it.effect("attaches after publication from the latest value and follows later changes", () =>

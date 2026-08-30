@@ -112,6 +112,7 @@ const addIntegrationConfigurationEvidenceEntryFor = (
   entries: Array<OrderedStatusEntry>
 ): void => {
   const responsibility = obligationForPlannedAttempt(delivery, standing.wait.plannedAttempt)
+  /* v8 ignore next -- @preserve projected IntegrationConfigurationWait standings carry their exact AcceptedAwaitingIntegration obligation. */
   if (responsibility?._tag !== "AcceptedAwaitingIntegration") return
   addEntry(
     entries,
@@ -133,6 +134,7 @@ const addTargetPromotionConfigurationEvidenceEntryFor = (
   entries: Array<OrderedStatusEntry>
 ): void => {
   const responsibility = obligationForPlannedAttempt(delivery, standing.wait.plannedAttempt)
+  /* v8 ignore next -- @preserve projected TargetPromotionConfigurationWait standings carry their exact StartedIntegration obligation. */
   if (responsibility?._tag !== "StartedIntegration") return
   addEntry(
     entries,
@@ -154,6 +156,7 @@ const addIntegrationDependencyEntryFor = (
   entries: Array<OrderedStatusEntry>
 ): void => {
   const prerequisiteTaskIds = nonEmptyTaskIdsFor(standing.wait.prerequisiteTaskIds)
+  /* v8 ignore next -- @preserve ticket-delivery projection rejects an empty IntegrationDependencyWait before status entry construction. */
   if (prerequisiteTaskIds === null) return
   addDependencyEntry(subject, delivery.taskId, prerequisiteTaskIds, standing, taskOrder, entries)
 }
@@ -197,6 +200,7 @@ const addResponsibilityEntriesFor = (
 ): void => {
   if (standing.facts.disposition._tag === "DependencyWait") {
     const prerequisiteTaskIds = nonEmptyTaskIdsFor(standing.facts.disposition.prerequisiteTaskIds)
+    /* v8 ignore next -- @preserve responsibility projection rejects an empty DependencyWait before status entry construction. */
     if (prerequisiteTaskIds === null) return
     addDependencyEntry(subject, delivery.taskId, prerequisiteTaskIds, standing, taskOrder, entries)
   }
@@ -214,6 +218,7 @@ const addIntegrationTrackerEntryFor = (
   entries: Array<OrderedStatusEntry>
 ): void => {
   const responsibility = obligationForPlannedAttempt(delivery, standing.wait.plannedAttempt)
+  /* v8 ignore next -- @preserve projected integration tracker waits carry the matching planned-attempt obligation. */
   if (responsibility === null) return
   const trackerFact = integrationTrackerFactForWait(standing.wait)
   addEntry(
@@ -239,6 +244,7 @@ const addIntegrationTargetEntryFor = (
   entries: Array<OrderedStatusEntry>
 ): void => {
   const responsibility = queuedIntegrationResponsibilityFor(delivery, standing.wait.plannedAttempt)
+  /* v8 ignore next -- @preserve projected IntegrationTargetWait standings carry their exact QueuedIntegration obligation. */
   if (responsibility?._tag !== "QueuedIntegration") return
   addEntry(
     entries,

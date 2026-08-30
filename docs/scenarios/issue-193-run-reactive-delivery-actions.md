@@ -153,45 +153,33 @@ returned in-memory result as authority to advance.
 - `runs maintained conflict, unreadable-Git, correction, exhaustion, and contradiction stories`
 - `reopens an ambiguously constructed candidate before retrying it`
 
-## Each accepted Running report authorizes one next executor request
+## Autonomous executor work uses one Begin and passive observation
+
+This section is superseded by
+[issue-264-autonomous-executor-work.md](issue-264-autonomous-executor-work.md).
+Issue 193 still owns reactive delivery of independently authorized actions; it
+does not make an executor report into permission for another work command.
 
 ### Starting situation, restart, and ordered boundary calls
 
-Executor session E belongs to A's exact RunId and AttemptId. Dalph's journal
-contains A's executor-responsibility beginning and accepted `Running` report
-ordinal 1. The process that accepted ordinal 1 has exited, so its proposal
-owner no longer exists. GitHub still reports A open with Dalph's exact claim;
-Git still proves A's planned worktree and target lineage.
+Executor session E belongs to A's exact RunId and AttemptId. Dalph has already
+recorded one Begin intent, called Begin once, and accepted
+`ExecutorWorkExecuting` at report ordinal 1. E continues autonomously.
 
-On restart, Dalph reconstructs ordinal 1 as the exact accepted progress for
-the next continuation, reserves or reuses A's one task-work position, and
-calls the executor's `startOrContinue` boundary once for E. If E returns
-`Running`, Dalph appends it as ordinal 2 before publishing a new
-continuation whose identity names ordinal 2. The settled ordinal-1 owner
-cannot suppress this distinct continuation. Dalph may then call
-`startOrContinue` once more. If E returns `Terminal`, Dalph appends it as
-ordinal 3, releases A's task-work position, and publishes no further
-continuation.
-
-Dalph accepts at most three consecutive `Running` reports for this exact
-attempt since its last accepted `SafelySuspended` report. If it reaches three,
-the next continuation fails with the typed
-`PlannedAttemptExecutorContinuationLimitReached` result before calling E.
-The journal and worktree remain intact, and restart reconstructs the same
-exhausted budget instead of beginning another three calls.
-
-A replay of ordinal 1 while its exact proposal owner remains live or settled
-does not call E twice. A report for another RunId or AttemptId authorizes
-nothing for A. The maintainer sees the recovered session advance through
-`Running(1)`, `Running(2)`, and `Terminal(3)` without a duplicate request or a
-forever wait. These prohibitions preserve D1, D12, and D41.
+An independently selected passive observation may return the same executing
+condition. Dalph settles that process-local read without appending any durable
+observation or report-ordinal event, advancing the accepted journal position,
+creating a successor proposal identity, or sending a Begin or Resume command.
+There is no three-observation exhaustion. A later changed terminal observation
+is accepted at report ordinal 2 and releases A's task-work position. Resume is
+available only after an accepted safe-suspension report and the separate
+current-facts selection rule.
 
 ### Acceptance-test mapping
 
-- `gives each accepted executor report its own continuation proposal`
-- `publishes each accepted executor report before continuing and stops after Terminal`
-- `stops an always-Running executor at the durable continuation limit`
-- `stops an always-Running controlled workflow at the shared continuation limit`
+- `observes unchanged executing work more than three times without durable events or another command`
+- `records a distinct terminal observation after unchanged executing work`
+- Quint `beginOnceAndObserveExecutingFiveTimesTest`
 
 ## Process loss discards a live claim owner and rereads GitHub
 

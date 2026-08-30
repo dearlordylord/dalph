@@ -12,7 +12,8 @@ ambient harness choices. Dalph does not inject a skill, review loop, subagent
 topology, model, or provider policy.
 
 Generic Dalph still sees only one exact planned attempt and its normalized
-`Running`, `SafelySuspended`, or terminal report. Codex thread ids, turn ids,
+`ExecutorWorkExecuting`, `ExecutorWorkSafelySuspended`, or terminal report.
+Codex thread ids, turn ids,
 JSON-RPC request ids, processes, terminal sessions, tools, and rollout files
 remain private to this implementation.
 
@@ -66,7 +67,7 @@ No person directly triggers this automatic work. Dalph has planned exact
 attempt P for task A, including A's original task-work-specification
 fingerprint, Base SHA, branch, worktree, and the statically selected Codex
 executor locator. Git has freshly proved that P's exact worktree is ready.
-Dalph has recorded its generic `StartOrContinue` intent. No attempt-thread
+Dalph has recorded its generic `Begin` intent. No attempt-thread
 association exists for P.
 
 The application has acquired one scoped Codex application server and completed
@@ -88,9 +89,9 @@ task turn.
    containing A's exact original task-work specification and the immutable
    planned-attempt facts needed by the task.
 5. When Codex reports the turn active, the implementation returns exact
-   `Running(P)`. Repeated generic continuation calls while that same turn is
-   active return its current `Running(P)` projection; they do not start
-   parallel turns.
+   `ExecutorWorkExecuting(P)`. Repeated passive `observe` calls while that same
+   turn is active return its current projection; they do not start parallel
+   turns.
 
 ### Crash and retry cuts
 
@@ -122,7 +123,7 @@ authorize a new thread or another task turn.
 
 ### Visible and forbidden result
 
-The maintainer sees P become Running through the existing generic executor
+The maintainer sees P become executing through the existing generic executor
 report. Dalph must not expose the thread id, create another attempt, send the
 task before the association is durable, start two turns for P, infer completion
 from an idle thread, or treat a lost `turn/start` response as proof that Codex
@@ -134,7 +135,7 @@ did nothing.
 - `retries after thread start returns but the association write is lost without sending two task turns`
 - `retries only an empty pre-turn allocation whose task turn was never sent`
 - `reconciles a lost first-turn response without starting another thread or turn`
-- `returns Running without starting a parallel turn for the same attempt`
+- `returns ExecutorWorkExecuting without starting a parallel turn for the same attempt`
 
 ## A later Dalph process resumes the same attempt thread
 
@@ -162,10 +163,10 @@ for whether current closure, claim, and Git facts permit continuation.
 2. The implementation reads P's exact private association.
 3. It calls `thread/read` or `thread/resume` with the recorded thread id and
    P's exact current planned worktree as `cwd`.
-4. An active turn projects `Running(P)`. A persisted terminal turn is
+4. An active turn projects `ExecutorWorkExecuting(P)`. A persisted terminal turn is
    reconciled through the terminal scenario below. An idle interrupted thread
    remains the same resumable thread and receives a later continuation only
-   after Dalph sends another generic `StartOrContinue` command.
+   after an accepted safe report and current facts authorize generic `Resume`.
 
 If Codex is temporarily unreachable, the implementation returns the existing
 normalized `TemporarilyUnavailable(P)`. If its stored history cannot be
@@ -175,7 +176,7 @@ position and starts no replacement thread.
 
 ### Visible, forbidden, crash, and retry result
 
-The maintainer sees P remain Running, safely suspended, terminal, or explicitly
+The maintainer sees P remain executing, safely suspended, terminal, or explicitly
 unavailable/unreadable through the generic executor boundary. Dalph must not
 replace P's materialized thread, infer a result from an idle thread, or use
 fresh tracker text as the original prompt. A crash before the resume response
@@ -226,18 +227,19 @@ protocol supplies the suspension request.
 4. Only after the execution substrate proves that no owned activity for P
    remains running, and the associated thread remains resumable, does the
    implementation return `SafelySuspended(P)`.
-5. A later generic `StartOrContinue(P)` resumes the same associated thread and
+5. A later generic `Resume(P)`, authorized by an accepted safe report and exact
+   current selection facts, resumes the same associated thread and
    sends a continuation turn in the same exact planned worktree.
 
 `turn/interrupt`, app-server process exit, a missing child process, or an idle
 thread alone does not prove safe suspension. If the implementation cannot
-complete its activity census or stop owned work, it returns Running or a
+complete its activity census or stop owned work, it returns `ExecutorWorkExecuting` or a
 normalized unavailable/unreadable outcome and Dalph retains P's task-work
 position.
 
 ### Visible, forbidden, crash, and retry result
 
-Alice sees P become safely suspended, remain Running or uncertain, or finish
+Alice sees P become safely suspended, remain executing or uncertain, or finish
 with its exact terminal result. Dalph must not report safe suspension while any
 Codex-owned activity can still change the worktree, replace the thread, or
 downgrade a terminal result observed during interruption. If Dalph dies after

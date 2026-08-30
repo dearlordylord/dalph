@@ -1,414 +1,269 @@
-// Negative controls for the durable executor-command protocol. Each action
-// performs one forbidden shortcut that a named invariant must reject.
+// Mutation controls: each illegal transition must turn a named safety claim red.
 module plannedAttemptExecutorNegativeTest {
   import plannedAttemptExecutor.* from "./plannedAttemptExecutor"
 
   action callWithoutIntent: bool = all {
     state.status == ResponsibilityBegan,
+    state' = { ...state, commandCallCount: state.commandCallCount + 1, lastAction: BeginCalledAction },
+  }
+
+  action recordSecondBegin: bool = all {
+    state.beginEverIntended,
+    isNoCommand(state.commandState),
+    state' = { ...state, beginIntentsSinceSafeSuspension: 2, commandIntentCount: state.commandIntentCount + 1, nextCommandOrdinal: state.nextCommandOrdinal + 1 },
+  }
+
+  action resumeWithoutSafeReport: bool = all {
+    state.status == StatusExecuting,
+    state' = { ...state, lastAction: ResumeIntentRecordedAction },
+  }
+
+  action consumeAcceptedSafeReportTwice: bool = all {
+    state.status == StatusSafelySuspended,
+    state.resumeIntentsSinceSafeSuspension == 1,
+    state' = { ...state, resumeIntentsSinceSafeSuspension: 2 },
+  }
+
+  action countCommandResponseAsSecondLifecycleReport: bool = all {
+    state.status == StatusExecuting,
+    boundaryResponseReport(state.evidence) == ExecutorWorkExecuting,
+    state' = { ...state, acceptedReportOrdinal: state.acceptedReportOrdinal + 1 },
+  }
+
+  action persistAndAuthorizeUnchangedExecutingObservation: bool = all {
+    state.status == StatusExecuting,
+    state.lastAction == UnchangedExactReportObservedAction,
+    state' = { ...state, acceptedReportOrdinal: state.acceptedReportOrdinal + 1, durableObservationCount: state.durableObservationCount + 1, proposalIdentityCount: state.proposalIdentityCount + 1, commandIntentCount: state.commandIntentCount + 1, commandCallCount: state.commandCallCount + 1, nextCommandOrdinal: state.nextCommandOrdinal + 1 },
+  }
+
+  action leaveTerminalAfterAcceptance: bool = all {
+    state.status == StatusTerminal,
+    state.terminalReportEverAccepted,
+    state' = { ...state, status: StatusExecuting },
+  }
+
+  action releaseFromUnavailableObservation: bool = all {
+    freshObservation(state.evidence) == ExecutorStateTemporarilyUnavailable,
+    state' = { ...state, positionHeld: false },
+  }
+
+  action recordFourthSuspend: bool = all {
+    state.suspendIntentsSinceExecuting == SUSPEND_COMMAND_LIMIT,
+    state' = { ...state, suspendIntentsSinceExecuting: state.suspendIntentsSinceExecuting + 1 },
+  }
+
+  action acceptPassiveExecutingAfterSafe: bool = all {
+    state.status == StatusSafelySuspended,
+    state.resumeIntentsSinceSafeSuspension == 0,
+    state' = { ...applyDistinctReport(state, ExecutorWorkExecuting), lastAction: FreshStateAcceptedAction },
+  }
+
+  action acceptFirstPassiveReportWithoutBegin: bool = all {
+    state.status == ResponsibilityBegan,
+    state' = { ...applyDistinctReport(state, ExecutorWorkExecuting), lastAction: FreshStateAcceptedAction },
+  }
+
+  action acceptPassiveSafeWithoutSuspend: bool = all {
+    state.status == StatusExecuting,
+    state.suspendIntentsSinceExecuting == 0,
     state' = {
-      ...state,
-      commandCallCount: state.commandCallCount + 1,
-      lastAction: StartCalledAction,
+      ...applyDistinctReport(state, ExecutorWorkSafelySuspended),
+      suspendIntentsSinceExecutingBeforeEvidence: 0,
+      lastAction: FreshStateAcceptedAction,
     },
   }
 
-  action callSameIntentTwice: bool = all {
-    isCalled(state.commandState),
+  action settleBeginWithSafeReport: bool = all {
+    activeCommand(state.commandState).kind == BeginCommand,
+    boundaryResponseReport(state.evidence) == ExecutorWorkSafelySuspended,
     state' = {
-      ...state,
-      commandCallCount: state.commandCallCount + 1,
-      lastAction: StartCalledAction,
+      ...applyDistinctReport(state, ExecutorWorkSafelySuspended),
+      commandState: NoCommand,
+      evidence: NoEvidence,
+      commandSettlementCount: state.commandSettlementCount + 1,
+      commandResponseSettlementCount: state.commandResponseSettlementCount + 1,
+      lastAction: ResponseSettledAction,
     },
   }
 
-  action replaceUnmatchedIntentBeforeReconciliation: bool = all {
-    isCalled(state.commandState),
+  action retryLostSuspendWithoutReconciliation: bool = all {
+    state.responseAmbiguous,
+    activeCommand(state.commandState).kind == SuspendCommand,
     state' = {
       ...state,
-      commandState: CommandIntended({
-        correlation: PLANNED_CORRELATION,
-        commandOrdinal: state.nextCommandOrdinal,
-        kind: StartOrContinueCommand,
-      }),
-      nextCommandOrdinal: state.nextCommandOrdinal + 1,
       commandIntentCount: state.commandIntentCount + 1,
+      nextCommandOrdinal: state.nextCommandOrdinal + 1,
+      suspendCommandIntentCount: state.suspendCommandIntentCount + 1,
+      suspendIntentsSinceExecuting: state.suspendIntentsSinceExecuting + 1,
+      lastAction: SuspendIntentRecordedAction,
     },
   }
 
-  action countProjectionAsCommandResponse: bool = all {
-    isCommandProjectionEvidence(state.evidence),
-    state' = {
-      ...state,
-      commandResponseEvidenceCount: state.commandResponseEvidenceCount + 1,
-    },
-  }
-
-  action settleWrongOrdinal: bool = {
-    val projection = commandProjectionOf(state.evidence)
-    val intended = activeCommand(state.commandState)
-    val wrong = {
-      ...projection.command,
-      commandOrdinal: projection.command.commandOrdinal + 1,
-    }
-    all {
-      isCommandProjectionEvidence(state.evidence),
-      commandProjectionIsExact(projection.outcome),
-      state' = {
-        ...state,
-        commandState: NoCommand,
-        evidence: NoEvidence,
-        commandSettlementCount: state.commandSettlementCount + 1,
-        responseAmbiguous: false,
-        lastSettlement: Settled({
-          intendedCommand: intended,
-          evidenceCommand: wrong,
-          source: SettledFromExactCommandProjection,
-        }),
-      },
-    }
-  }
-
-  action settleWrongCorrelation: bool = {
-    val projection = commandProjectionOf(state.evidence)
-    val intended = activeCommand(state.commandState)
-    val wrong = {
-      ...projection.command,
-      correlation: {
-        runId: OTHER_RUN_ID,
-        attemptId: ATTEMPT_ID,
-      },
-    }
-    all {
-      isCommandProjectionEvidence(state.evidence),
-      commandProjectionIsExact(projection.outcome),
-      state' = {
-        ...state,
-        commandState: NoCommand,
-        evidence: NoEvidence,
-        commandSettlementCount: state.commandSettlementCount + 1,
-        responseAmbiguous: false,
-        lastSettlement: Settled({
-          intendedCommand: intended,
-          evidenceCommand: wrong,
-          source: SettledFromExactCommandProjection,
-        }),
-      },
-    }
-  }
-
-  action misclassifyUnmatchedReadAsFreshStateProjection(
-    observation: ExecutorStateObservation,
-  ): bool = all {
+  // These mutations bypass the production evidence constructors to prove that
+  // an exact-looking report cannot settle foreign or stale command evidence.
+  action recordForeignCorrelationCommandProjection(foreignCorrelation: Correlation): bool = all {
     isCalled(state.commandState),
     state.responseAmbiguous,
     state.evidence == NoEvidence,
     state.reconciliationProjectionsThisActivation == 0,
     state' = {
       ...state,
-      evidence: FreshStateProjection({
-        correlation: PLANNED_CORRELATION,
-        observation: observation,
-      }),
+      evidence: CommandProjectionEvidence({ correlation: foreignCorrelation, commandOrdinal: activeCommand(state.commandState).commandOrdinal, outcome: CommandProjectionExactExecuting }),
+      positionHeldBeforeEvidence: state.positionHeld,
+      acceptedReportOrdinalBeforeEvidence: state.acceptedReportOrdinal,
       reconciliationProjectionsThisActivation: 1,
-      lastAction: FreshStateProjectedAction,
+      lastAction: CommandProjectedAction,
     },
   }
 
-  action settleFromStateProjection: bool = {
-    val intended = activeCommand(state.commandState)
-    all {
-      isFreshStateProjectionEvidence(state.evidence),
-      state' = {
-        ...state,
-        commandState: NoCommand,
-        evidence: NoEvidence,
-        commandSettlementCount: state.commandSettlementCount + 1,
-        responseAmbiguous: false,
-        lastSettlement: Settled({
-          intendedCommand: intended,
-          evidenceCommand: intended,
-          source: SettledFromFreshStateProjection,
-        }),
-      },
-    }
-  }
-
-  action releaseFromUnsafeCommandProjection: bool = {
-    val projection = commandProjectionOf(state.evidence)
-    all {
-      isCommandProjectionEvidence(state.evidence),
-      projection.outcome == CommandProjectionExactRunning
-        or projection.outcome == CommandProjectionNoCurrentReport
-        or projection.outcome == CommandProjectionTemporarilyUnavailable
-        or projection.outcome == CommandProjectionUnreadable
-        or projection.outcome == CommandProjectionContradiction,
-      state' = { ...state, positionHeld: false },
-    }
-  }
-
-  action releaseFromTemporaryFreshStateProjection: bool = all {
-    state.evidence == FreshStateProjection({
-      correlation: PLANNED_CORRELATION,
-      observation: ExecutorStateTemporarilyUnavailable,
-    }),
-    state' = { ...state, positionHeld: false },
-  }
-
-  action releaseFromNoCurrentFreshStateProjection: bool = all {
-    state.evidence == FreshStateProjection({
-      correlation: PLANNED_CORRELATION,
-      observation: ExecutorStateNoCurrentReport,
-    }),
-    state' = { ...state, positionHeld: false },
-  }
-
-  action releaseFromUnreadableFreshStateProjection: bool = all {
-    state.evidence == FreshStateProjection({
-      correlation: PLANNED_CORRELATION,
-      observation: ExecutorStateUnreadable,
-    }),
-    state' = { ...state, positionHeld: false },
-  }
-
-  action releaseFromContradictoryFreshStateProjection: bool = all {
-    state.evidence == FreshStateProjection({
-      correlation: PLANNED_CORRELATION,
-      observation: ExecutorStateContradiction,
-    }),
-    state' = { ...state, positionHeld: false },
-  }
-
-  action recordFourthSuspendCommand: bool = all {
-    state.suspendIntentsSinceRunning == SUSPEND_COMMAND_LIMIT,
-    isNoCommand(state.commandState),
+  action recordWrongOrdinalCommandProjection: bool = all {
+    isCalled(state.commandState),
+    state.responseAmbiguous,
+    state.evidence == NoEvidence,
+    state.reconciliationProjectionsThisActivation == 0,
     state' = {
       ...state,
-      commandState: CommandIntended({
-        correlation: PLANNED_CORRELATION,
-        commandOrdinal: state.nextCommandOrdinal,
-        kind: SuspendCommand,
-      }),
-      nextCommandOrdinal: state.nextCommandOrdinal + 1,
-      suspendIntentsSinceRunning: state.suspendIntentsSinceRunning + 1,
-      commandIntentCount: state.commandIntentCount + 1,
+      evidence: CommandProjectionEvidence({ correlation: PLANNED_CORRELATION, commandOrdinal: activeCommand(state.commandState).commandOrdinal + 1, outcome: CommandProjectionExactExecuting }),
+      positionHeldBeforeEvidence: state.positionHeld,
+      acceptedReportOrdinalBeforeEvidence: state.acceptedReportOrdinal,
+      reconciliationProjectionsThisActivation: 1,
+      lastAction: CommandProjectedAction,
     },
   }
 
-  action makeReadOnlyRecoveryPermanentlyUnavailable: bool = all {
-    state.suspendIntentsSinceRunning == SUSPEND_COMMAND_LIMIT,
-    isNoCommand(state.commandState),
-    state.reconciliationProjectionsThisActivation == 1,
-    state' = { ...state, recoveryCount: RECOVERY_LIMIT + 1 },
+  run callWithoutIntentIsDetectedTest = {
+    init.then(beginResponsibility).then(callWithoutIntent).expect(not(everyCallHasOneDurableIntent))
   }
 
-  run callWithoutIntentViolatesDurabilityTest = {
-    init
-      .then(beginResponsibility)
-      .then(callWithoutIntent)
-      .expect(not(everyCallHasOneDurableIntent))
+  run secondBeginIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSecondBegin).expect(not(beginOccursAtMostOnce))
   }
 
-  run duplicateCallViolatesOneCallPerIntentTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(callSameIntentTwice)
-      .expect(not(everyCallHasOneDurableIntent))
+  run resumeWithoutSafeReportIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(resumeWithoutSafeReport).expect(not(resumeRequiresAcceptedSafeReport))
   }
 
-  run unmatchedIntentMustReconcileBeforeAnotherCommandTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(replaceUnmatchedIntentBeforeReconciliation)
-      .expect(not(unmatchedIntentBlocksAnotherCommand))
+  run secondResumeAgainstSameSafeReportIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordResumeIntent).then(callResume)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(consumeAcceptedSafeReportTwice).expect(not(acceptedSafeReportAuthorizesAtMostOneResume))
   }
 
-  run projectionCountedAsResponseViolatesEvidenceSeparationTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionNoCurrentReport))
-      .then(countProjectionAsCommandResponse)
-      .expect(not(projectionsAreNotCommandResponses))
+  run commandResponseCannotManufactureReportOrdinalTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(receiveCommandResponse(ExecutorWorkExecuting))
+      .then(countCommandResponseAsSecondLifecycleReport)
+      .expect(not(unsettledEvidenceDoesNotAppendReport))
   }
 
-  run wrongOrdinalCannotSettleIntentTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleWrongOrdinal)
-      .expect(not(settlementsUseExactCommandOrdinal))
-  }
-
-  run wrongCorrelationCannotSettleIntentTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleWrongCorrelation)
+  run unchangedObservationMutationIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordFreshStateProjection(ExecutorStateExecuting))
+      .then(persistAndAuthorizeUnchangedExecutingObservation)
       .expect(and {
-        not(settlementsUseExactCommandOrdinal),
-        not(everyBoundaryValueCarriesPlannedAttempt),
+        not(unchangedExactObservationDoesNotAppendReport),
+        not(unchangedExactObservationIsProcessLocal),
       })
   }
 
-  run stateProjectionCannotSettleUnmatchedIntentTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(misclassifyUnmatchedReadAsFreshStateProjection(ExecutorStateSafelySuspended))
-      .then(settleFromStateProjection)
-      .expect(not(stateProjectionNeverSettlesCommand))
+  run terminalAbsorptionMutationIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordFreshStateProjection(ExecutorStateTerminal)).then(acceptFreshStateProjectionProof)
+      .then(leaveTerminalAfterAcceptance).expect(not(terminalAcceptedStatusIsAbsorbing))
   }
 
-  run unmatchedReadCannotBeClassifiedAsFreshStateProjectionTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(misclassifyUnmatchedReadAsFreshStateProjection(ExecutorStateRunning))
-      .expect(not(freshStateProjectionHasNoUnmatchedCommand))
+  run unavailableReleaseIsDetectedTest = {
+    init.then(beginResponsibility).then(recordFreshStateProjection(ExecutorStateTemporarilyUnavailable))
+      .then(releaseFromUnavailableObservation).expect(not(unsafeOrUnavailableNeverReleasesPosition))
   }
 
-  run runningProjectionCannotProveSafetyTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(releaseFromUnsafeCommandProjection)
-      .expect(not(unsafeOrUnavailableNeverReleasesPosition))
+  run fourthSuspendIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordFourthSuspend).expect(not(suspendCommandLimitPreserved))
   }
 
-  run unavailableProjectionCannotProveSafetyTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionNoCurrentReport))
-      .then(releaseFromUnsafeCommandProjection)
-      .expect(not(unsafeOrUnavailableNeverReleasesPosition))
+
+  run passiveSafeToExecutingMutationIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(acceptPassiveExecutingAfterSafe).expect(not(safeToExecutingRequiresResume))
   }
 
-  run temporaryFreshStateProjectionCannotReleasePositionTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordFreshStateProjection(ExecutorStateTemporarilyUnavailable))
-      .then(releaseFromTemporaryFreshStateProjection)
-      .expect(not(unsafeOrUnavailableNeverReleasesPosition))
+  run firstPassiveReportWithoutBeginIsDetectedTest = {
+    init.then(beginResponsibility)
+      .then(acceptFirstPassiveReportWithoutBegin)
+      .expect(not(passiveReportAcceptanceHasCausalCommand))
   }
 
-  run noCurrentFreshStateProjectionCannotReleasePositionTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordFreshStateProjection(ExecutorStateNoCurrentReport))
-      .then(releaseFromNoCurrentFreshStateProjection)
-      .expect(not(unsafeOrUnavailableNeverReleasesPosition))
+  run passiveSafeWithoutSuspendIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(acceptPassiveSafeWithoutSuspend)
+      .expect(not(passiveReportAcceptanceHasCausalCommand))
   }
 
-  run unreadableFreshStateProjectionCannotReleasePositionTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordFreshStateProjection(ExecutorStateUnreadable))
-      .then(releaseFromUnreadableFreshStateProjection)
-      .expect(not(unsafeOrUnavailableNeverReleasesPosition))
+  run beginSafeSettlementIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended))
+      .then(settleBeginWithSafeReport)
+      .expect(not(firstAcceptedReportIsExecuting))
   }
 
-  run contradictoryFreshStateProjectionCannotReleasePositionTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordFreshStateProjection(ExecutorStateContradiction))
-      .then(releaseFromContradictoryFreshStateProjection)
-      .expect(not(unsafeOrUnavailableNeverReleasesPosition))
+  run lostSuspendRetryBeforeReconciliationIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(loseCommandResponse)
+      .then(retryLostSuspendWithoutReconciliation)
+      .expect(not(lostSuspendRequiresReconciliationBeforeRetry))
   }
 
-  run fourthSuspendCommandViolatesBoundTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordFourthSuspendCommand)
-      .expect(not(commandBudgetsAreBounded))
+  run foreignRunCorrelationProjectionIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin).then(loseCommandResponse)
+      .then(recordForeignCorrelationCommandProjection(FOREIGN_RUN_CORRELATION))
+      .expect(and {
+        not(everyBoundaryValueCarriesExactCorrelation),
+        not(boundaryEvidenceUsesExactCommandIdentity),
+        not(commandProjectionBelongsToCalledCommand),
+        not(canSettleCommandProjection(state)),
+      })
   }
 
-  run suspendLimitCannotBecomePermanentReadOnlyDeadEndTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleCommandProjection)
-      .then(recoverActivation)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleCommandProjection)
-      .then(recoverActivation)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleCommandProjection)
-      .then(makeReadOnlyRecoveryPermanentlyUnavailable)
-      .expect(not(suspendLimitPreservesReadOnlyRecovery))
+  run foreignAttemptCorrelationProjectionIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin).then(loseCommandResponse)
+      .then(recordForeignCorrelationCommandProjection(FOREIGN_ATTEMPT_CORRELATION))
+      .expect(and {
+        not(everyBoundaryValueCarriesExactCorrelation),
+        not(boundaryEvidenceUsesExactCommandIdentity),
+        not(commandProjectionBelongsToCalledCommand),
+        not(canSettleCommandProjection(state)),
+      })
   }
 
-  run thirdLostSuspendCannotUseGenericStateProjectionTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(loseCommandResponse)
-      .then(recoverActivation)
-      .then(misclassifyUnmatchedReadAsFreshStateProjection(ExecutorStateSafelySuspended))
-      .expect(not(freshStateProjectionHasNoUnmatchedCommand))
+  run wrongCommandProjectionOrdinalIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin).then(loseCommandResponse)
+      .then(recordWrongOrdinalCommandProjection)
+      .expect(and {
+        everyBoundaryValueCarriesExactCorrelation,
+        not(boundaryEvidenceUsesExactCommandIdentity),
+        not(commandProjectionBelongsToCalledCommand),
+        not(canSettleCommandProjection(state)),
+      })
   }
 }

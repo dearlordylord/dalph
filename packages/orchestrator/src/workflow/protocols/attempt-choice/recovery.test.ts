@@ -1,11 +1,11 @@
 import { it } from "@effect/vitest"
+import { appendAcceptedSafeExecutorHistory } from "../../../../test/support/planned-attempt-executor-history.js"
 import {
   AttemptId,
   GitCommitSha,
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
-  PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -28,15 +28,7 @@ import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-ac
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import {
-  attemptPlanRecordKey,
-  intentRecordKey,
-  outcomeRecordKey,
-  plannedAttemptExecutorCommandIntendedRecordKey,
-  plannedAttemptExecutorStateObservedRecordKey,
-  plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
-} from "../../../workflow-journal/record-key.js"
+import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "../../../workflow-journal/record-key.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -55,16 +47,6 @@ import {
   makeTaskWorkSpecificationObservationOperation
 } from "../../registry/operation.js"
 import {
-  PlannedAttemptExecutorCommandIntendedEvent,
-  PlannedAttemptExecutorCommandOrdinal,
-  PlannedAttemptExecutorReportOrdinal,
-  PlannedAttemptExecutorStateObservation,
-  PlannedAttemptExecutorStateObservationOrdinal,
-  PlannedAttemptExecutorStateObservedEvent,
-  PlannedAttemptExecutorWorkReportedEvent,
-  PlannedAttemptExecutorWorkResponsibilityBeganEvent
-} from "../planned-attempt-executor-work/events.js"
-import {
   makeFocusedTaskClaimFactsUnreadable,
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved,
@@ -72,6 +54,7 @@ import {
 } from "../../task-tracker-facts/observation.js"
 import { AttemptChoiceControl, attemptChoiceControlLayer } from "./control.js"
 import { AttemptChoiceRequestId } from "./events.js"
+import { PlannedAttemptExecutorReportOrdinal } from "../planned-attempt-executor-work/events.js"
 
 const runId = RunId.make("attempt-choice-recovery-run")
 const taskId = TaskId.make("attempt-choice-recovery-task")
@@ -132,36 +115,7 @@ const appendChangedSafelySuspendedAttempt = Effect.fn("AttemptChoiceRecoveryTest
       attemptPlanRecordKey(plannedAttempt.attemptId),
       TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
     )
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
-    )
-    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-      PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "StartOrContinue",
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        ordinal: commandOrdinal,
-        plannedAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
-    const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
-      PlannedAttemptExecutorWorkReportedEvent.make({
-        ordinal: reportOrdinal,
-        report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
-          correlation: { attemptId: plannedAttempt.attemptId, runId }
-        }),
-        version: workflowJournalEventVersion
-      })
-    )
+    yield* appendAcceptedSafeExecutorHistory(plannedAttempt)
     const changedRead = makeTaskWorkSpecificationObservationOperation(
       OperationId.make("attempt-choice-recovery-observe-F2"),
       target,
@@ -193,7 +147,7 @@ it.effect("never claims the executor incorporated changed instructions", () =>
     const first = (yield* recovery.readDeliveryProjection).frontier
     const graph = first.transitions.find(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
     expect(graph).toMatchObject({ _tag: "ObservePlannedAttemptContinuationGraph", plannedAttempt })
-    expect(first.transitions.some(({ _tag }) => _tag === "ContinuePlannedAttemptExecutorWork")).toBe(false)
+    expect(first.transitions.some(({ _tag }) => _tag === "ObservePlannedAttemptExecutorWork")).toBe(false)
     if (graph?._tag !== "ObservePlannedAttemptContinuationGraph") return yield* Effect.die("missing graph read")
     yield* journal.append(runId, intentRecordKey(graph.operation.operationId), taskTrackerReadIntent(graph.operation))
     yield* journal.append(
@@ -304,8 +258,8 @@ it.effect("never claims the executor incorporated changed instructions", () =>
     )
 
     expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual({
-      _tag: "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts",
-      acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+      _tag: "ResumePlannedAttemptExecutorWorkAfterCurrentFacts",
+      acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(2) },
       plannedAttempt,
       witness: {
         activeTaskContinuationRead: {
@@ -313,30 +267,9 @@ it.effect("never claims the executor incorporated changed instructions", () =>
           taskClaimObservationOperationId: claim.operation.operationId,
           taskWorkSpecificationObservationOperationId: specification.operation.operationId
         },
+        targetLineageObservationOperationId: targetLineage.operation.operationId,
         worktreeObservationOperationId: worktree.operation.operationId
       }
-    })
-    const executorObservationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, executorObservationOrdinal),
-      PlannedAttemptExecutorStateObservedEvent.make({
-        observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
-          report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
-            correlation: { attemptId: plannedAttempt.attemptId, runId }
-          })
-        }),
-        occurrenceClassification: "NonActionOccurrence",
-        ordinal: executorObservationOrdinal,
-        plannedAttempt,
-        version: workflowJournalEventVersion
-      })
-    )
-
-    expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual({
-      _tag: "ObservePlannedAttemptContinuationGraph",
-      operation: expect.objectContaining({ _tag: "ReadTrackerGraph" }),
-      plannedAttempt
     })
     expect(plannedAttempt.taskRevision).toBe(plannedRevision)
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))

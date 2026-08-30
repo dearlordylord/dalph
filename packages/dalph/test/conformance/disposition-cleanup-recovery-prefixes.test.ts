@@ -100,14 +100,14 @@ const successor = PlannedTaskAttempt.make({
 const authorization = WorktreeCleanupAuthorization.make({
   causalPredecessors: replacementPredecessorsFor(attempt),
   disposition: PlannedAttemptCleanupDisposition.cases.Superseded.make({
-    dispositionAt: JournalPosition.make(19),
+    dispositionAt: JournalPosition.make(23),
     plannedAttempt: attempt,
     successorAttempt: successor
   }),
   evidenceRevision: WorktreeCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
   locator: attempt.worktree,
-  observationAt: JournalPosition.make(16),
+  observationAt: JournalPosition.make(20),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("disposition-cleanup:worktree:issue-69-recovery-p1"),
   owner: WorktreeCleanupOwner.make({ attemptId: attempt.attemptId, branch: attempt.branch }),
@@ -132,7 +132,7 @@ const branchAuthorization = BranchCleanupAuthorization.make({
   evidenceRevision: BranchCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
   locator: attempt.branch,
-  observationAt: JournalPosition.make(16),
+  observationAt: JournalPosition.make(20),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("disposition-cleanup:branch:issue-69-recovery-p1"),
   owner: BranchCleanupOwner.make({ attemptId: attempt.attemptId }),

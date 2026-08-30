@@ -15,6 +15,7 @@ import {
   TaskId,
   WorktreeLocator,
   makeTaskWorkSpecification,
+  passiveLifecycleObservationPurpose,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 
@@ -27,7 +28,7 @@ const contractShaLength = 40
 
 /** Shared executor boundary contract used by dry-run and Codex implementations. */
 export const plannedAttemptExecutorContract = <E>({ layer, name }: PlannedAttemptExecutorContractInput<E>): void => {
-  it.effect(`${name} PlannedAttemptExecutor reports running work and projects it exactly`, () =>
+  it.effect(`${name} PlannedAttemptExecutor begins once and projects the exact correlated work`, () =>
     Effect.gen(function* () {
       const specification = makeTaskWorkSpecification({
         body: "contract body",
@@ -47,17 +48,16 @@ export const plannedAttemptExecutorContract = <E>({ layer, name }: PlannedAttemp
       const request = PlannedAttemptExecutorRequest.make({ plannedAttempt: attempt, specification })
       const correlation = plannedAttemptExecutorCorrelation(attempt)
       const executor = yield* PlannedAttemptExecutor
-      expect(yield* executor.project(correlation)).toEqual(
+      expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
         PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
       )
-      expect(yield* executor.startOrContinue(request)).toEqual(
-        PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+      expect(yield* executor.begin(request)).toEqual(
+        PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
       )
-      expect(yield* executor.project(correlation)).toEqual(
-        PlannedAttemptExecutorProjection.cases.Exact.make({
-          report: PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-        })
-      )
+      const projection = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+      expect(projection._tag).toBe("Exact")
+      if (projection._tag !== "Exact") return yield* Effect.die("the executor must project the work it just began")
+      expect(projection.report.correlation).toEqual(correlation)
     }).pipe(Effect.provide(layer))
   )
 }

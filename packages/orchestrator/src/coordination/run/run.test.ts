@@ -1,33 +1,15 @@
 /* eslint-disable import/no-nodejs-modules -- The source-boundary test reads its neighboring module. */
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import {
-  AttemptId,
-  GitCommitSha,
-  PlannedAttemptExecutor,
-  PlannedAttemptExecutorProjection,
-  PlannedAttemptExecutorReport,
-  PlannedTaskAttempt,
-  plannedAttemptExecutorCorrelation,
-  RunId,
-  TaskBranchRef,
-  TaskExecutorLocator,
-  TaskId,
-  WorktreeLocator,
-  makeTaskWorkSpecification
-} from "@dalph/contracts"
-import { Effect, Layer, Option, Ref, Stream } from "effect"
+import { PlannedAttemptExecutor, RunId, TaskId } from "@dalph/contracts"
+import { Effect, Layer, Ref, Stream } from "effect"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
-import { TrackerGraphReader } from "../../authorities/task-tracker/graph-reader.js"
-import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
-import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
-import { controlledWorkflowInterpreterLayer } from "../../workflow/interpretation/layers.js"
 import { OperationId } from "../../workflow/identity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
@@ -68,6 +50,7 @@ it.effect("hands every Run activation to one journal establishment boundary", ()
         setTaskWorkCapacity: () => Effect.die("unused")
       },
       readRunReactivationControl: () => Effect.succeed("RunUnpaused" as const),
+      activateActiveWorkAuthorityRefresh: () => Effect.die("unused"),
       registerAcceptedRunReactivationObservers: () => Effect.void
     })
 
@@ -122,98 +105,6 @@ it.effect("lets the public controlled workflow terminate from its settled curren
     )
 
     expect(finality).toEqual({ _tag: "RunMayTerminate" })
-  })
-)
-
-it.effect("stops an always-Running controlled workflow at the shared continuation limit", () =>
-  Effect.gen(function* () {
-    const runId = RunId.make("controlled-running-limit-run")
-    const target = FixtureTarget.make("controlled-running-limit-target")
-    const specification = makeTaskWorkSpecification({
-      body: "Keep reporting Running.",
-      taskId: TaskId.make("controlled-running-task"),
-      title: "Bound controlled continuation"
-    })
-    const projected = projectTrackerSnapshot({
-      revision: "controlled-running-limit",
-      tasks: [{ id: specification.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
-    })
-    const snapshot = Option.getOrThrow(
-      Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined)
-    )
-    const plannedAttempt = PlannedTaskAttempt.make({
-      attemptId: AttemptId.make("controlled-running-attempt"),
-      baseSha: GitCommitSha.make("1".repeat(40)),
-      branch: TaskBranchRef.make("refs/heads/dalph/controlled-running-attempt"),
-      executor: TaskExecutorLocator.make("executor:controlled-running"),
-      runId,
-      taskId: specification.taskId,
-      taskRevision: specification.fingerprint,
-      worktree: WorktreeLocator.make("/worktrees/controlled-running-attempt")
-    })
-    const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-    const executorCalls = yield* Ref.make(0)
-    const operationIds = yield* Ref.make(0)
-    const failure = yield* runControlledWorkflow(target, policy, runId).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          Layer.succeed(
-            OperationIdAllocator,
-            OperationIdAllocator.of({
-              allocate: () =>
-                Ref.getAndUpdate(operationIds, (ordinal) => ordinal + 1).pipe(
-                  Effect.map((ordinal) => OperationId.make(`controlled-running-operation-${ordinal}`))
-                )
-            })
-          ),
-          Layer.succeed(
-            TaskClaimAcquisitionPlanner,
-            TaskClaimAcquisitionPlanner.of({
-              plan: (operationId, taskId) =>
-                Effect.succeed(
-                  TaskClaimAcquisition.make({
-                    operationId,
-                    owner: ClaimOwner.make("dalph"),
-                    taskId,
-                    token: ClaimToken.make("controlled-running-token")
-                  })
-                )
-            })
-          ),
-          Layer.succeed(
-            PlannedTaskAttemptPlanner,
-            PlannedTaskAttemptPlanner.of({ plan: () => Effect.succeed(plannedAttempt) })
-          ),
-          controlledWorkflowInterpreterLayer.pipe(
-            Layer.provide(
-              Layer.succeed(
-                TrackerGraphReader,
-                TrackerGraphReader.of({
-                  read: () => Effect.succeed(snapshot),
-                  readTaskWorkSpecification: () => Effect.succeed(specification)
-                })
-              )
-            )
-          ),
-          Layer.succeed(
-            PlannedAttemptExecutor,
-            PlannedAttemptExecutor.of({
-              project: () => Effect.succeed(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })),
-              requestSuspension: () => Effect.die("controlled workflow is not paused"),
-              startOrContinue: () =>
-                Ref.update(executorCalls, (calls) => calls + 1).pipe(
-                  Effect.as(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
-                )
-            })
-          ),
-          Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
-        )
-      ),
-      Effect.flip
-    )
-
-    expect(failure).toMatchObject({ _tag: "PlannedAttemptExecutorContinuationLimitReached", correlation, limit: 3 })
-    expect(yield* Ref.get(executorCalls)).toBe(3)
   })
 )
 

@@ -102,8 +102,18 @@ module taskFactChoiceProofNegativeTest {
   }
 }
 
-module taskFactStopProofNegativeTest {
-  import taskFactStopProof.* from "./taskFactReconciliation_proof"
+module historicalTaskFactStopRecoveryProofNegativeTest {
+  import historicalTaskFactStopRecoveryProof.* from "./taskFactReconciliation_proof"
+
+  action acceptExecutingWithoutHistoricalCommandReport: bool = all {
+    state.stage == NeedQuiescence,
+    state' = {
+      ...state,
+      evidence: ExactRunning,
+      quiescenceUnbroken: false,
+      positionHeld: true,
+    },
+  }
 
   action abandonWhileRunning: bool = all {
     state.stopApplied,
@@ -145,15 +155,22 @@ module taskFactStopProofNegativeTest {
   run abandonmentWithoutQuiescenceIsDetectedTest = {
     init
       .then(applyStop)
-      .then(breakRetainedSafeProof)
+      .then(acceptHistoricalExecutingAfterStartOrContinue)
       .then(abandonWhileRunning)
       .expect(not(abandonmentRequiresExactUnbrokenQuiescence))
+  }
+
+  run historicalExecutingWithoutCommandReportIsDetectedTest = {
+    init
+      .then(applyStop)
+      .then(acceptExecutingWithoutHistoricalCommandReport)
+      .expect(not(historicalExecutingRequiresAcceptedCommandReport))
   }
 
   run claimReleaseWhileWriterUnprovedIsDetectedTest = {
     init
       .then(applyStop)
-      .then(breakRetainedSafeProof)
+      .then(acceptHistoricalExecutingAfterStartOrContinue)
       .then(releaseClaimWhileWriterUnproved)
       .expect(not(unprovedWriterRetainsPositionAndClaim))
   }
@@ -168,7 +185,7 @@ module taskFactStopProofNegativeTest {
   run fourthStopIntentIsDetectedTest = {
     init
       .then(applyStop)
-      .then(breakRetainedSafeProof)
+      .then(acceptHistoricalExecutingAfterStartOrContinue)
       .then(recordStopIntent)
       .then(callStop)
       .then(loseStopResponse)
@@ -274,5 +291,179 @@ module taskFactClaimProofNegativeTest {
     init
       .then(disableIndependentTask)
       .expect(not(unrelatedTaskRemainsEligible))
+  }
+}
+
+module taskFactActiveRefreshProofNegativeTest {
+  import taskFactActiveRefreshProof.* from "./taskFactReconciliation_proof"
+
+  action conflateActiveUnreadableWithOrdinarySuspension: bool = all {
+    state.lastEvent == ActiveRefreshUnreadableObserved,
+    state' = {
+      ...state,
+      decision: RequestSafeSuspension,
+      constraint: UnreadableClaimConstraint,
+      executorAction: SuspendExecutor,
+    },
+  }
+
+  action authorizeContinueAfterHealthyRefresh: bool = all {
+    state.lastEvent == ActiveRefreshHealthyObserved,
+    state' = { ...state, decision: ContinueWork },
+  }
+
+  action releasePositionWhileStillRunning: bool = all {
+    state.evidence == ExactRunning,
+    state' = { ...state, positionHeld: false },
+  }
+
+  action reestablishWithStaleActiveRefreshProvenance: bool = all {
+    state.lastEvent == LifecycleReopened,
+    state.evidence == ExactSafelySuspended,
+    state.decision == ContinueWork,
+    state.constraint == NoConstraint,
+    state.purpose == ActiveRefreshRead,
+    state.refreshSource == Timer,
+    state' = {
+      ...state,
+      evidence: ExactRunning,
+      executorAction: NoExecutorAction,
+      positionHeld: true,
+      lastEvent: ActiveWorkRunningEstablished,
+    },
+  }
+
+  action reestablishWithStaleActiveReadPurpose: bool = all {
+    state.lastEvent == LifecycleReopened,
+    state.evidence == ExactSafelySuspended,
+    state.decision == ContinueWork,
+    state.constraint == NoConstraint,
+    state.purpose == ActiveRefreshRead,
+    state.refreshSource == Timer,
+    state' = {
+      ...state,
+      purpose: ActiveRefreshRead,
+      refreshSource: NoRefreshSource,
+      evidence: ExactRunning,
+      executorAction: NoExecutorAction,
+      positionHeld: true,
+      lastEvent: ActiveWorkRunningEstablished,
+    },
+  }
+
+  action reestablishWithStaleRefreshSource: bool = all {
+    state.lastEvent == LifecycleReopened,
+    state.evidence == ExactSafelySuspended,
+    state.decision == ContinueWork,
+    state.constraint == NoConstraint,
+    state.purpose == ActiveRefreshRead,
+    state.refreshSource == Timer,
+    state' = {
+      ...state,
+      purpose: OrdinaryRead,
+      refreshSource: Timer,
+      evidence: ExactRunning,
+      executorAction: NoExecutorAction,
+      positionHeld: true,
+      lastEvent: ActiveWorkRunningEstablished,
+    },
+  }
+
+  action offerBeforeRunningEstablishment: bool = all {
+    state.lastEvent == Initialized,
+    state' = {
+      ...state,
+      purpose: ActiveRefreshRead,
+      decision: ContinueWork,
+      evidence: ExactRunning,
+      refreshSource: TrackerNotification,
+      positionHeld: true,
+      lastEvent: ActiveRefreshOffered,
+    },
+  }
+
+  action offerFromUnknownSource: bool = all {
+    state.lastEvent == ActiveWorkRunningEstablished,
+    state' = {
+      ...state,
+      purpose: ActiveRefreshRead,
+      decision: ContinueWork,
+      evidence: ExactRunning,
+      refreshSource: NoRefreshSource,
+      positionHeld: true,
+      lastEvent: ActiveRefreshOffered,
+    },
+  }
+
+  run activeUnreadableSuspensionConflationIsDetectedTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerTrackerRefresh)
+      .then(observeUnreadableActiveRefresh)
+      .then(conflateActiveUnreadableWithOrdinarySuspension)
+      .expect(not(activeRefreshUnreadableAuthorizesNoExecutorAction))
+  }
+
+  run healthyRefreshContinuationAuthorizationIsDetectedTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerTrackerRefresh)
+      .then(observeHealthyActiveRefresh)
+      .then(authorizeContinueAfterHealthyRefresh)
+      .expect(not(healthyActiveRefreshAuthorizesNoExecutorAction))
+  }
+
+  run runningPositionReleaseIsDetectedTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerTrackerRefresh)
+      .then(releasePositionWhileStillRunning)
+      .expect(not(positionReleasesOnlyOnExactSafeEvidence))
+  }
+
+  run staleRefreshProvenanceOnReestablishmentIsDetectedTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerTimerRefresh)
+      .then(observeLifecycleClosure)
+      .then(reportSafelySuspended)
+      .then(observeFreshLifecycleReopen)
+      .then(reestablishWithStaleActiveRefreshProvenance)
+      .expect(not(runningEstablishmentRetainsAuthority))
+  }
+
+  run staleActiveReadPurposeOnReestablishmentIsDetectedTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerTimerRefresh)
+      .then(observeLifecycleClosure)
+      .then(reportSafelySuspended)
+      .then(observeFreshLifecycleReopen)
+      .then(reestablishWithStaleActiveReadPurpose)
+      .expect(not(runningEstablishmentRetainsAuthority))
+  }
+
+  run staleRefreshSourceOnReestablishmentIsDetectedTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerTimerRefresh)
+      .then(observeLifecycleClosure)
+      .then(reportSafelySuspended)
+      .then(observeFreshLifecycleReopen)
+      .then(reestablishWithStaleRefreshSource)
+      .expect(not(runningEstablishmentRetainsAuthority))
+  }
+
+  run activeOfferBeforeRunningEstablishmentIsDetectedTest = {
+    init
+      .then(offerBeforeRunningEstablishment)
+      .expect(not(activeRefreshOfferRequiresRunningEstablished))
+  }
+
+  run activeOfferFromUnknownSourceIsDetectedTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerFromUnknownSource)
+      .expect(not(activeRefreshSourceIsTrackerOrTimer))
   }
 }

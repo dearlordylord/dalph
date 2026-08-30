@@ -66,7 +66,11 @@ import {
   makeTargetLineageObservationOperation,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   TargetLineageObservation,
@@ -190,15 +194,15 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
   const candidateText = IntegratorCandidateText.make(fixture.qualifiedCandidate.candidateText)
   const session = IntegratorSessionCorrelation.make({
     ...fixture.qualifiedCandidate.run.session,
-    queuedAt: JournalPosition.make(8),
-    startedAt: JournalPosition.make(9),
-    targetLineageObservedAt: JournalPosition.make(11)
+    queuedAt: JournalPosition.make(11),
+    startedAt: JournalPosition.make(12),
+    targetLineageObservedAt: JournalPosition.make(14)
   })
   const integratorRun = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
   const candidate = IntegratorRunQualifiedCandidate.make({
     ...fixture.qualifiedCandidate,
     candidateText,
-    qualifiedAt: JournalPosition.make(16),
+    qualifiedAt: JournalPosition.make(19),
     run: integratorRun
   })
   const correlation = targetPromotionCorrelationFor(candidate)
@@ -230,8 +234,15 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
     position: JournalPosition.make(position),
     runId: fixture.runId
   })
+  const terminalReport = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+    correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId },
+    result: { _tag: "Accepted", acceptedResult: session.acceptedResult }
+  })
+  const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+    correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId }
+  })
   const stale = record(
-    19,
+    22,
     TargetPromotionStaleEvent.make({
       basis: TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal }),
       correlation,
@@ -271,7 +282,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
     record(
       6,
       PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "StartOrContinue",
+        command: "Begin",
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
@@ -281,17 +292,42 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
     ),
     record(
       7,
-      PlannedAttemptExecutorWorkReportedEvent.make({
-        ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-        report: PlannedAttemptExecutorReport.cases.Terminal.make({
-          correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId },
-          result: { _tag: "Accepted", acceptedResult: session.acceptedResult }
-        }),
+      PlannedAttemptExecutorCommandResponseObservedEvent.make({
+        commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt: fixture.plannedAttempt,
+        report: executingReport,
         version: workflowJournalEventVersion
       })
     ),
     record(
       8,
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+        report: executingReport,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      9,
+      PlannedAttemptExecutorStateObservedEvent.make({
+        observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: terminalReport }),
+        occurrenceClassification: "NonActionOccurrence",
+        ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+        plannedAttempt: fixture.plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      10,
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+        report: terminalReport,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      11,
       IntegrationResponsibilityBeganEvent.make({
         acceptedResult: session.acceptedResult,
         integrationTarget: fixture.integrationTarget,
@@ -300,17 +336,17 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      9,
+      12,
       IntegrationStartedEvent.make({
         acceptedResult: session.acceptedResult,
         integrationTarget: fixture.integrationTarget,
         plannedAttempt: fixture.plannedAttempt,
-        responsibilityBeganAt: JournalPosition.make(8),
+        responsibilityBeganAt: JournalPosition.make(11),
         version: workflowJournalEventVersion
       })
     ),
     record(
-      10,
+      13,
       GitReadIntentRecordedEvent.make({
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
@@ -319,7 +355,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      11,
+      14,
       TargetLineageObservedEvent.make({
         observation: TargetLineageObservation.make({
           plannedBaseIsAncestorOfTargetHead: true,
@@ -332,10 +368,10 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
         version: workflowJournalEventVersion
       })
     ),
-    record(12, IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })),
-    record(13, IntegratorRunStartedEvent.make({ run: integratorRun, version: workflowJournalEventVersion })),
+    record(15, IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })),
+    record(16, IntegratorRunStartedEvent.make({ run: integratorRun, version: workflowJournalEventVersion })),
     record(
-      14,
+      17,
       IntegratorRunResultRecordedEvent.make({
         result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: integratorRun }),
         run: integratorRun,
@@ -343,7 +379,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      15,
+      18,
       IntegratorRunCandidateGitReadIntendedEvent.make({
         candidateText,
         run: integratorRun,
@@ -351,7 +387,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      16,
+      19,
       IntegratorRunCandidateGitObservedEvent.make({
         candidateText,
         observation: IntegratorGitObservation.cases.Commit.make({
@@ -363,9 +399,9 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
         version: workflowJournalEventVersion
       })
     ),
-    record(17, TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })),
+    record(20, TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })),
     record(
-      18,
+      21,
       TargetPromotionAttemptIntendedEvent.make({
         attemptOrdinal,
         correlation,
@@ -375,7 +411,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
     ),
     stale,
     record(
-      20,
+      23,
       IntegrationQuarantinedEvent.make({
         basis: quarantineBasis,
         correlation: session,

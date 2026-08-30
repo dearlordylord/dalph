@@ -38,11 +38,21 @@ collected deterministic and negative tests, sampled invariant/witness check,
 and complete finite-state verification with no arbitrary depth token.
 
 The current proof projections are `taskFactReconciliation_proof.qnt` and
-`plannedAttemptExecutor_proof.qnt`. Their negative test modules are the mutation
+`plannedAttemptExecutor_proof.qnt`. The task-fact projection includes the
+accepted #218/#281 active-work slice: it separately proves `Running`
+establishment, tracker/timer source provenance, and healthy/unreadable
+observation behavior. Their negative test modules are the mutation
 controls for the collapsed proof state: each performs a forbidden transition
 and proves that the corresponding projected invariant turns red. The canonical
 models remain in the token-mutation census because they own runtime vocabulary
 and production-backed MBT.
+
+The active-work proof names source provenance because a tracker notification or
+timer is only an offer to reread current authority. A successful Git read keeps
+that source process-local; a typed Git read failure is the durable non-action
+outcome. The proof projection therefore checks the source-sensitive transition
+and its ordinary-unreadable negative control, while the runtime journal tests
+the exact read identity and ordinal chronology.
 
 Invariant and witness names are explicit gate inputs. The canonical
 `plannedAttemptExecutor` and `taskFactReconciliation` lists live in

@@ -16,6 +16,23 @@ module taskFactReconciliationTest {
       .expect(state.factDecision == ContinueWork and changedFactsPreserveWip)
   }
 
+  run lifecycleReopenReestablishmentResetsRefreshProvenanceTest = {
+    init
+      .then(establishRunningAttemptForActiveRefresh)
+      .then(offerActiveWorkAuthorityRefreshFromTimer)
+      .then(observeLifecycleClosure)
+      .then(reportSafelySuspended)
+      .then(observeFreshLifecycleReopen)
+      .then(establishRunningAttemptForActiveRefresh)
+      .expect(and {
+        activeWorkRunningEstablishmentRetainsAuthority,
+        state.authorityReadPurpose == OrdinaryContinuationRead,
+        state.refreshSource == NoRefreshSource,
+        state.executorEvidence == ExactExecuting,
+        state.positionHeld,
+      })
+  }
+
   run membershipLossWaitsAfterSafeSuspensionTest = {
     init
       .then(observeMembershipLoss)
@@ -86,6 +103,57 @@ module taskFactReconciliationTest {
         unreadableClaimCannotAuthorizeReplacement,
         state.exactClaimHeld,
         state.independentTaskSelected,
+      })
+  }
+
+  run activeRefreshUnreadableDoesNotSuspendOrContinueTest = {
+    init
+      .then(establishRunningAttemptForActiveRefresh)
+      .then(offerActiveWorkAuthorityRefreshFromTrackerNotification)
+      .then(observeUnreadableClaimDuringActiveRefresh)
+      .expect(and {
+        activeRefreshUnreadableAuthorizesNoExecutorAction,
+        state.factDecision == AwaitNextActiveWorkRefresh,
+        state.constraint == NoConstraint,
+        state.executorEvidence == ExactExecuting,
+        state.positionHeld,
+        state.implementationResponsibilityRetained,
+      })
+      .then(selectIndependentTaskB)
+      .expect(and {
+        state.factDecision == AwaitNextActiveWorkRefresh,
+        state.independentTaskSelected,
+    })
+  }
+
+  run activeRefreshHealthyDoesNotAuthorizeAnotherExecutorActionTest = {
+    init
+      .then(establishRunningAttemptForActiveRefresh)
+      .expect(activeWorkRunningEstablishmentRetainsAuthority)
+      .then(offerActiveWorkAuthorityRefreshFromTimer)
+      .then(observeHealthyActiveWorkRefresh)
+      .expect(and {
+        healthyActiveRefreshAuthorizesNoExecutorAction,
+        state.factDecision == AwaitNextActiveWorkRefresh,
+        state.constraint == NoConstraint,
+        state.executorEvidence == ExactExecuting,
+        state.positionHeld,
+        state.implementationResponsibilityRetained,
+    })
+  }
+
+  run activeRefreshGitFailuresRemainUnreadableAndNoActionTest = {
+    init
+      .then(establishRunningAttemptForActiveRefresh)
+      .then(offerActiveWorkAuthorityRefreshFromTrackerNotification)
+      .then(observeActiveRefreshGitFailures)
+      .expect(and {
+        activeRefreshGitFailuresAuthorizeNoExecutorAction,
+        state.factDecision == AwaitNextActiveWorkRefresh,
+        state.constraint == NoConstraint,
+        state.executorEvidence == ExactExecuting,
+        state.positionHeld,
+        state.implementationResponsibilityRetained,
       })
   }
 
@@ -238,23 +306,290 @@ module taskFactReconciliationTest {
       })
   }
 
-  run terminalAfterAppliedStopCanProveStoppageTest = {
+  run stopCancelsAdmittedUnissuedResumeBeforeExecutorContactTest = {
+    init
+      .then(observeF2Change)
+      .then(admitHeldResumeBeforeTerminalChoice)
+      .then(applyStopF2)
+      .expect(and {
+        not(state.heldResumeAdmitted),
+        state.heldResumeCancellationCount == 1,
+        state.resumeBoundaryCallCount == 0,
+        state.executorEvidence == ExactSafelySuspended,
+        terminalChoiceBlocksResumeWhileLifecycleEvidenceRemains,
+      })
+      .then(admitSameAttemptP.fail())
+  }
+
+  run restartCancelsAdmittedUnissuedResumeBeforeExecutorContactTest = {
+    init
+      .then(observeF2Change)
+      .then(admitHeldResumeBeforeTerminalChoice)
+      .then(applyRestartF2)
+      .expect(and {
+        not(state.heldResumeAdmitted),
+        state.heldResumeCancellationCount == 1,
+        state.resumeBoundaryCallCount == 0,
+        state.executorEvidence == ExactSafelySuspended,
+        terminalChoiceBlocksResumeWhileLifecycleEvidenceRemains,
+      })
+      .then(admitSameAttemptP.fail())
+  }
+
+  run settledUnchangedSafeResumeConsumesTerminalChoiceAuthorityTest = {
+    init
+      .then(observeF2Change)
+      .then(settleResumeWithUnchangedSafe)
+      .expect(and {
+        state.executorEvidence == ExactSafelySuspended,
+        state.resumeCommandIntentCount == 1,
+        state.resumeBoundaryCallCount == 1,
+        resumeSettledUnchangedSafeReached,
+      })
+      .then(applyStopF2.fail())
+  }
+
+  run settledUnchangedSafeResumeConsumesRestartAuthorityTest = {
+    init
+      .then(observeF2Change)
+      .then(settleResumeWithUnchangedSafe)
+      .then(applyRestartF2.fail())
+  }
+
+  run terminalAfterStopIsAbsorbingAndIntegratesNormallyTest = {
     init
       .then(observeF2Change)
       .then(applyStopF2)
-      .then(requireStoppageReconciliation)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(recoverStopActivation)
-      .then(projectExactTerminalForStoppage)
-      .then(abandonImplementation)
+      .then(observeExactTerminal)
       .expect(and {
-        state.executorEvidence == ExactTerminal,
-        not(state.implementationResponsibilityRetained),
-        not(state.positionHeld),
-        abandonmentRequiresExactUnbrokenQuiescence,
+        state.stopStage == NeedQuiescence,
+        state.implementationResponsibilityRetained,
+        not(state.replacementEventRecorded),
+        acceptedTerminalIsAbsorbing,
+        terminalChoiceBlocksResumeWhileLifecycleEvidenceRemains,
       })
+      .then(beginIntegration)
+      .expect(and { state.integrationSelected, stopNeverSelectsIntegration })
+  }
+
+  run terminalAfterRestartIsAbsorbingAndIntegratesNormallyTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(observeExactTerminal)
+      .expect(and {
+        state.replacementPhase == RestartApplied,
+        state.implementationResponsibilityRetained,
+        not(state.replacementEventRecorded),
+        acceptedTerminalIsAbsorbing,
+        terminalChoiceBlocksResumeWhileLifecycleEvidenceRemains,
+      })
+      .then(beginIntegration)
+      .expect(and { state.integrationSelected, restartNeverSelectsIntegration })
+  }
+
+  run terminalAfterStopCannotAbandonImplementationTest = {
+    init
+      .then(observeF2Change)
+      .then(applyStopF2)
+      .then(observeExactTerminal)
+      .then(abandonImplementation.fail())
+  }
+
+  run terminalCannotBeAcceptedAfterStopAlreadyAbandonedTest = {
+    init
+      .then(observeF2Change)
+      .then(applyStopF2)
+      .then(abandonImplementation)
+      .then(observeExactTerminal.fail())
+  }
+
+  run terminalAfterRestartCannotBeginReplacementTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(observeExactTerminal)
+      .then(beginReplacementFactsFromRetainedSafeSuspension.fail())
+  }
+
+  run terminalAfterRestartAuthorizationBeganBlocksExactTaskFactsTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeExactTerminal)
+      .then(observeReplacementExactF2TaskFacts.fail())
+  }
+
+  run terminalAfterRestartAuthorizationBeganBlocksChangedTaskFactsTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeExactTerminal)
+      .then(observeReplacementF3TaskFacts.fail())
+  }
+
+  run terminalAfterRestartAuthorizationBeganBlocksUnreadableTaskFactsTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeExactTerminal)
+      .then(observeReplacementTaskFactsUnreadable.fail())
+  }
+
+  run terminalAfterRestartAuthorizationBeganBlocksIneligibleTaskFactsTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeExactTerminal)
+      .then(observeReplacementTaskNotEligible.fail())
+  }
+
+  run terminalAfterRestartTaskFactsReadBlocksExactClaimTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeExactTerminal)
+      .then(observeReplacementExactK1.fail())
+  }
+
+  run terminalAfterRestartTaskFactsReadBlocksAbsentClaimTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeExactTerminal)
+      .then(observeReplacementClaimAbsent.fail())
+  }
+
+  run terminalAfterRestartTaskFactsReadBlocksForeignClaimTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeExactTerminal)
+      .then(observeReplacementClaimForeign.fail())
+  }
+
+  run terminalAfterRestartTaskFactsReadBlocksUnreadableClaimTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeExactTerminal)
+      .then(observeReplacementClaimUnreadable.fail())
+  }
+
+  run terminalAfterRestartTaskFactsReadBlocksBoundedUnreadableClaimTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeExactTerminal)
+      .then(observeReplacementClaimUnreadableBounded.fail())
+  }
+
+  run terminalAfterRestartTaskFactsReadBlocksClaimReadRecoveryTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementClaimUnreadable)
+      .then(observeExactTerminal)
+      .then(recoverReplacementClaimReadActivation.fail())
+  }
+
+  run terminalAfterRestartClaimReadBlocksReadyWorktreeTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeExactTerminal)
+      .then(observeReplacementExactW1Ready.fail())
+  }
+
+  run terminalAfterRestartClaimReadBlocksUnreadyWorktreeTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeExactTerminal)
+      .then(observeReplacementW1NotReady.fail())
+  }
+
+  run terminalAfterRestartClaimReadBlocksUnreadableWorktreeTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeExactTerminal)
+      .then(observeReplacementW1Unreadable.fail())
+  }
+
+  run terminalAfterRestartWorktreeReadBlocksExactTargetTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeReplacementExactW1Ready)
+      .then(observeExactTerminal)
+      .then(observeReplacementExactH2.fail())
+  }
+
+  run terminalAfterRestartWorktreeReadBlocksUnreadableTargetTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeReplacementExactW1Ready)
+      .then(observeExactTerminal)
+      .then(observeReplacementH2Unreadable.fail())
+  }
+
+  run terminalAfterRestartTargetReadBlocksAbsentAppendRecoveryTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeReplacementExactW1Ready)
+      .then(observeReplacementExactH2)
+      .then(observeExactTerminal)
+      .then(recoverReplacementAppendAbsent.fail())
+  }
+
+  run terminalAfterRestartTargetReadBlocksReplacementAppendTest = {
+    init
+      .then(observeF2Change)
+      .then(applyRestartF2)
+      .then(beginReplacementFactsFromRetainedSafeSuspension)
+      .then(observeReplacementExactF2TaskFacts)
+      .then(observeReplacementExactK1)
+      .then(observeReplacementExactW1Ready)
+      .then(observeReplacementExactH2)
+      .then(observeExactTerminal)
+      .then(recordPlannedAttemptReplacement.fail())
   }
 
   run terminalObservationAloneExposesNeitherChoiceTest = {
@@ -262,72 +597,6 @@ module taskFactReconciliationTest {
       .then(observeF2Change)
       .then(observeExactTerminal)
       .expect(terminalObservationAloneExposesNoChoice)
-  }
-
-  run projectedRunningSettlesIntentButNeverProvesQuiescenceTest = {
-    init
-      .then(observeF2Change)
-      .then(applyStopF2)
-      .then(requireStoppageReconciliation)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(recoverStopActivation)
-      .then(projectExactRunningForStoppage)
-      .expect(and {
-        state.stopCommandSettlementCount == 1,
-        state.lastSettledStopCommandOrdinal == 2,
-        state.stopStage == NeedQuiescence,
-        state.implementationResponsibilityRetained,
-        state.positionHeld,
-        projectedRunningSettlesOnlyItsIntent,
-      })
-      .then(recoverStopActivation)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(projectExactSafeForStoppage)
-      .then(abandonImplementation)
-      .expect(and {
-        state.stopCommandSettlementCount == 2,
-        not(state.implementationResponsibilityRetained),
-        abandonmentRequiresExactUnbrokenQuiescence,
-      })
-  }
-
-  run threeRunningStoppageCallsStillAllowLaterReadOnlySafeProofTest = {
-    init
-      .then(observeF2Change)
-      .then(applyStopF2)
-      .then(requireStoppageReconciliation)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(recoverStopActivation)
-      .then(projectExactRunningForStoppage)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(recoverStopActivation)
-      .then(projectExactRunningForStoppage)
-      .then(recordStoppageIntent)
-      .then(callStoppage)
-      .then(loseStoppageResponse)
-      .then(recoverStopActivation)
-      .then(projectExactRunningForStoppage)
-      .expect(and {
-        state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
-        state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
-        state.stopCommandSettlementCount == STOP_COMMAND_LIMIT,
-        stoppageLimitPreservesReadOnlyRecovery,
-      })
-      .then(recoverStopActivation)
-      .then(projectReadOnlyExactSafeAfterStoppageLimit)
-      .expect(and {
-        not(state.implementationResponsibilityRetained),
-        not(state.positionHeld),
-        abandonmentRequiresExactUnbrokenQuiescence,
-      })
   }
 
   run stopReleasesOnlyFreshlyConfirmedExactClaimTest = {
@@ -543,7 +812,7 @@ module taskFactReconciliationTest {
       })
       .then(startSuccessorExecutor)
       .expect(and {
-        state.replacementPhase == SuccessorRunning,
+        state.replacementPhase == SuccessorExecuting,
         state.successorExecutorStartCount == 1,
         state.successorExecutorResponsibilityRetained,
         successorUsesOrdinaryBoundedAdmission,
@@ -610,163 +879,6 @@ module taskFactReconciliationTest {
       .expect(successorUsesOrdinaryBoundedAdmission)
   }
 
-  run brokenSafeProofCanUseExactSafeReportThenFreshFactsTest = {
-    init
-      .then(observeF2Change)
-      .then(applyRestartF2)
-      .then(beginReplacementFactsFromRetainedSafeSuspension)
-      .then(observeReplacementExactF2TaskFacts)
-      .then(breakRestartSafeSuspension)
-      .expect(and {
-        state.replacementPhase == NeedCurrentExecutorQuiescence,
-        state.replacementTaskFacts == ReplacementTaskFactsNotRead,
-        state.positionHeld,
-        stoppageCallsHaveExactDurableIntents,
-      })
-      .then(observeRestartSafelySuspended)
-      .then(observeReplacementExactF2TaskFacts)
-      .then(observeReplacementExactK1)
-      .then(observeReplacementExactW1Ready)
-      .then(observeReplacementExactH2)
-      .then(recordPlannedAttemptReplacement)
-      .expect(and {
-        state.executorEvidence == ExactSafelySuspended,
-        state.replacementEventRecorded,
-        stoppageCallsHaveExactDurableIntents,
-        plannedAttemptReplacementRequiresExactCurrentEvidence,
-      })
-  }
-
-  run lateAcceptedPreservesEvidenceSkipsIntegrationAndUsesFreshFactsTest = {
-    init
-      .then(observeF2Change)
-      .then(applyRestartF2)
-      .then(beginReplacementFactsFromRetainedSafeSuspension)
-      .then(observeReplacementExactF2TaskFacts)
-      .then(breakRestartSafeSuspension)
-      .then(observeRestartAccepted)
-      .expect(and {
-        state.executorEvidence == ExactAcceptedTerminal,
-        state.lateAcceptedCommitPreserved,
-        state.lateAcceptedEvidencePreserved,
-        not(state.implementationResponsibilityRetained),
-        state.replacementTaskFacts == ReplacementTaskFactsNotRead,
-        state.lateAcceptedIntegrationResponsibilityCount == 0,
-        lateAcceptedNeverCreatesIntegrationResponsibility,
-      })
-      .then(observeReplacementExactF2TaskFacts)
-      .then(observeReplacementExactK1)
-      .then(observeReplacementExactW1Ready)
-      .then(observeReplacementExactH2)
-      .then(recordPlannedAttemptReplacement)
-      .expect(and {
-        state.replacementEventRecorded,
-        state.plannedSuccessor == PlannedP2,
-        state.lateAcceptedCommitPreserved,
-        state.lateAcceptedIntegrationResponsibilityCount == 0,
-        plannedAttemptReplacementRequiresExactCurrentEvidence,
-        restartNeverSelectsIntegration,
-      })
-  }
-
-  run runningWriterKeepsP1AndLetsIndependentCContinueTest = {
-    init
-      .then(observeF2Change)
-      .then(applyRestartF2)
-      .then(breakRestartSafeSuspension)
-      .then(observeRestartRunning)
-      .then(selectIndependentTaskB)
-      .expect(and {
-        state.replacementPhase == ReplacementWaiting,
-        state.replacementDisposition == RunningWriterWait,
-        state.implementationResponsibilityRetained,
-        state.p1Unsettled,
-        state.positionHeld,
-        not(state.replacementEventRecorded),
-        state.independentTaskSelected,
-        stoppageCallsHaveExactDurableIntents,
-        nonAuthorizingExecutorEvidenceNeverRecordsReplacement,
-      })
-  }
-
-  run restartSuspensionLimitUsesReadOnlySafeEvidenceTest = {
-    init
-      .then(observeF2Change)
-      .then(applyRestartF2)
-      .then(breakRestartSafeSuspension)
-      .then(observeRestartRunning)
-      .then(observeRestartRunning)
-      .then(observeRestartRunning)
-      .expect(and {
-        state.replacementPhase == ReplacementWaiting,
-        state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
-        state.suspensionCommandCountSinceSafeEvidence == STOP_COMMAND_LIMIT,
-        stoppageCallsHaveExactDurableIntents,
-        stoppageIsBounded,
-      })
-      .then(observeRestartSafelySuspended)
-      .expect(and {
-        state.replacementPhase == NeedCurrentReplacementTaskFacts,
-        state.executorEvidence == ExactSafelySuspended,
-        state.stopCommandIntentCount == STOP_COMMAND_LIMIT,
-        state.stopCommandSettlementCount == STOP_COMMAND_LIMIT,
-        state.suspensionCommandCountSinceSafeEvidence == 0,
-        stoppageCallsHaveExactDurableIntents,
-        stoppageIsBounded,
-      })
-  }
-
-  run completedTerminalEndsOnlyP1ExecutorWorkWithoutReplacementTest = {
-    init
-      .then(observeF2Change)
-      .then(applyRestartF2)
-      .then(breakRestartSafeSuspension)
-      .then(observeRestartCompleted)
-      .expect(and {
-        state.replacementDisposition == CompletedDoesNotAuthorizeReplacement,
-        state.completedResultPreserved,
-        not(state.implementationResponsibilityRetained),
-        not(state.replacementEventRecorded),
-        replacementTerminalOutcomesRemainDistinct,
-        nonAuthorizingExecutorEvidenceNeverRecordsReplacement,
-      })
-  }
-
-  run failedTerminalEndsOnlyP1ExecutorWorkWithoutReplacementTest = {
-    init
-      .then(observeF2Change)
-      .then(applyRestartF2)
-      .then(breakRestartSafeSuspension)
-      .then(observeRestartFailed)
-      .expect(and {
-        state.replacementDisposition == FailedDoesNotAuthorizeReplacement,
-        state.failedResultPreserved,
-        not(state.implementationResponsibilityRetained),
-        not(state.replacementEventRecorded),
-        replacementTerminalOutcomesRemainDistinct,
-        nonAuthorizingExecutorEvidenceNeverRecordsReplacement,
-      })
-  }
-
-  run unreadableOrContradictoryExecutorCannotAuthorizeReplacementTest = {
-    init
-      .then(observeF2Change)
-      .then(applyRestartF2)
-      .then(breakRestartSafeSuspension)
-      .then(observeRestartExecutorUnavailable)
-      .expect(and {
-        state.replacementDisposition == ExecutorUnreadableWait,
-        not(state.replacementEventRecorded),
-        nonAuthorizingExecutorEvidenceNeverRecordsReplacement,
-      })
-      .then(observeRestartExecutorContradiction)
-      .expect(and {
-        state.replacementDisposition == ExecutorCorrelationContradiction,
-        not(state.replacementEventRecorded),
-        nonAuthorizingExecutorEvidenceNeverRecordsReplacement,
-      })
-  }
-
   run F3AfterAppliedRestartRequiresNewChoiceAndRecordsNoP2Test = {
     init
       .then(observeF2Change)
@@ -784,6 +896,7 @@ module taskFactReconciliationTest {
         state.plannedSuccessor == NoPlannedSuccessor,
         changedAgainRequiresNewChoice,
       })
+      .then(applyContinueF3.fail())
   }
 
   run unreadableOrNoneligibleTaskFactsRecordNoP2Test = {

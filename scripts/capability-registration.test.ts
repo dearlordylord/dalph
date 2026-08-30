@@ -313,7 +313,7 @@ describe("capability registration gate", () => {
     )
   })
 
-  it("rejects alternate, empty, and stale implementation proof on all four newly bound tracker edges", () => {
+  it("rejects an empty production claim implementation proof", () => {
     const productionClaimEmpty = sourceFiles.map((file) =>
       file.path === "packages/orchestrator/src/authorities/task-tracker/github/claim-mutation.test.ts"
         ? {
@@ -328,7 +328,9 @@ describe("capability registration gate", () => {
     expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, productionClaimEmpty)).toContain(
       "task-tracker-claim production contract implementation binding is stale: githubTrackerMutationLayer"
     )
+  })
 
+  it("rejects an alternate controlled completion-claim implementation proof", () => {
     const controlledCompletionClaimAlternate = sourceFiles.map((file) =>
       file.path === "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.test.ts"
         ? {
@@ -345,7 +347,9 @@ describe("capability registration gate", () => {
     ).toContain(
       "task-tracker-completion-claim controlled contract implementation binding is stale: controlledCompletionClaimBoundaryLayerFrom"
     )
+  })
 
+  it("rejects an empty production completion-claim implementation proof", () => {
     const productionCompletionClaimEmpty = sourceFiles.map((file) =>
       file.path === "packages/orchestrator/src/authorities/task-tracker/github/completion-claim.test.ts"
         ? {
@@ -360,7 +364,9 @@ describe("capability registration gate", () => {
     expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, productionCompletionClaimEmpty)).toContain(
       "task-tracker-completion-claim production contract implementation binding is stale: githubCompletionClaimBoundaryLayer"
     )
+  })
 
+  it("rejects a stale production completion implementation identity", () => {
     const staleProductionCompletionIdentity = {
       ...capabilityRegistrationInventory,
       capabilities: capabilityRegistrationInventory.capabilities.map((capability) =>

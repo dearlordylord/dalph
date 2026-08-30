@@ -15,6 +15,7 @@ import {
   attemptPlanRecordKey,
   attemptChoiceAppliedRecordKey,
   attemptRestartAuthorityReadFailedRecordKey,
+  activeWorkAuthorityRefreshGitReadFailedRecordKey,
   attemptImplementationAbandonedRecordKey,
   attemptStoppageIntentRecordKey,
   controlDirectionAppliedRecordKey,
@@ -33,6 +34,7 @@ import {
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorCommandProjectionObservedRecordKey,
   plannedAttemptExecutorCommandResponseContradictedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorStateObservedRecordKey,
   stoppedAttemptClaimNoReleaseRecordKey,
   workflowRunBeganRecordKey,
@@ -110,6 +112,8 @@ interface OperationEventDescriptor {
   readonly relatedOperationIds: ReadonlyArray<OperationId>
   readonly requiredOperationIds: ReadonlyArray<OperationId>
   readonly requiredPredecessorKinds: ReadonlyArray<WorkflowJournalEvent["_tag"]>
+  /** Each group names equivalent predecessor kinds; one kind from each group is required. */
+  readonly requiredPredecessorKindAlternatives: ReadonlyArray<ReadonlyArray<WorkflowJournalEvent["_tag"]>>
   readonly recordPredecessor: RecordPredecessorFact
 }
 
@@ -192,6 +196,7 @@ interface OperationEventInput {
   readonly requiredOperationIds: ReadonlyArray<OperationId>
   readonly requiredPredecessorKey?: JournalRecordKey
   readonly requiredPredecessorKinds?: ReadonlyArray<WorkflowJournalEvent["_tag"]>
+  readonly requiredPredecessorKindAlternatives?: ReadonlyArray<ReadonlyArray<WorkflowJournalEvent["_tag"]>>
 }
 
 const operationEvent = (input: OperationEventInput): OperationEventDescriptor => ({
@@ -208,6 +213,7 @@ const operationEvent = (input: OperationEventInput): OperationEventDescriptor =>
       : { _tag: "RequiredRecordPredecessor", key: input.requiredPredecessorKey },
   relatedOperationIds: input.relatedOperationIds ?? [],
   requiredOperationIds: input.requiredOperationIds,
+  requiredPredecessorKindAlternatives: input.requiredPredecessorKindAlternatives ?? [],
   requiredPredecessorKinds: input.requiredPredecessorKinds ?? []
 })
 
@@ -285,6 +291,22 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
             : "GitReadIntentRecorded"
         ]
       }),
+    ActiveWorkAuthorityRefreshGitReadIntentRecorded: (event) =>
+      operationEvent({
+        expectedKey: intentRecordKey(event.operation.operationId),
+        operationId: event.operation.operationId,
+        plannedAttempt: event.operation.plannedAttempt,
+        requiredOperationIds: event.operation.predecessorOperationIds
+      }),
+    ActiveWorkAuthorityRefreshGitReadFailed: (event) =>
+      operationEvent({
+        expectedKey: activeWorkAuthorityRefreshGitReadFailedRecordKey(event.operation.operationId, event.ordinal),
+        operationId: event.operation.operationId,
+        plannedAttempt: event.operation.plannedAttempt,
+        requiredOperationIds: [event.operation.operationId],
+        requiredPredecessorKey: intentRecordKey(event.operation.operationId),
+        requiredPredecessorKinds: ["ActiveWorkAuthorityRefreshGitReadIntentRecorded"]
+      }),
     AttemptStoppageIntended: (event) => ({
       _tag: "AttemptChoiceEventDescriptor",
       expectedKey: attemptStoppageIntentRecordKey(event.requestId),
@@ -318,12 +340,7 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
       ),
     PlannedAttemptContinuationAuthorized: (event) => ({
       _tag: "GenericEventDescriptor",
-      expectedKey: plannedAttemptContinuationAuthorizedRecordKey(event.plannedAttempt.attemptId, [
-        event.witness.activeTaskContinuationRead.graphObservationOperationId,
-        event.witness.activeTaskContinuationRead.taskClaimObservationOperationId,
-        event.witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId,
-        event.witness.worktreeObservationOperationId
-      ])
+      expectedKey: plannedAttemptContinuationAuthorizedRecordKey(event.plannedAttempt.attemptId, event.witness)
     }),
     PlannedAttemptExecutorCommandIntended: (event) =>
       plannedAttemptExecutorEvent(
@@ -340,6 +357,13 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
           event.commandOrdinal,
           event.projectionOrdinal
         ),
+        event.plannedAttempt,
+        event.commandOrdinal
+      ),
+    PlannedAttemptExecutorCommandResponseObserved: (event) =>
+      plannedAttemptExecutorEvent(
+        { attemptId: event.plannedAttempt.attemptId, runId: event.plannedAttempt.runId },
+        plannedAttemptExecutorCommandResponseObservedRecordKey(event.plannedAttempt.attemptId, event.commandOrdinal),
         event.plannedAttempt,
         event.commandOrdinal
       ),
@@ -647,7 +671,9 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
         operationId: event.operationId,
         requiredOperationIds: [event.operationId],
         requiredPredecessorKey: intentRecordKey(event.operationId),
-        requiredPredecessorKinds: ["GitReadIntentRecorded"]
+        requiredPredecessorKindAlternatives: [
+          ["GitReadIntentRecorded", "ActiveWorkAuthorityRefreshGitReadIntentRecorded"]
+        ]
       }),
     TargetLineageObserved: (event) =>
       operationEvent({
@@ -656,7 +682,9 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
         plannedAttempt: event.plannedAttempt,
         requiredOperationIds: [event.operationId],
         requiredPredecessorKey: intentRecordKey(event.operationId),
-        requiredPredecessorKinds: ["GitReadIntentRecorded"]
+        requiredPredecessorKindAlternatives: [
+          ["GitReadIntentRecorded", "ActiveWorkAuthorityRefreshGitReadIntentRecorded"]
+        ]
       }),
     TaskTrackerFactsObserved: (event) =>
       operationEvent({

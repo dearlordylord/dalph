@@ -1,6 +1,6 @@
 import { GitCommitSha } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { Effect, Ref } from "effect"
+import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -14,9 +14,17 @@ import {
   targetPromotionIntentRecordKey,
   targetPromotionStaleRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
+import {
+  InRunJournal,
+  type InRunJournalService,
+  JournalStore,
+  JournalStoreContradiction,
+  type JournalRecord
+} from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
+import { IntegratorSessionId } from "../integrator/events.js"
 import {
   TargetPromotionAttemptIntendedEvent,
   TargetPromotionAttemptOrdinal,
@@ -34,7 +42,8 @@ import {
 import { runTargetPromotion } from "../target-promotion/protocol.js"
 import {
   appendPromotionStaleIntegrationQuarantine,
-  IntegrationPromotionStaleQuarantineRejected
+  IntegrationPromotionStaleQuarantineRejected,
+  pendingPromotionStaleIntegrationQuarantineFor
 } from "./promotion-stale.js"
 import { deriveIntegrationQuarantineState } from "./state.js"
 
@@ -115,6 +124,100 @@ it.effect("records one quarantine after Git directly rejects the exact compare-a
     expect(first.event.basis._tag).toBe("PromotionStale")
     expect(second).toEqual(first)
   }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("reports exact pending quarantine work until the stale evidence is settled", () =>
+  Effect.gen(function* () {
+    const stale = yield* appendStaleScenario("DirectRejectionAfterAttempt")
+    const journal = yield* JournalStore
+    expect(pendingPromotionStaleIntegrationQuarantineFor(yield* journal.read(runId), correlation)).toEqual({
+      correlation,
+      targetPromotionStaleAt: stale.position
+    })
+    yield* appendPromotionStaleIntegrationQuarantine({ correlation, targetPromotionStaleAt: stale.position })
+    expect(pendingPromotionStaleIntegrationQuarantineFor(yield* journal.read(runId), correlation)).toBeUndefined()
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("fails closed for stale-position drift and every ambiguous quarantine append result", () =>
+  Effect.gen(function* () {
+    const fixture = yield* Effect.gen(function* () {
+      const stale = yield* appendStaleScenario("DirectRejectionAfterAttempt")
+      const journal = yield* JournalStore
+      const prefix = yield* journal.read(runId)
+      const winner = yield* appendPromotionStaleIntegrationQuarantine({
+        correlation,
+        targetPromotionStaleAt: stale.position
+      })
+      return { prefix, stale, winner, withWinner: yield* journal.read(runId) }
+    }).pipe(Effect.provide(memoryJournalTestLayer))
+    const input = { correlation, targetPromotionStaleAt: fixture.stale.position }
+
+    const wrongPosition = yield* appendPromotionStaleIntegrationQuarantine({
+      ...input,
+      targetPromotionStaleAt: JournalPosition.make(Number(fixture.stale.position) + 10)
+    }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ hot: fixture.prefix })), Effect.flip)
+    expect(wrongPosition).toBeInstanceOf(IntegrationPromotionStaleQuarantineRejected)
+
+    const foreignWinner: JournalRecord = {
+      ...fixture.winner,
+      event: {
+        ...fixture.winner.event,
+        correlation: { ...fixture.winner.event.correlation, sessionId: IntegratorSessionId.make("foreign-session") }
+      }
+    }
+    const layerFor = (read: InRunJournalService["read"], append: InRunJournalService["append"]) =>
+      Layer.succeed(InRunJournal, InRunJournal.of({ append, read }))
+
+    const existingForeign = yield* appendPromotionStaleIntegrationQuarantine(input).pipe(
+      Effect.provide(
+        layerFor(
+          () => Effect.succeed([...fixture.prefix, foreignWinner]),
+          () => Effect.die("unused")
+        )
+      ),
+      Effect.flip
+    )
+    expect(existingForeign).toBeInstanceOf(IntegrationPromotionStaleQuarantineRejected)
+
+    const foreignAppend = yield* appendPromotionStaleIntegrationQuarantine(input).pipe(
+      Effect.provide(
+        layerFor(
+          () => Effect.succeed(fixture.prefix),
+          () => Effect.succeed(foreignWinner)
+        )
+      ),
+      Effect.flip
+    )
+    expect(foreignAppend).toBeInstanceOf(IntegrationPromotionStaleQuarantineRejected)
+
+    const exactReads = yield* Ref.make(0)
+    const exactAfterContradiction = yield* appendPromotionStaleIntegrationQuarantine(input).pipe(
+      Effect.provide(
+        layerFor(
+          () =>
+            Ref.getAndUpdate(exactReads, (count) => count + 1).pipe(
+              Effect.map((count) => (count === 0 ? fixture.prefix : fixture.withWinner))
+            ),
+          (_requestedRunId, key) =>
+            Effect.fail(new JournalStoreContradiction({ existingPosition: fixture.winner.position, key, runId }))
+        )
+      )
+    )
+    expect(exactAfterContradiction).toEqual(fixture.winner)
+
+    const missingAfterContradiction = yield* appendPromotionStaleIntegrationQuarantine(input).pipe(
+      Effect.provide(
+        layerFor(
+          () => Effect.succeed(fixture.prefix),
+          (_requestedRunId, key) =>
+            Effect.fail(new JournalStoreContradiction({ existingPosition: fixture.winner.position, key, runId }))
+        )
+      ),
+      Effect.flip
+    )
+    expect(missingAfterContradiction).toBeInstanceOf(IntegrationPromotionStaleQuarantineRejected)
+  })
 )
 
 it.effect("reconstructs promotion-stale quarantine only from one exact earlier compare-and-set intent", () =>

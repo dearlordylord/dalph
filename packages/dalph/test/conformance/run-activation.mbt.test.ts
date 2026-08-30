@@ -28,7 +28,11 @@ import {
   makeApplicationExitLifecycle,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   RunPolicyRevision,
@@ -75,6 +79,8 @@ import {
 import {
   attemptPlanRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
+  plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../orchestrator/src/workflow-journal/record-key.js"
@@ -100,7 +106,7 @@ import { controlDirectionApplicationLayer } from "../../../orchestrator/src/work
 import { taskClaimReacquisitionControlLayer } from "../../../orchestrator/src/workflow/protocols/task-claim-reacquisition/control.js"
 import { taskWorkCapacityControlLayer } from "../../../orchestrator/src/control/task-work-capacity.js"
 import { PlannedAttemptProtocolController } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
-import { continuePlannedAttemptExecutorWork } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
+import { beginPlannedAttemptExecutorWork } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
 import { RunFinalityDecision } from "../../../orchestrator/src/coordination/frontier/frontier.js"
 import {
   executeFreshTrackerGraphRead,
@@ -555,7 +561,7 @@ const makeRunActivationDriverImplementation = () => {
       runId,
       plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
       PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "StartOrContinue",
+        command: "Begin",
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         ordinal: commandOrdinal,
@@ -600,19 +606,20 @@ const makeRunActivationDriverImplementation = () => {
   }) satisfies JournalStoreService
 
   const executor = PlannedAttemptExecutor.of({
-    project: (correlation) =>
+    observe: (correlation) =>
       Effect.sync(() => {
         executorProjectionCalls += 1
         return ambiguousExecutorProjectionAvailable &&
           correlation.attemptId === attemptA.attemptId &&
           correlation.runId === runId
           ? PlannedAttemptExecutorProjection.cases.Exact.make({
-              report: PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+              report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
             })
           : PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
       }),
     requestSuspension: () => Effect.die("Run activation reconstruction does not suspend executor work"),
-    startOrContinue: () =>
+    resume: () => Effect.die("Run activation reconstruction does not resume executor work"),
+    begin: () =>
       Effect.sync(() => {
         executorCommandCalls += 1
       }).pipe(Effect.andThen(Effect.die("ambiguous command must reconcile before continuation")))
@@ -898,7 +905,7 @@ const makeRunActivationDriverImplementation = () => {
                   runId,
                   plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
                   PlannedAttemptExecutorCommandIntendedEvent.make({
-                    command: "StartOrContinue",
+                    command: "Begin",
                     initiatedBy: { _tag: "DalphCoordinator" },
                     occurrenceClassification: "InitiatedAction",
                     ordinal: commandOrdinal,
@@ -910,16 +917,56 @@ const makeRunActivationDriverImplementation = () => {
 
             const appendTerminalReportThroughJournal = (plannedAttempt: PlannedTaskAttempt) =>
               Effect.gen(function* () {
-                const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
+                const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+                const executingOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+                const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                  correlation: { attemptId: plannedAttempt.attemptId, runId }
+                })
                 yield* journal.append(
                   runId,
-                  plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal),
+                  plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+                  PlannedAttemptExecutorCommandResponseObservedEvent.make({
+                    commandOrdinal,
+                    occurrenceClassification: "NonActionOccurrence",
+                    plannedAttempt,
+                    report: executing,
+                    version: workflowJournalEventVersion
+                  })
+                )
+                yield* journal.append(
+                  runId,
+                  plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, executingOrdinal),
                   PlannedAttemptExecutorWorkReportedEvent.make({
-                    ordinal,
-                    report: PlannedAttemptExecutorReport.cases.Terminal.make({
-                      correlation: { attemptId: plannedAttempt.attemptId, runId },
-                      result: { _tag: "Completed" }
+                    ordinal: executingOrdinal,
+                    report: executing,
+                    version: workflowJournalEventVersion
+                  })
+                )
+                const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                  correlation: { attemptId: plannedAttempt.attemptId, runId },
+                  result: { _tag: "Completed" }
+                })
+                const stateOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+                yield* journal.append(
+                  runId,
+                  plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, stateOrdinal),
+                  PlannedAttemptExecutorStateObservedEvent.make({
+                    observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+                      report: terminal
                     }),
+                    occurrenceClassification: "NonActionOccurrence",
+                    ordinal: stateOrdinal,
+                    plannedAttempt,
+                    version: workflowJournalEventVersion
+                  })
+                )
+                const terminalOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
+                yield* journal.append(
+                  runId,
+                  plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, terminalOrdinal),
+                  PlannedAttemptExecutorWorkReportedEvent.make({
+                    ordinal: terminalOrdinal,
+                    report: terminal,
                     version: workflowJournalEventVersion
                   })
                 )
@@ -989,9 +1036,9 @@ const makeRunActivationDriverImplementation = () => {
                 ),
                 Match.when("ReconcileAmbiguousExecutorCommand", () =>
                   Effect.gen(function* () {
-                    const report = yield* continuePlannedAttemptExecutorWork(attemptA)
-                    if (report._tag !== "Running") {
-                      return yield* Effect.die("ambiguous executor command did not reconcile to exact Running")
+                    const report = yield* beginPlannedAttemptExecutorWork(attemptA)
+                    if (report._tag !== "ExecutorWorkExecuting") {
+                      return yield* Effect.die("ambiguous Begin command did not reconcile to exact executing work")
                     }
                     executorCalls += 1
                     yield* Deferred.succeed(command.acknowledged, undefined)
@@ -1030,7 +1077,11 @@ const makeRunActivationDriverImplementation = () => {
                     if (decision._tag === "Deferred") {
                       return yield* Effect.die("independent task must fit released capacity")
                     }
-                    yield* activeController.bindPlannedAttemptPosition(taskC, { attemptId: attemptC.attemptId, runId })
+                    yield* activeController.bindPlannedAttemptPosition(
+                      taskC,
+                      { attemptId: attemptC.attemptId, runId },
+                      admissionProposalC.id
+                    )
                     yield* appendResponsibilityThroughJournal(attemptC)
                     heldPosition = "AttemptC"
                     independentTaskAdmitted = true

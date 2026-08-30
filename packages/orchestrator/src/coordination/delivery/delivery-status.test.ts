@@ -688,7 +688,7 @@ it("maps responsibility dispositions by meaning without turning terminal or paus
     [ResponsibilityDisposition.StoppedAttemptSettled({ claimDisposition: "Released" }), "Settlement"],
     [
       ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({
-        report: PlannedAttemptExecutorReport.cases.Terminal.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation: plannedAttemptExecutorCorrelation(integrationFinalityFixture.plannedAttempt),
           result: { _tag: "Completed" }
         })
@@ -2165,10 +2165,10 @@ it("orders all public proposal route and admission families deterministically", 
     taskId: fixture.taskId,
     title: "status proposal route matrix"
   })
-  const freshStart = RunnableFrontierTransition.StartPlannedAttemptExecutorWork({
+  const freshStart = RunnableFrontierTransition.BeginPlannedAttemptExecutorWork({
     plannedAttempt: fixture.plannedAttempt
   })
-  const freshStartStep = FreshWorkflowStep.StartPlannedAttemptExecutorWork({
+  const freshStartStep = FreshWorkflowStep.BeginPlannedAttemptExecutorWork({
     plannedAttempt: fixture.plannedAttempt,
     specification,
     task
@@ -2186,7 +2186,7 @@ it("orders all public proposal route and admission families deterministically", 
     ...fixture.plannedAttempt,
     attemptId: AttemptId.make("status-route-continuation-attempt")
   })
-  const continuation = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+  const continuation = RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
     acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(6) },
     plannedAttempt: continuationAttempt
   })

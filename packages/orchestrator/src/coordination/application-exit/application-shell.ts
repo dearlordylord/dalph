@@ -36,7 +36,7 @@ export class ApplicationExitDrainFailure extends Schema.TaggedError<ApplicationE
 ) {}
 
 export interface ApplicationExitDrain {
-  readonly suspendRunningExecutorWork: Effect.Effect<
+  readonly suspendExecutingExecutorWork: Effect.Effect<
     ReadonlyArray<PlannedAttemptExecutorCorrelation>,
     ApplicationExitDrainFailure
   >
@@ -53,7 +53,7 @@ export type ApplicationExitTraceEvent =
   | { readonly _tag: "ExitRequested" }
   | { readonly _tag: "AdmissionCutoffClosed" }
   | {
-      readonly _tag: "RunningExecutorWorkReachedSafeBoundary"
+      readonly _tag: "ExecutingExecutorWorkReachedSafeBoundary"
       readonly correlations: readonly [PlannedAttemptExecutorCorrelation, ...Array<PlannedAttemptExecutorCorrelation>]
     }
   | { readonly _tag: "ProducedJournalWritesFlushed" }
@@ -73,7 +73,7 @@ const emitSafeExecutorCorrelations = (
   const [first, ...remaining] = correlations
   return first === undefined
     ? Effect.void
-    : trace.emit({ _tag: "RunningExecutorWorkReachedSafeBoundary", correlations: [first, ...remaining] })
+    : trace.emit({ _tag: "ExecutingExecutorWorkReachedSafeBoundary", correlations: [first, ...remaining] })
 }
 
 export interface ApplicationExitRequestBoundaryService {
@@ -152,7 +152,7 @@ export const makeApplicationExitRequestBoundary = Effect.fn("ApplicationExitRequ
   const drainApplication = Effect.gen(function* () {
     yield* Effect.all(
       [
-        runQuickDrain("ExecutorSuspension", drain.suspendRunningExecutorWork, (correlations) =>
+        runQuickDrain("ExecutorSuspension", drain.suspendExecutingExecutorWork, (correlations) =>
           emitSafeExecutorCorrelations(trace, correlations)
         ),
         runQuickDrain("ProducedJournalWriteFlush", drain.flushProducedJournalWrites, () =>
@@ -213,7 +213,7 @@ export interface ApplicationExitProcessLocalDrain {
 
 /** One active Run's fast, non-LLM executor-family Exit drain. */
 export interface ApplicationExitExecutorDrain {
-  readonly suspendRunningExecutorWork: Effect.Effect<
+  readonly suspendExecutingExecutorWork: Effect.Effect<
     ReadonlyArray<PlannedAttemptExecutorCorrelation>,
     ApplicationExitDrainFailure
   >
@@ -307,7 +307,7 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
       Effect.gen(function* () {
         const outcome = yield* Effect.exit(
           restore(
-            entry.drain.suspendRunningExecutorWork.pipe(
+            entry.drain.suspendExecutingExecutorWork.pipe(
               Effect.catchDefect((defect) =>
                 Effect.fail(
                   new ApplicationExitDrainFailure({
@@ -414,7 +414,7 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.make")(f
   const requestBoundary = yield* makeApplicationExitRequestBoundary(
     lifecycle,
     {
-      suspendRunningExecutorWork: activateExecutorDrains,
+      suspendExecutingExecutorWork: activateExecutorDrains,
       flushProducedJournalWrites: lifecycle.awaitForwardOwnersReleased.pipe(Effect.andThen(awaitExecutorDrainResults)),
       closeProcessLocalResources: Effect.gen(function* () {
         const drains = [...(yield* Ref.get(processLocalDrains)).registered.entries()]

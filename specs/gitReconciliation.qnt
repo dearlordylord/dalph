@@ -3,7 +3,7 @@
 // qualifies its exact ordered parents, and ref mutation remains at its own
 // boundary; this model records the authority and preservation decisions.
 module gitReconciliation {
-  type AttemptStatus = Running | SafelySuspended
+  type AttemptStatus = Executing | SafelySuspended
   type GitConstraint =
     | NoGitConstraint
     | WorktreeLostConstraint
@@ -62,7 +62,7 @@ module gitReconciliation {
 
   action init: bool = all {
     state' = {
-      status: Running,
+      status: Executing,
       constraint: NoGitConstraint,
       decision: ContinueAttempt,
       compatibleAdvanceObserved: false,
@@ -271,25 +271,25 @@ module gitReconciliation {
   }
 
   action observeIncompatibleTargetRewrite: bool = all {
-    state.status == Running,
+    state.status == Executing,
     state.decision == ContinueAttempt,
     state' = constrainAttempt(state, TargetRewriteConstraint),
   }
 
   action observeLostWorktree: bool = all {
-    state.status == Running,
+    state.status == Executing,
     state.decision == ContinueAttempt,
     state' = constrainAttempt(state, WorktreeLostConstraint),
   }
 
   action observeRegistrationConflict: bool = all {
-    state.status == Running,
+    state.status == Executing,
     state.decision == ContinueAttempt,
     state' = constrainAttempt(state, RegistrationConflictConstraint),
   }
 
   action reportSafelySuspended: bool = all {
-    state.status == Running,
+    state.status == Executing,
     state.decision == RequestSafeSuspension,
     state' = {
       ...state,

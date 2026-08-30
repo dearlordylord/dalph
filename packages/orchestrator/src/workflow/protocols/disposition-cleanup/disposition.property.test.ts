@@ -118,7 +118,7 @@ const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
 const settledWorktreeAuthorization = WorktreeCleanupAuthorization.make({
   ...authorization,
   disposition: PlannedAttemptCleanupDisposition.cases.Settled.make({
-    dispositionAt: JournalPosition.make(19),
+    dispositionAt: JournalPosition.make(23),
     plannedAttempt: attempt,
     settlementOperationId: OperationId.make("issue-69-property-settlement")
   })

@@ -358,6 +358,7 @@ const recordFor = (
     worktreeMaterializationIntent: boolean
     worktreeReady: boolean
     terminalStatus: "completed" | "failed"
+    unsealed: boolean
   }> = {}
 ) => {
   const correlation = overrides.correlation ?? predecessor
@@ -398,6 +399,18 @@ const recordFor = (
   }
   if (overrides.threadStartIntent) return CodexIntegratorPrivateRecord.cases.ThreadStartIntentRecorded.make(common)
   if (threadId === null) return CodexIntegratorPrivateRecord.cases.CandidateReady.make(common)
+  if (overrides.unsealed) {
+    return CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({
+      ...common,
+      runs: [
+        CodexIntegratorPrivateRun.cases.IntentRecorded.make({
+          correlation: run,
+          token: CodexOwnedTurnToken.make("cleanup-turn-token")
+        })
+      ],
+      threadId
+    })
+  }
   return overrides.removalIntent
     ? CodexIntegratorPrivateRecord.cases.RemovalIntentRecorded.make({ ...common, runs: [sealedRun], threadId })
     : CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({ ...common, runs: [sealedRun], threadId })
@@ -533,6 +546,18 @@ describe("Codex Integrator cleanup boundary", () => {
       (authority, authorization) => authority.observe(authorization)
     )
     expect(noIntent._tag).toBe("Foreign")
+
+    const unmaterialized = await runCase(
+      { record: recordFor("/tmp/unused", { worktreeReady: false }), registration: "none" },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(unmaterialized._tag).toBe("Unreadable")
+
+    const unsealed = await runCase(
+      { record: recordFor("/tmp/unused", { unsealed: true }), registration: "exact", pathExists: true },
+      (authority, authorization) => authority.observe(authorization)
+    )
+    expect(unsealed._tag).toBe("Unreadable")
   })
 
   it("requires exact thread, terminal, and process absence before settling a removal intent", async () => {
@@ -812,6 +837,8 @@ describe("Codex Integrator cleanup boundary", () => {
         readSequence: [
           recordFor("/tmp/unused"),
           recordFor("/tmp/unused"),
+          recordFor("/tmp/unused", { removalIntent: true }),
+          recordFor("/tmp/unused", { removalIntent: true }),
           recordFor("/tmp/unused", { removalIntent: true }),
           null
         ]

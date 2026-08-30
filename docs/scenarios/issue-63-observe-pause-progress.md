@@ -59,7 +59,7 @@ Before that Pause was applied, Dalph began exact planned-attempt executor work
 PA for A. It also recorded the next target-promotion attempt intent for D's
 integration candidate and asked Git to compare-and-set that exact candidate MD
 against its expected target head. The executor's latest report for PA is
-`Running`; the suspension selected after Pause has not yet returned. Git may
+`ExecutorWorkExecuting`; the suspension selected after Pause has not yet returned. Git may
 have applied MD, but Dalph has no recorded known result yet. C has its own
 running planned attempt PC. No cleanup or relinquishment disposition exists
 for A, D, or C.
@@ -83,7 +83,7 @@ same time.
    integration responsibility together with exact promotion request MD. It
    does not list PC, P, B, or C as covered by A's Pause.
 4. The view explains that PA prevents confirmation until the executor reports
-   `SafelySuspended` or a terminal result for PA's exact `(RunId, AttemptId)`.
+   `ExecutorWorkSafelySuspended` or a terminal result for PA's exact `(RunId, AttemptId)`.
    It separately explains that grouping descendant D prevents confirmation
    until Dalph reads Git, establishes MD's exact result, and reaches the
    integration protocol's safe resource-release boundary. The view does not
@@ -134,7 +134,8 @@ boundary result.
 
 Run R still has the applied Pause for `(R, A)`. Complete tracker observation G1
 says D is independent of A. Planned attempt PD for D previously reported
-`SafelySuspended`, later resumed while independent, and now reports `Running`.
+`ExecutorWorkSafelySuspended`, later resumed while independent, and now reports
+`ExecutorWorkExecuting`.
 Another covered responsibility for A still prevents confirmation, so Alice's
 observation subscription remains open.
 
@@ -155,7 +156,7 @@ An incomplete page or a failed read cannot establish the new grouping edge.
 4. PD's safe-suspension report from before G2 cannot settle the new obligation:
    it described an earlier time when D was independent. Dalph asks the executor
    to suspend the same exact attempt under issue #135's existing protocol.
-5. Only a `SafelySuspended` or terminal report correlated to PD after the G2
+5. Only an `ExecutorWorkSafelySuspended` or terminal report correlated to PD after the G2
    coverage boundary lets the view mark PD safe. Once A's other covered
    responsibility is also safe, Alice receives the confirmed view and the
    subscription completes.

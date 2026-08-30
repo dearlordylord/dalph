@@ -36,6 +36,7 @@ import {
 import type { TaskWorkCapacity } from "../admission/capacity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { RequiredPreStartTaskWorkPosition } from "./task-work-position.js"
+import type { ActiveRefreshRuntimeBoundary } from "../run/recovery-activation.js"
 import type {
   DeliveryActionProposal,
   DeliveryProposalContributions,
@@ -286,7 +287,7 @@ export type TicketDeliveryEvidence =
 
 /** Evidence that the executor reported a terminal result for one exact planned attempt. */
 export const PlannedAttemptExecutorTerminalEvidence = Schema.TaggedStruct("PlannedAttemptExecutorTerminal", {
-  report: PlannedAttemptExecutorReport.cases.Terminal
+  report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal
 })
 export type PlannedAttemptExecutorTerminalEvidence = typeof PlannedAttemptExecutorTerminalEvidence.Type
 
@@ -530,6 +531,8 @@ export interface DeliveryRuntimeFacts {
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
   /** Durable cancellation direction reconstructed for every production Run. */
   readonly cancellationApplied: boolean
+  /** Typed active-refresh completion marker retained until the mandatory G2 read. */
+  readonly activeRefreshBoundary?: ActiveRefreshRuntimeBoundary
   readonly runId?: RunId
 }
 
@@ -568,6 +571,8 @@ export interface DeliveryRuntimeEvaluation {
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
   /** Durable cancellation direction reconstructed for every production Run. */
   readonly cancellationApplied: boolean
+  /** Typed active-refresh completion marker retained until the mandatory G2 read. */
+  readonly activeRefreshBoundary?: ActiveRefreshRuntimeBoundary
 }
 
 const trackerGraphOutcome = (graph: TrackerGraphState): "AllTasksSucceeded" | "Blocked" | "Unsettled" => {

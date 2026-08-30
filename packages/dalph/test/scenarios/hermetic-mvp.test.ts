@@ -68,7 +68,7 @@ import {
   type IntegratorService
 } from "@dalph/orchestrator"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { ConfigProvider, Deferred, Effect, FileSystem, Fiber, Layer, Option, Ref, Schema } from "effect"
+import { ConfigProvider, Deferred, Effect, Exit, FileSystem, Fiber, Layer, Option, Ref, Schema, Scope } from "effect"
 import { expect } from "vitest"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 import { acceptedManifestBytes, runInGitDirectory, runInWorktree } from "./hermetic-support.js"
@@ -82,6 +82,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
     const git = yield* GitCommand
     const childProcesses = yield* ChildProcessSpawner.ChildProcessSpawner
     const root = yield* fileSystem.makeTempDirectory({ prefix: "dalph-hermetic-mvp-" })
+    const executorScope = yield* Scope.make()
 
     yield* Effect.gen(function* () {
       const repository = `${root}/repository`
@@ -145,6 +146,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       const executorStarts = yield* Ref.make(0)
       const integratorCalls = yield* Ref.make(0)
       const promotionAppliedWithoutResponse = yield* Deferred.make<void>()
+      const terminalProjectionReady = yield* Deferred.make<void>()
 
       const evidenceStore = yield* EvidenceStore.pipe(
         Effect.provide(nodeEvidenceStoreLayer(EvidenceStoreLocator.make(evidenceDirectory)))
@@ -271,7 +273,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       })
 
       const executor = PlannedAttemptExecutor.of({
-        project: (correlation) =>
+        observe: (correlation) =>
           Ref.get(executorReport).pipe(
             Effect.map(
               Option.match({
@@ -281,53 +283,61 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
             )
           ),
         requestSuspension: () => Effect.die("the no-crash journey never requests suspension"),
-        startOrContinue: (request) =>
-          Effect.scoped(
-            Effect.gen(function* () {
-              const existing = yield* Ref.get(executorReport)
-              if (Option.isSome(existing)) return existing.value
-              yield* Ref.update(executorStarts, (starts) => starts + 1)
-              const handle = yield* childProcesses.spawn(
-                ChildProcess.make(
-                  "node",
-                  ["-e", "require('node:fs').writeFileSync('RESULT.md', 'implemented by hermetic child\\n')"],
-                  { cwd: request.plannedAttempt.worktree }
+        resume: () => Effect.die("the no-crash journey never resumes executor work"),
+        begin: (request) =>
+          Effect.gen(function* () {
+            const existing = yield* Ref.get(executorReport)
+            if (Option.isSome(existing)) return existing.value
+            yield* Ref.update(executorStarts, (starts) => starts + 1)
+            const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+              correlation: plannedAttemptExecutorCorrelation(request.plannedAttempt)
+            })
+            yield* Ref.set(executorReport, Option.some(executing))
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                const handle = yield* childProcesses.spawn(
+                  ChildProcess.make(
+                    "node",
+                    ["-e", "require('node:fs').writeFileSync('RESULT.md', 'implemented by hermetic child\\n')"],
+                    { cwd: request.plannedAttempt.worktree }
+                  )
                 )
-              )
-              yield* Ref.set(childHandle, Option.some(handle))
-              const exitCode = yield* handle.exitCode
-              if (exitCode !== 0) return yield* Effect.die(`hermetic executor child exited ${exitCode}`)
-              yield* runInWorktree(git, request.plannedAttempt.worktree, ["add", "RESULT.md"], "stage task result")
-              yield* runInWorktree(
-                git,
-                request.plannedAttempt.worktree,
-                ["commit", "-m", "complete A"],
-                "commit task result"
-              )
-              const commit = GitCommitSha.make(
+                yield* Ref.set(childHandle, Option.some(handle))
+                const exitCode = yield* handle.exitCode
+                if (exitCode !== 0) return yield* Effect.die(`hermetic executor child exited ${exitCode}`)
+                yield* runInWorktree(git, request.plannedAttempt.worktree, ["add", "RESULT.md"], "stage task result")
                 yield* runInWorktree(
                   git,
                   request.plannedAttempt.worktree,
-                  ["rev-parse", "HEAD"],
-                  "read accepted commit"
+                  ["commit", "-m", "complete A"],
+                  "commit task result"
                 )
-              )
-              yield* runInWorktree(
-                git,
-                request.plannedAttempt.worktree,
-                ["push", bareRemote, `${commit}:refs/dalph/transfer-A`],
-                "transfer accepted commit to target object database"
-              )
-              const evidenceManifest = yield* evidenceStore.put(acceptedManifestBytes(request.plannedAttempt, commit))
-              yield* Ref.set(acceptedEvidence, Option.some(evidenceManifest))
-              const report = PlannedAttemptExecutorReport.cases.Terminal.make({
-                correlation: plannedAttemptExecutorCorrelation(request.plannedAttempt),
-                result: { _tag: "Accepted", acceptedResult: { commit, evidenceManifest } }
+                const commit = GitCommitSha.make(
+                  yield* runInWorktree(
+                    git,
+                    request.plannedAttempt.worktree,
+                    ["rev-parse", "HEAD"],
+                    "read accepted commit"
+                  )
+                )
+                yield* runInWorktree(
+                  git,
+                  request.plannedAttempt.worktree,
+                  ["push", bareRemote, `${commit}:refs/dalph/transfer-A`],
+                  "transfer accepted commit to target object database"
+                )
+                const evidenceManifest = yield* evidenceStore.put(acceptedManifestBytes(request.plannedAttempt, commit))
+                yield* Ref.set(acceptedEvidence, Option.some(evidenceManifest))
+                const report = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                  correlation: plannedAttemptExecutorCorrelation(request.plannedAttempt),
+                  result: { _tag: "Accepted", acceptedResult: { commit, evidenceManifest } }
+                })
+                yield* Ref.set(executorReport, Option.some(report))
+                yield* Deferred.succeed(terminalProjectionReady, undefined)
               })
-              yield* Ref.set(executorReport, Option.some(report))
-              return report
-            })
-          ).pipe(Effect.orDie)
+            ).pipe(Effect.orDie, Effect.forkIn(executorScope))
+            return executing
+          }).pipe(Effect.orDie)
       })
 
       const integrator: IntegratorService = {
@@ -457,14 +467,16 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: journalFilename })))
       )
 
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const initialCoordinator = yield* activationDriver.pipe(Effect.forkScoped)
+          yield* Deferred.await(terminalProjectionReady)
+          yield* Fiber.await(initialCoordinator)
+        })
+      )
+
       if (crashAfterPromotion) {
-        yield* Effect.scoped(
-          Effect.gen(function* () {
-            const firstCoordinator = yield* activationDriver.pipe(Effect.forkScoped)
-            yield* Deferred.await(promotionAppliedWithoutResponse)
-            yield* Fiber.await(firstCoordinator)
-          })
-        )
+        yield* Deferred.await(promotionAppliedWithoutResponse)
         const recordsAtCrash = yield* Effect.gen(function* () {
           return yield* (yield* JournalStore).read(runId)
         }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: journalFilename })))
@@ -549,7 +561,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
       expect(yield* Ref.get(integratorCalls)).toBe(1)
       expect(eventTags.filter((tag) => tag === "TaskAttemptPlanned")).toHaveLength(1)
       expect(eventTags.filter((tag) => tag === "TaskWorktreeReady")).toHaveLength(1)
-      expect(eventTags.filter((tag) => tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(1)
+      expect(eventTags.filter((tag) => tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(2)
       expect(eventTags.filter((tag) => tag === "IntegratorSessionFixed")).toHaveLength(1)
       expect(eventTags.filter((tag) => tag === "IntegratorRunStarted")).toHaveLength(1)
       expect(eventTags.filter((tag) => tag === "IntegratorRunResultRecorded")).toHaveLength(1)
@@ -583,7 +595,10 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
           Effect.provide(productionCoordinatorOwnershipLayer(GitCommonDirectoryTarget.make(`${repository}/.git`)))
         )
       )
-    }).pipe(Effect.ensuring(fileSystem.remove(root, { recursive: true }).pipe(Effect.orDie)))
+    }).pipe(
+      Effect.ensuring(Scope.close(executorScope, Exit.void)),
+      Effect.ensuring(fileSystem.remove(root, { recursive: true }).pipe(Effect.orDie))
+    )
 
     expect(yield* fileSystem.exists(root)).toBe(false)
   }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))

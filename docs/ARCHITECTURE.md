@@ -147,7 +147,7 @@ same ordinary delivery, planning, runtime, and stabilization interfaces.
 | --- | --- | --- |
 | Task tracker | task identity, authored instructions, lifecycle, dependencies, grouping, target membership, and claims | journaled observations and current process-local projections |
 | Git | commits, lineage, refs, worktrees, and integration state | exact planned locators, journaled intents and observations, and current process-local projections |
-| Dalph executor | complete work for one planned attempt and its normalized running, safely suspended, or terminal report | exact planned-attempt correlation and journaled responsibility/report facts |
+| Dalph executor | complete work for one planned attempt and its normalized executing, safely suspended, or terminal report | exact planned-attempt correlation and journaled responsibility/report facts |
 | Execution substrate | agent session/context and process observations used internally by an executor | only observations exposed through an accepted executor protocol; no copied session state as authority |
 | Integrator | one exact resumable integration session, including merge construction, conflict resolution, repository checks, review, and provider-private recovery | exact session correlation, its prepared-candidate or conclusive unsuccessful report, and referenced evidence |
 | Evidence store | immutable bytes addressed by their content digest | exact references in workflow-journal evidence-bearing events; never copied derived frontier or lock state |
@@ -391,9 +391,15 @@ and [issue-139-reconcile-git-facts.md](scenarios/issue-139-reconcile-git-facts.m
 ## Planned-Attempt Executor Boundary
 
 The executor performs the complete work for one exact planned attempt and
-reports `Running`, `SafelySuspended`, or a terminal result using the same
-`RunId` and `AttemptId`. Safe suspension and terminal results prove that no
-executor-owned activity for that attempt remains running. Coding-agent,
+reports `ExecutorWorkExecuting`, `ExecutorWorkSafelySuspended`, or
+`ExecutorWorkTerminal` using the same `RunId` and `AttemptId`. Dalph begins a
+new attempt once by sending one Begin command, then observes or awaits
+autonomous executing work through a read-only boundary. An unchanged executing
+observation is process-local: it advances neither the journal's accepted
+position nor any lifecycle-report ordinal, command, or proposal identity.
+Dalph resumes only the same safely suspended attempt after an accepted rule
+selects it. Safe suspension and terminal results prove that no executor-owned
+activity for that attempt remains executing. Coding-agent,
 reviewer, retry, handback, and session-restoration stages remain internal to a
 future production executor design.
 
@@ -402,15 +408,27 @@ prove adoption of an independently surviving production session. See
 [planned-attempt-executor-boundary.md](scenarios/planned-attempt-executor-boundary.md)
 and [Attempt Delivery and Integration](architecture/attempt-delivery-and-integration.md).
 
-When an activation ends after responsibility is durable but before the next
-executor report, the next activation reconstructs that exact responsibility
-through the ordinary Run entry. It rereads current tracker facts and the exact
-planned worktree through their journaled protocols, then records one generic
-continuation authorization naming those observations before executor contact.
-The authorization is an internal non-projected fact: it does not become a
+When an activation ends with an executing report, the next independently
+selected observation contacts only the executor's passive state boundary; it
+does not reread tracker or Git facts as permission for the already autonomous
+work. If responsibility is durable but no later report is accepted, the next
+activation reconstructs that exact responsibility through the ordinary Run
+entry and observes the executor that owns the exact `(RunId, AttemptId)`.
+Process loss does not prove that work stopped and does not authorize another
+Begin. If a command response was ambiguous, that passive projection reconciles
+the exact command before any bounded retry. Only an accepted safely suspended
+report can enter the current tracker, claim, worktree, control, capacity, and
+Git fact chain that authorizes Resume of the same attempt. No path creates a
 recovery occurrence, replacement attempt, or new executor identity. A typed
 cassette lifecycle control may dispose the activation at that same boundary,
 but it is not part of this production event vocabulary.
+
+While an executor is active, tracker notifications and the existing bounded
+timer are non-authoritative refresh opportunities owned and coalesced by the
+single Run reactivation owner. They enter the existing tracker-observation and
+graph-read stack without starting a concurrent activation. Executor reports do
+not trigger tracker reads or define their coverage. The one later
+post-quiescence read remains owned by Run stabilization.
 
 ## Accepted-Result Integration Admission
 

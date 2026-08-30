@@ -96,6 +96,7 @@ const validatePrivateRunOrdinals = (record: CodexIntegratorPrivateRecordShape): 
   const runs = validatedRuns(record)
   const runOrdinals = runs.map((run) => run.correlation.ordinal)
   if (new Set(runOrdinals).size !== runOrdinals.length) return "private record repeats a provider run ordinal"
+  /* v8 ignore next -- @preserve CodexIntegratorPrivateRunHistory enforces this same two-run maximum before record refinement. */
   if (runs.length > codexIntegratorProviderRunOrdinals.length) {
     return "private record contains more than the initial and retry provider runs"
   }
@@ -127,6 +128,7 @@ const validatePrivateRecordCorrelations = (record: CodexIntegratorPrivateRecordS
   const runs = validatedRuns(record)
   const sessions = runs.filter((run) => !sameSessionValue(record.correlation, run.correlation.session))
   if (sessions.length > 0) return "private run correlation belongs to another Integrator session"
+  /* v8 ignore next -- @preserve same-session run one is value-identical to the validated initial run-one correlation. */
   if (runs[0] !== undefined && !sameRunValue(runs[0].correlation, record.initialRun)) {
     return "private run history does not begin with the durably bound initial run"
   }

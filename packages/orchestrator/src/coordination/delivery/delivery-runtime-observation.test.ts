@@ -20,8 +20,15 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { DeliveryActionProtocolAdmissionMissing } from "./delivery-action-executor.js"
-import { DeliveryProposalId, trackerGraphReadProposalOf } from "./delivery-action-proposal.js"
+import {
+  DeliveryProposalId,
+  DeliveryProposalOrdinal,
+  trackerGraphReadProposalOf,
+  type DeliveryActionProposal,
+  type TaskWorkPositionRequirement
+} from "./delivery-action-proposal.js"
 import { deliveryRuntimeResourceCapabilitiesOf } from "./delivery-runtime-resources.js"
+import type { DeliveryTaskWorkAdmissionBasis } from "./relations.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import {
   deliveryRuntimeLiveOwnerSnapshots,
@@ -56,20 +63,36 @@ const correlation = plannedAttemptExecutorCorrelation(
   })
 )
 
-const makeOwner = Effect.fn("DeliveryRuntimeObservationTest.makeOwner")(function* () {
+const makeOwner = Effect.fn("DeliveryRuntimeObservationTest.makeOwner")(function* (
+  ownerProposal: DeliveryActionProposal = proposal,
+  preStart: DeliveryTaskWorkAdmissionBasis["preStart"] = []
+) {
   const integrationTargets = yield* makeIntegrationTargetResourceController()
   const { resources } = yield* deliveryRuntimeResourceCapabilitiesOf(
     integrationTargets,
     (yield* makeApplicationExitLifecycle()).admission
   )
   const admission = yield* resources
-    .makeAdmissionController({ capacity: TaskWorkCapacity.make(1), held: [], preStart: [] })
+    .makeAdmissionController({ capacity: TaskWorkCapacity.make(1), held: [], preStart })
     .pipe(Effect.provide(plannedAttemptProtocolControllerLayer))
-  const admitted = yield* admission.tryReserve(proposal)
+  const admitted = yield* admission.tryReserve(ownerProposal)
   if (admitted._tag === "Deferred") return yield* Effect.die("fixture proposal must be admitted")
   const owner: DeliveryRuntimeLiveOwnerSource = yield* makeDeliveryRuntimeLiveOwner(admitted.reservation)
   return { admission, integrationTargets, owner }
 })
+
+const taskScopedProposal = (id: string, taskWorkPosition: TaskWorkPositionRequirement): DeliveryActionProposal =>
+  ({
+    ...proposal,
+    admission: { ...proposal.admission, taskWorkPosition },
+    id: DeliveryProposalId.make(id),
+    order: {
+      _tag: "FreshWorkflowOrder",
+      frontierOrdinal: DeliveryProposalOrdinal.make(0),
+      step: "AcquireTaskClaim",
+      taskId
+    }
+  }) as DeliveryActionProposal
 
 it.effect("publishes each exact owner lifecycle atomically and keeps proposal identities branded", () =>
   Effect.gen(function* () {
@@ -170,6 +193,124 @@ it.effect("rejects protocol work when the admitted action owns no planned-attemp
     expect(failure).toEqual(
       new DeliveryActionProtocolAdmissionMissing({ correlation, proposalId: owner.reservation.proposal.id })
     )
+  })
+)
+
+it.effect("fails closed for every task-position phase exposed through an observed action lease", () =>
+  Effect.gen(function* () {
+    const operationId = OperationId.make("lease-position-operation")
+    const foreignOperationId = OperationId.make("lease-position-foreign-operation")
+
+    const runScoped = yield* makeOwner()
+    const runScopedLease = makeObservedDeliveryActionLease(
+      runScoped.admission,
+      runScoped.integrationTargets,
+      runScoped.owner,
+      Effect.void
+    )
+    expect((yield* Effect.exit(runScopedLease.bindPreStartTaskWorkPosition(operationId)))._tag).toBe("Failure")
+    expect((yield* Effect.exit(runScopedLease.bindPreStartPlannedAttemptPosition(operationId, correlation)))._tag).toBe(
+      "Failure"
+    )
+    expect((yield* Effect.exit(runScopedLease.bindPlannedAttemptPosition(correlation)))._tag).toBe("Failure")
+
+    const taskWithoutPosition = yield* makeOwner(
+      taskScopedProposal("lease-task-without-position", { _tag: "NoTaskWorkPosition" })
+    )
+    const taskWithoutPositionLease = makeObservedDeliveryActionLease(
+      taskWithoutPosition.admission,
+      taskWithoutPosition.integrationTargets,
+      taskWithoutPosition.owner,
+      Effect.void
+    )
+    expect((yield* taskWithoutPositionLease.bindPreStartTaskWorkPosition(operationId).pipe(Effect.flip)).reason).toBe(
+      "UnexpectedPositionPhase"
+    )
+    expect(
+      (yield* taskWithoutPositionLease.bindPreStartPlannedAttemptPosition(operationId, correlation).pipe(Effect.flip))
+        .reason
+    ).toBe("UnexpectedPositionPhase")
+    expect((yield* taskWithoutPositionLease.bindPlannedAttemptPosition(correlation).pipe(Effect.flip)).reason).toBe(
+      "UnexpectedPositionPhase"
+    )
+
+    const running = yield* makeOwner(
+      taskScopedProposal("lease-running-position", { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId })
+    )
+    const runningLease = makeObservedDeliveryActionLease(
+      running.admission,
+      running.integrationTargets,
+      running.owner,
+      Effect.void
+    )
+    expect((yield* runningLease.bindPreStartTaskWorkPosition(operationId).pipe(Effect.flip)).reason).toBe(
+      "UnexpectedPositionPhase"
+    )
+    expect(
+      (yield* runningLease.bindPreStartPlannedAttemptPosition(operationId, correlation).pipe(Effect.flip)).reason
+    ).toBe("UnexpectedPositionPhase")
+    yield* runningLease.bindPlannedAttemptPosition(correlation)
+
+    const freshClaim = yield* makeOwner(
+      taskScopedProposal("lease-fresh-claim-position", {
+        _tag: "PreStartTaskWorkPositionRequired",
+        mode: "AcquireFresh",
+        taskId
+      })
+    )
+    const freshClaimLease = makeObservedDeliveryActionLease(
+      freshClaim.admission,
+      freshClaim.integrationTargets,
+      freshClaim.owner,
+      Effect.void
+    )
+    yield* freshClaimLease.bindPreStartTaskWorkPosition(operationId)
+    expect(
+      (yield* freshClaimLease.bindPreStartPlannedAttemptPosition(operationId, correlation).pipe(Effect.flip)).reason
+    ).toBe("UnexpectedPositionPhase")
+    expect((yield* freshClaimLease.bindPlannedAttemptPosition(correlation).pipe(Effect.flip)).reason).toBe(
+      "UnexpectedPositionPhase"
+    )
+
+    const existingClaim = yield* makeOwner(
+      taskScopedProposal("lease-existing-claim-position", {
+        _tag: "PreStartTaskWorkPositionRequired",
+        claimOperationId: operationId,
+        mode: "ReuseExisting",
+        taskId
+      }),
+      [{ _tag: "UnplannedPreStartTaskWorkPosition", claimOperationId: operationId, taskId }]
+    )
+    const existingClaimLease = makeObservedDeliveryActionLease(
+      existingClaim.admission,
+      existingClaim.integrationTargets,
+      existingClaim.owner,
+      Effect.void
+    )
+    expect((yield* existingClaimLease.bindPreStartTaskWorkPosition(foreignOperationId).pipe(Effect.flip)).reason).toBe(
+      "ClaimOperationMismatch"
+    )
+    yield* existingClaimLease.bindPreStartTaskWorkPosition(operationId)
+    expect(
+      (yield* existingClaimLease.bindPreStartPlannedAttemptPosition(foreignOperationId, correlation).pipe(Effect.flip))
+        .reason
+    ).toBe("ClaimOperationMismatch")
+    yield* existingClaimLease.bindPreStartPlannedAttemptPosition(operationId, correlation)
+    expect(
+      (yield* existingClaimLease.bindPreStartPlannedAttemptPosition(foreignOperationId, correlation).pipe(Effect.flip))
+        .reason
+    ).toBe("ClaimOperationMismatch")
+    yield* existingClaimLease.bindPreStartPlannedAttemptPosition(operationId, correlation)
+    expect(
+      (yield* existingClaim.admission
+        .bindPlannedAttemptPosition(
+          taskId,
+          { ...correlation, attemptId: AttemptId.make("lease-position-foreign-attempt") },
+          existingClaim.owner.proposal.id
+        )
+        .pipe(Effect.flip)).reason
+    ).toBe("AttemptCorrelationMismatch")
+    yield* existingClaim.admission.bindPlannedAttemptPosition(taskId, correlation, existingClaim.owner.proposal.id)
   })
 )
 

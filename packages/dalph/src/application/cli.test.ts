@@ -213,6 +213,7 @@ it.effect("routes the configured production CLI command into its host-owned appl
               Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
             ),
           readRunReactivationControl: () => Effect.succeed("RunUnpaused" as const),
+          activateActiveWorkAuthorityRefresh: () => Effect.die("unused"),
           registerAcceptedRunReactivationObservers: () => Effect.void,
           operatorControl: {
             applyRunCancellation: () => Effect.die("unused"),

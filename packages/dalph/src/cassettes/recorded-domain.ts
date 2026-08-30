@@ -13,6 +13,11 @@ import {
 } from "@dalph/contracts"
 import {
   ActiveTaskClaim,
+  ActiveWorkAuthorityRefreshAuthority,
+  ActiveWorkAuthorityRefreshGitReadFailure,
+  ActiveWorkAuthorityRefreshGitReadOperation,
+  ActiveWorkAuthorityRefreshOrdinal,
+  ActiveWorkAuthorityRefreshSource,
   AttemptChoice,
   AttemptQuiescenceProof,
   AttemptChoiceRequestId,
@@ -294,6 +299,20 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     requestId: AttemptChoiceRequestId,
     subject: AttemptChoiceSubject
   },
+  /** A running owner records this exact Git read before crossing the Git boundary. */
+  ActiveWorkAuthorityRefreshGitReadInitiated: {
+    ...initiatedByCoordinator,
+    operation: ActiveWorkAuthorityRefreshGitReadOperation
+  },
+  /** A running owner refresh can fail to read Git without authorizing an executor action. */
+  ActiveWorkAuthorityRefreshGitReadFailed: {
+    authority: ActiveWorkAuthorityRefreshAuthority,
+    failure: ActiveWorkAuthorityRefreshGitReadFailure,
+    ...nonActionOccurrence,
+    operation: ActiveWorkAuthorityRefreshGitReadOperation,
+    ordinal: ActiveWorkAuthorityRefreshOrdinal,
+    source: ActiveWorkAuthorityRefreshSource
+  },
   AttemptStoppageIntended: {
     ...initiatedByCoordinator,
     requestId: AttemptChoiceRequestId,
@@ -535,7 +554,7 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     report: PlannedAttemptExecutorReport
   },
   PlannedAttemptExecutorCommandIntended: {
-    command: Schema.Literals(["StartOrContinue", "Suspend"]),
+    command: Schema.Literals(["Begin", "Resume", "Suspend"]),
     ...initiatedByCoordinator,
     ordinal: PlannedAttemptExecutorCommandOrdinal,
     plannedAttempt: PlannedTaskAttempt
@@ -546,6 +565,12 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     observation: PlannedAttemptExecutorCommandProjectionObservation,
     plannedAttempt: PlannedTaskAttempt,
     projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal
+  },
+  PlannedAttemptExecutorCommandResponseObserved: {
+    commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
+    ...nonActionOccurrence,
+    plannedAttempt: PlannedTaskAttempt,
+    report: PlannedAttemptExecutorReport
   },
   PlannedAttemptExecutorCommandResponseContradicted: {
     commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
@@ -629,10 +654,13 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
 export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
 
 /**
- * Provisional recorded format version. Incrementing it does not promise
- * backward compatibility until the project owner removes this comment.
+ * Provisional recorded format version. Version 13 separates active-refresh
+ * Git intent entries from ordinary Git reads and records process-local source
+ * only on active-refresh failures.
+ * Recorded cassettes remain fail-closed at the current version; this change
+ * does not claim a migration path for version 11.
  */
-const currentRecordedCassetteVersion = 11
+const currentRecordedCassetteVersion = 13
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

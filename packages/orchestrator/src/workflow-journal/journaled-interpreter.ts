@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Journaled Git dispatch keeps ordinary and active-refresh replay authority at one boundary. */
 import { Effect, Layer, Option } from "effect"
 import { type RunId } from "@dalph/contracts"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
@@ -39,9 +40,15 @@ import {
   type InterruptibleWorkflowBoundaryExecution
 } from "../workflow/interpretation/interpreter.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
+import * as RunActivation from "../coordination/run/run-activation-opportunity.js"
 import { runJournaledTaskClaimRelease } from "../workflow/protocols/task-claim-release/journaled.js"
 import { taskClaimObservationAttemptBound } from "../workflow/protocols/task-claim-observation/bound.js"
 import { journaledTrackerGraphRead } from "../workflow/protocols/task-tracker-read/protocol.js"
+import {
+  ordinaryGitReadIntentWasRecorded,
+  runActiveTargetLineageAuthorityRefreshGitRead,
+  runActiveWorktreeAuthorityRefreshGitRead
+} from "../workflow/protocols/active-work-authority-refresh/journaled.js"
 
 const requireTaskWorkSpecification = <A>(
   knowledge: Option.Option<A>,
@@ -55,7 +62,8 @@ const requireTaskWorkSpecification = <A>(
 /** Adds durable intent and outcomes to the generic pre-executor operations. */
 export const journaledWorkflowInterpreterLayer = <E, R>(
   runId: RunId,
-  interpreterLayer: Layer.Layer<WorkflowInterpreter, E, R>
+  interpreterLayer: Layer.Layer<WorkflowInterpreter, E, R>,
+  opportunity: RunActivation.RunActivationOpportunity = RunActivation.RunActivationOpportunity.OrdinaryRunEntry()
 ) =>
   Layer.effect(
     WorkflowInterpreter,
@@ -169,6 +177,20 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         onIntentRecorded: Effect.Effect<void> = Effect.void,
         interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
+        if (
+          RunActivation.isActiveWorkAuthorityRefreshForAttempt(opportunity, operation.plannedAttempt) &&
+          !ordinaryGitReadIntentWasRecorded(yield* journal.read(runId), operation)
+        ) {
+          return yield* runActiveWorktreeAuthorityRefreshGitRead({
+            boundary: interruptibleBoundary,
+            interpreter,
+            journal,
+            onIntentRecorded,
+            operation,
+            runId,
+            source: opportunity.source
+          })
+        }
         yield* Effect.uninterruptible(
           journal
             .append(
@@ -214,6 +236,20 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         onIntentRecorded: Effect.Effect<void> = Effect.void,
         interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
       ) {
+        if (
+          RunActivation.isActiveWorkAuthorityRefreshForAttempt(opportunity, operation.plannedAttempt) &&
+          !ordinaryGitReadIntentWasRecorded(yield* journal.read(runId), operation)
+        ) {
+          return yield* runActiveTargetLineageAuthorityRefreshGitRead({
+            boundary: interruptibleBoundary,
+            interpreter,
+            journal,
+            onIntentRecorded,
+            operation,
+            runId,
+            source: opportunity.source
+          })
+        }
         yield* Effect.uninterruptible(
           journal
             .append(
@@ -277,7 +313,8 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
                   .slice(0, existingObservationIndex + 1)
                   .flatMap(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []))
               },
-              operation.taskId
+              operation.taskId,
+              operation.target
             ),
             operation.operationId
           )
@@ -307,7 +344,8 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
                       event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []
                     )
                   },
-                  operation.taskId
+                  operation.taskId,
+                  operation.target
                 ),
                 operation.operationId
               )

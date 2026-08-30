@@ -6,7 +6,7 @@ Dalph accepts an Operator command or process-supervisor signal through one
 transport-neutral application-lifecycle protocol, atomically closes
 forward-progress admission, and spends at most five seconds reaching a durably
 recoverable boundary. Exit may call executor `requestSuspension` but never
-`startOrContinue`; how the executor implementation handles that request remains
+`begin` or `resume`; how the executor implementation handles that request remains
 opaque. The drain also performs the suspension intent and report writes
 required by that exact protocol, acknowledges already-produced journal writes,
 and releases process-local resources; it neither finishes work nor starts

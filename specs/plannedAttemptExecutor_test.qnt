@@ -1,252 +1,254 @@
 module plannedAttemptExecutorTest {
   import plannedAttemptExecutor.* from "./plannedAttemptExecutor"
 
-  run runningThenTerminalTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(receiveCommandResponse(ReportTerminal))
-      .then(settleCommandResponse)
+  run exactBoundaryCorrelationAndOrdinalArePreservedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent)
+      .expect(and {
+        everyBoundaryValueCarriesExactCorrelation,
+        commandOrdinalsAreAllocatedExactly,
+      })
+      .then(callBegin).then(receiveCommandResponse(ExecutorWorkExecuting))
+      .expect(and {
+        everyBoundaryValueCarriesExactCorrelation,
+        boundaryEvidenceUsesExactCommandIdentity,
+      })
+      .then(settleCommandResponse).then(recordSuspendIntent).then(callSuspend)
+      .then(loseCommandResponse).then(recordCommandProjection(CommandProjectionExactExecuting))
+      .expect(and {
+        everyBoundaryValueCarriesExactCorrelation,
+        boundaryEvidenceUsesExactCommandIdentity,
+        commandProjectionBelongsToCalledCommand,
+      })
+  }
+
+  run beginOnceAndObserveExecutingFiveTimesTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordFreshStateProjection(ExecutorStateExecuting))
+      .then(recoverActivation)
+      .then(recordFreshStateProjection(ExecutorStateExecuting))
+      .then(recoverActivation)
+      .then(recordFreshStateProjection(ExecutorStateExecuting))
+      .then(recoverActivation)
+      .then(recordFreshStateProjection(ExecutorStateExecuting))
+      .then(recoverActivation)
+      .then(recordFreshStateProjection(ExecutorStateExecuting))
+      .expect(and {
+        fourthUnchangedExecutingObservationReached,
+        state.commandIntentCount == 1,
+        state.commandCallCount == 1,
+        state.acceptedReportOrdinal == 1,
+        beginOccursAtMostOnce,
+        observationsDoNotConsumeCommandBudget,
+        unchangedExactObservationDoesNotAppendReport,
+        unchangedExactObservationIsProcessLocal,
+        state.durableObservationCount == 0,
+        state.proposalIdentityCount == 1,
+      })
+  }
+
+  run passiveTerminalObservationAppendsDistinctReportTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordFreshStateProjection(ExecutorStateTerminal)).then(acceptFreshStateProjectionProof)
+      .expect(and { terminalReached, state.acceptedReportOrdinal == 2, terminalReleasesPosition })
+  }
+
+  run firstPassiveLifecycleReportRequiresBeginSettlementTest = {
+    init.then(beginResponsibility)
+      .expect(and {
+        state.status == ResponsibilityBegan,
+        state.acceptedReportOrdinal == 0,
+        not(canRecordFreshStateProjection(state, ExecutorStateExecuting)),
+        not(canRecordFreshStateProjection(state, ExecutorStateSafelySuspended)),
+        not(canRecordFreshStateProjection(state, ExecutorStateTerminal)),
+        passiveReportAcceptanceHasCausalCommand,
+      })
+  }
+
+  run passiveSafeObservationRequiresSuspendTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .expect(not(canRecordFreshStateProjection(state, ExecutorStateSafelySuspended)))
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordFreshStateProjection(ExecutorStateSafelySuspended)).then(acceptFreshStateProjectionProof)
+      .expect(and {
+        safelySuspendedReached,
+        state.acceptedReportOrdinal == 2,
+        passiveReportAcceptanceHasCausalCommand,
+      })
+  }
+
+  run passiveTerminalAfterSafeRemainsAllowedTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordFreshStateProjection(ExecutorStateTerminal)).then(acceptFreshStateProjectionProof)
       .expect(and {
         terminalReached,
-        terminalReleasesPosition,
-        settlementsUseExactCommandOrdinal,
-        commandOrdinalsAreAllocatedExactly,
+        terminalAcceptedStatusIsAbsorbing,
+        passiveReportAcceptanceHasCausalCommand,
       })
   }
 
-  run safelySuspendAndResumeSameAttemptTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(receiveCommandResponse(ReportSafelySuspended))
-      .then(settleCommandResponse)
-      .expect(safelySuspendedReached and safeSuspensionReleasesPosition)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .expect(runningReached and everyBoundaryValueCarriesPlannedAttempt)
+  run beginSafeResponseCannotSettleTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended))
+      .expect(and { not(canSettleCommandResponse(state)), firstAcceptedReportIsExecuting })
   }
 
-  run commandIntentPrecedesEveryExecutorCallTest = {
-    init
-      .then(beginResponsibility)
-      .expect(not(isIntendedKind(state.commandState, StartOrContinueCommand)))
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .expect(not(isIntendedKind(state.commandState, StartOrContinueCommand)))
-      .expect(everyCallHasOneDurableIntent)
+  run beginTerminalResponseCannotSettleTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkTerminal))
+      .expect(and { not(canSettleCommandResponse(state)), firstAcceptedReportIsExecuting })
   }
 
-  run lostResponseSettlesOnlyFromExactCommandProjectionTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleCommandProjection)
-      .expect(and {
-        runningReached,
-        settlementsUseExactCommandOrdinal,
-        commandOrdinalsAreAllocatedExactly,
-        stateProjectionNeverSettlesCommand,
-        projectionsAreNotCommandResponses,
-        unmatchedIntentBlocksAnotherCommand,
-      })
+  run beginSafeProjectionCannotSettleTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin).then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionExactSafelySuspended))
+      .expect(and { not(canSettleCommandProjection(state)), firstAcceptedReportIsExecuting })
   }
 
-  run freshStateProjectionRequiresNoUnmatchedCommandTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .expect(not(canRecordFreshStateProjection(state)))
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleCommandProjection)
-      .expect(and {
-        runningReached,
-        isNoCommand(state.commandState),
-        state.commandSettlementCount == 1,
-        freshStateProjectionHasNoUnmatchedCommand,
-        settlementsUseExactCommandOrdinal,
-      })
-  }
-
-  run everyNonExactFreshStateOutcomeRetainsPositionTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordFreshStateProjection(ExecutorStateNoCurrentReport))
-      .expect(state.positionHeld and unsafeOrUnavailableNeverReleasesPosition)
+  run unchangedTerminalObservationIsProcessLocalTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordFreshStateProjection(ExecutorStateTerminal)).then(acceptFreshStateProjectionProof)
       .then(recoverActivation)
+      .then(recordFreshStateProjection(ExecutorStateTerminal))
+      .expect(and {
+        terminalReached,
+        terminalAcceptedStatusIsAbsorbing,
+        state.acceptedReportOrdinal == 2,
+        state.durableObservationCount == 1,
+        unchangedExactObservationDoesNotAppendReport,
+        unchangedExactObservationIsProcessLocal,
+        not(canRecordFreshStateProjection(state, ExecutorStateExecuting)),
+        not(canRecordFreshStateProjection(state, ExecutorStateSafelySuspended)),
+      })
+  }
+
+  run unchangedSafeObservationIsProcessLocalTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recoverActivation)
+      .then(recordFreshStateProjection(ExecutorStateSafelySuspended))
+      .expect(and {
+        safelySuspendedReached,
+        state.acceptedReportOrdinal == 2,
+        state.durableObservationCount == 0,
+        unchangedExactObservationDoesNotAppendReport,
+        unchangedExactObservationIsProcessLocal,
+        state.resumeIntentsSinceSafeSuspension == 0,
+      })
+  }
+
+  run unchangedSuspendResponseSettlesWithoutNewReportTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .expect(and {
+        executingReached,
+        state.commandSettlementCount == 2,
+        state.commandResponseEvidenceCount == 2,
+        state.acceptedReportOrdinal == 1,
+        acceptedReportsRequireSettledCommandOrObservation,
+        acceptedReportOrdinalAdvancesExactlyForDistinctReports,
+      })
+  }
+
+  run safeSuspendThenExactResumeTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .expect(safelySuspendedReached and safeSuspensionReleasesPosition)
+      .then(recordResumeIntent).then(callResume)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .expect(and { executingReached, resumeRequiresAcceptedSafeReport, state.acceptedReportOrdinal == 3 })
+  }
+
+  run lostBeginResponseReconcilesWithoutSecondBeginTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin).then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionExactExecuting)).then(settleCommandProjection)
+      .expect(and {
+        executingReached,
+        state.commandIntentCount == 1,
+        state.commandCallCount == 1,
+        not(canRecordBeginIntent(state)),
+        beginOccursAtMostOnce,
+      })
+  }
+
+  run lostSuspendMustReconcileBeforeRetryTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(loseCommandResponse)
+      .expect(and {
+        lostSuspendResponseReached,
+        state.suspendIntentsSinceExecuting == 1,
+        lostSuspendResponseConsumesCommandBudget,
+        lostSuspendRequiresReconciliationBeforeRetry,
+      })
+      .then(recordSuspendIntent.fail())
+  }
+
+  run lostSuspendResponseConsumesBoundAndReconcilesTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(loseCommandResponse)
+      .then(recoverActivation)
+      .then(recordCommandProjection(CommandProjectionExactExecuting)).then(settleCommandProjection)
+      .expect(and {
+        lostSuspendProjectionSettledReached,
+        state.suspendIntentsSinceExecuting == 1,
+        lostSuspendRequiresReconciliationBeforeRetry,
+      })
+      .then(recordSuspendIntent)
+      .expect(and { state.suspendIntentsSinceExecuting == 2, suspendCommandLimitPreserved })
+  }
+
+  run passiveSafeToExecutingIsBlockedTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .expect(and { safelySuspendedReached, state.acceptedReportOrdinal == 2, safeToExecutingRequiresResume })
+      .then(recordFreshStateProjection(ExecutorStateExecuting).fail())
+  }
+
+  run threeSuspendCommandsRemainTheOnlyCommandBoundTest = {
+    init.then(beginResponsibility)
+      .then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .expect(and { suspendCommandLimitReached, not(canRecordSuspendIntent(state)), suspendCommandLimitPreserved })
+  }
+
+  run unsafeObservationsRetainPositionTest = {
+    init.then(beginResponsibility)
       .then(recordFreshStateProjection(ExecutorStateTemporarilyUnavailable))
       .expect(state.positionHeld and unsafeOrUnavailableNeverReleasesPosition)
-      .then(recoverActivation)
-      .then(recordFreshStateProjection(ExecutorStateUnreadable))
-      .expect(state.positionHeld and unsafeOrUnavailableNeverReleasesPosition)
-      .then(recoverActivation)
-      .then(recordFreshStateProjection(ExecutorStateContradiction))
-      .expect(state.positionHeld and unsafeOrUnavailableNeverReleasesPosition)
-  }
-
-  run freshSafeStateProjectionWithNoCommandProvesQuiescenceTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordFreshStateProjection(ExecutorStateSafelySuspended))
-      .then(acceptFreshStateProjectionProof)
-      .expect(and {
-        safelySuspendedReached,
-        not(state.positionHeld),
-        isNoCommand(state.commandState),
-        state.commandSettlementCount == 0,
-        freshStateProjectionHasNoUnmatchedCommand,
-        stateProjectionNeverSettlesCommand,
-      })
-  }
-
-  run unavailableAndContradictoryCommandProjectionsRemainUnmatchedTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionNoCurrentReport))
-      .expect(not(canSettleCommandProjection(state)))
-      .expect(state.positionHeld and isCalled(state.commandState))
-      .then(recoverActivation)
-      .then(recordCommandProjection(CommandProjectionTemporarilyUnavailable))
-      .expect(not(canSettleCommandProjection(state)))
-      .then(recoverActivation)
-      .then(recordCommandProjection(CommandProjectionUnreadable))
-      .expect(not(canSettleCommandProjection(state)))
-      .then(recoverActivation)
-      .then(recordCommandProjection(CommandProjectionContradiction))
-      .expect(and {
-        not(canSettleCommandProjection(state)),
-        state.positionHeld,
-        isCalled(state.commandState),
-        state.commandSettlementCount == 0,
-        unsafeOrUnavailableNeverReleasesPosition,
-      })
-  }
-
-  run recoveryResetsOneReconciliationProjectionAllowanceTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionNoCurrentReport))
-      .expect(state.reconciliationProjectionsThisActivation == 1)
-      .then(recoverActivation)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleCommandProjection)
-      .expect(oneReconciliationProjectionPerActivation and runningReached)
-  }
-
-  run lostStartResponsesConsumeContinuationBudgetTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleCommandProjection)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(recoverActivation)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleCommandProjection)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(loseCommandResponse)
-      .then(recoverActivation)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleCommandProjection)
-      .expect(not(canRecordStartIntent(state)))
-      .expect(continuationLimitReached and commandBudgetsAreBounded)
-  }
-
-  run fourthSuspendCommandIsBlockedTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .expect(not(canRecordSuspendIntent(state)))
-      .expect(suspendCommandLimitReached and commandBudgetsAreBounded)
-  }
-
-  run threeRunningSuspendSettlementsStillAllowReadOnlySafeRecoveryTest = {
-    init
-      .then(beginResponsibility)
-      .then(recordStartOrContinueIntent)
-      .then(callStartOrContinue)
-      .then(receiveCommandResponse(ReportRunning))
-      .then(settleCommandResponse)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleCommandProjection)
-      .then(recoverActivation)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(loseCommandResponse)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleCommandProjection)
-      .then(recoverActivation)
-      .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(loseCommandResponse)
-      .then(recoverActivation)
-      .then(recordCommandProjection(CommandProjectionExactRunning))
-      .then(settleCommandProjection)
-      .expect(and {
-        not(canRecordSuspendIntent(state)),
-        suspendCommandLimitReached,
-        suspendLimitPreservesReadOnlyRecovery,
-      })
-      .then(recoverActivation)
-      .then(recordFreshStateProjection(ExecutorStateSafelySuspended))
-      .then(acceptFreshStateProjectionProof)
-      .expect(and {
-        safelySuspendedReached,
-        not(state.positionHeld),
-        state.suspendIntentsSinceRunning == SUSPEND_COMMAND_LIMIT,
-      })
-  }
-
-  run responsibilityPrecedesFirstExecutorCommandTest = {
-    init
-      .expect(not(canRecordStartIntent(state)))
-      .then(beginResponsibility)
-      .expect(responsibilityBeganReached and state.positionHeld)
   }
 }

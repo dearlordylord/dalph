@@ -9,42 +9,46 @@ import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { ApplicationExitDrainFailure } from "./application-shell.js"
 import { ApplicationExitDiagnostic, decideExecutorPosition } from "./lifecycle-decision.js"
-import {
-  latestPlannedAttemptExecutorEvidence,
-  latestUnsettledPlannedAttemptExecutorCommand
-} from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import { latestUnsettledPlannedAttemptExecutorCommand } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import { acceptedPlannedAttemptExecutorReportRecords } from "../../workflow/protocols/planned-attempt-executor-work/report-acceptance.js"
 import { requestPlannedAttemptExecutorSuspensionWithoutReconciliation } from "../../workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
 
 /** Whether Exit may issue the first suspension command or must preserve an earlier unresolved one. */
-export type RunningAttemptForApplicationExit = Data.TaggedEnum<{
+export type ExecutingAttemptForApplicationExit = Data.TaggedEnum<{
   ExecutorCommandAlreadyUnresolved: { readonly plannedAttempt: PlannedTaskAttempt }
   ReadyForSuspension: { readonly plannedAttempt: PlannedTaskAttempt }
 }>
 
-export const RunningAttemptForApplicationExit = Data.taggedEnum<RunningAttemptForApplicationExit>()
+export const ExecutingAttemptForApplicationExit = Data.taggedEnum<ExecutingAttemptForApplicationExit>()
 
 interface AttemptDrainResult {
   readonly correlations: ReadonlyArray<PlannedAttemptExecutorCorrelation>
   readonly diagnostics: ReadonlyArray<ApplicationExitDiagnostic>
 }
 
+const latestArrayElementOffset = -1
+
 /**
  * Finds exact unfinished responsibilities whose newest accepted executor
- * evidence is Running. It derives the set from Run history and allocates no
+ * evidence is Executing. It derives the set from Run history and allocates no
  * executor, operation, or replacement-attempt identity.
  */
-export const runningAttemptsForApplicationExit = (state: {
+export const executingAttemptsForApplicationExit = (state: {
   readonly records: ReadonlyArray<JournalRecord>
   readonly responsibilities: ReadonlyArray<WorkflowResponsibilityEntry>
-}): ReadonlyArray<RunningAttemptForApplicationExit> =>
-  state.responsibilities.flatMap((responsibility): ReadonlyArray<RunningAttemptForApplicationExit> => {
+}): ReadonlyArray<ExecutingAttemptForApplicationExit> =>
+  state.responsibilities.flatMap((responsibility): ReadonlyArray<ExecutingAttemptForApplicationExit> => {
     if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
     const plannedAttempt = responsibility.plannedAttempt
     if (latestUnsettledPlannedAttemptExecutorCommand(state.records, plannedAttempt) !== undefined) {
-      return [RunningAttemptForApplicationExit.ExecutorCommandAlreadyUnresolved({ plannedAttempt })]
+      return [ExecutingAttemptForApplicationExit.ExecutorCommandAlreadyUnresolved({ plannedAttempt })]
     }
-    return latestPlannedAttemptExecutorEvidence(state.records, plannedAttempt)?.report._tag === "Running"
-      ? [RunningAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })]
+    const latestAccepted = acceptedPlannedAttemptExecutorReportRecords(state.records, plannedAttempt).at(
+      latestArrayElementOffset
+    )
+    return latestAccepted?.event._tag === "PlannedAttemptExecutorWorkReported" &&
+      latestAccepted.event.report._tag === "ExecutorWorkExecuting"
+      ? [ExecutingAttemptForApplicationExit.ReadyForSuspension({ plannedAttempt })]
       : []
   })
 
@@ -59,17 +63,17 @@ const diagnosticFor = (error: { readonly _tag?: string }): ApplicationExitDiagno
 /**
  * Records the ordinary suspension intent, calls only requestSuspension, and
  * accepts only exact safe-or-terminal evidence. An unresolved intent or a
- * Running response deliberately remains pending until the shell's original
+ * Executing response deliberately remains pending until the shell's original
  * five-second deadline interrupts the drain.
  */
-export const suspendRunningExecutorWorkForApplicationExit = Effect.fn(
-  "ApplicationExitExecutorDrain.suspendRunningExecutorWork"
+export const suspendExecutingExecutorWorkForApplicationExit = Effect.fn(
+  "ApplicationExitExecutorDrain.suspendExecutingExecutorWork"
 )(function* () {
   const journal = yield* Journal
   const state = yield* journal.state.get.pipe(
     Effect.mapError((error) => new ApplicationExitDrainFailure({ diagnostics: [diagnosticFor(error)] }))
   )
-  const attempts = runningAttemptsForApplicationExit({
+  const attempts = executingAttemptsForApplicationExit({
     records: state.records,
     responsibilities: state.reconstructed.responsibility.entries
   })
@@ -78,7 +82,7 @@ export const suspendRunningExecutorWorkForApplicationExit = Effect.fn(
 
 /** Executes the already-derived exact-attempt set through the ordinary journaled executor protocol. */
 export const suspendApplicationExitAttempts = Effect.fn("ApplicationExitExecutorDrain.suspendAttempts")(function* (
-  attempts: ReadonlyArray<RunningAttemptForApplicationExit>
+  attempts: ReadonlyArray<ExecutingAttemptForApplicationExit>
 ) {
   const results = yield* Effect.forEach(
     attempts,

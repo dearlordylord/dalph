@@ -163,7 +163,6 @@ const notPreparedDetail = IntegratorNotPreparedDetail.make("outer Integrator rea
 type Phase =
   | "NoAcceptedResult"
   | "AcceptedResult"
-  | "LateAcceptedEvidence"
   | "Queued"
   | "Started"
   | "DependencyWait"
@@ -225,7 +224,6 @@ type PromotionGitObservation =
 
 type ModelResult = {
   readonly phase: Phase
-  readonly restartChoiceCommittedBeforeTerminal: boolean
   readonly acceptedEvidencePreserved: boolean
   readonly integrationResponsibilityRecorded: boolean
   readonly integrationResponsibilityCount: bigint
@@ -312,7 +310,6 @@ type ModelResult = {
 
 const initialResult = (id: bigint): ModelResult => ({
   phase: "NoAcceptedResult",
-  restartChoiceCommittedBeforeTerminal: false,
   acceptedEvidencePreserved: false,
   integrationResponsibilityRecorded: false,
   integrationResponsibilityCount: 0n,
@@ -457,7 +454,6 @@ const SpecResult = Schema.Struct({
   resourceBoundCommit: ITFBigInt,
   resourceBoundHead: ITFBigInt,
   resourceBoundTarget: ITFBigInt,
-  restartChoiceCommittedBeforeTerminal: Schema.Boolean,
   resourceHeadCandidate: ITFBigInt,
   retryFreshQuarantineCount: ITFBigInt,
   retryNotApplicableCount: ITFBigInt,
@@ -768,14 +764,7 @@ const candidateObservationTag = (
 }
 
 const phaseNeedsSession = (phase: Phase): boolean =>
-  !new Set<Phase>([
-    "NoAcceptedResult",
-    "AcceptedResult",
-    "LateAcceptedEvidence",
-    "Queued",
-    "Started",
-    "DependencyWait"
-  ]).has(phase)
+  !new Set<Phase>(["NoAcceptedResult", "AcceptedResult", "Queued", "Started", "DependencyWait"]).has(phase)
 
 const phaseNeedsResult = (phase: Phase): boolean =>
   new Set<Phase>([
@@ -1319,7 +1308,6 @@ const acceptedResultIntegrationDriver = defineDriver(
     loseIntegratorResponseOne: {},
     losePromotionAttemptResponseOne: {},
     loseSuccessorResponseOne: {},
-    observeAppliedRestartBeforeAcceptedOne: {},
     observeExactCandidateOne: {},
     observeIncompatibleTargetLineageOne: {},
     observeMissingCandidateOne: {},
@@ -1714,11 +1702,7 @@ const acceptedResultIntegrationDriver = defineDriver(
     }
 
     const modelAccept = (id: bigint): void =>
-      updateModelResult(id, (result) => ({
-        ...result,
-        phase: result.restartChoiceCommittedBeforeTerminal ? "LateAcceptedEvidence" : "AcceptedResult",
-        acceptedEvidencePreserved: true
-      }))
+      updateModelResult(id, (result) => ({ ...result, phase: "AcceptedResult", acceptedEvidencePreserved: true }))
 
     const modelQueue = (id: bigint): void => {
       const queuePosition = modelNextJournalPosition
@@ -1743,6 +1727,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         "CandidateGitReadIntent",
         "CandidateGitReadPending",
         "CandidateReady",
+        "FullRerunSelected",
         "PromotionPremise"
       ]).has(phase)
 
@@ -2163,7 +2148,6 @@ const acceptedResultIntegrationDriver = defineDriver(
       const requiresFreshFacts = [...modelResults.values()].some(
         (result) =>
           result.phase !== "NoAcceptedResult" &&
-          result.phase !== "LateAcceptedEvidence" &&
           !new Set<Phase>(["PromotionSucceeded", "PromotionStale", "PromotionExhausted"]).has(result.phase)
       )
       updateModelResults((result) => ({
@@ -2182,7 +2166,8 @@ const acceptedResultIntegrationDriver = defineDriver(
                   ? "PromotionResponseLost"
                   : result.phase,
         integratorResponseAmbiguous: result.phase === "IntegratorInFlight" ? true : result.integratorResponseAmbiguous,
-        targetHeld: false,
+        targetHeld:
+          result.phase === "IntegratorNotPrepared" || result.phase === "CandidateRejected" ? result.targetHeld : false,
         lastRecoveryRunSession:
           result.integratorResponseAmbiguous ||
           result.phase === "IntegratorInFlight" ||
@@ -2277,6 +2262,7 @@ const acceptedResultIntegrationDriver = defineDriver(
         return rejectImpossibleTransition(`integrator adapter predecessor contradiction: ${predecessor.detail}`)
       }
       const resultState: ReconstructedIntegratorState = new Set<Phase>([
+        "RetrySelected",
         "RetryInFlight",
         "SuccessorSessionFixed",
         "SuccessorInFlight",
@@ -2385,7 +2371,21 @@ const acceptedResultIntegrationDriver = defineDriver(
         return rejectImpossibleTransition("model/runtime Git-read intent mismatch")
       }
       if (model.candidateGitObservation !== actualCandidateObservation) {
-        return rejectImpossibleTransition("model/runtime Git observation mismatch")
+        const candidateHistory = runtime
+          .readRecords()
+          .flatMap(({ event, position }) =>
+            event._tag === "IntegratorRunCandidateGitReadIntended"
+              ? [`${position}:intent:${event.run.session.sessionId}:${event.candidateText}`]
+              : event._tag === "IntegratorRunCandidateGitObserved"
+                ? [
+                    `${position}:observed:${event.run.session.sessionId}:${event.observation.candidateText}:${event.observation._tag}`
+                  ]
+                : []
+          )
+          .join(",")
+        return rejectImpossibleTransition(
+          `model/runtime Git observation mismatch for result ${id}: expected ${model.candidateGitObservation}, actual ${actualCandidateObservation}, phase ${model.phase}, reconstructed ${resultState._tag}, history ${candidateHistory}`
+        )
       }
       if (model.candidateQualificationProven !== (resultState._tag === "GitQualifiedPrepared")) {
         return rejectImpossibleTransition("model/runtime Git qualification mismatch")

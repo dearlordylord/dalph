@@ -17,10 +17,12 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowResponsibilityEntry, WorkflowResponsibilityState } from "../reconstruction/state.js"
+import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import {
   deriveRunFinalityDecision,
   deriveRunnableFrontier,
   ResponsibilityDisposition,
+  type ResponsibilityFreshFacts,
   RunnableFrontierTransition,
   runnableTransitionTaskId
 } from "./frontier.js"
@@ -97,7 +99,7 @@ it("orders owned work by earliest outstanding journal position before task ident
   expect(frontier.transitions.map(runnableTransitionTaskId)).toEqual([taskA, taskB, taskA])
 })
 
-it("prioritizes a sibling executor safety suspension before continuation", () => {
+it("prioritizes a sibling executor safety suspension before observation", () => {
   const continuingA = { ...executionResponsibilityFor(taskA, "task-A-continuing"), beganAt: JournalPosition.make(1) }
   const suspendingB = { ...executionResponsibilityFor(taskB, "task-B-suspending"), beganAt: JournalPosition.make(3) }
   const frontier = deriveRunnableFrontier({
@@ -125,8 +127,78 @@ it("prioritizes a sibling executor safety suspension before continuation", () =>
 
   expect(frontier.transitions.map((transition) => [transition._tag, runnableTransitionTaskId(transition)])).toEqual([
     ["SuspendPlannedAttemptExecutorWork", taskB],
-    ["ContinuePlannedAttemptExecutorWork", taskA]
+    ["ObservePlannedAttemptExecutorWork", taskA]
   ])
+})
+
+it("begins only once and observes already-begun executor work thereafter", () => {
+  const responsibility = executionResponsibilityFor(taskA)
+  const state = WorkflowResponsibilityState.make({ entries: [responsibility] })
+  const frontierFor = (
+    acceptedProgress:
+      | { readonly _tag: "ExecutorResponsibilityBegan"; readonly acceptedAt: JournalPosition }
+      | { readonly _tag: "ExecutorReportAccepted"; readonly ordinal: PlannedAttemptExecutorReportOrdinal }
+  ) =>
+    deriveRunnableFrontier({
+      freshEligibleTasks: [],
+      responsibility: state,
+      responsibilityFacts: [
+        {
+          _tag: "PlannedAttemptExecutorFreshFacts" as const,
+          disposition: { _tag: "Ready" as const, acceptedProgress },
+          responsibility
+        }
+      ]
+    })
+
+  expect(frontierFor({ _tag: "ExecutorResponsibilityBegan", acceptedAt: responsibility.beganAt }).transitions).toEqual([
+    RunnableFrontierTransition.BeginPlannedAttemptExecutorWork({ plannedAttempt: responsibility.plannedAttempt })
+  ])
+  expect(
+    frontierFor({ _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(1) }).transitions
+  ).toEqual([
+    RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+      acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+      plannedAttempt: responsibility.plannedAttempt
+    })
+  ])
+})
+
+it("projects stopped-executor observation and wait dispositions distinctly", () => {
+  const responsibility = executionResponsibilityFor(taskA)
+  const state = WorkflowResponsibilityState.make({ entries: [responsibility] })
+  const requestId = AttemptChoiceRequestId.make({ nonce: "frontier-stoppage", runId: frontierRunId })
+  const subject = {
+    observedTaskRevision: TaskRevision.make("frontier-stoppage-observed"),
+    plannedAttempt: responsibility.plannedAttempt
+  }
+  const frontierFor = (
+    disposition: Extract<ResponsibilityFreshFacts, { readonly _tag: "PlannedAttemptExecutorFreshFacts" }>["disposition"]
+  ) =>
+    deriveRunnableFrontier({
+      freshEligibleTasks: [],
+      responsibility: state,
+      responsibilityFacts: [{ _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }]
+    })
+
+  expect(
+    frontierFor(ResponsibilityDisposition.AttemptStoppageExecutorObservationRequired({ requestId, subject }))
+  ).toEqual({
+    explanations: [],
+    transitions: [RunnableFrontierTransition.ObserveAttemptStoppageExecutor({ requestId, subject })]
+  })
+  expect(frontierFor(ResponsibilityDisposition.AttemptStoppageWait({ reason: "ExecutorUnavailable" }))).toEqual({
+    explanations: [
+      {
+        _tag: "AttemptStoppageWait",
+        correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
+        reason: "ExecutorUnavailable",
+        taskId: taskA,
+        wakeCondition: "ProcessRestartedOrAcceptedFactsChanged"
+      }
+    ],
+    transitions: []
+  })
 })
 
 it("reconciles an already-intended exact claim release as its own responsibility", () => {
@@ -162,7 +234,7 @@ it("reconciles an already-intended exact claim release as its own responsibility
 
 it("retains a terminal executor report for the exact planned attempt", () => {
   const responsibility = executionResponsibilityFor(taskA)
-  const report = PlannedAttemptExecutorReport.cases.Terminal.make({
+  const report = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
     correlation: { attemptId: responsibility.plannedAttempt.attemptId, runId: responsibility.plannedAttempt.runId },
     result: PlannedAttemptExecutorResult.cases.Failed.make({})
   })

@@ -52,8 +52,10 @@ type CursorFailure = AuthoredCassetteInteractionMismatch
 type OuterIntegratorGitStoryItem =
   | typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationFailed.Type
   | typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationReturned.Type
-type AuthoredExecutorRequest = "StartOrContinue" | "Suspend"
+type AuthoredExecutorRequest = "Begin" | "Resume" | "Suspend"
 type ActiveExecutorReportRequest = { readonly attemptId: AttemptId; readonly request: AuthoredExecutorRequest }
+type ExecutorRequestPublicationHold =
+  typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.Type
 type GitRequestCorrelation = { readonly candidateCommit: GitCommitSha; readonly repository: GitRepositoryLocator }
 type PromotionGitStoryItem =
   | typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadFailed.Type
@@ -96,6 +98,11 @@ const executorReportRequestMatches = (
   active: ActiveExecutorReportRequest,
   item: AuthoredPlannedAttemptExecutorOutcomeItem
 ): boolean => active.request === item.request && active.attemptId === item.report.attemptId
+
+const executorRequestPublicationHoldMatches = (
+  active: ActiveExecutorReportRequest,
+  item: ExecutorRequestPublicationHold
+): boolean => active.request === item.request && active.attemptId === item.attemptId
 
 const authoredExecutorReportMatches = (
   item: StoryItem | undefined,
@@ -284,8 +291,15 @@ export interface StoryCursor {
     Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldTargetLineageRead.Type>
   >
   readonly awaitTargetLineageReadBoundary: (taskId: TaskId, attemptId: AttemptId) => Effect.Effect<void>
-  readonly consumeExecutorRequestPublicationHold: Effect.Effect<
-    Option.Option<typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.Type>
+  readonly consumeExecutorRequestPublicationHold: (
+    taskId: TaskId,
+    attemptId: AttemptId,
+    request: AuthoredExecutorRequest
+  ) => Effect.Effect<
+    Option.Option<{
+      readonly item: typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.Type
+      readonly releaseAfterStoryPosition: number
+    }>
   >
   readonly consumeCapacityChange: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type>
@@ -299,17 +313,17 @@ export interface StoryCursor {
   readonly consumeExecutorReport: Effect.Effect<AuthoredPlannedAttemptExecutorOutcomeItem, CursorFailure>
   /** Concurrent executor requests wait for the exact authored attempt and command response. */
   readonly consumeExecutorReportFor: (
-    request: "StartOrContinue" | "Suspend",
+    request: "Begin" | "Resume" | "Suspend",
     attemptId: AttemptId
   ) => Effect.Effect<AuthoredPlannedAttemptExecutorOutcomeItem, CursorFailure>
   /** Marks the exact executor command in flight before crash and response boundaries are inspected. */
   readonly beginExecutorReportRequest: (
-    request: "StartOrContinue" | "Suspend",
+    request: "Begin" | "Resume" | "Suspend",
     attemptId: AttemptId
   ) => Effect.Effect<void>
   /** Releases one exact in-flight executor command marker after its controlled boundary settles. */
   readonly endExecutorReportRequest: (
-    request: "StartOrContinue" | "Suspend",
+    request: "Begin" | "Resume" | "Suspend",
     attemptId: AttemptId
   ) => Effect.Effect<void>
   readonly consumeExecutorProjection: Effect.Effect<
@@ -617,6 +631,21 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       return true
     }
   )
+  const awaitOwnedExecutorRequestPublicationHoldBeforeSelection = Effect.fn(
+    "AuthoredCassette.awaitOwnedExecutorRequestPublicationHoldBeforeSelection"
+  )(function* (item: StoryItem | undefined, index: number) {
+    if (item?._tag !== "DalphHoldsExecutorRequestThroughNextDeliveryPublication") return false
+    const ownership = SubscriptionRef.changes(activeExecutorReportRequests).pipe(
+      Stream.filter((active) => active.some((candidate) => executorRequestPublicationHoldMatches(candidate, item)))
+    )
+    const isOwned = SubscriptionRef.get(activeExecutorReportRequests).pipe(
+      Effect.map((active) => active.some((candidate) => executorRequestPublicationHoldMatches(candidate, item)))
+    )
+    const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+    if (ownershipOrAdvance === "Unowned") return false
+    if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
+    return true
+  })
   const awaitOwnedStoryItemImmediatelyBeforeSelection = Effect.fn(
     "AuthoredCassette.awaitOwnedStoryItemImmediatelyBeforeSelection"
   )(function* (item: StoryItem | undefined, index: number, operation: CassetteDecision) {
@@ -654,6 +683,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     claimed: MismatchedStoryItem,
     operation: CassetteDecision
   ) {
+    if (yield* awaitOwnedExecutorRequestPublicationHoldBeforeSelection(claimed.item, claimed.index)) return true
     const activeRequests = yield* SubscriptionRef.get(activeExecutorReportRequests)
     const activeIntegratorRequests = yield* SubscriptionRef.get(activeIntegratorGitObservations)
     const activeSelections = yield* SubscriptionRef.get(activeDalphSelections)
@@ -921,16 +951,24 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       if (release === undefined) return yield* dieAtBoundary
       yield* Effect.raceFirst(Deferred.await(release), dieAtBoundary)
     })
-  const consumeExecutorRequestPublicationHold = Effect.gen(function* () {
-    const claimed = yield* claimNext(
-      (
-        item
-      ): item is typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.Type =>
-        item?._tag === "DalphHoldsExecutorRequestThroughNextDeliveryPublication"
-    )
-    if (claimed._tag === "Mismatch") return Option.none()
-    return Option.some(claimed.item)
-  })
+  const consumeExecutorRequestPublicationHold = (
+    taskId: TaskId,
+    attemptId: AttemptId,
+    request: AuthoredExecutorRequest
+  ) =>
+    Effect.gen(function* () {
+      const claimed = yield* claimNext(
+        (
+          item
+        ): item is typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.Type =>
+          item?._tag === "DalphHoldsExecutorRequestThroughNextDeliveryPublication" &&
+          item.taskId === taskId &&
+          item.attemptId === attemptId &&
+          item.request === request
+      )
+      if (claimed._tag === "Mismatch") return Option.none()
+      return Option.some({ item: claimed.item, releaseAfterStoryPosition: claimed.index + 1 })
+    })
   const consumeExecutorReport = Effect.gen(function* () {
     const claimed = yield* claimNext(isAuthoredPlannedAttemptExecutorOutcomeItem)
     if (claimed._tag === "Mismatch") {
@@ -1599,9 +1637,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return true
   })
-  const consumeTrackerGraphLoop: () => StoryCursor["consumeTrackerGraph"] = Effect.fn(
-    "AuthoredCassette.consumeTrackerGraphLoop"
-  )(function* () {
+  const consumeTrackerGraphLoop = Effect.fn("AuthoredCassette.consumeTrackerGraphLoop")(function* (): Effect.fn.Return<
+    AuthoredTrackerGraphReadResult,
+    CursorFailure
+  > {
     const claimed = yield* claimNext(
       (item): item is AuthoredTrackerGraphReadResult =>
         item?._tag === "TrackerGraphReadFailed" ||
@@ -1612,6 +1651,24 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       if (yield* awaitOwnedSelectionBeforeTrackerGraphResult(claimed.item, claimed.index)) {
         return yield* consumeTrackerGraphLoop()
       }
+      const currentItem = claimed.item
+      if (isAuthoredPlannedAttemptExecutorOutcomeItem(currentItem)) {
+        const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(
+          SubscriptionRef.changes(activeExecutorReportRequests).pipe(
+            Stream.filter((active) => active.some((candidate) => executorReportRequestMatches(candidate, currentItem)))
+          ),
+          claimed.index,
+          SubscriptionRef.get(activeExecutorReportRequests).pipe(
+            Effect.map((active) => active.some((candidate) => executorReportRequestMatches(candidate, currentItem)))
+          )
+        )
+        if (ownershipOrAdvance !== "Unowned") {
+          yield* awaitsLaterStoryItem(position, claimed.index)
+          return yield* consumeTrackerGraphLoop()
+        }
+      }
+    }
+    if (claimed._tag === "Mismatch") {
       return yield* new AuthoredCassetteInteractionMismatch({
         actual: "TrackerGraphReadFailed | TrackerGraphReadReturned | RunActivationFinalTrackerGraphReadReturned",
         /* v8 ignore next -- A decoded story retains its terminal assertion after any graph interaction. */

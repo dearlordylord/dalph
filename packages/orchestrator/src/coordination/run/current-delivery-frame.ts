@@ -4,7 +4,6 @@ import type { OperationId } from "../../workflow/identity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import { Effect, Option, Schema } from "effect"
 import type { JournalState } from "../delivery/journal.js"
-import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 
 /** Journal history does not yet contain a graph usable by delivery. */
@@ -39,17 +38,8 @@ export const journaledCurrentDeliveryFrameOf = (
 ): Effect.Effect<CurrentDeliveryFrame, CurrentDeliveryControlPolicyUnavailable | CurrentDeliveryGraphUnavailable> =>
   Effect.gen(function* () {
     if (journal.graph._tag === "GraphNotEstablished") return yield* new CurrentDeliveryGraphUnavailable()
-    const currentGraph = Option.getOrUndefined(latestReconstructedTaskGraph(journal.reconstructed.graphKnowledge))
-    /* v8 ignore start -- GraphEstablished is published from this exact reconstructed graph. */
-    if (currentGraph === undefined) return yield* new CurrentDeliveryGraphUnavailable()
-    /* v8 ignore stop */
-    const currentGraphOperationId = journal.reconstructed.graphKnowledge.taskTrackerFacts.findLast(
-      (observation) =>
-        observation._tag === "CompleteTaskTrackerFacts" || observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
-    )?.operationId
-    /* v8 ignore start -- A reconstructed complete graph retains its journaled observation identity. */
-    if (currentGraphOperationId === undefined) return yield* new CurrentDeliveryGraphUnavailable()
-    /* v8 ignore stop */
+    const currentGraph = journal.graph.observation.snapshot
+    const currentGraphOperationId = journal.graph.observation.operationId
     const runControlPolicy = Option.getOrUndefined(journal.reconstructed.controlPolicy)
     /* v8 ignore start -- Bootstrap validates that Run beginning established this policy. */
     if (runControlPolicy === undefined) return yield* new CurrentDeliveryControlPolicyUnavailable()

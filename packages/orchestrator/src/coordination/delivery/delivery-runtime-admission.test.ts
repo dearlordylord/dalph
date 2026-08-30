@@ -141,7 +141,7 @@ it.effect("keeps proof-based Stop behind an already admitted continuation until 
         { capacity: TaskWorkCapacity.make(1), held: [], preStart: [] },
         yield* makeIntegrationTargetResourceController()
       )
-      const continuationTransition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+      const continuationTransition = RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
         acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
         plannedAttempt
       })
@@ -209,6 +209,12 @@ it.effect("a successful claim action retains its pre-start task-work reservation
       yield* admission.bindPreStartTaskWorkPosition(taskId, OperationId.make("claim-A"))
       yield* admission.complete(admitted.reservation)
 
+      expect((yield* admission.snapshot).positions.get(taskId)).toMatchObject({ _tag: "BoundPreStartRuntimePosition" })
+      yield* admission.synchronize({
+        capacity: TaskWorkCapacity.make(1),
+        held: [],
+        preStart: [{ _tag: "UnplannedPreStartTaskWorkPosition", claimOperationId: OperationId.make("claim-A"), taskId }]
+      })
       expect((yield* admission.snapshot).positions.get(taskId)).toMatchObject({ _tag: "DurablePreStartPosition" })
     })
   )
@@ -312,7 +318,7 @@ it.effect("retains a reconstructed running position across a stale synchronizati
         correlation
       })
 
-      yield* admission.bindPlannedAttemptPosition(taskId, correlation)
+      yield* admission.bindPlannedAttemptPosition(taskId, correlation, DeliveryProposalId.make("stale-running"))
       yield* admission.synchronize({
         capacity: TaskWorkCapacity.make(1),
         held: [{ correlation, taskId }],
@@ -421,11 +427,53 @@ it.effect("fails closed when a claim or plan binding loses its exact position pr
       })
 
       const foreignExecutorAttempt = yield* admission
-        .bindPlannedAttemptPosition(taskId, { attemptId: AttemptId.make("attempt:binding:foreign-executor"), runId })
+        .bindPlannedAttemptPosition(
+          taskId,
+          { attemptId: AttemptId.make("attempt:binding:foreign-executor"), runId },
+          DeliveryProposalId.make("foreign-executor")
+        )
         .pipe(Effect.flip)
       expect(foreignExecutorAttempt).toMatchObject({
         _tag: "ExecutorPlanTaskWorkPositionBindingContradiction",
         reason: "AttemptCorrelationMismatch"
+      })
+    })
+  )
+)
+
+it.effect("retains a bound planned pre-start position until its accepted executor publication", () =>
+  withProtocolController(
+    Effect.gen(function* () {
+      const claimOperationId = OperationId.make("claim-bound-until-publication")
+      const exactCorrelation = { attemptId: AttemptId.make("attempt:bound-until-publication"), runId }
+      const proposalId = DeliveryProposalId.make("bound-until-publication")
+      const admission = yield* makeDeliveryRuntimeAdmissionController(
+        {
+          capacity: TaskWorkCapacity.make(1),
+          held: [],
+          preStart: [
+            { _tag: "PlannedPreStartTaskWorkPosition", claimOperationId, correlation: exactCorrelation, taskId }
+          ]
+        },
+        yield* makeIntegrationTargetResourceController()
+      )
+
+      yield* admission.bindPlannedAttemptPosition(taskId, exactCorrelation, proposalId)
+      yield* admission.synchronize({ capacity: TaskWorkCapacity.make(1), held: [], preStart: [] })
+      expect((yield* admission.snapshot).positions.get(taskId)).toEqual({
+        _tag: "BoundRuntimePosition",
+        correlation: exactCorrelation,
+        proposalId
+      })
+
+      yield* admission.synchronize({
+        capacity: TaskWorkCapacity.make(1),
+        held: [{ correlation: exactCorrelation, taskId }],
+        preStart: []
+      })
+      expect((yield* admission.snapshot).positions.get(taskId)).toEqual({
+        _tag: "AcceptedAttemptPosition",
+        correlation: exactCorrelation
       })
     })
   )
@@ -528,7 +576,7 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
         integrationTargets
       )
       const missingBinding = yield* admission
-        .bindPlannedAttemptPosition(TaskId.make("unknown"), correlation)
+        .bindPlannedAttemptPosition(TaskId.make("unknown"), correlation, DeliveryProposalId.make("missing-binding"))
         .pipe(Effect.flip)
       expect(missingBinding).toMatchObject({
         _tag: "ExecutorPlanTaskWorkPositionBindingContradiction",
@@ -641,7 +689,7 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
         ]
       })
       expect((yield* admission.snapshot).positions.get(pendingTaskId)).toMatchObject({
-        _tag: "BoundRuntimePosition",
+        _tag: "AcceptedAttemptPosition",
         correlation: otherCorrelation
       })
       expect((yield* admission.snapshot).positions.get(synchronizedPendingTaskId)).toMatchObject({
@@ -715,6 +763,206 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
       if (acquired._tag !== "Admitted") return yield* Effect.die("integration target was not acquired")
       yield* admission.rollback(acquired.reservation, false)
       expect((yield* integrationTargets.snapshot).heldResponsibilityPositions).toEqual(new Set())
+    })
+  )
+)
+
+it.effect("reconciles every live and durable pre-start publication phase without inventing capacity", () =>
+  withProtocolController(
+    Effect.gen(function* () {
+      const proposalBase = trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(1),
+        purpose: "EstablishCurrentGraph",
+        runId,
+        target: FixtureTarget.make("admission-publication-phase-target")
+      })
+      const proposalFor = (id: string, task: TaskId) => ({
+        ...proposalBase,
+        admission: {
+          integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+          plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+          taskWorkPosition: {
+            _tag: "PreStartTaskWorkPositionRequired" as const,
+            mode: "AcquireFresh" as const,
+            taskId: task
+          }
+        },
+        id: DeliveryProposalId.make(id)
+      })
+      const planned = (task: TaskId, claimOperationId: OperationId, exactCorrelation = correlation) => ({
+        _tag: "PlannedPreStartTaskWorkPosition" as const,
+        claimOperationId,
+        correlation: exactCorrelation,
+        taskId: task
+      })
+      const unplanned = (task: TaskId, claimOperationId: OperationId) => ({
+        _tag: "UnplannedPreStartTaskWorkPosition" as const,
+        claimOperationId,
+        taskId: task
+      })
+
+      const pendingTask = TaskId.make("publication-pending")
+      const pendingClaim = OperationId.make("publication-pending-claim")
+      const pendingAdmission = yield* makeDeliveryRuntimeAdmissionController(
+        { capacity: TaskWorkCapacity.make(1), held: [], preStart: [] },
+        yield* makeIntegrationTargetResourceController()
+      )
+      const pendingReservation = yield* pendingAdmission.tryReserve(proposalFor("publication-pending", pendingTask))
+      if (pendingReservation._tag !== "Admitted") return yield* Effect.die("pending position was not admitted")
+      yield* pendingAdmission.synchronize({
+        capacity: TaskWorkCapacity.make(1),
+        held: [],
+        preStart: [planned(pendingTask, pendingClaim)]
+      })
+      expect((yield* pendingAdmission.snapshot).positions.get(pendingTask)).toMatchObject({
+        _tag: "BoundPreStartRuntimePosition",
+        claimOperationId: pendingClaim
+      })
+      yield* pendingAdmission.synchronize({
+        capacity: TaskWorkCapacity.make(1),
+        held: [],
+        preStart: [planned(pendingTask, pendingClaim)]
+      })
+      expect((yield* pendingAdmission.snapshot).positions.get(pendingTask)).toMatchObject({
+        _tag: "DurablePlannedPreStartPosition"
+      })
+      yield* pendingAdmission.synchronize({
+        capacity: TaskWorkCapacity.make(1),
+        held: [],
+        preStart: [unplanned(pendingTask, pendingClaim)]
+      })
+      expect((yield* pendingAdmission.snapshot).positions.get(pendingTask)).toEqual({
+        _tag: "DurablePreStartPosition",
+        claimOperationId: pendingClaim
+      })
+      yield* pendingAdmission.rollback(pendingReservation.reservation, false)
+      expect((yield* pendingAdmission.snapshot).positions.get(pendingTask)).toMatchObject({
+        _tag: "DurablePreStartPosition"
+      })
+
+      const mismatchedTask = TaskId.make("publication-mismatched")
+      const mismatchedAdmission = yield* makeDeliveryRuntimeAdmissionController(
+        { capacity: TaskWorkCapacity.make(1), held: [], preStart: [] },
+        yield* makeIntegrationTargetResourceController()
+      )
+      const mismatchedReservation = yield* mismatchedAdmission.tryReserve(
+        proposalFor("publication-mismatched", mismatchedTask)
+      )
+      if (mismatchedReservation._tag !== "Admitted") return yield* Effect.die("mismatch position was not admitted")
+      yield* mismatchedAdmission.bindPreStartTaskWorkPosition(
+        mismatchedTask,
+        OperationId.make("publication-original-claim")
+      )
+      yield* mismatchedAdmission.synchronize({
+        capacity: TaskWorkCapacity.make(1),
+        held: [],
+        preStart: [planned(mismatchedTask, OperationId.make("publication-foreign-claim"))]
+      })
+      expect((yield* mismatchedAdmission.snapshot).positions.get(mismatchedTask)).toMatchObject({
+        _tag: "BoundPreStartRuntimePosition",
+        claimOperationId: OperationId.make("publication-original-claim")
+      })
+      yield* mismatchedAdmission.synchronize({
+        capacity: TaskWorkCapacity.make(1),
+        held: [],
+        preStart: [unplanned(mismatchedTask, OperationId.make("publication-original-claim"))]
+      })
+      expect((yield* mismatchedAdmission.snapshot).positions.get(mismatchedTask)).toMatchObject({
+        _tag: "DurablePreStartPosition"
+      })
+      yield* mismatchedAdmission.rollback(mismatchedReservation.reservation, false)
+
+      const unboundTask = TaskId.make("publication-unbound-complete")
+      const unboundAdmission = yield* makeDeliveryRuntimeAdmissionController(
+        { capacity: TaskWorkCapacity.make(1), held: [], preStart: [] },
+        yield* makeIntegrationTargetResourceController()
+      )
+      const unboundReservation = yield* unboundAdmission.tryReserve(proposalFor("publication-unbound", unboundTask))
+      if (unboundReservation._tag !== "Admitted") return yield* Effect.die("unbound position was not admitted")
+      yield* unboundAdmission.complete(unboundReservation.reservation)
+      yield* unboundAdmission.rollback(unboundReservation.reservation, false)
+      expect((yield* unboundAdmission.snapshot).positions.has(unboundTask)).toBe(false)
+
+      const missingPlan = yield* unboundAdmission
+        .bindPreStartPlannedAttemptPosition(unboundTask, pendingClaim, correlation)
+        .pipe(Effect.flip)
+      expect(missingPlan.reason).toBe("PositionMissing")
+
+      const boundTask = TaskId.make("publication-bound-running")
+      const boundProposalId = DeliveryProposalId.make("publication-bound-running")
+      const boundAdmission = yield* makeDeliveryRuntimeAdmissionController(
+        { capacity: TaskWorkCapacity.make(1), held: [], preStart: [planned(boundTask, pendingClaim)] },
+        yield* makeIntegrationTargetResourceController()
+      )
+      yield* boundAdmission.bindPreStartTaskWorkPosition(boundTask, pendingClaim)
+      const foreignCorrelation = { attemptId: AttemptId.make("publication-foreign-attempt"), runId }
+      yield* boundAdmission.bindPlannedAttemptPosition(boundTask, correlation, boundProposalId)
+      yield* boundAdmission.synchronize({
+        capacity: TaskWorkCapacity.make(1),
+        held: [{ correlation: foreignCorrelation, taskId: boundTask }],
+        preStart: []
+      })
+      expect((yield* boundAdmission.snapshot).positions.get(boundTask)).toMatchObject({
+        _tag: "BoundRuntimePosition",
+        correlation
+      })
+      expect(
+        (yield* boundAdmission
+          .bindPlannedAttemptPosition(boundTask, foreignCorrelation, boundProposalId)
+          .pipe(Effect.flip)).reason
+      ).toBe("AttemptCorrelationMismatch")
+      yield* boundAdmission.bindPlannedAttemptPosition(boundTask, correlation, boundProposalId)
+
+      const acceptedAndPreStartTask = TaskId.make("publication-accepted-and-pre-start")
+      const acceptedAndPreStart = yield* makeDeliveryRuntimeAdmissionController(
+        { capacity: TaskWorkCapacity.make(1), held: [{ correlation, taskId: acceptedAndPreStartTask }], preStart: [] },
+        yield* makeIntegrationTargetResourceController()
+      )
+      yield* acceptedAndPreStart.synchronize({
+        capacity: TaskWorkCapacity.make(1),
+        held: [{ correlation, taskId: acceptedAndPreStartTask }],
+        preStart: [unplanned(acceptedAndPreStartTask, pendingClaim)]
+      })
+      expect((yield* acceptedAndPreStart.snapshot).positions.get(acceptedAndPreStartTask)).toMatchObject({
+        _tag: "AcceptedAttemptPosition"
+      })
+      expect(
+        (yield* acceptedAndPreStart
+          .bindPreStartTaskWorkPosition(acceptedAndPreStartTask, pendingClaim)
+          .pipe(Effect.flip)).reason
+      ).toBe("UnexpectedPositionPhase")
+      expect(
+        (yield* acceptedAndPreStart
+          .bindPreStartPlannedAttemptPosition(acceptedAndPreStartTask, pendingClaim, correlation)
+          .pipe(Effect.flip)).reason
+      ).toBe("UnexpectedPositionPhase")
+
+      const durablePlannedTask = TaskId.make("publication-durable-planned")
+      const durablePlanned = yield* makeDeliveryRuntimeAdmissionController(
+        { capacity: TaskWorkCapacity.make(1), held: [], preStart: [planned(durablePlannedTask, pendingClaim)] },
+        yield* makeIntegrationTargetResourceController()
+      )
+      expect(
+        (yield* durablePlanned
+          .bindPreStartTaskWorkPosition(durablePlannedTask, OperationId.make("publication-wrong-claim"))
+          .pipe(Effect.flip)).reason
+      ).toBe("ClaimOperationMismatch")
+      yield* durablePlanned.bindPreStartTaskWorkPosition(durablePlannedTask, pendingClaim)
+      expect(
+        (yield* durablePlanned
+          .bindPreStartPlannedAttemptPosition(
+            durablePlannedTask,
+            OperationId.make("publication-wrong-plan-claim"),
+            correlation
+          )
+          .pipe(Effect.flip)).reason
+      ).toBe("ClaimOperationMismatch")
+      expect(
+        (yield* durablePlanned
+          .bindPreStartPlannedAttemptPosition(durablePlannedTask, pendingClaim, foreignCorrelation)
+          .pipe(Effect.flip)).reason
+      ).toBe("AttemptCorrelationMismatch")
+      yield* durablePlanned.bindPreStartPlannedAttemptPosition(durablePlannedTask, pendingClaim, correlation)
     })
   )
 )

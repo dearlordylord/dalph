@@ -73,7 +73,20 @@ import {
   type IntegratorService
 } from "@dalph/orchestrator"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import { ConfigProvider, Deferred, Effect, FileSystem, Fiber, Layer, Option, Ref, Schema, Stream } from "effect"
+import {
+  ConfigProvider,
+  Deferred,
+  Effect,
+  Exit,
+  FileSystem,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Scope,
+  Stream
+} from "effect"
 import { expect } from "vitest"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 import { acceptedManifestBytes, runInGitDirectory, runInWorktree } from "./hermetic-support.js"
@@ -137,6 +150,7 @@ it.effect(
       const git = yield* GitCommand
       const childProcesses = yield* ChildProcessSpawner.ChildProcessSpawner
       const root = yield* fileSystem.makeTempDirectory({ prefix: "dalph-hermetic-concurrency-" })
+      const executorScope = yield* Scope.make()
 
       yield* Effect.gen(function* () {
         const repository = `${root}/repository`
@@ -230,8 +244,8 @@ it.effect(
         for (const task of taskKeys) childWorkFinished.set(task, yield* Deferred.make<void>())
         const childTerminal = new Map<TaskKey, Deferred.Deferred<void>>()
         for (const task of taskKeys) childTerminal.set(task, yield* Deferred.make<void>())
-        const accepted = new Map<TaskKey, Deferred.Deferred<void>>()
-        for (const task of taskKeys) accepted.set(task, yield* Deferred.make<void>())
+        const terminalProjectionReady = new Map<TaskKey, Deferred.Deferred<void>>()
+        for (const task of taskKeys) terminalProjectionReady.set(task, yield* Deferred.make<void>())
         const integratorStarted = new Map<TaskKey, Deferred.Deferred<void>>()
         for (const task of taskKeys) integratorStarted.set(task, yield* Deferred.make<void>())
         const allowBReport = yield* Deferred.make<void>()
@@ -452,7 +466,7 @@ it.effect(
         })
 
         const executor = PlannedAttemptExecutor.of({
-          project: (correlation) =>
+          observe: (correlation) =>
             Ref.get(executorReports).pipe(
               Effect.map((current) => {
                 const report = [...current.values()].find(
@@ -466,85 +480,94 @@ it.effect(
               })
             ),
           requestSuspension: () => Effect.die("the concurrency journey never requests suspension"),
-          startOrContinue: (request) =>
-            Effect.scoped(
-              Effect.gen(function* () {
-                const task = taskKeys.find((candidate) => request.plannedAttempt.taskId === taskIdOf(candidate))
-                if (task === undefined)
-                  return yield* Effect.die(`unknown planned attempt ${request.plannedAttempt.taskId}`)
-                const existing = yield* Ref.get(executorReports).pipe(Effect.map((current) => current.get(task)))
-                if (existing !== undefined) return existing
-                if (task === "D") {
-                  yield* Ref.set(dStarted, true)
-                  if (Option.isNone(yield* Deferred.poll(graphBothCompleted))) {
-                    return yield* Effect.die("D executor started before the later complete graph")
-                  }
-                  yield* Deferred.succeed(dStartedAfterGraph, undefined)
+          resume: () => Effect.die("the concurrency journey never resumes executor work"),
+          begin: (request) =>
+            Effect.gen(function* () {
+              const task = taskKeys.find((candidate) => request.plannedAttempt.taskId === taskIdOf(candidate))
+              if (task === undefined)
+                return yield* Effect.die(`unknown planned attempt ${request.plannedAttempt.taskId}`)
+              const existing = yield* Ref.get(executorReports).pipe(Effect.map((current) => current.get(task)))
+              if (existing !== undefined) return existing
+              if (task === "D") {
+                yield* Ref.set(dStarted, true)
+                if (Option.isNone(yield* Deferred.poll(graphBothCompleted))) {
+                  return yield* Effect.die("D executor started before the later complete graph")
                 }
-                const handle = yield* childProcesses.spawn(
-                  ChildProcess.make("node", ["-e", task === "D" ? immediateChildScript : barrierChildScript, task], {
-                    cwd: request.plannedAttempt.worktree
-                  })
-                )
-                yield* Ref.update(childHandles, (current) => new Map(current).set(task, handle))
-                const ready = taskValue(childReady, task)
-                const collector = yield* handle.stdout.pipe(
-                  Stream.decodeText(),
-                  Stream.splitLines,
-                  Stream.runForEach((line) => {
-                    if (line === `READY:${task}`) return Deferred.succeed(ready, undefined)
-                    if (line === `WORK_FINISHED:${task}`) {
-                      return Ref.update(childWorkFinishedOrder, (current) => [...current, task]).pipe(
-                        Effect.andThen(Deferred.succeed(taskValue(childWorkFinished, task), undefined))
-                      )
-                    }
-                    return Effect.void
-                  }),
-                  Effect.forkScoped
-                )
-                void collector
-                const exitCode = yield* handle.exitCode
-                if (exitCode !== 0) return yield* Effect.die(`hermetic child ${task} exited ${exitCode}`)
-                yield* Ref.update(childTerminalOrder, (current) => [...current, task])
-                yield* Deferred.succeed(taskValue(childTerminal, task), undefined)
-                if (task === "B") yield* Deferred.await(allowBReport)
-                yield* runInWorktree(
-                  git,
-                  request.plannedAttempt.worktree,
-                  ["add", `RESULT-${task}.md`],
-                  `stage ${task} result`
-                )
-                yield* runInWorktree(
-                  git,
-                  request.plannedAttempt.worktree,
-                  ["commit", "-m", `complete ${task}`],
-                  `commit ${task} result`
-                )
-                const commit = GitCommitSha.make(
+                yield* Deferred.succeed(dStartedAfterGraph, undefined)
+              }
+              const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                correlation: plannedAttemptExecutorCorrelation(request.plannedAttempt)
+              })
+              yield* Ref.update(executorReports, (current) => new Map(current).set(task, executing))
+              yield* Effect.scoped(
+                Effect.gen(function* () {
+                  const handle = yield* childProcesses.spawn(
+                    ChildProcess.make("node", ["-e", task === "D" ? immediateChildScript : barrierChildScript, task], {
+                      cwd: request.plannedAttempt.worktree
+                    })
+                  )
+                  yield* Ref.update(childHandles, (current) => new Map(current).set(task, handle))
+                  const ready = taskValue(childReady, task)
+                  const collector = yield* handle.stdout.pipe(
+                    Stream.decodeText(),
+                    Stream.splitLines,
+                    Stream.runForEach((line) => {
+                      if (line === `READY:${task}`) return Deferred.succeed(ready, undefined)
+                      if (line === `WORK_FINISHED:${task}`) {
+                        return Ref.update(childWorkFinishedOrder, (current) => [...current, task]).pipe(
+                          Effect.andThen(Deferred.succeed(taskValue(childWorkFinished, task), undefined))
+                        )
+                      }
+                      return Effect.void
+                    }),
+                    Effect.forkScoped
+                  )
+                  void collector
+                  const exitCode = yield* handle.exitCode
+                  if (exitCode !== 0) return yield* Effect.die(`hermetic child ${task} exited ${exitCode}`)
+                  yield* Ref.update(childTerminalOrder, (current) => [...current, task])
+                  yield* Deferred.succeed(taskValue(childTerminal, task), undefined)
+                  if (task === "B") yield* Deferred.await(allowBReport)
                   yield* runInWorktree(
                     git,
                     request.plannedAttempt.worktree,
-                    ["rev-parse", "HEAD"],
-                    `read ${task} commit`
+                    ["add", `RESULT-${task}.md`],
+                    `stage ${task} result`
                   )
-                )
-                yield* runInWorktree(
-                  git,
-                  request.plannedAttempt.worktree,
-                  ["push", bareRemote, `${commit}:refs/dalph/transfer-${task}`],
-                  `transfer ${task} commit`
-                )
-                const evidenceManifest = yield* evidenceStore.put(acceptedManifestBytes(request.plannedAttempt, commit))
-                yield* Ref.update(acceptedEvidence, (current) => new Map(current).set(task, evidenceManifest))
-                const report = PlannedAttemptExecutorReport.cases.Terminal.make({
-                  correlation: plannedAttemptExecutorCorrelation(request.plannedAttempt),
-                  result: { _tag: "Accepted", acceptedResult: { commit, evidenceManifest } }
+                  yield* runInWorktree(
+                    git,
+                    request.plannedAttempt.worktree,
+                    ["commit", "-m", `complete ${task}`],
+                    `commit ${task} result`
+                  )
+                  const commit = GitCommitSha.make(
+                    yield* runInWorktree(
+                      git,
+                      request.plannedAttempt.worktree,
+                      ["rev-parse", "HEAD"],
+                      `read ${task} commit`
+                    )
+                  )
+                  yield* runInWorktree(
+                    git,
+                    request.plannedAttempt.worktree,
+                    ["push", bareRemote, `${commit}:refs/dalph/transfer-${task}`],
+                    `transfer ${task} commit`
+                  )
+                  const evidenceManifest = yield* evidenceStore.put(
+                    acceptedManifestBytes(request.plannedAttempt, commit)
+                  )
+                  yield* Ref.update(acceptedEvidence, (current) => new Map(current).set(task, evidenceManifest))
+                  const report = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                    correlation: plannedAttemptExecutorCorrelation(request.plannedAttempt),
+                    result: { _tag: "Accepted", acceptedResult: { commit, evidenceManifest } }
+                  })
+                  yield* Ref.update(executorReports, (current) => new Map(current).set(task, report))
+                  yield* Deferred.succeed(taskValue(terminalProjectionReady, task), undefined)
                 })
-                yield* Ref.update(executorReports, (current) => new Map(current).set(task, report))
-                yield* Deferred.succeed(taskValue(accepted, task), undefined)
-                return report
-              })
-            ).pipe(Effect.orDie)
+              ).pipe(Effect.orDie, Effect.forkIn(executorScope))
+              return executing
+            }).pipe(Effect.orDie)
         })
 
         const integrator: IntegratorService = {
@@ -559,7 +582,7 @@ it.effect(
               if (plannedTask === undefined) return yield* Effect.die("Integrator received unknown accepted result")
               const expectedAttempt = taskValue(plannedAttempts, plannedTask)
               const expectedReport = (yield* Ref.get(executorReports)).get(plannedTask)
-              if (expectedReport?._tag !== "Terminal" || expectedReport.result._tag !== "Accepted") {
+              if (expectedReport?._tag !== "ExecutorWorkTerminal" || expectedReport.result._tag !== "Accepted") {
                 return yield* Effect.die(`Integrator received a non-accepted report for ${plannedTask}`)
               }
               const expectedTargetHead =
@@ -722,7 +745,7 @@ it.effect(
           Effect.provide(application),
           Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: journalFilename })))
         )
-        const activationFiber = yield* activationDriver.pipe(Effect.forkScoped)
+        yield* activationDriver
         yield* Deferred.await(taskValue(childReady, "A"))
         yield* Deferred.await(taskValue(childReady, "B"))
         const handlesAfterOverlap = yield* Ref.get(childHandles)
@@ -736,9 +759,9 @@ it.effect(
         const releaseChild = (task: TaskKey, handle: ChildProcessSpawner.ChildProcessHandle) =>
           Ref.update(childReleaseOrder, (current) => [...current, task]).pipe(Effect.andThen(sendChildRelease(handle)))
 
-        // B writes and terminates first, but its accepted report is held at a
-        // test-only barrier. A's report can therefore become the first queue
-        // responsibility without changing the production executor boundary.
+        // B writes and terminates first, but its terminal projection is held
+        // at a test-only barrier. A's report can therefore be durably accepted
+        // before B publishes Terminal, without changing the production boundary.
         yield* releaseChild("B", handleB)
         yield* Deferred.await(taskValue(childWorkFinished, "B"))
         yield* Deferred.await(taskValue(childTerminal, "B"))
@@ -749,17 +772,19 @@ it.effect(
         yield* releaseChild("A", handleA)
         yield* Deferred.await(taskValue(childWorkFinished, "A"))
         yield* Deferred.await(taskValue(childTerminal, "A"))
-        yield* Deferred.await(taskValue(accepted, "A"))
+        yield* Deferred.await(taskValue(terminalProjectionReady, "A"))
         expect(yield* Ref.get(childWorkFinishedOrder)).toEqual(["B", "A"])
         expect(yield* Ref.get(childTerminalOrder)).toEqual(["B", "A"])
-        expect((yield* Ref.get(executorReports)).has("B")).toBe(false)
+        expect((yield* Ref.get(executorReports)).get("B")?._tag).toBe("ExecutorWorkExecuting")
 
-        // This is the explicit A report barrier: only now may B return its
-        // terminal executor report. Both accepted reports are therefore
-        // durable in A-before-B order before integration begins.
-        yield* Deferred.succeed(allowBReport, undefined)
-        yield* Deferred.await(taskValue(accepted, "B"))
+        const integrationFiber = yield* activationDriver.pipe(Effect.forkScoped)
         yield* Deferred.await(taskValue(integratorStarted, "A"))
+
+        // This is the explicit A acceptance barrier: only after Dalph has
+        // durably accepted A and begun its integration may B publish its
+        // terminal projection.
+        yield* Deferred.succeed(allowBReport, undefined)
+        yield* Deferred.await(taskValue(terminalProjectionReady, "B"))
         const callsWhileAIntegratorHeld = yield* Ref.get(integratorCalls)
         expect(callsWhileAIntegratorHeld).toEqual(["A"])
         expect(yield* Ref.get(integratorMaximumActive)).toBe(1)
@@ -768,12 +793,14 @@ it.effect(
         yield* Deferred.await(taskValue(integratorStarted, "B"))
         expect(yield* Ref.get(integratorMaximumActive)).toBe(1)
 
-        yield* Deferred.await(graphACompletedWhileBOpen)
         expect(yield* Ref.get(dStarted)).toBe(false)
         yield* Deferred.succeed(releaseIntegratorB, undefined)
+        yield* Deferred.await(graphACompletedWhileBOpen)
         yield* Deferred.await(graphBothCompleted)
         yield* Deferred.await(dStartedAfterGraph)
-        yield* Fiber.join(activationFiber)
+        yield* Deferred.await(taskValue(terminalProjectionReady, "D"))
+        yield* Fiber.join(integrationFiber)
+        yield* activationDriver
         expect(yield* Ref.get(terminated)).toBe(true)
 
         const records = yield* Effect.gen(function* () {
@@ -782,7 +809,7 @@ it.effect(
         const reports = yield* Ref.get(executorReports)
         const acceptedCommitFor = (task: TaskKey): GitCommitSha => {
           const report = taskValue(reports, task)
-          const result = report._tag === "Terminal" ? report.result : undefined
+          const result = report._tag === "ExecutorWorkTerminal" ? report.result : undefined
           return Option.getOrThrow(
             result?._tag === "Accepted" ? Option.some(result.acceptedResult.commit) : Option.none()
           )
@@ -841,7 +868,7 @@ it.effect(
         const acceptedExecutorReportFor = (task: TaskKey) =>
           executorReportRecords.find(
             ({ event }) =>
-              event.report._tag === "Terminal" &&
+              event.report._tag === "ExecutorWorkTerminal" &&
               event.report.result._tag === "Accepted" &&
               event.report.correlation.attemptId === taskValue(plannedAttempts, task).attemptId
           )
@@ -874,7 +901,7 @@ it.effect(
         expect(aIntegrationResponsibility.position).toBeLessThan(acceptedBReport.position)
         expect(aIntegrationResponsibility.position).toBeLessThan(bIntegrationResponsibility.position)
         expect(acceptedAReport.position).toBeLessThan(firstIntegratorRun.position)
-        expect(acceptedBReport.position).toBeLessThan(firstIntegratorRun.position)
+        expect(firstIntegratorRun.position).toBeLessThan(acceptedBReport.position)
         expect(integratorRunRecords.map(({ event }) => event.run.session.plannedAttempt.taskId)).toEqual([
           taskIdOf("A"),
           taskIdOf("B"),
@@ -1112,7 +1139,10 @@ it.effect(
           )
         )
         expect(lockReacquired).toBe(true)
-      }).pipe(Effect.ensuring(fileSystem.remove(root, { recursive: true }).pipe(Effect.orDie)))
+      }).pipe(
+        Effect.ensuring(Scope.close(executorScope, Exit.void)),
+        Effect.ensuring(fileSystem.remove(root, { recursive: true }).pipe(Effect.orDie))
+      )
 
       expect(yield* fileSystem.exists(root)).toBe(false)
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer)),

@@ -15,6 +15,8 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 import { integrationResponsibilityEquivalence } from "../../workflow/protocols/integration-admission/responsibility.js"
+import { claimReadMatchesTarget, exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 
 type RelinquishedEvent = Extract<
   WorkflowJournalEvent,
@@ -60,19 +62,9 @@ const proofEvidenceFor = (
   plannedAttempt: PlannedTaskAttempt,
   records: ReadonlyArray<JournalRecord>
 ): PlannedAttemptExecutorEvidence | undefined =>
-  plannedAttemptExecutorEvidence(records, plannedAttempt).find((candidate) => {
-    if (proof._tag === "CommandResponse") {
-      return candidate.source._tag === "CommandResponse" && candidate.source.ordinal === proof.reportOrdinal
-    }
-    if (proof._tag === "CommandProjection") {
-      return (
-        candidate.source._tag === "CommandProjection" &&
-        candidate.source.commandOrdinal === proof.commandOrdinal &&
-        candidate.source.projectionOrdinal === proof.projectionOrdinal
-      )
-    }
-    return candidate.source._tag === "StateProjection" && candidate.source.ordinal === proof.observationOrdinal
-  })
+  plannedAttemptExecutorEvidence(records, plannedAttempt).find(
+    (candidate) => candidate.source._tag === "AcceptedReport" && candidate.source.ordinal === proof.reportOrdinal
+  )
 
 const proofMatchesEvidence = (
   proof: RelinquishedEvent["proof"],
@@ -85,7 +77,7 @@ const proofMatchesEvidence = (
     evidence === undefined ||
     latest === undefined ||
     latest.observedAt !== evidence.observedAt ||
-    (evidence.report._tag !== "Terminal" && evidence.report._tag !== "SafelySuspended")
+    (evidence.report._tag !== "ExecutorWorkTerminal" && evidence.report._tag !== "ExecutorWorkSafelySuspended")
   ) {
     return false
   }
@@ -98,28 +90,32 @@ const proofMatchesEvidence = (
   )
 }
 
-const focusedClaimObservationRecord = (record: JournalRecord, taskId: PlannedTaskAttempt["taskId"]): boolean =>
+const focusedClaimObservationRecord = (
+  record: JournalRecord,
+  taskId: PlannedTaskAttempt["taskId"],
+  immutableRunTarget: TrackerTarget | undefined
+): record is ClaimObservationRecord =>
   record.event._tag === "TaskTrackerFactsObserved" &&
+  immutableRunTarget !== undefined &&
   (record.event.observation._tag === "FocusedTaskClaimFacts" ||
     record.event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
-  record.event.observation.coverage.taskId === taskId
+  record.event.observation.coverage.taskId === taskId &&
+  taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
 
 const claimObservationRecordFor = (
   records: ReadonlyArray<JournalRecord>,
   operationId: OperationId,
   taskId: PlannedTaskAttempt["taskId"],
   after: JournalPosition,
-  before: JournalPosition
+  before: JournalPosition,
+  immutableRunTarget: TrackerTarget | undefined
 ): ClaimObservationRecord | undefined => {
   const observation = records.findLast(
     (candidate): candidate is ClaimObservationRecord =>
       candidate.position > after &&
       candidate.position < before &&
-      candidate.event._tag === "TaskTrackerFactsObserved" &&
-      candidate.event.operationId === operationId &&
-      (candidate.event.observation._tag === "FocusedTaskClaimFacts" ||
-        candidate.event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
-      candidate.event.observation.coverage.taskId === taskId
+      focusedClaimObservationRecord(candidate, taskId, immutableRunTarget) &&
+      candidate.event.operationId === operationId
   )
   if (
     observation === undefined ||
@@ -127,7 +123,7 @@ const claimObservationRecordFor = (
       (candidate) =>
         candidate.position > observation.position &&
         candidate.position < before &&
-        focusedClaimObservationRecord(candidate, taskId)
+        focusedClaimObservationRecord(candidate, taskId, immutableRunTarget)
     )
   ) {
     return undefined
@@ -159,7 +155,8 @@ const claimReadIntentFor = (
   operationId: OperationId,
   taskId: PlannedTaskAttempt["taskId"],
   after: JournalPosition,
-  before: JournalPosition
+  before: JournalPosition,
+  immutableRunTarget: TrackerTarget | undefined
 ): ClaimReadOperation | undefined =>
   (() => {
     const intent = records.findLast(
@@ -169,9 +166,12 @@ const claimReadIntentFor = (
         event._tag === "TaskTrackerReadIntentRecorded" &&
         event.operation._tag === "ReadTaskClaim" &&
         event.operation.operationId === operationId &&
-        event.operation.taskId === taskId
+        event.operation.taskId === taskId &&
+        immutableRunTarget !== undefined &&
+        taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(immutableRunTarget)
     )
     if (intent?.event._tag !== "TaskTrackerReadIntentRecorded") return undefined
+    if (!claimReadMatchesTarget(records, operationId, taskId, after, before, immutableRunTarget)) return undefined
     /* v8 ignore next -- @preserve The find predicate admits only ReadTaskClaim intent records. */
     return intent.event.operation._tag === "ReadTaskClaim" ? intent.event.operation : undefined
   })()
@@ -326,7 +326,10 @@ const postCancellationForwardWork = (
   if (event._tag === "IntegrationStarted") {
     return postCancellationIntegrationWork(record, records, cancellationAt)
   }
-  if (event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "StartOrContinue") {
+  if (
+    event._tag === "PlannedAttemptExecutorCommandIntended" &&
+    (event.command === "Begin" || event.command === "Resume")
+  ) {
     return event._tag
   }
   return postCancellationForwardWorkTags.has(event._tag) ? event._tag : undefined
@@ -504,12 +507,14 @@ const noReleaseObservationIsValid = (
   position: JournalPosition,
   relinquished: JournalRecord & { readonly event: RelinquishedEvent }
 ): boolean => {
+  const immutableRunTarget = exactWorkflowRunTargetFor(prior)
   const observation = claimObservationRecordFor(
     prior,
     event.observationOperationId,
     event.plannedAttempt.taskId,
     relinquished.position,
-    position
+    position,
+    immutableRunTarget
   )
   const readIntent =
     observation === undefined
@@ -519,7 +524,8 @@ const noReleaseObservationIsValid = (
           event.observationOperationId,
           event.plannedAttempt.taskId,
           relinquished.position,
-          observation.position
+          observation.position,
+          immutableRunTarget
         )
   if (observation === undefined || readIntent === undefined) return false
   if (!readIntent.predecessorOperationIds.includes(relinquished.event.authorizedClaim.operationId)) return false
@@ -628,12 +634,14 @@ const cancellationReleaseObservationIsValid = (
   position: JournalPosition,
   relinquished: JournalRecord & { readonly event: RelinquishedEvent }
 ): boolean => {
+  const immutableRunTarget = exactWorkflowRunTargetFor(prior)
   const observation = claimObservationRecordFor(
     prior,
     authority.observationOperationId,
     relinquished.event.plannedAttempt.taskId,
     relinquished.position,
-    position
+    position,
+    immutableRunTarget
   )
   if (observation === undefined) return false
   const readIntent = claimReadIntentFor(
@@ -641,7 +649,8 @@ const cancellationReleaseObservationIsValid = (
     authority.observationOperationId,
     relinquished.event.plannedAttempt.taskId,
     relinquished.position,
-    position
+    position,
+    immutableRunTarget
   )
   if (readIntent === undefined) return false
   if (!readIntent.predecessorOperationIds.includes(relinquished.event.authorizedClaim.operationId)) return false

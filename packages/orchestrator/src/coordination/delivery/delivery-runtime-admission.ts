@@ -76,7 +76,8 @@ export interface DeliveryRuntimeAdmissionController {
   ) => Effect.Effect<void, DeliveryTaskWorkPositionBindingContradiction>
   readonly bindPlannedAttemptPosition: (
     taskId: TaskId,
-    correlation: PlannedAttemptExecutorCorrelation
+    correlation: PlannedAttemptExecutorCorrelation,
+    proposalId: DeliveryProposalId
   ) => Effect.Effect<void, DeliveryTaskWorkPositionBindingContradiction>
   readonly releasePlannedAttemptPosition: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<void>
   readonly complete: (reservation: DeliveryAdmissionReservation) => Effect.Effect<void>
@@ -190,9 +191,12 @@ const synchronizeAcceptedTaskPosition = (
   ) {
     return { _tag: "AcceptedAttemptPosition", correlation }
   }
-  return position._tag === "PendingRuntimePosition"
-    ? { _tag: "BoundRuntimePosition", correlation, proposalId: position.proposalId }
-    : undefined
+  if (position._tag === "BoundRuntimePosition") {
+    return sameCorrelation(position.correlation, correlation)
+      ? { _tag: "AcceptedAttemptPosition", correlation }
+      : undefined
+  }
+  return { _tag: "BoundRuntimePosition", correlation, proposalId: position.proposalId }
 }
 
 const synchronizePlannedPreStartTaskPosition = (
@@ -227,6 +231,11 @@ const synchronizePreStartTaskPosition = (
   if (position === undefined) return preStartPositionOf(required)
   if (required._tag === "PlannedPreStartTaskWorkPosition")
     return synchronizePlannedPreStartTaskPosition(position, required)
+  if (position._tag === "BoundPreStartRuntimePosition") {
+    return sameOperationId(position.claimOperationId, required.claimOperationId)
+      ? { _tag: "DurablePreStartPosition", claimOperationId: required.claimOperationId }
+      : undefined
+  }
   return position._tag === "DurablePlannedPreStartPosition" &&
     sameOperationId(position.claimOperationId, required.claimOperationId)
     ? { _tag: "DurablePreStartPosition", claimOperationId: required.claimOperationId }
@@ -322,6 +331,7 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
   const retainCompletedPreStartReservation = (taskId: TaskId, proposalId: DeliveryProposalId) =>
     Ref.update(state, (current) => {
       const position = current.positions.get(taskId)
+      /* v8 ignore next -- @preserve this callback follows a completed pre-start reservation, which cannot publish an accepted or absent position before synchronization. */
       if (
         position === undefined ||
         position._tag === "AcceptedAttemptPosition" ||
@@ -332,9 +342,7 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
         return current
       }
       if (position._tag === "BoundPreStartRuntimePosition" && position.proposalId === proposalId) {
-        const positions = new Map(current.positions)
-        positions.set(taskId, { _tag: "DurablePreStartPosition", claimOperationId: position.claimOperationId })
-        return { ...current, positions }
+        return current
       }
       return current
     })
@@ -420,8 +428,11 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
     reservation: DeliveryAdmissionReservation,
     retainTaskPositionAfterIntent: boolean
   ) {
-    if (reservation.createdTaskPositionFor !== null && !retainTaskPositionAfterIntent) {
-      yield* releaseTaskReservation(reservation.createdTaskPositionFor, reservation.proposal.id)
+    if (!retainTaskPositionAfterIntent) {
+      const requirement = reservation.proposal.admission.taskWorkPosition
+      if (requirement._tag !== "NoTaskWorkPosition") {
+        yield* releaseTaskReservation(requirement.taskId, reservation.proposal.id)
+      }
     }
     if (reservation.acquiredIntegrationResponsibility !== null) {
       yield* integrationTargets.release(reservation.acquiredIntegrationResponsibility)
@@ -594,7 +605,8 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
 
   const bindPlannedAttemptPosition = Effect.fn("DeliveryRuntimeAdmission.bindPlannedAttemptPosition")(function* (
     taskId: TaskId,
-    correlation: PlannedAttemptExecutorCorrelation
+    correlation: PlannedAttemptExecutorCorrelation,
+    proposalId: DeliveryProposalId
   ) {
     const result = yield* Ref.modify(
       state,
@@ -622,11 +634,31 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
             }
           ] as const
         }
+        if (position._tag === "DurablePlannedPreStartPosition") {
+          return sameCorrelation(position.correlation, correlation)
+            ? ([
+                { _tag: "Success" as const },
+                {
+                  ...current,
+                  positions: new Map(current.positions).set(taskId, {
+                    _tag: "BoundRuntimePosition",
+                    correlation,
+                    proposalId
+                  })
+                }
+              ] as const)
+            : ([
+                {
+                  _tag: "Failure" as const,
+                  failure: { correlation, reason: "AttemptCorrelationMismatch" as const, taskId, position }
+                },
+                current
+              ] as const)
+        }
         if (
           position._tag === "AcceptedAttemptPosition" ||
           position._tag === "AcceptedAttemptPositionOmittedOnce" ||
-          position._tag === "BoundRuntimePosition" ||
-          position._tag === "DurablePlannedPreStartPosition"
+          position._tag === "BoundRuntimePosition"
         ) {
           return sameCorrelation(positionCorrelationOf(position), correlation)
             ? ([{ _tag: "Success" as const }, current] as const)

@@ -10,6 +10,7 @@ import {
   TaskTrackerFactsObservedEvent,
   TaskTrackerFactsReadFailed
 } from "../../task-tracker-facts/observation.js"
+import { makeTaskTrackerFactsObservedFromRead } from "../task-tracker-read/protocol.js"
 import { TrackerAdapterReadFailureReason } from "../../../authorities/task-tracker/graph-reader.js"
 import { makeTrackerGraphObservationOperation } from "../../registry/operation.js"
 import { WorkflowRunBeganEvent } from "../../registry/event.js"
@@ -133,6 +134,41 @@ describe("post-promotion blocker ancestry chronology", () => {
     expect(postPromotionBlockerClearAuthorizationFor([promotion()], fixture.claim)).toBeUndefined()
     expect(postPromotionBlockerClearAuthorizationFor([beginning(), promotion()], fixture.claim)).toBeUndefined()
     expect(postPromotionBlockerClearAuthorizationFor(records.slice(0, 3), fixture.claim)).toBeUndefined()
+
+    const priorSnapshot = snapshotFor("post-promotion-missing-reconfirmation-prior", TaskLifecycle.cases.Open.make({}))
+    const priorOperation = makeTrackerGraphObservationOperation(
+      OperationId.make("post-promotion-missing-reconfirmation-prior"),
+      fixture.target,
+      [],
+      [blocker, fixture.taskId]
+    )
+    const priorRecord: JournalRecord = {
+      event: TaskTrackerFactsObservedEvent.make({
+        observation: makeCompleteTaskTrackerFactsObserved(priorOperation, priorSnapshot),
+        operationId: priorOperation.operationId,
+        version: workflowJournalEventVersion
+      }),
+      key: JournalRecordKey.make("post-promotion-missing-reconfirmation-prior"),
+      position: JournalPosition.make(3),
+      runId: fixture.runId
+    }
+    const laterOperation = makeTrackerGraphObservationOperation(
+      OperationId.make("post-promotion-missing-reconfirmation-later"),
+      fixture.target,
+      [priorOperation.operationId],
+      [blocker, fixture.taskId]
+    )
+    const reconfirmation = makeTaskTrackerFactsObservedFromRead([priorRecord], laterOperation, priorSnapshot)
+    expect(reconfirmation.observation._tag).toBe("UnchangedTaskTrackerFactsReconfirmed")
+    const missingPriorRecord: JournalRecord = {
+      event: reconfirmation,
+      key: JournalRecordKey.make("post-promotion-missing-reconfirmation-later"),
+      position: JournalPosition.make(3),
+      runId: fixture.runId
+    }
+    expect(
+      postPromotionBlockerClearAuthorizationFor([beginning(), promotion(), missingPriorRecord], fixture.claim)
+    ).toBeUndefined()
 
     const unrelatedProjected = projectTrackerSnapshot({
       revision: TrackerRevision.make("post-promotion-unrelated-revision"),

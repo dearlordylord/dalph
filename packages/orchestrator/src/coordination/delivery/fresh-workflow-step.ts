@@ -29,12 +29,12 @@ export type FreshWorkflowStep = Data.TaggedEnum<{
     readonly predecessorOperationId: OperationId
     readonly task: Task
   }
-  StartPlannedAttemptExecutorWork: {
+  BeginPlannedAttemptExecutorWork: {
     readonly plannedAttempt: PlannedTaskAttempt
     readonly specification: TaskWorkSpecification
     readonly task: Task
   }
-  ContinuePlannedAttemptExecutorWork: {
+  ObservePlannedAttemptExecutorWork: {
     readonly acceptedProgress: AcceptedPlannedAttemptExecutorProgress
     readonly plannedAttempt: PlannedTaskAttempt
     readonly specification: TaskWorkSpecification

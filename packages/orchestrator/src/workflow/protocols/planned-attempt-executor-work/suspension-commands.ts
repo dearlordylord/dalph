@@ -5,30 +5,43 @@ import {
 } from "@dalph/contracts"
 import { Effect } from "effect"
 import { InRunJournal } from "../../../workflow-journal/store.js"
-import {
-  defaultPlannedAttemptExecutorContinuationLimit,
-  defaultPlannedAttemptExecutorSuspensionLimit,
-  type PlannedAttemptExecutorContinuationLimit,
-  type PlannedAttemptExecutorSuspensionLimit
-} from "./events.js"
+import { defaultPlannedAttemptExecutorSuspensionLimit, type PlannedAttemptExecutorSuspensionLimit } from "./events.js"
 import { latestUnsettledPlannedAttemptExecutorCommand } from "./evidence.js"
-import { PlannedAttemptExecutorCommandReconciliationRequired, runPlannedAttemptExecutorCommand } from "./protocol.js"
+import { runPlannedAttemptExecutorCommand } from "./command.js"
+import { PlannedAttemptExecutorCommandReconciliationRequired } from "./protocol.js"
 import { type PlannedAttemptProtocolPermit, withPlannedAttemptProtocolPermit } from "./protocol-controller.js"
 
-/** Starts or resumes all executor work for the exact planned attempt. */
-export const continuePlannedAttemptExecutorWorkWithPermit = (
+/** Begins all executor work for the exact planned attempt once. */
+export const beginPlannedAttemptExecutorWorkWithPermit = (
   permit: PlannedAttemptProtocolPermit,
   plannedAttempt: PlannedTaskAttempt,
-  continuationLimit: PlannedAttemptExecutorContinuationLimit = defaultPlannedAttemptExecutorContinuationLimit,
   selectedSpecification?: TaskWorkSpecification
 ) =>
   withPlannedAttemptProtocolPermit(
     permit,
     plannedAttemptExecutorCorrelation(plannedAttempt),
     runPlannedAttemptExecutorCommand(
+      permit,
       plannedAttempt,
-      "StartOrContinue",
-      continuationLimit,
+      "Begin",
+      defaultPlannedAttemptExecutorSuspensionLimit,
+      selectedSpecification
+    )
+  )
+
+/** Resumes the same exact work after one accepted safe-suspension transition. */
+export const resumePlannedAttemptExecutorWorkWithPermit = (
+  permit: PlannedAttemptProtocolPermit,
+  plannedAttempt: PlannedTaskAttempt,
+  selectedSpecification?: TaskWorkSpecification
+) =>
+  withPlannedAttemptProtocolPermit(
+    permit,
+    plannedAttemptExecutorCorrelation(plannedAttempt),
+    runPlannedAttemptExecutorCommand(
+      permit,
+      plannedAttempt,
+      "Resume",
       defaultPlannedAttemptExecutorSuspensionLimit,
       selectedSpecification
     )
@@ -58,12 +71,7 @@ export const requestPlannedAttemptExecutorSuspensionWithoutReconciliationWithPer
           correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
         })
       }
-      return yield* runPlannedAttemptExecutorCommand(
-        plannedAttempt,
-        "Suspend",
-        defaultPlannedAttemptExecutorContinuationLimit,
-        suspensionLimit
-      )
+      return yield* runPlannedAttemptExecutorCommand(permit, plannedAttempt, "Suspend", suspensionLimit)
     })
   )
 
@@ -76,10 +84,5 @@ export const requestPlannedAttemptExecutorSuspensionWithPermit = (
   withPlannedAttemptProtocolPermit(
     permit,
     plannedAttemptExecutorCorrelation(plannedAttempt),
-    runPlannedAttemptExecutorCommand(
-      plannedAttempt,
-      "Suspend",
-      defaultPlannedAttemptExecutorContinuationLimit,
-      suspensionLimit
-    )
+    runPlannedAttemptExecutorCommand(permit, plannedAttempt, "Suspend", suspensionLimit)
   )

@@ -44,6 +44,7 @@ import {
   type JournalRecord,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorCommandResponseContradictedEvent,
   PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
@@ -88,6 +89,13 @@ import {
   recordGitObservationEntry,
   type RecordedGitObservationEntry
 } from "./recorded-git-observation-mapping.js"
+import {
+  eventForActiveWorkAuthorityRefreshGitReadFailedEntry,
+  isActiveWorkAuthorityRefreshGitReadFailedEvent,
+  isRecordedActiveWorkAuthorityRefreshGitReadFailedEntry,
+  lyricForActiveWorkAuthorityRefreshGitReadFailedEntry,
+  recordActiveWorkAuthorityRefreshGitReadFailedEntry
+} from "./recorded-active-work-authority-refresh-mapping.js"
 import {
   eventForRunEntry,
   isJournalRunEntry,
@@ -140,6 +148,7 @@ const recordExecutorEntry = (
       readonly _tag:
         | "PlannedAttemptExecutorCommandIntended"
         | "PlannedAttemptExecutorCommandProjectionObserved"
+        | "PlannedAttemptExecutorCommandResponseObserved"
         | "PlannedAttemptExecutorCommandResponseContradicted"
         | "PlannedAttemptExecutorStateObserved"
         | "PlannedAttemptExecutorWorkReported"
@@ -176,6 +185,13 @@ const recordExecutorEntry = (
         occurrenceClassification: value.occurrenceClassification,
         plannedAttempt: value.plannedAttempt,
         projectionOrdinal: value.projectionOrdinal
+      }),
+      PlannedAttemptExecutorCommandResponseObserved: (value): RecordedCassetteEntry => ({
+        _tag: "PlannedAttemptExecutorCommandResponseObserved",
+        commandOrdinal: value.commandOrdinal,
+        occurrenceClassification: value.occurrenceClassification,
+        plannedAttempt: value.plannedAttempt,
+        report: value.report
       }),
       PlannedAttemptExecutorCommandResponseContradicted: (value): RecordedCassetteEntry => ({
         _tag: "PlannedAttemptExecutorCommandResponseContradicted",
@@ -515,10 +531,17 @@ const isTaskBoundaryEvent = (event: WorkflowJournalEvent): event is TaskBoundary
 
 type GitObservationEvent = Extract<
   WorkflowJournalEvent,
-  { readonly _tag: "GitReadIntentRecorded" | "PlannedAttemptWorktreeObserved" | "TargetLineageObserved" }
+  {
+    readonly _tag:
+      | "ActiveWorkAuthorityRefreshGitReadIntentRecorded"
+      | "GitReadIntentRecorded"
+      | "PlannedAttemptWorktreeObserved"
+      | "TargetLineageObserved"
+  }
 >
 
 const gitObservationEventTags = {
+  ActiveWorkAuthorityRefreshGitReadIntentRecorded: true,
   GitReadIntentRecorded: true,
   PlannedAttemptWorktreeObserved: true,
   TargetLineageObserved: true
@@ -546,6 +569,7 @@ type ExecutorEvent = Extract<
     readonly _tag:
       | "PlannedAttemptExecutorCommandIntended"
       | "PlannedAttemptExecutorCommandProjectionObserved"
+      | "PlannedAttemptExecutorCommandResponseObserved"
       | "PlannedAttemptExecutorCommandResponseContradicted"
       | "PlannedAttemptExecutorStateObserved"
       | "PlannedAttemptExecutorWorkReported"
@@ -556,6 +580,7 @@ type ExecutorEvent = Extract<
 const executorEventTags = {
   PlannedAttemptExecutorCommandIntended: true,
   PlannedAttemptExecutorCommandProjectionObserved: true,
+  PlannedAttemptExecutorCommandResponseObserved: true,
   PlannedAttemptExecutorCommandResponseContradicted: true,
   PlannedAttemptExecutorStateObserved: true,
   PlannedAttemptExecutorWorkReported: true,
@@ -920,6 +945,7 @@ const recordedEntryFor = (event: WorkflowJournalEvent): RecordedCassetteEntry =>
       requestId: value.requestId,
       subject: value.subject
     })),
+    Match.when(isActiveWorkAuthorityRefreshGitReadFailedEvent, recordActiveWorkAuthorityRefreshGitReadFailedEntry),
     Match.when(isIntegrationPreparationEvent, recordIntegrationPreparationEntry),
     Match.when(isGitObservationEvent, recordGitObservationEntry),
     Match.when(isTrackerEvent, recordTrackerEntry),
@@ -1006,6 +1032,7 @@ type RecordedExecutorEntry = Extract<
     readonly _tag:
       | "PlannedAttemptExecutorCommandIntended"
       | "PlannedAttemptExecutorCommandProjectionObserved"
+      | "PlannedAttemptExecutorCommandResponseObserved"
       | "PlannedAttemptExecutorCommandResponseContradicted"
       | "PlannedAttemptExecutorStateObserved"
       | "PlannedAttemptExecutorWorkReported"
@@ -1016,6 +1043,7 @@ const isRecordedExecutorEntry = (entry: RecordedCassetteEntry): entry is Recorde
   new Set([
     "PlannedAttemptExecutorCommandIntended",
     "PlannedAttemptExecutorCommandProjectionObserved",
+    "PlannedAttemptExecutorCommandResponseObserved",
     "PlannedAttemptExecutorCommandResponseContradicted",
     "PlannedAttemptExecutorStateObserved",
     "PlannedAttemptExecutorWorkReported",
@@ -1051,6 +1079,14 @@ const eventForExecutorEntry = (entry: RecordedExecutorEntry): WorkflowJournalEve
         occurrenceClassification: value.occurrenceClassification,
         plannedAttempt: value.plannedAttempt,
         projectionOrdinal: value.projectionOrdinal,
+        version: workflowJournalEventVersion
+      }),
+    PlannedAttemptExecutorCommandResponseObserved: (value) =>
+      PlannedAttemptExecutorCommandResponseObservedEvent.make({
+        commandOrdinal: value.commandOrdinal,
+        occurrenceClassification: value.occurrenceClassification,
+        plannedAttempt: value.plannedAttempt,
+        report: value.report,
         version: workflowJournalEventVersion
       }),
     PlannedAttemptExecutorCommandResponseContradicted: (value) =>
@@ -1446,6 +1482,10 @@ const eventForOtherRecordedEntry = (
     Match.when(isRecordedAttemptRestartAuthorityReadFailedEntry, (value) =>
       AttemptRestartAuthorityReadFailedEvent.make({ ...value, version: workflowJournalEventVersion })
     ),
+    Match.when(
+      isRecordedActiveWorkAuthorityRefreshGitReadFailedEntry,
+      eventForActiveWorkAuthorityRefreshGitReadFailedEntry
+    ),
     Match.when(isRecordedOuterIntegratorEntry, eventForOuterIntegratorEntry),
     Match.when(isRecordedIntegrationQuarantineEntry, eventForIntegrationQuarantineEntry),
     Match.when(isRecordedIntegrationPreparationEntry, eventForIntegrationPreparationEntry),
@@ -1556,6 +1596,8 @@ const lyricForExecutorEntry = (entry: RecordedExecutorEntry): string =>
       `Dalph coordinator intended executor command ${value.command} for attempt ${value.plannedAttempt.attemptId}.`,
     PlannedAttemptExecutorCommandProjectionObserved: (value) =>
       `Dalph observed ${value.observation._tag} while reconciling executor command ${value.commandOrdinal} for attempt ${value.plannedAttempt.attemptId}.`,
+    PlannedAttemptExecutorCommandResponseObserved: (value) =>
+      `The executor returned ${value.report._tag} to command ${value.commandOrdinal} for attempt ${value.plannedAttempt.attemptId}.`,
     PlannedAttemptExecutorCommandResponseContradicted: (value) =>
       `The executor returned a response for attempt ${value.observed.correlation.attemptId} to command ${value.commandOrdinal} for expected attempt ${value.plannedAttempt.attemptId}; Dalph kept the command unresolved.`,
     PlannedAttemptExecutorStateObserved: (value) =>
@@ -1784,6 +1826,9 @@ type RecordedPresentationResidualEntry = Exclude<
 >
 
 const lyricForRecordedPresentationResidual = (entry: RecordedPresentationResidualEntry): string => {
+  if (isRecordedActiveWorkAuthorityRefreshGitReadFailedEntry(entry)) {
+    return lyricForActiveWorkAuthorityRefreshGitReadFailedEntry(entry)
+  }
   if (isRecordedGitObservationEntry(entry)) return lyricForGitObservationEntry(entry)
   if (isRecordedExecutorEntry(entry)) return lyricForExecutorEntry(entry)
   if (isRecordedTrackerEntry(entry)) return lyricForTrackerEntry(entry)
@@ -1803,7 +1848,7 @@ const lyricForOtherRecordedEntry = (entry: RecordedOtherEntry): string => {
 
 const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string =>
   entry._tag === "PlannedAttemptContinuationAuthorized"
-    ? `Dalph authorized continuation of planned attempt ${entry.plannedAttempt.attemptId} after four current observations.`
+    ? `Dalph authorized resumption of planned attempt ${entry.plannedAttempt.attemptId} after five current observations.`
     : lyricForOtherRecordedEntry(entry)
 
 /** Human-readable prose derived from structured entries, never parsed as a contract. */

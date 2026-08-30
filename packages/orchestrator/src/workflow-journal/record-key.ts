@@ -37,6 +37,8 @@ import type {
   CleanupMutationOrdinal,
   CleanupObservationOrdinal
 } from "../workflow/protocols/disposition-cleanup/disposition.js"
+import type { PlannedAttemptContinuationWitness } from "../workflow/protocols/planned-attempt-continuation/events.js"
+import type { ActiveWorkAuthorityRefreshOrdinal } from "../workflow/protocols/active-work-authority-refresh/events.js"
 
 export const workflowRunBeganRecordKey = JournalRecordKey.make("run:began")
 
@@ -210,6 +212,13 @@ export const outcomeRecordKey = (operationId: OperationId): JournalRecordKey =>
 export const attemptRestartAuthorityReadFailedRecordKey = (operationId: OperationId): JournalRecordKey =>
   JournalRecordKey.make(`operation:${operationId}:restart-authority-read-failed`)
 
+/** Stable key for one numbered active-work authority-refresh Git read failure. */
+export const activeWorkAuthorityRefreshGitReadFailedRecordKey = (
+  operationId: OperationId,
+  ordinal: ActiveWorkAuthorityRefreshOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`operation:${operationId}:active-work-authority-refresh-git-read-failed:${ordinal}`)
+
 export const attemptPlanRecordKey = (attemptId: AttemptId): JournalRecordKey =>
   JournalRecordKey.make(`attempt:${attemptId}:plan`)
 
@@ -219,9 +228,20 @@ export const plannedAttemptExecutorWorkResponsibilityBeganRecordKey = (attemptId
 /** Stable key for one exact continuation authorization and its current-fact witnesses. */
 export const plannedAttemptContinuationAuthorizedRecordKey = (
   attemptId: AttemptId,
-  witnessOperationIds: ReadonlyArray<OperationId>
-): JournalRecordKey =>
-  JournalRecordKey.make(`attempt:${attemptId}:continuation-authorized:${[...witnessOperationIds].toSorted().join(":")}`)
+  witness: PlannedAttemptContinuationWitness
+): JournalRecordKey => {
+  const observation = witness.activeTaskContinuationRead
+  const witnessOperationIds = [
+    observation.graphObservationOperationId,
+    observation.taskClaimObservationOperationId,
+    observation.taskWorkSpecificationObservationOperationId,
+    witness.targetLineageObservationOperationId,
+    witness.worktreeObservationOperationId
+  ]
+  return JournalRecordKey.make(
+    `attempt:${attemptId}:continuation-authorized:${witnessOperationIds.toSorted().join(":")}`
+  )
+}
 
 export const plannedAttemptExecutorCommandIntendedRecordKey = (
   attemptId: AttemptId,
@@ -242,6 +262,12 @@ export const plannedAttemptExecutorCommandResponseContradictedRecordKey = (
   commandOrdinal: PlannedAttemptExecutorCommandOrdinal
 ): JournalRecordKey =>
   JournalRecordKey.make(`attempt:${attemptId}:executor-command:${commandOrdinal}:response-contradiction`)
+
+export const plannedAttemptExecutorCommandResponseObservedRecordKey = (
+  attemptId: AttemptId,
+  commandOrdinal: PlannedAttemptExecutorCommandOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(`attempt:${attemptId}:executor-command:${commandOrdinal}:response-observation`)
 
 export const plannedAttemptExecutorWorkReportedRecordKey = (
   attemptId: AttemptId,

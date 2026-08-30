@@ -105,8 +105,8 @@ module taskFactChoiceProofTest {
   }
 }
 
-module taskFactStopProofTest {
-  import taskFactStopProof.* from "./taskFactReconciliation_proof"
+module historicalTaskFactStopRecoveryProofTest {
+  import historicalTaskFactStopRecoveryProof.* from "./taskFactReconciliation_proof"
 
   run retainedSafeProofAllowsStopWithoutAnotherExecutorCallTest = {
     init
@@ -123,7 +123,7 @@ module taskFactStopProofTest {
   run ambiguousStopAcceptsOnlyExactSafeProjectionTest = {
     init
       .then(applyStop)
-      .then(breakRetainedSafeProof)
+      .then(acceptHistoricalExecutingAfterStartOrContinue)
       .then(recordStopIntent)
       .then(callStop)
       .then(loseStopResponse)
@@ -141,7 +141,7 @@ module taskFactStopProofTest {
   run threeLostRunningStopsAllowOnlyReadOnlySafeRecoveryTest = {
     init
       .then(applyStop)
-      .then(breakRetainedSafeProof)
+      .then(acceptHistoricalExecutingAfterStartOrContinue)
       .then(recordStopIntent)
       .then(callStop)
       .then(loseStopResponse)
@@ -178,7 +178,7 @@ module taskFactStopProofTest {
   run unprovedRunningWriterRetainsPositionClaimAndArtifactsTest = {
     init
       .then(applyStop)
-      .then(breakRetainedSafeProof)
+      .then(acceptHistoricalExecutingAfterStartOrContinue)
       .then(recordStopIntent)
       .then(callStop)
       .then(loseStopResponse)
@@ -275,5 +275,67 @@ module taskFactClaimProofTest {
         state.releaseCallCount == 1,
         claimReleaseIsBoundedAndReconciled,
       })
+  }
+}
+
+module taskFactActiveRefreshProofTest {
+  import taskFactActiveRefreshProof.* from "./taskFactReconciliation_proof"
+
+  run activeRefreshUnreadableWaitsWithoutExecutorActionTest = {
+    init
+      .then(establishRunningAttempt)
+      .expect(runningEstablishmentRetainsAuthority)
+      .then(offerTimerRefresh)
+      .then(observeUnreadableActiveRefresh)
+      .expect(and {
+        activeRefreshUnreadableAuthorizesNoExecutorAction,
+        activeRefreshOfferRequiresRunningEstablished,
+        activeRefreshSourceIsTrackerOrTimer,
+      })
+      .then(selectIndependentTask)
+      .expect(state.independentTaskSelected and independentTaskRemainsEligible)
+  }
+
+  run healthyActiveRefreshWaitsWithoutExecutorActionTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerTrackerRefresh)
+      .then(observeHealthyActiveRefresh)
+      .expect(and {
+        healthyActiveRefreshAuthorizesNoExecutorAction,
+        activeRefreshOfferRequiresRunningEstablished,
+        activeRefreshSourceIsTrackerOrTimer,
+      })
+  }
+
+  // Scenario: after an active refresh offer, lifecycle closure requests an
+  // exact safe suspension; a fresh reopen then re-establishes Running work as
+  // an ordinary continuation with no refresh source.
+  run lifecycleReopenReestablishmentResetsRefreshProvenanceTest = {
+    init
+      .then(establishRunningAttempt)
+      .then(offerTimerRefresh)
+      .then(observeLifecycleClosure)
+      .expect(lifecycleClosedReached and state.decision == RequestSafeSuspension)
+      .then(reportSafelySuspended)
+      .expect(safelySuspendedReached and not(state.positionHeld))
+      .then(observeFreshLifecycleReopen)
+      .expect(lifecycleReopenedReached and state.decision == ContinueWork)
+      .then(reestablishRunningAttempt)
+      .expect(and {
+        runningEstablishmentRetainsAuthority,
+        state.purpose == OrdinaryRead,
+        state.refreshSource == NoRefreshSource,
+        state.evidence == ExactRunning,
+        state.positionHeld,
+      })
+  }
+
+  run ordinaryUnreadableReadUsesExactSuspensionRouteTest = {
+    init
+      .then(observeUnreadableOrdinaryRead)
+      .expect(ordinaryUnreadableStillRequestsSafeSuspension)
+      .then(reportSafelySuspended)
+      .expect(not(state.positionHeld) and positionReleasesOnlyOnExactSafeEvidence)
   }
 }

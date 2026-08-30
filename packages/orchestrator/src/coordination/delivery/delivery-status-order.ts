@@ -326,6 +326,7 @@ const proposalActionIdentityTieBreaker = (proposal: DeliveryActionProposal): str
     FreshOperationIdRequired: ({ source }) =>
       Match.valueTags(source, {
         Allocate: () => "fresh-operation:allocate",
+        Preserve: ({ operationId }) => `fresh-operation:preserve:${operationId}`,
         ExternalSuccessReleaseClaim: ({ claimOperationId }) => `fresh-operation:external:${claimOperationId}`,
         TaskClaimReacquisitionRequest: ({ requestId }) => `fresh-operation:reacquisition:${requestId}`
       }),

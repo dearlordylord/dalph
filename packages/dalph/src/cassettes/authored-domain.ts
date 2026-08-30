@@ -92,9 +92,9 @@ export type AuthoredCassetteDecision = typeof AuthoredCassetteDecision.Type
  * Dalph adds the RunId it created when the ordinary executor boundary is used.
  */
 export const AuthoredPlannedAttemptExecutorReport = Schema.TaggedUnion({
-  Running: { attemptId: AttemptId },
-  SafelySuspended: { attemptId: AttemptId },
-  Terminal: {
+  ExecutorWorkExecuting: { attemptId: AttemptId },
+  ExecutorWorkSafelySuspended: { attemptId: AttemptId },
+  ExecutorWorkTerminal: {
     attemptId: AttemptId,
     result: Schema.TaggedUnion({
       Accepted: { acceptedResult: Schema.Struct({ commit: GitCommitSha }) },
@@ -162,11 +162,23 @@ export const AuthoredOrchestrationEvidence = Schema.TaggedUnion({
   },
   PlannedAttemptExecutorWorkReported: {
     attemptId: AttemptId,
-    report: Schema.Literals(["Running", "SafelySuspended", "TerminalAccepted", "TerminalCompleted", "TerminalFailed"])
+    report: Schema.Literals([
+      "ExecutorWorkExecuting",
+      "ExecutorWorkSafelySuspended",
+      "ExecutorWorkTerminalAccepted",
+      "ExecutorWorkTerminalCompleted",
+      "ExecutorWorkTerminalFailed"
+    ])
   },
   PlannedAttemptExecutorCommandProjectionObserved: {
     attemptId: AttemptId,
-    report: Schema.Literals(["Running", "SafelySuspended", "TerminalAccepted", "TerminalCompleted", "TerminalFailed"])
+    report: Schema.Literals([
+      "ExecutorWorkExecuting",
+      "ExecutorWorkSafelySuspended",
+      "ExecutorWorkTerminalAccepted",
+      "ExecutorWorkTerminalCompleted",
+      "ExecutorWorkTerminalFailed"
+    ])
   },
   PlannedAttemptExecutorWorkResponsibilityBegan: { attemptId: AttemptId, taskId: TaskId }
 })
@@ -710,7 +722,7 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   /** Harness synchronization: keep this exact executor request in flight while the next ordinary delivery fact publishes. */
   DalphHoldsExecutorRequestThroughNextDeliveryPublication: {
     attemptId: AttemptId,
-    request: Schema.Literals(["StartOrContinue", "Suspend"]),
+    request: Schema.Literals(["Begin", "Resume", "Suspend"]),
     taskId: TaskId
   },
   DalphSelects: { operation: AuthoredCassetteDecision },
@@ -757,7 +769,7 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   InitialControlPolicy: { policy: InitialControlPolicy },
   PlannedAttemptExecutorWorkReported: {
     report: AuthoredPlannedAttemptExecutorReport,
-    request: Schema.Literals(["StartOrContinue", "Suspend"])
+    request: Schema.Literals(["Begin", "Resume", "Suspend"])
   },
   /** A read-only executor projection returns this exact current authority state. */
   PlannedAttemptExecutorProjectionReturned: { report: AuthoredPlannedAttemptExecutorReport },
@@ -765,7 +777,7 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   PlannedAttemptExecutorResponseLost: {
     detail: Schema.String,
     report: AuthoredPlannedAttemptExecutorReport,
-    request: Schema.Literals(["StartOrContinue", "Suspend"])
+    request: Schema.Literals(["Begin", "Resume", "Suspend"])
   },
   OperatorAppliesControlDirection: {
     direction: ControlDirection,
@@ -1088,12 +1100,31 @@ const ambiguousBoundaryLossesImmediatelyCrash = Schema.makeFilter(
       : "an authored executor or claim-release response loss must be followed immediately by coordinator process death"
 )
 
-const executorLossProjectionOffset = 2
+const beginResponsesAreExecuting = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+  cassette.story.every(
+    (item) =>
+      (item._tag !== "PlannedAttemptExecutorResponseLost" && item._tag !== "PlannedAttemptExecutorWorkReported") ||
+      item.request !== "Begin" ||
+      item.report._tag === "ExecutorWorkExecuting"
+  )
+    ? undefined
+    : "an authored Begin response must report ExecutorWorkExecuting"
+)
+
+const afterProcessDeathOffset = 2
+
 const lostExecutorResponsesRequireExplicitProjection = Schema.makeFilter(
   (cassette: typeof AuthoredScenarioCassetteShape.Type) =>
     cassette.story.every((item, index) => {
       if (item._tag !== "PlannedAttemptExecutorResponseLost") return true
-      const projection = cassette.story[index + executorLossProjectionOffset]
+      const projection = cassette.story
+        .slice(index + afterProcessDeathOffset)
+        .find(
+          (candidate) =>
+            candidate._tag === "PlannedAttemptExecutorProjectionReturned" ||
+            candidate._tag === "PlannedAttemptExecutorResponseLost" ||
+            candidate._tag === "PlannedAttemptExecutorWorkReported"
+        )
       return (
         projection?._tag === "PlannedAttemptExecutorProjectionReturned" &&
         projection.report.attemptId === item.report.attemptId
@@ -1162,7 +1193,7 @@ const heldLaterActivationGraphReturnOffset = 8
 const heldSpecificationSelectionOffset = 9
 const heldSpecificationReturnOffset = 10
 const heldAttemptChoiceOffset = 11
-const heldExecutorOutcomeOffset = 12
+const heldPostChoiceOffset = 12
 
 type AuthoredStory = (typeof AuthoredScenarioCassetteShape.Type)["story"]
 type AdmittedContinuationHold =
@@ -1263,13 +1294,16 @@ const exactHeldAttemptChoiceAt = (
   return isHeldAttemptChoice(choice) && heldAttemptChoiceMatches(choice, hold, specification)
 }
 
-const exactHeldExecutorOutcomeAt = (story: AuthoredStory, holdIndex: number, attemptId: AttemptId): boolean => {
-  const outcome = story[holdIndex + heldExecutorOutcomeOffset]
+const heldResumeOutcomeFollowsTerminalChoice = (
+  story: AuthoredStory,
+  holdIndex: number,
+  attemptId: AttemptId
+): boolean => {
+  const next = story[holdIndex + heldPostChoiceOffset]
   return (
-    (outcome?._tag === "PlannedAttemptExecutorResponseLost" ||
-      outcome?._tag === "PlannedAttemptExecutorWorkReported") &&
-    outcome.request === "StartOrContinue" &&
-    outcome.report.attemptId === attemptId
+    (next?._tag === "PlannedAttemptExecutorResponseLost" || next?._tag === "PlannedAttemptExecutorWorkReported") &&
+    next.request === "Resume" &&
+    next.report.attemptId === attemptId
   )
 }
 
@@ -1312,8 +1346,8 @@ const admittedContinuationClosureIssue = (
   if (!exactHeldAttemptChoiceAt(story, holdIndex, hold, specification)) {
     return "the admitted continuation hold must be followed by the matching applied Stop or Restart request"
   }
-  if (!exactHeldExecutorOutcomeAt(story, holdIndex, hold.attemptId)) {
-    return "the admitted continuation hold must close with the exact StartOrContinue boundary outcome"
+  if (heldResumeOutcomeFollowsTerminalChoice(story, holdIndex, hold.attemptId)) {
+    return "the terminal attempt choice must cancel the held Resume before executor contact"
   }
   return undefined
 }
@@ -1351,6 +1385,7 @@ const AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteShape.check(
   .check(coordinatorLifecycleBoundariesHaveFollowingActivationWork)
   .check(finalTrackerReadClosesCurrentActivation)
   .check(ambiguousBoundaryLossesImmediatelyCrash)
+  .check(beginResponsesAreExecuting)
   .check(lostExecutorResponsesRequireExplicitProjection)
   .check(completionFinalityStoryIsComplete)
   .check(admittedContinuationHoldHasExactAttemptChoiceClosure)

@@ -1,4 +1,17 @@
-import { PlannedAttemptExecutor, RunId, TaskId } from "@dalph/contracts"
+import {
+  AttemptId,
+  GitCommitSha,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorReport,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator,
+  plannedAttemptExecutorCorrelation
+} from "@dalph/contracts"
 import { it } from "@effect/vitest"
 import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node"
 import { Context, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Ref, Scope, Stream } from "effect"
@@ -27,6 +40,10 @@ import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "../delivery/in-memory-relations.js"
 import { currentSignalOf, type DeliveryRelationInputBundle, TrackerGraphState } from "../delivery/relations.js"
 import { RunFinalityDecision, type RunFinalityProof } from "../frontier/frontier.js"
+import {
+  activeWorkAuthorityRefreshSubjectsForRunState,
+  type RunActivationOpportunity
+} from "./run-activation-opportunity.js"
 import { DispositionCleanupActivation } from "../../workflow/protocols/disposition-cleanup/loop.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
 import {
@@ -40,21 +57,42 @@ import {
 } from "../../workflow-journal/store.js"
 import { OperationId } from "../../workflow/identity.js"
 import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
-import { TargetLineageObservedEvent, taskTrackerReadIntent } from "../../workflow/registry/event.js"
-import { projectWorkflowOccurrences } from "../../workflow/registry/occurrence-projection.js"
-import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  TargetLineageObservedEvent,
+  TaskAttemptPlannedEvent,
+  taskTrackerReadIntent
+} from "../../workflow/registry/event.js"
+import { projectWorkflowOccurrences } from "../../workflow/registry/occurrence-projection.js"
+import {
+  makeTaskAttemptPlanOperation,
+  makeTrackerGraphObservationOperation
+} from "../../workflow/registry/operation.js"
+import {
+  attemptPlanRecordKey,
   integrationQuarantinedRecordKey,
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
-  intentRecordKey
+  intentRecordKey,
+  plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey,
+  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
 import { makeRunFinalityEvidence, runTerminationDispositionOf } from "../frontier/run-finality.js"
 import { AllocatedWorkflowRunId, freshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import { JournaledRunBootstrap, type AcceptedRunReactivationObservers } from "./run.js"
 import { journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
+import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import {
   type ApplicationExitShellService,
   type ApplicationProcessLifecycleService,
@@ -328,6 +366,178 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   return { ...bootstrap, applicationExitRequestBoundary: sharedApplicationExit.requestBoundary }
 })
 
+const appendExecutorHistory = (
+  journal: JournalStore["Service"],
+  runId: RunId,
+  plannedAttempt: PlannedTaskAttempt,
+  reportTag: "Running" | "SafelySuspended" | "Terminal"
+) =>
+  Effect.gen(function* () {
+    const plan = makeTaskAttemptPlanOperation({
+      operationId: OperationId.make(`bootstrap-capture-plan:${plannedAttempt.attemptId}`),
+      plannedAttempt,
+      predecessorOperationIds: []
+    })
+    yield* journal.append(
+      runId,
+      attemptPlanRecordKey(plannedAttempt.attemptId),
+      TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+    )
+    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Begin",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: commandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+      PlannedAttemptExecutorCommandResponseObservedEvent.make({
+        commandOrdinal,
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt,
+        report: executing,
+        version: workflowJournalEventVersion
+      })
+    )
+    const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: reportOrdinal,
+        report: executing,
+        version: workflowJournalEventVersion
+      })
+    )
+    if (reportTag === "Running") return
+    const settledReport =
+      reportTag === "SafelySuspended"
+        ? PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+        : PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Completed" } })
+    const settledCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, settledCommandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Suspend",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: settledCommandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, settledCommandOrdinal),
+      PlannedAttemptExecutorCommandResponseObservedEvent.make({
+        commandOrdinal: settledCommandOrdinal,
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt,
+        report: settledReport,
+        version: workflowJournalEventVersion
+      })
+    )
+    const settledOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
+    yield* journal.append(
+      runId,
+      plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, settledOrdinal),
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: settledOrdinal,
+        report: settledReport,
+        version: workflowJournalEventVersion
+      })
+    )
+  })
+
+const captureTestAttempt = (runId: RunId, suffix: string, taskSuffix: string) =>
+  PlannedTaskAttempt.make({
+    attemptId: AttemptId.make(`bootstrap-capture-attempt-${suffix}`),
+    baseSha: GitCommitSha.make("a".repeat(40)),
+    branch: TaskBranchRef.make(`refs/heads/dalph/bootstrap-capture-${suffix}`),
+    executor: TaskExecutorLocator.make("executor:bootstrap-capture"),
+    runId,
+    taskId: TaskId.make(`bootstrap-capture-task-${taskSuffix}`),
+    taskRevision: TaskRevision.make(`bootstrap-capture-revision-${suffix}`),
+    worktree: WorktreeLocator.make(`/worktrees/bootstrap-capture-${suffix}`)
+  })
+
+it.effect("captures only unfinished Running responsibilities at the active refresh boundary", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-active-refresh-capture")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      yield* storage.beginRun(runId, target, initialPolicy)
+
+      const runningA = captureTestAttempt(runId, "running-a", "a")
+      const runningB = captureTestAttempt(runId, "running-b", "b")
+      const safelySuspended = captureTestAttempt(runId, "safely-suspended", "c")
+      const terminal = captureTestAttempt(runId, "terminal", "d")
+      yield* appendExecutorHistory(storage, runId, runningA, "Running")
+      yield* appendExecutorHistory(storage, runId, runningB, "Running")
+      yield* appendExecutorHistory(storage, runId, safelySuspended, "SafelySuspended")
+      yield* appendExecutorHistory(storage, runId, terminal, "Terminal")
+
+      const captured = yield* Ref.make<RunActivationOpportunity | undefined>(undefined)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const decision = yield* bootstrap.activateActiveWorkAuthorityRefresh(
+        target,
+        Effect.die("an existing Run must not reread its initial policy"),
+        runId,
+        (opportunity) =>
+          Ref.set(captured, opportunity).pipe(
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+          ),
+        "Timer"
+      )
+      expect(decision).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+      const opportunity = yield* Ref.get(captured)
+      if (opportunity?._tag !== "ActiveWorkAuthorityRefresh") {
+        return yield* Effect.die("active refresh did not receive its captured opportunity")
+      }
+      const capturedSubjects = [...opportunity.subjects].map(({ attemptId, runId: subjectRunId }) => ({
+        attemptId,
+        runId: subjectRunId
+      }))
+      expect(capturedSubjects).toEqual([
+        { runId, attemptId: runningA.attemptId },
+        { runId, attemptId: runningB.attemptId }
+      ])
+
+      const late = captureTestAttempt(runId, "late-running", "e")
+      yield* appendExecutorHistory(storage, runId, late, "Running")
+      const laterHistory = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+      if (laterHistory._tag !== "ValidWorkflowJournalHistory") {
+        return yield* Effect.die("late running fixture must preserve valid journal history")
+      }
+      expect(
+        [...activeWorkAuthorityRefreshSubjectsForRunState(laterHistory.runState)].map(({ attemptId }) => attemptId)
+      ).toEqual([runningA.attemptId, runningB.attemptId, late.attemptId])
+      expect([...opportunity.subjects].map(({ attemptId }) => attemptId)).toEqual([
+        runningA.attemptId,
+        runningB.attemptId
+      ])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 const withTemporaryDatabase = <A, E, R>(use: (filename: JournalDatabaseLocator) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem
@@ -518,9 +728,9 @@ it.effect("keeps the active Run alive until its exact executor-family Exit drain
         awaitExecutorDrains: applicationExit.awaitExecutorDrains,
         registerExecutorDrain: (drain) =>
           applicationExit.registerExecutorDrain({
-            suspendRunningExecutorWork: Deferred.succeed(executorDrainStarted, undefined).pipe(
+            suspendExecutingExecutorWork: Deferred.succeed(executorDrainStarted, undefined).pipe(
               Effect.andThen(Deferred.await(releaseExecutorDrain)),
-              Effect.andThen(drain.suspendRunningExecutorWork)
+              Effect.andThen(drain.suspendExecutingExecutorWork)
             )
           })
       }
@@ -2379,6 +2589,56 @@ it.effect("applies inactive Run controls through the Journal while inactive Task
       expect(unpaused.event).toMatchObject({ _tag: "ControlDirectionApplied", direction: "Unpause" })
       expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunUnpaused")
       expect(yield* Ref.get(observed)).toEqual(["Pause", "Unpause"])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("reads inactive integration quarantine control from the Journal", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-inactive-quarantine-control")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const requestId = IntegrationQuarantineDirectionRequestId.make({ nonce: "inactive-quarantine-read", runId })
+
+      const failure = yield* bootstrap.operatorControl
+        .readIntegrationQuarantineDirection({ requestId })
+        .pipe(Effect.flip)
+
+      expect(failure).toMatchObject({ _tag: "IntegrationQuarantineDirectionResultNotFound", requestId })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("keeps an initial delivery publication harmless before reactivation observers are registered", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-publication-without-observer")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const publicationCount = yield* Ref.make(0)
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        storage,
+        defaultTrackerGraphReader,
+        undefined,
+        undefined,
+        defaultOwnership,
+        publicationCount
+      )
+
+      expect(
+        yield* bootstrap.activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.succeed(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+        )
+      ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+      expect(yield* Ref.get(publicationCount)).toBe(1)
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )

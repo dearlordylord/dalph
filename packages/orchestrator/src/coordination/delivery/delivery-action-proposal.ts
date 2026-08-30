@@ -16,6 +16,7 @@ import type {
   WorkflowTaskClaimReleaseOperation
 } from "../../workflow/registry/operation.js"
 import type { IntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
+import type { ActiveWorkAuthorityRefreshGitReadOperation } from "../../workflow/protocols/active-work-authority-refresh/events.js"
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import type { RunnableFrontierTransition } from "../frontier/frontier.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
@@ -199,7 +200,7 @@ export type NewRecoveredWorkflowAction =
 
 type FreshExecutorStep = Extract<
   FreshWorkflowStep,
-  { readonly _tag: "ContinuePlannedAttemptExecutorWork" | "StartPlannedAttemptExecutorWork" }
+  { readonly _tag: "ObservePlannedAttemptExecutorWork" | "BeginPlannedAttemptExecutorWork" }
 >
 export type FreshOperationStep = Exclude<FreshWorkflowStep, FreshExecutorStep>
 
@@ -257,11 +258,13 @@ type FreshOperationIdentity = {
   readonly _tag: "FreshOperationIdRequired"
   readonly source:
     | { readonly _tag: "Allocate" }
+    /** A recovery boundary selected this exact identity before admission. */
+    | { readonly _tag: "Preserve"; readonly operationId: OperationId }
     | { readonly _tag: "ExternalSuccessReleaseClaim"; readonly claimOperationId: OperationId }
     | { readonly _tag: "TaskClaimReacquisitionRequest"; readonly requestId: TaskClaimReacquisitionRequestId }
 }
 
-/** New identity allocation is declared, but projection never allocates either identity. */
+/** A fresh action operation identity is declared before admission; projection never allocates it. */
 export type FreshIdentityDeliveryProposal =
   | (DeliveryProposalBase & {
       readonly actionIdentity: { readonly _tag: "FreshOperationAndAttemptIdsRequired" }
@@ -315,7 +318,7 @@ export type DeliveryProposalDerivationIssue =
       readonly transition:
         | "CommitFreshTaskClaimIntent"
         | "ContinueFreshWorkflowOperation"
-        | "StartPlannedAttemptExecutorWork"
+        | "BeginPlannedAttemptExecutorWork"
     }
   | {
       readonly _tag: "PreStartClaimProvenanceMissing"
@@ -336,6 +339,8 @@ export interface FreshDecision {
 export interface DeliveryProposalsInput {
   readonly acceptedAt?: JournalPosition | null
   readonly acceptedOperationIds: ReadonlySet<OperationId>
+  /** Active-refresh Git intents still pending at this exact journal evaluation. */
+  readonly activeRefreshPendingGitReadOperations?: ReadonlyArray<ActiveWorkAuthorityRefreshGitReadOperation>
   readonly fresh: ReadonlyArray<FreshDecision>
   readonly integrationResponsibilities?: ReadonlyArray<IntegrationResponsibility>
   readonly responsibilities?: ReadonlyArray<WorkflowResponsibilityEntry>

@@ -35,8 +35,16 @@ import {
   IntegratorCandidateWorktreeRoot,
   IntegratorPrivateStoreLocator,
   nodeCodexIntegratorPrivateStoreLayer,
+  recordRunIntent,
+  removalIntentRecordFor,
+  removedRecordFor,
   revision
 } from "./codex-integrator-private-store.js"
+import {
+  appendPrivateRunHistory,
+  newPrivateRecordRunError,
+  sealedPrivateRunHistoryFrom
+} from "./codex-integrator-private-lifecycle.js"
 import {
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
@@ -118,6 +126,48 @@ const threadRecordInput = (runs: ReadonlyArray<unknown>) => ({
 })
 
 describe("Codex Integrator private store", () => {
+  it("rejects every noncanonical provider-run history transition before persistence", () => {
+    const sealedRun = CodexIntegratorPrivateRun.cases.CompletedTurnSealed.make({
+      correlation: runCorrelation(1),
+      token: CodexOwnedTurnToken.make("private-lifecycle-sealed-token"),
+      result: terminalResult(),
+      turnId: CodexTurnId.make("private-lifecycle-sealed-turn")
+    })
+
+    expect(appendPrivateRunHistory([], validRun(2))).toBeUndefined()
+    expect(appendPrivateRunHistory([validRun(1)], validRun(2))).toBeUndefined()
+    expect(appendPrivateRunHistory([], validRun(1))).toEqual([validRun(1)])
+    expect(appendPrivateRunHistory([sealedRun], validRun(2))).toEqual([sealedRun, validRun(2)])
+    expect(sealedPrivateRunHistoryFrom([])).toBeUndefined()
+    expect(sealedPrivateRunHistoryFrom([sealedRun, validRun(2)])).toBeUndefined()
+    expect(sealedPrivateRunHistoryFrom([sealedRun])).toEqual([sealedRun])
+    expect(newPrivateRecordRunError(runCorrelation(1))).toBeUndefined()
+    expect(newPrivateRecordRunError(runCorrelation(2))).toContain("sealed run-one")
+    expect(newPrivateRecordRunError(runCorrelation(3))).toContain("exceeds Retry")
+  })
+
+  it("fails closed when private-record lifecycle helpers receive the wrong durable phase", () => {
+    const threadId = CodexThreadId.make("private-lifecycle-thread")
+    const appServerIncarnation = CodexServerIncarnation.make("private-lifecycle-incarnation")
+    const threadReady = Schema.decodeUnknownSync(CodexIntegratorPrivateRecord)({
+      ...record(),
+      _tag: "ThreadReady",
+      threadId
+    })
+    const unsealed = Schema.decodeUnknownSync(CodexIntegratorPrivateRecord)({
+      ...record(),
+      _tag: "ThreadWithRuns",
+      runs: [validRun(1)],
+      threadId
+    })
+
+    expect(recordRunIntent(record(), validRun(1), appServerIncarnation)).toBeUndefined()
+    expect(recordRunIntent(threadReady, validRun(2), appServerIncarnation)).toBeUndefined()
+    expect(removalIntentRecordFor(record())).toBeUndefined()
+    expect(removalIntentRecordFor(unsealed)).toBeUndefined()
+    expect(removedRecordFor(unsealed)).toBeUndefined()
+  })
+
   it("reads absence, writes a record, and finds it by exact candidate path", async () => {
     const result = await Effect.runPromise(
       Effect.scoped(

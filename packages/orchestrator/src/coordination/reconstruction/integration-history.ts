@@ -24,7 +24,6 @@ import { validateProviderRunActivityAbsent } from "../../workflow/protocols/inte
 
 export interface IntegrationHistoryIndexes extends IntegratorHistoryIndexes {
   readonly acceptedExecutorResults: HashMap.HashMap<AttemptId, AcceptedResult>
-  readonly acceptedExecutorResultPositions: HashMap.HashMap<AttemptId, JournalPosition>
   readonly executorResponsibilitiesBegan: HashMap.HashMap<
     AttemptId,
     { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
@@ -37,18 +36,15 @@ export interface IntegrationHistoryIndexes extends IntegratorHistoryIndexes {
     JournalPosition,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationStarted" }>
   >
-  readonly firstRestartChoiceAppliedAt: HashMap.HashMap<AttemptId, JournalPosition>
   readonly targetPromotionHistory: TargetPromotionHistoryIndexes
 }
 
 /** Creates one fresh in-memory index for validating a trace prefix. */
 export const makeIntegrationHistoryIndexes = (): IntegrationHistoryIndexes => ({
   acceptedExecutorResults: HashMap.empty(),
-  acceptedExecutorResultPositions: HashMap.empty(),
   executorResponsibilitiesBegan: HashMap.empty(),
   integrationResponsibilitiesBegan: HashMap.empty(),
   integrationStarted: HashMap.empty(),
-  firstRestartChoiceAppliedAt: HashMap.empty(),
   targetPromotionHistory: makeTargetPromotionHistoryIndexes(),
   targetLineageReadIntents: HashMap.empty(),
   targetLineageObservations: HashMap.empty(),
@@ -77,17 +73,13 @@ const invalidResponsibilityBeginning = (
   indexes: IntegrationHistoryIndexes
 ): string | undefined => {
   const accepted = mapGet(indexes.acceptedExecutorResults, event.plannedAttempt.attemptId)
-  const acceptedAt = mapGet(indexes.acceptedExecutorResultPositions, event.plannedAttempt.attemptId)
-  const restartAt = mapGet(indexes.firstRestartChoiceAppliedAt, event.plannedAttempt.attemptId)
   const executorResponsibility = mapGet(indexes.executorResponsibilitiesBegan, event.plannedAttempt.attemptId)
-  return restartAt !== undefined && acceptedAt !== undefined && restartAt < acceptedAt
-    ? `integration responsibility for attempt ${event.plannedAttempt.attemptId} follows an Accepted result suppressed by prior Restart`
-    : accepted === undefined ||
-        !acceptedResultEquivalence(accepted, event.acceptedResult) ||
-        executorResponsibility === undefined ||
-        !plannedTaskAttemptEquivalence(executorResponsibility.plannedAttempt, event.plannedAttempt)
-      ? `integration responsibility for attempt ${event.plannedAttempt.attemptId} has no prior matching accepted terminal result`
-      : undefined
+  return accepted === undefined ||
+    !acceptedResultEquivalence(accepted, event.acceptedResult) ||
+    executorResponsibility === undefined ||
+    !plannedTaskAttemptEquivalence(executorResponsibility.plannedAttempt, event.plannedAttempt)
+    ? `integration responsibility for attempt ${event.plannedAttempt.attemptId} has no prior matching accepted terminal result`
+    : undefined
 }
 
 const invalidIntegrationStart = (

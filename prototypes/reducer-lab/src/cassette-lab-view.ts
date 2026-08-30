@@ -214,7 +214,7 @@ export const continuationAuthorizationSummaryItems = (
     },
     {
       term: "Durable authorization",
-      description: `generic PlannedAttemptContinuationAuthorized at journal ${projection.authorization.position}; no recovery event is inferred`
+      description: `generic PlannedAttemptContinuationAuthorized at journal ${projection.authorization.position}; no replacement attempt or executor invocation is inferred`
     },
     {
       term: "Fresh witness operations",
@@ -222,7 +222,8 @@ export const continuationAuthorizationSummaryItems = (
         `graph ${witness.activeTask.graph.operationId}`,
         `specification ${witness.activeTask.specification.operationId}`,
         `claim ${witness.activeTask.claim.operationId}`,
-        `worktree ${witness.worktree.operationId}`
+        `worktree ${witness.worktree.operationId}`,
+        `target lineage ${witness.targetLineage.operationId}`
       ].join(" · ")
     },
     {

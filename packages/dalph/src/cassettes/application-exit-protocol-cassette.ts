@@ -46,7 +46,7 @@ export const runApplicationExitProtocolCassette = Effect.fn("ApplicationExitProt
   yield* shell.registerProcessLocalDrain({ closeProcessLocalResources: recordDrain("ProcessLocalResources") })
   if (cassette.scenario === "DrainFailure") {
     yield* shell.registerExecutorDrain({
-      suspendRunningExecutorWork: Effect.fail(
+      suspendExecutingExecutorWork: Effect.fail(
         new ApplicationExitDrainFailure({ diagnostics: [drainFailureDiagnostic] })
       )
     })
