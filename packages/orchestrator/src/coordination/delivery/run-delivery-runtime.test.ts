@@ -13,7 +13,8 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import { Deferred, Effect, Fiber, Layer, Option, Ref, Stream, SubscriptionRef } from "effect"
 import { expect } from "vitest"
@@ -34,13 +35,29 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { InterruptibleWorkflowBoundaryIntent } from "../../workflow/interpretation/interpreter.js"
 import {
+  makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
   makeTargetLineageObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
+import {
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent
+} from "../../workflow/registry/event.js"
+import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
+import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandProjectionObservation,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
@@ -87,13 +104,21 @@ import {
   deliveryRuntimeResourcesLayer
 } from "./delivery-runtime-resources.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
-import type { DeliveryRuntimeObservationState } from "./delivery-runtime-observation.js"
+import {
+  DeliveryRuntimeObservationObserver,
+  type DeliveryRuntimeObservationState
+} from "./delivery-runtime-observation.js"
 import {
   makePlannedAttemptProtocolController,
   PlannedAttemptProtocolController,
   plannedAttemptProtocolControllerLayer
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type { DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
+import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
+import type { JournalRecord } from "../../workflow-journal/store.js"
+import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
+import { deriveJournalResponsibilityFacts } from "../run/recovery-activation.js"
+import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
 
 const deliveryRuntimeResourceCapabilitiesOf = Effect.fn("RunDeliveryRuntimeTest.makeCapabilities")(function* (
   integrationTargets: Parameters<typeof makeCapabilitiesWithAdmission>[0]
@@ -1976,6 +2001,263 @@ it.effect("processes a changed frontier without a caller-supplied runtime bounda
         return yield* Effect.die("the current evaluation must retain its descriptive proposal frontier")
       }
       expect(latest.proposedActions.proposals).toEqual([])
+    })
+  )
+)
+
+it.effect("ignores a stale accepted frontier before it can call the executor", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const holder = proposal(0, TaskId.make("accepted-runtime-holder"))
+      const stale = proposal(1, TaskId.make("stale-runtime-task"))
+      const relation = yield* dynamicEvaluationSignal({
+        ...withProposals(base, [holder]),
+        acceptedAt: JournalPosition.make(10)
+      })
+      const executorCalls = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const holderStarted = yield* Deferred.make<void>()
+      const releaseHolder = yield* Deferred.make<void>()
+      const acceptedThirteenObserved = yield* Deferred.make<void>()
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal }) =>
+          Effect.gen(function* () {
+            yield* Ref.update(executorCalls, (calls) => [...calls, proposal.id])
+            if (proposal.id !== holder.id) return yield* Effect.die("a stale proposal must never reach the executor")
+            yield* Deferred.succeed(holderStarted, undefined)
+            yield* Deferred.await(releaseHolder)
+            return { _tag: "ActionCompleted", proposalId: proposal.id } satisfies DeliveryActionResult
+          })
+      })
+      const observer = DeliveryRuntimeObservationObserver.of({
+        observe: ({ evaluation }) =>
+          evaluation.acceptedAt === JournalPosition.make(13)
+            ? Deferred.succeed(acceptedThirteenObserved, undefined)
+            : Effect.void
+      })
+      const runtime = yield* runDeliveryRuntimePhase(relation).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(DeliveryRuntimeObservationObserver, observer),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(holderStarted)
+      yield* relation.publish({ ...withProposals(base, []), acceptedAt: JournalPosition.make(12) })
+      yield* relation.publish({ ...withProposals(base, [stale]), acceptedAt: JournalPosition.make(11) })
+      yield* relation.publish({ ...withProposals(base, []), acceptedAt: JournalPosition.make(13) })
+      yield* Deferred.await(acceptedThirteenObserved)
+      yield* Deferred.succeed(releaseHolder, undefined)
+
+      const quiescence = yield* Fiber.join(runtime)
+      expect(quiescence).toMatchObject({ _tag: "PassiveRuntimeQuiescence", acceptedAt: JournalPosition.make(13) })
+      expect(yield* Ref.get(executorCalls)).toEqual([holder.id])
+      expect(yield* Ref.get(executorCalls)).not.toContain(stale.id)
+    })
+  )
+)
+
+it.effect("accepts Pause during phase two and retains the exact G2 boundary without executor work", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const g2AcceptedAt = JournalPosition.make(7)
+      const pauseAcceptedAt = JournalPosition.make(8)
+      const waitingTaskId = independentPlannedAttempt.taskId
+      const occupiedTaskId = TaskId.make("post-g2-pause-capacity-holder")
+      const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+      const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(1)
+      const safelySuspended = PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+        correlation: plannedAttemptExecutorCorrelation(independentPlannedAttempt)
+      })
+      const acquisition = {
+        operationId: OperationId.make("post-g2-pause-independent-acquisition"),
+        owner: ClaimOwner.make("dalph"),
+        taskId: waitingTaskId,
+        token: ClaimToken.make("post-g2-pause-independent-token")
+      }
+      const claimAcquisition = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
+      const attemptPlan = makeTaskAttemptPlanOperation({
+        operationId: OperationId.make("post-g2-pause-independent-plan"),
+        plannedAttempt: independentPlannedAttempt,
+        predecessorOperationIds: [acquisition.operationId]
+      })
+      const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
+        event,
+        key: describeJournalEvent(event).expectedKey,
+        position: JournalPosition.make(position),
+        runId
+      })
+      const executorChronology = [
+        record(
+          1,
+          TaskClaimAcquisitionIntendedEvent.make({ operation: claimAcquisition, version: workflowJournalEventVersion })
+        ),
+        record(
+          2,
+          TaskClaimAcquiredEvent.make({
+            claim: ActiveTaskClaim.make(acquisition),
+            version: workflowJournalEventVersion
+          })
+        ),
+        record(3, TaskAttemptPlannedEvent.make({ operation: attemptPlan, version: workflowJournalEventVersion })),
+        record(
+          4,
+          PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+            plannedAttempt: independentPlannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        ),
+        record(
+          5,
+          PlannedAttemptExecutorCommandIntendedEvent.make({
+            command: "Suspend",
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            ordinal: commandOrdinal,
+            plannedAttempt: independentPlannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        ),
+        record(
+          6,
+          PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+            commandOrdinal,
+            observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({
+              report: safelySuspended
+            }),
+            occurrenceClassification: "NonActionOccurrence",
+            plannedAttempt: independentPlannedAttempt,
+            projectionOrdinal,
+            version: workflowJournalEventVersion
+          })
+        )
+      ]
+      const reducedB = reduceWorkflowJournalHistory(runId, executorChronology)
+      if (reducedB._tag !== "ValidWorkflowJournalHistory") {
+        return yield* Effect.die(
+          `B's accepted executor chronology must reconstruct as valid journal history: ${JSON.stringify(reducedB.issues)}`
+        )
+      }
+      const bFacts = deriveJournalResponsibilityFacts(reducedB.runState).find(
+        (facts) =>
+          facts._tag === "PlannedAttemptExecutorFreshFacts" &&
+          facts.responsibility.plannedAttempt.runId === independentPlannedAttempt.runId &&
+          facts.responsibility.plannedAttempt.attemptId === independentPlannedAttempt.attemptId
+      )
+      if (
+        bFacts?._tag !== "PlannedAttemptExecutorFreshFacts" ||
+        bFacts.disposition._tag !== "Ready" ||
+        bFacts.disposition.acceptedProgress._tag !== "ExecutorProjectionAccepted"
+      ) {
+        return yield* Effect.die("B must be ready from its accepted safely suspended command projection")
+      }
+      const waiting = recoveredProposalFor(
+        RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+          acceptedProgress: bFacts.disposition.acceptedProgress,
+          plannedAttempt: independentPlannedAttempt
+        }),
+        new Set(),
+        independentPlannedAttempt
+      )
+      const graphProjection = projectTrackerSnapshot({
+        revision: "post-g2-pause",
+        tasks: [plannedAttempt.taskId, waitingTaskId, occupiedTaskId].map((id) => ({
+          id,
+          lifecycle: { _tag: "Open" as const },
+          parentTaskId: null,
+          prerequisiteIds: []
+        }))
+      })
+      if (graphProjection._tag === "Invalid") return yield* Effect.die("the accepted G2 graph must be valid")
+      const graph = TrackerGraphState.cases.GraphEstablished.make({
+        observation: makeTestJournaledTrackerGraphObservation({
+          operationId: OperationId.make("post-g2-pause-graph"),
+          recordedAt: g2AcceptedAt,
+          snapshot: graphProjection.snapshot
+        })
+      })
+      const boundary = {
+        _tag: "ActiveRefreshRuntimeBoundary" as const,
+        runId,
+        reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+      }
+      const acceptedG2 = {
+        ...withProposals(base, [waiting], 1),
+        acceptedAt: g2AcceptedAt,
+        activeRefreshBoundary: boundary,
+        current: { ...base.current, trackerGraph: graph },
+        pauseCoverage: {
+          _tag: "PauseCoverageGraphEstablished" as const,
+          applied: { run: { _tag: "RunUnpaused" as const }, tasks: { _tag: "NoTaskPauses" as const } },
+          observedAt: g2AcceptedAt,
+          snapshot: graphProjection.snapshot
+        },
+        quiescence: { _tag: "TrackerReconfirmationAllowed" as const },
+        taskWork: {
+          capacity: TaskWorkCapacity.make(1),
+          held: [
+            {
+              correlation: { attemptId: AttemptId.make("post-g2-pause-capacity-attempt"), runId },
+              taskId: occupiedTaskId
+            }
+          ]
+        }
+      } satisfies DeliveryRuntimeEvaluation
+      expect(requiredPlannedAttemptPositionsOf(reducedB.runState)).toEqual([])
+      expect(acceptedG2.taskWork.held.map(({ taskId }) => taskId)).toEqual([occupiedTaskId])
+      expect(waiting.route).toMatchObject({
+        transition: {
+          acceptedProgress: { _tag: "ExecutorProjectionAccepted", observedAt: JournalPosition.make(6) },
+          plannedAttempt: independentPlannedAttempt
+        }
+      })
+      const acceptedPause = {
+        ...acceptedG2,
+        acceptedAt: pauseAcceptedAt,
+        pauseCoverage: {
+          ...acceptedG2.pauseCoverage,
+          applied: { run: { _tag: "RunPaused" as const }, tasks: { _tag: "NoTaskPauses" as const } }
+        },
+        proposedActions: { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [] },
+        quiescence: { _tag: "QuiescencePassive" as const, reason: "RunPaused" as const }
+      } satisfies DeliveryRuntimeEvaluation
+      const relation = yield* dynamicEvaluationSignal(acceptedG2)
+      const waitingDeferred = yield* Deferred.make<void>()
+      const trace = DeliverySemanticTrace.of({
+        emit: (event) =>
+          event._tag === "ProposalDeferred" && event.proposalId === waiting.id
+            ? Deferred.succeed(waitingDeferred, undefined)
+            : Effect.void
+      })
+      const executorCalls = yield* Ref.make(0)
+      const runtime = yield* runDeliveryRuntimePhase(
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
+      ).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliverySemanticTrace, trace),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: () => Ref.update(executorCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("unused")))
+          })
+        ),
+        Effect.forkChild
+      )
+      yield* Deferred.await(waitingDeferred)
+      yield* relation.publish(acceptedPause)
+      const result = yield* Fiber.join(runtime)
+
+      expect(result).toMatchObject({
+        _tag: "PassiveRuntimeQuiescence",
+        acceptedAt: pauseAcceptedAt,
+        activeRefreshBoundary: boundary,
+        current: { trackerGraph: graph },
+        disposition: { _tag: "QuiescencePassive", reason: "RunPaused" },
+        proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }
+      })
+      expect(yield* Ref.get(executorCalls)).toBe(0)
     })
   )
 )

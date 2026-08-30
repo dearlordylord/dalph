@@ -345,6 +345,70 @@ it.effect("keeps a proposed delivery unsettled until ordinary evidence advances 
   })
 )
 
+it.effect("keeps an incomplete graph with no work active without inferring termination", () =>
+  Effect.gen(function* () {
+    const relation = yield* deliveryRuntime.pipe(
+      Effect.provide(
+        makeDeliveryRelationsLayer({
+          exactEvidence: currentSignalOf([]),
+          graph: currentSignalOf(TrackerGraphState.cases.GraphNotEstablished.make({})),
+          policy: currentSignalOf(policy)
+        })
+      )
+    )
+    const current = Option.getOrThrow(
+      yield* relation.changes.pipe(
+        Stream.map(({ current }) => current),
+        Stream.runHead
+      )
+    )
+
+    expect(current.ticketDeliveries.deliveries).toEqual([])
+    expect(
+      deliveryFinalityOf(
+        current,
+        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        { _tag: "TrackerReconfirmationAllowed" }
+      )
+    ).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
+  })
+)
+
+it.effect("keeps an isolated proposal derivation issue active without inferring termination", () =>
+  Effect.gen(function* () {
+    const taskId = TaskId.make("isolated-finality-issue")
+    const relation = yield* deliveryRuntime.pipe(
+      Effect.provide(
+        makeDeliveryRelationsLayer({
+          exactEvidence: currentSignalOf([]),
+          graph: currentSignalOf(journaledGraphState(journaledGraph("isolated-finality-issue"))),
+          policy: currentSignalOf(policy)
+        })
+      )
+    )
+    const current = Option.getOrThrow(
+      yield* relation.changes.pipe(
+        Stream.map(({ current }) => current),
+        Stream.runHead
+      )
+    )
+
+    expect(
+      deliveryFinalityOf(
+        current,
+        {
+          _tag: "DeliveryProposalsAvailable",
+          isolatedIssues: [
+            { _tag: "FreshRouteProvenanceMissing", taskId, transition: "StartPlannedAttemptExecutorWork" }
+          ],
+          proposals: []
+        },
+        { _tag: "TrackerReconfirmationAllowed" }
+      )
+    ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+  })
+)
+
 it.effect("lets a completed tracker target terminate after exact integration finality settles", () =>
   Effect.gen(function* () {
     const fixture = integrationFinalityFixture
