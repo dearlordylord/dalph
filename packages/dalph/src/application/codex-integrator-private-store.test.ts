@@ -21,13 +21,13 @@ import { Effect, Exit, FileSystem, Layer, Option, PlatformError, Schema } from "
 import { describe, expect, it } from "vitest"
 import {
   CodexServerIncarnation,
+  CodexThreadId,
   CodexThreadOwnershipToken,
   CodexTurnId,
   CodexOwnedTurnToken
 } from "./codex-attempt-store.js"
 import {
   CodexIntegratorPrivateRecord,
-  CodexIntegratorPrivateLifecycle,
   CodexIntegratorPrivateRun,
   CodexIntegratorPrivateStore,
   CodexIntegratorStoreFailure,
@@ -80,13 +80,11 @@ const record = (
   path = "/tmp/private-store-candidate",
   correlation: IntegratorSessionCorrelation = session
 ): CodexIntegratorPrivateRecord =>
-  CodexIntegratorPrivateRecord.make({
+  CodexIntegratorPrivateRecord.cases.CandidateUnmaterialized.make({
     appServerIncarnation: CodexServerIncarnation.make("private-store-incarnation"),
     candidatePath: IntegratorCandidateWorktreePath.make(path),
     correlation,
     revision: revision(1),
-    lifecycle: CodexIntegratorPrivateLifecycle.cases.CandidateUnmaterialized.make({}),
-    runs: [],
     threadToken: CodexThreadOwnershipToken.make("private-store-thread")
   })
 
@@ -110,6 +108,13 @@ const validRun = (ordinal = 1) =>
     correlation: runCorrelation(ordinal),
     token: CodexOwnedTurnToken.make(`private-store-turn-${ordinal}`)
   })
+
+const threadRecordInput = (runs: ReadonlyArray<unknown>) => ({
+  ...record(),
+  _tag: "ThreadWithRuns",
+  runs,
+  threadId: CodexThreadId.make("private-store-thread-id")
+})
 
 describe("Codex Integrator private store", () => {
   it("reads absence, writes a record, and finds it by exact candidate path", async () => {
@@ -155,7 +160,10 @@ describe("Codex Integrator private store", () => {
             const store = yield* CodexIntegratorPrivateStore
             yield* store.write(record(`${root}/first`))
             yield* store.write(
-              CodexIntegratorPrivateRecord.make({ ...record(`${root}/second`), revision: revision(2) })
+              Schema.decodeUnknownSync(CodexIntegratorPrivateRecord)({
+                ...record(`${root}/second`),
+                revision: revision(2)
+              })
             )
             const replaced = yield* store.read(session.sessionId)
             yield* fileSystem.writeFileString(locator, "not-json")
@@ -239,9 +247,9 @@ describe("Codex Integrator private store", () => {
       }
     ]
     for (const run of invalidRuns) {
-      expect(
-        Option.isNone(Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)({ ...record(), runs: [run] }))
-      ).toBe(true)
+      expect(Option.isNone(Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)(threadRecordInput([run])))).toBe(
+        true
+      )
     }
 
     const observedRun = CodexIntegratorPrivateRun.cases.TurnObserved.make({
@@ -256,14 +264,14 @@ describe("Codex Integrator private store", () => {
       turnId: CodexTurnId.make("sealed-valid")
     })
     expect(
-      Option.isSome(Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)({ ...record(), runs: [observedRun] }))
+      Option.isSome(Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)(threadRecordInput([observedRun])))
     ).toBe(true)
     expect(
-      Option.isSome(Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)({ ...record(), runs: [sealedRun] }))
+      Option.isSome(Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)(threadRecordInput([sealedRun])))
     ).toBe(true)
     expect(
       Option.isSome(
-        Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)({ ...record(), runs: [sealedRun, validRun(2)] })
+        Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)(threadRecordInput([sealedRun, validRun(2)]))
       )
     ).toBe(true)
 
@@ -272,31 +280,30 @@ describe("Codex Integrator private store", () => {
       sessionId: IntegratorSessionId.make("private-store-foreign-session")
     })
     const invalidRecords: ReadonlyArray<unknown> = [
-      { ...record(), runs: [validRun(1), validRun(1)] },
-      { ...record(), runs: [validRun(1), validRun(2), validRun(3)] },
-      { ...record(), runs: [validRun(2)] },
-      { ...record(), runs: [validRun(1), validRun(2)] },
-      { ...record(), runs: [validRun(2), validRun(1)] },
-      { ...record(), runs: [sealedRun, { ...validRun(2), token: sealedRun.token }] },
-      { ...record(), runs: [{ ...validRun(), correlation: { ...runCorrelation(1), ordinal: 0 } }] },
-      { ...record(), lifecycle: { _tag: "ThreadStarted" } },
-      { ...record(), lifecycle: { _tag: "RemovalIntentRecorded" } },
-      { ...record(), lifecycle: { _tag: "UnknownLifecycle" } },
-      { ...record(), runs: [{ ...validRun(), correlation: runCorrelation(1, foreignSession) }] },
-      {
-        ...record(),
-        runs: [
-          {
-            ...validRun(),
-            _tag: "CompletedTurnSealed" as const,
-            result: terminalResult(runCorrelation(2)),
-            turnId: CodexTurnId.make("sealed-mismatch")
-          }
-        ]
-      }
+      threadRecordInput([validRun(1), validRun(1)]),
+      threadRecordInput([validRun(1), validRun(2), validRun(3)]),
+      threadRecordInput([validRun(2)]),
+      threadRecordInput([validRun(1), validRun(2)]),
+      threadRecordInput([validRun(2), validRun(1)]),
+      threadRecordInput([sealedRun, { ...validRun(2), token: sealedRun.token }]),
+      threadRecordInput([{ ...validRun(), correlation: { ...runCorrelation(1), ordinal: 0 } }]),
+      { ...record(), _tag: "ThreadReady", runs: [validRun()] },
+      { ...record(), _tag: "RemovalIntentRecorded", runs: [validRun()], threadId: CodexThreadId.make("removal") },
+      { ...record(), _tag: "UnknownLifecycle" },
+      threadRecordInput([{ ...validRun(), correlation: runCorrelation(1, foreignSession) }]),
+      threadRecordInput([
+        {
+          ...validRun(),
+          _tag: "CompletedTurnSealed" as const,
+          result: terminalResult(runCorrelation(2)),
+          turnId: CodexTurnId.make("sealed-mismatch")
+        }
+      ])
     ]
     for (const value of invalidRecords) {
-      expect(Option.isNone(Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)(value))).toBe(true)
+      expect(
+        Option.isNone(Schema.decodeUnknownOption(CodexIntegratorPrivateRecord, { onExcessProperty: "error" })(value))
+      ).toBe(true)
     }
   })
 

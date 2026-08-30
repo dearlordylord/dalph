@@ -2,10 +2,9 @@ import { Effect, Result, Schema } from "effect"
 import type { FileSystem } from "effect"
 import { GitCommitSha, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
 import {
-  bump,
-  CodexIntegratorPrivateLifecycle,
+  CodexIntegratorPrivateRecord,
+  nextPrivateRecordFields,
   type CodexIntegratorConfiguration,
-  type CodexIntegratorPrivateRecord,
   type CodexIntegratorPrivateStoreService,
   type IntegratorCandidateWorktreePath
 } from "./codex-integrator-private-store.js"
@@ -131,13 +130,10 @@ const reconcileExistingCandidateWorktree = Effect.fn("CodexIntegrator.reconcileE
   ) {
     return yield* Effect.fail(providerFailure("candidate worktree registration is foreign or at the wrong head"))
   }
-  if (
-    intended.lifecycle._tag !== "CandidateUnmaterialized" &&
-    intended.lifecycle._tag !== "WorktreeMaterializationIntentRecorded"
-  ) {
+  if (intended._tag !== "CandidateUnmaterialized" && intended._tag !== "WorktreeMaterializationIntentRecorded") {
     return intended
   }
-  const ready = bump(intended, { lifecycle: CodexIntegratorPrivateLifecycle.cases.CandidateReady.make({}) })
+  const ready = CodexIntegratorPrivateRecord.cases.CandidateReady.make(nextPrivateRecordFields(intended))
   yield* boundary(store.write(ready))
   return ready
 })
@@ -174,10 +170,7 @@ const materializeCandidateWorktree = Effect.fn("CodexIntegrator.materializeCandi
   ownership: CoordinatorMutationGuard
 ) {
   const exists = yield* boundary(fileSystem.exists(candidatePath))
-  if (
-    record.lifecycle._tag !== "CandidateUnmaterialized" &&
-    record.lifecycle._tag !== "WorktreeMaterializationIntentRecorded"
-  ) {
+  if (record._tag !== "CandidateUnmaterialized" && record._tag !== "WorktreeMaterializationIntentRecorded") {
     return yield* Effect.fail(providerFailure("ready candidate worktree registration disappeared"))
   }
   if (exists) return yield* Effect.fail(providerFailure("candidate path exists without the exact Git registration"))
@@ -203,7 +196,7 @@ const materializeCandidateWorktree = Effect.fn("CodexIntegrator.materializeCandi
   if (validation.exact.prunable || !createdPathExists) {
     return yield* Effect.fail(providerFailure("candidate worktree registration is prunable or missing on disk"))
   }
-  const next = bump(intended, { lifecycle: CodexIntegratorPrivateLifecycle.cases.CandidateReady.make({}) })
+  const next = CodexIntegratorPrivateRecord.cases.CandidateReady.make(nextPrivateRecordFields(intended))
   yield* boundary(store.write(next))
   return next
 })
@@ -218,11 +211,9 @@ export const ensureCandidateWorktree = Effect.fn("CodexIntegrator.ensureCandidat
 ) {
   const candidatePath = record.candidatePath
   const intended =
-    record.lifecycle._tag !== "CandidateUnmaterialized"
+    record._tag !== "CandidateUnmaterialized"
       ? record
-      : bump(record, {
-          lifecycle: CodexIntegratorPrivateLifecycle.cases.WorktreeMaterializationIntentRecorded.make({})
-        })
+      : CodexIntegratorPrivateRecord.cases.WorktreeMaterializationIntentRecorded.make(nextPrivateRecordFields(record))
   if (intended !== record) yield* boundary(store.write(intended))
   const records = yield* readWorktrees(commands, config)
   const exact = records.find((item) => item.worktree === WorktreeLocator.make(candidatePath))

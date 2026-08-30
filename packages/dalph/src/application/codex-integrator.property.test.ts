@@ -24,7 +24,6 @@ import { describe, expect, it } from "vitest"
 import { codexIntegratorLayer } from "./codex-integrator.js"
 import {
   CodexIntegratorConfiguration,
-  CodexIntegratorPrivateLifecycle,
   CodexIntegratorPrivateRecord,
   CodexIntegratorPrivateRun,
   IntegratorCandidateWorktreePath,
@@ -118,8 +117,7 @@ const roundtripResult = IntegratorResult.cases.NotPrepared.make({
   correlation: roundtripRun,
   detail: IntegratorNotPreparedDetail.make("property terminal result")
 })
-const privateRunArbitrary = fc.constantFrom<CodexIntegratorPrivateRun | undefined>(
-  undefined,
+const privateRunArbitrary = fc.constantFrom<CodexIntegratorPrivateRun>(
   CodexIntegratorPrivateRun.cases.IntentRecorded.make({ correlation: roundtripRun, token: roundtripToken }),
   CodexIntegratorPrivateRun.cases.TurnBoundaryCrossing.make({ correlation: roundtripRun, token: roundtripToken }),
   CodexIntegratorPrivateRun.cases.TurnObserved.make({
@@ -140,32 +138,79 @@ const privateRunArbitrary = fc.constantFrom<CodexIntegratorPrivateRun | undefine
     turnId: roundtripTurnId
   })
 )
-const privateLifecycleArbitrary = fc.constantFrom<CodexIntegratorPrivateLifecycle>(
-  CodexIntegratorPrivateLifecycle.cases.CandidateUnmaterialized.make({}),
-  CodexIntegratorPrivateLifecycle.cases.WorktreeMaterializationIntentRecorded.make({}),
-  CodexIntegratorPrivateLifecycle.cases.CandidateReady.make({}),
-  CodexIntegratorPrivateLifecycle.cases.ThreadStartIntentRecorded.make({}),
-  CodexIntegratorPrivateLifecycle.cases.ThreadStarted.make({ threadId: roundtripThreadId }),
-  CodexIntegratorPrivateLifecycle.cases.RemovalIntentRecorded.make({ threadId: roundtripThreadId }),
-  CodexIntegratorPrivateLifecycle.cases.Removed.make({})
+const privateRecordFields = {
+  appServerIncarnation: CodexServerIncarnation.make("property-incarnation"),
+  candidatePath: IntegratorCandidateWorktreePath.make("/tmp/property-candidate"),
+  correlation: baseSession,
+  revision: revision(1),
+  threadToken: CodexThreadOwnershipToken.make("property-thread-token")
+}
+const sealedPrivateRunArbitrary = fc.constantFrom(
+  CodexIntegratorPrivateRun.cases.CompletedTurnSealed.make({
+    correlation: roundtripRun,
+    result: roundtripResult,
+    token: roundtripToken,
+    turnId: roundtripTurnId
+  }),
+  CodexIntegratorPrivateRun.cases.FailedTurnSealed.make({
+    correlation: roundtripRun,
+    result: roundtripResult,
+    token: roundtripToken,
+    turnId: roundtripTurnId
+  })
+)
+const privateRecordArbitrary = fc.oneof(
+  fc.constant(CodexIntegratorPrivateRecord.cases.CandidateUnmaterialized.make(privateRecordFields)),
+  fc.constant(CodexIntegratorPrivateRecord.cases.WorktreeMaterializationIntentRecorded.make(privateRecordFields)),
+  fc.constant(CodexIntegratorPrivateRecord.cases.CandidateReady.make(privateRecordFields)),
+  fc.constant(CodexIntegratorPrivateRecord.cases.ThreadStartIntentRecorded.make(privateRecordFields)),
+  fc.constant(
+    CodexIntegratorPrivateRecord.cases.ThreadReady.make({ ...privateRecordFields, threadId: roundtripThreadId })
+  ),
+  privateRunArbitrary.map((run) =>
+    CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({
+      ...privateRecordFields,
+      runs: [run],
+      threadId: roundtripThreadId
+    })
+  ),
+  sealedPrivateRunArbitrary.map((run) =>
+    CodexIntegratorPrivateRecord.cases.RemovalIntentRecorded.make({
+      ...privateRecordFields,
+      runs: [run],
+      threadId: roundtripThreadId
+    })
+  ),
+  sealedPrivateRunArbitrary.map((run) =>
+    CodexIntegratorPrivateRecord.cases.Removed.make({ ...privateRecordFields, runs: [run] })
+  )
 )
 
-it("roundtrips every private Integrator lifecycle and provider-turn variant", () => {
+it("roundtrips generated valid private Integrator record variants", () => {
   fc.assert(
-    fc.property(privateLifecycleArbitrary, privateRunArbitrary, (lifecycle, run) => {
-      const record = CodexIntegratorPrivateRecord.make({
-        appServerIncarnation: CodexServerIncarnation.make("property-incarnation"),
-        candidatePath: IntegratorCandidateWorktreePath.make("/tmp/property-candidate"),
-        correlation: baseSession,
-        lifecycle,
-        revision: revision(1),
-        runs: run === undefined ? [] : [run],
-        threadToken: CodexThreadOwnershipToken.make("property-thread-token")
-      })
+    fc.property(privateRecordArbitrary, (record) => {
       const encoded = Schema.encodeUnknownSync(CodexIntegratorPrivateRecord)(record)
       expect(Schema.decodeUnknownSync(CodexIntegratorPrivateRecord)(encoded)).toEqual(record)
     })
   )
+})
+
+it("rejects impossible record-level lifecycle and run combinations", () => {
+  const activeRun = CodexIntegratorPrivateRun.cases.IntentRecorded.make({
+    correlation: roundtripRun,
+    token: roundtripToken
+  })
+  const impossible = [
+    { ...privateRecordFields, _tag: "CandidateUnmaterialized", runs: [activeRun] },
+    { ...privateRecordFields, _tag: "ThreadWithRuns", runs: [], threadId: roundtripThreadId },
+    { ...privateRecordFields, _tag: "RemovalIntentRecorded", runs: [activeRun], threadId: roundtripThreadId },
+    { ...privateRecordFields, _tag: "Removed", runs: [activeRun] }
+  ]
+  for (const record of impossible) {
+    expect(() =>
+      Schema.decodeUnknownSync(CodexIntegratorPrivateRecord, { onExcessProperty: "error" })(record)
+    ).toThrow()
+  }
 })
 
 const locatorArbitrary = fc

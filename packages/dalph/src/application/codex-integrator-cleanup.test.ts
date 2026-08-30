@@ -40,7 +40,7 @@ import {
   GitCommandInvocationFailure,
   type GitCommandService
 } from "@dalph/orchestrator"
-import { Effect, FileSystem, Option, Ref } from "effect"
+import { Effect, FileSystem, Option, Ref, Schema } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   CodexOwnedTurnToken,
@@ -60,7 +60,6 @@ import {
 } from "./codex-app-server.js"
 import {
   CodexIntegratorConfiguration,
-  CodexIntegratorPrivateLifecycle,
   CodexIntegratorPrivateRecord,
   CodexIntegratorPrivateRun,
   type CodexIntegratorPrivateStoreService,
@@ -188,12 +187,12 @@ const runCase = <A>(
             ? null
             : options.record.candidatePath.endsWith("/foreign-record")
               ? options.record
-              : CodexIntegratorPrivateRecord.make({ ...options.record, candidatePath })
+              : Schema.decodeUnknownSync(CodexIntegratorPrivateRecord)({ ...options.record, candidatePath })
         const current = yield* Ref.make<CodexIntegratorPrivateRecord | null>(initialRecord)
         const normalizeRecord = (record: CodexIntegratorPrivateRecord | null): CodexIntegratorPrivateRecord | null =>
           record === null || record.candidatePath.endsWith("/foreign-record")
             ? record
-            : CodexIntegratorPrivateRecord.make({ ...record, candidatePath })
+            : Schema.decodeUnknownSync(CodexIntegratorPrivateRecord)({ ...record, candidatePath })
         const reads = yield* Ref.make(0)
         const censusReads = yield* Ref.make(0)
         const registration = yield* Ref.make<Registration>(options.registration ?? "exact")
@@ -364,19 +363,6 @@ const recordFor = (
   const correlation = overrides.correlation ?? predecessor
   const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
   const threadId = overrides.threadId === undefined ? CodexThreadId.make("cleanup-thread") : overrides.threadId
-  const lifecycle = overrides.removed
-    ? CodexIntegratorPrivateLifecycle.cases.Removed.make({})
-    : overrides.worktreeMaterializationIntent
-      ? CodexIntegratorPrivateLifecycle.cases.WorktreeMaterializationIntentRecorded.make({})
-      : overrides.worktreeReady === false
-        ? CodexIntegratorPrivateLifecycle.cases.CandidateUnmaterialized.make({})
-        : overrides.threadStartIntent
-          ? CodexIntegratorPrivateLifecycle.cases.ThreadStartIntentRecorded.make({})
-          : threadId === null
-            ? CodexIntegratorPrivateLifecycle.cases.CandidateReady.make({})
-            : overrides.removalIntent
-              ? CodexIntegratorPrivateLifecycle.cases.RemovalIntentRecorded.make({ threadId })
-              : CodexIntegratorPrivateLifecycle.cases.ThreadStarted.make({ threadId })
   const result = IntegratorResult.cases.NotPrepared.make({
     correlation: run,
     detail: IntegratorNotPreparedDetail.make("cleanup test terminal result")
@@ -395,15 +381,25 @@ const recordFor = (
           token: CodexOwnedTurnToken.make("cleanup-turn-token"),
           turnId: CodexTurnId.make("cleanup-turn")
         })
-  return CodexIntegratorPrivateRecord.make({
+  const common = {
     appServerIncarnation: CodexServerIncarnation.make("cleanup-incarnation"),
     candidatePath: IntegratorCandidateWorktreePath.make(candidatePath),
     correlation,
     revision: revision(overrides.revision ?? 1),
-    lifecycle,
-    runs: [sealedRun],
     threadToken: CodexThreadOwnershipToken.make("cleanup-thread-token")
-  })
+  }
+  if (overrides.removed) return CodexIntegratorPrivateRecord.cases.Removed.make({ ...common, runs: [sealedRun] })
+  if (overrides.worktreeMaterializationIntent) {
+    return CodexIntegratorPrivateRecord.cases.WorktreeMaterializationIntentRecorded.make(common)
+  }
+  if (overrides.worktreeReady === false) {
+    return CodexIntegratorPrivateRecord.cases.CandidateUnmaterialized.make(common)
+  }
+  if (overrides.threadStartIntent) return CodexIntegratorPrivateRecord.cases.ThreadStartIntentRecorded.make(common)
+  if (threadId === null) return CodexIntegratorPrivateRecord.cases.CandidateReady.make(common)
+  return overrides.removalIntent
+    ? CodexIntegratorPrivateRecord.cases.RemovalIntentRecorded.make({ ...common, runs: [sealedRun], threadId })
+    : CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({ ...common, runs: [sealedRun], threadId })
 }
 
 describe("Codex Integrator cleanup boundary", () => {
@@ -485,15 +481,6 @@ describe("Codex Integrator cleanup boundary", () => {
       (authority, authorization) => authority.observe(authorization)
     )
     expect(removalIntent._tag).toBe("Absent")
-
-    const missingTerminalEvidence = await runCase(
-      {
-        record: CodexIntegratorPrivateRecord.make({ ...recordFor("/tmp/unused", { removalIntent: true }), runs: [] }),
-        registration: "none"
-      },
-      (authority, authorization) => authority.observe(authorization)
-    )
-    expect(missingTerminalEvidence._tag).toBe("Unreadable")
 
     const materializingWithoutRegistration = await runCase(
       {

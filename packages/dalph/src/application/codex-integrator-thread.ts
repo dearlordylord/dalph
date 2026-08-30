@@ -1,9 +1,8 @@
 import { Effect } from "effect"
 import { CodexThreadWorkingDirectory, type CodexAppServer, type CodexThreadSnapshot } from "./codex-app-server.js"
 import {
-  bump,
-  CodexIntegratorPrivateLifecycle,
-  type CodexIntegratorPrivateRecord,
+  CodexIntegratorPrivateRecord,
+  nextPrivateRecordFields,
   type CodexIntegratorPrivateStoreService
 } from "./codex-integrator-private-store.js"
 import { boundary, observedThread, providerFailure } from "./codex-integrator-runtime.js"
@@ -14,16 +13,17 @@ const adoptListedThread = Effect.fn("CodexIntegrator.adoptListedThread")(functio
   store: CodexIntegratorPrivateStoreService,
   matching: CodexThreadSnapshot
 ) {
-  if (record.lifecycle._tag !== "ThreadStartIntentRecorded") {
+  if (record._tag !== "ThreadStartIntentRecorded") {
     return yield* Effect.fail(providerFailure("persistent candidate thread is unowned"))
   }
   const thread = yield* observedThread(app, matching.id, record.candidatePath)
   if (thread.ownedThreadToken !== record.threadToken) {
     return yield* Effect.fail(providerFailure("listed thread does not carry the exact recorded ownership token"))
   }
-  const attached = bump(record, {
+  const attached = CodexIntegratorPrivateRecord.cases.ThreadReady.make({
+    ...nextPrivateRecordFields(record),
     appServerIncarnation: app.incarnation,
-    lifecycle: CodexIntegratorPrivateLifecycle.cases.ThreadStarted.make({ threadId: thread.id })
+    threadId: thread.id
   })
   yield* boundary(store.write(attached))
   return { record: attached, thread }
@@ -35,10 +35,10 @@ const startOwnedThread = Effect.fn("CodexIntegrator.startOwnedThread")(function*
   store: CodexIntegratorPrivateStoreService
 ) {
   const intent =
-    record.lifecycle._tag === "ThreadStartIntentRecorded" && record.appServerIncarnation === app.incarnation
+    record._tag === "ThreadStartIntentRecorded" && record.appServerIncarnation === app.incarnation
       ? record
-      : bump(record, {
-          lifecycle: CodexIntegratorPrivateLifecycle.cases.ThreadStartIntentRecorded.make({}),
+      : CodexIntegratorPrivateRecord.cases.ThreadStartIntentRecorded.make({
+          ...nextPrivateRecordFields(record),
           appServerIncarnation: app.incarnation
         })
   if (intent !== record) yield* boundary(store.write(intent))
@@ -50,8 +50,9 @@ const startOwnedThread = Effect.fn("CodexIntegrator.startOwnedThread")(function*
   ) {
     return yield* Effect.fail(providerFailure("thread/start returned a foreign candidate cwd"))
   }
-  const next = bump(intent, {
-    lifecycle: CodexIntegratorPrivateLifecycle.cases.ThreadStarted.make({ threadId: started.id })
+  const next = CodexIntegratorPrivateRecord.cases.ThreadReady.make({
+    ...nextPrivateRecordFields(intent),
+    threadId: started.id
   })
   yield* boundary(store.write(next))
   return { record: next, thread: started }
@@ -91,8 +92,8 @@ export const ensureThread = Effect.fn("CodexIntegrator.ensureThread")(function* 
   record: CodexIntegratorPrivateRecord,
   store: CodexIntegratorPrivateStoreService
 ) {
-  if (record.lifecycle._tag === "ThreadStarted" || record.lifecycle._tag === "RemovalIntentRecorded") {
-    return yield* ensureExistingThread(app, record, record.lifecycle.threadId)
+  if (record._tag === "ThreadReady" || record._tag === "ThreadWithRuns") {
+    return yield* ensureExistingThread(app, record, record.threadId)
   }
   if (app.listThreads === undefined || app.listThreadsComplete !== true) {
     return yield* Effect.fail(providerFailure("persistent thread list is unavailable or incomplete"))

@@ -17,12 +17,11 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Context, Effect, FileSystem, Layer, Option, Ref } from "effect"
+import { Context, Effect, FileSystem, Layer, Option, Ref, Schema } from "effect"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { codexIntegratorLayer, nodeCodexIntegratorLayer } from "./codex-integrator.js"
 import {
   CodexIntegratorConfiguration,
-  CodexIntegratorPrivateLifecycle,
   CodexIntegratorPrivateRecord,
   CodexIntegratorPrivateRun,
   CodexIntegratorPrivateStore,
@@ -31,7 +30,9 @@ import {
   IntegratorPrivateStoreLocator,
   candidateWorktreePathFor,
   memoryCodexIntegratorPrivateStoreLayer,
-  preserveRevision,
+  preservedPrivateRecordFields,
+  privateRuns,
+  removedRecordFor,
   updateRun
 } from "./codex-integrator-private-store.js"
 import {
@@ -948,7 +949,9 @@ describe("Codex Integrator", () => {
         const store = yield* CodexIntegratorPrivateStore
         const stored = yield* store.read(session.sessionId)
         if (Option.isNone(stored)) return yield* Effect.fail("run-two private record was lost")
-        const runTwo = stored.value.runs.find((item) => item.correlation.ordinal === IntegratorRunOrdinal.make(2))
+        const runTwo = privateRuns(stored.value).find(
+          (item) => item.correlation.ordinal === IntegratorRunOrdinal.make(2)
+        )
         if (runTwo === undefined) return yield* Effect.fail("run-two private token was lost")
         return { first, lost, recovered, runTwoToken: runTwo.token }
       }).pipe(Effect.provide(providerLayer(config, { turnStarts, turnTokens, failAfterRecordingSecondTurn: true })))
@@ -1163,8 +1166,8 @@ describe("Codex Integrator", () => {
     )
     expect(Option.isSome(result.stored)).toBe(true)
     if (Option.isSome(result.stored)) {
-      expect(result.stored.value.runs[0]?._tag).toBe("FailedTurnSealed")
-      const sealed = result.stored.value.runs[0]
+      expect(privateRuns(result.stored.value)[0]?._tag).toBe("FailedTurnSealed")
+      const sealed = privateRuns(result.stored.value)[0]
       expect(sealed?._tag === "FailedTurnSealed" ? sealed.result._tag : undefined).toBe("NotPrepared")
     }
   })
@@ -1471,9 +1474,7 @@ describe("Codex Integrator", () => {
         const current = yield* store.read(session.sessionId)
         if (Option.isNone(current)) return yield* Effect.fail("private record was not written")
         yield* store.write(
-          preserveRevision(current.value, {
-            lifecycle: CodexIntegratorPrivateLifecycle.cases.ThreadStartIntentRecorded.make({})
-          })
+          CodexIntegratorPrivateRecord.cases.ThreadStartIntentRecorded.make(preservedPrivateRecordFields(current.value))
         )
         const fileSystem = yield* FileSystem.FileSystem
         yield* fileSystem.remove(candidatePath, { recursive: true })
@@ -1726,7 +1727,7 @@ describe("Codex Integrator", () => {
         const store = yield* CodexIntegratorPrivateStore
         const stored = yield* store.read(session.sessionId)
         if (Option.isNone(stored)) return yield* Effect.fail("private record was not written")
-        const run = stored.value.runs[0]
+        const run = privateRuns(stored.value)[0]
         if (run === undefined) return yield* Effect.fail("provider run was not written")
         yield* store.write(
           updateRun(
@@ -1779,15 +1780,15 @@ describe("Codex Integrator", () => {
         const stored = yield* store.read(session.sessionId)
         if (Option.isNone(stored)) return yield* Effect.fail("private record was not written")
         yield* store.write(
-          CodexIntegratorPrivateRecord.make({
+          Schema.decodeUnknownSync(CodexIntegratorPrivateRecord)({
             ...stored.value,
             candidatePath: IntegratorCandidateWorktreePath.make("/tmp/foreign-private-candidate")
           })
         )
         const pathFailure = yield* Effect.flip(integrator.prepare(requestFor(1)))
-        yield* store.write(
-          preserveRevision(stored.value, { lifecycle: CodexIntegratorPrivateLifecycle.cases.Removed.make({}) })
-        )
+        const tombstone = removedRecordFor(stored.value)
+        if (tombstone === undefined) return yield* Effect.fail("sealed private result was not written")
+        yield* store.write(tombstone)
         const tombstoneFailure = yield* Effect.flip(integrator.prepare(requestFor(1)))
         return { pathFailure, tombstoneFailure }
       }).pipe(Effect.provide(providerLayer(config)))

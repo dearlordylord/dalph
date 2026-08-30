@@ -15,13 +15,14 @@ import {
   bump,
   candidateWorktreePathFor,
   type CodexIntegratorConfiguration,
-  CodexIntegratorPrivateLifecycle,
   CodexIntegratorPrivateRecord,
   CodexIntegratorPrivateRun,
   CodexIntegratorPrivateStore,
   type CodexIntegratorPrivateStoreService,
   type IntegratorCandidateWorktreePath,
   nodeCodexIntegratorPrivateStoreLayer,
+  privateRuns,
+  recordRunIntent,
   revision,
   runCorrelationEquals,
   sameSession,
@@ -93,7 +94,8 @@ const configError = (config: CodexIntegratorConfiguration): string | undefined =
 const runFor = (
   record: CodexIntegratorPrivateRecord,
   run: IntegratorRunCorrelation
-): CodexIntegratorPrivateRun | undefined => record.runs.find((item) => runCorrelationEquals(item.correlation, run))
+): CodexIntegratorPrivateRun | undefined =>
+  privateRuns(record).find((item) => runCorrelationEquals(item.correlation, run))
 
 const newToken = (): CodexOwnedTurnToken => CodexOwnedTurnToken.make(`dalph-integrator-${randomUUID()}`)
 
@@ -105,7 +107,7 @@ const ensureRunPreconditionError = (
     return "provider run ordinal exceeds Retry"
   }
   if (run.ordinal === maximumProviderRunOrdinal) {
-    const first = record.runs.find((item) => Number(item.correlation.ordinal) === 1)
+    const first = privateRuns(record).find((item) => Number(item.correlation.ordinal) === 1)
     if (first === undefined || (first._tag !== "CompletedTurnSealed" && first._tag !== "FailedTurnSealed")) {
       return "Retry run two has no sealed run-one result"
     }
@@ -123,12 +125,14 @@ const ensureRun = Effect.fn("CodexIntegrator.ensureRun")(function* (
   if (preconditionError !== undefined) return yield* Effect.fail(providerFailure(preconditionError))
   const existing = runFor(record, run)
   if (existing !== undefined) return { record, run: existing }
-  const ordinalCollision = record.runs.find((item) => item.correlation.ordinal === run.ordinal)
+  const ordinalCollision = privateRuns(record).find((item) => item.correlation.ordinal === run.ordinal)
   /* v8 ignore next -- @preserve The private-record validator rejects duplicate ordinals before recovery reaches this guard. */
   if (ordinalCollision !== undefined)
     return yield* Effect.fail(providerFailure("private run ordinal is bound to another session"))
   const created = CodexIntegratorPrivateRun.cases.IntentRecorded.make({ correlation: run, token: newToken() })
-  const next = bump(record, { appServerIncarnation: app.incarnation, runs: [...record.runs, created] })
+  const next = recordRunIntent(record, created, app.incarnation)
+  if (next === undefined)
+    return yield* Effect.fail(providerFailure("provider run requires an established owned thread"))
   yield* boundary(store.write(next))
   return { record: next, run: created }
 })
@@ -183,11 +187,11 @@ const contradictoryProviderTurn = (
   record: CodexIntegratorPrivateRecord,
   token: CodexOwnedTurnToken
 ): CodexThreadSnapshot["turns"][number] | undefined => {
-  const knownTokens = new Set(record.runs.map((item) => item.token))
+  const knownTokens = new Set(privateRuns(record).map((item) => item.token))
   return thread.turns.find((item) => {
     if (item.ownedTurnToken === token) return false
     if (item.ownedTurnToken === undefined) return true
-    const known = record.runs.find((candidate) => candidate.token === item.ownedTurnToken)
+    const known = privateRuns(record).find((candidate) => candidate.token === item.ownedTurnToken)
     return (
       !knownTokens.has(item.ownedTurnToken) ||
       (known?._tag !== "CompletedTurnSealed" && known?._tag !== "FailedTurnSealed")
@@ -334,7 +338,7 @@ const reconcilePrivateRecord = Effect.fn("CodexIntegrator.reconcilePrivateRecord
   if (!sameSession(found.correlation, run.session) || found.candidatePath !== candidatePath) {
     return yield* Effect.fail(providerFailure("private record belongs to another session or candidate path"))
   }
-  if (found.lifecycle._tag === "Removed") {
+  if (found._tag === "Removed") {
     return yield* Effect.fail(providerFailure("private candidate record is tombstoned"))
   }
   const current =
@@ -352,13 +356,11 @@ const createPrivateRecord = Effect.fn("CodexIntegrator.createPrivateRecord")(fun
   if (Option.isSome(occupied)) {
     return yield* Effect.fail(providerFailure("candidate path is already owned by another integration session"))
   }
-  const created = CodexIntegratorPrivateRecord.make({
+  const created = CodexIntegratorPrivateRecord.cases.CandidateUnmaterialized.make({
     appServerIncarnation: app.incarnation,
     candidatePath,
     correlation: run.session,
     revision: revision(1),
-    lifecycle: CodexIntegratorPrivateLifecycle.cases.CandidateUnmaterialized.make({}),
-    runs: [],
     threadToken: CodexThreadOwnershipToken.make(`dalph-integrator-thread-${randomUUID()}`)
   })
   yield* boundary(store.write(created))
@@ -397,18 +399,11 @@ const integratorServiceFor = (
           Effect.gen(function* () {
             const run = request.correlation
             const initial = yield* checkConfigAndRecord(config, store, run, app)
-            // The exact run token is durable before any candidate or thread boundary.
-            const ensured = yield* ensureRun(store, initial, run, app)
-            const materialized = yield* ensureCandidateWorktree(
-              commands,
-              fileSystem,
-              config,
-              ensured.record,
-              store,
-              ownership
-            )
+            const materialized = yield* ensureCandidateWorktree(commands, fileSystem, config, initial, store, ownership)
             const threaded = yield* ensureThread(app, materialized, store)
-            return yield* executeRun(app, census, store, threaded.record, ensured.run, threaded.thread)
+            // The thread id is durable before the first exact provider-run token is recorded.
+            const ensured = yield* ensureRun(store, threaded.record, run, app)
+            return yield* executeRun(app, census, store, ensured.record, ensured.run, threaded.thread)
           })
         )
         .pipe(

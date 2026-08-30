@@ -77,34 +77,48 @@ export const CodexIntegratorPrivateRun = Schema.TaggedUnion({
 })
 export type CodexIntegratorPrivateRun = typeof CodexIntegratorPrivateRun.Type
 
-/** The exact private candidate/thread ownership boundary reached by one Integrator session. */
-export const CodexIntegratorPrivateLifecycle = Schema.TaggedUnion({
-  CandidateUnmaterialized: {},
-  WorktreeMaterializationIntentRecorded: {},
-  CandidateReady: {},
-  ThreadStartIntentRecorded: {},
-  ThreadStarted: { threadId: CodexThreadId },
-  RemovalIntentRecorded: { threadId: CodexThreadId },
-  Removed: {}
-})
-export type CodexIntegratorPrivateLifecycle = typeof CodexIntegratorPrivateLifecycle.Type
+const CodexIntegratorSealedPrivateRun = Schema.Union([
+  CodexIntegratorPrivateRun.cases.CompletedTurnSealed,
+  CodexIntegratorPrivateRun.cases.FailedTurnSealed
+])
+type CodexIntegratorSealedPrivateRun = typeof CodexIntegratorSealedPrivateRun.Type
+
+const privateRunHistory = Schema.Union([
+  Schema.Tuple([CodexIntegratorPrivateRun]),
+  Schema.Tuple([CodexIntegratorPrivateRun, CodexIntegratorPrivateRun])
+])
+const sealedPrivateRunHistory = Schema.Union([
+  Schema.Tuple([CodexIntegratorSealedPrivateRun]),
+  Schema.Tuple([CodexIntegratorSealedPrivateRun, CodexIntegratorSealedPrivateRun])
+])
+
+const privateRecordFields = {
+  appServerIncarnation: CodexServerIncarnation,
+  candidatePath: IntegratorCandidateWorktreePath,
+  correlation: IntegratorSessionCorrelation,
+  revision: CodexIntegratorPrivateRevision,
+  threadToken: CodexThreadOwnershipToken
+}
 
 type CodexIntegratorPrivateRecordShape = {
   readonly correlation: IntegratorSessionCorrelation
-  readonly lifecycle: CodexIntegratorPrivateLifecycle
   readonly revision: CodexIntegratorPrivateRevision
-  readonly runs: ReadonlyArray<CodexIntegratorPrivateRun>
+  readonly runs?: ReadonlyArray<CodexIntegratorPrivateRun>
 }
 
+const validatedRuns = (record: CodexIntegratorPrivateRecordShape): ReadonlyArray<CodexIntegratorPrivateRun> =>
+  record.runs ?? []
+
 const validatePrivateRunOrdinals = (record: CodexIntegratorPrivateRecordShape): string | undefined => {
-  const runOrdinals = record.runs.map((run) => run.correlation.ordinal)
+  const runs = validatedRuns(record)
+  const runOrdinals = runs.map((run) => run.correlation.ordinal)
   if (new Set(runOrdinals).size !== runOrdinals.length) return "private record repeats a provider run ordinal"
-  if (record.runs.length > maximumPrivateRunOrdinal) {
+  if (runs.length > maximumPrivateRunOrdinal) {
     return "private record contains more than the initial and retry provider runs"
   }
   /* v8 ignore next -- @preserve CodexIntegratorPrivateRun validates every ordinal before this record-level defensive check. */
   if (
-    record.runs.some(
+    runs.some(
       (run) =>
         Number(run.correlation.ordinal) < firstPrivateRunOrdinal ||
         Number(run.correlation.ordinal) > maximumPrivateRunOrdinal
@@ -118,10 +132,11 @@ const validatePrivateRunOrdinals = (record: CodexIntegratorPrivateRecordShape): 
 }
 
 const validatePrivateRunTokens = (record: CodexIntegratorPrivateRecordShape): string | undefined => {
-  const runTokens = record.runs.map((run) => run.token)
+  const runs = validatedRuns(record)
+  const runTokens = runs.map((run) => run.token)
   if (new Set(runTokens).size !== runTokens.length) return "private record repeats a provider turn token"
-  const retry = record.runs.find((run) => Number(run.correlation.ordinal) === maximumPrivateRunOrdinal)
-  const initial = record.runs.find((run) => Number(run.correlation.ordinal) === firstPrivateRunOrdinal)
+  const retry = runs.find((run) => Number(run.correlation.ordinal) === maximumPrivateRunOrdinal)
+  const initial = runs.find((run) => Number(run.correlation.ordinal) === firstPrivateRunOrdinal)
   return retry !== undefined &&
     (initial === undefined || (initial._tag !== "CompletedTurnSealed" && initial._tag !== "FailedTurnSealed"))
     ? "private retry run requires a sealed initial run"
@@ -129,9 +144,10 @@ const validatePrivateRunTokens = (record: CodexIntegratorPrivateRecordShape): st
 }
 
 const validatePrivateRecordCorrelations = (record: CodexIntegratorPrivateRecordShape): string | undefined => {
-  const sessions = record.runs.filter((run) => !sameSessionValue(record.correlation, run.correlation.session))
+  const runs = validatedRuns(record)
+  const sessions = runs.filter((run) => !sameSessionValue(record.correlation, run.correlation.session))
   if (sessions.length > 0) return "private run correlation belongs to another Integrator session"
-  return record.runs.some(
+  return runs.some(
     (run) =>
       (run._tag === "CompletedTurnSealed" || run._tag === "FailedTurnSealed") &&
       !sameRunValue(run.result.correlation, run.correlation)
@@ -148,14 +164,23 @@ const validatePrivateRecord = (record: CodexIntegratorPrivateRecordShape): strin
   return validatePrivateRecordCorrelations(record)
 }
 
-export const CodexIntegratorPrivateRecord = Schema.Struct({
-  appServerIncarnation: CodexServerIncarnation,
-  candidatePath: IntegratorCandidateWorktreePath,
-  correlation: IntegratorSessionCorrelation,
-  lifecycle: CodexIntegratorPrivateLifecycle,
-  revision: CodexIntegratorPrivateRevision,
-  runs: Schema.Array(CodexIntegratorPrivateRun),
-  threadToken: CodexThreadOwnershipToken
+/**
+ * One durable Integrator candidate state. Each tag carries exactly the thread
+ * and provider-run evidence established by that chronological boundary.
+ */
+export const CodexIntegratorPrivateRecord = Schema.TaggedUnion({
+  CandidateUnmaterialized: privateRecordFields,
+  WorktreeMaterializationIntentRecorded: privateRecordFields,
+  CandidateReady: privateRecordFields,
+  ThreadStartIntentRecorded: privateRecordFields,
+  /** Codex returned the owned thread, but no provider-run intent is durable yet. */
+  ThreadReady: { ...privateRecordFields, threadId: CodexThreadId },
+  /** At least one provider-run intent is durable for the exact owned thread. */
+  ThreadWithRuns: { ...privateRecordFields, runs: privateRunHistory, threadId: CodexThreadId },
+  /** Cleanup may cross the Git removal boundary only with sealed terminal evidence. */
+  RemovalIntentRecorded: { ...privateRecordFields, runs: sealedPrivateRunHistory, threadId: CodexThreadId },
+  /** The removed candidate retains sealed terminal evidence but no live thread ownership fact. */
+  Removed: { ...privateRecordFields, runs: sealedPrivateRunHistory }
 }).check(Schema.makeFilter(validatePrivateRecord))
 export type CodexIntegratorPrivateRecord = typeof CodexIntegratorPrivateRecord.Type
 
@@ -192,7 +217,7 @@ const recordFor = (
 const decodeRecords = (
   value: unknown
 ): Effect.Effect<ReadonlyArray<CodexIntegratorPrivateRecord>, CodexIntegratorStoreFailure> =>
-  Schema.decodeUnknownEffect(Schema.Array(CodexIntegratorPrivateRecord))(value).pipe(
+  Schema.decodeUnknownEffect(Schema.Array(CodexIntegratorPrivateRecord), { onExcessProperty: "error" })(value).pipe(
     Effect.flatMap((records) => {
       const sessionIds = records.map((record) => record.correlation.sessionId)
       if (new Set(sessionIds).size !== sessionIds.length) {
@@ -340,24 +365,107 @@ export const runCorrelationEquals = sameRunValue
 
 export const revision = (value: number): CodexIntegratorPrivateRevision => CodexIntegratorPrivateRevision.make(value)
 
+type PrivateRecordCommonUpdate = { readonly appServerIncarnation?: CodexServerIncarnation }
+
 export const bump = (
   record: CodexIntegratorPrivateRecord,
-  update: Partial<CodexIntegratorPrivateRecord>
+  update: PrivateRecordCommonUpdate
 ): CodexIntegratorPrivateRecord =>
-  CodexIntegratorPrivateRecord.make({ ...record, ...update, revision: revision(Number(record.revision) + 1) })
+  Schema.decodeUnknownSync(CodexIntegratorPrivateRecord)({
+    ...record,
+    ...update,
+    revision: revision(Number(record.revision) + 1)
+  })
 
-/** Applies a private lifecycle marker without changing the external evidence revision. */
-export const preserveRevision = (
+export const nextPrivateRecordFields = (record: CodexIntegratorPrivateRecord) => ({
+  appServerIncarnation: record.appServerIncarnation,
+  candidatePath: record.candidatePath,
+  correlation: record.correlation,
+  revision: revision(Number(record.revision) + 1),
+  threadToken: record.threadToken
+})
+
+export const preservedPrivateRecordFields = (record: CodexIntegratorPrivateRecord) => ({
+  appServerIncarnation: record.appServerIncarnation,
+  candidatePath: record.candidatePath,
+  correlation: record.correlation,
+  revision: record.revision,
+  threadToken: record.threadToken
+})
+
+export const privateRuns = (record: CodexIntegratorPrivateRecord): ReadonlyArray<CodexIntegratorPrivateRun> =>
+  "runs" in record ? record.runs : []
+
+export const recordRunIntent = (
   record: CodexIntegratorPrivateRecord,
-  update: Partial<CodexIntegratorPrivateRecord>
-): CodexIntegratorPrivateRecord => CodexIntegratorPrivateRecord.make({ ...record, ...update })
+  run: Extract<CodexIntegratorPrivateRun, { readonly _tag: "IntentRecorded" }>,
+  appServerIncarnation: CodexServerIncarnation
+): Extract<CodexIntegratorPrivateRecord, { readonly _tag: "ThreadWithRuns" }> | undefined => {
+  if (record._tag === "ThreadReady") {
+    return CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({
+      ...nextPrivateRecordFields(record),
+      appServerIncarnation,
+      runs: [run],
+      threadId: record.threadId
+    })
+  }
+  return record._tag === "ThreadWithRuns" && record.runs.length === 1
+    ? CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({
+        ...nextPrivateRecordFields(record),
+        appServerIncarnation,
+        runs: [record.runs[0], run],
+        threadId: record.threadId
+      })
+    : undefined
+}
+
+const sealedRunHistory = (
+  record: CodexIntegratorPrivateRecord
+):
+  | readonly [CodexIntegratorSealedPrivateRun]
+  | readonly [CodexIntegratorSealedPrivateRun, CodexIntegratorSealedPrivateRun]
+  | undefined => {
+  const runs = privateRuns(record)
+  const first = runs[0]
+  if (first === undefined || (first._tag !== "CompletedTurnSealed" && first._tag !== "FailedTurnSealed")) {
+    return undefined
+  }
+  const second = runs[1]
+  if (second === undefined) return [first]
+  return second._tag === "CompletedTurnSealed" || second._tag === "FailedTurnSealed" ? [first, second] : undefined
+}
+
+export const removalIntentRecordFor = (
+  record: CodexIntegratorPrivateRecord
+): Extract<CodexIntegratorPrivateRecord, { readonly _tag: "RemovalIntentRecorded" }> | undefined => {
+  if (record._tag !== "ThreadWithRuns") return undefined
+  const runs = sealedRunHistory(record)
+  return runs === undefined
+    ? undefined
+    : CodexIntegratorPrivateRecord.cases.RemovalIntentRecorded.make({
+        ...preservedPrivateRecordFields(record),
+        runs,
+        threadId: record.threadId
+      })
+}
+
+export const removedRecordFor = (
+  record: CodexIntegratorPrivateRecord
+): Extract<CodexIntegratorPrivateRecord, { readonly _tag: "Removed" }> | undefined => {
+  const runs = sealedRunHistory(record)
+  return runs === undefined
+    ? undefined
+    : CodexIntegratorPrivateRecord.cases.Removed.make({ ...preservedPrivateRecordFields(record), runs })
+}
 
 export const updateRun = (
   record: CodexIntegratorPrivateRecord,
   run: CodexIntegratorPrivateRun,
   next: CodexIntegratorPrivateRun
 ): CodexIntegratorPrivateRecord => {
-  return bump(record, {
-    runs: record.runs.map((item) => (item.correlation.ordinal === run.correlation.ordinal ? next : item))
+  return Schema.decodeUnknownSync(CodexIntegratorPrivateRecord)({
+    ...record,
+    revision: revision(Number(record.revision) + 1),
+    runs: privateRuns(record).map((item) => (item.correlation.ordinal === run.correlation.ordinal ? next : item))
   })
 }

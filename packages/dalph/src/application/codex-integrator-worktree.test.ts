@@ -30,7 +30,6 @@ import { Effect, Exit, FileSystem, Option } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   CodexIntegratorConfiguration,
-  CodexIntegratorPrivateLifecycle,
   CodexIntegratorPrivateRecord,
   type CodexIntegratorPrivateStoreService,
   IntegratorCandidateWorktreePath,
@@ -80,15 +79,14 @@ const privateRecordFor = (
   candidatePath: IntegratorCandidateWorktreePath,
   worktreeReady = false
 ): CodexIntegratorPrivateRecord =>
-  CodexIntegratorPrivateRecord.make({
+  (worktreeReady
+    ? CodexIntegratorPrivateRecord.cases.CandidateReady
+    : CodexIntegratorPrivateRecord.cases.CandidateUnmaterialized
+  ).make({
     appServerIncarnation: CodexServerIncarnation.make("worktree-incarnation"),
     candidatePath,
     correlation: worktreeSession,
     revision: revision(1),
-    lifecycle: worktreeReady
-      ? CodexIntegratorPrivateLifecycle.cases.CandidateReady.make({})
-      : CodexIntegratorPrivateLifecycle.cases.CandidateUnmaterialized.make({}),
-    runs: [],
     threadToken: CodexThreadOwnershipToken.make("worktree-thread")
   })
 
