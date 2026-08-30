@@ -5,6 +5,7 @@ import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
+import { UnclaimedTask } from "../../../authorities/task-tracker/claim-mutation.js"
 import { InRunJournal, type JournalRecord, JournalStorageUnavailable } from "../../../workflow-journal/store.js"
 import {
   completionClaimReplacedRecordKey,
@@ -240,6 +241,16 @@ it.effect("malformed, missing, and foreign accepted-result evidence stop before 
           reference.digest ===
           valid.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.evidenceManifest.digest
             ? Effect.succeed(encode("not-json"))
+            : store.read(reference)
+      },
+      {
+        label: "invalid JSON",
+        read: (
+          reference: typeof valid.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.evidenceManifest
+        ) =>
+          reference.digest ===
+          valid.claim.promotionCorrelation.qualifiedCandidate.run.session.acceptedResult.evidenceManifest.digest
+            ? Effect.succeed(new TextEncoder().encode("{"))
             : store.read(reference)
       },
       {
@@ -1589,6 +1600,78 @@ it.effect("restart authorization rejects completed lifecycle without the exact c
   }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
 )
 
+it.effect("rejects changed focused task facts before another tracker completion mutation", () =>
+  Effect.gen(function* () {
+    const request = completionTaskRequestFor(fixture.claim)
+    const replacementOperationId = completionClaimReplacementOperationIdFor(fixture.claim)
+    const cases = [
+      {
+        expectedReason: "TaskIdentityOrRevisionChanged",
+        label: "task revision",
+        facts: { ...authorization.focusedFacts, taskRevision: TaskRevision.make("focused-completion-another-revision") }
+      },
+      {
+        expectedReason: "TaskNotInTarget",
+        label: "target membership",
+        facts: {
+          ...authorization.focusedFacts,
+          targetMembership: "NotMember" satisfies typeof authorization.focusedFacts.targetMembership
+        }
+      }
+    ]
+
+    for (const scenario of cases) {
+      const completionCalls = yield* Ref.make(0)
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
+        {
+          event: CompletionClaimReplacedEvent.make({
+            claim: fixture.claim,
+            operationId: replacementOperationId,
+            version: workflowJournalEventVersion
+          }),
+          key: completionClaimReplacedRecordKey(replacementOperationId),
+          position: JournalPosition.make(1),
+          runId: fixture.runId
+        },
+        {
+          event: CompletionTaskIntendedEvent.make({ request, version: workflowJournalEventVersion }),
+          key: completionTaskIntentRecordKey(request),
+          position: JournalPosition.make(2),
+          runId: fixture.runId
+        }
+      ])
+      const boundary: CompletionTaskBoundaryService = {
+        completeTask: () => Ref.update(completionCalls, (count) => count + 1),
+        readCompletionRequest: () => Effect.die(`${scenario.label} conflict must stop before request lookup`),
+        readFocusedTaskCompletion: ({ operationId }) =>
+          Effect.succeed({ ...scenario.facts, lifecycle: "CompletedSuccessfully", operationId })
+      }
+      const conflict = yield* authorizeCompletionTaskAttempt(
+        boundary,
+        request,
+        fixture.target,
+        CompletionTaskRequestOrdinal.make(1)
+      ).pipe(
+        Effect.provideService(
+          TargetPromotionGit,
+          TargetPromotionGit.of({
+            compareAndSet: () => Effect.die(`${scenario.label} conflict never mutates Git`),
+            read: () => Effect.die(`${scenario.label} conflict must stop before reading Git`)
+          })
+        ),
+        Effect.provide(journalLayer(records, chronology)),
+        Effect.flip
+      )
+
+      expect(conflict, scenario.label).toBeInstanceOf(CompletionTaskAuthorizationConflict)
+      expect(conflict, scenario.label).toMatchObject({ reason: scenario.expectedReason })
+      expect(yield* Ref.get(completionCalls), scenario.label).toBe(0)
+      expect(yield* Ref.get(chronology), scenario.label).not.toContain("CompletionTaskAttemptIntended")
+    }
+  }).pipe(Effect.provide(memoryEvidenceStoreLayer), Effect.provide(NodeServices.layer))
+)
+
 it.effect("checks current task facts after a raced definitive rejection", () =>
   Effect.gen(function* () {
     const result = yield* protocolHarness(["DefinitelyRejected"], { focusedLifecycle: "CompletedSuccessfully" })
@@ -1689,6 +1772,15 @@ it("keeps every focused confirmation conflict distinct from an exact-open wait",
       facts: { ...exact, operationId: OperationId.make("another-focused-operation") },
       target: fixture.target,
       expected: "FocusedFactsCorrelationMismatch"
+    },
+    {
+      facts: {
+        ...exact,
+        currentClaim: UnclaimedTask.make({ taskId: TaskId.make("another-focused-task") }),
+        taskId: TaskId.make("another-focused-task")
+      },
+      target: fixture.target,
+      expected: "TaskIdentityOrRevisionChanged"
     },
     {
       facts: { ...exact, taskRevision: TaskRevision.make("another-focused-revision") },
