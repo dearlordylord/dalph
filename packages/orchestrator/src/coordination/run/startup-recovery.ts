@@ -15,10 +15,7 @@ import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretatio
 import { ControlDirectionApplication } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-claim-reacquisition/control.js"
 import { AttemptChoiceControl } from "../../workflow/protocols/attempt-choice/control.js"
-import {
-  makePlannedAttemptProtocolController,
-  PlannedAttemptProtocolController
-} from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import {
   hasUnfinishedRunResponsibility,
@@ -210,7 +207,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   const controlDirectionApplication = yield* ControlDirectionApplication
   const taskClaimReacquisitionControl = yield* TaskClaimReacquisitionControl
   const attemptChoiceControl = yield* AttemptChoiceControl
-  const plannedAttemptProtocolController = yield* makePlannedAttemptProtocolController()
+  const plannedAttemptProtocolController = yield* PlannedAttemptProtocolController
   const ambient = yield* Effect.context<never>()
   const integrator = Context.getOption(ambient, Integrator)
   const integratorGit = Context.getOption(ambient, IntegratorGit)

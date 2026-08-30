@@ -9,40 +9,114 @@ export const plannedAttemptExecutorObligations = Object.freeze({
   invariants: Object.freeze([
     "everyCallHasOneDurableIntent",
     "unmatchedIntentBlocksAnotherCommand",
-    "projectionsAreNotCommandResponses",
-    "settlementsUseExactCommandOrdinal",
+    "acceptedReportsRequireSettledCommandOrObservation",
+    "unsettledEvidenceDoesNotAppendReport",
     "commandOrdinalsAreAllocatedExactly",
+    "everyBoundaryValueCarriesExactCorrelation",
+    "boundaryEvidenceUsesExactCommandIdentity",
     "stateProjectionNeverSettlesCommand",
-    "freshStateProjectionHasNoUnmatchedCommand",
     "commandProjectionBelongsToCalledCommand",
-    "commandBudgetsAreBounded",
+    "beginOccursAtMostOnce",
+    "firstAcceptedReportIsExecuting",
+    "resumeRequiresAcceptedSafeReport",
+    "acceptedSafeReportAuthorizesAtMostOneResume",
+    "observationsDoNotConsumeCommandBudget",
+    "acceptedReportOrdinalAdvancesExactlyForDistinctReports",
+    "unchangedExactObservationDoesNotAppendReport",
+    "unchangedExactObservationIsProcessLocal",
     "oneReconciliationProjectionPerActivation",
-    "suspendLimitPreservesReadOnlyRecovery",
+    "suspendCommandLimitPreserved",
+    "lostSuspendResponseConsumesCommandBudget",
+    "lostSuspendRequiresReconciliationBeforeRetry",
     "unsafeOrUnavailableNeverReleasesPosition",
-    "runningAndUnsettledWorkRetainsPosition",
+    "executingAndUnsettledWorkRetainsPosition",
     "safeSuspensionReleasesPosition",
-    "terminalReleasesPosition"
+    "terminalReleasesPosition",
+    "terminalAcceptedStatusIsAbsorbing",
+    "safeToExecutingRequiresResume",
+    "passiveReportAcceptanceHasCausalCommand"
   ]),
   witnesses: Object.freeze([
     "responsibilityBeganReached",
-    "startIntentRecordedReached",
+    "beginIntentRecordedReached",
+    "resumeIntentRecordedReached",
     "suspendIntentRecordedReached",
-    "startCalledReached",
+    "beginCalledReached",
+    "resumeCalledReached",
     "suspendCalledReached",
     "responseReceivedReached",
     "responseLostReached",
+    "lostSuspendResponseReached",
     "commandProjectedReached",
     "freshStateProjectedReached",
-    "freshSafeProofAcceptedReached",
     "responseSettledReached",
     "projectionSettledReached",
+    "lostSuspendProjectionSettledReached",
+    "freshStateAcceptedReached",
     "recoveryActivatedReached",
-    "continuationLimitReached",
+    // The deterministic test and focused evidence proof own the four-read
+    // unchanged-Executing obligation. Its nine-action prefix is too sparse in
+    // this broad sampler to make a nonzero random hit an honest gate.
     "suspendCommandLimitReached",
-    "runningReached",
+    "executingReached",
     "safelySuspendedReached",
     "terminalReached"
   ])
+})
+
+// The proof projection intentionally owns only stage/counter properties. RunId,
+// AttemptId, command ordinal, and their foreign-value negative controls remain
+// canonical-model obligations above; duplicating tracker targets or executor
+// correlation in this projection would create a second authority model.
+export const plannedAttemptExecutorProofObligations = Object.freeze({
+  evidence: Object.freeze({
+    invariants: Object.freeze([
+      "everyCallHasDurableIntent",
+      "beginOccursOnce",
+      "firstAcceptedReportIsExecuting",
+      "acceptedSafeReportAuthorizesAtMostOneResume",
+      "commandResponsesAndAcceptedReportsStayDistinct",
+      "unchangedExecutingObservationsKeepOrdinal",
+      "passiveObservationsDoNotCallExecutor",
+      "safeAndTerminalReleasePosition",
+      "evidenceProofTypeOk"
+    ]),
+    witnesses: Object.freeze([
+      "beginIntentReached",
+      "beginCalledReached",
+      "commandResponseReached",
+      "executingAcceptedReached",
+      "fourthUnchangedObservationReached",
+      "terminalObservationReached",
+      "safeReached",
+      "resumeIntentReached",
+      "resumeCalledReached"
+    ])
+  }),
+  suspendBound: Object.freeze({
+    invariants: Object.freeze([
+      "everySuspendCallHasItsIntent",
+      "suspendLimitBlocksFourthCommand",
+      "lostSuspendResponseConsumesCommandBudget",
+      "lostSuspendRequiresReconciliationBeforeRetry",
+      "postLimitRecoveryIsReadOnly",
+      "positionReleasesOnlyForSafeOrTerminalEvidence",
+      "suspendProofTypeOk"
+    ]),
+    witnesses: Object.freeze([
+      "firstSuspendIntentReached",
+      "thirdSuspendIntentReached",
+      "suspendCalledReached",
+      "suspendResponseLostReached",
+      "directSuspendSettledReached",
+      "projectedSuspendSettledReached",
+      "thirdSuspendSettledReached",
+      "safeSuspendReached",
+      "terminalSuspendReached",
+      "readOnlyRecoveryReached",
+      "readOnlySafeReached"
+    ])
+  })
 })
 
 export const runActivationObligations = Object.freeze({
@@ -132,7 +206,7 @@ export const runCancellationObligations = Object.freeze({
   witnesses: Object.freeze([
     "idleCancellationAppliedReached",
     "cancellationRedeliveryReached",
-    "runningExecutorCancellationReached",
+    "executingExecutorCancellationReached",
     "executorStopIntentReached",
     "executorSafeReportReached",
     "claimReleaseIntentReached",
@@ -162,15 +236,12 @@ export const taskFactReconciliationObligations = Object.freeze({
     "continueRequiresEveryFreshExactAuthority",
     "continueResumesOnlyImmutableAttemptP",
     "changedAgainRequiresNewChoice",
-    "projectedRunningSettlesOnlyItsIntent",
-    "stoppageCallsHaveExactDurableIntents",
-    "stoppageIsBounded",
-    "stoppageLimitPreservesReadOnlyRecovery",
+    "terminalChoiceBlocksResumeWhileLifecycleEvidenceRemains",
+    "acceptedTerminalIsAbsorbing",
     "abandonmentRequiresExactUnbrokenQuiescence",
     "stopPreservesEveryArtifact",
     "stopNeverSelectsIntegration",
     "quiescentStopNeedNotHoldPosition",
-    "unprovedWriterRetainsPositionAndClaim",
     "claimChangesOnlyAfterAbandonmentAndExactRead",
     "absentForeignUnreadableClaimsAreNeverMutated",
     "claimReleaseIsBoundedAndReconciled",
@@ -197,15 +268,14 @@ export const taskFactReconciliationObligations = Object.freeze({
     "successorUsesOrdinaryBoundedAdmission",
     "p1AndP2ExecutorResponsibilitiesNeverOverlap",
     "crashKeepsEitherNoP2OrTheSameP2",
-    "replacementTerminalOutcomesRemainDistinct",
-    "nonAuthorizingExecutorEvidenceNeverRecordsReplacement",
-    "lateAcceptedNeverCreatesIntegrationResponsibility",
     "restartNeverSelectsIntegration"
   ]),
   witnesses: Object.freeze([
     "continueF2AppliedReached",
     "restartF2AppliedReached",
     "f2ObservedReached",
+    "heldResumeAdmittedReached",
+    "resumeSettledUnchangedSafeReached",
     "stopF2AppliedReached",
     "exactRedeliveredReached",
     "runMismatchRejectedReached",
@@ -225,14 +295,6 @@ export const taskFactReconciliationObligations = Object.freeze({
     "continueAdmittedReached",
     "f3ObservedReached",
     "continueF3AppliedReached",
-    "stoppageReconciliationRequiredReached",
-    "stoppageIntentRecordedReached",
-    "stoppageCalledReached",
-    "stoppageResponseLostReached",
-    "stoppageRunningProjectedReached",
-    "stoppageSafeProjectedReached",
-    "stoppageReadOnlySafeProjectedReached",
-    "stopRecoveryActivatedReached",
     "implementationAbandonedReached",
     "exactClaimObservedReached",
     "absentClaimObservedReached",
@@ -272,7 +334,6 @@ export const taskFactReconciliationObligations = Object.freeze({
     "ownedClaimMutationRequestedReached",
     "replacementNotRequestedReached",
     "restartAppliedReached",
-    "replacementQuiescenceRequiredReached",
     "replacementTaskFactsRequiredReached",
     "replacementClaimRequiredReached",
     "replacementClaimReadLimitReached",
@@ -283,12 +344,9 @@ export const taskFactReconciliationObligations = Object.freeze({
     "plannedAttemptReplacementRecordedReached",
     "successorWaitingAdmissionReached",
     "successorAdmittedReached",
-    "successorRunningReached",
+    "successorExecutingReached",
     "replacementWaitingReached",
-    "replacementRejectedReached",
-    "lateAcceptedReplacementEvidenceReached",
-    "completedReplacementEvidenceReached",
-    "failedReplacementEvidenceReached"
+    "replacementRejectedReached"
   ])
 })
 
@@ -297,7 +355,6 @@ export const acceptedResultIntegrationObligations = Object.freeze({
     "cancellationExactlyQueued",
     "ordinaryAcceptedAdmissionRecordsOneResponsibility",
     "acceptedEvidenceIsNeverDiscarded",
-    "lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility",
     "queuePositionsAreUnique",
     "targetHeldOnlyForActiveIntegration",
     "atMostOneTargetHolder",
@@ -354,8 +411,6 @@ export const acceptedResultIntegrationObligations = Object.freeze({
   ]),
   witnesses: Object.freeze([
     "acceptedReached",
-    "restartCommittedBeforeAcceptedReached",
-    "lateAcceptedEvidenceReached",
     "queuedReached",
     "startedReached",
     "dependencyWaitReached",

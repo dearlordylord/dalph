@@ -124,7 +124,6 @@ const integrationStarted = IntegrationStartedEvent.make({
 
 const indexes = (): IntegrationHistoryIndexes => ({
   acceptedExecutorResults: HashMap.empty(),
-  acceptedExecutorResultPositions: HashMap.empty(),
   executorResponsibilitiesBegan: HashMap.empty(),
   integrationResponsibilitiesBegan: HashMap.empty(),
   integrationStarted: HashMap.make([session.startedAt, integrationStarted]),
@@ -143,7 +142,6 @@ const indexes = (): IntegrationHistoryIndexes => ({
   integratorRunResults: HashMap.empty(),
   integratorRunCandidateGitReadIntents: HashMap.empty(),
   integratorRunCandidateGitObservations: HashMap.empty(),
-  firstRestartChoiceAppliedAt: HashMap.empty(),
   targetPromotionHistory: makeTargetPromotionHistoryIndexes()
 })
 
@@ -729,10 +727,9 @@ describe("retained integration history", () => {
     ])
   })
 
-  it("validates responsibility acceptance, restart ordering, and integration start chronology", () => {
+  it("validates responsibility acceptance and integration start chronology", () => {
     const attemptId = fixture.plannedAttempt.attemptId
     const responsibilityAt = JournalPosition.make(4)
-    const acceptedAt = JournalPosition.make(2)
     const executorResponsibilityAt = JournalPosition.make(3)
     const responsibility = IntegrationResponsibilityBeganEvent.make({
       acceptedResult: session.acceptedResult,
@@ -745,7 +742,6 @@ describe("retained integration history", () => {
     const seeded = {
       ...emptyIndexes,
       acceptedExecutorResults: HashMap.set(emptyIndexes.acceptedExecutorResults, attemptId, session.acceptedResult),
-      acceptedExecutorResultPositions: HashMap.set(emptyIndexes.acceptedExecutorResultPositions, attemptId, acceptedAt),
       executorResponsibilitiesBegan: HashMap.set(emptyIndexes.executorResponsibilitiesBegan, attemptId, {
         plannedAttempt: fixture.plannedAttempt,
         position: executorResponsibilityAt
@@ -755,17 +751,6 @@ describe("retained integration history", () => {
       identityIssues: [],
       semanticIssues: []
     })
-
-    const restartBeforeAcceptance = validate(
-      {
-        ...seeded,
-        firstRestartChoiceAppliedAt: HashMap.set(seeded.firstRestartChoiceAppliedAt, attemptId, JournalPosition.make(1))
-      },
-      [record(responsibilityAt, responsibility)]
-    )
-    expect(restartBeforeAcceptance.semanticIssues).toEqual([
-      expect.stringContaining("Accepted result suppressed by prior Restart")
-    ])
 
     const missingAcceptance = validate(indexes(), [record(responsibilityAt, responsibility)])
     expect(missingAcceptance.semanticIssues).toEqual([
@@ -880,46 +865,18 @@ describe("retained integration history", () => {
       version: workflowJournalEventVersion
     })
     const responsibilityRecord = record(31, responsibilityEvent)
-    const restartBeforeAcceptedWithoutPosition = invalidIntegrationHistoryEvent(
-      responsibilityRecord,
-      {
-        ...indexes(),
-        firstRestartChoiceAppliedAt: HashMap.make([session.plannedAttempt.attemptId, JournalPosition.make(10)])
-      },
-      [responsibilityRecord]
-    )
-    expect(restartBeforeAcceptedWithoutPosition.detail).toContain("no prior matching accepted terminal result")
-
-    const restartAfterAccepted = invalidIntegrationHistoryEvent(
+    const acceptedTerminal = invalidIntegrationHistoryEvent(
       responsibilityRecord,
       {
         ...indexes(),
         acceptedExecutorResults: HashMap.make([session.plannedAttempt.attemptId, session.acceptedResult]),
-        acceptedExecutorResultPositions: HashMap.make([session.plannedAttempt.attemptId, JournalPosition.make(10)]),
         executorResponsibilitiesBegan: HashMap.make([
           session.plannedAttempt.attemptId,
           { plannedAttempt: session.plannedAttempt, position: JournalPosition.make(5) }
-        ]),
-        firstRestartChoiceAppliedAt: HashMap.make([session.plannedAttempt.attemptId, JournalPosition.make(11)])
+        ])
       },
       [responsibilityRecord]
     )
-    expect(restartAfterAccepted.detail).toBeUndefined()
-
-    const restartBeforeAccepted = invalidIntegrationHistoryEvent(
-      responsibilityRecord,
-      {
-        ...indexes(),
-        acceptedExecutorResults: HashMap.make([session.plannedAttempt.attemptId, session.acceptedResult]),
-        acceptedExecutorResultPositions: HashMap.make([session.plannedAttempt.attemptId, JournalPosition.make(10)]),
-        executorResponsibilitiesBegan: HashMap.make([
-          session.plannedAttempt.attemptId,
-          { plannedAttempt: session.plannedAttempt, position: JournalPosition.make(5) }
-        ]),
-        firstRestartChoiceAppliedAt: HashMap.make([session.plannedAttempt.attemptId, JournalPosition.make(9)])
-      },
-      [responsibilityRecord]
-    )
-    expect(restartBeforeAccepted.detail).toContain("suppressed by prior Restart")
+    expect(acceptedTerminal.detail).toBeUndefined()
   })
 })

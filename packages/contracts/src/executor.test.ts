@@ -34,10 +34,10 @@ it("derives the executor correlation and stable key only from the planned run an
 })
 
 it.each([
-  PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
-  PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }),
-  PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } }),
-  PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+  PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
+  PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }),
+  PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Completed" } }),
+  PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
 ])("roundtrips the $._tag executor report through its shared Schema", (report) => {
   expect(
     Schema.decodeUnknownSync(PlannedAttemptExecutorReport)(
@@ -48,7 +48,7 @@ it.each([
 
 it.each([
   PlannedAttemptExecutorProjection.cases.Exact.make({
-    report: PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
   }),
   PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }),
   PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation }),
@@ -59,7 +59,7 @@ it.each([
   }),
   PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
     expected: correlation,
-    observed: PlannedAttemptExecutorReport.cases.Running.make({
+    observed: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
       correlation: { attemptId: AttemptId.make("foreign-attempt"), runId: correlation.runId }
     })
   })
@@ -76,14 +76,14 @@ it("rejects a contradiction that does not contain a foreign observed report", ()
     Schema.decodeUnknownSync(PlannedAttemptExecutorProjection)({
       _tag: "CorrelationContradiction",
       expected: correlation,
-      observed: { _tag: "Running", correlation }
+      observed: { _tag: "ExecutorWorkExecuting", correlation }
     })
   ).toThrow()
 })
 
 it("roundtrips a provider-neutral exact command failure", () => {
   const failure = new PlannedAttemptExecutorCommandFailure({
-    command: "StartOrContinue",
+    command: "Begin",
     correlation,
     detail: "the injected boundary declined the command"
   })

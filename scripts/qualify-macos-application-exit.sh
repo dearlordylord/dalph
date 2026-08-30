@@ -260,7 +260,7 @@ set +e
   run_signalled_fixture running 0 - "$QUALIFICATION_PLANNED_WORKTREE" "$QUALIFICATION_BASE"
   require_output "$OUTPUT_DIRECTORY/running.jsonl" '"controlledExecutor":"FastSuspensionRequested","llmRequests":0'
   require_output "$OUTPUT_DIRECTORY/running.jsonl" '"journalEvents":["PlannedAttemptExecutorWorkResponsibilityBegan","PlannedAttemptExecutorWorkReported","PlannedAttemptExecutorCommandIntended","PlannedAttemptExecutorWorkReported"]'
-  require_output "$OUTPUT_DIRECTORY/running.jsonl" '"_tag":"RunningExecutorWorkReachedSafeBoundary","correlations":[{"attemptId":"linux-host-attempt","runId":"linux-host-run"}]'
+  require_output "$OUTPUT_DIRECTORY/running.jsonl" '"_tag":"ExecutingExecutorWorkReachedSafeBoundary","correlations":[{"attemptId":"linux-host-attempt","runId":"linux-host-run"}]'
   require_output "$OUTPUT_DIRECTORY/running.jsonl" '"ExitResultReported"'
   require_output "$OUTPUT_DIRECTORY/running.jsonl" '"_tag":"Succeeded"'
   echo "+ git worktree list --porcelain"

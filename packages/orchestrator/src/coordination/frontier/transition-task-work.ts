@@ -4,17 +4,17 @@ import type { RunnableFrontierTransition } from "./frontier.js"
 export type TransitionTaskWorkPosition = "Existing" | "ReserveOrReuse" | null
 
 /** Pure domain requirement shared by proposal construction and runtime admission. */
-export const transitionTaskWorkPosition = (transition: RunnableFrontierTransition): TransitionTaskWorkPosition =>
-  transition._tag === "AdvanceAttemptStoppage"
-    ? transition.taskWorkPosition === "ReserveOrReuse"
-      ? "ReserveOrReuse"
-      : null
-    : transition._tag === "ObserveAttemptStoppageExecutor"
-      ? "ReserveOrReuse"
-      : transition._tag === "SuspendPlannedAttemptExecutorWork"
-        ? "Existing"
-        : transition._tag === "CommitFreshTaskClaimIntent" ||
-            transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-            transition._tag === "StartPlannedAttemptExecutorWork"
-          ? "ReserveOrReuse"
-          : null
+export const transitionTaskWorkPosition = (transition: RunnableFrontierTransition): TransitionTaskWorkPosition => {
+  if (transition._tag === "AdvanceAttemptStoppage") {
+    return transition.taskWorkPosition === "ReserveOrReuse" ? "ReserveOrReuse" : null
+  }
+  if (transition._tag === "SuspendPlannedAttemptExecutorWork") return "Existing"
+  const reserveOrReuse = new Set<RunnableFrontierTransition["_tag"]>([
+    "BeginPlannedAttemptExecutorWork",
+    "CommitFreshTaskClaimIntent",
+    "ObserveAttemptStoppageExecutor",
+    "ObservePlannedAttemptExecutorWork",
+    "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
+  ])
+  return reserveOrReuse.has(transition._tag) ? "ReserveOrReuse" : null
+}

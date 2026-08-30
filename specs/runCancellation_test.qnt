@@ -63,9 +63,9 @@ module runCancellationTest {
       })
   }
 
-  run runningExecutorCancellationStopsAndReleasesClaimTest = {
+  run executingExecutorCancellationStopsAndReleasesClaimTest = {
     init
-      .then(selectRunningExecutor)
+      .then(selectExecutingExecutor)
       .then(applyCancellation)
       .then(recordExecutorStopIntent)
       .then(reportExecutorSafe)
@@ -75,7 +75,7 @@ module runCancellationTest {
       .then(readFreshClassificationGraph)
       .then(handoffToFreshClassification)
       .expect(and {
-        runningExecutorCancellationReached,
+        executingExecutorCancellationReached,
         executorStopIntentReached,
         executorSafeReportReached,
         claimReleaseIntentReached,
@@ -111,7 +111,7 @@ module runCancellationTest {
 
   run executorCrashReconcilesExactIntentBeforeHandoffTest = {
     init
-      .then(selectRunningExecutor)
+      .then(selectExecutingExecutor)
       .then(applyCancellation)
       .then(recordExecutorStopIntent)
       .then(crashBeforeSettlement)
@@ -174,7 +174,7 @@ module runCancellationTest {
 
   run foreignClaimIsObservedWithoutReleaseTest = {
     init
-      .then(selectRunningExecutor)
+      .then(selectExecutingExecutor)
       .then(applyCancellation)
       .then(recordExecutorStopIntent)
       .then(reportExecutorSafe)
@@ -195,7 +195,7 @@ module runCancellationTest {
 
   run unreadableClaimKeepsCancellationPendingTest = {
     init
-      .then(selectRunningExecutor)
+      .then(selectExecutingExecutor)
       .then(applyCancellation)
       .then(recordExecutorStopIntent)
       .then(reportExecutorSafe)

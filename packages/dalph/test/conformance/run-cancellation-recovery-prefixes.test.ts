@@ -91,9 +91,10 @@ const productionRuntimeLayer = (runId: RunId, graph: TaskDagSnapshot) => {
     releaseTaskClaim: () => Effect.die("cancellation recovery does not release task claims")
   })
   const executor = PlannedAttemptExecutor.of({
-    project: (correlation) => Effect.succeed(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })),
+    observe: (correlation) => Effect.succeed(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })),
     requestSuspension: () => Effect.die("cancellation recovery has no executor responsibility"),
-    startOrContinue: () => Effect.die("cancellation recovery has no executor responsibility")
+    resume: () => Effect.die("cancellation recovery has no executor responsibility"),
+    begin: () => Effect.die("cancellation recovery has no executor responsibility")
   })
   const controls = Layer.mergeAll(
     attemptChoiceControlLayer,

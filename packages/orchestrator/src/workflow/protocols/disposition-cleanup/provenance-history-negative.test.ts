@@ -489,6 +489,23 @@ it.effect("rejects malformed, foreign, duplicate, and reordered worktree settlem
     expect(
       validateWorktreeCleanupProvenance(move(records, tag("WorktreeCleanupAuthorized"), 1), authorization)._tag
     ).toBe("Invalid")
+    const forgedBeginToSafe = records.filter(
+      ({ event }) =>
+        !(
+          (event._tag === "PlannedAttemptExecutorWorkReported" && event.ordinal === 1) ||
+          (event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend") ||
+          event._tag === "PlannedAttemptExecutorCommandResponseObserved"
+        )
+    )
+    expect(validateWorktreeCleanupProvenance(forgedBeginToSafe, authorization)._tag).toBe("Invalid")
+    for (const command of ["Begin", "Suspend"] as const) {
+      const forgedCommandKey = replace(
+        records,
+        (record) => record.event._tag === "PlannedAttemptExecutorCommandIntended" && record.event.command === command,
+        (record) => ({ ...record, key: foreignKey })
+      )
+      expect(validateWorktreeCleanupProvenance(forgedCommandKey, authorization)._tag).toBe("Invalid")
+    }
   }).pipe(
     Effect.provide(
       worktreeCleanupTestLayer({

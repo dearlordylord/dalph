@@ -6,7 +6,7 @@ This document preserves the earlier Codex executor decision that a materialized
 attempt thread is never replaced. It adds an explicit Operator action for one
 owned turn inside that retained thread, after Codex proves the exact preceding
 turn was purged and Dalph freshly proves that the planned attempt, thread, and
-worktree still have one exclusive owner. Ordinary `StartOrContinue` recovery
+worktree still have one exclusive owner. Ordinary Begin/Observe/Resume recovery
 still never authorizes this replacement.
 
 For the selected Codex executor, one non-ephemeral Codex thread is the private
@@ -68,8 +68,9 @@ reusing D1 for another subject is a contradiction.
    new turn is a replacement work unit in the retained P/S1/W1 session.
 8. After returned turn U2 is correlated to that token, Dalph seals U1 and its
    purge evidence as immutable private history, makes U2 the current work unit,
-   and returns the ordinary exact `Running(P)` report. Later generic
-   continuation and suspension use S1/U2 without presenting U2 as resumed U1.
+   and returns the ordinary exact `ExecutorWorkExecuting(P)` report. Later
+   passive observation, exact safe-state Resume, and suspension use S1/U2
+   without presenting U2 as resumed U1.
 
 Alice sees one successful replacement for D1 and P continue in the same W1.
 She does not see a new attempt, Base SHA, branch, worktree, claim, or generic
@@ -172,7 +173,8 @@ second replacement after U2 was observed.
 
 These are executor-private crash cuts. They do not add P0-P6 actions to
 `plannedAttemptExecutor.qnt`: the model still observes one unchanged outer P
-and only its ordinary `Running`, `SafelySuspended`, or terminal report. The
+and only its ordinary `ExecutorWorkExecuting`, `ExecutorWorkSafelySuspended`,
+or terminal report. The
 existing outer conformance suite remains the negative control that no internal
 identity enters Dalph's Journal, capacity, responsibility, or correlation.
 

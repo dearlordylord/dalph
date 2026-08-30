@@ -10,7 +10,6 @@ import { runnableTransitionTaskId, transitionTrackerGraphRequirement } from "../
 import { readDeliveryProjectionFrom, type RunRecoveryProjectionSource } from "../run/recovery-activation.js"
 import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
 import { journaledCurrentDeliveryFrameOf, type CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
-import { latestReconstructedTaskGraph } from "../reconstruction/graph-knowledge.js"
 import { deriveFreshWorkflowDecisions } from "../run/fresh-workflow.js"
 import {
   acceptedOperationIdsOf,
@@ -45,21 +44,15 @@ type JournalProjection = Effect.Success<JournalService["state"]["get"]>
 type RecoveredDeliveryProjection = Effect.Success<RunRecoveryProjectionSource["readDeliveryProjection"]>
 
 const pauseCoverageFactsOf = (journal: JournalProjection) => {
-  const latestGraphRecord = journal.records.findLast(
-    ({ event }) =>
-      event._tag === "TaskTrackerFactsObserved" &&
-      (event.observation._tag === "CompleteTaskTrackerFacts" ||
-        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
-  )
-  const snapshot = Option.getOrUndefined(latestReconstructedTaskGraph(journal.reconstructed.graphKnowledge))
-  return latestGraphRecord === undefined || snapshot === undefined
-    ? ({ _tag: "PauseCoverageGraphNotEstablished", applied: journal.reconstructed.pause } as const)
-    : ({
-        _tag: "PauseCoverageGraphEstablished",
-        applied: journal.reconstructed.pause,
-        observedAt: latestGraphRecord.position,
-        snapshot
-      } as const)
+  if (journal.graph._tag !== "GraphEstablished") {
+    return { _tag: "PauseCoverageGraphNotEstablished", applied: journal.reconstructed.pause } as const
+  }
+  return {
+    _tag: "PauseCoverageGraphEstablished",
+    applied: journal.reconstructed.pause,
+    observedAt: journal.graph.observation.recordedAt,
+    snapshot: journal.graph.observation.snapshot
+  } as const
 }
 
 const eligibleRecoveredTransitions = (
@@ -145,7 +138,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     })
     const frame =
       journal.graph._tag === "GraphEstablished" ? yield* journaledCurrentDeliveryFrameOf(journal) : undefined
-    const fresh = frame === undefined ? [] : deriveFreshWorkflowDecisions(frame, recoveredAttemptIds)
+    const fresh = frame === undefined ? [] : deriveFreshWorkflowDecisions(frame, recoveredAttemptIds, target)
     const freshTaskIds = new Set(fresh.map(({ transition }) => runnableTransitionTaskId(transition)))
     const recovered = eligibleRecoveredTransitions(journal, projection, freshTaskIds)
     const transitions = [...recovered, ...fresh.map(({ transition }) => transition)]

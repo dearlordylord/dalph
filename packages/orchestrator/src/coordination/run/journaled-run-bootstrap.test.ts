@@ -518,9 +518,9 @@ it.effect("keeps the active Run alive until its exact executor-family Exit drain
         awaitExecutorDrains: applicationExit.awaitExecutorDrains,
         registerExecutorDrain: (drain) =>
           applicationExit.registerExecutorDrain({
-            suspendRunningExecutorWork: Deferred.succeed(executorDrainStarted, undefined).pipe(
+            suspendExecutingExecutorWork: Deferred.succeed(executorDrainStarted, undefined).pipe(
               Effect.andThen(Deferred.await(releaseExecutorDrain)),
-              Effect.andThen(drain.suspendRunningExecutorWork)
+              Effect.andThen(drain.suspendExecutingExecutorWork)
             )
           })
       }
@@ -2379,6 +2379,56 @@ it.effect("applies inactive Run controls through the Journal while inactive Task
       expect(unpaused.event).toMatchObject({ _tag: "ControlDirectionApplied", direction: "Unpause" })
       expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunUnpaused")
       expect(yield* Ref.get(observed)).toEqual(["Pause", "Unpause"])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("reads inactive integration quarantine control from the Journal", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-inactive-quarantine-control")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const requestId = IntegrationQuarantineDirectionRequestId.make({ nonce: "inactive-quarantine-read", runId })
+
+      const failure = yield* bootstrap.operatorControl
+        .readIntegrationQuarantineDirection({ requestId })
+        .pipe(Effect.flip)
+
+      expect(failure).toMatchObject({ _tag: "IntegrationQuarantineDirectionResultNotFound", requestId })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("keeps an initial delivery publication harmless before reactivation observers are registered", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-publication-without-observer")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const publicationCount = yield* Ref.make(0)
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        storage,
+        defaultTrackerGraphReader,
+        undefined,
+        undefined,
+        defaultOwnership,
+        publicationCount
+      )
+
+      expect(
+        yield* bootstrap.activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.succeed(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+        )
+      ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
+      expect(yield* Ref.get(publicationCount)).toBe(1)
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )

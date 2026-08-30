@@ -613,8 +613,11 @@ it.effect("classifies Dalph beginning executor-work responsibility separately fr
     const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
     const firstOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
     const secondOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
-    const running = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-    const terminal = PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
+    const running = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+      correlation,
+      result: { _tag: "Completed" }
+    })
     const projection = yield* projectWorkflowOccurrences([
       {
         event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
@@ -688,7 +691,7 @@ it.effect("rejects an executor report without its responsibility-began occurrenc
       {
         event: PlannedAttemptExecutorWorkReportedEvent.make({
           ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-          report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
           version: workflowJournalEventVersion
         }),
         key: plannedAttemptExecutorWorkReportedRecordKey(
@@ -725,7 +728,7 @@ it.effect("rejects an executor report whose exact responsibility is absent, late
       {
         event: PlannedAttemptExecutorWorkReportedEvent.make({
           ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-          report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
           version: workflowJournalEventVersion
         }),
         key: plannedAttemptExecutorWorkReportedRecordKey(
@@ -1555,7 +1558,7 @@ it.effect("presents only the proven actor and keeps executor or Integrator detai
       occurrenceClassification: "NonActionOccurrence",
       ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
       recordedAt: JournalPosition.make(4),
-      report: PlannedAttemptExecutorReport.cases.Running.make({
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
         correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
       }),
       runId
@@ -2047,7 +2050,7 @@ it.effect("projects an atomic replacement occurrence while ignoring lifecycle ro
         headSha: plannedAttempt.baseSha,
         worktree: plannedAttempt.worktree
       }),
-      quiescenceProof: { _tag: "CommandResponse", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+      quiescenceProof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
       specificationObservationOperationId: specificationRead.operationId,
       targetHeadSha: successor.baseSha,
       targetLineageObservationOperationId: targetRead.operationId
@@ -2135,7 +2138,7 @@ it.effect("projects the historical #81 preservation variants and the #82 success
           expectedClaim: fixture.activeClaim,
           initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
           occurrenceClassification: "InitiatedAction",
-          proof: { _tag: "CommandResponse", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+          proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
           requestId,
           subject,
           version: workflowJournalEventVersion

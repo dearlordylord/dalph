@@ -21,7 +21,7 @@ export type DeliveryGraphTaskTone = "blocked" | "waiting" | "desired" | "running
 
 export const deliveryGraphInterpretationNotes = [
   "Excluded tasks remain visible with their exact graph reason in task facts",
-  "Settlement appears only from established settlement evidence, never from executor Terminal alone"
+  "Settlement appears only from established settlement evidence, never from ExecutorWorkTerminal alone"
 ] as const
 
 /**

@@ -3,6 +3,7 @@ import {
   AttemptId,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -19,6 +20,7 @@ import { makeIntegrationTargetResourceController } from "../coordination/admissi
 import { makeDeliveryRuntimeAdmissionController } from "../coordination/delivery/delivery-runtime-admission.js"
 import { makeApplicationExitLifecycle } from "../coordination/application-exit/lifecycle.js"
 import { makeRunRecoveryProjection } from "../coordination/run/recovery-activation.js"
+import { requiredPlannedAttemptPositionsOf } from "../coordination/run/required-planned-attempt-positions.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
 import { memoryJournalTestLayer } from "../workflow-journal/adapters/memory-store.js"
 import { InRunJournal, JournalStore } from "../workflow-journal/store.js"
@@ -29,9 +31,18 @@ import { makeTaskAttemptPlanOperation } from "../workflow/registry/operation.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import {
   attemptPlanRecordKey,
+  plannedAttemptExecutorStateObservedRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../workflow-journal/record-key.js"
-import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../workflow/protocols/planned-attempt-executor-work/events.js"
 import { plannedAttemptProtocolControllerLayer } from "../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../workflow/interpretation/interpreter.js"
 import { projectWorkflowOccurrences } from "../workflow/registry/occurrence-projection.js"
@@ -239,9 +250,10 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
       Effect.provideService(
         PlannedAttemptExecutor,
         PlannedAttemptExecutor.of({
-          project: () => Effect.die("restart construction does not ask the stopped fake for a report"),
+          observe: () => Effect.die("restart construction does not ask the stopped fake for a report"),
           requestSuspension: () => Effect.die("restart construction does not suspend work"),
-          startOrContinue: () => Effect.die("restart construction does not continue work")
+          begin: () => Effect.die("restart construction does not begin work"),
+          resume: () => Effect.die("restart construction does not resume work")
         })
       ),
       Effect.provideService(
@@ -280,4 +292,126 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
     Effect.provide(memoryJournalTestLayer),
     Effect.provide(plannedAttemptProtocolControllerLayer)
   )
+)
+
+it.effect("restart holds the task-work position until an exact Safe or Terminal observation is accepted", () =>
+  Effect.sync(() => {
+    const runId = RunId.make("pending-executor-report-capacity-run")
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("pending-executor-report-capacity-attempt"),
+      baseSha: GitCommitSha.make("9".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/pending-executor-report-capacity"),
+      executor: TaskExecutorLocator.make("executor:controlled-fake"),
+      runId,
+      taskId: TaskId.make("pending-executor-report-capacity-task"),
+      taskRevision: TaskRevision.make("pending-executor-report-capacity-revision"),
+      worktree: WorktreeLocator.make("/worktrees/pending-executor-report-capacity")
+    })
+    const responsibility = {
+      _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+      beganAt: JournalPosition.make(1),
+      plannedAttempt
+    }
+
+    for (const report of [
+      PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId }
+      }),
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId },
+        result: { _tag: "Completed" }
+      })
+    ]) {
+      const ordinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+      const event = PlannedAttemptExecutorStateObservedEvent.make({
+        observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report }),
+        occurrenceClassification: "NonActionOccurrence",
+        ordinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+      const positions = requiredPlannedAttemptPositionsOf({
+        responsibility: { entries: [responsibility] },
+        workflowHistory: {
+          records: [
+            {
+              event,
+              key: plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, ordinal),
+              position: JournalPosition.make(2),
+              runId
+            }
+          ]
+        }
+      })
+
+      expect(positions).toEqual([{ attemptId: plannedAttempt.attemptId, runId, taskId: plannedAttempt.taskId }])
+    }
+  })
+)
+
+it.effect("restart releases the task-work position after an unchanged accepted Safe or Terminal passive replay", () =>
+  Effect.sync(() => {
+    const runId = RunId.make("accepted-replay-capacity-run")
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: AttemptId.make("accepted-replay-capacity-attempt"),
+      baseSha: GitCommitSha.make("8".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/accepted-replay-capacity"),
+      executor: TaskExecutorLocator.make("executor:controlled-fake"),
+      runId,
+      taskId: TaskId.make("accepted-replay-capacity-task"),
+      taskRevision: TaskRevision.make("accepted-replay-capacity-revision"),
+      worktree: WorktreeLocator.make("/worktrees/accepted-replay-capacity")
+    })
+    const responsibility = {
+      _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+      beganAt: JournalPosition.make(1),
+      plannedAttempt
+    }
+
+    for (const report of [
+      PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId }
+      }),
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId },
+        result: { _tag: "Completed" }
+      })
+    ]) {
+      const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+      const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+      const accepted = PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: reportOrdinal,
+        report,
+        version: workflowJournalEventVersion
+      })
+      const replayed = PlannedAttemptExecutorStateObservedEvent.make({
+        observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report }),
+        occurrenceClassification: "NonActionOccurrence",
+        ordinal: observationOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+      const positions = requiredPlannedAttemptPositionsOf({
+        responsibility: { entries: [responsibility] },
+        workflowHistory: {
+          records: [
+            {
+              event: accepted,
+              key: plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
+              position: JournalPosition.make(2),
+              runId
+            },
+            {
+              event: replayed,
+              key: plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, observationOrdinal),
+              position: JournalPosition.make(3),
+              runId
+            }
+          ]
+        }
+      })
+
+      expect(positions).toEqual([])
+    }
+  })
 )

@@ -43,6 +43,7 @@ import {
   type JournalRecord,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorCommandResponseContradictedEvent,
   PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
@@ -139,6 +140,7 @@ const recordExecutorEntry = (
       readonly _tag:
         | "PlannedAttemptExecutorCommandIntended"
         | "PlannedAttemptExecutorCommandProjectionObserved"
+        | "PlannedAttemptExecutorCommandResponseObserved"
         | "PlannedAttemptExecutorCommandResponseContradicted"
         | "PlannedAttemptExecutorStateObserved"
         | "PlannedAttemptExecutorWorkReported"
@@ -175,6 +177,13 @@ const recordExecutorEntry = (
         occurrenceClassification: value.occurrenceClassification,
         plannedAttempt: value.plannedAttempt,
         projectionOrdinal: value.projectionOrdinal
+      }),
+      PlannedAttemptExecutorCommandResponseObserved: (value): RecordedCassetteEntry => ({
+        _tag: "PlannedAttemptExecutorCommandResponseObserved",
+        commandOrdinal: value.commandOrdinal,
+        occurrenceClassification: value.occurrenceClassification,
+        plannedAttempt: value.plannedAttempt,
+        report: value.report
       }),
       PlannedAttemptExecutorCommandResponseContradicted: (value): RecordedCassetteEntry => ({
         _tag: "PlannedAttemptExecutorCommandResponseContradicted",
@@ -536,6 +545,7 @@ type ExecutorEvent = Extract<
     readonly _tag:
       | "PlannedAttemptExecutorCommandIntended"
       | "PlannedAttemptExecutorCommandProjectionObserved"
+      | "PlannedAttemptExecutorCommandResponseObserved"
       | "PlannedAttemptExecutorCommandResponseContradicted"
       | "PlannedAttemptExecutorStateObserved"
       | "PlannedAttemptExecutorWorkReported"
@@ -546,6 +556,7 @@ type ExecutorEvent = Extract<
 const executorEventTags = {
   PlannedAttemptExecutorCommandIntended: true,
   PlannedAttemptExecutorCommandProjectionObserved: true,
+  PlannedAttemptExecutorCommandResponseObserved: true,
   PlannedAttemptExecutorCommandResponseContradicted: true,
   PlannedAttemptExecutorStateObserved: true,
   PlannedAttemptExecutorWorkReported: true,
@@ -996,6 +1007,7 @@ type RecordedExecutorEntry = Extract<
     readonly _tag:
       | "PlannedAttemptExecutorCommandIntended"
       | "PlannedAttemptExecutorCommandProjectionObserved"
+      | "PlannedAttemptExecutorCommandResponseObserved"
       | "PlannedAttemptExecutorCommandResponseContradicted"
       | "PlannedAttemptExecutorStateObserved"
       | "PlannedAttemptExecutorWorkReported"
@@ -1006,6 +1018,7 @@ const isRecordedExecutorEntry = (entry: RecordedCassetteEntry): entry is Recorde
   new Set([
     "PlannedAttemptExecutorCommandIntended",
     "PlannedAttemptExecutorCommandProjectionObserved",
+    "PlannedAttemptExecutorCommandResponseObserved",
     "PlannedAttemptExecutorCommandResponseContradicted",
     "PlannedAttemptExecutorStateObserved",
     "PlannedAttemptExecutorWorkReported",
@@ -1041,6 +1054,14 @@ const eventForExecutorEntry = (entry: RecordedExecutorEntry): WorkflowJournalEve
         occurrenceClassification: value.occurrenceClassification,
         plannedAttempt: value.plannedAttempt,
         projectionOrdinal: value.projectionOrdinal,
+        version: workflowJournalEventVersion
+      }),
+    PlannedAttemptExecutorCommandResponseObserved: (value) =>
+      PlannedAttemptExecutorCommandResponseObservedEvent.make({
+        commandOrdinal: value.commandOrdinal,
+        occurrenceClassification: value.occurrenceClassification,
+        plannedAttempt: value.plannedAttempt,
+        report: value.report,
         version: workflowJournalEventVersion
       }),
     PlannedAttemptExecutorCommandResponseContradicted: (value) =>
@@ -1539,6 +1560,8 @@ const lyricForExecutorEntry = (entry: RecordedExecutorEntry): string =>
       `Dalph coordinator intended executor command ${value.command} for attempt ${value.plannedAttempt.attemptId}.`,
     PlannedAttemptExecutorCommandProjectionObserved: (value) =>
       `Dalph observed ${value.observation._tag} while reconciling executor command ${value.commandOrdinal} for attempt ${value.plannedAttempt.attemptId}.`,
+    PlannedAttemptExecutorCommandResponseObserved: (value) =>
+      `The executor returned ${value.report._tag} to command ${value.commandOrdinal} for attempt ${value.plannedAttempt.attemptId}.`,
     PlannedAttemptExecutorCommandResponseContradicted: (value) =>
       `The executor returned a response for attempt ${value.observed.correlation.attemptId} to command ${value.commandOrdinal} for expected attempt ${value.plannedAttempt.attemptId}; Dalph kept the command unresolved.`,
     PlannedAttemptExecutorStateObserved: (value) =>
@@ -1784,7 +1807,7 @@ const lyricForOtherRecordedEntry = (entry: RecordedOtherEntry): string => {
 
 const lyricForRecordedEntry = (entry: RecordedCassetteEntry): string =>
   entry._tag === "PlannedAttemptContinuationAuthorized"
-    ? `Dalph authorized continuation of planned attempt ${entry.plannedAttempt.attemptId} after four current observations.`
+    ? `Dalph authorized resumption of planned attempt ${entry.plannedAttempt.attemptId} after five current observations.`
     : lyricForOtherRecordedEntry(entry)
 
 /** Human-readable prose derived from structured entries, never parsed as a contract. */

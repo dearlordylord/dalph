@@ -4,15 +4,11 @@ import {
   type TaskWorkSpecification
 } from "@dalph/contracts"
 import { Effect } from "effect"
-import {
-  defaultPlannedAttemptExecutorContinuationLimit,
-  defaultPlannedAttemptExecutorSuspensionLimit,
-  type PlannedAttemptExecutorContinuationLimit,
-  type PlannedAttemptExecutorSuspensionLimit
-} from "./events.js"
+import { defaultPlannedAttemptExecutorSuspensionLimit, type PlannedAttemptExecutorSuspensionLimit } from "./events.js"
 import { observePlannedAttemptExecutorStateWithPermit } from "./protocol.js"
 import {
-  continuePlannedAttemptExecutorWorkWithPermit,
+  beginPlannedAttemptExecutorWorkWithPermit,
+  resumePlannedAttemptExecutorWorkWithPermit,
   requestPlannedAttemptExecutorSuspensionWithoutReconciliationWithPermit,
   requestPlannedAttemptExecutorSuspensionWithPermit
 } from "./suspension-commands.js"
@@ -28,15 +24,25 @@ export const observePlannedAttemptExecutorState = Effect.fn("PlannedAttemptExecu
   )
 })
 
-/** Starts or resumes exact executor work while excluding abandonment of that attempt. */
-export const continuePlannedAttemptExecutorWork = Effect.fn("PlannedAttemptExecutorWorkflow.continue")(function* (
+/** Begins exact executor work once while excluding abandonment of that attempt. */
+export const beginPlannedAttemptExecutorWork = Effect.fn("PlannedAttemptExecutorWorkflow.begin")(function* (
   plannedAttempt: PlannedTaskAttempt,
-  continuationLimit: PlannedAttemptExecutorContinuationLimit = defaultPlannedAttemptExecutorContinuationLimit,
   selectedSpecification?: TaskWorkSpecification
 ) {
   const controller = yield* PlannedAttemptProtocolController
   return yield* controller.withPermit(plannedAttemptExecutorCorrelation(plannedAttempt), (permit) =>
-    continuePlannedAttemptExecutorWorkWithPermit(permit, plannedAttempt, continuationLimit, selectedSpecification)
+    beginPlannedAttemptExecutorWorkWithPermit(permit, plannedAttempt, selectedSpecification)
+  )
+})
+
+/** Resumes exact safely suspended work while excluding abandonment of that attempt. */
+export const resumePlannedAttemptExecutorWork = Effect.fn("PlannedAttemptExecutorWorkflow.resume")(function* (
+  plannedAttempt: PlannedTaskAttempt,
+  selectedSpecification?: TaskWorkSpecification
+) {
+  const controller = yield* PlannedAttemptProtocolController
+  return yield* controller.withPermit(plannedAttemptExecutorCorrelation(plannedAttempt), (permit) =>
+    resumePlannedAttemptExecutorWorkWithPermit(permit, plannedAttempt, selectedSpecification)
   )
 })
 

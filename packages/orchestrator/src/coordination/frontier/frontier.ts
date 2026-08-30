@@ -94,13 +94,13 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly taskId: TaskId
   }
   ContinueFreshWorkflowOperation: { readonly operationId: OperationId; readonly taskId: TaskId }
-  StartPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
-  ContinuePlannedAttemptExecutorWork: {
+  BeginPlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
+  ObservePlannedAttemptExecutorWork: {
     readonly acceptedProgress: AcceptedPlannedAttemptExecutorProgress
     readonly plannedAttempt: PlannedTaskAttempt
   }
   /** Continue one retained responsibility only after the named current tracker and Git facts are authorized. */
-  ContinuePlannedAttemptExecutorWorkAfterCurrentFacts: {
+  ResumePlannedAttemptExecutorWorkAfterCurrentFacts: {
     readonly acceptedProgress: AcceptedPlannedAttemptExecutorProgress
     readonly plannedAttempt: PlannedTaskAttempt
     readonly witness: PlannedAttemptContinuationWitness
@@ -125,7 +125,7 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
     readonly operation: typeof WorkflowOperation.cases.ReadTargetLineage.Type
     readonly plannedAttempt: PlannedTaskAttempt
   }
-  ObservePlannedAttemptContinuationExecutor: { readonly plannedAttempt: PlannedTaskAttempt }
+  ReconcilePlannedAttemptExecutorWork: { readonly plannedAttempt: PlannedTaskAttempt }
   ObserveAttemptStoppageExecutor: { readonly requestId: AttemptChoiceRequestId; readonly subject: AttemptChoiceSubject }
   ObserveResponsibleTaskClaim: {
     readonly operation: typeof WorkflowOperation.cases.ReadTaskClaim.Type
@@ -303,8 +303,8 @@ const transitionTrackerGraphRequirements = {
   CommitFreshTaskClaimIntent: "CurrentTrackerGraphRequired",
   CommitTaskClaimReacquisitionIntent: "AcceptedHistorySufficient",
   ContinueFreshWorkflowOperation: "CurrentTrackerGraphRequired",
-  ContinuePlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
-  ContinuePlannedAttemptExecutorWorkAfterCurrentFacts: "CurrentTrackerGraphRequired",
+  ObservePlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
+  ResumePlannedAttemptExecutorWorkAfterCurrentFacts: "CurrentTrackerGraphRequired",
   RecordChangedHeadRetryQuarantine: "CurrentTrackerGraphRequired",
   RecordInitialConclusiveIntegrationQuarantine: "AcceptedHistorySufficient",
   RecordProviderRunFailureIntegrationQuarantine: "AcceptedHistorySufficient",
@@ -319,7 +319,7 @@ const transitionTrackerGraphRequirements = {
   DeleteCompletedTaskCompletionClaim: "CurrentTrackerGraphRequired",
   ObservePlannedAttemptContinuationClaim: "AcceptedHistorySufficient",
   ObserveAttemptStoppageExecutor: "AcceptedHistorySufficient",
-  ObservePlannedAttemptContinuationExecutor: "AcceptedHistorySufficient",
+  ReconcilePlannedAttemptExecutorWork: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationGraph: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationSpecification: "AcceptedHistorySufficient",
   ObservePlannedAttemptContinuationTargetLineage: "AcceptedHistorySufficient",
@@ -340,7 +340,7 @@ const transitionTrackerGraphRequirements = {
   RetryCancelledAttemptClaimRelease: "AcceptedHistorySufficient",
   RetryStoppedAttemptClaimRelease: "AcceptedHistorySufficient",
   ReleaseStartedIntegrationTarget: "AcceptedHistorySufficient",
-  StartPlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
+  BeginPlannedAttemptExecutorWork: "CurrentTrackerGraphRequired",
   StartQueuedIntegration: "CurrentTrackerGraphRequired",
   SuspendPlannedAttemptExecutorWork: "AcceptedHistorySufficient"
 } as const satisfies Record<RunnableFrontierTransition["_tag"], TransitionTrackerGraphRequirement>
@@ -363,7 +363,7 @@ export type FrontierExplanation = Data.TaggedEnum<{
   }
   AttemptStoppageWait: {
     readonly correlation: PlannedAttemptExecutorCorrelation
-    readonly reason: "ExecutorContradictory" | "ExecutorRunning" | "ExecutorUnavailable"
+    readonly reason: "ExecutorContradictory" | "ExecutorExecuting" | "ExecutorUnavailable"
     readonly taskId: TaskId
     readonly wakeCondition: "ProcessRestartedOrAcceptedFactsChanged"
   }
@@ -423,7 +423,7 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly taskId: TaskId
   }
   PlannedAttemptExecutorWorkTerminal: {
-    readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "Terminal" }>
+    readonly report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "ExecutorWorkTerminal" }>
     readonly taskId: TaskId
   }
   PlannedAttemptExecutorProjectionWait: {
@@ -862,10 +862,15 @@ const executorDecisionFor = (
         })
       }),
       Ready: ({ acceptedProgress }) => ({
-        transition: RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
-          acceptedProgress,
-          plannedAttempt: facts.responsibility.plannedAttempt
-        })
+        transition:
+          acceptedProgress._tag === "ExecutorResponsibilityBegan"
+            ? RunnableFrontierTransition.BeginPlannedAttemptExecutorWork({
+                plannedAttempt: facts.responsibility.plannedAttempt
+              })
+            : RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+                acceptedProgress,
+                plannedAttempt: facts.responsibility.plannedAttempt
+              })
       })
     }),
     Match.exhaustive

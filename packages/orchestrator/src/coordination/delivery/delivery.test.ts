@@ -285,8 +285,8 @@ it.effect("rejects nonterminal executor reports as terminal delivery evidence", 
   Effect.gen(function* () {
     const correlation = { attemptId: AttemptId.make("attempt-A"), runId: RunId.make("run-A") }
     const reports = [
-      PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
-      PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+      PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
+      PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
     ]
 
     for (const report of reports) {
@@ -298,6 +298,23 @@ it.effect("rejects nonterminal executor reports as terminal delivery evidence", 
       )
       expect(Exit.isFailure(decoded)).toBe(true)
     }
+  })
+)
+
+it.effect("accepts the normalized terminal executor report as terminal delivery evidence", () =>
+  Effect.gen(function* () {
+    const correlation = { attemptId: AttemptId.make("attempt-terminal"), runId: RunId.make("run-terminal") }
+    const report = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+      correlation,
+      result: { _tag: "Completed" }
+    })
+
+    const decoded = yield* Schema.decodeUnknownEffect(PlannedAttemptExecutorTerminalEvidence)({
+      _tag: "PlannedAttemptExecutorTerminal",
+      report
+    })
+
+    expect(decoded).toEqual({ _tag: "PlannedAttemptExecutorTerminal", report })
   })
 )
 

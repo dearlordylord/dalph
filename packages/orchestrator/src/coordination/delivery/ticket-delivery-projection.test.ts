@@ -804,7 +804,7 @@ describe("#181 ticket-delivery positive and negative space", () => {
   it("retains terminal knowledge only until the complete graph establishes success", () => {
     const taskA = TaskId.make("A")
     const responsibility = exactExecutorEvidence(taskA).facts
-    const terminal = PlannedAttemptExecutorReport.cases.Terminal.make({
+    const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
       correlation: {
         attemptId: responsibility.responsibility.plannedAttempt.attemptId,
         runId: responsibility.responsibility.plannedAttempt.runId

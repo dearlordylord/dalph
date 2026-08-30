@@ -1,5 +1,12 @@
 /* eslint-disable functional/immutable-data, max-lines -- The chronological validator owns its local indexes and cross-event invariants. */
-import { type AttemptId, type PlannedTaskAttempt, type RunId, type TaskId } from "@dalph/contracts"
+import {
+  plannedTaskAttemptEquivalence,
+  samePlannedAttemptExecutorReport,
+  type AttemptId,
+  type PlannedTaskAttempt,
+  type RunId,
+  type TaskId
+} from "@dalph/contracts"
 import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
 import { rememberValidatedJournalPrefixSuccessor } from "../../workflow-journal/prefix-lineage.js"
 import { type OperationId } from "../../workflow/identity.js"
@@ -7,7 +14,7 @@ import { describeJournalEvent } from "../../workflow/registry/event-descriptor.j
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
-import { HashMap, HashSet, Match, Option } from "effect"
+import { HashMap, HashSet, Option } from "effect"
 import {
   duplicateUnfinishedTaskAttemptIssue,
   type InvalidWorkflowJournalHistory,
@@ -16,7 +23,6 @@ import {
   WorkflowJournalHistorySemanticIssue,
   type ValidWorkflowJournalHistory
 } from "./history-result.js"
-import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { advanceReconstructedRunState, reconstructValidatedRunState } from "./reduce.js"
 import type { ReconstructedRunState } from "./state.js"
 import { runGraphTaskFactsOutcome } from "../frontier/run-finality.js"
@@ -39,14 +45,12 @@ import { ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracke
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import { evaluatePlannedAttemptContinuationAuthorization } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
 import {
+  currentUnconsumedAcceptedSafeEvidence,
   latestPlannedAttemptExecutorEvidence,
   latestUnsettledPlannedAttemptExecutorCommand,
   plannedAttemptExecutorEvidence
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
-import {
-  defaultPlannedAttemptExecutorContinuationLimit,
-  defaultPlannedAttemptExecutorSuspensionLimit
-} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import { defaultPlannedAttemptExecutorSuspensionLimit } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { authorizedClaimForAttempt } from "../../workflow/claim-authority-history.js"
 import {
   validateIntegrationFinalityHistoryRecord,
@@ -58,6 +62,8 @@ import {
   sameAttemptChoiceSubject
 } from "../../workflow/protocols/attempt-choice/events.js"
 import { reconstructedTaskGraphFromEvents } from "./graph-knowledge.js"
+import { claimReadMatchesTarget, exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
+import { hasLaterCompleteObservation } from "../../workflow-journal/run-termination-freshness.js"
 import { recordedTaskAttemptPlanFor } from "../../workflow/protocols/task-attempt-planning/journal-evidence.js"
 import { exactTaskIdSetKey, taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { restartAuthorityReadOperationMatches } from "../../workflow/protocols/attempt-choice/replacement-events.js"
@@ -67,6 +73,8 @@ import {
   type RestartApplicationRecord
 } from "../../workflow/protocols/attempt-choice/restart-authority.js"
 import { validateCancelledAttemptHistory } from "./cancelled-attempt-history.js"
+import { appliedTerminalChoiceFor } from "../../workflow/protocols/attempt-choice/terminal-choice-authority.js"
+import { plannedAttemptExecutorLifecycleTransitionError } from "../../workflow/protocols/planned-attempt-executor-work/report-acceptance.js"
 
 const finalArrayElementOffset = -1
 
@@ -135,7 +143,6 @@ const emptyIntegrationFinalityHistoryIndexes = (): IntegrationFinalityHistoryInd
 
 const emptyIndexes = (): FoldIndexes => ({
   acceptedExecutorResults: HashMap.empty(),
-  acceptedExecutorResultPositions: HashMap.empty(),
   abandonedExecutorAttempts: HashSet.empty(),
   attemptChoiceSubjects: HashSet.empty(),
   executorCommandOrdinals: HashMap.empty(),
@@ -158,7 +165,6 @@ const emptyIndexes = (): FoldIndexes => ({
   integratorRunResults: HashMap.empty(),
   integratorRunCandidateGitReadIntents: HashMap.empty(),
   integratorRunCandidateGitObservations: HashMap.empty(),
-  firstRestartChoiceAppliedAt: HashMap.empty(),
   targetPromotionHistory: emptyTargetPromotionHistoryIndexes(),
   integrationFinalityHistory: emptyIntegrationFinalityHistoryIndexes(),
   latestControlDirectionOrdinal: 0,
@@ -306,23 +312,22 @@ const validateAttemptChoiceAuthority = (
       `attempt-choice request ${record.event.requestId.nonce} has no prior matching planned attempt`
     )
   }
-  const latestReport = latestPlannedAttemptExecutorEvidence(prior, subject.plannedAttempt)
-  const executorIsSafelySuspended = () =>
-    latestReport?.report._tag === "SafelySuspended" &&
-    latestUnsettledPlannedAttemptExecutorCommand(prior, subject.plannedAttempt) === undefined
-  if (!executorIsSafelySuspended()) {
+  if (currentUnconsumedAcceptedSafeEvidence(prior, subject.plannedAttempt) === undefined) {
     semanticIssue(
       issues,
       runId,
       record.position,
-      `attempt-choice request ${record.event.requestId.nonce} requires a latest exact safely-suspended executor report`
+      `attempt-choice request ${record.event.requestId.nonce} requires the latest accepted safely-suspended executor report`
     )
   }
+  const immutableRunTarget = exactWorkflowRunTargetFor(prior)
   const latestSpecification = prior.findLast(
     ({ event }) =>
+      immutableRunTarget !== undefined &&
       event._tag === "TaskTrackerFactsObserved" &&
       event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
-      event.observation.factFamily.taskId === subject.plannedAttempt.taskId
+      event.observation.factFamily.taskId === subject.plannedAttempt.taskId &&
+      taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
   )?.event
   const specificationMatches = () =>
     latestSpecification?._tag === "TaskTrackerFactsObserved" &&
@@ -393,6 +398,20 @@ const validateAttemptChoice = (
       `attempt-choice request ${record.event.requestId.nonce} follows the terminal Stop direction for the same attempt`
     )
   }
+  const priorRestart = prior.find(
+    ({ event }) =>
+      event._tag === "AttemptChoiceApplied" &&
+      event.choice === "RestartTaskImplementation" &&
+      plannedTaskAttemptEquivalence(event.subject.plannedAttempt, subject.plannedAttempt)
+  )
+  if (record.event.choice === "ContinueExistingAttempt" && priorRestart !== undefined) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `Continue request ${record.event.requestId.nonce} follows the terminal Restart direction for the same attempt`
+    )
+  }
   const subjectKey = attemptChoiceSubjectKey(subject)
   if (HashSet.has(indexes.attemptChoiceSubjects, subjectKey)) {
     semanticIssue(
@@ -402,18 +421,7 @@ const validateAttemptChoice = (
       `attempt-choice request ${record.event.requestId.nonce} follows the winning direction for the same fingerprint pair`
     )
   }
-  const withSubject = { ...indexes, attemptChoiceSubjects: HashSet.add(indexes.attemptChoiceSubjects, subjectKey) }
-  return record.event.choice === "RestartTaskImplementation" &&
-    !HashMap.has(withSubject.firstRestartChoiceAppliedAt, subject.plannedAttempt.attemptId)
-    ? {
-        ...withSubject,
-        firstRestartChoiceAppliedAt: HashMap.set(
-          withSubject.firstRestartChoiceAppliedAt,
-          subject.plannedAttempt.attemptId,
-          record.position
-        )
-      }
-    : withSubject
+  return { ...indexes, attemptChoiceSubjects: HashSet.add(indexes.attemptChoiceSubjects, subjectKey) }
 }
 
 const matchingAppliedStop = (
@@ -476,14 +484,18 @@ const matchingAbandonmentForAppliedStop = (
 const latestFocusedClaimObservationAfter = (
   prior: ReadonlyArray<JournalRecord>,
   baselinePosition: JournalPosition,
-  taskId: TaskId
+  taskId: TaskId,
+  immutableRunTarget: ReturnType<typeof exactWorkflowRunTargetFor>
 ) =>
   prior.findLast(
     ({ event, position }) =>
       position > baselinePosition &&
+      immutableRunTarget !== undefined &&
       event._tag === "TaskTrackerFactsObserved" &&
-      event.observation._tag === "FocusedTaskClaimFacts" &&
-      event.observation.coverage.taskId === taskId
+      (event.observation._tag === "FocusedTaskClaimFacts" ||
+        event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+      event.observation.coverage.taskId === taskId &&
+      taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
   )
 
 const matchingFocusedClaimReadIntentAfter = (
@@ -537,17 +549,8 @@ const proofEvidenceFor = (
   plannedAttempt: PlannedTaskAttempt,
   proof: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptImplementationAbandoned" }>["proof"]
 ) =>
-  plannedAttemptExecutorEvidence(prior, plannedAttempt).find((evidence) =>
-    Match.valueTags(proof, {
-      CommandResponse: ({ reportOrdinal }) =>
-        evidence.source._tag === "CommandResponse" && evidence.source.ordinal === reportOrdinal,
-      CommandProjection: ({ commandOrdinal, projectionOrdinal }) =>
-        evidence.source._tag === "CommandProjection" &&
-        evidence.source.commandOrdinal === commandOrdinal &&
-        evidence.source.projectionOrdinal === projectionOrdinal,
-      StateProjection: ({ observationOrdinal }) =>
-        evidence.source._tag === "StateProjection" && evidence.source.ordinal === observationOrdinal
-    })
+  plannedAttemptExecutorEvidence(prior, plannedAttempt).find(
+    (evidence) => evidence.source._tag === "AcceptedReport" && evidence.source.ordinal === proof.reportOrdinal
   )
 
 const sameClaimObservation = (
@@ -568,6 +571,7 @@ const validateAttemptStop = (
 ): FoldIndexes => {
   const event = record.event
   const prior = records.filter(({ position }) => position < record.position)
+  const immutableRunTarget = exactWorkflowRunTargetFor(prior)
   const validateStopEventAuthority = () => {
     if (
       event._tag === "AttemptStoppageIntended" ||
@@ -594,24 +598,15 @@ const validateAttemptStop = (
       const evidenceProvesQuiescence = () =>
         evidence !== undefined &&
         currentEvidence?.observedAt === evidence.observedAt &&
-        (evidence.report._tag === "SafelySuspended" || evidence.report._tag === "Terminal")
+        evidence.report._tag === "ExecutorWorkSafelySuspended"
       if (!evidenceProvesQuiescence()) {
         semanticIssue(
           issues,
           runId,
           record.position,
-          `attempt abandonment for ${event.subject.plannedAttempt.attemptId} requires its exact safe or terminal executor proof`
+          `attempt abandonment for ${event.subject.plannedAttempt.attemptId} requires its exact accepted Safe executor proof`
         )
-      } else if (
-        evidence !== undefined &&
-        prior.some(
-          ({ event: priorEvent, position }) =>
-            position > evidence.observedAt &&
-            priorEvent._tag === "PlannedAttemptExecutorCommandIntended" &&
-            priorEvent.plannedAttempt.runId === event.subject.plannedAttempt.runId &&
-            priorEvent.plannedAttempt.attemptId === event.subject.plannedAttempt.attemptId
-        )
-      ) {
+      } else if (latestUnsettledPlannedAttemptExecutorCommand(prior, event.subject.plannedAttempt) !== undefined) {
         semanticIssue(
           issues,
           runId,
@@ -653,7 +648,8 @@ const validateAttemptStop = (
         const observationRecord = latestFocusedClaimObservationAfter(
           prior,
           baselinePosition,
-          event.subject.plannedAttempt.taskId
+          event.subject.plannedAttempt.taskId,
+          immutableRunTarget
         )
         const observation = observationRecord?.event
         const findObservationIntent = () =>
@@ -667,11 +663,22 @@ const validateAttemptStop = (
               )
             : undefined
         const observationIntent = findObservationIntent()
+        const observationReadMatchesRunTarget =
+          observationRecord !== undefined &&
+          claimReadMatchesTarget(
+            prior,
+            event.observationOperationId,
+            event.subject.plannedAttempt.taskId,
+            baselinePosition,
+            observationRecord.position,
+            immutableRunTarget
+          )
         const observationMatches = () =>
           observation?._tag !== "TaskTrackerFactsObserved" ||
           observation.observation._tag !== "FocusedTaskClaimFacts" ||
           observation.operationId !== event.observationOperationId ||
           observationIntent?._tag !== "TaskTrackerReadIntentRecorded" ||
+          !observationReadMatchesRunTarget ||
           !sameClaimObservation(observation.observation.observation, event.observation)
         if (observationMatches()) {
           semanticIssue(
@@ -769,18 +776,28 @@ const validateAttemptStop = (
           const observationRecord = latestFocusedClaimObservationAfter(
             prior,
             abandonment.position,
-            appliedStop.event.subject.plannedAttempt.taskId
+            appliedStop.event.subject.plannedAttempt.taskId,
+            immutableRunTarget
           )
           const observation = observationRecord?.event
           const findObservationIntent = () =>
             observationRecord?.event._tag === "TaskTrackerFactsObserved"
-              ? matchingFocusedClaimReadIntentAfter(
+              ? claimReadMatchesTarget(
                   prior,
+                  authority.observationOperationId,
+                  appliedStop.event.subject.plannedAttempt.taskId,
                   abandonment.position,
-                  observationRecord.event.operationId,
                   observationRecord.position,
-                  appliedStop.event.subject.plannedAttempt.taskId
+                  immutableRunTarget
                 )
+                ? matchingFocusedClaimReadIntentAfter(
+                    prior,
+                    abandonment.position,
+                    observationRecord.event.operationId,
+                    observationRecord.position,
+                    appliedStop.event.subject.plannedAttempt.taskId
+                  )
+                : undefined
               : undefined
           const observationIntent = findObservationIntent()
           const observationContradicts = () =>
@@ -1237,6 +1254,7 @@ const replacementReadIntentsAreFreshAndExact = (
   const worktree = freshReplacementGitReadIntent(prior, witness.oldWorktreeObservationOperationId, applicationPosition)
   const target = freshReplacementGitReadIntent(prior, witness.targetLineageObservationOperationId, applicationPosition)
   const began = prior.find(({ event: candidate }) => candidate._tag === "WorkflowRunBegan")?.event
+  /* v8 ignore next -- @preserve An accepted PlannedAttemptReplaced history is anchored to the prior WorkflowRunBegan authority. */
   if (began?._tag !== "WorkflowRunBegan") return false
   const trackerTarget = taskTrackerTargetKey(began.target)
   return [
@@ -1503,8 +1521,10 @@ const plannedAttemptReplacementFactsAreExact = (
   const event = record.event
   const { plannedAttempt } = event.subject
   const { witness } = event
+  const immutableRunTarget = exactWorkflowRunTargetFor(prior)
+  if (immutableRunTarget === undefined) return false
   return [
-    !restartChoiceWasInvalidatedByLaterSpecification(prior, application.position, event.subject),
+    !restartChoiceWasInvalidatedByLaterSpecification(prior, application.position, event.subject, immutableRunTarget),
     replacementPreservesPriorResources(prior, plannedAttempt, witness, application.position),
     replacementReadIntentsAreFreshAndExact(prior, event, application.position),
     replacementGraphIsExact(prior, plannedAttempt, witness.graphObservationOperationId, application.position),
@@ -1556,42 +1576,26 @@ export const replacementFollowsIntegrationCutoff = (
 
 type ReplacementQuiescenceEvidence = NonNullable<ReturnType<typeof proofEvidenceFor>>
 
-export const replacementProofIsSafeOrLateAccepted = (
-  proof: ReplacementQuiescenceEvidence,
-  applicationPosition: JournalPosition
-): boolean => {
-  if (proof.report._tag === "SafelySuspended") return true
-  if (proof.report._tag !== "Terminal") return false
-  return [proof.report.result._tag === "Accepted", proof.observedAt > applicationPosition].every(Boolean)
-}
+export const replacementProofIsAcceptedSafe = (proof: ReplacementQuiescenceEvidence): boolean =>
+  proof.report._tag === "ExecutorWorkSafelySuspended"
 
-const replacementProofHasNoLaterCommand = (
+const replacementHasNoUnsettledCommand = (
   prior: ReadonlyArray<JournalRecord>,
-  plannedAttempt: PlannedTaskAttempt,
-  proof: ReplacementQuiescenceEvidence
-): boolean =>
-  !prior.some(({ event, position }) => {
-    if (event._tag !== "PlannedAttemptExecutorCommandIntended") return false
-    return [
-      position > proof.observedAt,
-      event.plannedAttempt.runId === plannedAttempt.runId,
-      event.plannedAttempt.attemptId === plannedAttempt.attemptId
-    ].every(Boolean)
-  })
+  plannedAttempt: PlannedTaskAttempt
+): boolean => latestUnsettledPlannedAttemptExecutorCommand(prior, plannedAttempt) === undefined
 
 const replacementQuiescenceIsCurrent = (
   prior: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
-  quiescenceProof: PlannedAttemptReplacementRecord["event"]["witness"]["quiescenceProof"],
-  applicationPosition: JournalPosition
+  quiescenceProof: PlannedAttemptReplacementRecord["event"]["witness"]["quiescenceProof"]
 ): boolean => {
   const proof = proofEvidenceFor(prior, plannedAttempt, quiescenceProof)
   if (proof === undefined) return false
   const latestEvidence = latestPlannedAttemptExecutorEvidence(prior, plannedAttempt)
   return [
     latestEvidence?.observedAt === proof.observedAt,
-    replacementProofHasNoLaterCommand(prior, plannedAttempt, proof),
-    replacementProofIsSafeOrLateAccepted(proof, applicationPosition)
+    replacementHasNoUnsettledCommand(prior, plannedAttempt),
+    replacementProofIsAcceptedSafe(proof)
   ].every(Boolean)
 }
 
@@ -1633,12 +1637,12 @@ const validatePlannedAttemptReplacement = (
   if (replacementFollowsIntegrationCutoff(prior, priorAttempt)) {
     semanticIssue(issues, runId, record.position, "PlannedAttemptReplaced follows the exact integration-start cutoff")
   }
-  if (!replacementQuiescenceIsCurrent(prior, priorAttempt, event.witness.quiescenceProof, applied.position)) {
+  if (!replacementQuiescenceIsCurrent(prior, priorAttempt, event.witness.quiescenceProof)) {
     semanticIssue(
       issues,
       runId,
       record.position,
-      "PlannedAttemptReplaced requires current unbroken safe suspension or a late Accepted terminal report"
+      "PlannedAttemptReplaced requires current unbroken accepted Safe suspension"
     )
   }
   if (!plannedAttemptReplacementFactsAreExact({ ...record, event }, prior, applied)) {
@@ -1823,9 +1827,621 @@ const validateTrackerObservation = (
   }
 }
 
+type ExecutorCommandIntentEvent = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: "PlannedAttemptExecutorCommandIntended" }
+>
+
+const validateExecutorCommandIdentityAndOrdinal = (
+  event: ExecutorCommandIntentEvent,
+  record: JournalRecord,
+  runId: RunId,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): FoldIndexes => {
+  const attemptId = event.plannedAttempt.attemptId
+  const responsibility = mapGet(indexes.executorResponsibilitiesBegan, attemptId)
+  if (
+    responsibility === undefined ||
+    !plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
+  ) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor command for attempt ${attemptId} has no prior matching executor-work responsibility`
+    )
+  }
+  const expectedOrdinal = (mapGet(indexes.executorCommandOrdinals, attemptId) ?? 0) + 1
+  if (event.ordinal !== expectedOrdinal) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor command for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
+    )
+  }
+  return { ...indexes, executorCommandOrdinals: HashMap.set(indexes.executorCommandOrdinals, attemptId, event.ordinal) }
+}
+
+const recordExecutorCommandCount = (
+  event: ExecutorCommandIntentEvent,
+  record: JournalRecord,
+  runId: RunId,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): FoldIndexes => {
+  const attemptId = event.plannedAttempt.attemptId
+  const commandCountKey = `${attemptId}:${event.command}`
+  const commandCount = (mapGet(indexes.executorCommandCountsSinceSafeSuspension, commandCountKey) ?? 0) + 1
+  if (event.command === "Suspend" && commandCount > defaultPlannedAttemptExecutorSuspensionLimit) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor ${event.command} command for attempt ${attemptId} exceeds durable limit ${defaultPlannedAttemptExecutorSuspensionLimit}`
+    )
+  }
+  return {
+    ...indexes,
+    executorCommandCountsSinceSafeSuspension: HashMap.set(
+      indexes.executorCommandCountsSinceSafeSuspension,
+      commandCountKey,
+      commandCount
+    )
+  }
+}
+
+const priorExecutorCommands = (
+  records: ReadonlyArray<JournalRecord>,
+  event: ExecutorCommandIntentEvent,
+  before: JournalPosition
+) =>
+  records.filter(
+    (candidate) =>
+      candidate.position < before &&
+      candidate.event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      candidate.event.plannedAttempt.attemptId === event.plannedAttempt.attemptId
+  )
+
+const validateExecutorBeginUniqueness = (
+  event: ExecutorCommandIntentEvent,
+  record: JournalRecord,
+  runId: RunId,
+  priorCommands: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (event.command !== "Begin") return
+  const began = priorCommands.some(
+    (candidate) =>
+      candidate.event._tag === "PlannedAttemptExecutorCommandIntended" && candidate.event.command === "Begin"
+  )
+  if (began) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor begin for attempt ${event.plannedAttempt.attemptId} follows a prior begin intent`
+    )
+  }
+}
+
+const validateExecutorResumeAuthority = (
+  event: ExecutorCommandIntentEvent,
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (event.command !== "Resume") return
+  const attemptId = event.plannedAttempt.attemptId
+  const priorTerminalChoice = appliedTerminalChoiceFor(
+    records.filter(({ position }) => position < record.position),
+    event.plannedAttempt
+  )
+  if (priorTerminalChoice !== undefined) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor resume for attempt ${attemptId} follows terminal choice ${priorTerminalChoice.event.requestId.nonce}`
+    )
+  }
+  const priorRecords = records.filter(({ position }) => position < record.position)
+  if (currentUnconsumedAcceptedSafeEvidence(priorRecords, event.plannedAttempt) === undefined) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor resume for attempt ${attemptId} lacks an unconsumed accepted safe suspension`
+    )
+  }
+}
+
+const validateExecutorSuspendAuthority = (
+  event: ExecutorCommandIntentEvent,
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (event.command !== "Suspend") return
+  const priorRecords = records.filter(({ position }) => position < record.position)
+  const latestEvidence = latestPlannedAttemptExecutorEvidence(priorRecords, event.plannedAttempt)
+  if (latestEvidence?.source._tag === "AcceptedReport" && latestEvidence.report._tag === "ExecutorWorkExecuting") {
+    return
+  }
+  semanticIssue(
+    issues,
+    runId,
+    record.position,
+    `executor Suspend for attempt ${event.plannedAttempt.attemptId} lacks latest accepted executing-work authority`
+  )
+}
+
+const recordUnsettledExecutorCommand = (
+  event: ExecutorCommandIntentEvent,
+  record: JournalRecord,
+  runId: RunId,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): FoldIndexes => {
+  const attemptId = event.plannedAttempt.attemptId
+  if (HashMap.has(indexes.unsettledExecutorCommands, attemptId)) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor command for attempt ${attemptId} follows an unmatched prior command intent`
+    )
+  }
+  if (HashSet.has(indexes.terminalExecutorAttempts, attemptId)) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor command follows the terminal result for attempt ${attemptId}`
+    )
+  }
+  return {
+    ...indexes,
+    unsettledExecutorCommands: HashMap.set(indexes.unsettledExecutorCommands, attemptId, event.ordinal)
+  }
+}
+
+const validateExecutorCommandIntent = (
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): FoldIndexes => {
+  if (record.event._tag !== "PlannedAttemptExecutorCommandIntended") return indexes
+  const event = record.event
+  const priorCommands = priorExecutorCommands(records, event, record.position)
+  const withIdentity = validateExecutorCommandIdentityAndOrdinal(event, record, runId, indexes, issues)
+  const withCount = recordExecutorCommandCount(event, record, runId, withIdentity, issues)
+  validateExecutorBeginUniqueness(event, record, runId, priorCommands, issues)
+  validateExecutorResumeAuthority(event, record, runId, records, issues)
+  validateExecutorSuspendAuthority(event, record, runId, records, issues)
+  return recordUnsettledExecutorCommand(event, record, runId, withCount, issues)
+}
+
+type ExecutorStateObservedEvent = Extract<
+  WorkflowJournalEvent,
+  { readonly _tag: "PlannedAttemptExecutorStateObserved" }
+>
+type ExecutorLifecycleTransitionObservation = Extract<
+  ExecutorStateObservedEvent["observation"],
+  { readonly _tag: "ExecutorLifecycleTransitionContradiction" }
+>
+
+const executorReportMatchesAttempt = (
+  report: ExecutorLifecycleTransitionObservation["accepted"],
+  event: ExecutorStateObservedEvent
+): boolean =>
+  report.correlation.runId === event.plannedAttempt.runId &&
+  report.correlation.attemptId === event.plannedAttempt.attemptId
+
+const isRecognizedExecutorLifecycleContradiction = (observation: ExecutorLifecycleTransitionObservation): boolean =>
+  !samePlannedAttemptExecutorReport(observation.accepted, observation.observed) &&
+  (observation.accepted._tag === "ExecutorWorkTerminal" ||
+    (observation.accepted._tag === "ExecutorWorkExecuting" &&
+      observation.observed._tag === "ExecutorWorkSafelySuspended") ||
+    (observation.accepted._tag === "ExecutorWorkSafelySuspended" &&
+      observation.observed._tag === "ExecutorWorkExecuting"))
+
+const validateExecutorLifecycleContradictionCorrelations = (
+  observation: ExecutorLifecycleTransitionObservation,
+  event: ExecutorStateObservedEvent,
+  record: JournalRecord,
+  runId: RunId,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (
+    executorReportMatchesAttempt(observation.accepted, event) &&
+    executorReportMatchesAttempt(observation.observed, event)
+  ) {
+    return
+  }
+  identityIssue(
+    issues,
+    runId,
+    record.position,
+    `executor lifecycle transition contradiction for attempt ${event.plannedAttempt.attemptId} contains a contradictory correlation`
+  )
+}
+
+const validateExecutorLifecycleContradictionLatestAccepted = (
+  observation: ExecutorLifecycleTransitionObservation,
+  event: ExecutorStateObservedEvent,
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  const latestAccepted = records.findLast(
+    (candidate) =>
+      candidate.position < record.position &&
+      candidate.event._tag === "PlannedAttemptExecutorWorkReported" &&
+      candidate.event.report.correlation.runId === event.plannedAttempt.runId &&
+      candidate.event.report.correlation.attemptId === event.plannedAttempt.attemptId
+  )?.event
+  if (
+    latestAccepted?._tag === "PlannedAttemptExecutorWorkReported" &&
+    samePlannedAttemptExecutorReport(latestAccepted.report, observation.accepted)
+  ) {
+    return
+  }
+  semanticIssue(
+    issues,
+    runId,
+    record.position,
+    `executor lifecycle transition contradiction for attempt ${event.plannedAttempt.attemptId} does not name its latest accepted report`
+  )
+}
+
+const validateExecutorLifecycleContradictionShape = (
+  observation: ExecutorLifecycleTransitionObservation,
+  event: ExecutorStateObservedEvent,
+  record: JournalRecord,
+  runId: RunId,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (isRecognizedExecutorLifecycleContradiction(observation)) return
+  semanticIssue(
+    issues,
+    runId,
+    record.position,
+    `executor lifecycle transition contradiction for attempt ${event.plannedAttempt.attemptId} does not contain a contradictory lifecycle transition`
+  )
+}
+
+const validateExecutorLifecycleTransitionContradiction = (
+  event: ExecutorStateObservedEvent,
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (event.observation._tag !== "ExecutorLifecycleTransitionContradiction") return
+  const observation = event.observation
+  validateExecutorLifecycleContradictionCorrelations(observation, event, record, runId, issues)
+  validateExecutorLifecycleContradictionLatestAccepted(observation, event, record, runId, records, issues)
+  validateExecutorLifecycleContradictionShape(observation, event, record, runId, issues)
+}
+
+const validateExecutorInitialReportCausalityContradiction = (
+  event: ExecutorStateObservedEvent,
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (event.observation._tag !== "ExecutorInitialReportCausalityContradiction") return
+  const observation = event.observation
+  if (!executorReportMatchesAttempt(observation.observed, event)) {
+    identityIssue(
+      issues,
+      runId,
+      record.position,
+      `executor initial-report causality contradiction for attempt ${event.plannedAttempt.attemptId} contains a contradictory correlation`
+    )
+    return
+  }
+  const priorRecords = records.filter(({ position }) => position < record.position)
+  if (
+    plannedAttemptExecutorLifecycleTransitionError(priorRecords, event.plannedAttempt, observation.observed)?._tag ===
+    "PlannedAttemptExecutorInitialReportCausalityContradiction"
+  ) {
+    return
+  }
+  semanticIssue(
+    issues,
+    runId,
+    record.position,
+    `executor initial-report causality contradiction for attempt ${event.plannedAttempt.attemptId} does not describe a missing exact Begin settlement`
+  )
+}
+
+const validateExactExecutorStateObservation = (
+  event: ExecutorStateObservedEvent,
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (event.observation._tag !== "ExactExecutorReport") return
+  const priorRecords = records.filter(({ position }) => position < record.position)
+  const contradiction = plannedAttemptExecutorLifecycleTransitionError(
+    priorRecords,
+    event.plannedAttempt,
+    event.observation.report
+  )
+  if (contradiction === undefined) return
+  semanticIssue(
+    issues,
+    runId,
+    record.position,
+    `exact executor state observation for attempt ${event.plannedAttempt.attemptId} violates ${contradiction._tag}`
+  )
+}
+
+type ExecutorWorkReportedEvent = Extract<WorkflowJournalEvent, { readonly _tag: "PlannedAttemptExecutorWorkReported" }>
+
+const latestUnacceptedExecutorEvidenceFor = (
+  records: ReadonlyArray<JournalRecord>,
+  record: JournalRecord,
+  priorAcceptedPosition: JournalPosition | undefined,
+  attemptId: AttemptId
+): JournalRecord | undefined =>
+  records.findLast((candidate) => {
+    if (
+      candidate.position >= record.position ||
+      (priorAcceptedPosition !== undefined && candidate.position <= priorAcceptedPosition)
+    ) {
+      return false
+    }
+    const event = candidate.event
+    return (
+      (event._tag === "PlannedAttemptExecutorCommandResponseObserved" ||
+        event._tag === "PlannedAttemptExecutorCommandResponseContradicted" ||
+        event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+        event._tag === "PlannedAttemptExecutorStateObserved") &&
+      event.plannedAttempt.attemptId === attemptId
+    )
+  })
+
+const executorReportFromEvidenceRecord = (record: JournalRecord | undefined) => {
+  if (record === undefined) return undefined
+  const event = record.event
+  if (event._tag === "PlannedAttemptExecutorCommandResponseObserved") return event.report
+  if (event._tag === "PlannedAttemptExecutorCommandProjectionObserved") {
+    return event.observation._tag === "ExactExecutorReport" ? event.observation.report : undefined
+  }
+  if (event._tag === "PlannedAttemptExecutorStateObserved") {
+    return event.observation._tag === "ExactExecutorReport" ? event.observation.report : undefined
+  }
+  return undefined
+}
+
+const validateExecutorWorkReportIdentityAndOrdinal = (
+  event: ExecutorWorkReportedEvent,
+  record: JournalRecord,
+  runId: RunId,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): FoldIndexes => {
+  const attemptId = event.report.correlation.attemptId
+  const responsibility = mapGet(indexes.executorResponsibilitiesBegan, attemptId)
+  if (responsibility === undefined || event.report.correlation.runId !== responsibility.plannedAttempt.runId) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor report for attempt ${attemptId} has no prior matching executor-work responsibility`
+    )
+  }
+  const expectedOrdinal = (mapGet(indexes.executorReportOrdinals, attemptId) ?? 0) + 1
+  if (event.ordinal !== expectedOrdinal) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor report for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
+    )
+  }
+  return { ...indexes, executorReportOrdinals: HashMap.set(indexes.executorReportOrdinals, attemptId, event.ordinal) }
+}
+
+const validateExecutorWorkReportEvidence = (
+  event: ExecutorWorkReportedEvent,
+  record: JournalRecord,
+  runId: RunId,
+  latestUnacceptedEvidence: JournalRecord | undefined,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  const evidenceReport = executorReportFromEvidenceRecord(latestUnacceptedEvidence)
+  if (evidenceReport === undefined || !samePlannedAttemptExecutorReport(evidenceReport, event.report)) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor report for attempt ${event.report.correlation.attemptId} lacks a matching unaccepted command response or observation`
+    )
+  }
+}
+
+const causalExecutorCommandOrdinal = (record: JournalRecord | undefined) => {
+  const event = record?.event
+  return event?._tag === "PlannedAttemptExecutorCommandResponseObserved" ||
+    event?._tag === "PlannedAttemptExecutorCommandProjectionObserved"
+    ? event.commandOrdinal
+    : undefined
+}
+
+const isMatchingCausalResume = (
+  candidate: JournalRecord,
+  evidencePosition: JournalPosition,
+  priorAcceptedPosition: JournalPosition,
+  event: ExecutorWorkReportedEvent,
+  commandOrdinal: number
+): boolean =>
+  candidate.position < evidencePosition &&
+  candidate.position > priorAcceptedPosition &&
+  candidate.event._tag === "PlannedAttemptExecutorCommandIntended" &&
+  candidate.event.command === "Resume" &&
+  candidate.event.ordinal === commandOrdinal &&
+  candidate.event.plannedAttempt.runId === event.report.correlation.runId &&
+  candidate.event.plannedAttempt.attemptId === event.report.correlation.attemptId
+
+const isSafeToExecutingTransition = (
+  priorAccepted: JournalRecord | undefined,
+  event: ExecutorWorkReportedEvent
+): priorAccepted is JournalRecord & { readonly event: ExecutorWorkReportedEvent } =>
+  priorAccepted?.event._tag === "PlannedAttemptExecutorWorkReported" &&
+  priorAccepted.event.report._tag === "ExecutorWorkSafelySuspended" &&
+  event.report._tag === "ExecutorWorkExecuting"
+
+const validateSafeToExecutingCausality = (
+  event: ExecutorWorkReportedEvent,
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  priorAccepted: JournalRecord | undefined,
+  latestUnacceptedEvidence: JournalRecord | undefined,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (!isSafeToExecutingTransition(priorAccepted, event)) return
+  const commandOrdinal = causalExecutorCommandOrdinal(latestUnacceptedEvidence)
+  const evidencePosition = latestUnacceptedEvidence?.position ?? record.position
+  const resumeCommand =
+    commandOrdinal === undefined
+      ? undefined
+      : records.findLast((candidate) =>
+          isMatchingCausalResume(candidate, evidencePosition, priorAccepted.position, event, commandOrdinal)
+        )
+  if (resumeCommand === undefined) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor lifecycle transition from accepted safe suspension to executing for attempt ${event.report.correlation.attemptId} requires its matching Resume command response or projection`
+    )
+  }
+}
+
+const validateExecutorLifecycleAcceptance = (
+  event: ExecutorWorkReportedEvent,
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt | undefined,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  if (plannedAttempt === undefined) return
+  const priorRecords = records.filter(({ position }) => position < record.position)
+  const contradiction = plannedAttemptExecutorLifecycleTransitionError(priorRecords, plannedAttempt, event.report)
+  if (contradiction === undefined) return
+  semanticIssue(
+    issues,
+    runId,
+    record.position,
+    `executor lifecycle report for attempt ${event.report.correlation.attemptId} violates ${contradiction._tag}`
+  )
+}
+
+const validateExecutorReportFinality = (
+  event: ExecutorWorkReportedEvent,
+  record: JournalRecord,
+  runId: RunId,
+  priorAccepted: JournalRecord | undefined,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): void => {
+  const attemptId = event.report.correlation.attemptId
+  if (
+    priorAccepted?.event._tag === "PlannedAttemptExecutorWorkReported" &&
+    samePlannedAttemptExecutorReport(priorAccepted.event.report, event.report)
+  ) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor report for attempt ${attemptId} repeats an unchanged lifecycle report`
+    )
+  }
+  if (HashSet.has(indexes.terminalExecutorAttempts, attemptId)) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor report follows the terminal result for attempt ${attemptId}`
+    )
+  }
+}
+
+const recordExecutorWorkReportOutcome = (event: ExecutorWorkReportedEvent, indexes: FoldIndexes): FoldIndexes => {
+  const attemptId = event.report.correlation.attemptId
+  if (event.report._tag === "ExecutorWorkTerminal") {
+    const terminal = { ...indexes, terminalExecutorAttempts: HashSet.add(indexes.terminalExecutorAttempts, attemptId) }
+    return event.report.result._tag === "Accepted"
+      ? {
+          ...terminal,
+          acceptedExecutorResults: HashMap.set(
+            terminal.acceptedExecutorResults,
+            attemptId,
+            event.report.result.acceptedResult
+          )
+        }
+      : terminal
+  }
+  return event.report._tag === "ExecutorWorkSafelySuspended"
+    ? {
+        ...indexes,
+        executorCommandCountsSinceSafeSuspension: HashMap.remove(
+          indexes.executorCommandCountsSinceSafeSuspension,
+          `${attemptId}:Suspend`
+        )
+      }
+    : indexes
+}
+
+const validateExecutorWorkReport = (
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): FoldIndexes => {
+  if (record.event._tag !== "PlannedAttemptExecutorWorkReported") return indexes
+  const event = record.event
+  const attemptId = event.report.correlation.attemptId
+  const responsibility = mapGet(indexes.executorResponsibilitiesBegan, attemptId)
+  const withOrdinal = validateExecutorWorkReportIdentityAndOrdinal(event, record, runId, indexes, issues)
+  const priorAccepted = records.findLast(
+    (candidate) =>
+      candidate.position < record.position &&
+      candidate.event._tag === "PlannedAttemptExecutorWorkReported" &&
+      candidate.event.report.correlation.attemptId === attemptId
+  )
+  const latestUnacceptedEvidence = latestUnacceptedExecutorEvidenceFor(
+    records,
+    record,
+    priorAccepted?.position,
+    attemptId
+  )
+  validateExecutorWorkReportEvidence(event, record, runId, latestUnacceptedEvidence, issues)
+  validateExecutorLifecycleAcceptance(event, record, runId, records, responsibility?.plannedAttempt, issues)
+  validateSafeToExecutingCausality(event, record, runId, records, priorAccepted, latestUnacceptedEvidence, issues)
+  validateExecutorReportFinality(event, record, runId, priorAccepted, withOrdinal, issues)
+  return recordExecutorWorkReportOutcome(event, withOrdinal)
+}
+
 const validateExecutorEvent = (
   record: JournalRecord,
   runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
 ): FoldIndexes => {
@@ -1881,78 +2497,6 @@ const validateExecutorEvent = (
             position: record.position
           })
         }
-      }
-    }
-  }
-  const validateCommandIntent = () => {
-    if (event._tag === "PlannedAttemptExecutorCommandIntended") {
-      const attemptId = event.plannedAttempt.attemptId
-      const responsibility = mapGet(next.executorResponsibilitiesBegan, attemptId)
-      const responsibilityMatches = () =>
-        responsibility !== undefined &&
-        plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
-      if (!responsibilityMatches()) {
-        semanticIssue(
-          issues,
-          runId,
-          record.position,
-          `executor command for attempt ${attemptId} has no prior matching executor-work responsibility`
-        )
-      }
-      const expectedCommandOrdinal = () => (mapGet(next.executorCommandOrdinals, attemptId) ?? 0) + 1
-      const expectedOrdinal = expectedCommandOrdinal()
-      if (event.ordinal !== expectedOrdinal) {
-        semanticIssue(
-          issues,
-          runId,
-          record.position,
-          `executor command for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
-        )
-      }
-      next = { ...next, executorCommandOrdinals: HashMap.set(next.executorCommandOrdinals, attemptId, event.ordinal) }
-      const commandCountKey = `${attemptId}:${event.command}`
-      const nextCommandCount = () => (mapGet(next.executorCommandCountsSinceSafeSuspension, commandCountKey) ?? 0) + 1
-      const commandCount = nextCommandCount()
-      next = {
-        ...next,
-        executorCommandCountsSinceSafeSuspension: HashMap.set(
-          next.executorCommandCountsSinceSafeSuspension,
-          commandCountKey,
-          commandCount
-        )
-      }
-      const commandLimitFor = () =>
-        event.command === "StartOrContinue"
-          ? defaultPlannedAttemptExecutorContinuationLimit
-          : defaultPlannedAttemptExecutorSuspensionLimit
-      const commandLimit = commandLimitFor()
-      if (commandCount > commandLimit) {
-        semanticIssue(
-          issues,
-          runId,
-          record.position,
-          `executor ${event.command} command for attempt ${attemptId} exceeds durable limit ${commandLimit}`
-        )
-      }
-      if (HashMap.has(next.unsettledExecutorCommands, attemptId)) {
-        semanticIssue(
-          issues,
-          runId,
-          record.position,
-          `executor command for attempt ${attemptId} follows an unmatched prior command intent`
-        )
-      }
-      next = {
-        ...next,
-        unsettledExecutorCommands: HashMap.set(next.unsettledExecutorCommands, attemptId, event.ordinal)
-      }
-      if (HashSet.has(next.terminalExecutorAttempts, attemptId)) {
-        semanticIssue(
-          issues,
-          runId,
-          record.position,
-          `executor command follows the terminal result for attempt ${attemptId}`
-        )
       }
     }
   }
@@ -2013,15 +2557,6 @@ const validateExecutorEvent = (
           return
         }
         next = { ...next, unsettledExecutorCommands: HashMap.remove(next.unsettledExecutorCommands, attemptId) }
-        if (report._tag === "SafelySuspended") {
-          next = {
-            ...next,
-            executorCommandCountsSinceSafeSuspension: HashMap.remove(
-              HashMap.remove(next.executorCommandCountsSinceSafeSuspension, `${attemptId}:StartOrContinue`),
-              `${attemptId}:Suspend`
-            )
-          }
-        }
       }
       const validateContradictoryObservation = () => {
         if (event.observation._tag !== "ExecutorReportContradiction") return
@@ -2073,6 +2608,38 @@ const validateExecutorEvent = (
         )
       }
     }
+  }
+  const validateCommandResponse = () => {
+    if (event._tag !== "PlannedAttemptExecutorCommandResponseObserved") return
+    const attemptId = event.plannedAttempt.attemptId
+    const responsibility = mapGet(next.executorResponsibilitiesBegan, attemptId)
+    if (
+      responsibility === undefined ||
+      !plannedTaskAttemptEquivalence(responsibility.plannedAttempt, event.plannedAttempt)
+    ) {
+      semanticIssue(
+        issues,
+        runId,
+        record.position,
+        `executor command response for attempt ${attemptId} has no prior matching executor-work responsibility`
+      )
+    }
+    if (mapGet(next.unsettledExecutorCommands, attemptId) !== event.commandOrdinal) {
+      semanticIssue(
+        issues,
+        runId,
+        record.position,
+        `executor command response for attempt ${attemptId} does not name its unmatched command intent`
+      )
+    }
+    if (
+      event.report.correlation.runId !== event.plannedAttempt.runId ||
+      event.report.correlation.attemptId !== attemptId
+    ) {
+      identityIssue(issues, runId, record.position, `executor command response for attempt ${attemptId} is foreign`)
+      return
+    }
+    next = { ...next, unsettledExecutorCommands: HashMap.remove(next.unsettledExecutorCommands, attemptId) }
   }
   const validateStateObservation = () => {
     if (event._tag === "PlannedAttemptExecutorStateObserved") {
@@ -2138,102 +2705,18 @@ const validateExecutorEvent = (
       }
       validateExactObservationCorrelation()
       validateContradictoryObservationCorrelation()
-      const observedSafeSuspension = () =>
-        event.observation._tag === "ExactExecutorReport" && event.observation.report._tag === "SafelySuspended"
-      if (observedSafeSuspension()) {
-        next = {
-          ...next,
-          executorCommandCountsSinceSafeSuspension: HashMap.remove(
-            HashMap.remove(next.executorCommandCountsSinceSafeSuspension, `${attemptId}:StartOrContinue`),
-            `${attemptId}:Suspend`
-          )
-        }
-      }
+      validateExactExecutorStateObservation(event, record, runId, records, issues)
+      validateExecutorInitialReportCausalityContradiction(event, record, runId, records, issues)
+      validateExecutorLifecycleTransitionContradiction(event, record, runId, records, issues)
     }
-  }
-  const validateWorkReport = () => {
-    if (event._tag !== "PlannedAttemptExecutorWorkReported") return
-    const attemptId = event.report.correlation.attemptId
-    const responsibility = mapGet(next.executorResponsibilitiesBegan, attemptId)
-    if (responsibility === undefined || event.report.correlation.runId !== responsibility.plannedAttempt.runId) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `executor report for attempt ${attemptId} has no prior matching executor-work responsibility`
-      )
-    }
-    const expectedOrdinal = (mapGet(next.executorReportOrdinals, attemptId) ?? 0) + 1
-    if (event.ordinal !== expectedOrdinal) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `executor report for attempt ${attemptId} expected ordinal ${expectedOrdinal}, found ${event.ordinal}`
-      )
-    }
-    next = { ...next, executorReportOrdinals: HashMap.set(next.executorReportOrdinals, attemptId, event.ordinal) }
-    const settleCommandIntent = () => {
-      if (!HashMap.has(next.unsettledExecutorCommands, attemptId)) {
-        semanticIssue(
-          issues,
-          runId,
-          record.position,
-          `executor report for attempt ${attemptId} has no outstanding command intent`
-        )
-      } else {
-        next = { ...next, unsettledExecutorCommands: HashMap.remove(next.unsettledExecutorCommands, attemptId) }
-      }
-    }
-    settleCommandIntent()
-    if (HashSet.has(next.terminalExecutorAttempts, attemptId)) {
-      semanticIssue(
-        issues,
-        runId,
-        record.position,
-        `executor report follows the terminal result for attempt ${attemptId}`
-      )
-    }
-    const recordTerminalOutcome = () => {
-      if (event.report._tag === "Terminal") {
-        next = { ...next, terminalExecutorAttempts: HashSet.add(next.terminalExecutorAttempts, attemptId) }
-        if (event.report.result._tag === "Accepted") {
-          next = {
-            ...next,
-            acceptedExecutorResults: HashMap.set(
-              next.acceptedExecutorResults,
-              attemptId,
-              event.report.result.acceptedResult
-            ),
-            acceptedExecutorResultPositions: HashMap.set(
-              next.acceptedExecutorResultPositions,
-              attemptId,
-              record.position
-            )
-          }
-        }
-      }
-    }
-    const recordSafeSuspension = () => {
-      if (event.report._tag === "SafelySuspended") {
-        next = {
-          ...next,
-          executorCommandCountsSinceSafeSuspension: HashMap.remove(
-            HashMap.remove(next.executorCommandCountsSinceSafeSuspension, `${attemptId}:StartOrContinue`),
-            `${attemptId}:Suspend`
-          )
-        }
-      }
-    }
-    recordTerminalOutcome()
-    recordSafeSuspension()
   }
   validateResponsibilityBegan()
-  validateCommandIntent()
+  next = validateExecutorCommandIntent(record, runId, records, next, issues)
   validateCommandProjection()
+  validateCommandResponse()
   validateCommandResponseContradiction()
   validateStateObservation()
-  validateWorkReport()
+  next = validateExecutorWorkReport(record, runId, records, next, issues)
   return next
 }
 
@@ -2500,6 +2983,7 @@ const terminationGraphFactsFor = (
     lifecycles.lifecycles.map(({ lifecycle, taskId }) => ({
       id: taskId,
       lifecycle,
+      /* v8 ignore next -- @preserve CompleteTaskTrackerFactsObserved rejects any missing prerequisite row for a lifecycle task before this typed fact family reaches terminationGraphFactsFor. */
       prerequisiteIds: prerequisitesByTask.get(taskId) ?? []
     }))
   )
@@ -2557,16 +3041,7 @@ const validateLatestTerminationObservation = (
   terminatedAt: JournalPosition,
   reject: (detail: string) => void
 ): void => {
-  if (
-    records.some(
-      ({ event, position }) =>
-        position > evidence.observedAt &&
-        position < terminatedAt &&
-        event._tag === "TaskTrackerFactsObserved" &&
-        (event.observation._tag === "CompleteTaskTrackerFacts" ||
-          event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
-    )
-  ) {
+  if (hasLaterCompleteObservation(records, evidence, terminatedAt)) {
     reject("termination evidence must use the latest complete graph observation")
   }
 }
@@ -2706,7 +3181,7 @@ const validateRecord = (
   }
   if (!envelope.unique) {
     if (record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-      next = validateExecutorEvent(record, runId, next, issues)
+      next = validateExecutorEvent(record, runId, records, next, issues)
     }
     return next
   }
@@ -2721,7 +3196,7 @@ const validateRecord = (
   validateTaskClaimRelease(record, records, (detail) => identityIssue(issues, runId, record.position, detail))
   validateTrackerObservation(record, runId, records, issues)
   next = validateReconfirmationReference(record, runId, next, issues)
-  next = validateExecutorEvent(record, runId, next, issues)
+  next = validateExecutorEvent(record, runId, records, next, issues)
   next = validateIntegrationHistoryRecord(
     record,
     runId,

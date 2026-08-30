@@ -14,7 +14,7 @@ Run's exact executor suspension reports a conclusive diagnostic while another
 already-admitted owner, produced journal-write flush, and process-local release
 can still make the retained workflow recoverable. Dalph starts these independent
 quick drains concurrently. It starts no replacement attempt, tracker or Git
-reconciliation, later integration phase, executor `startOrContinue` request,
+reconciliation, later integration phase, executor `begin` or `resume` request,
 or durable cleanup.
 
 The executor failure is retained as application-lifecycle evidence as soon as

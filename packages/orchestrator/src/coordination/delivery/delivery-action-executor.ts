@@ -14,7 +14,8 @@ import type {
 import type { TaskClaimAcquisitionPlannerService } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import type {
   PlannedAttemptExecutorCommandReconciliationRequired,
-  PlannedAttemptExecutorContinuationLimitReached,
+  PlannedAttemptExecutorAcceptedFacts,
+  PlannedAttemptExecutorAlreadyBegan,
   PlannedAttemptExecutorCorrelationMismatch,
   PlannedAttemptExecutorProjectionCorrelationMismatch,
   PlannedAttemptExecutorProjectionTemporarilyUnavailable,
@@ -23,12 +24,25 @@ import type {
   PlannedAttemptExecutorResponsibilityAbandoned,
   PlannedAttemptExecutorResponsibilityContradiction,
   PlannedAttemptExecutorResponsibilityMissing,
+  PlannedAttemptExecutorResumeNotAuthorized,
   PlannedAttemptExecutorStateNoCurrentReport,
   PlannedAttemptExecutorStateTemporarilyUnavailable,
   PlannedAttemptExecutorStateUnreadable,
   PlannedAttemptExecutorSuspensionLimitReached
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import type { PlannedAttemptContinuationAuthorizationRejected } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
+import type {
+  PlannedAttemptExecutorBeginReportContradiction,
+  PlannedAttemptExecutorInitializationCorrelationContradiction,
+  PlannedAttemptExecutorInitialReportCausalityContradiction,
+  PlannedAttemptExecutorLifecycleTransitionContradiction,
+  PlannedAttemptExecutorResumeInvalidatedByTerminalChoice,
+  PlannedAttemptExecutorSuspensionNotAuthorized,
+  PlannedAttemptExecutorTaskWorkSpecificationMismatch,
+  PlannedAttemptExecutorTaskWorkSpecificationMissing,
+  PlannedAttemptExecutorTerminalReportContradiction,
+  PlannedAttemptExecutorWorkAlreadyTerminal
+} from "../../workflow/protocols/planned-attempt-executor-work/errors.js"
 import type { PlannedAttemptProtocolPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type {
   AcceptedResultEvidenceConflict,
@@ -75,7 +89,6 @@ import {
 import type { DeliveryRelationSourceError } from "./relations.js"
 import type {
   advanceAttemptStoppage,
-  observeAttemptStoppageExecutor,
   recordStoppedAttemptClaimNoRelease
 } from "../../workflow/protocols/attempt-choice/stop.js"
 import type { advanceAttemptRestart } from "../../workflow/protocols/attempt-choice/restart.js"
@@ -179,6 +192,8 @@ export type DeliveryActionResult =
     }
   | {
       readonly _tag: "ExecutorReportPublished"
+      /** Whether this boundary advanced accepted Journal facts or only replayed the latest exact report. */
+      readonly acceptedFacts: PlannedAttemptExecutorAcceptedFacts
       readonly plannedAttempt: PlannedTaskAttempt
       readonly proposalId: DeliveryProposalId
       readonly report: PlannedAttemptExecutorReport
@@ -203,7 +218,6 @@ export type DeliveryActionExecutionError =
   | DeliveryActionProtocolAdmissionMissing
   | EffectFunctionFailure<typeof advanceAttemptRestart>
   | EffectFunctionFailure<typeof advanceAttemptStoppage>
-  | EffectFunctionFailure<typeof observeAttemptStoppageExecutor>
   | EffectFunctionFailure<typeof recordStoppedAttemptClaimNoRelease>
   | EffectFunctionFailure<typeof queueAcceptedResultIntegrationResponsibility>
   | EffectFunctionFailure<typeof recoverTaskClaimOperation>
@@ -219,7 +233,18 @@ export type DeliveryActionExecutionError =
   | IntegratorBoundaryUnavailable
   | TargetPromotionRuntimeUnavailable
   | IntegrationFinalityRuntimeUnavailable
-  | PlannedAttemptExecutorContinuationLimitReached
+  | PlannedAttemptExecutorAlreadyBegan
+  | PlannedAttemptExecutorBeginReportContradiction
+  | PlannedAttemptExecutorInitializationCorrelationContradiction
+  | PlannedAttemptExecutorInitialReportCausalityContradiction
+  | PlannedAttemptExecutorLifecycleTransitionContradiction
+  | PlannedAttemptExecutorResumeInvalidatedByTerminalChoice
+  | PlannedAttemptExecutorResumeNotAuthorized
+  | PlannedAttemptExecutorSuspensionNotAuthorized
+  | PlannedAttemptExecutorTaskWorkSpecificationMismatch
+  | PlannedAttemptExecutorTaskWorkSpecificationMissing
+  | PlannedAttemptExecutorTerminalReportContradiction
+  | PlannedAttemptExecutorWorkAlreadyTerminal
   | PlannedAttemptExecutorCommandReconciliationRequired
   | PlannedAttemptExecutorCorrelationMismatch
   | PlannedAttemptExecutorProjectionCorrelationMismatch

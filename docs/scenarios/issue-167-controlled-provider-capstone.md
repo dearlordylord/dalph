@@ -18,7 +18,7 @@ promotion intent yet.
 
 Dalph reads the complete graph, claims A, records A's immutable attempt, creates
 its exact worktree, and asks the controlled executor to work. The executor
-returns `Terminal(Accepted(commit))`. Dalph records the accepted-result
+returns `ExecutorWorkTerminal(Accepted(commit))`. Dalph records the accepted-result
 responsibility, fixes one Integrator session at the exact target head, and asks
 the controlled Integrator to advance it. The Integrator reports one candidate
 M. Dalph asks Git about M, accepts it only after Git reports ordered direct
@@ -61,7 +61,7 @@ ref `refs/heads/master`, initially at Base SHA
 `2222222222222222222222222222222222222222`. Before A's accepted result there
 is no Integrator session or Git-qualified candidate. The journal begins empty;
 by the declared process death it contains the exact B and C plans,
-responsibilities, and Running reports used for reconstruction.
+responsibilities, and `ExecutorWorkExecuting` reports used for reconstruction.
 
 The next activation reconstructs the same Run, B and C attempts, claims, and
 worktrees from the journal and current controlled authorities before allowing

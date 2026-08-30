@@ -44,9 +44,9 @@ const plannedAttempt = PlannedTaskAttempt.make({
 })
 
 describe("deliveryProposalsOf", () => {
-  it("gives each accepted executor report its own continuation proposal", () => {
+  it("gives distinct accepted executor lifecycle reports distinct observation proposals", () => {
     const proposalAt = (ordinal: number) => {
-      const transition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+      const transition = RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
         acceptedProgress: {
           _tag: "ExecutorReportAccepted",
           ordinal: PlannedAttemptExecutorReportOrdinal.make(ordinal)
@@ -57,12 +57,12 @@ describe("deliveryProposalsOf", () => {
         .ticketDelivery[0]
     }
 
-    const afterRunning = proposalAt(1)
-    const afterNextRunning = proposalAt(2)
+    const afterExecuting = proposalAt(1)
+    const afterTerminal = proposalAt(2)
 
-    expect(afterRunning?.id).not.toBe(afterNextRunning?.id)
-    expect(afterRunning?.route).toMatchObject({ transition: { acceptedProgress: { ordinal: 1 } } })
-    expect(afterNextRunning?.route).toMatchObject({ transition: { acceptedProgress: { ordinal: 2 } } })
+    expect(afterExecuting?.id).not.toBe(afterTerminal?.id)
+    expect(afterExecuting?.route).toMatchObject({ transition: { acceptedProgress: { ordinal: 1 } } })
+    expect(afterTerminal?.route).toMatchObject({ transition: { acceptedProgress: { ordinal: 2 } } })
   })
 
   it("derives one stable fresh claim proposal without allocating its operation identity", () => {
@@ -272,7 +272,7 @@ describe("deliveryProposalsOf", () => {
 
   it("preserves existing A ahead of fresh C without consulting live positions", () => {
     const taskC = TaskId.make("C")
-    const continueA = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+    const continueA = RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
       acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(2) },
       plannedAttempt
     })

@@ -24,7 +24,7 @@ Dalph reads and records the tracker graph, rereads A before crossing the claim
 boundary, records and creates A's controlled claim, rereads A after the claim,
 reads and records A's exact task-work specification, records the immutable
 attempt, reconciles the controlled worktree, and asks the executor to do the
-complete attempt work. The executor first reports Running and then Terminal
+complete attempt work. The executor first reports `ExecutorWorkExecuting` and then `ExecutorWorkTerminal`
 Completed. The authored cassette tells this complete real case through typed
 starting facts, actor commands, controlled outside results, expected Dalph
 actions, expected outcomes, and forbidden outcomes. Outcome assertions remain

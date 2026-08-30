@@ -26,7 +26,6 @@ it("rejects a skipped step in the authored completion-finality boundary chronolo
     /must be an exact prefix of active-record presence, replacement, two completion-marker presence reads, completion-marker deletion, and completion-marker absence/u
   )
 })
-
 it("keeps active-record absence distinct from completion-marker absence in authored finality", () => {
   const distinctMarkerReads = deliveryFinalitySpineAuthoredCassette
 
@@ -41,4 +40,22 @@ it("keeps active-record absence distinct from completion-marker absence in autho
       )
     })
   ).toThrow(/completion-marker absence/u)
+})
+
+it("rejects an authored Begin response that skips Executing", () => {
+  const invalid = {
+    ...deliveryFinalitySpineAuthoredCassette,
+    story: deliveryFinalitySpineAuthoredCassette.story.map((item) =>
+      item._tag === "PlannedAttemptExecutorWorkReported" && item.request === "Begin"
+        ? {
+            ...item,
+            report: { _tag: "ExecutorWorkTerminal", attemptId: item.report.attemptId, result: { _tag: "Completed" } }
+          }
+        : item
+    )
+  }
+
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(invalid)).toThrow(
+    /an authored Begin response must report ExecutorWorkExecuting/u
+  )
 })

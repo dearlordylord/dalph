@@ -1,7 +1,7 @@
 import { Cause, Effect, Exit, Fiber, Option, Schema } from "effect"
 import { NodeCrypto } from "@effect/platform-node"
 import { expect, it } from "vitest"
-import { type AttemptId, GitCommitSha, GitRepositoryLocator, type TaskId } from "@dalph/contracts"
+import { AttemptId, GitCommitSha, GitRepositoryLocator, TaskId } from "@dalph/contracts"
 import { TaskWorkCapacity } from "@dalph/orchestrator"
 import {
   AuthoredCassetteStoryItem,
@@ -41,8 +41,8 @@ type WorkAuthorizationChronologyItem =
   | {
       readonly _tag: "ExecutorReport"
       readonly attemptId: AttemptId
-      readonly report: "Running" | "SafelySuspended" | "Terminal"
-      readonly request: "StartOrContinue" | "Suspend"
+      readonly report: "ExecutorWorkExecuting" | "ExecutorWorkSafelySuspended" | "ExecutorWorkTerminal"
+      readonly request: "Begin" | "Resume" | "Suspend"
     }
 
 const projectWorkAuthorizationChronology = (
@@ -69,30 +69,28 @@ const projectWorkAuthorizationChronology = (
 it("authors distinct instruction-read chronology for fresh, safely suspended, and already-executing work", () => {
   expect(projectWorkAuthorizationChronology(maintainedAuthoredCassetteCatalog.singletonTaskCompletes.story)).toEqual([
     { _tag: "TaskWorkSpecificationReadSelected", taskId: "A" },
-    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "Running", request: "StartOrContinue" },
-    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "Terminal", request: "StartOrContinue" }
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "ExecutorWorkExecuting", request: "Begin" }
   ])
 
   expect(
     projectWorkAuthorizationChronology(maintainedAuthoredCassetteCatalog.runUnpauseAfterSafeSuspension.story)
   ).toEqual([
     { _tag: "TaskWorkSpecificationReadSelected", taskId: "A" },
-    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "Running", request: "StartOrContinue" },
-    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "SafelySuspended", request: "Suspend" },
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "ExecutorWorkExecuting", request: "Begin" },
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "ExecutorWorkSafelySuspended", request: "Suspend" },
     { _tag: "TaskWorkSpecificationReadSelected", taskId: "A" },
-    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "Terminal", request: "StartOrContinue" }
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "ExecutorWorkTerminal", request: "Resume" }
   ])
 
   expect(
     projectWorkAuthorizationChronology(maintainedAuthoredCassetteCatalog.compatibleTargetAdvanceContinues.story)
   ).toEqual([
     { _tag: "TaskWorkSpecificationReadSelected", taskId: "A" },
-    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "Running", request: "StartOrContinue" },
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "ExecutorWorkExecuting", request: "Begin" },
     { _tag: "CoordinatorProcessDies" },
-    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "SafelySuspended", request: "StartOrContinue" },
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "ExecutorWorkSafelySuspended", request: "Suspend" },
     { _tag: "TaskWorkSpecificationReadSelected", taskId: "A" },
-    { _tag: "TaskWorkSpecificationReadSelected", taskId: "A" },
-    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "Terminal", request: "StartOrContinue" }
+    { _tag: "ExecutorReport", attemptId: "attempt:A:0", report: "ExecutorWorkTerminal", request: "Resume" }
   ])
 })
 
@@ -111,8 +109,8 @@ const projectRestartAddedTaskChronology = (
   story.flatMap((item): ReadonlyArray<RestartAddedTaskChronologyItem> => {
     if (item._tag === "CoordinatorProcessDies") return [{ _tag: item._tag }] as const
     if (
-      item._tag === "PlannedAttemptExecutorWorkReported" &&
-      item.report._tag === "Terminal" &&
+      item._tag === "PlannedAttemptExecutorProjectionReturned" &&
+      item.report._tag === "ExecutorWorkTerminal" &&
       item.report.result._tag === "Accepted" &&
       (item.report.attemptId === "attempt:B:0" || item.report.attemptId === "attempt:C:1")
     ) {
@@ -120,7 +118,15 @@ const projectRestartAddedTaskChronology = (
     }
     if (
       item._tag === "PlannedAttemptExecutorWorkReported" &&
-      item.report._tag === "Running" &&
+      item.report._tag === "ExecutorWorkTerminal" &&
+      item.report.result._tag === "Accepted" &&
+      (item.report.attemptId === "attempt:B:0" || item.report.attemptId === "attempt:C:1")
+    ) {
+      return [{ _tag: "ExistingAttemptAccepted" as const, attemptId: item.report.attemptId }]
+    }
+    if (
+      item._tag === "PlannedAttemptExecutorWorkReported" &&
+      item.report._tag === "ExecutorWorkExecuting" &&
       item.report.attemptId === "attempt:X:0"
     ) {
       return [{ _tag: "RestartAddedAttemptRunning" as const, attemptId: item.report.attemptId }]
@@ -201,7 +207,13 @@ it("consumes the authored cursor's optional and terminal public probes", async (
       expect(Option.isSome(yield* projection.consumeExecutorProjection)).toBe(true)
       const pauseStart = yield* makeStoryCursor([findStoryItem("OperatorStartsPauseObservation")])
       expect(Option.isSome(yield* pauseStart.consumePauseObservationStart)).toBe(true)
-      const pauseAwait = yield* makeStoryCursor([findStoryItem("OperatorAwaitsPauseProgress")])
+      const maintainedPauseProgress = findStoryItem("PauseProgressObserved")
+      const pauseAwait = yield* makeStoryCursor([
+        AuthoredCassetteStoryItem.cases.OperatorAwaitsPauseProgress.make({
+          result: maintainedPauseProgress.result,
+          subject: maintainedPauseProgress.subject
+        })
+      ])
       expect(Option.isSome(yield* pauseAwait.consumePauseProgressAwait)).toBe(true)
       const pauseObserved = yield* makeStoryCursor([findStoryItem("PauseProgressObserved")])
       expect(Option.isSome(yield* pauseObserved.consumePauseProgressObserved)).toBe(true)
@@ -307,10 +319,17 @@ it("keeps authored promotion Git, control, and executor outcomes correlated at t
       expect(Option.isSome(yield* inFlightCursor.consumeInFlightExecutorControlDirection())).toBe(true)
       const capacity = yield* makeStoryCursor([findStoryItem("SetTaskExecutionCapacity")])
       expect(Option.isSome(yield* capacity.consumeCapacityChange)).toBe(true)
-      const publicationHold = yield* makeStoryCursor([
-        findStoryItem("DalphHoldsExecutorRequestThroughNextDeliveryPublication")
-      ])
-      expect(Option.isSome(yield* publicationHold.consumeExecutorRequestPublicationHold)).toBe(true)
+      const publicationHoldItem = findStoryItem("DalphHoldsExecutorRequestThroughNextDeliveryPublication")
+      const publicationHold = yield* makeStoryCursor([publicationHoldItem])
+      expect(
+        Option.isSome(
+          yield* publicationHold.consumeExecutorRequestPublicationHold(
+            publicationHoldItem.taskId,
+            publicationHoldItem.attemptId,
+            publicationHoldItem.request
+          )
+        )
+      ).toBe(true)
     })
   )
 })
@@ -458,6 +477,60 @@ it("fails closed when an exact selection has no permitted immediate predecessor 
   )
 })
 
+it("fails closed when an executor publication hold has no matching request owner", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const cursor = yield* makeStoryCursor([
+        AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.make({
+          attemptId: AttemptId.make("attempt:malformed-hold"),
+          request: "Suspend",
+          taskId: TaskId.make("A")
+        })
+      ])
+      const wrongRequest = { request: "Begin" as const, attemptId: AttemptId.make("attempt:malformed-hold") }
+      const exit = yield* Effect.acquireUseRelease(
+        cursor.beginExecutorReportRequest(wrongRequest.request, wrongRequest.attemptId),
+        () => Effect.exit(cursor.consumeDalphSelectionFor({ _tag: "ReadTaskClaim", taskId: TaskId.make("A") })),
+        () => cursor.endExecutorReportRequest(wrongRequest.request, wrongRequest.attemptId)
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("AuthoredCassetteInteractionMismatch")
+    })
+  )
+})
+
+it("does not let a competing executor command consume a publication hold", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const taskId = TaskId.make("A")
+      const attemptId = AttemptId.make("attempt:publication-hold")
+      const request = "Suspend" as const
+      const cursor = yield* makeStoryCursor([
+        AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.make({
+          attemptId,
+          request,
+          taskId
+        })
+      ])
+
+      expect(
+        Option.isNone(
+          yield* cursor.consumeExecutorRequestPublicationHold(
+            TaskId.make("B"),
+            AttemptId.make("attempt:competing-command"),
+            "Begin"
+          )
+        )
+      ).toBe(true)
+      expect(yield* cursor.storyPosition).toBe(0)
+
+      expect(Option.isSome(yield* cursor.consumeExecutorRequestPublicationHold(taskId, attemptId, request))).toBe(true)
+      expect(yield* cursor.storyPosition).toBe(1)
+    })
+  )
+})
+
 it("fails closed when an exact executor report has no permitted immediate predecessor owner", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -514,7 +587,7 @@ it("round-trips restart, release, worktree, Git, and lost-response histories", a
         maintainedAuthoredCassetteCatalog.changedAttemptRestartsCleanly,
         maintainedAuthoredCassetteCatalog.changedAttemptStopReleaseResponseLost,
         maintainedAuthoredCassetteCatalog.lostPlannedWorktreeSafelySuspends,
-        maintainedAuthoredCassetteCatalog.changedAttemptRestartRemainsUnproved,
+        maintainedAuthoredCassetteCatalog.changedAttemptRestartCancelsHeldResume,
         maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration
       ]
 

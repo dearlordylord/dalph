@@ -80,7 +80,7 @@ const witness = PlannedAttemptReplacementWitness.make({
     headSha: GitCommitSha.make("3".repeat(40)),
     worktree: p1.worktree
   }),
-  quiescenceProof: { _tag: "CommandResponse", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+  quiescenceProof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
   specificationObservationOperationId: OperationId.make("restart-event-current-F2"),
   targetHeadSha: p2.baseSha,
   targetLineageObservationOperationId: OperationId.make("restart-event-current-H2")

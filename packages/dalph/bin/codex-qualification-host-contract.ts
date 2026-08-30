@@ -44,7 +44,7 @@ export const CodexQualificationHostEvent = Schema.Struct({
   pid: Schema.optionalKey(Schema.Int),
   worktree: Schema.optionalKey(Schema.String),
   threadMaterialized: Schema.optionalKey(Schema.Boolean),
-  command: Schema.optionalKey(Schema.Literals(["StartOrContinue", "Suspend"])),
+  command: Schema.optionalKey(Schema.Literals(["Begin", "Observe", "Resume", "Suspend"])),
   report: Schema.optionalKey(PlannedAttemptExecutorReport),
   projection: Schema.optionalKey(PlannedAttemptExecutorProjection),
   exitResult: Schema.optionalKey(ApplicationExitResult),

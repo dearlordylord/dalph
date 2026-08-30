@@ -316,7 +316,7 @@ const appendIntegrationStart = Effect.fn("TraceReaderTest.appendIntegrationStart
   yield* journal.append(runId, describeJournalEvent(responsibility).expectedKey, responsibility)
   const report = PlannedAttemptExecutorWorkReportedEvent.make({
     ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-    report: PlannedAttemptExecutorReport.cases.Terminal.make({
+    report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
       correlation: { attemptId: integrationPlannedAttempt.attemptId, runId },
       result: { _tag: "Accepted", acceptedResult: integrationAcceptedResult }
     }),
@@ -427,7 +427,7 @@ const historicalIntegrationBoundaryRecords = (): ReadonlyArray<JournalRecord> =>
       3,
       PlannedAttemptExecutorWorkReportedEvent.make({
         ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-        report: PlannedAttemptExecutorReport.cases.Terminal.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId },
           result: { _tag: "Accepted", acceptedResult: predecessor.acceptedResult }
         }),
@@ -850,6 +850,44 @@ it.effect("maps projection failures consistently through complete and cursor tra
       reader.readAt(TraceCursor.make({ position: JournalPosition.make(2), runId }))
     )
     expect(cursorFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId })
+  })
+)
+
+it.effect("maps a reachable historical occurrence projection failure through every reader boundary", () =>
+  Effect.gen(function* () {
+    const base = historicalIntegrationBoundaryRecords()
+    const last = base.at(-1)
+    if (last === undefined) return yield* Effect.die("historical boundary fixture is empty")
+    const malformedEvent = TaskClaimAcquiredEvent.make({
+      claim: integrationFinalityFixture.activeClaim,
+      version: workflowJournalEventVersion
+    })
+    const malformed = [
+      ...base,
+      {
+        event: malformedEvent,
+        key: describeJournalEvent(malformedEvent).expectedKey,
+        position: JournalPosition.make(Number(last.position) + 1),
+        runId: integrationFinalityFixture.runId
+      }
+    ]
+    const reader = readerFromRecords(malformed)
+    const historyFailure = yield* Effect.flip(reader.read(integrationFinalityFixture.runId))
+    expect(historyFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId: integrationFinalityFixture.runId })
+    if (historyFailure._tag !== "TraceProjectionInvalid") return
+    expect(historyFailure.detail).toContain("TrackerOutcomeWithoutReadIntent")
+
+    const cursorFailure = yield* Effect.flip(
+      reader.readAt(
+        TraceCursor.make({
+          position: JournalPosition.make(Number(last.position) + 1),
+          runId: integrationFinalityFixture.runId
+        })
+      )
+    )
+    expect(cursorFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId: integrationFinalityFixture.runId })
+    if (cursorFailure._tag !== "TraceProjectionInvalid") return
+    expect(cursorFailure.detail).toContain("TrackerOutcomeWithoutReadIntent")
   })
 )
 

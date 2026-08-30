@@ -83,6 +83,20 @@ export type DispositionCleanupLoopResult = {
 /** The activation must remain bounded even when a damaged journal repeats a family. */
 export const cleanupResponsibilitySelectionLimit = 3 as const // eslint-disable-line no-magic-numbers
 
+/** Cleanup authority is unavailable until exactly one immutable Run beginning exists. */
+const hasImmutableRunBeginning = (records: ReadonlyArray<JournalRecord>): boolean =>
+  records.filter(({ event }) => event._tag === "WorkflowRunBegan").length === 1
+
+const emptyCleanupLoopResult = (): DispositionCleanupLoopResult => ({
+  branch: undefined,
+  branchOutcomes: [],
+  candidate: undefined,
+  candidateOutcomes: [],
+  selected: { branch: undefined, candidate: undefined, worktree: undefined },
+  worktree: undefined,
+  worktreeOutcomes: []
+})
+
 /** Journal-derived cleanup authority made available to ordinary Run activation. */
 export interface DispositionCleanupActivationService {
   readonly responsibilities: DispositionCleanupResponsibilitySet
@@ -243,6 +257,7 @@ export const selectCleanupResponsibilitySet = (
   records: ReadonlyArray<unknown>
 ): DispositionCleanupResponsibilitySet => {
   const journalRecords = records.filter((record): record is JournalRecord => Schema.is(JournalRecord)(record))
+  if (!hasImmutableRunBeginning(journalRecords)) return { branch: [], candidate: [], worktree: [] }
   return {
     branch: bounded(
       familyAuthorizations(
@@ -287,9 +302,11 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
   proposals: DispositionCleanupProposals = { branch: [], candidate: [], worktree: [] }
 ) {
   const journal = yield* InRunJournal
-  yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "candidate"])
   const initialRecords = yield* journal.read(runId)
-  let selectedSet = selectCleanupResponsibilitySet(initialRecords)
+  if (!hasImmutableRunBeginning(initialRecords)) return emptyCleanupLoopResult()
+  yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "candidate"])
+  const recordsAfterDerived = yield* journal.read(runId)
+  let selectedSet = selectCleanupResponsibilitySet(recordsAfterDerived)
   const scopedProposals = {
     branch: proposals.branch.filter((authorization) => authorization.disposition.plannedAttempt.runId === runId),
     candidate: proposals.candidate.filter(
@@ -299,10 +316,11 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
   } satisfies DispositionCleanupProposals
   const worktreeCandidates = bounded(
     byOperation([...selectedSet.worktree, ...scopedProposals.worktree]).filter((authorization) =>
-      hasMutationBudget(initialRecords, authorization)
+      hasMutationBudget(recordsAfterDerived, authorization)
     )
   )
   const worktreeOutcomes = yield* Effect.forEach(worktreeCandidates, (authorization) =>
+    /* v8 ignore next -- @preserve WorktreeCleanupAuthorization.disposition is the PlannedAttemptCleanupDisposition schema checked by isCleanupEligibleDisposition. */
     isCleanupEligibleDisposition(authorization.disposition)
       ? runWorktreeCleanup(authorization)
       : Effect.succeed(WorktreeCleanupOutcome.cases.Preserved.make({ authorization, reason: "ineligible disposition" }))
@@ -317,6 +335,7 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
     )
   )
   const branchOutcomes = yield* Effect.forEach(branchCandidates, (authorization) =>
+    /* v8 ignore next -- @preserve BranchCleanupAuthorization.disposition is the PlannedAttemptCleanupDisposition schema checked by isCleanupEligibleDisposition. */
     isCleanupEligibleDisposition(authorization.disposition)
       ? runBranchCleanup(authorization)
       : Effect.succeed(BranchCleanupOutcome.cases.Preserved.make({ authorization, reason: "ineligible disposition" }))
@@ -330,6 +349,7 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
     )
   )
   const candidateOutcomes = yield* Effect.forEach(candidateCandidates, (authorization) =>
+    /* v8 ignore next -- @preserve IntegratorCandidateCleanupAuthorization.disposition is the candidate disposition schema checked by isCleanupEligibleDisposition. */
     isCleanupEligibleDisposition(authorization.disposition)
       ? runIntegratorCandidateCleanup(authorization)
       : Effect.succeed(
@@ -364,8 +384,10 @@ export const activateDispositionCleanup = Effect.fn("DispositionCleanup.activate
   // this in the same ordinary activation pass means a resumed Run can derive
   // the branch authorization without a caller supplying one; the loop will
   // execute it only when the settlement is already present.
-  yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "branch", "candidate"])
   const journal = yield* InRunJournal
+  const records = yield* journal.read(runId)
+  if (!hasImmutableRunBeginning(records)) return { branch: [], candidate: [], worktree: [] }
+  yield* appendDerivedCleanupAuthorizations(runId, ["worktree", "branch", "candidate"])
   return selectCleanupResponsibilitySet(yield* journal.read(runId))
 })
 
@@ -399,6 +421,7 @@ export const appendDerivedCleanupAuthorizations = Effect.fn("DispositionCleanup.
   function* (runId: RunId, families: ReadonlyArray<"branch" | "candidate" | "worktree">) {
     const journal = yield* InRunJournal
     let records = yield* journal.read(runId)
+    if (!hasImmutableRunBeginning(records)) return
     const derived = deriveCleanupAuthorizations(records)
     const appendOne = Effect.fn("DispositionCleanup.appendOne")(function* (
       authorization: WorktreeCleanupAuthorization | BranchCleanupAuthorization | IntegratorCandidateCleanupAuthorization

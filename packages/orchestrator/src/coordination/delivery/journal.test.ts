@@ -205,6 +205,61 @@ it.effect("does not publish complete graph facts for another tracker target", ()
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
+it.effect("does not pair a target-A graph read with an earlier foreign-target snapshot", () =>
+  Effect.gen(function* () {
+    const mixedTargetRunId = RunId.make("journal-mixed-target-order")
+    const storage = yield* JournalStore
+    yield* storage.beginRun(mixedTargetRunId, target, initialPolicy)
+    const initial = reduceWorkflowJournalHistory(mixedTargetRunId, yield* storage.read(mixedTargetRunId))
+    if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
+    const journal = yield* makeJournal(mixedTargetRunId, target, initial, storage)
+    const foreignTarget = FixtureTarget.make("journal-mixed-target-order-foreign")
+    const foreignOperation = makeTrackerGraphObservationOperation(
+      OperationId.make("mixed-target-order-foreign-read"),
+      foreignTarget
+    )
+    yield* journal.append(
+      mixedTargetRunId,
+      intentRecordKey(foreignOperation.operationId),
+      taskTrackerReadIntent(foreignOperation)
+    )
+    yield* journal.append(
+      mixedTargetRunId,
+      outcomeRecordKey(foreignOperation.operationId),
+      taskTrackerFactsObservedEvent(
+        foreignOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(foreignOperation, graph("mixed-target-order-foreign", ["B"]))
+      )
+    )
+
+    const localOperation = makeTrackerGraphObservationOperation(
+      OperationId.make("mixed-target-order-local-read"),
+      target
+    )
+    yield* journal.append(
+      mixedTargetRunId,
+      intentRecordKey(localOperation.operationId),
+      taskTrackerReadIntent(localOperation)
+    )
+    yield* journal.append(
+      mixedTargetRunId,
+      outcomeRecordKey(localOperation.operationId),
+      taskTrackerFactsObservedEvent(
+        localOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(localOperation, graph("mixed-target-order-local", ["A"]))
+      )
+    )
+
+    const current = yield* journal.state.get
+    expect(current.graph._tag).toBe("GraphEstablished")
+    if (current.graph._tag === "GraphEstablished") {
+      expect(current.graph.observation.snapshot.revision).toBe(TrackerRevision.make("mixed-target-order-local"))
+      expect(current.graph.observation.snapshot.toWire().tasks.map(({ id }) => id)).toEqual(["A"])
+      expect(current.graph.observation.operationId).toBe(localOperation.operationId)
+    }
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
 it.effect("publishes an equal-content reconfirmation as a later journaled graph observation", () =>
   Effect.gen(function* () {
     const fixedRunId = RunId.make("journal-equal-reconfirmation")

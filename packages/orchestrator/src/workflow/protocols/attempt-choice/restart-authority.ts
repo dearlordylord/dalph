@@ -1,24 +1,15 @@
 import { Effect, Schema } from "effect"
 import { type JournalPosition } from "../../../workflow-journal/identity.js"
-import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 import {
   latestPlannedAttemptExecutorEvidence,
-  latestUnsettledPlannedAttemptExecutorCommand
+  isAcceptedPlannedAttemptExecutorEvidence
 } from "../planned-attempt-executor-work/evidence.js"
-import {
-  observePlannedAttemptExecutorStateWithPermit,
-  reconcileOrObservePlannedAttemptExecutorStateWithPermit
-} from "../planned-attempt-executor-work/protocol.js"
-import { requestPlannedAttemptExecutorSuspensionWithPermit } from "../planned-attempt-executor-work/suspension-commands.js"
-import { type PlannedAttemptProtocolPermit } from "../planned-attempt-executor-work/protocol-controller.js"
 import { AttemptChoiceRequestId, AttemptChoiceSubject } from "./events.js"
 import type { AttemptRestartPendingReason, AttemptRestartRejectedReason } from "./restart-reasons.js"
-import {
-  terminalRestartQuiescence,
-  type RestartApplicationRecord,
-  type RestartQuiescence
-} from "./restart-authority-evidence.js"
+import { terminalRestartQuiescence, type RestartQuiescence } from "./restart-authority-evidence.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../../authorities/task-tracker/target.js"
 export {
   exactAppliedRestart,
   proofFor,
@@ -49,7 +40,8 @@ export type AttemptRestartAdvanceResult =
 export const restartChoiceWasInvalidatedByLaterSpecification = (
   records: ReadonlyArray<JournalRecord>,
   applicationPosition: JournalRecord["position"],
-  subject: AttemptChoiceSubject
+  subject: AttemptChoiceSubject,
+  immutableRunTarget?: TrackerTarget
 ): boolean =>
   records.some(
     ({ event, position }) =>
@@ -57,19 +49,23 @@ export const restartChoiceWasInvalidatedByLaterSpecification = (
       event._tag === "TaskTrackerFactsObserved" &&
       event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
       event.observation.factFamily.taskId === subject.plannedAttempt.taskId &&
+      (immutableRunTarget === undefined ||
+        taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)) &&
       event.observation.factFamily.fingerprint !== subject.observedTaskRevision
   )
 
-const currentQuiescence = (
-  records: ReadonlyArray<JournalRecord>,
-  application: RestartApplicationRecord,
-  subject: AttemptChoiceSubject
-): RestartQuiescence => {
+const currentQuiescence = (records: ReadonlyArray<JournalRecord>, subject: AttemptChoiceSubject): RestartQuiescence => {
   const evidence = latestPlannedAttemptExecutorEvidence(records, subject.plannedAttempt)
-  if (evidence?.report._tag === "Terminal") {
-    return terminalRestartQuiescence(evidence, application)
+  if (evidence === undefined) return { _tag: "Pending", reason: "ExecutorUnavailable" }
+  if (!isAcceptedPlannedAttemptExecutorEvidence(evidence)) {
+    return { _tag: "Pending", reason: "ExecutorLifecycleAcceptancePending" }
   }
-  if (evidence?.report._tag !== "SafelySuspended") return { _tag: "Unproved" }
+  if (evidence.report._tag === "ExecutorWorkTerminal") {
+    return terminalRestartQuiescence(evidence)
+  }
+  if (evidence.report._tag !== "ExecutorWorkSafelySuspended") {
+    return { _tag: "Rejected", reason: "ExecutingDoesNotAuthorizeReplacement" }
+  }
   const laterCommand = records.some(
     ({ event, position }) =>
       position > evidence.observedAt &&
@@ -77,7 +73,9 @@ const currentQuiescence = (
       event.plannedAttempt.runId === subject.plannedAttempt.runId &&
       event.plannedAttempt.attemptId === subject.plannedAttempt.attemptId
   )
-  return laterCommand ? { _tag: "Unproved" } : { _tag: "Proof", evidence }
+  return laterCommand
+    ? { _tag: "Rejected", reason: "LaterExecutorCommandInvalidatedChoice" }
+    : { _tag: "Proof", evidence }
 }
 
 export const nextRestartReadOperationId = (
@@ -106,23 +104,7 @@ export const nextRestartReadOperationId = (
     : OperationId.make(`${prefix}${after}`)
 }
 
-export const terminalOrSafeRestartQuiescence = Effect.fn("AttemptRestart.establishQuiescence")(function* (
-  records: ReadonlyArray<JournalRecord>,
-  application: RestartApplicationRecord,
-  subject: AttemptChoiceSubject,
-  permit: PlannedAttemptProtocolPermit
-) {
-  const current = currentQuiescence(records, application, subject)
-  if (current._tag !== "Unproved") return current
-  const unsettled = latestUnsettledPlannedAttemptExecutorCommand(records, subject.plannedAttempt)
-  const report = yield* unsettled === undefined
-    ? requestPlannedAttemptExecutorSuspensionWithPermit(permit, subject.plannedAttempt).pipe(
-        Effect.catchTag("PlannedAttemptExecutorSuspensionLimitReached", () =>
-          observePlannedAttemptExecutorStateWithPermit(permit, subject.plannedAttempt)
-        )
-      )
-    : reconcileOrObservePlannedAttemptExecutorStateWithPermit(permit, subject.plannedAttempt)
-  if (report._tag === "Running") return { _tag: "Pending" as const, reason: "ExecutorRunning" as const }
-  const journal = yield* InRunJournal
-  return currentQuiescence(yield* journal.read(subject.plannedAttempt.runId), application, subject)
-})
+export const currentRestartQuiescence = Effect.fn("AttemptRestart.establishQuiescence")(
+  (records: ReadonlyArray<JournalRecord>, subject: AttemptChoiceSubject) =>
+    Effect.succeed(currentQuiescence(records, subject))
+)

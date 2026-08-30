@@ -1,8 +1,9 @@
-import { plannedTaskAttemptEquivalence, RunId } from "@dalph/contracts"
+import { plannedAttemptExecutorCorrelation, plannedTaskAttemptEquivalence, RunId } from "@dalph/contracts"
 import { Context, Effect, Layer, Schema, Semaphore } from "effect"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { OperationId } from "../../identity.js"
-import { isExactTaskClaim, type TaskClaimObservation } from "../../../authorities/task-tracker/claim-mutation.js"
+import { type TaskClaimObservation } from "../../../authorities/task-tracker/claim-mutation.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import { attemptChoiceAppliedRecordKey } from "../../../workflow-journal/record-key.js"
 import {
   type JournalAppendError,
@@ -13,9 +14,14 @@ import {
   WorkflowRunNotBegan
 } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
+import { exactWorkflowRunTargetFor } from "../../../workflow-journal/run-target.js"
 import {
-  latestPlannedAttemptExecutorEvidence,
-  latestUnsettledPlannedAttemptExecutorCommand
+  PlannedAttemptProtocolController,
+  plannedAttemptProtocolControllerLayer
+} from "../planned-attempt-executor-work/protocol-controller.js"
+import {
+  currentUnconsumedAcceptedSafeEvidence,
+  latestAcceptedPlannedAttemptExecutorEvidence
 } from "../planned-attempt-executor-work/evidence.js"
 import { recordedTaskAttemptPlanFor } from "../task-attempt-planning/journal-evidence.js"
 import {
@@ -25,6 +31,7 @@ import {
   sameAttemptChoiceSubject,
   type AttemptChoiceSubject
 } from "./events.js"
+import { abandonmentFor, claimReleaseAfter, claimReleaseIntentAfter, noReleaseAfter } from "./control-settlement.js"
 import { ApplyAttemptChoiceRequest } from "./request.js"
 
 /** One request identity was already applied with different exact contents. */
@@ -58,7 +65,8 @@ export class AttemptChoiceNotAvailable extends Schema.TaggedError<AttemptChoiceN
       "AttemptNotPlanned",
       "AttemptSuperseded",
       "ExecutorNotSafelySuspended",
-      "ObservedFingerprintNotCurrent"
+      "ObservedFingerprintNotCurrent",
+      "TerminalChoiceAlreadyApplied"
     ]),
     requestId: AttemptChoiceRequestId,
     runId: RunId
@@ -80,6 +88,7 @@ export class AttemptChoiceResultNotFound extends Schema.TaggedError<AttemptChoic
 /** The latest durable phase reached only by an applied Stop direction. */
 export type AttemptChoiceStopStatus =
   | { readonly _tag: "AwaitingQuiescence" }
+  | { readonly _tag: "SupersededByTerminal" }
   | { readonly _tag: "ImplementationAbandonedClaimDispositionPending" }
   | { readonly _tag: "ImplementationAbandonedClaimReleasePending"; readonly operationId: OperationId }
   | { readonly _tag: "SettledReleased"; readonly operationId: OperationId }
@@ -95,19 +104,6 @@ type AttemptChoiceAppliedRecord<
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }> & {
     readonly choice: Choice
   }
-}
-
-type AbandonmentRecord = Omit<JournalRecord, "event"> & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>
-}
-type NoReleaseRecord = Omit<JournalRecord, "event"> & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "StoppedAttemptClaimNoReleaseObserved" }>
-}
-type ClaimReleasedRecord = Omit<JournalRecord, "event"> & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimReleased" }>
-}
-type ClaimReleaseIntentRecord = Omit<JournalRecord, "event"> & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimReleaseIntended" }>
 }
 
 /** Public application/query result: the winning record plus a choice-valid current phase. */
@@ -152,66 +148,26 @@ const matchingChoice = (records: ReadonlyArray<JournalRecord>, subject: AttemptC
           plannedTaskAttemptEquivalence(record.event.subject.plannedAttempt, subject.plannedAttempt)))
   )
 
-const abandonmentFor = (
-  records: ReadonlyArray<JournalRecord>,
-  application: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
-) =>
-  records.findLast(
-    (record): record is AbandonmentRecord =>
-      record.event._tag === "AttemptImplementationAbandoned" &&
-      sameAttemptChoiceRequestId(record.event.requestId, application.requestId) &&
-      sameAttemptChoiceSubject(record.event.subject, application.subject)
-  )
-
-const noReleaseAfter = (
-  records: ReadonlyArray<JournalRecord>,
-  abandonment: JournalRecord,
-  application: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
-) =>
-  records.findLast(
-    (record): record is NoReleaseRecord =>
-      record.position > abandonment.position &&
-      record.event._tag === "StoppedAttemptClaimNoReleaseObserved" &&
-      sameAttemptChoiceRequestId(record.event.requestId, application.requestId) &&
-      sameAttemptChoiceSubject(record.event.subject, application.subject)
-  )
-
-const claimReleaseAfter = (
-  records: ReadonlyArray<JournalRecord>,
-  abandonment: JournalRecord,
-  expectedClaim: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>["expectedClaim"]
-) =>
-  records.findLast(
-    (record): record is ClaimReleasedRecord =>
-      record.position > abandonment.position &&
-      record.event._tag === "TaskClaimReleased" &&
-      isExactTaskClaim(record.event.release.claim, expectedClaim)
-  )
-
-const claimReleaseIntentAfter = (
-  records: ReadonlyArray<JournalRecord>,
-  abandonment: JournalRecord,
-  expectedClaim: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>["expectedClaim"]
-) =>
-  records.findLast(
-    (record): record is ClaimReleaseIntentRecord =>
-      record.position > abandonment.position &&
-      record.event._tag === "TaskClaimReleaseIntended" &&
-      isExactTaskClaim(record.event.operation.release.claim, expectedClaim)
-  )
-
 const currentResultFor = (
   records: ReadonlyArray<JournalRecord>,
   application: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }> & {
     readonly choice: "StopTaskImplementation"
-  }
+  },
+  immutableRunTarget: TrackerTarget
 ): AttemptChoiceStopStatus => {
+  const currentExecutorEvidence = latestAcceptedPlannedAttemptExecutorEvidence(
+    records,
+    application.subject.plannedAttempt
+  )
+  if (currentExecutorEvidence?.report._tag === "ExecutorWorkTerminal") {
+    return { _tag: "SupersededByTerminal" }
+  }
   const abandonment = abandonmentFor(records, application)
   if (abandonment === undefined) {
     return { _tag: "AwaitingQuiescence" }
   }
   const expectedClaim = abandonment.event.expectedClaim
-  const noRelease = noReleaseAfter(records, abandonment, application)
+  const noRelease = noReleaseAfter(records, abandonment, application, immutableRunTarget)
   if (noRelease !== undefined) {
     return {
       _tag: "SettledNoRelease",
@@ -219,11 +175,23 @@ const currentResultFor = (
       observationOperationId: noRelease.event.observationOperationId
     }
   }
-  const released = claimReleaseAfter(records, abandonment, expectedClaim)
+  const released = claimReleaseAfter(
+    records,
+    abandonment,
+    expectedClaim,
+    application.subject.plannedAttempt.taskId,
+    immutableRunTarget
+  )
   if (released !== undefined) {
     return { _tag: "SettledReleased", operationId: released.event.release.operationId }
   }
-  const releaseIntent = claimReleaseIntentAfter(records, abandonment, expectedClaim)
+  const releaseIntent = claimReleaseIntentAfter(
+    records,
+    abandonment,
+    expectedClaim,
+    application.subject.plannedAttempt.taskId,
+    immutableRunTarget
+  )
   return releaseIntent !== undefined
     ? {
         _tag: "ImplementationAbandonedClaimReleasePending",
@@ -235,13 +203,14 @@ const currentResultFor = (
 const resultFor = (
   records: ReadonlyArray<JournalRecord>,
   application: JournalRecord,
-  event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>
+  event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }>,
+  immutableRunTarget: TrackerTarget
 ): AttemptChoiceApplicationResult =>
   event.choice === "StopTaskImplementation"
     ? {
         _tag: "StopApplied",
         application: { ...application, event: { ...event, choice: "StopTaskImplementation" } },
-        status: currentResultFor(records, { ...event, choice: "StopTaskImplementation" })
+        status: currentResultFor(records, { ...event, choice: "StopTaskImplementation" }, immutableRunTarget)
       }
     : event.choice === "RestartTaskImplementation"
       ? {
@@ -255,12 +224,14 @@ const resultFor = (
 
 const choiceIsExposed = (
   records: ReadonlyArray<JournalRecord>,
-  request: ApplyAttemptChoiceRequest
+  request: ApplyAttemptChoiceRequest,
+  immutableRunTarget: TrackerTarget
 ):
   | "AttemptNotPlanned"
   | "AttemptSuperseded"
   | "ExecutorNotSafelySuspended"
   | "ObservedFingerprintNotCurrent"
+  | "TerminalChoiceAlreadyApplied"
   | undefined => {
   if (recordedTaskAttemptPlanFor(records, request.subject.plannedAttempt) === undefined) return "AttemptNotPlanned"
   if (
@@ -272,17 +243,26 @@ const choiceIsExposed = (
   ) {
     return "AttemptSuperseded"
   }
-  const latestReport = latestPlannedAttemptExecutorEvidence(records, request.subject.plannedAttempt)
-  const latestCommandWasSettled =
-    latestUnsettledPlannedAttemptExecutorCommand(records, request.subject.plannedAttempt) === undefined
-  if (latestReport?.report._tag !== "SafelySuspended" || !latestCommandWasSettled) {
+  if (
+    request.choice === "ContinueExistingAttempt" &&
+    records.some(
+      ({ event }) =>
+        event._tag === "AttemptChoiceApplied" &&
+        (event.choice === "RestartTaskImplementation" || event.choice === "StopTaskImplementation") &&
+        plannedTaskAttemptEquivalence(event.subject.plannedAttempt, request.subject.plannedAttempt)
+    )
+  ) {
+    return "TerminalChoiceAlreadyApplied"
+  }
+  if (currentUnconsumedAcceptedSafeEvidence(records, request.subject.plannedAttempt) === undefined) {
     return "ExecutorNotSafelySuspended"
   }
   const latestSpecification = records.findLast(
     ({ event }) =>
       event._tag === "TaskTrackerFactsObserved" &&
       event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
-      event.observation.factFamily.taskId === request.subject.plannedAttempt.taskId
+      event.observation.factFamily.taskId === request.subject.plannedAttempt.taskId &&
+      taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
   )?.event
   return latestSpecificationMatches(latestSpecification, request) ? undefined : "ObservedFingerprintNotCurrent"
 }
@@ -300,9 +280,6 @@ const redeliveryMatchesRequest = (
   request: ApplyAttemptChoiceRequest
 ): boolean => redelivered.choice === request.choice && sameAttemptChoiceSubject(redelivered.subject, request.subject)
 
-const runHasBegan = (records: ReadonlyArray<JournalRecord>): boolean =>
-  records.some(({ event }) => event._tag === "WorkflowRunBegan")
-
 const integrationStartedFor = (records: ReadonlyArray<JournalRecord>, request: ApplyAttemptChoiceRequest): boolean =>
   records.some(
     ({ event }) =>
@@ -313,7 +290,8 @@ const integrationStartedFor = (records: ReadonlyArray<JournalRecord>, request: A
 
 const choicePreconditionError = (
   records: ReadonlyArray<JournalRecord>,
-  request: ApplyAttemptChoiceRequest
+  request: ApplyAttemptChoiceRequest,
+  immutableRunTarget: NonNullable<ReturnType<typeof exactWorkflowRunTargetFor>>
 ): AttemptChoiceOutsidePreIntegrationPhase | AttemptChoiceAlreadyApplied | AttemptChoiceNotAvailable | undefined => {
   const runId = request.subject.plannedAttempt.runId
   if (integrationStartedFor(records, request)) {
@@ -328,16 +306,17 @@ const choicePreconditionError = (
       winningRequestId: existingChoice.event.requestId
     })
   }
-  const unavailable = choiceIsExposed(records, request)
+  const unavailable = choiceIsExposed(records, request, immutableRunTarget)
   return unavailable === undefined
     ? undefined
     : new AttemptChoiceNotAvailable({ reason: unavailable, requestId: request.requestId, runId })
 }
 
-export const attemptChoiceControlLayer = Layer.effect(
+const attemptChoiceControlFromProtocolLayer = Layer.effect(
   AttemptChoiceControl,
   Effect.gen(function* () {
     const journal = yield* InRunJournal
+    const protocolController = yield* PlannedAttemptProtocolController
     const applications = yield* Semaphore.make(1)
     const applyUnserialized = Effect.fn("AttemptChoiceControl.apply")(function* (input: unknown) {
       const request = yield* Schema.decodeUnknownEffect(ApplyAttemptChoiceRequest, { onExcessProperty: "error" })(input)
@@ -349,36 +328,45 @@ export const attemptChoiceControlLayer = Layer.effect(
           subjectRunId: runId
         })
       }
-      const records = yield* journal.read(runId)
-      if (!runHasBegan(records)) {
-        return yield* new WorkflowRunNotBegan({ runId })
-      }
-      const redelivered = records.find(
-        ({ event }) =>
-          event._tag === "AttemptChoiceApplied" && sameAttemptChoiceRequestId(event.requestId, request.requestId)
-      )
-      if (redelivered?.event._tag === "AttemptChoiceApplied") {
-        if (redeliveryMatchesRequest(redelivered.event, request)) {
-          return resultFor(records, redelivered, redelivered.event)
-        }
-        return yield* new AttemptChoiceRequestIdentityContradiction({
-          existingPosition: redelivered.position,
-          requestId: request.requestId,
-          runId
+      const withChoicePermit =
+        request.choice === "ContinueExistingAttempt"
+          ? protocolController.withPermit
+          : protocolController.withTerminalPermit
+      return yield* withChoicePermit(plannedAttemptExecutorCorrelation(request.subject.plannedAttempt), () =>
+        Effect.gen(function* () {
+          const records = yield* journal.read(runId)
+          const immutableRunTarget = exactWorkflowRunTargetFor(records)
+          if (immutableRunTarget === undefined) {
+            return yield* new WorkflowRunNotBegan({ runId })
+          }
+          const redelivered = records.find(
+            ({ event }) =>
+              event._tag === "AttemptChoiceApplied" && sameAttemptChoiceRequestId(event.requestId, request.requestId)
+          )
+          if (redelivered?.event._tag === "AttemptChoiceApplied") {
+            if (redeliveryMatchesRequest(redelivered.event, request)) {
+              return resultFor(records, redelivered, redelivered.event, immutableRunTarget)
+            }
+            return yield* new AttemptChoiceRequestIdentityContradiction({
+              existingPosition: redelivered.position,
+              requestId: request.requestId,
+              runId
+            })
+          }
+          const preconditionError = choicePreconditionError(records, request, immutableRunTarget)
+          if (preconditionError !== undefined) return yield* preconditionError
+          const event = AttemptChoiceAppliedEvent.make({
+            choice: request.choice,
+            initiatedBy: { _tag: "Operator" },
+            occurrenceClassification: "InitiatedAction",
+            requestId: request.requestId,
+            subject: request.subject,
+            version: workflowJournalEventVersion
+          })
+          const application = yield* journal.append(runId, attemptChoiceAppliedRecordKey(request.requestId), event)
+          return resultFor([...records, application], application, event, immutableRunTarget)
         })
-      }
-      const preconditionError = choicePreconditionError(records, request)
-      if (preconditionError !== undefined) return yield* preconditionError
-      const event = AttemptChoiceAppliedEvent.make({
-        choice: request.choice,
-        initiatedBy: { _tag: "Operator" },
-        occurrenceClassification: "InitiatedAction",
-        requestId: request.requestId,
-        subject: request.subject,
-        version: workflowJournalEventVersion
-      })
-      const application = yield* journal.append(runId, attemptChoiceAppliedRecordKey(request.requestId), event)
-      return resultFor([...records, application], application, event)
+      )
     })
     const read = Effect.fn("AttemptChoiceControl.read")(function* (input: unknown) {
       const requestId = yield* Schema.decodeUnknownEffect(AttemptChoiceRequestId, { onExcessProperty: "error" })(input)
@@ -389,11 +377,20 @@ export const attemptChoiceControlLayer = Layer.effect(
       if (application?.event._tag !== "AttemptChoiceApplied") {
         return yield* new AttemptChoiceResultNotFound({ requestId })
       }
-      return resultFor(records, application, application.event)
+      const immutableRunTarget = exactWorkflowRunTargetFor(records)
+      if (immutableRunTarget === undefined) {
+        return yield* new WorkflowRunNotBegan({ runId: requestId.runId })
+      }
+      return resultFor(records, application, application.event, immutableRunTarget)
     })
     return AttemptChoiceControl.of({
       apply: (input) => applications.withPermit(applyUnserialized(input)),
       read: (input) => applications.withPermit(read(input))
     })
   })
+)
+
+/** One process-local exact-attempt guard shared by Operator choices and executor commands. */
+export const attemptChoiceControlLayer = attemptChoiceControlFromProtocolLayer.pipe(
+  Layer.provideMerge(plannedAttemptProtocolControllerLayer)
 )

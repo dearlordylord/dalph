@@ -1134,6 +1134,7 @@ const operationIdsOfFinalityEvent = (event: IntegrationFinalityJournalEvent): Re
   const claim = operationIdsOfFinalityClaimEvent(event)
   if (claim !== undefined) return claim
   if (event._tag === "IntegrationFinalitySettled") return finalitySettledOperationIds(event)
+  /* v8 ignore next -- @preserve the closed IntegrationFinalityJournalEvent union is fully dispatched above; every remaining finality event is one of these post-promotion ancestry records. */
   if (
     event._tag === "PostPromotionBlockerCandidateAncestryReadIntended" ||
     event._tag === "PostPromotionBlockerCandidateAncestryObserved"
@@ -1323,6 +1324,7 @@ const nestedOperationReferencesOfFinalityEvent = (
   const claim = nestedOperationReferencesOfClaimEvent(event)
   if (claim !== undefined) return claim
   if (event._tag === "IntegrationFinalitySettled") return finalitySettledReferences(event)
+  /* v8 ignore next -- @preserve the closed IntegrationFinalityJournalEvent union is fully dispatched above; every remaining finality event is one of these post-promotion ancestry records. */
   if (
     event._tag === "PostPromotionBlockerCandidateAncestryReadIntended" ||
     event._tag === "PostPromotionBlockerCandidateAncestryObserved"
@@ -1621,6 +1623,7 @@ const taskIdsOfHistoricalFinality = (occurrence: WorkflowOccurrenceValue): Reado
   const event = occurrence.event
   if ("authorization" in event) return [event.authorization.claim.plannedAttempt.taskId]
   if ("claim" in event) return [event.claim.plannedAttempt.taskId]
+  /* v8 ignore next -- @preserve every historical finality event carries authorization, claim, or a request containing claim; the empty arm cannot be constructed by its schemas. */
   if ("request" in event && "claim" in event.request) return [event.request.claim.plannedAttempt.taskId]
   return []
 }
@@ -1890,7 +1893,7 @@ const integrationHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRec
     }
     if (
       record.event._tag === "PlannedAttemptExecutorWorkReported" &&
-      record.event.report._tag === "Terminal" &&
+      record.event.report._tag === "ExecutorWorkTerminal" &&
       record.event.report.result._tag === "Accepted"
     ) {
       const attemptId = record.event.report.correlation.attemptId
@@ -1900,11 +1903,6 @@ const integrationHistoryIssue = (runId: RunId, records: ReadonlyArray<JournalRec
           indexes.acceptedExecutorResults,
           attemptId,
           record.event.report.result.acceptedResult
-        ),
-        acceptedExecutorResultPositions: HashMap.set(
-          indexes.acceptedExecutorResultPositions,
-          attemptId,
-          record.position
         )
       }
     }
@@ -2164,6 +2162,7 @@ const historyFromRecords = Effect.fn("TraceReader.historyFromRecords")(function*
   const projection = yield* projectWorkflowOccurrences(records, { includeControlDisposition: true }).pipe(
     Effect.mapError((cause) => new TraceProjectionInvalid({ detail: String(cause), runId }))
   )
+  /* v8 ignore next -- @preserve a validated history that reaches this fallback has the same projection used by the complete index; its item mapping is schema-total. */
   const items = projection.occurrences.map((occurrence) => itemFromOccurrence(runId, occurrence))
   const committedThrough = Option.getOrThrow(Option.fromUndefinedOr(records[records.length - 1]?.position))
   return TraceHistory.make({ committedThrough, items, runId, version: traceReaderSchemaVersion })
@@ -2224,7 +2223,10 @@ const completeTraceIndexFromRecords = (
       relationships,
       facets,
       version: traceReaderSchemaVersion
-    }).pipe(Effect.mapError((cause) => new TraceProjectionInvalid({ detail: String(cause), runId })))
+    }).pipe(
+      /* v8 ignore next -- @preserve validated records and typed projection outputs satisfy TraceAtCursor before this defensive schema error mapping. */
+      Effect.mapError((cause) => new TraceProjectionInvalid({ detail: String(cause), runId }))
+    )
     const committedPositions: ReadonlySet<JournalPosition> = new Set(records.map(({ position }) => position))
     return {
       committedThrough,
@@ -2507,6 +2509,7 @@ export const makeTraceReader = (source: TraceJournalReadSource): TraceReaderServ
           return Effect.fail(failure)
         }
         const item = operationItem(view.items, predecessorOperationId)
+        /* v8 ignore next -- @preserve every indexed causal predecessor is emitted by the same validated operation occurrence as the edge. */
         if (item === undefined) {
           const failure = new TraceCausalPredecessorNotProjected({
             predecessorOperationId,

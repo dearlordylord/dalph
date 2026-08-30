@@ -3,7 +3,7 @@ import { Context, Schema } from "effect"
 import { AttemptId, PlannedTaskAttempt } from "./planned-attempt.js"
 import { RunId } from "./workflow-identity.js"
 import { GitCommitSha } from "./git-locator.js"
-import { EvidenceReference } from "./evidence.js"
+import { EvidenceReference, evidenceReferenceEquals } from "./evidence.js"
 import { TaskWorkSpecification } from "./task-work-specification.js"
 
 /**
@@ -45,11 +45,35 @@ export type PlannedAttemptExecutorResult = typeof PlannedAttemptExecutorResult.T
  * running and that the same attempt can resume.
  */
 export const PlannedAttemptExecutorReport = Schema.TaggedUnion({
-  Running: { correlation: PlannedAttemptExecutorCorrelation },
-  SafelySuspended: { correlation: PlannedAttemptExecutorCorrelation },
-  Terminal: { correlation: PlannedAttemptExecutorCorrelation, result: PlannedAttemptExecutorResult }
+  ExecutorWorkExecuting: { correlation: PlannedAttemptExecutorCorrelation },
+  ExecutorWorkSafelySuspended: { correlation: PlannedAttemptExecutorCorrelation },
+  ExecutorWorkTerminal: { correlation: PlannedAttemptExecutorCorrelation, result: PlannedAttemptExecutorResult }
 })
 export type PlannedAttemptExecutorReport = typeof PlannedAttemptExecutorReport.Type
+
+const samePlannedAttemptExecutorResult = (
+  left: PlannedAttemptExecutorResult,
+  right: PlannedAttemptExecutorResult
+): boolean => {
+  if (left._tag !== right._tag) return false
+  if (left._tag !== "Accepted" || right._tag !== "Accepted") return true
+  return (
+    left.acceptedResult.commit === right.acceptedResult.commit &&
+    evidenceReferenceEquals(left.acceptedResult.evidenceManifest, right.acceptedResult.evidenceManifest)
+  )
+}
+
+/** Exact equality for one normalized executor lifecycle report. */
+export const samePlannedAttemptExecutorReport = (
+  left: PlannedAttemptExecutorReport,
+  right: PlannedAttemptExecutorReport
+): boolean => {
+  if (!samePlannedAttemptExecutorCorrelation(left.correlation, right.correlation) || left._tag !== right._tag) {
+    return false
+  }
+  if (left._tag !== "ExecutorWorkTerminal" || right._tag !== "ExecutorWorkTerminal") return true
+  return samePlannedAttemptExecutorResult(left.result, right.result)
+}
 
 /**
  * The normalized result of asking the opaque executor for current state.
@@ -91,6 +115,15 @@ const PlannedAttemptExecutorProjectionShape = Schema.TaggedUnion({
 export const PlannedAttemptExecutorProjection = PlannedAttemptExecutorProjectionShape
 export type PlannedAttemptExecutorProjection = typeof PlannedAttemptExecutorProjection.Type
 
+/** Distinguishes a passive lifecycle read from reconciliation of one exact ambiguous command. */
+export const PlannedAttemptExecutorObservationPurpose = Schema.TaggedUnion({
+  PassiveLifecycleObservation: {},
+  ReconcileCommand: { command: Schema.Literals(["Begin", "Resume", "Suspend"]) }
+})
+export type PlannedAttemptExecutorObservationPurpose = typeof PlannedAttemptExecutorObservationPurpose.Type
+export const passiveLifecycleObservationPurpose =
+  PlannedAttemptExecutorObservationPurpose.cases.PassiveLifecycleObservation.make({})
+
 export const plannedAttemptExecutorCorrelation = (
   plannedAttempt: PlannedTaskAttempt
 ): PlannedAttemptExecutorCorrelation =>
@@ -118,18 +151,27 @@ export type PlannedAttemptExecutorRequest = typeof PlannedAttemptExecutorRequest
 export class PlannedAttemptExecutorCommandFailure extends Schema.TaggedError<PlannedAttemptExecutorCommandFailure>()(
   "PlannedAttemptExecutorCommandFailure",
   {
-    command: Schema.Literals(["StartOrContinue", "Suspend"]),
+    command: Schema.Literals(["Begin", "Resume", "Suspend"]),
     correlation: PlannedAttemptExecutorCorrelation,
     detail: Schema.String
   }
 ) {}
 
 export interface PlannedAttemptExecutorService {
-  readonly project: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<PlannedAttemptExecutorProjection>
+  /** Passively reads the executor-owned lifecycle report without changing work. */
+  readonly observe: (
+    correlation: PlannedAttemptExecutorCorrelation,
+    purpose: PlannedAttemptExecutorObservationPurpose
+  ) => Effect.Effect<PlannedAttemptExecutorProjection>
+  /** Begins the complete work for an exact planned attempt once. */
+  readonly begin: (
+    request: PlannedAttemptExecutorRequest
+  ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
   readonly requestSuspension: (
     plannedAttempt: PlannedTaskAttempt
   ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
-  readonly startOrContinue: (
+  /** Resumes the same exact attempt only after it was safely suspended. */
+  readonly resume: (
     request: PlannedAttemptExecutorRequest
   ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
 }

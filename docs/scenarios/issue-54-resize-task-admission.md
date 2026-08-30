@@ -10,7 +10,7 @@ worktree, unfinished executor-work responsibility, and process-local task-work
 position. C has none of those facts. Git has the planned A and B worktrees; no
 Git ref or worktree changes as part of the capacity request.
 
-The controlled fake executor reports A and B Running. The Operator then asks
+The controlled fake executor reports A and B `ExecutorWorkExecuting`. The Operator then asks
 Dalph's local control boundary to change task-execution capacity from two to
 one, naming Run revision one as the policy being replaced. Dalph decodes the
 positive capacity, checks the latest journaled policy revision, and appends the
@@ -18,10 +18,10 @@ past-tense Operator-initiated policy change at revision two. Only after that
 append may a later scheduling cycle use capacity one. Receiving or decoding the
 request alone changes nothing.
 
-Dalph does not ask either executor attempt to stop. When A reports Terminal,
+Dalph does not ask either executor attempt to stop. When A reports `ExecutorWorkTerminal`,
 its task-work position becomes available, but B still occupies one position.
 Because usage equals the new limit, Dalph does not claim or plan C. Only after B
-reports Terminal and usage falls below one may Dalph admit C through its
+reports `ExecutorWorkTerminal` and usage falls below one may Dalph admit C through its
 ordinary claim, focused task specification, attempt plan, worktree, and
 executor boundaries.
 

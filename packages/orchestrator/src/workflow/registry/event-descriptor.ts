@@ -33,6 +33,7 @@ import {
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorCommandProjectionObservedRecordKey,
   plannedAttemptExecutorCommandResponseContradictedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorStateObservedRecordKey,
   stoppedAttemptClaimNoReleaseRecordKey,
   workflowRunBeganRecordKey,
@@ -317,12 +318,7 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
       ),
     PlannedAttemptContinuationAuthorized: (event) => ({
       _tag: "GenericEventDescriptor",
-      expectedKey: plannedAttemptContinuationAuthorizedRecordKey(event.plannedAttempt.attemptId, [
-        event.witness.activeTaskContinuationRead.graphObservationOperationId,
-        event.witness.activeTaskContinuationRead.taskClaimObservationOperationId,
-        event.witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId,
-        event.witness.worktreeObservationOperationId
-      ])
+      expectedKey: plannedAttemptContinuationAuthorizedRecordKey(event.plannedAttempt.attemptId, event.witness)
     }),
     PlannedAttemptExecutorCommandIntended: (event) =>
       plannedAttemptExecutorEvent(
@@ -339,6 +335,13 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
           event.commandOrdinal,
           event.projectionOrdinal
         ),
+        event.plannedAttempt,
+        event.commandOrdinal
+      ),
+    PlannedAttemptExecutorCommandResponseObserved: (event) =>
+      plannedAttemptExecutorEvent(
+        { attemptId: event.plannedAttempt.attemptId, runId: event.plannedAttempt.runId },
+        plannedAttemptExecutorCommandResponseObservedRecordKey(event.plannedAttempt.attemptId, event.commandOrdinal),
         event.plannedAttempt,
         event.commandOrdinal
       ),

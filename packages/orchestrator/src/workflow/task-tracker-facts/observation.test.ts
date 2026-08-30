@@ -5,6 +5,8 @@ import { expect, it } from "vitest"
 import { RunId, TaskId, TaskRevision, makeTaskWorkSpecification, TaskWorkSpecification } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TrackerRevision } from "../../authorities/task-tracker/task.js"
+import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
+import { InitialControlPolicy } from "../../control/policy.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../identity.js"
 import {
@@ -1143,6 +1145,104 @@ effectIt.effect("reuses one acknowledged focused-read intent after a lost provid
     expect(result.events.map(({ _tag }) => _tag)).toEqual(["TaskTrackerReadIntentRecorded", "TaskTrackerFactsObserved"])
   })
 )
+
+it("keeps live and replayed target-A focused reads on target A across a Journal interleaving", async () => {
+  const runId = RunId.make("journaled-focused-read-mixed-target")
+  const targetA = FixtureTarget.make("target-A")
+  const targetB = FixtureTarget.make("target-B")
+  const taskId = TaskId.make("mixed-target-task")
+  const operationA = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("journaled-focused-mixed-target-A"),
+    targetA,
+    taskId
+  )
+  const operationB = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("journaled-focused-mixed-target-B"),
+    targetB,
+    taskId
+  )
+  const specificationA = makeTaskWorkSpecification({ body: "target A body", taskId, title: "target A title" })
+  const specificationB = makeTaskWorkSpecification({ body: "target B body", taskId, title: "target B title" })
+  let interleaved = false
+  const provider = Layer.succeed(
+    WorkflowInterpreter,
+    WorkflowInterpreter.of({
+      acquireTaskClaim: () => Effect.die("unused"),
+      readTaskClaim: () => Effect.die("unused"),
+      readTaskWorktree: () => Effect.die("unused"),
+      readTargetLineage: () => Effect.die("unused"),
+      readTrackerGraph: () => Effect.die("unused"),
+      readTaskWorkSpecification: (operation) =>
+        operation.operationId === operationA.operationId
+          ? Effect.succeed(specificationA)
+          : Effect.die("unexpected focused provider read"),
+      reconcileTaskWorktree: () => Effect.die("unused"),
+      recordTaskAttemptPlan: () => Effect.die("unused"),
+      releaseTaskClaim: () => Effect.die("unused")
+    })
+  )
+  const result = await Effect.gen(function* () {
+    const journal = yield* JournalStore
+    yield* journal.beginRun(
+      runId,
+      targetA,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const interleaving = InRunJournal.of({
+      append: (eventRunId, key, event) =>
+        journal.append(eventRunId, key, event).pipe(
+          Effect.tap(() =>
+            !interleaved && event._tag === "TaskTrackerFactsObserved" && event.operationId === operationA.operationId
+              ? Effect.gen(function* () {
+                  interleaved = true
+                  yield* journal.append(
+                    eventRunId,
+                    intentRecordKey(operationB.operationId),
+                    taskTrackerReadIntent(operationB)
+                  )
+                  yield* journal.append(
+                    eventRunId,
+                    outcomeRecordKey(operationB.operationId),
+                    taskTrackerFactsObservedEvent(
+                      operationB.operationId,
+                      makeFocusedTaskWorkSpecificationFactsObserved(operationB, specificationB)
+                    )
+                  )
+                })
+              : Effect.void
+          )
+        ),
+      read: journal.read
+    })
+    const layer = journaledWorkflowInterpreterLayer(runId, provider).pipe(
+      Layer.provide(Layer.succeed(InRunJournal, interleaving))
+    )
+    const { live, replay } = yield* Effect.gen(function* () {
+      const interpreter = yield* WorkflowInterpreter
+      return {
+        live: yield* interpreter.readTaskWorkSpecification(operationA),
+        replay: yield* interpreter.readTaskWorkSpecification(operationA)
+      }
+    }).pipe(Effect.provide(layer))
+    return { live, replay, records: yield* journal.read(runId) }
+  }).pipe(Effect.provide(memoryJournalTestLayer), Effect.runPromise)
+
+  expect(result.live).toEqual(specificationA)
+  expect(result.replay).toEqual(specificationA)
+  expect(result.records.map(({ event }) => event._tag)).toEqual([
+    "WorkflowRunBegan",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved",
+    "TaskTrackerReadIntentRecorded",
+    "TaskTrackerFactsObserved"
+  ])
+  expect(result.records.filter(({ event }) => event._tag === "TaskTrackerFactsObserved")).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ event: expect.objectContaining({ operationId: operationA.operationId }) }),
+      expect.objectContaining({ event: expect.objectContaining({ operationId: operationB.operationId }) })
+    ])
+  )
+})
 
 it("the controlled reader exposes focused specification updates and typed absence", async () => {
   const target = FixtureTarget.make("controlled-target")

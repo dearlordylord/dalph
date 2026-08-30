@@ -17,9 +17,9 @@ export const PlannedAttemptExecutorCommandProjectionOrdinal = Schema.Int.pipe(
 )
 export type PlannedAttemptExecutorCommandProjectionOrdinal = typeof PlannedAttemptExecutorCommandProjectionOrdinal.Type
 
-/** Durable intent recorded before an executor start/continue or suspension request crosses its boundary. */
+/** Durable intent recorded before an executor begin, resume, or suspension request crosses its boundary. */
 export const PlannedAttemptExecutorCommandIntendedEvent = Schema.TaggedStruct("PlannedAttemptExecutorCommandIntended", {
-  command: Schema.Literals(["StartOrContinue", "Suspend"]),
+  command: Schema.Literals(["Begin", "Resume", "Suspend"]),
   initiatedBy: WorkflowActor.cases.DalphCoordinator,
   occurrenceClassification: Schema.Literal("InitiatedAction"),
   ordinal: PlannedAttemptExecutorCommandOrdinal,
@@ -52,6 +52,23 @@ export const PlannedAttemptExecutorCommandProjectionObservedEvent = Schema.Tagge
 )
 export type PlannedAttemptExecutorCommandProjectionObservedEvent =
   typeof PlannedAttemptExecutorCommandProjectionObservedEvent.Type
+
+/**
+ * Settles one exact command with its direct, correlated boundary response.
+ * This is command-response evidence, not acceptance of a lifecycle transition.
+ */
+export const PlannedAttemptExecutorCommandResponseObservedEvent = Schema.TaggedStruct(
+  "PlannedAttemptExecutorCommandResponseObserved",
+  {
+    commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
+    occurrenceClassification: Schema.Literal("NonActionOccurrence"),
+    plannedAttempt: PlannedTaskAttempt,
+    report: PlannedAttemptExecutorReport,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+export type PlannedAttemptExecutorCommandResponseObservedEvent =
+  typeof PlannedAttemptExecutorCommandResponseObservedEvent.Type
 
 /** The direct response to one exact executor command named another Run or attempt. */
 export const PlannedAttemptExecutorCommandResponseContradictedEvent = Schema.TaggedStruct(
@@ -86,7 +103,12 @@ export const PlannedAttemptExecutorStateObservation = Schema.TaggedUnion({
   ExecutorStateNoCurrentReport: {},
   ExecutorStateTemporarilyUnavailable: {},
   ExecutorStateUnreadable: {},
-  ExecutorReportContradiction: { observed: PlannedAttemptExecutorReport }
+  ExecutorReportContradiction: { observed: PlannedAttemptExecutorReport },
+  ExecutorInitialReportCausalityContradiction: { observed: PlannedAttemptExecutorReport },
+  ExecutorLifecycleTransitionContradiction: {
+    accepted: PlannedAttemptExecutorReport,
+    observed: PlannedAttemptExecutorReport
+  }
 })
 export type PlannedAttemptExecutorStateObservation = typeof PlannedAttemptExecutorStateObservation.Type
 
@@ -100,13 +122,6 @@ export const PlannedAttemptExecutorStateObservedEvent = Schema.TaggedStruct("Pla
 })
 export type PlannedAttemptExecutorStateObservedEvent = typeof PlannedAttemptExecutorStateObservedEvent.Type
 
-/** Maximum accepted executor reports that may authorize start-or-continue calls for one exact attempt. */
-export const PlannedAttemptExecutorContinuationLimit = Schema.Int.pipe(
-  Schema.check(Schema.isGreaterThan(0)),
-  Schema.brand("PlannedAttemptExecutorContinuationLimit")
-)
-export type PlannedAttemptExecutorContinuationLimit = typeof PlannedAttemptExecutorContinuationLimit.Type
-
 /** Maximum executor suspension commands Dalph may durably issue for one exact attempt. */
 export const PlannedAttemptExecutorSuspensionLimit = Schema.Int.pipe(
   Schema.check(Schema.isGreaterThan(0)),
@@ -114,10 +129,6 @@ export const PlannedAttemptExecutorSuspensionLimit = Schema.Int.pipe(
 )
 export type PlannedAttemptExecutorSuspensionLimit = typeof PlannedAttemptExecutorSuspensionLimit.Type
 
-const defaultPlannedAttemptExecutorContinuationLimitValue = 3
-export const defaultPlannedAttemptExecutorContinuationLimit = PlannedAttemptExecutorContinuationLimit.make(
-  defaultPlannedAttemptExecutorContinuationLimitValue
-)
 const defaultPlannedAttemptExecutorSuspensionLimitValue = 3
 export const defaultPlannedAttemptExecutorSuspensionLimit = PlannedAttemptExecutorSuspensionLimit.make(
   defaultPlannedAttemptExecutorSuspensionLimitValue
@@ -132,7 +143,7 @@ export const PlannedAttemptExecutorWorkResponsibilityBeganEvent = Schema.TaggedS
   { plannedAttempt: PlannedTaskAttempt, version: Schema.Literal(workflowJournalEventVersion) }
 )
 
-/** Records the executor's latest complete-attempt report after the boundary returns. */
+/** Accepts one distinct lifecycle transition reported for the exact executor work. */
 export const PlannedAttemptExecutorWorkReportedEvent = Schema.TaggedStruct("PlannedAttemptExecutorWorkReported", {
   ordinal: PlannedAttemptExecutorReportOrdinal,
   report: PlannedAttemptExecutorReport,
@@ -142,6 +153,7 @@ export const PlannedAttemptExecutorWorkReportedEvent = Schema.TaggedStruct("Plan
 export const PlannedAttemptExecutorJournalEvent = Schema.Union([
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorCommandResponseContradictedEvent,
   PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,

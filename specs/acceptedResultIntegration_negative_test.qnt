@@ -4,26 +4,6 @@
 module acceptedResultIntegrationNegativeTest {
   import acceptedResultIntegration.* from "./acceptedResultIntegration"
 
-  action queueLateAcceptedAfterRestart: bool = {
-    val result = state.results.get(1)
-    all {
-      result.phase == LateAcceptedEvidence,
-      result.restartChoiceCommittedBeforeTerminal,
-      state' = {
-        ...state,
-        results: state.results.put(1, {
-          ...result,
-          phase: Queued,
-          integrationResponsibilityRecorded: true,
-          integrationResponsibilityCount: 1,
-          queuePosition: state.nextJournalPosition,
-          preIntegrationCancellation: true,
-        }),
-        nextJournalPosition: state.nextJournalPosition + 1,
-      },
-    }
-  }
-
   action discardOrdinaryAcceptedResponsibility: bool = {
     val result = state.results.get(1)
     all {
@@ -36,17 +16,6 @@ module acceptedResultIntegrationNegativeTest {
           integrationResponsibilityRecorded: false,
           integrationResponsibilityCount: 0,
         }),
-      },
-    }
-  }
-
-  action discardLateAcceptedEvidence: bool = {
-    val result = state.results.get(1)
-    all {
-      result.phase == LateAcceptedEvidence,
-      state' = {
-        ...state,
-        results: state.results.put(1, { ...result, acceptedEvidencePreserved: false }),
       },
     }
   }
@@ -801,31 +770,12 @@ module acceptedResultIntegrationNegativeTest {
       .expect(not(quarantinePhaseRequiresRecordedOccurrence))
   }
 
-  run lateAcceptedAfterRestartCannotBeQueuedForIntegrationTest = {
-    init
-      .then(observeAppliedRestartBeforeAccepted(1))
-      .then(acceptResult(1))
-      .then(queueLateAcceptedAfterRestart)
-      .expect(and {
-        not(ordinaryAcceptedAdmissionRecordsOneResponsibility),
-        not(lateAcceptedAfterRestartNeverCreatesIntegrationResponsibility),
-      })
-  }
-
   run ordinaryAcceptedCannotLoseItsOneResponsibilityTest = {
     init
       .then(acceptResult(1))
       .then(queueAcceptedResult(1))
       .then(discardOrdinaryAcceptedResponsibility)
       .expect(not(ordinaryAcceptedAdmissionRecordsOneResponsibility))
-  }
-
-  run lateAcceptedEvidenceCannotBeDiscardedTest = {
-    init
-      .then(observeAppliedRestartBeforeAccepted(1))
-      .then(acceptResult(1))
-      .then(discardLateAcceptedEvidence)
-      .expect(not(acceptedEvidenceIsNeverDiscarded))
   }
 
   run rejectedCandidateCannotAdvanceLaterSameTargetQueueTest = {

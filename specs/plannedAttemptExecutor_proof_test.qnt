@@ -1,135 +1,70 @@
 module plannedAttemptExecutorEvidenceProofTest {
   import plannedAttemptExecutorEvidenceProof.* from "./plannedAttemptExecutor_proof"
 
-  run directResponseUsesExactIntentAndReleasesOnlyForSafeTest = {
-    init
-      .then(recordSuspendIntent)
-      .then(callExecutor)
-      .then(recordDirectResponse(SafelySuspendedReport))
-      .then(settleDirectResponse)
-      .expect(and {
-        not(state.positionHeld),
-        everyCallHasDurableIntent,
-        directResponsesAndProjectionsStayDistinct,
-        settlementUsesExactOrdinalAndCorrelation,
-        positionReleasesOnlyForSafeOrTerminalEvidence,
-      })
+  run fourPassiveExecutingReadsKeepOneReportOrdinalTest = {
+    init.then(recordBeginIntent).then(callBegin).then(observeBeginResponse(ExecutingReport)).then(settleBeginResponse)
+      .then(observeUnchangedExecuting).then(observeUnchangedExecuting).then(observeUnchangedExecuting).then(observeUnchangedExecuting)
+      .expect(and { fourthUnchangedObservationReached, state.acceptedReportOrdinal == 1, state.callCount == 1, state.durableObservationCount == 0, state.proposalIdentityCount == 1, unchangedExecutingObservationsKeepOrdinal, unchangedExecutingObservationsAreProcessLocal, passiveObservationsDoNotCallExecutor })
   }
 
-  run lostResponseUsesExactCommandProjectionTest = {
-    init
-      .then(recordStartIntent)
-      .then(callExecutor)
-      .then(loseResponse)
-      .then(recordExactCommandProjection(RunningReport))
-      .then(settleCommandProjection)
-      .expect(and {
-        state.positionHeld,
-        directResponsesAndProjectionsStayDistinct,
-        settlementUsesExactOrdinalAndCorrelation,
-      })
+  run passiveTerminalReadAdvancesOrdinalAndReleasesTest = {
+    init.then(recordBeginIntent).then(callBegin).then(observeBeginResponse(ExecutingReport)).then(settleBeginResponse)
+      .then(observeTerminal)
+      .expect(and { state.acceptedReportOrdinal == 2, terminalObservationReached, safeAndTerminalReleasePosition })
   }
 
-  run unavailableProjectionConsumesOneReadAndRecoveryResetsAllowanceTest = {
-    init
-      .then(recordSuspendIntent)
-      .then(callExecutor)
-      .then(loseResponse)
-      .then(recordUnavailableCommandProjection)
-      .expect(and {
-        state.positionHeld,
-        state.settlementCount == 0,
-        oneReconciliationReadPerActivation,
-        ambiguousOrUnavailableEvidenceRetainsPosition,
-      })
-      .then(activateRecovery)
-      .then(recordExactCommandProjection(TerminalReport))
-      .then(settleCommandProjection)
-      .expect(not(state.positionHeld) and positionReleasesOnlyForSafeOrTerminalEvidence)
+  run beginSafeResponseCannotSettleTest = {
+    init.then(recordBeginIntent).then(callBegin).then(observeBeginResponse(SafeReport))
+      .expect(firstAcceptedReportIsExecuting)
+      .then(settleBeginResponse.fail())
   }
 
-  run freshStateProjectionRequiresNoCommandAndDoesNotSettleOneTest = {
-    init
-      .then(recordFreshSafeStateProjection)
-      .then(acceptFreshStateProjection)
-      .expect(and {
-        not(state.positionHeld),
-        freshStateProjectionNeverSettlesCommand,
-        positionReleasesOnlyForSafeOrTerminalEvidence,
-      })
-  }
-}
-
-module plannedAttemptExecutorStartBoundProofTest {
-  import plannedAttemptExecutorStartBoundProof.* from "./plannedAttemptExecutor_proof"
-
-  run threeLostStartResponsesConsumeTheWholeBudgetTest = {
-    init
-      .then(recordStartIntent).then(callStart).then(loseStartResponse).then(observeProjectedRunning).then(settleRunning)
-      .then(recordStartIntent).then(callStart).then(loseStartResponse).then(observeProjectedRunning).then(settleRunning)
-      .then(recordStartIntent).then(callStart).then(loseStartResponse).then(observeProjectedRunning).then(settleRunning)
-      .expect(and {
-        state.intentCount == START_LIMIT,
-        state.callCount == START_LIMIT,
-        state.settlementCount == START_LIMIT,
-        everyStartCallHasItsIntent,
-        lostResponsesStillConsumeStartBudget,
-        startLimitBlocksFourthCommand,
-      })
-      .then(recordStartIntent.fail())
+  run unchangedSuspendResponseSettlesWithoutReportTest = {
+    init.then(recordBeginIntent).then(callBegin).then(observeBeginResponse(ExecutingReport)).then(settleBeginResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(observeSuspendResponse(ExecutingReport)).then(settleSuspendResponse)
+      .expect(and { state.settlementCount == 2, state.responseCount == 2, state.acceptedReportOrdinal == 1, commandResponsesAndAcceptedReportsStayDistinct })
   }
 
-  run terminalStartResponseReleasesPositionTest = {
-    init
-      .then(recordStartIntent)
-      .then(callStart)
-      .then(observeDirectTerminal)
-      .then(settleTerminal)
-      .expect(not(state.positionHeld) and terminalStartReleasesPosition)
+  run safeThenResumeSameWorkTest = {
+    init.then(recordBeginIntent).then(callBegin).then(observeBeginResponse(ExecutingReport)).then(settleBeginResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(observeSuspendResponse(SafeReport)).then(settleSuspendResponse)
+      .then(recordResumeIntent).then(callResume).then(observeResumeResponse(TerminalReport)).then(settleResumeResponse)
+      .expect(and { state.stage == Terminal, state.acceptedReportOrdinal == 3, safeAndTerminalReleasePosition, beginOccursOnce })
   }
 }
 
 module plannedAttemptExecutorSuspendBoundProofTest {
   import plannedAttemptExecutorSuspendBoundProof.* from "./plannedAttemptExecutor_proof"
 
-  run threeLostRunningSuspendResponsesAllowOnlyReadOnlySafeRecoveryTest = {
+  run threeExecutingResponsesThenPassiveSafeTest = {
     init
-      .then(recordSuspendIntent).then(callSuspend).then(loseSuspendResponse).then(observeProjectedRunning).then(settleRunning)
-      .then(recordSuspendIntent).then(callSuspend).then(loseSuspendResponse).then(observeProjectedRunning).then(settleRunning)
-      .then(recordSuspendIntent).then(callSuspend).then(loseSuspendResponse).then(observeProjectedRunning).then(settleRunning)
-      .expect(and {
-        state.intentCount == SUSPEND_LIMIT,
-        state.callCount == SUSPEND_LIMIT,
-        state.settlementCount == SUSPEND_LIMIT,
-        everySuspendCallHasItsIntent,
-        lostResponsesStillConsumeSuspendBudget,
-        suspendLimitBlocksFourthCommand,
-      })
-      .then(activateReadOnlyRecovery)
-      .then(recordFreshSafeStateProjection)
-      .then(acceptFreshSafeStateProjection)
-      .expect(and {
-        not(state.positionHeld),
-        state.callCount == SUSPEND_LIMIT,
-        postLimitRecoveryIsReadOnly,
-        positionReleasesOnlyForSafeOrTerminalEvidence,
-      })
+      .then(recordSuspendIntent).then(callSuspend).then(observeResponse(ExecutingReport)).then(settleResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(observeResponse(ExecutingReport)).then(settleResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(observeResponse(ExecutingReport)).then(settleResponse)
+      .expect(and { state.intentCount == SUSPEND_LIMIT, suspendLimitBlocksFourthCommand, everySuspendCallHasItsIntent })
+      .then(activateReadOnlyRecovery).then(observePassiveSafe)
+      .expect(and { readOnlySafeReached, postLimitRecoveryIsReadOnly, positionReleasesOnlyForSafeOrTerminalEvidence })
   }
 
-  run fourthSuspendCommandIsBlockedTest = {
+  run fourthSuspendIsBlockedTest = {
     init
-      .then(recordSuspendIntent).then(callSuspend).then(observeDirectRunning).then(settleRunning)
-      .then(recordSuspendIntent).then(callSuspend).then(observeDirectRunning).then(settleRunning)
-      .then(recordSuspendIntent).then(callSuspend).then(observeDirectRunning).then(settleRunning)
+      .then(recordSuspendIntent).then(callSuspend).then(observeResponse(ExecutingReport)).then(settleResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(observeResponse(ExecutingReport)).then(settleResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(observeResponse(ExecutingReport)).then(settleResponse)
       .then(recordSuspendIntent.fail())
   }
 
-  run directSafeSuspendResponseReleasesPositionTest = {
-    init
+  run lostSuspendMustReconcileBeforeRetryTest = {
+    init.then(recordSuspendIntent).then(callSuspend).then(loseResponse)
+      .expect(and { suspendResponseLostReached, lostSuspendResponseConsumesCommandBudget, lostSuspendRequiresReconciliationBeforeRetry })
+      .then(recordSuspendIntent.fail())
+  }
+
+  run lostSuspendProjectionSettlesBeforeRetryTest = {
+    init.then(recordSuspendIntent).then(callSuspend).then(loseResponse)
+      .then(observeProjection(ExecutingReport)).then(settleProjection)
+      .expect(and { state.projectionSettlementCount == 1, projectedSuspendSettledReached, lostSuspendResponseConsumesCommandBudget, lostSuspendRequiresReconciliationBeforeRetry })
       .then(recordSuspendIntent)
-      .then(callSuspend)
-      .then(observeDirectSafe)
-      .then(settleSafe)
-      .expect(not(state.positionHeld) and positionReleasesOnlyForSafeOrTerminalEvidence)
+      .expect(and { state.intentCount == 2, state.projectionSettlementCount == 1, lostSuspendResponseConsumesCommandBudget, lostSuspendRequiresReconciliationBeforeRetry })
   }
 }

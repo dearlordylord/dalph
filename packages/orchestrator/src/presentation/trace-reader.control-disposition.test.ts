@@ -347,7 +347,7 @@ const cancellationSettlementRecords = (): ReadonlyArray<JournalRecord> => {
     record(
       6,
       PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "StartOrContinue",
+        command: "Begin",
         initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
         occurrenceClassification: "InitiatedAction",
         ordinal: commandOrdinal,
@@ -360,7 +360,7 @@ const cancellationSettlementRecords = (): ReadonlyArray<JournalRecord> => {
       7,
       PlannedAttemptExecutorWorkReportedEvent.make({
         ordinal: reportOrdinal,
-        report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
           correlation: { attemptId: controlAttempt.attemptId, runId }
         }),
         version: workflowJournalEventVersion
@@ -384,7 +384,7 @@ const cancellationSettlementRecords = (): ReadonlyArray<JournalRecord> => {
         initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
         occurrenceClassification: "InitiatedAction",
         plannedAttempt: controlAttempt,
-        proof: { _tag: "CommandResponse", reportOrdinal },
+        proof: { _tag: "AcceptedReport", reportOrdinal },
         version: workflowJournalEventVersion
       }),
       runId
@@ -427,7 +427,7 @@ const establishCandidateCleanupPrefix = Effect.fn("TraceReaderControlDisposition
       cleanupRunId,
       plannedAttemptExecutorCommandIntendedRecordKey(attempt.attemptId, commandOrdinal),
       PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "StartOrContinue",
+        command: "Begin",
         initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
         occurrenceClassification: "InitiatedAction",
         ordinal: commandOrdinal,
@@ -440,7 +440,7 @@ const establishCandidateCleanupPrefix = Effect.fn("TraceReaderControlDisposition
       plannedAttemptExecutorWorkReportedRecordKey(attempt.attemptId, reportOrdinal),
       PlannedAttemptExecutorWorkReportedEvent.make({
         ordinal: reportOrdinal,
-        report: PlannedAttemptExecutorReport.cases.Terminal.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation: { attemptId: attempt.attemptId, runId: cleanupRunId },
           result: { _tag: "Accepted", acceptedResult: candidateAcceptedResult }
         }),
@@ -598,7 +598,7 @@ it.effect("fails closed for a cancelled-attempt relinquishment with malformed ex
         ...relinquishment,
         event: CancelledAttemptImplementationResponsibilityRelinquishedEvent.make({
           ...relinquishment.event,
-          proof: { _tag: "CommandResponse", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2) }
+          proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(2) }
         })
       }
     ]
@@ -625,7 +625,7 @@ it.effect("fails closed for forward executor work after Run cancellation", () =>
     const forwardWork = record(
       Number(last.position) + 1,
       PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "StartOrContinue",
+        command: "Begin",
         initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
         occurrenceClassification: "InitiatedAction",
         ordinal: PlannedAttemptExecutorCommandOrdinal.make(2),
@@ -725,7 +725,8 @@ it.effect("fails closed for malformed Stop abandonment and stopped-claim prefixe
     if (abandonment?.event._tag !== "AttemptImplementationAbandoned") {
       return yield* Effect.die("Stop validation fixture did not record abandonment")
     }
-    const lastRecord = records.at(-1)
+    const lastElementOffset = -1
+    const lastRecord = records.at(lastElementOffset)
     if (lastRecord === undefined) return yield* Effect.die("Stop validation fixture is empty")
     const reindex = (values: ReadonlyArray<JournalRecord>): ReadonlyArray<JournalRecord> =>
       values.map((item, index) => ({ ...item, position: JournalPosition.make(index + 1) }))
@@ -735,17 +736,17 @@ it.effect("fails closed for malformed Stop abandonment and stopped-claim prefixe
         records: reindex(records.filter(({ event }) => event._tag !== "AttemptChoiceApplied"))
       },
       {
-        detail: "requires its exact safe or terminal executor proof",
+        detail: "requires its exact accepted Safe executor proof",
         records: reindex(
           records.map((item) =>
-            item.event._tag !== "AttemptImplementationAbandoned" || item.event.proof._tag !== "CommandResponse"
+            item.event._tag !== "AttemptImplementationAbandoned"
               ? item
               : {
                   ...item,
                   event: {
                     ...item.event,
                     proof: {
-                      _tag: "CommandResponse" as const,
+                      _tag: "AcceptedReport" as const,
                       reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(
                         Number(item.event.proof.reportOrdinal) + 1
                       )

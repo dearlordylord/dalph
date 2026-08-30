@@ -36,7 +36,6 @@ import {
   attemptChoiceControlLayer,
   ClaimOwner,
   ClaimToken,
-  continuePlannedAttemptExecutorWork,
   EvidenceStore,
   FixtureTarget,
   InitialControlPolicy,
@@ -47,14 +46,13 @@ import {
   OperationId,
   OperationIdAllocator,
   observePlannedAttemptExecutorState,
-  observeAttemptStoppageExecutor,
   PlannedAttemptProtocolController,
   type PlannedAttemptProtocolControllerService,
   plannedAttemptProtocolControllerLayer,
   PlannedTaskAttemptPlanner,
   recordStoppedAttemptClaimNoRelease,
   makeApplicationExitLifecycle,
-  requestPlannedAttemptExecutorSuspension,
+  resumePlannedAttemptExecutorWork,
   TaskClaimReleaseFailure,
   TaskLifecycle,
   TaskAttemptPlanRecordAcknowledged,
@@ -81,9 +79,10 @@ import {
 } from "../../../orchestrator/src/authorities/git/target-lineage.js"
 import { FixtureReadError } from "../../../orchestrator/src/authorities/task-tracker/graph-reader.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
+import { taskTrackerTargetKey } from "../../../orchestrator/src/authorities/task-tracker/target.js"
 import { makeRunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { deriveFreshWorkflowDecisions } from "../../../orchestrator/src/coordination/run/fresh-workflow.js"
-import { latestReconstructedTaskGraph } from "../../../orchestrator/src/coordination/reconstruction/graph-knowledge.js"
+import { reconstructedTaskGraphFor } from "../../../orchestrator/src/coordination/reconstruction/graph-knowledge.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow-journal/journaled-interpreter.js"
 import {
@@ -96,6 +95,7 @@ import {
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../orchestrator/src/workflow-journal/record-key.js"
@@ -120,12 +120,13 @@ import {
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
   type PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
-import { continuePlannedAttemptExecutorWorkWithPermit } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/suspension-commands.js"
+import { beginPlannedAttemptExecutorWorkWithPermit } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/suspension-commands.js"
 import {
   queueAcceptedResultIntegrationResponsibility,
   startQueuedIntegration
@@ -244,30 +245,27 @@ type ExecutorObservationTag = PlannedAttemptExecutorStateObservation["_tag"]
 
 const executorEvidenceProjection = (
   currentFailure: ExecutorObservationTag | undefined,
-  report: PlannedAttemptExecutorReport | undefined,
-  restartSelected: boolean
+  report: PlannedAttemptExecutorReport | undefined
 ): string => {
   if (currentFailure === "ExecutorReportContradiction") return "ExecutorContradiction"
   if (currentFailure !== undefined && currentFailure !== "ExactExecutorReport") return "ExecutorUnavailable"
-  if (report?._tag === "SafelySuspended") return "ExactSafelySuspended"
-  if (report?._tag === "Running") return "ExactRunning"
-  if (report?._tag !== "Terminal") return "ExecutorUnavailable"
-  if (!restartSelected) return "ExactTerminal"
-  if (report.result._tag === "Accepted") return "ExactAcceptedTerminal"
-  return report.result._tag === "Completed" ? "ExactCompletedTerminal" : "ExactFailedTerminal"
+  if (report?._tag === "ExecutorWorkSafelySuspended") return "ExactSafelySuspended"
+  if (report?._tag === "ExecutorWorkExecuting") return "ExactExecuting"
+  if (report?._tag !== "ExecutorWorkTerminal") return "ExecutorUnavailable"
+  return "ExactTerminal"
 }
 
 it("projects every newer non-exact executor observation instead of stale exact evidence", () => {
-  const staleRunning = PlannedAttemptExecutorReport.cases.Running.make({
+  const staleExecuting = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
     correlation: { attemptId: plannedAttempt.attemptId, runId }
   })
-  expect(executorEvidenceProjection("ExecutorReportContradiction", staleRunning, false)).toBe("ExecutorContradiction")
+  expect(executorEvidenceProjection("ExecutorReportContradiction", staleExecuting)).toBe("ExecutorContradiction")
   for (const outcome of [
     "ExecutorStateNoCurrentReport",
     "ExecutorStateTemporarilyUnavailable",
     "ExecutorStateUnreadable"
   ] as const) {
-    expect(executorEvidenceProjection(outcome, staleRunning, false)).toBe("ExecutorUnavailable")
+    expect(executorEvidenceProjection(outcome, staleExecuting)).toBe("ExecutorUnavailable")
   }
 })
 
@@ -275,6 +273,7 @@ const RequestIdProjection = Schema.Struct({ nonce: ITFBigInt, runId: ITFBigInt }
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
     appliedChoiceCount: ITFBigInt,
+    appliedChoiceCountAtTerminalObservation: ITFBigInt,
     authorizedFingerprint: Variant,
     claimObservation: Variant,
     claimReleaseAuthorizedByExactRead: Schema.Boolean,
@@ -302,20 +301,16 @@ const SpecProjection = Schema.Struct({
     independentTaskSelected: Schema.Boolean,
     integrationSelected: Schema.Boolean,
     lastControlResult: Variant,
-    lastSettledStopCommandOrdinal: ITFBigInt,
+    heldResumeAdmitted: Schema.Boolean,
+    heldResumeCancellationCount: ITFBigInt,
     logsPreserved: Schema.Boolean,
     positionHeld: Schema.Boolean,
     quiescenceUnbroken: Schema.Boolean,
+    resumeCommandIntentCount: ITFBigInt,
+    resumeBoundaryCallCount: ITFBigInt,
     resumedAttempt: Variant,
     sessionHistoryPreserved: Schema.Boolean,
-    stopCommandCallCount: ITFBigInt,
-    stopCommandIntentCount: ITFBigInt,
-    stopCommandSettlementCount: ITFBigInt,
-    stopProjectionsThisActivation: ITFBigInt,
-    stopRecoveryCount: ITFBigInt,
-    stopResponseAmbiguous: Schema.Boolean,
     stopStage: Variant,
-    suspensionCommandCountSinceSafeEvidence: ITFBigInt,
     unresolvedClaimReleaseResponsibility: Schema.Boolean,
     winningRequestId: RequestIdProjection,
     wipPreserved: Schema.Boolean,
@@ -346,11 +341,6 @@ const SpecProjection = Schema.Struct({
     successorExecutorStartCount: ITFBigInt,
     successorExecutorResponsibilityRetained: Schema.Boolean,
     replacementProcessLossCount: ITFBigInt,
-    completedResultPreserved: Schema.Boolean,
-    failedResultPreserved: Schema.Boolean,
-    lateAcceptedCommitPreserved: Schema.Boolean,
-    lateAcceptedEvidencePreserved: Schema.Boolean,
-    lateAcceptedIntegrationResponsibilityCount: ITFBigInt,
     p1BranchPreserved: Schema.Boolean,
     p1CommitsPreserved: Schema.Boolean,
     p1JournalEvidencePreserved: Schema.Boolean,
@@ -405,10 +395,8 @@ const taskFactReconciliationDriver = defineDriver(
     applyStopF2: {},
     beginReplacementFactsFromRetainedSafeSuspension: {},
     beginIntegration: {},
-    callStoppage: {},
     init: {},
     loseClaimReleaseResponse: {},
-    loseStoppageResponse: {},
     observeF2Change: {},
     observeAbsentClaim: {},
     observeExactClaim: {},
@@ -427,21 +415,10 @@ const taskFactReconciliationDriver = defineDriver(
     observeReplacementTaskNotEligible: {},
     observeReplacementW1NotReady: {},
     observeReplacementW1Unreadable: {},
-    observeRestartAccepted: {},
-    observeRestartCompleted: {},
-    observeRestartExecutorContradiction: {},
-    observeRestartExecutorUnavailable: {},
-    observeRestartFailed: {},
-    observeRestartRunning: {},
-    observeRestartSafelySuspended: {},
     observeForeignClaim: {},
     observeUnreadableClaim: {},
     projectClaimReleased: {},
     projectClaimStillExact: {},
-    projectExactRunningForStoppage: {},
-    projectExactSafeForStoppage: {},
-    projectExactTerminalForStoppage: {},
-    projectReadOnlyExactSafeAfterStoppageLimit: {},
     prepareCleanSuccessorW2: {},
     readFreshExactClaim: {},
     readFreshExactExecutor: {},
@@ -450,11 +427,9 @@ const taskFactReconciliationDriver = defineDriver(
     readFreshExactSpecification: {},
     readFreshExactWorktree: {},
     recordClaimReleaseIntent: {},
-    recordStoppageIntent: {},
     recoverClaimActivation: {},
     recoverReplacementAppendAbsent: {},
     recoverReplacementAppendPresent: {},
-    recoverStopActivation: {},
     redeliverExactF2Choice: {},
     rejectContinuePastIntegrationCutoff: {},
     rejectLosingF2Choice: {},
@@ -463,9 +438,7 @@ const taskFactReconciliationDriver = defineDriver(
     rejectRestartPastIntegrationCutoff: {},
     rejectStopPastIntegrationCutoff: {},
     releaseExactClaim: {},
-    requireStoppageReconciliation: {},
     recordPlannedAttemptReplacement: {},
-    breakRestartSafeSuspension: {},
     selectIndependentTaskB: {},
     startSuccessorExecutor: {}
   },
@@ -479,8 +452,8 @@ const taskFactReconciliationDriver = defineDriver(
     let replacementTaskEligible = true
     let replacementTargetHeadReadable = true
     let executorAuthority: PlannedAttemptExecutorReport | undefined =
-      PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
-    let nextStartOrContinueReport: PlannedAttemptExecutorReport = PlannedAttemptExecutorReport.cases.Running.make({
+      PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+    let nextBeginReport: PlannedAttemptExecutorReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
       correlation
     })
     let activeRequestId = continueD1
@@ -501,15 +474,10 @@ const taskFactReconciliationDriver = defineDriver(
     let replacementProcessLossCount = 0
     let successorAdmissionCount = 0
     let successorAdmissionReservation: DeliveryAdmissionReservation | undefined
-    let restartSuspensionReport: PlannedAttemptExecutorReport = PlannedAttemptExecutorReport.cases.Running.make({
-      correlation
-    })
-    let restartSuspensionBoundary = false
     let controller: DeliveryRuntimeAdmissionController | undefined
-    let suspensionCallCount = 0
-    let stopProjectionBaseline = 0
-    let stopRecoveryCount = 0
+    let freshExecutorObservationPosition = 0
     let releaseCallCount = 0
+    let releaseCallCountAtExactObservation = 0
     // Captures the real release-boundary count when the latest authoritative
     // claim observation becomes non-exact. It is chronology input, not a
     // mirrored decision: any later production boundary call changes the
@@ -521,12 +489,6 @@ const taskFactReconciliationDriver = defineDriver(
     // this baseline only classifies whether that activation has performed its
     // required stopped-claim observation yet.
     let claimObservationBaseline = 0
-    let commandIntentSignal = Deferred.makeUnsafe<void>()
-    let commandIntentGate = Deferred.makeUnsafe<void>()
-    let commandCallSignal = Deferred.makeUnsafe<void>()
-    let commandResponse = Deferred.makeUnsafe<PlannedAttemptExecutorReport>()
-    let pauseCommandIntent = false
-    let pendingCommand: Fiber.Fiber<PlannedAttemptExecutorReport, unknown> | undefined
     let releaseIntentSignal = Deferred.makeUnsafe<void>()
     let releaseIntentGate = Deferred.makeUnsafe<void>()
     let releaseCallSignal = Deferred.makeUnsafe<void>()
@@ -547,11 +509,6 @@ const taskFactReconciliationDriver = defineDriver(
             runId: eventRunId
           } satisfies JournalRecord
           records = [...records, record]
-          if (pauseCommandIntent && event._tag === "PlannedAttemptExecutorCommandIntended") {
-            pauseCommandIntent = false
-            yield* Deferred.succeed(commandIntentSignal, undefined)
-            yield* Deferred.await(commandIntentGate)
-          }
           if (pauseReleaseIntent && event._tag === "TaskClaimReleaseIntended") {
             pauseReleaseIntent = false
             yield* Deferred.succeed(releaseIntentSignal, undefined)
@@ -601,7 +558,7 @@ const taskFactReconciliationDriver = defineDriver(
       })
     )
     const executor = PlannedAttemptExecutor.of({
-      project: () =>
+      observe: () =>
         Effect.succeed(
           executorAuthority === undefined
             ? PlannedAttemptExecutorProjection.cases.NoReport.make({
@@ -615,26 +572,22 @@ const taskFactReconciliationDriver = defineDriver(
                 })
               : PlannedAttemptExecutorProjection.cases.Exact.make({ report: executorAuthority })
         ),
-      requestSuspension: () =>
-        restartSuspensionBoundary
-          ? Effect.sync(() => {
-              suspensionCallCount += 1
-              executorAuthority = restartSuspensionReport
-              return restartSuspensionReport
-            })
-          : Effect.gen(function* () {
-              suspensionCallCount += 1
-              yield* Deferred.succeed(commandCallSignal, undefined)
-              return yield* Deferred.await(commandResponse)
-            }),
-      startOrContinue: (request: PlannedAttemptExecutorRequest) =>
+      requestSuspension: () => Effect.die("terminal choice conformance never issues Suspend"),
+      begin: (request: PlannedAttemptExecutorRequest) =>
         Effect.sync(() => {
           const attempt = request.plannedAttempt
           if (plannedTaskAttemptEquivalence(attempt, successorAttempt)) {
-            return PlannedAttemptExecutorReport.cases.Running.make({ correlation: successorCorrelation })
+            return PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation: successorCorrelation })
           }
-          const report = nextStartOrContinueReport
-          nextStartOrContinueReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+          const report = nextBeginReport
+          nextBeginReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+          executorAuthority = report
+          return report
+        }),
+      resume: () =>
+        Effect.sync(() => {
+          const report = nextBeginReport
+          nextBeginReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
           executorAuthority = report
           return report
         })
@@ -789,11 +742,12 @@ const taskFactReconciliationDriver = defineDriver(
         const reduction = reduceWorkflowJournalHistory(runId, records)
         if (reduction._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(reduction)
         const runState = reduction.runState
-        const currentGraph = Option.getOrUndefined(latestReconstructedTaskGraph(runState.graphKnowledge))
+        const currentGraph = Option.getOrUndefined(reconstructedTaskGraphFor(runState.graphKnowledge, target))
         const currentGraphOperationId = runState.graphKnowledge.taskTrackerFacts.findLast(
           (observation) =>
-            observation._tag === "CompleteTaskTrackerFacts" ||
-            observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
+            (observation._tag === "CompleteTaskTrackerFacts" ||
+              observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
+            taskTrackerTargetKey(observation.target) === taskTrackerTargetKey(target)
         )?.operationId
         const acceptedAt = runState.appliedThrough
         const runControlPolicy = Option.getOrUndefined(runState.controlPolicy)
@@ -805,15 +759,19 @@ const taskFactReconciliationDriver = defineDriver(
         ) {
           return yield* Effect.die("current delivery frame must be reconstructable")
         }
-        return deriveFreshWorkflowDecisions({
-          acceptedAt,
-          currentGraph,
-          currentGraphOperationId,
-          pause: runState.pause,
-          responsibility: runState.responsibility,
-          runControlPolicy,
-          workflowHistory: runState.workflowHistory
-        })
+        return deriveFreshWorkflowDecisions(
+          {
+            acceptedAt,
+            currentGraph,
+            currentGraphOperationId,
+            pause: runState.pause,
+            responsibility: runState.responsibility,
+            runControlPolicy,
+            workflowHistory: runState.workflowHistory
+          },
+          new Set(),
+          target
+        )
       })
     const requireController = () =>
       controller === undefined ? Effect.die("admission controller not initialized") : Effect.succeed(controller)
@@ -927,13 +885,6 @@ const taskFactReconciliationDriver = defineDriver(
           })
         )
       })
-    const resetCommandBoundary = () => {
-      commandIntentSignal = Deferred.makeUnsafe<void>()
-      commandIntentGate = Deferred.makeUnsafe<void>()
-      commandCallSignal = Deferred.makeUnsafe<void>()
-      commandResponse = Deferred.makeUnsafe<PlannedAttemptExecutorReport>()
-      pauseCommandIntent = true
-    }
     const resetReleaseBoundary = () => {
       releaseIntentSignal = Deferred.makeUnsafe<void>()
       releaseIntentGate = Deferred.makeUnsafe<void>()
@@ -947,8 +898,10 @@ const taskFactReconciliationDriver = defineDriver(
         releaseResponse = Deferred.makeUnsafe<"Failure" | "Success">()
         pauseReleaseIntent = false
         pendingReleaseCallBaseline = releaseCallCount
-        const selected = yield* transition("ReleaseStoppedAttemptClaim")
-        if (selected._tag !== "ReleaseStoppedAttemptClaim") return yield* Effect.die("wrong release transition")
+        const selected = yield* transition("RetryStoppedAttemptClaimRelease")
+        if (selected._tag !== "RetryStoppedAttemptClaimRelease") {
+          return yield* Effect.die("wrong stopped-claim release retry transition")
+        }
         pendingRelease = yield* provideInterpreter(
           Effect.gen(function* () {
             yield* (yield* WorkflowInterpreter).releaseTaskClaim(selected.operation)
@@ -987,12 +940,6 @@ const taskFactReconciliationDriver = defineDriver(
       }
       return undefined
     }
-    const executorProjectionCount = () =>
-      records.filter(
-        ({ event }) =>
-          event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
-          event._tag === "PlannedAttemptExecutorStateObserved"
-      ).length
     const postChoiceRecords = () => {
       const choice = latestChoice()
       return choice === undefined ? [] : records.filter(({ position }) => position > choice.position)
@@ -1020,12 +967,9 @@ const taskFactReconciliationDriver = defineDriver(
         claim: later.some(
           ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskClaimFacts"
         ),
-        executor: later.some(
-          ({ event }) =>
-            event._tag === "PlannedAttemptExecutorStateObserved" &&
-            event.observation._tag === "ExactExecutorReport" &&
-            event.observation.report._tag === "SafelySuspended"
-        ),
+        executor:
+          freshExecutorObservationPosition >
+          (changedSpecification === undefined ? choice.position : changedSpecification.position),
         graph: later.some(
           ({ event }) =>
             event._tag === "TaskTrackerFactsObserved" &&
@@ -1051,9 +995,7 @@ const taskFactReconciliationDriver = defineDriver(
       if (choice?.choice !== "ContinueExistingAttempt") return "NotContinuing"
       const later = postChoiceRecords()
       if (
-        later.some(
-          ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "StartOrContinue"
-        )
+        later.some(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Resume")
       )
         return "ContinueResumed"
       const latestSpecification = later.findLast(
@@ -1146,6 +1088,9 @@ const taskFactReconciliationDriver = defineDriver(
         pendingRelease.pollUnsafe() === undefined &&
         releaseCallCount > pendingReleaseCallBaseline
       if (releaseCallInFlight) return "ClaimReleaseAmbiguous"
+      if (pendingRelease !== undefined && pendingRelease.pollUnsafe() !== undefined) {
+        return "ClaimReleaseRetryWait"
+      }
       const readAfterIntent = records.some(
         ({ event, position }) =>
           position > releaseIntent.position &&
@@ -1154,74 +1099,6 @@ const taskFactReconciliationDriver = defineDriver(
       )
       return readAfterIntent ? "ClaimReleaseRetryWait" : "NeedClaimRelease"
     }
-    const appendExecutorReport = (report: PlannedAttemptExecutorReport) =>
-      Effect.gen(function* () {
-        const ordinal = PlannedAttemptExecutorReportOrdinal.make(
-          records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported").length + 1
-        )
-        executorAuthority = report
-        yield* journal.append(
-          runId,
-          plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal),
-          PlannedAttemptExecutorWorkReportedEvent.make({ ordinal, report, version: workflowJournalEventVersion })
-        )
-      })
-    const breakRetainedRestartProof = () =>
-      Effect.gen(function* () {
-        const ordinal = PlannedAttemptExecutorCommandOrdinal.make(
-          records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended").length + 1
-        )
-        yield* journal.append(
-          runId,
-          plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, ordinal),
-          PlannedAttemptExecutorCommandIntendedEvent.make({
-            command: "StartOrContinue",
-            initiatedBy: { _tag: "DalphCoordinator" },
-            occurrenceClassification: "InitiatedAction",
-            ordinal,
-            plannedAttempt,
-            version: workflowJournalEventVersion
-          })
-        )
-        yield* appendExecutorReport(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
-      })
-    const appendUnsettledExecutorCommand = () =>
-      Effect.gen(function* () {
-        const ordinal = PlannedAttemptExecutorCommandOrdinal.make(
-          records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended").length + 1
-        )
-        yield* journal.append(
-          runId,
-          plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, ordinal),
-          PlannedAttemptExecutorCommandIntendedEvent.make({
-            command: "StartOrContinue",
-            initiatedBy: { _tag: "DalphCoordinator" },
-            occurrenceClassification: "InitiatedAction",
-            ordinal,
-            plannedAttempt,
-            version: workflowJournalEventVersion
-          })
-        )
-      })
-    const appendStartOrContinueReport = (report: PlannedAttemptExecutorReport) =>
-      Effect.gen(function* () {
-        const ordinal = PlannedAttemptExecutorCommandOrdinal.make(
-          records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended").length + 1
-        )
-        yield* journal.append(
-          runId,
-          plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, ordinal),
-          PlannedAttemptExecutorCommandIntendedEvent.make({
-            command: "StartOrContinue",
-            initiatedBy: { _tag: "DalphCoordinator" },
-            occurrenceClassification: "InitiatedAction",
-            ordinal,
-            plannedAttempt,
-            version: workflowJournalEventVersion
-          })
-        )
-        yield* appendExecutorReport(report)
-      })
     const expectRestartResult = (
       expectedTag: "AttemptRestartPending" | "AttemptRestartRejected" | "PlannedAttemptReplacementRecorded",
       expectedReason?: string
@@ -1250,8 +1127,8 @@ const taskFactReconciliationDriver = defineDriver(
           replacementTaskFactsReadable = true
           replacementTaskEligible = true
           replacementTargetHeadReadable = true
-          executorAuthority = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
-          nextStartOrContinueReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+          executorAuthority = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+          nextBeginReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
           activeRequestId = continueD1
           activeSubject = subjectF2
           activeChoice = "ContinueExistingAttempt"
@@ -1269,12 +1146,9 @@ const taskFactReconciliationDriver = defineDriver(
           replacementProcessLossCount = 0
           successorAdmissionCount = 0
           successorAdmissionReservation = undefined
-          restartSuspensionReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-          restartSuspensionBoundary = false
-          suspensionCallCount = 0
-          stopProjectionBaseline = 0
-          stopRecoveryCount = 0
+          freshExecutorObservationPosition = 0
           releaseCallCount = 0
+          releaseCallCountAtExactObservation = 0
           releaseCallCountAtNonExactObservation = 0
           pendingReleaseCallBaseline = 0
           claimRecoveryCount = 0
@@ -1315,15 +1189,27 @@ const taskFactReconciliationDriver = defineDriver(
             })
           )
           const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+          const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
           yield* journal.append(
             runId,
             plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
             PlannedAttemptExecutorCommandIntendedEvent.make({
-              command: "StartOrContinue",
+              command: "Begin",
               initiatedBy: { _tag: "DalphCoordinator" },
               occurrenceClassification: "InitiatedAction",
               ordinal: commandOrdinal,
               plannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+            PlannedAttemptExecutorCommandResponseObservedEvent.make({
+              commandOrdinal,
+              occurrenceClassification: "NonActionOccurrence",
+              plannedAttempt,
+              report: executingReport,
               version: workflowJournalEventVersion
             })
           )
@@ -1333,7 +1219,44 @@ const taskFactReconciliationDriver = defineDriver(
             plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal),
             PlannedAttemptExecutorWorkReportedEvent.make({
               ordinal,
-              report: executorAuthority,
+              report: executingReport,
+              version: workflowJournalEventVersion
+            })
+          )
+          const suspendCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, suspendCommandOrdinal),
+            PlannedAttemptExecutorCommandIntendedEvent.make({
+              command: "Suspend",
+              initiatedBy: { _tag: "DalphCoordinator" },
+              occurrenceClassification: "InitiatedAction",
+              ordinal: suspendCommandOrdinal,
+              plannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+          const safelySuspendedReport = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+            correlation
+          })
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, suspendCommandOrdinal),
+            PlannedAttemptExecutorCommandResponseObservedEvent.make({
+              commandOrdinal: suspendCommandOrdinal,
+              occurrenceClassification: "NonActionOccurrence",
+              plannedAttempt,
+              report: safelySuspendedReport,
+              version: workflowJournalEventVersion
+            })
+          )
+          const safelySuspendedOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
+          yield* journal.append(
+            runId,
+            plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, safelySuspendedOrdinal),
+            PlannedAttemptExecutorWorkReportedEvent.make({
+              ordinal: safelySuspendedOrdinal,
+              report: safelySuspendedReport,
               version: workflowJournalEventVersion
             })
           )
@@ -1430,16 +1353,7 @@ const taskFactReconciliationDriver = defineDriver(
         Effect.sync(() => {
           activeRequestId = stopD2
           activeSubject = subjectF2
-        }).pipe(
-          Effect.andThen(applyChoice("StopTaskImplementation", stopD2, subjectF2)),
-          Effect.tap(() =>
-            Effect.sync(() => {
-              stopProjectionBaseline = executorProjectionCount()
-            })
-          ),
-          Effect.orDie,
-          Effect.asVoid
-        ),
+        }).pipe(Effect.andThen(applyChoice("StopTaskImplementation", stopD2, subjectF2)), Effect.orDie, Effect.asVoid),
       redeliverExactF2Choice: () =>
         applyChoice(activeChoice, activeRequestId, activeSubject).pipe(Effect.orDie, Effect.asVoid),
       rejectRunMismatchedRequest: () =>
@@ -1467,13 +1381,13 @@ const taskFactReconciliationDriver = defineDriver(
         ).pipe(Effect.orDie),
       observeExactTerminal: () =>
         Effect.sync(() => {
-          nextStartOrContinueReport = PlannedAttemptExecutorReport.cases.Terminal.make({
+          executorAuthority = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
             correlation,
             result: { _tag: "Accepted", acceptedResult }
           })
         }).pipe(
           Effect.andThen(reservePosition),
-          Effect.andThen(provideJournal(continuePlannedAttemptExecutorWork(plannedAttempt))),
+          Effect.andThen(provideJournal(observePlannedAttemptExecutorState(plannedAttempt))),
           Effect.andThen(releasePosition()),
           Effect.orDie,
           Effect.asVoid
@@ -1553,10 +1467,14 @@ const taskFactReconciliationDriver = defineDriver(
       readFreshExactWorktree: () => readThrough("ObservePlannedAttemptContinuationWorktree").pipe(Effect.orDie),
       readFreshExactLineage: () => readThrough("ObservePlannedAttemptContinuationTargetLineage").pipe(Effect.orDie),
       readFreshExactExecutor: () =>
-        provideJournal(observePlannedAttemptExecutorState(plannedAttempt)).pipe(Effect.orDie, Effect.asVoid),
+        provideJournal(observePlannedAttemptExecutorState(plannedAttempt)).pipe(
+          Effect.tap(() => Effect.sync(() => (freshExecutorObservationPosition = records.length))),
+          Effect.orDie,
+          Effect.asVoid
+        ),
       admitSameAttemptP: () =>
         reservePosition().pipe(
-          Effect.andThen(provideJournal(continuePlannedAttemptExecutorWork(plannedAttempt))),
+          Effect.andThen(provideJournal(resumePlannedAttemptExecutorWork(plannedAttempt))),
           Effect.orDie,
           Effect.asVoid
         ),
@@ -1578,124 +1496,6 @@ const taskFactReconciliationDriver = defineDriver(
           replacementPhase = "NeedCurrentReplacementTaskFacts"
           replacementDisposition = "NoReplacementDisposition"
         }),
-      breakRestartSafeSuspension: () =>
-        breakRetainedRestartProof().pipe(
-          Effect.andThen(reservePosition()),
-          Effect.tap(() =>
-            Effect.sync(() => {
-              replacementPhase = "NeedCurrentExecutorQuiescence"
-              replacementDisposition = "NoReplacementDisposition"
-              replacementTaskFacts = "ReplacementTaskFactsNotRead"
-              replacementClaimFacts = "ReplacementClaimNotRead"
-              replacementClaimReadsThisActivation = 0
-              oldWorktreeFacts = "OldWorktreeNotRead"
-              replacementTargetHeadFacts = "ReplacementTargetHeadNotRead"
-              observedOldWorktreeHead = "NoGitCommit"
-              oldBaseB1IsAncestor = false
-              observedReplacementTargetHead = "NoGitCommit"
-            })
-          ),
-          Effect.orDie
-        ),
-      observeRestartRunning: () =>
-        Effect.gen(function* () {
-          restartSuspensionBoundary = true
-          restartSuspensionReport = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-          yield* expectRestartResult("AttemptRestartPending", "ExecutorRunning")
-          restartSuspensionBoundary = false
-          replacementPhase = "ReplacementWaiting"
-          replacementDisposition = "RunningWriterWait"
-        }),
-      observeRestartExecutorUnavailable: () =>
-        Effect.gen(function* () {
-          executorAuthority = undefined
-          yield* appendUnsettledExecutorCommand()
-          yield* expectRestartResult("AttemptRestartPending", "ExecutorUnavailable")
-          replacementPhase = "ReplacementWaiting"
-          replacementDisposition = "ExecutorUnreadableWait"
-        }).pipe(Effect.orDie),
-      observeRestartExecutorContradiction: () =>
-        Effect.gen(function* () {
-          executorAuthority = PlannedAttemptExecutorReport.cases.Running.make({
-            correlation: { attemptId: AttemptId.make("task-fact-model-contradictory-attempt"), runId }
-          })
-          yield* appendUnsettledExecutorCommand()
-          yield* expectRestartResult("AttemptRestartPending", "ExecutorContradictory")
-          replacementPhase = "ReplacementWaiting"
-          replacementDisposition = "ExecutorCorrelationContradiction"
-        }).pipe(Effect.orDie),
-      observeRestartSafelySuspended: () =>
-        Effect.gen(function* () {
-          restartSuspensionBoundary = true
-          restartSuspensionReport = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
-          yield* provideJournal(requestPlannedAttemptExecutorSuspension(plannedAttempt))
-          restartSuspensionBoundary = false
-          yield* releasePosition()
-          replacementPhase = "NeedCurrentReplacementTaskFacts"
-          replacementDisposition = "NoReplacementDisposition"
-          replacementTaskFacts = "ReplacementTaskFactsNotRead"
-          replacementClaimFacts = "ReplacementClaimNotRead"
-          replacementClaimReadsThisActivation = 0
-          oldWorktreeFacts = "OldWorktreeNotRead"
-          replacementTargetHeadFacts = "ReplacementTargetHeadNotRead"
-          observedOldWorktreeHead = "NoGitCommit"
-          oldBaseB1IsAncestor = false
-          observedReplacementTargetHead = "NoGitCommit"
-        }).pipe(Effect.orDie),
-      observeRestartAccepted: () =>
-        appendStartOrContinueReport(
-          PlannedAttemptExecutorReport.cases.Terminal.make({
-            correlation,
-            result: { _tag: "Accepted", acceptedResult }
-          })
-        ).pipe(
-          Effect.andThen(releasePosition()),
-          Effect.tap(() =>
-            Effect.sync(() => {
-              replacementPhase = "NeedCurrentReplacementTaskFacts"
-              replacementDisposition = "NoReplacementDisposition"
-              replacementTaskFacts = "ReplacementTaskFactsNotRead"
-              replacementClaimFacts = "ReplacementClaimNotRead"
-              replacementClaimReadsThisActivation = 0
-              oldWorktreeFacts = "OldWorktreeNotRead"
-              replacementTargetHeadFacts = "ReplacementTargetHeadNotRead"
-              observedOldWorktreeHead = "NoGitCommit"
-              oldBaseB1IsAncestor = false
-              observedReplacementTargetHead = "NoGitCommit"
-            })
-          ),
-          Effect.orDie
-        ),
-      observeRestartCompleted: () =>
-        appendStartOrContinueReport(
-          PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
-        ).pipe(
-          Effect.andThen(releasePosition()),
-          Effect.andThen(expectRestartResult("AttemptRestartRejected", "CompletedDoesNotAuthorizeReplacement")),
-          Effect.tap(() =>
-            Effect.sync(() => {
-              replacementPhase = "ReplacementRejected"
-              replacementDisposition = "CompletedDoesNotAuthorizeReplacement"
-            })
-          ),
-          Effect.orDie,
-          Effect.asVoid
-        ),
-      observeRestartFailed: () =>
-        appendStartOrContinueReport(
-          PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
-        ).pipe(
-          Effect.andThen(releasePosition()),
-          Effect.andThen(expectRestartResult("AttemptRestartRejected", "FailedDoesNotAuthorizeReplacement")),
-          Effect.tap(() =>
-            Effect.sync(() => {
-              replacementPhase = "ReplacementRejected"
-              replacementDisposition = "FailedDoesNotAuthorizeReplacement"
-            })
-          ),
-          Effect.orDie,
-          Effect.asVoid
-        ),
       observeReplacementExactF2TaskFacts: () =>
         Effect.sync(() => {
           currentSpecification = specificationF2
@@ -1925,92 +1725,11 @@ const taskFactReconciliationDriver = defineDriver(
           if (reservation?._tag !== "PlannedAttemptProtocolAdmission") {
             return yield* Effect.die("successor start requires its admitted exact-attempt protocol permit")
           }
-          yield* provideJournal(continuePlannedAttemptExecutorWorkWithPermit(reservation.permit, successorAttempt))
+          yield* provideJournal(beginPlannedAttemptExecutorWorkWithPermit(reservation.permit, successorAttempt))
           yield* admission.complete(reservation)
           successorAdmissionReservation = undefined
-          replacementPhase = "SuccessorRunning"
+          replacementPhase = "SuccessorExecuting"
         }).pipe(Effect.orDie),
-      requireStoppageReconciliation: () =>
-        Effect.sync(() => {
-          executorAuthority = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-        }).pipe(
-          Effect.andThen(provideJournal(observePlannedAttemptExecutorState(plannedAttempt))),
-          // This read supplies the model's external "proof broke" trigger; it
-          // is not one of the later Stop reconciliation projections.
-          Effect.tap(() =>
-            Effect.sync(() => {
-              stopProjectionBaseline += 1
-            })
-          ),
-          Effect.andThen(reservePosition()),
-          Effect.orDie,
-          Effect.asVoid
-        ),
-      recordStoppageIntent: () =>
-        Effect.gen(function* () {
-          resetCommandBoundary()
-          pendingCommand = yield* provideJournal(requestPlannedAttemptExecutorSuspension(plannedAttempt)).pipe(
-            Effect.forkDetach({ startImmediately: true })
-          )
-          yield* Deferred.await(commandIntentSignal)
-        }).pipe(Effect.orDie),
-      callStoppage: () =>
-        Deferred.succeed(commandIntentGate, undefined).pipe(
-          Effect.andThen(Deferred.await(commandCallSignal)),
-          Effect.orDie,
-          Effect.asVoid
-        ),
-      loseStoppageResponse: () =>
-        pendingCommand === undefined
-          ? Effect.die("stoppage command must be pending")
-          : Fiber.interrupt(pendingCommand).pipe(Effect.asVoid),
-      projectExactRunningForStoppage: () =>
-        Effect.sync(() => {
-          executorAuthority = PlannedAttemptExecutorReport.cases.Running.make({ correlation })
-        }).pipe(
-          Effect.andThen(provideJournal(requestPlannedAttemptExecutorSuspension(plannedAttempt))),
-          Effect.andThen(reservePosition()),
-          Effect.orDie,
-          Effect.asVoid
-        ),
-      projectExactSafeForStoppage: () =>
-        Effect.sync(() => {
-          executorAuthority = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
-        }).pipe(
-          Effect.andThen(provideJournal(requestPlannedAttemptExecutorSuspension(plannedAttempt))),
-          Effect.andThen(releasePosition()),
-          Effect.orDie,
-          Effect.asVoid
-        ),
-      projectExactTerminalForStoppage: () =>
-        Effect.sync(() => {
-          executorAuthority = PlannedAttemptExecutorReport.cases.Terminal.make({
-            correlation,
-            result: { _tag: "Completed" }
-          })
-        }).pipe(
-          Effect.andThen(provideJournal(requestPlannedAttemptExecutorSuspension(plannedAttempt))),
-          Effect.andThen(releasePosition()),
-          Effect.orDie,
-          Effect.asVoid
-        ),
-      recoverStopActivation: () =>
-        Effect.gen(function* () {
-          yield* reactivate()
-          if (stopRecoveryCount < 3) stopRecoveryCount += 1
-          stopProjectionBaseline = executorProjectionCount()
-        }).pipe(Effect.orDie, Effect.asVoid),
-      projectReadOnlyExactSafeAfterStoppageLimit: () =>
-        Effect.gen(function* () {
-          const selected = yield* transition("ObserveAttemptStoppageExecutor")
-          if (selected._tag !== "ObserveAttemptStoppageExecutor")
-            return yield* Effect.die("missing production post-limit Stop observation")
-          executorAuthority = PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
-          yield* provideControl(observeAttemptStoppageExecutor(selected.requestId, selected.subject)).pipe(
-            Effect.provideService(PlannedAttemptExecutor, executor)
-          )
-          yield* releasePosition()
-        }).pipe(Effect.orDie, Effect.asVoid),
       abandonImplementation: () =>
         provideControl(
           advanceAttemptStoppage(activeRequestId, activeSubject).pipe(
@@ -2020,7 +1739,15 @@ const taskFactReconciliationDriver = defineDriver(
       observeExactClaim: () =>
         Effect.sync(() => {
           currentClaim = "Exact"
-        }).pipe(Effect.andThen(readThrough("ObserveStoppedAttemptClaim")), Effect.orDie),
+        }).pipe(
+          Effect.andThen(readThrough("ObserveStoppedAttemptClaim")),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              releaseCallCountAtExactObservation = releaseCallCount
+            })
+          ),
+          Effect.orDie
+        ),
       observeAbsentClaim: () =>
         Effect.sync(() => {
           currentClaim = "Absent"
@@ -2114,7 +1841,6 @@ const taskFactReconciliationDriver = defineDriver(
           if (pendingRelease === undefined) return yield* Effect.die("claim release must be pending")
           yield* Fiber.await(pendingRelease)
           currentClaim = "Exact"
-          yield* readThrough("ObserveStoppedAttemptClaim")
         }).pipe(Effect.orDie),
       recoverClaimActivation: () =>
         Effect.sync(() => {
@@ -2163,52 +1889,6 @@ const taskFactReconciliationDriver = defineDriver(
           const choice = latestChoice()?.event
           const fresh = freshFacts()
           const report = evidenceReport()
-          const suspendIntents = records.filter(
-            ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
-          )
-          const latestSafeEvidencePosition = records.findLast(
-            ({ event }) =>
-              (event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "SafelySuspended") ||
-              ((event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
-                event._tag === "PlannedAttemptExecutorStateObserved") &&
-                event.observation._tag === "ExactExecutorReport" &&
-                event.observation.report._tag === "SafelySuspended")
-          )?.position
-          const exactSuspendProjections = records.filter(
-            ({ event }) =>
-              event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-              event.observation._tag === "ExactExecutorReport" &&
-              suspendIntents.some(({ event: intent }) =>
-                intent._tag === "PlannedAttemptExecutorCommandIntended"
-                  ? intent.ordinal === event.commandOrdinal
-                  : false
-              )
-          )
-          const restartApplied = records.some(
-            ({ event }) => event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation"
-          )
-          const latestSuspendIntent = suspendIntents.at(-1)
-          const restartSuspendResponses = restartApplied
-            ? records.filter(
-                ({ event, position }) =>
-                  latestSuspendIntent !== undefined &&
-                  position > latestSuspendIntent.position &&
-                  event._tag === "PlannedAttemptExecutorWorkReported" &&
-                  event.report.correlation.attemptId === correlation.attemptId &&
-                  event.report.correlation.runId === correlation.runId
-              )
-            : []
-          const latestSuspend = suspendIntents.at(-1)?.event
-          const latestSettled = exactSuspendProjections.at(-1)?.event
-          const latestRestartSuspendResponse = restartSuspendResponses.at(-1)?.event
-          const latestSuspendSettled =
-            latestSuspend?._tag === "PlannedAttemptExecutorCommandIntended" &&
-            records.some(
-              ({ event }) =>
-                event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-                event.commandOrdinal === latestSuspend.ordinal &&
-                event.observation._tag === "ExactExecutorReport"
-            )
           const abandonment = records.findLast(({ event }) => event._tag === "AttemptImplementationAbandoned")
           const claimIntent = records.findLast(({ event }) => event._tag === "TaskClaimReleaseIntended")
           const claimReleased = records.some(({ event }) => event._tag === "TaskClaimReleased")
@@ -2312,7 +1992,6 @@ const taskFactReconciliationDriver = defineDriver(
           const artifactsPreserved = plannedIdentityPreserved && !cleanupTransitionSelected
           const admission = yield* requireController()
           const admissionSnapshot = yield* admission.snapshot
-          const pendingCommandExit = pendingCommand?.pollUnsafe()
           const independentTaskEligible =
             graphSnapshot.toWire().tasks.some(({ id }) => id === independentTaskId) &&
             [...fullRecovery.frontier.transitions, ...freshWorkflow.map(({ transition }) => transition)].some(
@@ -2333,7 +2012,10 @@ const taskFactReconciliationDriver = defineDriver(
               ? "NeedClaimObservation"
               : journalStopStage === "ClaimReleaseRetryWait" &&
                   claimObservationsThisActivation === 1 &&
-                  recoveryTransitions.some(({ _tag }) => _tag === "ReleaseStoppedAttemptClaim")
+                  recoveryTransitions.some(
+                    ({ _tag }) => _tag === "ReleaseStoppedAttemptClaim" || _tag === "RetryStoppedAttemptClaimRelease"
+                  ) &&
+                  releaseCallCount === releaseCallCountAtExactObservation
                 ? "NeedClaimRelease"
                 : journalStopStage
           const replacementRecords = records.filter(({ event }) => event._tag === "PlannedAttemptReplaced")
@@ -2355,7 +2037,7 @@ const taskFactReconciliationDriver = defineDriver(
           const successorExecutorStartCount = records.filter(
             ({ event }) =>
               event._tag === "PlannedAttemptExecutorCommandIntended" &&
-              event.command === "StartOrContinue" &&
+              event.command === "Begin" &&
               plannedTaskAttemptEquivalence(event.plannedAttempt, successorAttempt)
           ).length
           const successorExecutorResponsibilityBegan = records.some(
@@ -2369,37 +2051,26 @@ const taskFactReconciliationDriver = defineDriver(
               event.report.correlation.attemptId === successorCorrelation.attemptId &&
               event.report.correlation.runId === successorCorrelation.runId
           )?.event
-          const restartApplication = records.find(
-            ({ event }) => event._tag === "AttemptChoiceApplied" && event.choice === "RestartTaskImplementation"
-          )
-          const lateTerminal = records.findLast(
-            ({ event, position }) =>
-              restartApplication !== undefined &&
-              position > restartApplication.position &&
-              event._tag === "PlannedAttemptExecutorWorkReported" &&
-              event.report._tag === "Terminal"
-          )?.event
-          const lateAccepted =
-            lateTerminal?._tag === "PlannedAttemptExecutorWorkReported" &&
-            lateTerminal.report._tag === "Terminal" &&
-            lateTerminal.report.result._tag === "Accepted"
-          const completed =
-            lateTerminal?._tag === "PlannedAttemptExecutorWorkReported" &&
-            lateTerminal.report._tag === "Terminal" &&
-            lateTerminal.report.result._tag === "Completed"
-          const failed =
-            lateTerminal?._tag === "PlannedAttemptExecutorWorkReported" &&
-            lateTerminal.report._tag === "Terminal" &&
-            lateTerminal.report.result._tag === "Failed"
-          const lateAcceptedIntegrationResponsibilityCount = records.filter(
-            ({ event, position }) =>
-              restartApplication !== undefined &&
-              position > restartApplication.position &&
-              event._tag === "IntegrationResponsibilityBegan" &&
-              event.plannedAttempt.attemptId === plannedAttempt.attemptId
+          const resumeCommandIntentCount = records.filter(
+            ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Resume"
           ).length
+          const terminalReportRecord = records.findLast(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkReported" &&
+              event.report.correlation.attemptId === correlation.attemptId &&
+              event.report.correlation.runId === correlation.runId &&
+              event.report._tag === "ExecutorWorkTerminal"
+          )
           return {
             appliedChoiceCount: BigInt(records.filter(({ event }) => event._tag === "AttemptChoiceApplied").length),
+            appliedChoiceCountAtTerminalObservation: BigInt(
+              terminalReportRecord === undefined
+                ? 0
+                : records.filter(
+                    ({ event, position }) =>
+                      position < terminalReportRecord.position && event._tag === "AttemptChoiceApplied"
+                  ).length
+            ),
             authorizedFingerprint:
               choice?.choice === "ContinueExistingAttempt" || choice?.choice === "RestartTaskImplementation"
                 ? fingerprintTag(choice.subject.observedTaskRevision)
@@ -2423,11 +2094,7 @@ const taskFactReconciliationDriver = defineDriver(
             continueStage: continueStage(),
             currentFingerprint: fingerprintTag(currentSpecification.fingerprint),
             evidencePreserved: artifactsPreserved,
-            executorEvidence: executorEvidenceProjection(
-              currentExecutorFailure,
-              report,
-              choice?.choice === "RestartTaskImplementation"
-            ),
+            executorEvidence: executorEvidenceProjection(currentExecutorFailure, report),
             f2WinningChoice:
               f2Choice?._tag === "AttemptChoiceApplied"
                 ? f2Choice.choice === "ContinueExistingAttempt"
@@ -2450,19 +2117,13 @@ const taskFactReconciliationDriver = defineDriver(
             freshSpecificationExact: fresh.specification,
             freshWorktreeExact: fresh.worktree,
             implementationResponsibilityRetained:
-              abandonment === undefined &&
-              !records.some(({ event }) => event._tag === "PlannedAttemptReplaced") &&
-              !(choice?.choice === "RestartTaskImplementation" && report?._tag === "Terminal"),
+              abandonment === undefined && !records.some(({ event }) => event._tag === "PlannedAttemptReplaced"),
             independentTaskEligible,
             independentTaskSelected,
             integrationSelected: records.some(({ event }) => event._tag === "IntegrationStarted"),
             lastControlResult,
-            lastSettledStopCommandOrdinal:
-              latestSettled?._tag === "PlannedAttemptExecutorCommandProjectionObserved"
-                ? BigInt(latestSettled.commandOrdinal)
-                : latestRestartSuspendResponse?._tag === "PlannedAttemptExecutorWorkReported"
-                  ? BigInt(latestRestartSuspendResponse.ordinal)
-                  : 0n,
+            heldResumeAdmitted: false,
+            heldResumeCancellationCount: 0n,
             logsPreserved: artifactsPreserved,
             positionHeld: (() => {
               const position = admissionSnapshot.positions.get(taskId)
@@ -2474,29 +2135,13 @@ const taskFactReconciliationDriver = defineDriver(
               )
             })(),
             quiescenceUnbroken:
-              (report?._tag === "SafelySuspended" || report?._tag === "Terminal") && !laterExecutorCommand,
+              (report?._tag === "ExecutorWorkSafelySuspended" || report?._tag === "ExecutorWorkTerminal") &&
+              !laterExecutorCommand,
+            resumeCommandIntentCount: BigInt(resumeCommandIntentCount),
+            resumeBoundaryCallCount: BigInt(resumeCommandIntentCount),
             resumedAttempt: continueStage() === "ContinueResumed" ? "AttemptP" : "NoAttempt",
             sessionHistoryPreserved: artifactsPreserved,
-            stopCommandCallCount: BigInt(suspensionCallCount),
-            stopCommandIntentCount: BigInt(suspendIntents.length),
-            stopCommandSettlementCount: BigInt(exactSuspendProjections.length + restartSuspendResponses.length),
-            stopProjectionsThisActivation: BigInt(
-              f2Choice?._tag === "AttemptChoiceApplied" && f2Choice.choice === "StopTaskImplementation"
-                ? executorProjectionCount() - stopProjectionBaseline
-                : 0
-            ),
-            stopRecoveryCount: BigInt(stopRecoveryCount),
-            stopResponseAmbiguous:
-              latestSuspend?._tag === "PlannedAttemptExecutorCommandIntended" &&
-              !latestSuspendSettled &&
-              suspensionCallCount > 0 &&
-              pendingCommandExit !== undefined,
             stopStage: projectedStopStage,
-            suspensionCommandCountSinceSafeEvidence: BigInt(
-              suspendIntents.filter(
-                ({ position }) => latestSafeEvidencePosition === undefined || position > latestSafeEvidencePosition
-              ).length
-            ),
             unresolvedClaimReleaseResponsibility:
               abandonment !== undefined && !claimReleased && noRelease === undefined,
             winningRequestId: choice === undefined ? { nonce: 0n, runId: 0n } : requestProjection(choice.requestId),
@@ -2541,13 +2186,8 @@ const taskFactReconciliationDriver = defineDriver(
             successorExecutorResponsibilityRetained:
               successorExecutorResponsibilityBegan &&
               successorExecutorReport?._tag === "PlannedAttemptExecutorWorkReported" &&
-              successorExecutorReport.report._tag === "Running",
+              successorExecutorReport.report._tag === "ExecutorWorkExecuting",
             replacementProcessLossCount: BigInt(replacementProcessLossCount),
-            completedResultPreserved: completed,
-            failedResultPreserved: failed,
-            lateAcceptedCommitPreserved: lateAccepted,
-            lateAcceptedEvidencePreserved: lateAccepted,
-            lateAcceptedIntegrationResponsibilityCount: BigInt(lateAcceptedIntegrationResponsibilityCount),
             p1BranchPreserved: plannedIdentityPreserved,
             p1CommitsPreserved: artifactsPreserved,
             p1JournalEvidencePreserved: plannedIdentityPreserved,
@@ -2672,15 +2312,16 @@ it.effect("requires command reconciliation before a generic executor-state proje
       Effect.provideService(
         PlannedAttemptExecutor,
         PlannedAttemptExecutor.of({
-          project: () =>
+          observe: () =>
             Effect.sync(() => {
               projectionCalls += 1
               return PlannedAttemptExecutorProjection.cases.Exact.make({
-                report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+                report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
               })
             }),
           requestSuspension: () => Effect.die("unused suspension"),
-          startOrContinue: () => Effect.die("unused continuation")
+          resume: () => Effect.die("unused resume"),
+          begin: () => Effect.die("unused continuation")
         })
       ),
       Effect.flip
@@ -2693,26 +2334,39 @@ it.effect("requires command reconciliation before a generic executor-state proje
   }).pipe(Effect.provide(memoryJournalTestLayer), Effect.provide(plannedAttemptProtocolControllerLayer))
 )
 
-it("rejects a work report whose exact command intent is absent", () => {
-  const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
+it("rejects a command response whose exact command intent is absent", () => {
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+  const planWithoutPredecessor = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make("task-fact-model-missing-command-plan"),
+    plannedAttempt,
+    predecessorOperationIds: []
+  })
   const records: ReadonlyArray<JournalRecord> = [
+    {
+      event: TaskAttemptPlannedEvent.make({ operation: planWithoutPredecessor, version: workflowJournalEventVersion }),
+      key: attemptPlanRecordKey(plannedAttempt.attemptId),
+      position: JournalPosition.make(1),
+      runId
+    },
     {
       event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
         plannedAttempt,
         version: workflowJournalEventVersion
       }),
       key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-      position: JournalPosition.make(1),
+      position: JournalPosition.make(2),
       runId
     },
     {
-      event: PlannedAttemptExecutorWorkReportedEvent.make({
-        ordinal: reportOrdinal,
-        report: PlannedAttemptExecutorReport.cases.Running.make({ correlation }),
+      event: PlannedAttemptExecutorCommandResponseObservedEvent.make({
+        commandOrdinal,
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt,
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
         version: workflowJournalEventVersion
       }),
-      key: plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
-      position: JournalPosition.make(2),
+      key: plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+      position: JournalPosition.make(3),
       runId
     }
   ]
@@ -2721,7 +2375,7 @@ it("rejects a work report whose exact command intent is absent", () => {
   expect(reduction).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: expect.arrayContaining([
-      expect.objectContaining({ detail: expect.stringContaining("has no outstanding command intent") })
+      expect.objectContaining({ detail: expect.stringContaining("does not name its unmatched command intent") })
     ])
   })
 })

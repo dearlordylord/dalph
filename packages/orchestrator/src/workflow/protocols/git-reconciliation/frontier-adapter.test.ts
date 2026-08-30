@@ -63,7 +63,7 @@ const frontierFor = (plannedBaseIsAncestorOfTargetHead: boolean) => {
 
 it("continues A and keeps independent C eligible after compatible target advancement", () => {
   expect(frontierFor(true).transitions).toEqual([
-    { _tag: "ContinuePlannedAttemptExecutorWork", acceptedProgress, plannedAttempt },
+    { _tag: "BeginPlannedAttemptExecutorWork", plannedAttempt },
     { _tag: "CommitFreshTaskClaimIntent", ...independentTask }
   ])
 })

@@ -116,7 +116,7 @@ const threadRecordFor = (configuration: QualificationConfiguration, threadId: Co
     worktree: WorktreeLocator.make(configuration.worktree)
   })
 
-const reportEvent = (command: "StartOrContinue" | "Suspend", report: PlannedAttemptExecutorReport) => ({
+const reportEvent = (command: "Begin" | "Observe" | "Resume" | "Suspend", report: PlannedAttemptExecutorReport) => ({
   event: "report" as const,
   command,
   report
@@ -133,10 +133,10 @@ const settleAttempt = (
   remaining: number
 ): Effect.Effect<PlannedAttemptExecutorReport, unknown> =>
   executor
-    .project(correlation)
+    .observe(correlation, { _tag: "PassiveLifecycleObservation" })
     .pipe(
       Effect.flatMap((projection) =>
-        projection._tag === "Exact" && projection.report._tag !== "Running"
+        projection._tag === "Exact" && projection.report._tag !== "ExecutorWorkExecuting"
           ? Effect.succeed(projection.report)
           : remaining <= 0
             ? Effect.fail(
@@ -256,35 +256,35 @@ const configurationProgram = Effect.gen(function* () {
           configuration.action === "turn" ||
           configuration.action === "association-cut"
         ) {
-          yield* writeEvent(reportEvent("StartOrContinue", yield* executor.startOrContinue(request)))
+          yield* writeEvent(reportEvent("Begin", yield* executor.begin(request)))
         } else if (configuration.action === "project" || configuration.action === "read") {
           yield* writeEvent(
             projectionEvent(
               configuration.waitForTerminalProjection
                 ? { _tag: "Exact", report: yield* settleAttempt(executor, correlation, terminalObservationAttempts) }
-                : yield* executor.project(correlation)
+                : yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
             )
           )
         } else if (configuration.action === "suspend" || configuration.action === "interrupt") {
           yield* writeEvent(reportEvent("Suspend", yield* executor.requestSuspension(attempt)))
         } else if (configuration.action === "settle") {
-          const initial = yield* executor.startOrContinue(request)
-          yield* writeEvent(reportEvent("StartOrContinue", initial))
-          if (initial._tag === "Running") {
+          const initial = yield* executor.begin(request)
+          yield* writeEvent(reportEvent("Begin", initial))
+          if (initial._tag === "ExecutorWorkExecuting") {
             yield* Effect.sleep("100 millis")
             yield* writeEvent(
-              reportEvent("StartOrContinue", yield* settleAttempt(executor, correlation, terminalObservationAttempts))
+              reportEvent("Observe", yield* settleAttempt(executor, correlation, terminalObservationAttempts))
             )
           }
         } else if (configuration.action === "exercise-suspension") {
-          yield* writeEvent(reportEvent("StartOrContinue", yield* executor.startOrContinue(request)))
+          yield* writeEvent(reportEvent("Begin", yield* executor.begin(request)))
           if (configuration.waitForOwnedChild) yield* waitForOwnedChildPublication(configuration.worktree)
           yield* Effect.sleep("100 millis")
           const suspension = yield* Effect.forkScoped(executor.requestSuspension(attempt), { startImmediately: true })
           yield* writeEvent({ event: "suspension-requested" })
           yield* writeEvent(reportEvent("Suspend", yield* Fiber.join(suspension)))
         } else if (configuration.action === "exercise-terminal-suspension") {
-          yield* writeEvent(reportEvent("StartOrContinue", yield* executor.startOrContinue(request)))
+          yield* writeEvent(reportEvent("Begin", yield* executor.begin(request)))
           yield* writeEvent({ event: "suspension-ready" })
           yield* Effect.promise(
             () =>
@@ -298,19 +298,19 @@ const configurationProgram = Effect.gen(function* () {
           yield* writeEvent({ event: "suspension-requested" })
           yield* writeEvent(reportEvent("Suspend", yield* Fiber.join(suspension)))
         } else if (configuration.action === "exit" || configuration.action === "exit-stuck") {
-          const started = yield* executor.startOrContinue(request)
-          yield* writeEvent(reportEvent("StartOrContinue", started))
+          const started = yield* executor.begin(request)
+          yield* writeEvent(reportEvent("Begin", started))
           if (configuration.waitForOwnedChild) yield* waitForOwnedChildPublication(configuration.worktree)
           const suspendForExit = executor.requestSuspension(attempt).pipe(
             Effect.tap((report) => writeEvent(reportEvent("Suspend", report))),
             Effect.flatMap((report) =>
-              report._tag === "SafelySuspended" || report._tag === "Terminal"
+              report._tag === "ExecutorWorkSafelySuspended" || report._tag === "ExecutorWorkTerminal"
                 ? Effect.succeed([report.correlation])
                 : Effect.fail(exitDrainFailure(`Executor Exit drain retained ${report._tag} work`))
             )
           )
           yield* applicationExit.registerExecutorDrain({
-            suspendRunningExecutorWork:
+            suspendExecutingExecutorWork:
               configuration.action === "exit-stuck"
                 ? suspendForExit.pipe(
                     Effect.catch((failure) =>
@@ -327,7 +327,7 @@ const configurationProgram = Effect.gen(function* () {
                     )
                   )
           })
-          if (started._tag === "Running") yield* Effect.sleep("100 millis")
+          if (started._tag === "ExecutorWorkExecuting") yield* Effect.sleep("100 millis")
           const result = yield* applicationExit.requestBoundary.requestExit
           yield* writeEvent({ event: "exit-result", exitResult: result })
         } else {

@@ -105,8 +105,8 @@ module taskFactChoiceProofTest {
   }
 }
 
-module taskFactStopProofTest {
-  import taskFactStopProof.* from "./taskFactReconciliation_proof"
+module historicalTaskFactStopRecoveryProofTest {
+  import historicalTaskFactStopRecoveryProof.* from "./taskFactReconciliation_proof"
 
   run retainedSafeProofAllowsStopWithoutAnotherExecutorCallTest = {
     init
@@ -123,7 +123,7 @@ module taskFactStopProofTest {
   run ambiguousStopAcceptsOnlyExactSafeProjectionTest = {
     init
       .then(applyStop)
-      .then(breakRetainedSafeProof)
+      .then(acceptHistoricalExecutingAfterStartOrContinue)
       .then(recordStopIntent)
       .then(callStop)
       .then(loseStopResponse)
@@ -141,7 +141,7 @@ module taskFactStopProofTest {
   run threeLostRunningStopsAllowOnlyReadOnlySafeRecoveryTest = {
     init
       .then(applyStop)
-      .then(breakRetainedSafeProof)
+      .then(acceptHistoricalExecutingAfterStartOrContinue)
       .then(recordStopIntent)
       .then(callStop)
       .then(loseStopResponse)
@@ -178,7 +178,7 @@ module taskFactStopProofTest {
   run unprovedRunningWriterRetainsPositionClaimAndArtifactsTest = {
     init
       .then(applyStop)
-      .then(breakRetainedSafeProof)
+      .then(acceptHistoricalExecutingAfterStartOrContinue)
       .then(recordStopIntent)
       .then(callStop)
       .then(loseStopResponse)

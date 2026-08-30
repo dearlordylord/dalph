@@ -64,15 +64,17 @@ See [issue-139-reconcile-git-facts.md](../scenarios/issue-139-reconcile-git-fact
 The executor receives one exact planned attempt identified by the same `RunId`
 and `AttemptId` used by the Journal. It reports:
 
-- `Running`;
-- `SafelySuspended`; or
+- `ExecutorWorkExecuting`;
+- `ExecutorWorkSafelySuspended`; or
 - a terminal accepted, completed, or failed result.
 
-The responsibility-began action is distinct from the first executor report.
-Recording intent proves that Dalph assumed responsibility; it does not prove
-that the executor accepted or started work. Safe suspension and terminal
-results prove that no executor-owned activity for that attempt remains running
-and allow its task-work position to be released.
+The responsibility-began action, command intent, exact command-response
+settlement, passive state observation, and accepted distinct lifecycle report
+are separate facts. Dalph calls Begin once. While the report remains executing,
+later Observe calls are read-only and do not append another report ordinal or
+consume a command budget. Only an accepted safe suspension or terminal result
+proves that no executor-owned activity for that attempt remains and allows its
+task-work position to be released.
 
 The generic boundary does not expose coding-agent, reviewer, handback, retry,
 or session stages. Those belong inside a future production executor. The
@@ -83,7 +85,7 @@ of agent context plus every committed and uncommitted worktree layer.
 See
 [planned-attempt-executor-boundary.md](../scenarios/planned-attempt-executor-boundary.md).
 
-## Existing-attempt continuation after activation loss
+## Existing-attempt observation and safe resumption after activation loss
 
 If the coordinator activation ends after Dalph records
 `PlannedAttemptExecutorWorkResponsibilityBegan`, the next activation retains
@@ -92,16 +94,20 @@ volatile state or allocate another executor identity. Startup uses the same
 Journal-backed Run establishment and recovery composition as every other
 activation.
 
-Before the retained attempt contacts the executor, recovery performs the
-ordinary current task-tracker reads for the graph, authored specification, and
-exact claim. A comparable unchanged graph is represented by the compact
-`UnchangedTaskTrackerFactsReconfirmed` observation. It then performs a separate
-Git read for the exact planned worktree. One generic durable
-`PlannedAttemptContinuationAuthorized` fact witnesses the four operation
-identities and the exact `(RunId, AttemptId)`; it is not a recovery event and
-does not enter the occurrence projection. Missing, stale, later, or
-wrong-attempt witnesses fail before executor contact. The later executor
-report remains a report for the retained attempt.
+Recovery first reconciles an unsettled Begin, Resume, or Suspend command by
+observing the exact executor projection. Otherwise, an executing attempt is
+observed passively without reading tracker or Git facts as permission for the
+executor to keep working.
+
+Only an accepted `ExecutorWorkSafelySuspended` report can enter resumption
+selection. Recovery then performs current task-tracker reads for the graph,
+authored specification, and exact claim, followed by separate Git reads for
+the exact planned worktree and compatible target lineage. One durable
+`PlannedAttemptContinuationAuthorized` fact witnesses those five observation
+identities and the exact `(RunId, AttemptId)` before Resume. Missing, stale,
+superseded, or wrong-attempt witnesses fail before executor contact. The
+scheduler that decides when to invoke later passive observations is owned by
+issue 265.
 
 ## Accepted-result admission
 

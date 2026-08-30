@@ -130,8 +130,8 @@ export const decideInterruptibleOwnerRelease = (
 }
 
 export type ExecutorPositionDecision = Data.TaggedEnum<{
-  ReleasePosition: { readonly evidence: "SafelySuspended" | "Terminal" }
-  RetainPosition: { readonly reason: "ForeignCorrelation" | "NoEvidence" | "RunningIsUnsafe" }
+  ReleasePosition: { readonly evidence: "ExecutorWorkSafelySuspended" | "ExecutorWorkTerminal" }
+  RetainPosition: { readonly reason: "ForeignCorrelation" | "NoEvidence" | "ExecutingIsUnsafe" }
 }>
 
 export const ExecutorPositionDecision = Data.taggedEnum<ExecutorPositionDecision>()
@@ -146,9 +146,10 @@ export const decideExecutorPosition = (
     return ExecutorPositionDecision.RetainPosition({ reason: "ForeignCorrelation" })
   }
   return Match.valueTags(report, {
-    Running: () => ExecutorPositionDecision.RetainPosition({ reason: "RunningIsUnsafe" }),
-    SafelySuspended: () => ExecutorPositionDecision.ReleasePosition({ evidence: "SafelySuspended" }),
-    Terminal: () => ExecutorPositionDecision.ReleasePosition({ evidence: "Terminal" })
+    ExecutorWorkExecuting: () => ExecutorPositionDecision.RetainPosition({ reason: "ExecutingIsUnsafe" }),
+    ExecutorWorkSafelySuspended: () =>
+      ExecutorPositionDecision.ReleasePosition({ evidence: "ExecutorWorkSafelySuspended" }),
+    ExecutorWorkTerminal: () => ExecutorPositionDecision.ReleasePosition({ evidence: "ExecutorWorkTerminal" })
   })
 }
 
@@ -156,11 +157,11 @@ export const decideExecutorPosition = (
 export type ApplicationExitExecutorAttemptEvidence = Data.TaggedEnum<{
   FastSuspensionCalled: Record<never, never>
   NotStarted: Record<never, never>
-  Running: Record<never, never>
-  SafelySuspended: Record<never, never>
+  ExecutorWorkExecuting: Record<never, never>
+  ExecutorWorkSafelySuspended: Record<never, never>
   SuspensionCallFailed: { readonly diagnostic: ApplicationExitDiagnostic }
   SuspensionIntentRecorded: Record<never, never>
-  Terminal: Record<never, never>
+  ExecutorWorkTerminal: Record<never, never>
 }>
 
 export const ApplicationExitExecutorAttemptEvidence = Data.taggedEnum<ApplicationExitExecutorAttemptEvidence>()
@@ -191,11 +192,11 @@ const applicationExitDiagnostics = (snapshot: ApplicationExitDrainSnapshot): Arr
     Match.valueTags(attempt, {
       FastSuspensionCalled: () => [],
       NotStarted: () => [],
-      Running: () => [],
-      SafelySuspended: () => [],
+      ExecutorWorkExecuting: () => [],
+      ExecutorWorkSafelySuspended: () => [],
       SuspensionCallFailed: ({ diagnostic }) => [diagnostic],
       SuspensionIntentRecorded: () => [],
-      Terminal: () => []
+      ExecutorWorkTerminal: () => []
     })
   ),
   ...Match.valueTags(snapshot.producedWrite, {
@@ -219,22 +220,23 @@ const attemptHasUsefulQuickWork = (attempt: ApplicationExitExecutorAttemptEviden
   Match.valueTags(attempt, {
     FastSuspensionCalled: () => true,
     NotStarted: () => false,
-    Running: () => true,
-    SafelySuspended: () => false,
+    ExecutorWorkExecuting: () => true,
+    ExecutorWorkSafelySuspended: () => false,
     SuspensionCallFailed: () => false,
     SuspensionIntentRecorded: () => true,
-    Terminal: () => false
+    ExecutorWorkTerminal: () => false
   })
 
 const attemptIsSafe = (attempt: ApplicationExitExecutorAttemptEvidence): boolean =>
   Match.valueTags(attempt, {
     FastSuspensionCalled: () => false,
     NotStarted: () => true,
-    Running: () => false,
-    SafelySuspended: () => true,
+    ExecutorWorkExecuting: () => false,
+    ExecutorWorkSafelySuspended: () => true,
+    /* v8 ignore next -- @preserve SuspensionCallFailed contributes diagnostics, so successBoundaryReached short-circuits before attemptIsSafe. */
     SuspensionCallFailed: () => false,
     SuspensionIntentRecorded: () => false,
-    Terminal: () => true
+    ExecutorWorkTerminal: () => true
   })
 
 const processLocalResourcesReleased = (snapshot: ApplicationExitDrainSnapshot): boolean =>

@@ -102,8 +102,18 @@ module taskFactChoiceProofNegativeTest {
   }
 }
 
-module taskFactStopProofNegativeTest {
-  import taskFactStopProof.* from "./taskFactReconciliation_proof"
+module historicalTaskFactStopRecoveryProofNegativeTest {
+  import historicalTaskFactStopRecoveryProof.* from "./taskFactReconciliation_proof"
+
+  action acceptExecutingWithoutHistoricalCommandReport: bool = all {
+    state.stage == NeedQuiescence,
+    state' = {
+      ...state,
+      evidence: ExactRunning,
+      quiescenceUnbroken: false,
+      positionHeld: true,
+    },
+  }
 
   action abandonWhileRunning: bool = all {
     state.stopApplied,
@@ -145,15 +155,22 @@ module taskFactStopProofNegativeTest {
   run abandonmentWithoutQuiescenceIsDetectedTest = {
     init
       .then(applyStop)
-      .then(breakRetainedSafeProof)
+      .then(acceptHistoricalExecutingAfterStartOrContinue)
       .then(abandonWhileRunning)
       .expect(not(abandonmentRequiresExactUnbrokenQuiescence))
+  }
+
+  run historicalExecutingWithoutCommandReportIsDetectedTest = {
+    init
+      .then(applyStop)
+      .then(acceptExecutingWithoutHistoricalCommandReport)
+      .expect(not(historicalExecutingRequiresAcceptedCommandReport))
   }
 
   run claimReleaseWhileWriterUnprovedIsDetectedTest = {
     init
       .then(applyStop)
-      .then(breakRetainedSafeProof)
+      .then(acceptHistoricalExecutingAfterStartOrContinue)
       .then(releaseClaimWhileWriterUnproved)
       .expect(not(unprovedWriterRetainsPositionAndClaim))
   }
@@ -168,7 +185,7 @@ module taskFactStopProofNegativeTest {
   run fourthStopIntentIsDetectedTest = {
     init
       .then(applyStop)
-      .then(breakRetainedSafeProof)
+      .then(acceptHistoricalExecutingAfterStartOrContinue)
       .then(recordStopIntent)
       .then(callStop)
       .then(loseStopResponse)

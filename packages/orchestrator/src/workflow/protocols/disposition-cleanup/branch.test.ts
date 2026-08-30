@@ -58,7 +58,7 @@ const branchAuthorization = BranchCleanupAuthorization.make({
   evidenceRevision: BranchCleanupEvidenceRevision.make(1),
   expectedHead: baseSha,
   locator: attempt.branch,
-  observationAt: JournalPosition.make(16),
+  observationAt: JournalPosition.make(20),
   observationOperationId: replacementWorktreeObservationOperationIdFor(attempt),
   operationId: OperationId.make("issue-69-branch-cleanup"),
   owner: BranchCleanupOwner.make({ attemptId: attempt.attemptId }),

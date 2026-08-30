@@ -13,6 +13,7 @@ import {
   TaskId,
   WorktreeLocator,
   makeTaskWorkSpecification,
+  plannedAttemptExecutorCorrelation,
   samePlannedTaskAttempt
 } from "@dalph/contracts"
 import {
@@ -500,8 +501,8 @@ const purgedPredecessorEvidenceIsRetained = (
   )
 }
 
-const runningRecordHasNoPredecessor = (record: CodexAttemptRecord | undefined): boolean =>
-  record?._tag === "Running" && record.priorObservedTurnId === null
+const replacementRecordHasNoPredecessor = (record: CodexAttemptRecord | undefined): boolean =>
+  record?._tag === "TurnObserved" && record.priorObservedTurnId === null
 
 const purgedWorkUnitIsPreserved = (
   replacementResult: CodexProviderWorkUnitReplacementResult,
@@ -512,7 +513,7 @@ const purgedWorkUnitIsPreserved = (
   replacementResult._tag === "Replaced" &&
   replacementHistoryIsComplete(ledger) &&
   purgedPredecessorEvidenceIsRetained(ledger, thread) &&
-  runningRecordHasNoPredecessor(record)
+  replacementRecordHasNoPredecessor(record)
 
 const replacementIdentityIsDistinct = (ledger: CodexPurgedWorkUnitReplacementLedger | undefined): boolean => {
   const observed = ledger?.history[4]
@@ -520,13 +521,15 @@ const replacementIdentityIsDistinct = (ledger: CodexPurgedWorkUnitReplacementLed
   return observed.replacementTurnId !== predecessorTurnId && observed.replacementToken !== predecessorToken
 }
 
-const runningRecordTracksReplacement = (
+const replacementRecordTracksReplacement = (
   ledger: CodexPurgedWorkUnitReplacementLedger | undefined,
   record: CodexAttemptRecord | undefined
 ): boolean => {
   const observed = ledger?.history[4]
   return (
-    observed?._tag === "TurnObserved" && record?._tag === "Running" && record.currentToken === observed.replacementToken
+    observed?._tag === "TurnObserved" &&
+    record?._tag === "TurnObserved" &&
+    record.currentToken === observed.replacementToken
   )
 }
 
@@ -546,7 +549,7 @@ const replacementWorkUnitIsDistinct = (
 ): boolean =>
   replacementResult._tag === "Replaced" &&
   replacementIdentityIsDistinct(ledger) &&
-  runningRecordTracksReplacement(ledger, record) &&
+  replacementRecordTracksReplacement(ledger, record) &&
   threadContainsReplacement(ledger, thread)
 
 /** Runs one maintained story through the concrete Codex planned-attempt executor layer. */
@@ -570,11 +573,20 @@ export const runCodexPlannedAttemptExecutorCassette: (
     controlledCodexReplacementAuthorityLayer(harness.replacementAuthority)
   )
   const executorLayer = codexPlannedAttemptExecutorLayer.pipe(Layer.provide(dependencies))
+  const observeExactReport = Effect.fn("CodexExecutorCassette.observeExactReport")(function* (
+    executor: PlannedAttemptExecutorService
+  ) {
+    const projection = yield* executor.observe(plannedAttemptExecutorCorrelation(attempt), {
+      _tag: "PassiveLifecycleObservation"
+    })
+    if (projection._tag === "Exact") return projection.report
+    return yield* Effect.die(`expected exact Codex executor report, received ${projection._tag}`)
+  })
   const executeHappyReplacement = Effect.fn("CodexExecutorCassette.executeHappyReplacement")(function* (
     executor: PlannedAttemptExecutorService,
     replacementResult: CodexProviderWorkUnitReplacementResult
   ) {
-    const report = yield* executor.startOrContinue(request)
+    const report = yield* observeExactReport(executor)
     const ledger = yield* harness.currentReplacementLedger
     const record = yield* harness.currentRecord
     const thread = yield* harness.currentThread
@@ -606,9 +618,9 @@ export const runCodexPlannedAttemptExecutorCassette: (
   const executeOrdinary = Effect.fn("CodexExecutorCassette.executeOrdinary")(function* (
     executor: PlannedAttemptExecutorService
   ) {
-    const first = yield* executor.startOrContinue(request)
+    const first = yield* executor.begin(request)
     const activeActivity = publicActivityProjection(yield* harness.observeCurrentActivity)
-    if (cassette.scenario === "FirstTurnRunning" || cassette.scenario === "LostTurnResponse") {
+    if (cassette.scenario === "FirstTurnExecutorWorkExecuting" || cassette.scenario === "LostTurnResponse") {
       return {
         activeActivity,
         distinctReplacementWorkUnit: null,
@@ -617,14 +629,14 @@ export const runCodexPlannedAttemptExecutorCassette: (
         reports: [first]
       }
     }
-    if (cassette.scenario === "AcceptedTerminal") {
+    if (cassette.scenario === "AcceptedExecutorWorkTerminal") {
       yield* harness.completeTurn
       return {
         activeActivity,
         distinctReplacementWorkUnit: null,
         purgedWorkUnitPreserved: null,
         replacementResultTag: null,
-        reports: [first, yield* executor.startOrContinue(request)]
+        reports: [first, yield* observeExactReport(executor)]
       }
     }
     yield* harness.interruptForeignTurn

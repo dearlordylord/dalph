@@ -75,7 +75,7 @@ module applicationExitNegativeTest {
   }
 
   action releaseAttemptAForForeignReport: bool = all {
-    state.attemptA == AttemptRunning,
+    state.attemptA == AttemptExecuting,
     state' = {
       ...state,
       attemptA: AttemptSafelySuspended,
@@ -85,19 +85,19 @@ module applicationExitNegativeTest {
   }
 
   action releaseUnsafeAttemptPosition: bool = all {
-    state.attemptA == AttemptRunning,
+    state.attemptA == AttemptExecuting,
     state' = { ...state, attemptAPositionHeld: false },
   }
 
   action callFastSuspensionWithoutIntent: bool = all {
-    state.attemptA == AttemptRunning,
+    state.attemptA == AttemptExecuting,
     not(state.durable.attemptASuspensionIntentAcknowledged),
     state' = { ...state, attemptA: FastSuspensionCalled },
   }
 
   action reportSuccessWithUnsafeAttempt: bool = all {
     state.phase == Draining,
-    state.attemptA == AttemptRunning,
+    state.attemptA == AttemptExecuting,
     state' = {
       ...state,
       phase: SuccessReported,

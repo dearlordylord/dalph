@@ -26,7 +26,8 @@ import { runAuthoredScenarioCassette } from "../../src/cassettes/authored-runner
 it.effect("records exact completion-request lookup intent and outcomes", () =>
   Effect.gen(function* () {
     const run = yield* runAuthoredScenarioCassette(deliveryFinalitySpineAuthoredCassette)
-    const attempt = run.records.findLast(({ event }) => event._tag === "CompletionTaskAttemptIntended")?.event
+    const attemptRecordIndex = run.records.findLastIndex(({ event }) => event._tag === "CompletionTaskAttemptIntended")
+    const attempt = run.records[attemptRecordIndex]?.event
     const confirmationIntent = run.records.findLast(
       ({ event }) =>
         event._tag === "TaskTrackerReadIntentRecorded" &&
@@ -77,7 +78,7 @@ it.effect("records exact completion-request lookup intent and outcomes", () =>
       version: workflowJournalEventVersion
     })
     const syntheticEvents: ReadonlyArray<WorkflowJournalEvent> = [
-      ...run.records.slice(0, 44).map(({ event }) => event),
+      ...run.records.slice(0, attemptRecordIndex + 1).map(({ event }) => event),
       responseLost,
       confirmationIntent,
       openFactsEvent,

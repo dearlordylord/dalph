@@ -18,7 +18,7 @@ import {
 } from "@dalph/contracts"
 import {
   beginPlannedAttemptExecutorResponsibility,
-  continuePlannedAttemptExecutorWork,
+  beginPlannedAttemptExecutorWork,
   type JournalRecord,
   JournalStore,
   journalStoreCapabilities,
@@ -30,6 +30,7 @@ import {
   PlannedAttemptProtocolController,
   type PlannedAttemptProtocolControllerService,
   requestPlannedAttemptExecutorSuspension,
+  resumePlannedAttemptExecutorWork,
   TaskWorkCapacity
 } from "../../../orchestrator/src/index.js"
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
@@ -94,9 +95,15 @@ const SpecProjection = Schema.Struct({
     reconciliationProjectionsThisActivation: ITFBigInt,
     recoveryCount: ITFBigInt,
     responseAmbiguous: Schema.Boolean,
-    startOrContinueIntentsSinceSafeSuspension: ITFBigInt,
+    beginIntentsSinceSafeSuspension: ITFBigInt,
+    resumeIntentsSinceSafeSuspension: ITFBigInt,
+    acceptedReportOrdinal: ITFBigInt,
+    observationCount: ITFBigInt,
+    durableObservationCount: ITFBigInt,
+    proposalIdentityCount: ITFBigInt,
     status: Variant,
-    suspendIntentsSinceRunning: ITFBigInt
+    suspendIntentsSinceExecuting: ITFBigInt,
+    terminalReportEverAccepted: Schema.Boolean
   })
 })
 
@@ -105,12 +112,15 @@ const variantTag = (value: unknown): string =>
 const pickedTag = (value: unknown): string => variantTag(value)
 const reportFrom = (value: unknown): PlannedAttemptExecutorReport => {
   switch (pickedTag(value)) {
-    case "ReportSafelySuspended":
-      return PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
-    case "ReportTerminal":
-      return PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Completed" } })
+    case "ExecutorWorkSafelySuspended":
+      return PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+    case "ExecutorWorkTerminal":
+      return PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation,
+        result: { _tag: "Completed" }
+      })
     default:
-      return PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+      return PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
   }
 }
 
@@ -118,14 +128,16 @@ const executorConformanceDriver = defineDriver(
   {
     acceptFreshStateProjectionProof: {},
     beginResponsibility: {},
-    callStartOrContinue: {},
+    callBegin: {},
+    callResume: {},
     callSuspend: {},
     init: {},
     loseCommandResponse: {},
     receiveCommandResponse: { report: Schema.Unknown },
     recordCommandProjection: { commandProjection: Schema.Unknown },
     recordFreshStateProjection: { stateObservation: Schema.Unknown },
-    recordStartOrContinueIntent: {},
+    recordBeginIntent: {},
+    recordResumeIntent: {},
     recordSuspendIntent: {},
     recoverActivation: {},
     settleCommandProjection: {},
@@ -137,25 +149,26 @@ const executorConformanceDriver = defineDriver(
     let protocolController: PlannedAttemptProtocolControllerService | undefined
     let authorityReport: PlannedAttemptExecutorReport | undefined
     let currentProjection: PlannedAttemptExecutorProjection | undefined
-    let commandKind: "StartOrContinue" | "Suspend" = "StartOrContinue"
+    let commandKind: "Begin" | "Resume" | "Suspend" = "Begin"
     let commandIntentGate = Deferred.makeUnsafe<void>()
     let commandIntentSignal = Deferred.makeUnsafe<void>()
     let commandCallSignal = Deferred.makeUnsafe<void>()
     let commandResponse = Deferred.makeUnsafe<PlannedAttemptExecutorReport>()
-    let reportGate = Deferred.makeUnsafe<void>()
-    let reportSignal = Deferred.makeUnsafe<void>()
+    let responseGate = Deferred.makeUnsafe<void>()
+    let responseSignal = Deferred.makeUnsafe<void>()
     let projectionGate = Deferred.makeUnsafe<void>()
     let projectionSignal = Deferred.makeUnsafe<void>()
     let stateGate = Deferred.makeUnsafe<void>()
     let stateSignal = Deferred.makeUnsafe<void>()
     let pauseCommandIntent = false
-    let pauseReport = false
+    let pauseResponse = false
     let pauseProjection = false
     let pauseState = false
     let pendingCommand: Fiber.Fiber<PlannedAttemptExecutorReport, unknown> | undefined
     let pendingProjection: Fiber.Fiber<PlannedAttemptExecutorReport, unknown> | undefined
     let pendingState: Fiber.Fiber<PlannedAttemptExecutorReport, unknown> | undefined
     let commandCalls = 0
+    let observationCalls = 0
     // Recovery count is an activation-local driver fact; command and evidence
     // state below still comes exclusively from the production journal.
     let recoveryCount = 0
@@ -178,10 +191,10 @@ const executorConformanceDriver = defineDriver(
             yield* Deferred.succeed(commandIntentSignal, undefined)
             yield* Deferred.await(commandIntentGate)
           }
-          if (pauseReport && event._tag === "PlannedAttemptExecutorWorkReported") {
-            pauseReport = false
-            yield* Deferred.succeed(reportSignal, undefined)
-            yield* Deferred.await(reportGate)
+          if (pauseResponse && event._tag === "PlannedAttemptExecutorCommandResponseObserved") {
+            pauseResponse = false
+            yield* Deferred.succeed(responseSignal, undefined)
+            yield* Deferred.await(responseGate)
           }
           if (pauseProjection && event._tag === "PlannedAttemptExecutorCommandProjectionObserved") {
             pauseProjection = false
@@ -208,7 +221,7 @@ const executorConformanceDriver = defineDriver(
       Layer.provideMerge(journalStoreCapabilities(Layer.succeed(JournalStore, journal)))
     )
     const executor = PlannedAttemptExecutor.of({
-      project: () =>
+      observe: () =>
         Effect.succeed(
           currentProjection ??
             (authorityReport === undefined
@@ -223,7 +236,7 @@ const executorConformanceDriver = defineDriver(
           yield* Deferred.succeed(commandCallSignal, undefined)
           return yield* Deferred.await(commandResponse)
         }),
-      startOrContinue: (request) =>
+      begin: (request) =>
         Effect.gen(function* () {
           if (
             request.specification.body !== specification.body ||
@@ -233,6 +246,12 @@ const executorConformanceDriver = defineDriver(
           ) {
             return yield* Effect.die("the model command must carry its exact task-work specification")
           }
+          commandCalls += 1
+          yield* Deferred.succeed(commandCallSignal, undefined)
+          return yield* Deferred.await(commandResponse)
+        }),
+      resume: () =>
+        Effect.gen(function* () {
           commandCalls += 1
           yield* Deferred.succeed(commandCallSignal, undefined)
           return yield* Deferred.await(commandResponse)
@@ -249,7 +268,9 @@ const executorConformanceDriver = defineDriver(
     const workflow = () =>
       commandKind === "Suspend"
         ? provideWorkflow(requestPlannedAttemptExecutorSuspension(plannedAttempt))
-        : provideWorkflow(continuePlannedAttemptExecutorWork(plannedAttempt, undefined, specification))
+        : commandKind === "Resume"
+          ? provideWorkflow(resumePlannedAttemptExecutorWork(plannedAttempt, specification))
+          : provideWorkflow(beginPlannedAttemptExecutorWork(plannedAttempt, specification))
     const requireController = () =>
       controller === undefined ? Effect.die("admission controller not initialized") : Effect.succeed(controller)
     const reservePosition = Effect.fn("ExecutorModel.reservePosition")(function* () {
@@ -272,16 +293,22 @@ const executorConformanceDriver = defineDriver(
       commandIntentSignal = Deferred.makeUnsafe<void>()
       commandCallSignal = Deferred.makeUnsafe<void>()
       commandResponse = Deferred.makeUnsafe<PlannedAttemptExecutorReport>()
-      reportGate = Deferred.makeUnsafe<void>()
-      reportSignal = Deferred.makeUnsafe<void>()
+      responseGate = Deferred.makeUnsafe<void>()
+      responseSignal = Deferred.makeUnsafe<void>()
       pauseCommandIntent = true
-      pauseReport = false
+      pauseResponse = false
     }
     const recordIntent = (kind: typeof commandKind) =>
       Effect.gen(function* () {
         resetCommand(kind)
-        pendingCommand = yield* workflow().pipe(Effect.forkDetach({ startImmediately: true }))
-        yield* Deferred.await(commandIntentSignal)
+        const commandFiber = yield* workflow().pipe(Effect.forkDetach({ startImmediately: true }))
+        pendingCommand = commandFiber
+        yield* Effect.raceFirst(
+          Deferred.await(commandIntentSignal),
+          Fiber.await(commandFiber).pipe(
+            Effect.flatMap(() => Effect.die(`production ${kind} command exited before recording its intent`))
+          )
+        )
       })
     const call = () =>
       Deferred.succeed(commandIntentGate, undefined).pipe(
@@ -291,7 +318,8 @@ const executorConformanceDriver = defineDriver(
     const settleAccepted = (fiber: Fiber.Fiber<PlannedAttemptExecutorReport, unknown>) =>
       Effect.gen(function* () {
         const report = yield* Fiber.join(fiber)
-        if (report._tag === "SafelySuspended" || report._tag === "Terminal") yield* releasePosition()
+        if (report._tag === "ExecutorWorkSafelySuspended" || report._tag === "ExecutorWorkTerminal")
+          yield* releasePosition()
         else yield* reservePosition()
       })
     const projectionEventCount = () =>
@@ -309,10 +337,10 @@ const executorConformanceDriver = defineDriver(
           position > intended.position &&
           !(
             index === records.length - 1 &&
-            ((event._tag === "PlannedAttemptExecutorWorkReported" && pendingCommand !== undefined) ||
+            ((event._tag === "PlannedAttemptExecutorCommandResponseObserved" && pendingCommand !== undefined) ||
               (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" && pendingProjection !== undefined))
           ) &&
-          (event._tag === "PlannedAttemptExecutorWorkReported" ||
+          (event._tag === "PlannedAttemptExecutorCommandResponseObserved" ||
             (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
               event.commandOrdinal === intendedOrdinal &&
               event.observation._tag === "ExactExecutorReport"))
@@ -320,9 +348,9 @@ const executorConformanceDriver = defineDriver(
       return settled ? undefined : intended.event
     }
     const evidenceTag = () => {
-      if (pauseReport === false && pendingCommand !== undefined) {
+      if (pauseResponse === false && pendingCommand !== undefined) {
         const latest = records.at(-1)?.event
-        if (latest?._tag === "PlannedAttemptExecutorWorkReported") return "CommandResponse"
+        if (latest?._tag === "PlannedAttemptExecutorCommandResponseObserved") return "BoundaryCommandResponse"
       }
       const latest = records.at(-1)?.event
       if (pendingProjection !== undefined && latest?._tag === "PlannedAttemptExecutorCommandProjectionObserved")
@@ -332,7 +360,7 @@ const executorConformanceDriver = defineDriver(
       return "NoEvidence"
     }
     const exactReport = (event: JournalRecord["event"] | undefined) => {
-      if (event?._tag === "PlannedAttemptExecutorWorkReported") return event.report
+      if (event?._tag === "PlannedAttemptExecutorCommandResponseObserved") return event.report
       if (
         event?._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
         event?._tag === "PlannedAttemptExecutorStateObserved"
@@ -345,7 +373,7 @@ const executorConformanceDriver = defineDriver(
         | Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorCommandIntended" }>
         | undefined
       const settlements: Array<{
-        readonly command: "StartOrContinue" | "Suspend"
+        readonly command: "Begin" | "Resume" | "Suspend"
         readonly recordIndex: number
         readonly report: PlannedAttemptExecutorReport
         readonly source: "Projection" | "Response"
@@ -358,7 +386,7 @@ const executorConformanceDriver = defineDriver(
         const report = exactReport(event)
         const isPendingEvidence =
           index === records.length - 1 &&
-          ((event._tag === "PlannedAttemptExecutorWorkReported" && pendingCommand !== undefined) ||
+          ((event._tag === "PlannedAttemptExecutorCommandResponseObserved" && pendingCommand !== undefined) ||
             (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" && pendingProjection !== undefined))
         if (isPendingEvidence || activeIntent === undefined || report === undefined) return
         if (event._tag === "PlannedAttemptExecutorStateObserved") return
@@ -372,7 +400,7 @@ const executorConformanceDriver = defineDriver(
           command: activeIntent.command,
           recordIndex: index,
           report,
-          source: event._tag === "PlannedAttemptExecutorWorkReported" ? "Response" : "Projection"
+          source: event._tag === "PlannedAttemptExecutorCommandResponseObserved" ? "Response" : "Projection"
         })
         activeIntent = undefined
       })
@@ -389,6 +417,7 @@ const executorConformanceDriver = defineDriver(
           authorityReport = undefined
           currentProjection = undefined
           commandCalls = 0
+          observationCalls = 0
           recoveryCount = 0
           projectionBaseline = 0
           pendingCommand = undefined
@@ -408,22 +437,23 @@ const executorConformanceDriver = defineDriver(
           Effect.orDie,
           Effect.asVoid
         ),
-      recordStartOrContinueIntent: () =>
-        reservePosition().pipe(Effect.andThen(recordIntent("StartOrContinue")), Effect.orDie),
+      recordBeginIntent: () => reservePosition().pipe(Effect.andThen(recordIntent("Begin")), Effect.orDie),
+      recordResumeIntent: () => reservePosition().pipe(Effect.andThen(recordIntent("Resume")), Effect.orDie),
       recordSuspendIntent: () => recordIntent("Suspend").pipe(Effect.orDie),
-      callStartOrContinue: () => call().pipe(Effect.orDie),
+      callBegin: () => call().pipe(Effect.orDie),
+      callResume: () => call().pipe(Effect.orDie),
       callSuspend: () => call().pipe(Effect.orDie),
       receiveCommandResponse: ({ report }) =>
         Effect.gen(function* () {
-          pauseReport = true
+          pauseResponse = true
           const response = reportFrom(report)
           authorityReport = response
           yield* Deferred.succeed(commandResponse, response)
-          yield* Deferred.await(reportSignal)
+          yield* Deferred.await(responseSignal)
         }).pipe(Effect.orDie),
       settleCommandResponse: () =>
         Effect.gen(function* () {
-          yield* Deferred.succeed(reportGate, undefined)
+          yield* Deferred.succeed(responseGate, undefined)
           if (pendingCommand === undefined) return yield* Effect.die("command response must be pending")
           yield* settleAccepted(pendingCommand)
           pendingCommand = undefined
@@ -440,7 +470,7 @@ const executorConformanceDriver = defineDriver(
           projectionSignal = Deferred.makeUnsafe<void>()
           pauseProjection = true
           const tag = pickedTag(commandProjection)
-          const foreignReport = PlannedAttemptExecutorReport.cases.Running.make({
+          const foreignReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
             correlation: { attemptId: AttemptId.make("other"), runId: plannedAttempt.runId }
           })
           currentProjection =
@@ -457,17 +487,17 @@ const executorConformanceDriver = defineDriver(
                       })
                     : tag === "CommandProjectionExactSafelySuspended"
                       ? PlannedAttemptExecutorProjection.cases.Exact.make({
-                          report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+                          report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
                         })
                       : tag === "CommandProjectionExactTerminal"
                         ? PlannedAttemptExecutorProjection.cases.Exact.make({
-                            report: PlannedAttemptExecutorReport.cases.Terminal.make({
+                            report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
                               correlation,
                               result: { _tag: "Completed" }
                             })
                           })
                         : PlannedAttemptExecutorProjection.cases.Exact.make({
-                            report: PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+                            report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
                           })
           authorityReport =
             currentProjection._tag === "Exact"
@@ -487,11 +517,17 @@ const executorConformanceDriver = defineDriver(
         }).pipe(Effect.orDie),
       recordFreshStateProjection: ({ stateObservation }) =>
         Effect.gen(function* () {
-          stateGate = Deferred.makeUnsafe<void>()
-          stateSignal = Deferred.makeUnsafe<void>()
-          pauseState = true
           const tag = pickedTag(stateObservation)
-          const foreignReport = PlannedAttemptExecutorReport.cases.Running.make({
+          const latestAccepted = records.findLast(
+            ({ event }) => event._tag === "PlannedAttemptExecutorWorkReported"
+          )?.event
+          const unchangedExact =
+            latestAccepted?._tag === "PlannedAttemptExecutorWorkReported" &&
+            ((tag === "ExecutorStateExecuting" && latestAccepted.report._tag === "ExecutorWorkExecuting") ||
+              (tag === "ExecutorStateSafelySuspended" &&
+                latestAccepted.report._tag === "ExecutorWorkSafelySuspended") ||
+              (tag === "ExecutorStateTerminal" && latestAccepted.report._tag === "ExecutorWorkTerminal"))
+          const foreignReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
             correlation: { attemptId: AttemptId.make("other"), runId: plannedAttempt.runId }
           })
           currentProjection =
@@ -508,17 +544,17 @@ const executorConformanceDriver = defineDriver(
                       })
                     : tag === "ExecutorStateSafelySuspended"
                       ? PlannedAttemptExecutorProjection.cases.Exact.make({
-                          report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+                          report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
                         })
                       : tag === "ExecutorStateTerminal"
                         ? PlannedAttemptExecutorProjection.cases.Exact.make({
-                            report: PlannedAttemptExecutorReport.cases.Terminal.make({
+                            report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
                               correlation,
                               result: { _tag: "Completed" }
                             })
                           })
                         : PlannedAttemptExecutorProjection.cases.Exact.make({
-                            report: PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+                            report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
                           })
           authorityReport =
             currentProjection._tag === "Exact"
@@ -526,6 +562,14 @@ const executorConformanceDriver = defineDriver(
               : currentProjection._tag === "CorrelationContradiction"
                 ? currentProjection.observed
                 : undefined
+          observationCalls += 1
+          if (unchangedExact) {
+            yield* provideWorkflow(observePlannedAttemptExecutorState(plannedAttempt))
+            return
+          }
+          stateGate = Deferred.makeUnsafe<void>()
+          stateSignal = Deferred.makeUnsafe<void>()
+          pauseState = true
           pendingState = yield* provideWorkflow(observePlannedAttemptExecutorState(plannedAttempt)).pipe(
             Effect.forkDetach({ startImmediately: true })
           )
@@ -535,9 +579,8 @@ const executorConformanceDriver = defineDriver(
         Effect.gen(function* () {
           yield* Deferred.succeed(stateGate, undefined)
           if (pendingState === undefined) return yield* Effect.die("state projection must be pending")
-          yield* Fiber.join(pendingState)
+          yield* settleAccepted(pendingState)
           pendingState = undefined
-          yield* releasePosition()
         }).pipe(Effect.orDie),
       recoverActivation: () =>
         Effect.gen(function* () {
@@ -552,41 +595,26 @@ const executorConformanceDriver = defineDriver(
             pendingState = undefined
           }
           projectionBaseline = projectionEventCount()
-          recoveryCount = Math.min(recoveryCount + 1, 3)
+          recoveryCount = Math.min(recoveryCount + 1, 5)
         }),
       getState: () =>
         Effect.gen(function* () {
           const admission = yield* requireController()
           const snapshot = yield* admission.snapshot
-          const intents = records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+          const intents = records.flatMap(({ event }) =>
+            event._tag === "PlannedAttemptExecutorCommandIntended" ? [event] : []
+          )
           const reports = records.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")
           const settlements = settledCommands()
-          const latestSafeSettlement = settlements.findLast(({ report }) => report._tag === "SafelySuspended")
-          const latestAcceptedSafeStateIndex = records.findLastIndex(
-            ({ event }, index) =>
-              !(index === records.length - 1 && pendingState !== undefined) &&
-              event._tag === "PlannedAttemptExecutorStateObserved" &&
-              event.observation._tag === "ExactExecutorReport" &&
-              event.observation.report._tag === "SafelySuspended"
+          const latestSafeIndex = records.findLastIndex(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkSafelySuspended"
           )
-          const latestSafeIndex = Math.max(latestSafeSettlement?.recordIndex ?? -1, latestAcceptedSafeStateIndex)
           const sinceSafe = records.slice(latestSafeIndex + 1)
-          const latestStartRunningSettlement = settlements.findLast(
-            ({ command, report }) => command === "StartOrContinue" && report._tag === "Running"
-          )
-          const sinceRunning = records.slice((latestStartRunningSettlement?.recordIndex ?? -1) + 1)
           const unmatched = unmatchedCommand()
           const evidence = evidenceTag()
           const stateProjectionCount = projectionEventCount() - projectionBaseline
-          const latestSettlement = settlements.at(-1)
-          const latestAcceptedStateIndex = records.findLastIndex(
-            ({ event }, index) =>
-              !(index === records.length - 1 && pendingState !== undefined) &&
-              event._tag === "PlannedAttemptExecutorStateObserved" &&
-              event.observation._tag === "ExactExecutorReport" &&
-              (event.observation.report._tag === "SafelySuspended" || event.observation.report._tag === "Terminal")
-          )
-          const latestAcceptedState = records.at(latestAcceptedStateIndex)?.event
+          const latestAcceptedReport = reports.at(-1)?.event
           const responsibilityBegan = records.some(
             ({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
           )
@@ -595,7 +623,9 @@ const executorConformanceDriver = defineDriver(
           return {
             commandCallCount: BigInt(commandCalls),
             commandIntentCount: BigInt(intents.length),
-            commandResponseEvidenceCount: BigInt(reports.length),
+            commandResponseEvidenceCount: BigInt(
+              records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved").length
+            ),
             commandResponseSettlementCount: BigInt(settlements.filter(({ source }) => source === "Response").length),
             commandSettlementCount: BigInt(settlements.length),
             commandState:
@@ -610,23 +640,41 @@ const executorConformanceDriver = defineDriver(
             reconciliationProjectionsThisActivation: BigInt(stateProjectionCount),
             recoveryCount: BigInt(recoveryCount),
             responseAmbiguous,
-            startOrContinueIntentsSinceSafeSuspension: BigInt(
+            beginIntentsSinceSafeSuspension: BigInt(intents.filter(({ command }) => command === "Begin").length),
+            resumeIntentsSinceSafeSuspension: BigInt(
               sinceSafe.filter(
+                ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Resume"
+              ).length
+            ),
+            acceptedReportOrdinal: BigInt(reports.length),
+            observationCount: BigInt(observationCalls),
+            durableObservationCount: BigInt(
+              records.filter(({ event }) => event._tag === "PlannedAttemptExecutorStateObserved").length
+            ),
+            proposalIdentityCount: BigInt(
+              reports.filter(
                 ({ event }) =>
-                  event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "StartOrContinue"
+                  event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkExecuting"
               ).length
             ),
             status:
-              latestAcceptedStateIndex > (latestSettlement?.recordIndex ?? -1) &&
-              latestAcceptedState?._tag === "PlannedAttemptExecutorStateObserved" &&
-              latestAcceptedState.observation._tag === "ExactExecutorReport"
-                ? latestAcceptedState.observation.report._tag
-                : (latestSettlement?.report._tag ??
-                  (responsibilityBegan ? "ResponsibilityBegan" : "ResponsibilityNotBegun")),
-            suspendIntentsSinceRunning: BigInt(
-              sinceRunning.filter(
+              latestAcceptedReport?._tag === "PlannedAttemptExecutorWorkReported"
+                ? latestAcceptedReport.report._tag === "ExecutorWorkExecuting"
+                  ? "StatusExecuting"
+                  : latestAcceptedReport.report._tag === "ExecutorWorkSafelySuspended"
+                    ? "StatusSafelySuspended"
+                    : "StatusTerminal"
+                : responsibilityBegan
+                  ? "ResponsibilityBegan"
+                  : "ResponsibilityNotBegun",
+            suspendIntentsSinceExecuting: BigInt(
+              sinceSafe.filter(
                 ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
               ).length
+            ),
+            terminalReportEverAccepted: reports.some(
+              ({ event }) =>
+                event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkTerminal"
             )
           }
         })

@@ -190,9 +190,10 @@ const boundaryLayer = (records: ReadonlyArray<JournalRecord>) =>
     Layer.succeed(
       PlannedAttemptExecutor,
       PlannedAttemptExecutor.of({
-        project: () => failIfCalled("executor projection"),
+        observe: () => failIfCalled("executor observation"),
         requestSuspension: () => failIfCalled("executor suspension"),
-        startOrContinue: () => failIfCalled("executor start or continuation")
+        begin: () => failIfCalled("executor begin"),
+        resume: () => failIfCalled("executor resume")
       })
     ),
     Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => failIfCalled("workflow trace") }))

@@ -85,7 +85,7 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       PlannedAttemptExecutorProjectionReturned: noLandmark,
       PlannedAttemptExecutorResponseLost: noLandmark,
       PlannedAttemptExecutorWorkReported: (item) =>
-        `Attempt ${item.report.attemptId} reported ${item.report._tag}${item.report._tag === "SafelySuspended" ? "; its held position can now be released" : ""}`,
+        `Attempt ${item.report.attemptId} reported ${item.report._tag}${item.report._tag === "ExecutorWorkSafelySuspended" ? "; its held position can now be released" : ""}`,
       RunActivationFinalTrackerGraphReadReturned: (item) =>
         trackerGraphLandmark(item.graph, "Activation-final tracker read returned graph"),
       RunCoordinator: noLandmark,

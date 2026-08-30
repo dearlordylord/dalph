@@ -47,7 +47,7 @@ reconciliation.
    reconcile-before-retry. A retry limit is a count of complete attempts, not
    a claim that GitHub will respond within a local duration. Execution start
    and stop use exact correlated reports; an absent or slow report remains
-   unresolved rather than becoming `SafelySuspended`.
+   unresolved rather than becoming `ExecutorWorkSafelySuspended`.
 5. The maintainer records the decisions in the focused control-plane budget
    document linked from the architecture map. The document distinguishes
    targets, hard timeouts, retry/backoff policies, observation/cancellation
@@ -83,7 +83,7 @@ freshness from elapsed process time, or turn a metrics target into a timeout.
 
 The operator runs Dalph against one Git common directory. Dalph holds the
 local filesystem lock and has started a background descriptor/path comparison.
-One admitted executor reports `Running`; no new forward-progress owner is
+One admitted executor reports `ExecutorWorkExecuting`; no new forward-progress owner is
 accepted after the Exit request. The executor, GitHub, and any target
 repository verification process are outside the local timing contract.
 
@@ -152,7 +152,7 @@ proves either outside result.
    no second claim request. If GitHub reports an authoritative absence, the
    existing bounded acquisition protocol may retry. An unreadable response or
    conflicting claim remains a typed constraint.
-4. If the executor reports `SafelySuspended` or a terminal result for the exact
+4. If the executor reports `ExecutorWorkSafelySuspended` or a terminal result for the exact
    correlation, Dalph may release that task-work position. A slow, missing, or
    foreign report does not release it. Recovery continues only while the
    owning protocol's bounded observations or commands remain available.

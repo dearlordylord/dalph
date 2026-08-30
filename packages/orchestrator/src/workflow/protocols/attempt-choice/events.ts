@@ -4,12 +4,7 @@ import { ActiveTaskClaim, TaskClaimObservation } from "../../../authorities/task
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { WorkflowActor } from "../../registry/actor.js"
-import {
-  PlannedAttemptExecutorCommandOrdinal,
-  PlannedAttemptExecutorCommandProjectionOrdinal,
-  PlannedAttemptExecutorReportOrdinal,
-  PlannedAttemptExecutorStateObservationOrdinal
-} from "../planned-attempt-executor-work/events.js"
+import { PlannedAttemptExecutorReportOrdinal } from "../planned-attempt-executor-work/events.js"
 
 /** Non-person identity bound to the Run whose journal can decide exact redelivery. */
 export const AttemptChoiceRequestId = Schema.Struct({ nonce: Schema.NonEmptyString, runId: RunId }).pipe(
@@ -70,14 +65,9 @@ export const AttemptStoppageIntendedEvent = Schema.TaggedStruct("AttemptStoppage
 })
 export type AttemptStoppageIntendedEvent = typeof AttemptStoppageIntendedEvent.Type
 
-/** Exact journal provenance that proved no executor-owned writer remained. */
+/** Exact accepted lifecycle report that proved no executor-owned writer remained. */
 export const AttemptQuiescenceProof = Schema.TaggedUnion({
-  CommandProjection: {
-    commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
-    projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal
-  },
-  CommandResponse: { reportOrdinal: PlannedAttemptExecutorReportOrdinal },
-  StateProjection: { observationOrdinal: PlannedAttemptExecutorStateObservationOrdinal }
+  AcceptedReport: { reportOrdinal: PlannedAttemptExecutorReportOrdinal }
 })
 export type AttemptQuiescenceProof = typeof AttemptQuiescenceProof.Type
 

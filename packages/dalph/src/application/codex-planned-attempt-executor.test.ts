@@ -6,6 +6,7 @@ import {
   EvidenceReference,
   GitCommitSha,
   PlannedAttemptExecutor,
+  type PlannedAttemptExecutorService,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   PlannedAttemptExecutorRequest,
@@ -16,6 +17,7 @@ import {
   TaskId,
   WorktreeLocator,
   makeTaskWorkSpecification,
+  passiveLifecycleObservationPurpose,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import {
@@ -178,7 +180,8 @@ const makeHarness = (
     readonly manualAfterFirstTurn?: boolean
     readonly reorderTurnsOnResume?: boolean
     readonly foreignTurnCorrelation?: boolean
-    readonly terminalTurnStatus?: "completed" | "failed"
+    readonly terminalTurnStatus?: "completed" | "failed" | "interrupted"
+    readonly loseResponseThreadStatus?: "active" | "idle"
     readonly omitOwnedTurnToken?: boolean
     readonly wrongOwnedTurnToken?: boolean
     readonly keepTurnRunningOnInterruptCount?: number
@@ -189,6 +192,7 @@ const makeHarness = (
     readonly failAfterReplacementObservedOnce?: boolean
     readonly failAfterReplacementSealOnce?: boolean
     readonly dieAfterReplacementTurnStartOnce?: boolean
+    readonly dieAfterFirstTurnStartOnce?: boolean
   } = {}
 ): Harness => {
   const threadId = CodexThreadId.make("codex-thread-issue-58")
@@ -228,6 +232,7 @@ const makeHarness = (
   let replacementObservedFailure = false
   let replacementSealFailure = false
   let replacementTurnStartDeath = false
+  let firstTurnStartDeath = false
 
   const manualTurn = (id: string): CodexTurnSnapshot => ({
     id: CodexTurnId.make(id),
@@ -303,6 +308,10 @@ const makeHarness = (
           replacementTurnStartDeath = true
           return yield* Effect.die("controlled process loss after replacement turn/start")
         }
+        if (options.dieAfterFirstTurnStartOnce === true && !firstTurnStartDeath) {
+          firstTurnStartDeath = true
+          return yield* Effect.die("controlled process loss after first turn/start")
+        }
         if (
           ((options.loseFirstTurnResponse === true && !firstTurnResponseLost) ||
             options.loseTurnResponseAt === turnNumber) &&
@@ -310,6 +319,7 @@ const makeHarness = (
         ) {
           firstTurnResponseLost = true
           if (options.resumeUnavailableAfterLostTurn === true) resumeUnavailable = true
+          currentThread = { ...currentThread, status: options.loseResponseThreadStatus ?? "active" }
           return yield* Effect.fail(unavailable("turn/start"))
         }
         return currentTurn
@@ -729,8 +739,8 @@ const manifestDriftEvidenceStoreLayer = (replacement: Uint8Array): Layer.Layer<E
   ).pipe(Layer.provide(NodeServices.layer))
 
 type ConformanceBoundaryCall =
-  | { readonly _tag: "Project"; readonly correlation: typeof conformanceCorrelation }
-  | { readonly _tag: "StartOrContinue"; readonly correlation: typeof conformanceCorrelation }
+  | { readonly _tag: "Observe"; readonly correlation: typeof conformanceCorrelation }
+  | { readonly _tag: "Begin" | "Resume"; readonly correlation: typeof conformanceCorrelation }
   | { readonly _tag: "Suspend"; readonly correlation: typeof conformanceCorrelation }
 
 /**
@@ -745,9 +755,9 @@ const codexConformanceImplementation = {
   make: (scenario: string, onBoundary: (call: ConformanceBoundaryCall) => Effect.Effect<void>) =>
     Effect.gen(function* () {
       const options =
-        scenario === "ForeignStart"
+        scenario === "ForeignBegin"
           ? { foreignTurnCorrelation: true }
-          : scenario === "RunningThenSafeSuspension"
+          : scenario === "ExecutingThenSafeSuspension"
             ? { keepTurnRunningOnInterruptCount: 1 }
             : scenario === "UnavailableSuspension"
               ? { interruptUnavailable: true }
@@ -757,35 +767,36 @@ const codexConformanceImplementation = {
         return yield* PlannedAttemptExecutor
       }).pipe(Effect.provide(layerFor(harness)))
 
-      if (
-        scenario === "RunningThenSafeSuspension" ||
-        scenario === "ForeignSuspension" ||
-        scenario === "UnavailableSuspension" ||
-        scenario === "TerminalSuspension" ||
-        scenario === "ExactProjection" ||
-        scenario === "ForeignProjection"
-      ) {
-        yield* concrete.startOrContinue(conformanceRequest).pipe(Effect.orDie)
+      if (scenario === "ExactProjection" || scenario === "ForeignProjection") {
+        yield* concrete.begin(conformanceRequest).pipe(Effect.orDie)
       }
       if (scenario === "ForeignSuspension" || scenario === "ForeignProjection") harness.makeForeignResume()
       if (scenario === "UnavailableSuspension") harness.makeInterruptUnavailable()
-      if (scenario === "TerminalSuspension") harness.complete(conformanceFinalResponse)
 
       const calls = yield* Ref.make<ReadonlyArray<ConformanceBoundaryCall>>([])
       const record = (call: ConformanceBoundaryCall) =>
         Ref.update(calls, (current) => [...current, call]).pipe(Effect.andThen(onBoundary(call)))
       const executor = PlannedAttemptExecutor.of({
-        project: (requested) =>
-          record({ _tag: "Project", correlation: conformanceCorrelation }).pipe(
-            Effect.andThen(concrete.project(requested))
+        observe: (requested) =>
+          record({ _tag: "Observe", correlation: conformanceCorrelation }).pipe(
+            Effect.andThen(concrete.observe(requested, passiveLifecycleObservationPurpose))
           ),
         requestSuspension: (requested) =>
           record({ _tag: "Suspend", correlation: conformanceCorrelation }).pipe(
             Effect.andThen(concrete.requestSuspension(requested))
           ),
-        startOrContinue: (requested) =>
-          record({ _tag: "StartOrContinue", correlation: conformanceCorrelation }).pipe(
-            Effect.andThen(concrete.startOrContinue(requested))
+        begin: (requested) =>
+          record({ _tag: "Begin", correlation: conformanceCorrelation }).pipe(
+            Effect.andThen(concrete.begin(requested)),
+            Effect.tap(() =>
+              scenario === "TerminalSuspension"
+                ? Effect.sync(() => harness.complete(conformanceFinalResponse))
+                : Effect.void
+            )
+          ),
+        resume: (requested) =>
+          record({ _tag: "Resume", correlation: conformanceCorrelation }).pipe(
+            Effect.andThen(concrete.resume(requested))
           )
       })
       return { calls: Ref.get(calls), executor }
@@ -798,12 +809,20 @@ plannedAttemptExecutorContract({
   name: "Codex app-server"
 })
 
+const observeExactReport = Effect.fn("CodexPlannedAttemptExecutorTest.observeExactReport")(function* (
+  executor: PlannedAttemptExecutorService
+) {
+  const projection = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+  if (projection._tag === "Exact") return projection.report
+  return yield* Effect.die(`expected exact executor report, received ${projection._tag}`)
+})
+
 it.effect("persists the exact association before the first turn and seals Accepted from reread evidence", () => {
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    const first = yield* executor.startOrContinue(request)
-    expect(first).toEqual(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
+    const first = yield* executor.begin(request)
+    expect(first).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
     expect(harness.associationAtTurn()?._tag).toBe("AssociatedPreTurn")
     expect(harness.associationAtTurn()?.worktree).toBe(worktree)
     expect(harness.turnCwds).toEqual([worktree])
@@ -819,9 +838,9 @@ it.effect("persists the exact association before the first turn and seals Accept
     }
 
     harness.complete(finalResponse(head))
-    const accepted = yield* executor.startOrContinue(request)
-    expect(accepted._tag).toBe("Terminal")
-    if (accepted._tag === "Terminal") {
+    const accepted = yield* observeExactReport(executor)
+    expect(accepted._tag).toBe("ExecutorWorkTerminal")
+    if (accepted._tag === "ExecutorWorkTerminal") {
       expect(accepted.result._tag).toBe("Accepted")
       if (accepted.result._tag === "Accepted") expect(accepted.result.acceptedResult.commit).toBe(head)
     }
@@ -836,19 +855,20 @@ it.effect("persists the exact association before the first turn and seals Accept
     }
     expect(harness.turnCount()).toBe(1)
 
-    const projected = yield* executor.project(correlation)
+    const projected = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(projected._tag).toBe("Exact")
-    if (projected._tag === "Exact" && projected.report._tag === "Terminal") {
+    if (projected._tag === "Exact" && projected.report._tag === "ExecutorWorkTerminal") {
       expect(projected.report.result._tag).toBe("Accepted")
     }
 
     const resumeCountBeforeRestart = harness.resumeCwds.length
     const restarted = yield* Effect.gen(function* () {
       const restartedExecutor = yield* PlannedAttemptExecutor
-      return yield* restartedExecutor.startOrContinue(request)
+      return yield* observeExactReport(restartedExecutor)
     }).pipe(Effect.provide(layerFor(harness)))
-    expect(restarted._tag).toBe("Terminal")
+    expect(restarted._tag).toBe("ExecutorWorkTerminal")
     expect(harness.resumeCwds.length).toBeGreaterThan(resumeCountBeforeRestart)
+    expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -857,11 +877,11 @@ it.effect("fails closed when accepted evidence changes its manifest, content add
     const harness = makeHarness()
     return Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
-      yield* executor.startOrContinue(request)
+      yield* executor.begin(request)
       harness.complete(finalResponse(head))
-      const result = yield* executor.startOrContinue(request).pipe(Effect.exit)
+      const result = yield* observeExactReport(executor).pipe(Effect.exit)
       expect(result._tag).toBe("Failure")
-      expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+      expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
     }).pipe(Effect.provide(layerFor(harness, defaultGitCommand, mutatedEvidenceStoreLayer(mode))))
   })
 )
@@ -870,14 +890,14 @@ it.effect("keeps an accepted turn running when activity appears during evidence 
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.complete(finalResponse(head))
     harness.setActivityCensusSequence([
       { _tag: "Absent" },
       { _tag: "ExactLive", activities: [{ _tag: "ActiveTurn", turnId: CodexTurnId.make("late-active-58") }] }
     ])
-    expect(yield* executor.startOrContinue(request)).toEqual(
-      PlannedAttemptExecutorReport.cases.Running.make({ correlation })
+    expect(yield* observeExactReport(executor)).toEqual(
+      PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
     )
     expect(harness.currentRecord()?._tag).toBe("Running")
   }).pipe(Effect.provide(layerFor(harness)))
@@ -915,63 +935,70 @@ it.effect("fails closed when evidence is unavailable or Git cannot prove the acc
   }
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     unavailableEvidenceHarness.complete(finalResponse(head))
-    const unavailableEvidence = yield* executor.startOrContinue(request).pipe(Effect.exit)
+    const unavailableEvidence = yield* observeExactReport(executor).pipe(Effect.exit)
     expect(unavailableEvidence._tag).toBe("Failure")
-    expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+    expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
   }).pipe(
     Effect.provide(layerFor(unavailableEvidenceHarness, defaultGitCommand, null)),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         failedHeadHarness.complete(finalResponse(head))
-        expect((yield* executor.startOrContinue(request).pipe(Effect.exit))._tag).toBe("Failure")
+        expect((yield* observeExactReport(executor).pipe(Effect.exit))._tag).toBe("Failure")
       }).pipe(Effect.provide(layerFor(failedHeadHarness, failedHead)))
     ),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         malformedHeadHarness.complete(finalResponse(head))
-        expect((yield* executor.startOrContinue(request).pipe(Effect.exit))._tag).toBe("Failure")
+        expect((yield* observeExactReport(executor).pipe(Effect.exit))._tag).toBe("Failure")
       }).pipe(Effect.provide(layerFor(malformedHeadHarness, malformedHead)))
     ),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         movingHeadHarness.complete(finalResponse(head))
-        expect((yield* executor.startOrContinue(request).pipe(Effect.exit))._tag).toBe("Failure")
+        expect((yield* observeExactReport(executor).pipe(Effect.exit))._tag).toBe("Failure")
       }).pipe(Effect.provide(layerFor(movingHeadHarness, movingHead)))
     ),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         rereadFailureHarness.complete(finalResponse(head))
-        expect((yield* executor.startOrContinue(request).pipe(Effect.exit))._tag).toBe("Failure")
+        expect((yield* observeExactReport(executor).pipe(Effect.exit))._tag).toBe("Failure")
       }).pipe(Effect.provide(layerFor(rereadFailureHarness, rereadFailure)))
     )
   )
 })
 
-it.effect("seals an immediate provider failure and rejects a turn that returns another owned token", () => {
+it.effect("normalizes an immediate provider failure to Begin Executing and exposes Terminal passively", () => {
   const failedHarness = makeHarness({ terminalTurnStatus: "failed" })
   const tokenHarness = makeHarness({ wrongOwnedTurnToken: true })
   return Effect.gen(function* () {
     const failedExecutor = yield* PlannedAttemptExecutor
-    const failed = yield* failedExecutor.startOrContinue(request)
-    expect(failed).toEqual(
-      PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+    const began = yield* failedExecutor.begin(request)
+    expect(began).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
+    expect(failedHarness.currentRecord()?._tag).toBe("Terminal")
+    expect(yield* failedExecutor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" })).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+      })
+    )
+    expect(yield* observeExactReport(failedExecutor)).toEqual(
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
     )
   }).pipe(
     Effect.provide(layerFor(failedHarness)),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        const result = yield* executor.startOrContinue(request).pipe(Effect.exit)
+        const result = yield* executor.begin(request).pipe(Effect.exit)
         expect(result._tag).toBe("Failure")
       }).pipe(Effect.provide(layerFor(tokenHarness)))
     )
@@ -982,16 +1009,16 @@ it.effect("seals a recovered failed owned turn even when Codex marks its thread 
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    expect((yield* executor.startOrContinue(request))._tag).toBe("Running")
+    expect((yield* executor.begin(request))._tag).toBe("ExecutorWorkExecuting")
     const thread = harness.currentThread()
     harness.setThread({
       ...thread,
       status: "systemError",
       turns: thread.turns.map((turn) => ({ ...turn, status: "failed" as const }))
     })
-    const failed = yield* executor.startOrContinue(request)
+    const failed = yield* observeExactReport(executor)
     expect(failed).toEqual(
-      PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
     )
   }).pipe(Effect.provide(layerFor(harness)))
 })
@@ -1023,11 +1050,11 @@ it.effect("rejects malformed, foreign, ambiguous, and non-JSON terminal messages
       const harness = makeHarness()
       return Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         harness.completeWithItems(items)
-        const failed = yield* executor.startOrContinue(request)
+        const failed = yield* observeExactReport(executor)
         expect(failed).toEqual(
-          PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+          PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
         )
       }).pipe(Effect.provide(layerFor(harness)))
     }
@@ -1047,10 +1074,10 @@ it.effect(
     }
     return Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
-      yield* executor.startOrContinue(request)
+      yield* executor.begin(request)
       activityHarness.complete(finalResponse(head))
-      const accepted = yield* executor.startOrContinue(request)
-      expect(accepted._tag).toBe("Terminal")
+      const accepted = yield* observeExactReport(executor)
+      expect(accepted._tag).toBe("ExecutorWorkTerminal")
       activityHarness.setActivityCensusSequence([
         { _tag: "Absent" },
         {
@@ -1068,31 +1095,31 @@ it.effect(
           ]
         }
       ])
-      const activityDuringReread = yield* executor.project(correlation)
+      const activityDuringReread = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
       expect(activityDuringReread._tag).toBe("Exact")
-      if (activityDuringReread._tag === "Exact") expect(activityDuringReread.report._tag).toBe("Running")
+      if (activityDuringReread._tag === "Exact") expect(activityDuringReread.report._tag).toBe("ExecutorWorkExecuting")
       activityHarness.setActivityCensus({ _tag: "Absent" })
-      expect((yield* executor.project(correlation))._tag).toBe("Exact")
+      expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Exact")
     }).pipe(
       Effect.provide(layerFor(activityHarness)),
       Effect.andThen(
         Effect.gen(function* () {
           const executor = yield* PlannedAttemptExecutor
-          yield* executor.startOrContinue(request)
+          yield* executor.begin(request)
           turnHarness.complete(finalResponse(head))
-          expect((yield* executor.startOrContinue(request))._tag).toBe("Terminal")
+          expect((yield* observeExactReport(executor))._tag).toBe("ExecutorWorkTerminal")
           turnHarness.complete(finalResponse(otherHead))
-          expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+          expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
         }).pipe(Effect.provide(layerFor(turnHarness)))
       ),
       Effect.andThen(
         Effect.gen(function* () {
           const executor = yield* PlannedAttemptExecutor
-          yield* executor.startOrContinue(request)
+          yield* executor.begin(request)
           headHarness.complete(finalResponse(head))
-          expect((yield* executor.startOrContinue(request))._tag).toBe("Terminal")
+          expect((yield* observeExactReport(executor))._tag).toBe("ExecutorWorkTerminal")
           headMismatch = true
-          expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+          expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
         }).pipe(Effect.provide(layerFor(headHarness, rereadHead)))
       )
     )
@@ -1105,13 +1132,13 @@ it.effect(
     const harness = makeHarness()
     const accepted = Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
-      yield* executor.startOrContinue(request)
+      yield* executor.begin(request)
       harness.complete(finalResponse(head))
-      expect((yield* executor.startOrContinue(request))._tag).toBe("Terminal")
+      expect((yield* observeExactReport(executor))._tag).toBe("ExecutorWorkTerminal")
     }).pipe(Effect.provide(layerFor(harness)))
     const restarted = Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
-      expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+      expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
     }).pipe(Effect.provide(layerFor(harness, defaultGitCommand, null)))
     return accepted.pipe(Effect.andThen(restarted))
   }
@@ -1121,23 +1148,23 @@ it.effect("rejects corrupted evidence when rereading an accepted terminal", () =
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.complete(finalResponse(head))
-    expect((yield* executor.startOrContinue(request))._tag).toBe("Terminal")
-    expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+    expect((yield* observeExactReport(executor))._tag).toBe("ExecutorWorkTerminal")
+    expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
   }).pipe(Effect.provide(layerFor(harness, defaultGitCommand, corruptOnRereadEvidenceStoreLayer)))
 })
 
-it.effect("serializes same-attempt parallel admission behind one gate", () => {
+it.effect("admits only one same-attempt Begin behind the executor gate", () => {
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    const reports = yield* Effect.all(
-      Array.from({ length: 12 }, () => executor.startOrContinue(request)),
+    const exits = yield* Effect.all(
+      Array.from({ length: 12 }, () => executor.begin(request).pipe(Effect.exit)),
       { concurrency: 12 }
     )
-    expect(reports).toHaveLength(12)
-    expect(reports.every((report) => report._tag === "Running")).toBe(true)
+    expect(exits.filter(({ _tag }) => _tag === "Success")).toHaveLength(1)
+    expect(exits.filter(({ _tag }) => _tag === "Failure")).toHaveLength(11)
     expect(harness.turnCount()).toBe(1)
     expect(harness.currentRecord()?._tag).toBe("Running")
   }).pipe(Effect.provide(layerFor(harness)))
@@ -1147,11 +1174,11 @@ it.effect("does not accept a commit without the exact final response correlation
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.complete(JSON.stringify({ commit: head }))
-    const result = yield* executor.startOrContinue(request)
+    const result = yield* observeExactReport(executor)
     expect(result).toEqual(
-      PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
     )
   }).pipe(Effect.provide(layerFor(harness)))
 })
@@ -1160,37 +1187,86 @@ it.effect("matches an owned turn correlation when the app-server records it expl
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     const thread = harness.currentThread()
     const turn = thread.turns[0]
     expect(turn).toBeDefined()
     if (turn !== undefined) {
       harness.setThread({ ...thread, turns: [{ ...turn, correlation }] })
     }
-    const projected = yield* executor.project(correlation)
+    const projected = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(projected._tag).toBe("Exact")
-    if (projected._tag === "Exact") expect(projected.report._tag).toBe("Running")
+    if (projected._tag === "Exact") expect(projected.report._tag).toBe("ExecutorWorkExecuting")
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
-it.effect("reconciles a lost response from a terminal turn without sending another turn", () => {
+it.effect("reconciles a lost provider response and keeps lost public Begin reconciliation executing", () => {
   const harness = makeHarness({ loseFirstTurnResponse: true, terminalTurnStatus: "completed" })
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    const result = yield* executor.startOrContinue(request)
-    expect(result).toEqual(
-      PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+    const began = yield* executor.begin(request)
+    expect(began).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
+    expect(yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" })).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+      })
+    )
+    expect(yield* observeExactReport(executor)).toEqual(
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
     )
     expect(harness.turnCount()).toBe(1)
     expect(harness.currentRecord()?._tag).toBe("Terminal")
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
+it.effect("reconciles a lost Begin terminal after restart before exposing it passively", () => {
+  const harness = makeHarness({ terminalTurnStatus: "completed", dieAfterFirstTurnStartOnce: true })
+  const firstProcess = Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const lost = yield* executor.begin(request).pipe(Effect.exit)
+    expect(lost._tag).toBe("Failure")
+    expect(harness.currentRecord()?._tag).toBe("TurnIntentRecorded")
+    expect(harness.turnCount()).toBe(1)
+  }).pipe(Effect.provide(layerFor(harness)))
+
+  return firstProcess.pipe(
+    // The provider completed the exact turn during the process loss; only
+    // the private local result persistence was skipped.
+    Effect.andThen(Effect.sync(() => harness.complete(finalResponse(head)))),
+    Effect.andThen(
+      Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const reconciled = yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" })
+        expect(reconciled).toEqual(
+          PlannedAttemptExecutorProjection.cases.Exact.make({
+            report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+          })
+        )
+        expect(harness.currentRecord()?._tag).toBe("Terminal")
+        expect(harness.turnCount()).toBe(1)
+        expect(harness.turnCwds).toHaveLength(1)
+        const resumeCallsAfterReconciliation = harness.resumeCwds.length
+        expect(yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" })).toEqual(reconciled)
+        expect(harness.resumeCwds.length).toBe(resumeCallsAfterReconciliation)
+
+        const passive = yield* observeExactReport(executor)
+        expect(passive._tag).toBe("ExecutorWorkTerminal")
+        if (passive._tag === "ExecutorWorkTerminal") {
+          expect(passive.result._tag).toBe("Accepted")
+          if (passive.result._tag === "Accepted") expect(passive.result.acceptedResult.commit).toBe(head)
+        }
+        expect(harness.turnCount()).toBe(1)
+        expect(yield* observeExactReport(executor)).toEqual(passive)
+      }).pipe(Effect.provide(layerFor(harness)))
+    )
+  )
+})
+
 it.effect("retains the original turn-start failure when recovery cannot resume the thread", () => {
   const harness = makeHarness({ loseFirstTurnResponse: true, resumeUnavailableAfterLostTurn: true })
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    const result = yield* executor.startOrContinue(request).pipe(Effect.exit)
+    const result = yield* executor.begin(request).pipe(Effect.exit)
     expect(result._tag).toBe("Failure")
     expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))
@@ -1200,7 +1276,7 @@ it.effect("backfills an omitted owned token on the started turn", () => {
   const harness = makeHarness({ omitOwnedTurnToken: true })
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    expect((yield* executor.startOrContinue(request))._tag).toBe("Running")
+    expect((yield* executor.begin(request))._tag).toBe("ExecutorWorkExecuting")
     const record = harness.currentRecord()
     expect(record?._tag).toBe("Running")
     if (record?._tag === "Running") {
@@ -1214,13 +1290,13 @@ it.effect("reconciles a lost turn response without sending a second turn", () =>
   const harness = makeHarness({ loseFirstTurnResponse: true })
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    const running = yield* executor.startOrContinue(request)
-    expect(running._tag).toBe("Running")
+    const running = yield* executor.begin(request)
+    expect(running._tag).toBe("ExecutorWorkExecuting")
     expect(harness.turnCount()).toBe(1)
 
     harness.complete(finalResponse(head))
-    const accepted = yield* executor.startOrContinue(request)
-    expect(accepted._tag).toBe("Terminal")
+    const accepted = yield* observeExactReport(executor)
+    expect(accepted._tag).toBe("ExecutorWorkTerminal")
     expect(harness.turnCount()).toBe(1)
     const terminalRecord = harness.currentRecord()
     expect(terminalRecord?._tag).toBe("Terminal")
@@ -1234,26 +1310,44 @@ it.effect("reconciles a lost turn response without sending a second turn", () =>
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
+it.effect("fails closed when a lost turn response leaves an interrupted turn idle", () => {
+  const harness = makeHarness({
+    loseFirstTurnResponse: true,
+    loseResponseThreadStatus: "idle",
+    terminalTurnStatus: "interrupted"
+  })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const failure = yield* executor.begin(request).pipe(Effect.flip)
+    expect(failure.command).toBe("Begin")
+    expect(failure.correlation).toEqual(correlation)
+    expect(harness.turnCount()).toBe(1)
+    expect(harness.currentThread().status).toBe("idle")
+    expect(harness.currentThread().turns[0]?.status).toBe("interrupted")
+    expect(harness.currentRecord()?._tag).toBe("TurnIntentRecorded")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
 it.effect("seals Failed on commit mismatch and never reports Completed", () => {
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.complete(finalResponse(otherHead))
     harness.setActivityCensusSequence([{ _tag: "Absent" }, { _tag: "ExactLive", activities: [] }, { _tag: "Absent" }])
-    const running = yield* executor.startOrContinue(request)
-    expect(running._tag).toBe("Running")
-    const failed = yield* executor.startOrContinue(request)
+    const running = yield* observeExactReport(executor)
+    expect(running._tag).toBe("ExecutorWorkExecuting")
+    const failed = yield* observeExactReport(executor)
     expect(failed).toEqual(
-      PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
     )
-    const again = yield* executor.startOrContinue(request)
+    const again = yield* observeExactReport(executor)
     expect(again).toEqual(failed)
     expect(JSON.stringify(failed)).not.toContain("Completed")
     harness.setActivityCensus({ _tag: "ExactLive", activities: [] })
-    const activeTerminal = yield* executor.project(correlation)
+    const activeTerminal = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(activeTerminal._tag).toBe("Exact")
-    if (activeTerminal._tag === "Exact") expect(activeTerminal.report._tag).toBe("Running")
+    if (activeTerminal._tag === "Exact") expect(activeTerminal.report._tag).toBe("ExecutorWorkExecuting")
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -1266,11 +1360,11 @@ it.effect("does not seal Failed when Git head observation is unavailable", () =>
   }
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.complete(finalResponse(head))
-    const result = yield* executor.startOrContinue(request).pipe(Effect.exit)
+    const result = yield* observeExactReport(executor).pipe(Effect.exit)
     expect(result._tag).toBe("Failure")
-    const projected = yield* executor.project(correlation)
+    const projected = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(projected._tag).toBe("Unreadable")
   }).pipe(Effect.provide(layerFor(harness, unavailableGit)))
 })
@@ -1280,21 +1374,21 @@ it.effect("lets a terminal result win the suspension race and keeps owned activi
   const activityHarness = makeHarness()
   return Effect.gen(function* () {
     const terminalExecutor = yield* PlannedAttemptExecutor
-    yield* terminalExecutor.startOrContinue(request)
+    yield* terminalExecutor.begin(request)
     terminalHarness.complete(finalResponse(head))
     const terminal = yield* terminalExecutor.requestSuspension(attempt)
-    expect(terminal._tag).toBe("Terminal")
-    if (terminal._tag === "Terminal") expect(terminal.result._tag).toBe("Accepted")
+    expect(terminal._tag).toBe("ExecutorWorkTerminal")
+    if (terminal._tag === "ExecutorWorkTerminal") expect(terminal.result._tag).toBe("Accepted")
   }).pipe(
     Effect.provide(layerFor(terminalHarness)),
     Effect.andThen(
       Effect.gen(function* () {
         const activityExecutor = yield* PlannedAttemptExecutor
-        yield* activityExecutor.startOrContinue(request)
+        yield* activityExecutor.begin(request)
         activityHarness.complete(finalResponse(head))
         activityHarness.makeTerminalActivity()
         const report = yield* activityExecutor.requestSuspension(attempt)
-        expect(report._tag).toBe("Running")
+        expect(report._tag).toBe("ExecutorWorkExecuting")
       }).pipe(Effect.provide(layerFor(activityHarness)))
     )
   )
@@ -1305,9 +1399,9 @@ it.effect("terminates a reported background activity before reporting safe suspe
   harness.makeTerminalActivity()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     const suspended = yield* executor.requestSuspension(attempt)
-    expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
+    expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }))
     expect(harness.backgroundTerminationCount()).toBe(1)
     expect(harness.descendantTerminationCount()).toBe(0)
   }).pipe(Effect.provide(layerFor(harness)))
@@ -1324,14 +1418,14 @@ it.effect("keeps capacity when the census finds a hidden tool absent from the te
   }
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.complete(finalResponse(head))
     harness.setActivityCensus({ _tag: "ExactLive", activities: [{ _tag: "BackgroundTerminal", terminal: hiddenTool }] })
-    const running = yield* executor.startOrContinue(request)
-    expect(running).toEqual(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
+    const running = yield* observeExactReport(executor)
+    expect(running).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
     harness.setActivityCensus({ _tag: "Absent" })
-    const accepted = yield* executor.startOrContinue(request)
-    expect(accepted._tag).toBe("Terminal")
+    const accepted = yield* observeExactReport(executor)
+    expect(accepted._tag).toBe("ExecutorWorkTerminal")
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -1345,7 +1439,7 @@ it.effect("does not report safe suspension while a process-group descendant surv
   }
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.setActivityCensus({
       _tag: "ExactLive",
       activities: [{ _tag: "ProcessGroupDescendant", identity: descendant }]
@@ -1355,7 +1449,7 @@ it.effect("does not report safe suspension while a process-group descendant surv
     expect(harness.descendantTerminationCount()).toBeGreaterThan(0)
     harness.setActivityCensus({ _tag: "Absent" })
     const suspended = yield* executor.requestSuspension(attempt)
-    expect(suspended._tag).toBe("SafelySuspended")
+    expect(suspended._tag).toBe("ExecutorWorkSafelySuspended")
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -1366,7 +1460,7 @@ it.effect("keeps suspension unresolved for contradictory, active, surviving, and
   const failedTerminationHarness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     contradictoryHarness.setActivityCensus({ _tag: "Contradictory", detail: "contradictory activity" })
     const contradictory = yield* executor.requestSuspension(attempt).pipe(Effect.exit)
     expect(contradictory._tag).toBe("Failure")
@@ -1375,7 +1469,7 @@ it.effect("keeps suspension unresolved for contradictory, active, surviving, and
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         activeHarness.setActivityCensus({
           _tag: "ExactLive",
           activities: [{ _tag: "ActiveTurn", turnId: CodexTurnId.make("active-turn-58") }]
@@ -1387,7 +1481,7 @@ it.effect("keeps suspension unresolved for contradictory, active, surviving, and
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         survivingHarness.makeTerminalActivity()
         survivingHarness.setActivityCensus({
           _tag: "ExactLive",
@@ -1411,7 +1505,7 @@ it.effect("keeps suspension unresolved for contradictory, active, surviving, and
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         failedTerminationHarness.makeTerminalActivity()
         failedTerminationHarness.makeBackgroundTerminationFail()
         const failedTermination = yield* executor.requestSuspension(attempt).pipe(Effect.exit)
@@ -1425,10 +1519,10 @@ it.effect("reconciles an interrupted response that settled before its error and 
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.makeInterruptSettleBeforeFailure()
     const suspended = yield* executor.requestSuspension(attempt)
-    expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
+    expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }))
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -1436,11 +1530,11 @@ it.effect("lets a terminal turn observed after interrupt failure win suspension"
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.makeInterruptTerminalBeforeFailure()
     const report = yield* executor.requestSuspension(attempt)
-    expect(report._tag).toBe("Terminal")
-    if (report._tag === "Terminal") expect(report.result._tag).toBe("Accepted")
+    expect(report._tag).toBe("ExecutorWorkTerminal")
+    if (report._tag === "ExecutorWorkTerminal") expect(report.result._tag).toBe("Accepted")
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -1449,21 +1543,21 @@ it.effect("fails closed when the persisted prior owned turn is self-referential 
   const missingPriorHarness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     const current = selfReferentialHarness.currentRecord()
     expect(current?._tag).toBe("Running")
     if (current?._tag === "Running") {
       selfReferentialHarness.setRecord(
         CodexAttemptRecord.cases.Running.make({ ...current, priorObservedTurnId: current.observedTurnId })
       )
-      expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+      expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
     }
   }).pipe(
     Effect.provide(layerFor(selfReferentialHarness)),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         const current = missingPriorHarness.currentRecord()
         expect(current?._tag).toBe("Running")
         if (current?._tag === "Running") {
@@ -1473,7 +1567,7 @@ it.effect("fails closed when the persisted prior owned turn is self-referential 
               priorObservedTurnId: CodexTurnId.make("missing-prior-58")
             })
           )
-          expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+          expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
         }
       }).pipe(Effect.provide(layerFor(missingPriorHarness)))
     )
@@ -1485,7 +1579,7 @@ it.effect("reconciles a persisted turn intent through running and safe suspensio
   const suspensionHarness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     const current = runningHarness.currentRecord()
     expect(current?._tag).toBe("Running")
     if (current?._tag === "Running") {
@@ -1500,15 +1594,15 @@ it.effect("reconciles a persisted turn intent through running and safe suspensio
           worktree: current.worktree
         })
       )
-      expect((yield* executor.startOrContinue(request))._tag).toBe("Running")
-      expect(runningHarness.currentRecord()?._tag).toBe("Running")
+      expect((yield* observeExactReport(executor))._tag).toBe("ExecutorWorkExecuting")
+      expect(runningHarness.currentRecord()?._tag).toBe("TurnIntentRecorded")
     }
   }).pipe(
     Effect.provide(layerFor(runningHarness)),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         const current = suspensionHarness.currentRecord()
         expect(current?._tag).toBe("Running")
         if (current?._tag === "Running") {
@@ -1524,7 +1618,7 @@ it.effect("reconciles a persisted turn intent through running and safe suspensio
             })
           )
           expect(yield* executor.requestSuspension(attempt)).toEqual(
-            PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+            PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
           )
           expect(suspensionHarness.currentRecord()?._tag).toBe("SafelySuspended")
         }
@@ -1546,7 +1640,7 @@ it.effect("normalizes suspension requests with absent, foreign, and empty-pre-tu
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         const current = foreignHarness.currentRecord()
         expect(current?._tag).toBe("Running")
         if (current?._tag === "Running") {
@@ -1559,14 +1653,14 @@ it.effect("normalizes suspension requests with absent, foreign, and empty-pre-tu
           )
         }
         const foreign = yield* executor.requestSuspension(attempt)
-        expect(foreign._tag).toBe("Running")
+        expect(foreign._tag).toBe("ExecutorWorkExecuting")
         expect(foreign.correlation.attemptId).toBe("foreign-suspension-attempt")
       }).pipe(Effect.provide(layerFor(foreignHarness)))
     ),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         const current = emptyHarness.currentRecord()
         expect(current?._tag).toBe("Running")
         emptyHarness.setRecord(
@@ -1593,33 +1687,33 @@ it.effect("fails closed for malformed thread states and unresolved turn intents"
   const observedMissingHarness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     notLoadedHarness.setThread({ ...notLoadedHarness.currentThread(), status: "notLoaded" })
-    expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
-    expect(yield* executor.startOrContinue(request).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
+    expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
+    expect(yield* executor.begin(request).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
   }).pipe(
     Effect.provide(layerFor(notLoadedHarness)),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         systemErrorHarness.setThread({ ...systemErrorHarness.currentThread(), status: "systemError" })
-        expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+        expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
       }).pipe(Effect.provide(layerFor(systemErrorHarness)))
     ),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         cwdMismatchHarness.setThread({ ...cwdMismatchHarness.currentThread(), cwd: "/tmp/foreign-worktree" })
         cwdMismatchHarness.preserveResumeCwd()
-        expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+        expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
       }).pipe(Effect.provide(layerFor(cwdMismatchHarness)))
     ),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         const current = associatedActivityHarness.currentRecord()
         expect(current?._tag).toBe("Running")
         if (current?._tag === "Running") {
@@ -1632,7 +1726,7 @@ it.effect("fails closed for malformed thread states and unresolved turn intents"
               worktree: current.worktree
             })
           )
-          expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+          expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
           associatedActivityHarness.setThread({
             id: current.threadId,
             cwd: current.worktree,
@@ -1646,7 +1740,7 @@ it.effect("fails closed for malformed thread states and unresolved turn intents"
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         const current = unresolvedHarness.currentRecord()
         expect(current?._tag).toBe("Running")
         if (current?._tag === "Running") {
@@ -1661,16 +1755,16 @@ it.effect("fails closed for malformed thread states and unresolved turn intents"
           })
           unresolvedHarness.setRecord(intent)
           unresolvedHarness.setThread({ id: current.threadId, cwd: current.worktree, status: "idle", turns: [] })
-          expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+          expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
           expect(yield* executor.requestSuspension(attempt).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
-          expect(yield* executor.startOrContinue(request).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
+          expect(yield* executor.begin(request).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
         }
       }).pipe(Effect.provide(layerFor(unresolvedHarness)))
     ),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         const current = observedMissingHarness.currentRecord()
         expect(current?._tag).toBe("Running")
         if (current?._tag === "Running") {
@@ -1687,7 +1781,7 @@ it.effect("fails closed for malformed thread states and unresolved turn intents"
             })
           )
           observedMissingHarness.setThread({ id: current.threadId, cwd: current.worktree, status: "idle", turns: [] })
-          expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+          expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
         }
       }).pipe(Effect.provide(layerFor(observedMissingHarness)))
     )
@@ -1698,14 +1792,14 @@ it.effect("keeps a terminal attempt running when its activity census is unreadab
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.complete(finalResponse(head))
     harness.setActivityCensus({ _tag: "Unreadable", detail: "controlled process observation" })
-    const running = yield* executor.startOrContinue(request)
-    expect(running).toEqual(PlannedAttemptExecutorReport.cases.Running.make({ correlation }))
-    const projected = yield* executor.project(correlation)
+    const running = yield* observeExactReport(executor)
+    expect(running).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
+    const projected = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(projected._tag).toBe("Exact")
-    if (projected._tag === "Exact") expect(projected.report._tag).toBe("Running")
+    if (projected._tag === "Exact") expect(projected.report._tag).toBe("ExecutorWorkExecuting")
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -1719,31 +1813,32 @@ it.effect("keeps terminal capacity while an owned descendant survives, then acce
   }
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.complete(finalResponse(head))
     harness.setActivityCensus({
       _tag: "ExactLive",
       activities: [{ _tag: "ProcessGroupDescendant", identity: descendant }]
     })
-    const running = yield* executor.startOrContinue(request)
-    expect(running._tag).toBe("Running")
+    const running = yield* observeExactReport(executor)
+    expect(running._tag).toBe("ExecutorWorkExecuting")
     harness.setActivityCensus({ _tag: "Absent" })
-    const accepted = yield* executor.startOrContinue(request)
-    expect(accepted._tag).toBe("Terminal")
-    if (accepted._tag === "Terminal") expect(accepted.result._tag).toBe("Accepted")
+    const accepted = yield* observeExactReport(executor)
+    expect(accepted._tag).toBe("ExecutorWorkTerminal")
+    if (accepted._tag === "ExecutorWorkTerminal") expect(accepted.result._tag).toBe("Accepted")
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
-it.effect("retries a lost association write without sending two task turns", () => {
+it.effect("does not issue a second Begin after an association write failure", () => {
   const harness = makeHarness({ failAssociatedWriteOnce: true })
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    const first = yield* executor.startOrContinue(request).pipe(Effect.exit)
+    const first = yield* executor.begin(request).pipe(Effect.exit)
     expect(first._tag).toBe("Failure")
-    const second = yield* executor.startOrContinue(request)
-    expect(second._tag).toBe("Running")
-    expect(harness.threadStarts()).toBe(2)
-    expect(harness.turnCount()).toBe(1)
+    expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
+      PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+    )
+    expect(harness.threadStarts()).toBe(1)
+    expect(harness.turnCount()).toBe(0)
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -1751,15 +1846,15 @@ it.effect("sends the first turn on a freshly associated thread without treating 
   const harness = makeHarness({ missingEmptyThread: true })
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    const running = yield* executor.startOrContinue(request)
-    expect(running._tag).toBe("Running")
+    const running = yield* executor.begin(request)
+    expect(running._tag).toBe("ExecutorWorkExecuting")
     expect(harness.threadStarts()).toBe(1)
     expect(harness.resumeCwds).toHaveLength(0)
     expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
-it.effect("replaces only a conclusively absent empty pre-turn thread", () => {
+it.effect("does not replace a conclusively absent recovered pre-turn thread", () => {
   const harness = makeHarness({ missingEmptyThread: true })
   return Effect.gen(function* () {
     const lostEmptyThread = yield* harness.app.startThread(worktree)
@@ -1773,10 +1868,9 @@ it.effect("replaces only a conclusively absent empty pre-turn thread", () => {
       })
     )
     const executor = yield* PlannedAttemptExecutor
-    const running = yield* executor.startOrContinue(request)
-    expect(running._tag).toBe("Running")
-    expect(harness.threadStarts()).toBe(2)
-    expect(harness.turnCount()).toBe(1)
+    expect(yield* executor.begin(request).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
+    expect(harness.threadStarts()).toBe(1)
+    expect(harness.turnCount()).toBe(0)
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -1785,9 +1879,9 @@ it.effect("normalizes unavailable and foreign resume observations without replac
   const foreignHarness = makeHarness()
   return Effect.gen(function* () {
     const unavailableExecutor = yield* PlannedAttemptExecutor
-    yield* unavailableExecutor.startOrContinue(request)
+    yield* unavailableExecutor.begin(request)
     unavailableHarness.makeResumeUnavailable()
-    const unavailable = yield* unavailableExecutor.project(correlation)
+    const unavailable = yield* unavailableExecutor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(unavailable._tag).toBe("TemporarilyUnavailable")
     expect(unavailableHarness.threadStarts()).toBe(1)
   }).pipe(
@@ -1795,9 +1889,9 @@ it.effect("normalizes unavailable and foreign resume observations without replac
     Effect.andThen(
       Effect.gen(function* () {
         const foreignExecutor = yield* PlannedAttemptExecutor
-        yield* foreignExecutor.startOrContinue(request)
+        yield* foreignExecutor.begin(request)
         foreignHarness.makeForeignResume()
-        const contradiction = yield* foreignExecutor.project(correlation)
+        const contradiction = yield* foreignExecutor.observe(correlation, passiveLifecycleObservationPurpose)
         expect(contradiction._tag).toBe("CorrelationContradiction")
         expect(foreignHarness.threadStarts()).toBe(1)
       }).pipe(Effect.provide(layerFor(foreignHarness)))
@@ -1809,15 +1903,15 @@ it.effect("reports safe suspension after an interrupted turn and resumes the sam
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     const firstTurnRecord = harness.currentRecord()
     expect(firstTurnRecord?._tag).toBe("Running")
     const suspended = yield* executor.requestSuspension(attempt)
-    expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation }))
+    expect(suspended).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }))
     expect(harness.threadStarts()).toBe(1)
 
-    const resumed = yield* executor.startOrContinue(request)
-    expect(resumed._tag).toBe("Running")
+    const resumed = yield* executor.resume(request)
+    expect(resumed._tag).toBe("ExecutorWorkExecuting")
     expect(harness.threadStarts()).toBe(1)
     expect(harness.turnCount()).toBe(2)
     const continuationRecord = harness.currentRecord()
@@ -1833,18 +1927,18 @@ it.effect("reports safe suspension after an interrupted turn and resumes the sam
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
-it.effect("reconciles a lost continuation response against the later turn without duplication", () => {
+it.effect("reconciles a lost Resume response against the later turn without duplication", () => {
   const harness = makeHarness({ loseTurnResponseAt: 2 })
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     const firstTurnRecord = harness.currentRecord()
     expect(firstTurnRecord?._tag).toBe("Running")
     const suspended = yield* executor.requestSuspension(attempt)
-    expect(suspended._tag).toBe("SafelySuspended")
+    expect(suspended._tag).toBe("ExecutorWorkSafelySuspended")
 
-    const resumed = yield* executor.startOrContinue(request)
-    expect(resumed._tag).toBe("Running")
+    const resumed = yield* executor.resume(request)
+    expect(resumed._tag).toBe("ExecutorWorkExecuting")
     expect(harness.turnCount()).toBe(2)
     const continuationRecord = harness.currentRecord()
     expect(continuationRecord?._tag).toBe("Running")
@@ -1860,8 +1954,8 @@ it.effect("reconciles a lost continuation response against the later turn withou
     }
 
     harness.complete(finalResponse(head))
-    const accepted = yield* executor.startOrContinue(request)
-    expect(accepted._tag).toBe("Terminal")
+    const accepted = yield* observeExactReport(executor)
+    expect(accepted._tag).toBe("ExecutorWorkTerminal")
     expect(harness.turnCount()).toBe(2)
   }).pipe(Effect.provide(layerFor(harness)))
 })
@@ -1870,10 +1964,10 @@ it.effect("matches the owned turn by token across manual turns and reordered sna
   const harness = makeHarness({ manualBeforeFirstTurn: true, manualAfterFirstTurn: true, reorderTurnsOnResume: true })
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.complete(finalResponse(head))
-    const accepted = yield* executor.startOrContinue(request)
-    expect(accepted._tag).toBe("Terminal")
+    const accepted = yield* observeExactReport(executor)
+    expect(accepted._tag).toBe("ExecutorWorkTerminal")
     expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))
 })
@@ -1882,11 +1976,11 @@ it.effect("preserves foreign-token turns while reporting the exact owned turn", 
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.addForeignOwnedTurn()
-    const projected = yield* executor.project(correlation)
+    const projected = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(projected._tag).toBe("Exact")
-    if (projected._tag === "Exact") expect(projected.report._tag).toBe("Running")
+    if (projected._tag === "Exact") expect(projected.report._tag).toBe("ExecutorWorkExecuting")
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -1894,11 +1988,11 @@ it.effect("maps duplicate owned tokens to an unreadable projection without choos
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.duplicateOwnedTurn()
-    const projected = yield* executor.project(correlation)
+    const projected = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(projected._tag).toBe("Unreadable")
-    const retried = yield* executor.startOrContinue(request).pipe(Effect.exit)
+    const retried = yield* executor.begin(request).pipe(Effect.exit)
     expect(retried._tag).toBe("Failure")
     expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))
@@ -1908,11 +2002,11 @@ it.effect("maps an owned token to a contradictory turn id without choosing a tur
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.contradictOwnedTurnId()
-    const projected = yield* executor.project(correlation)
+    const projected = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(projected._tag).toBe("Unreadable")
-    const retried = yield* executor.startOrContinue(request).pipe(Effect.exit)
+    const retried = yield* executor.begin(request).pipe(Effect.exit)
     expect(retried._tag).toBe("Failure")
     expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))
@@ -1922,9 +2016,9 @@ it.effect("maps a foreign correlation on the owned token to a contradiction", ()
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.makeForeignTurnCorrelation()
-    const projected = yield* executor.project(correlation)
+    const projected = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(projected._tag).toBe("CorrelationContradiction")
     expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))
@@ -1934,36 +2028,16 @@ it.effect("projects no report, safe suspension, and an idle running record throu
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    expect((yield* executor.project(correlation))._tag).toBe("NoReport")
+    expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("NoReport")
 
-    harness.setRecord(
-      CodexAttemptRecord.cases.EmptyPreTurn.make({
-        attemptId: attempt.attemptId,
-        correlationAttemptId: attempt.attemptId,
-        correlationRunId: attempt.runId,
-        worktree
-      })
-    )
-    expect((yield* executor.project(correlation))._tag).toBe("NoReport")
-
-    const associatedRecord = CodexAttemptRecord.cases.AssociatedPreTurn.make({
-      attemptId: attempt.attemptId,
-      correlationAttemptId: attempt.attemptId,
-      correlationRunId: attempt.runId,
-      threadId: CodexThreadId.make("codex-thread-issue-58"),
-      worktree
-    })
-    harness.setRecord(associatedRecord)
-    expect((yield* executor.project(correlation))._tag).toBe("NoReport")
-
-    const running = yield* executor.startOrContinue(request)
-    expect(running._tag).toBe("Running")
+    const running = yield* executor.begin(request)
+    expect(running._tag).toBe("ExecutorWorkExecuting")
     const suspended = yield* executor.requestSuspension(attempt)
-    expect(suspended._tag).toBe("SafelySuspended")
-    const projectedSuspension = yield* executor.project(correlation)
+    expect(suspended._tag).toBe("ExecutorWorkSafelySuspended")
+    const projectedSuspension = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(projectedSuspension).toEqual(
       PlannedAttemptExecutorProjection.cases.Exact.make({
-        report: PlannedAttemptExecutorReport.cases.SafelySuspended.make({ correlation })
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
       })
     )
 
@@ -1992,13 +2066,13 @@ it.effect("projects no report, safe suspension, and an idle running record throu
         _tag: "ExactLive",
         activities: [{ _tag: "ActiveTurn", turnId: current.observedTurnId }]
       })
-      const exact = yield* executor.project(correlation)
+      const exact = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
       expect(exact._tag).toBe("Exact")
-      if (exact._tag === "Exact") expect(exact.report._tag).toBe("Running")
+      if (exact._tag === "Exact") expect(exact.report._tag).toBe("ExecutorWorkExecuting")
       harness.setActivityCensus({ _tag: "Unreadable", detail: "idle activity census unavailable" })
-      expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+      expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
       harness.setActivityCensus({ _tag: "Absent" })
-      expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+      expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
     }
   }).pipe(Effect.provide(layerFor(harness)))
 })
@@ -2010,13 +2084,13 @@ it.effect("normalizes stored failures, foreign records, and unusable app-server 
   return Effect.gen(function* () {
     const failureExecutor = yield* PlannedAttemptExecutor
     failureHarness.makeReadFailure()
-    expect((yield* failureExecutor.project(correlation))._tag).toBe("Unreadable")
+    expect((yield* failureExecutor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
   }).pipe(
     Effect.provide(layerFor(failureHarness)),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         const record = foreignHarness.currentRecord()
         expect(record).toBeDefined()
         if (record?._tag === "Running") {
@@ -2028,18 +2102,23 @@ it.effect("normalizes stored failures, foreign records, and unusable app-server 
             })
           )
         }
-        expect((yield* executor.project(correlation))._tag).toBe("CorrelationContradiction")
-        expect((yield* executor.startOrContinue(request))._tag).toBe("Running")
+        expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe(
+          "CorrelationContradiction"
+        )
+        const foreign = yield* executor.begin(request)
+        expect(foreign._tag).toBe("ExecutorWorkExecuting")
+        expect(foreign.correlation).toEqual({ attemptId: "foreign-attempt", runId: "foreign-run" })
+        expect(foreignHarness.turnCount()).toBe(1)
       }).pipe(Effect.provide(layerFor(foreignHarness)))
     ),
     Effect.andThen(
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
-        yield* executor.startOrContinue(request)
+        yield* executor.begin(request)
         protocolHarness.setResumeFailure(
           new CodexAppServerFailure({ detail: "protocol response", kind: "Protocol", operation: "thread/resume" })
         )
-        expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+        expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
         protocolHarness.setResumeFailure(
           new CodexAppServerFailure({
             detail: "initialization identity conflict",
@@ -2047,7 +2126,9 @@ it.effect("normalizes stored failures, foreign records, and unusable app-server 
             operation: "initialize"
           })
         )
-        expect((yield* executor.project(correlation))._tag).toBe("InitializationCorrelationContradiction")
+        expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe(
+          "InitializationCorrelationContradiction"
+        )
       }).pipe(Effect.provide(layerFor(protocolHarness)))
     )
   )
@@ -2057,31 +2138,33 @@ it.effect("reconstructs a persisted failed terminal without sending another task
   const harness = makeHarness({ terminalTurnStatus: "failed" })
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    const started = yield* executor.startOrContinue(request)
-    expect(started._tag).toBe("Terminal")
+    const started = yield* executor.begin(request)
+    expect(started._tag).toBe("ExecutorWorkExecuting")
     expect(harness.turnCount()).toBe(1)
 
     const current = harness.currentRecord()
     expect(current?._tag).toBe("Terminal")
-    const projected = yield* executor.project(correlation)
+    const projected = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
     expect(projected).toEqual(
       PlannedAttemptExecutorProjection.cases.Exact.make({
-        report: PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+          correlation,
+          result: { _tag: "Failed" }
+        })
       })
     )
-    const retried = yield* executor.startOrContinue(request)
-    expect(retried).toEqual(
-      PlannedAttemptExecutorReport.cases.Terminal.make({ correlation, result: { _tag: "Failed" } })
+    expect(yield* observeExactReport(executor)).toEqual(
+      PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Failed" } })
     )
     expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
-it.effect("fails closed when a persisted terminal is presented while its turn is still active during start", () => {
+it.effect("passively observes executing when a persisted terminal turn is still active", () => {
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     const current = harness.currentRecord()
     expect(current?._tag).toBe("Running")
     if (current?._tag !== "Running") return
@@ -2093,7 +2176,11 @@ it.effect("fails closed when a persisted terminal is presented while its turn is
         terminal: CodexSealedTerminal.cases.Failed.make({})
       })
     )
-    expect(yield* executor.startOrContinue(request).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
+    expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+      })
+    )
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -2103,7 +2190,7 @@ it.effect(
     const harness = makeHarness()
     return Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
-      yield* executor.startOrContinue(request)
+      yield* executor.begin(request)
       const current = harness.currentRecord()
       expect(current?._tag).toBe("Running")
       if (current?._tag !== "Running") return
@@ -2124,7 +2211,7 @@ it.effect("fails closed when an associated thread already contains owned activit
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     const current = harness.currentRecord()
     expect(current?._tag).toBe("Running")
     if (current?._tag === "Running") {
@@ -2143,8 +2230,8 @@ it.effect("fails closed when an associated thread already contains owned activit
         status: "active",
         turns: [{ id: current.observedTurnId, status: "inProgress", items: [], ownedTurnToken: current.currentToken }]
       })
-      expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
-      expect(yield* executor.startOrContinue(request).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
+      expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
+      expect(yield* executor.begin(request).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
     }
   }).pipe(Effect.provide(layerFor(harness)))
 })
@@ -2167,9 +2254,9 @@ it.effect("rejects a retained accepted terminal when its reread manifest no long
       digest: EvidenceDigest.make(Array.from(replacementDigest, (byte) => byte.toString(16).padStart(2, "0")).join(""))
     })
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.complete(finalResponse(head))
-    expect((yield* executor.startOrContinue(request))._tag).toBe("Terminal")
+    expect((yield* observeExactReport(executor))._tag).toBe("ExecutorWorkTerminal")
     const current = harness.currentRecord()
     expect(current?._tag).toBe("Terminal")
     if (current?._tag === "Terminal") {
@@ -2181,7 +2268,7 @@ it.effect("rejects a retained accepted terminal when its reread manifest no long
         })
       )
     }
-    expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
+    expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
   }).pipe(
     Effect.provide(layerFor(harness, defaultGitCommand, manifestDriftEvidenceStoreLayer(replacementBytes))),
     Effect.provide(NodeServices.layer)
@@ -2192,9 +2279,9 @@ it.effect("fails closed when a persisted terminal is followed by an interrupted 
   const harness = makeHarness()
   return Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.startOrContinue(request)
+    yield* executor.begin(request)
     harness.complete(finalResponse(head))
-    expect((yield* executor.startOrContinue(request))._tag).toBe("Terminal")
+    expect((yield* observeExactReport(executor))._tag).toBe("ExecutorWorkTerminal")
     const terminalRecord = harness.currentRecord()
     const terminalTurnId = terminalRecord?._tag === "Terminal" ? terminalRecord.observedTurnId : undefined
     expect(terminalTurnId).toBeDefined()
@@ -2205,8 +2292,7 @@ it.effect("fails closed when a persisted terminal is followed by an interrupted 
       status: "idle",
       turns: thread.turns.map((turn) => (turn.id === terminalTurnId ? { ...turn, status: "interrupted" } : turn))
     })
-    const restarted = yield* executor.startOrContinue(request).pipe(Effect.exit)
-    expect(restarted._tag).toBe("Failure")
+    expect((yield* executor.observe(correlation, passiveLifecycleObservationPurpose))._tag).toBe("Unreadable")
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
@@ -3142,4 +3228,231 @@ it.effect("reopens after U2 crossed turn/start and reconciles it without startin
       expect(Option.isSome(sealed) && sealed.value.history.at(-1)?._tag).toBe("Sealed")
     })
   ).pipe(Effect.provide(NodeServices.layer))
+)
+
+it.effect("allocates a replacement thread for an unfinished EmptyPreTurn before Begin contacts Codex", () => {
+  const harness = makeHarness()
+  harness.setRecord(
+    CodexAttemptRecord.cases.EmptyPreTurn.make({
+      attemptId: attempt.attemptId,
+      correlationAttemptId: attempt.attemptId,
+      correlationRunId: attempt.runId,
+      worktree
+    })
+  )
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const began = yield* executor.begin(request)
+    expect(began).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
+    expect(harness.threadStarts()).toBe(1)
+    expect(harness.turnCount()).toBe(1)
+    expect(harness.associationAtTurn()?._tag).toBe("AssociatedPreTurn")
+    expect(harness.currentRecord()?._tag).toBe("Running")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("reconciles an admitted Resume whose private Safe record meets an already-running turn", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request)
+    const current = harness.currentRecord()
+    expect(current?._tag).toBe("Running")
+    if (current?._tag !== "Running") return
+
+    // The process may have persisted Safe before the provider's Resume response
+    // was observed. Re-reading the exact provider turn must settle as Running,
+    // without issuing a second turn.
+    const { _tag: _currentTag, ...safeFields } = current
+    harness.setRecord(CodexAttemptRecord.cases.SafelySuspended.make(safeFields))
+    const resumed = yield* executor.resume(request)
+    expect(resumed).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
+    expect(harness.turnCount()).toBe(1)
+    expect(harness.resumeCwds).toEqual([worktree])
+    expect(harness.currentRecord()?._tag).toBe("Running")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("returns an already-terminal result when Resume reconciles a Safe private record", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request)
+    harness.complete(finalResponse(head))
+    const current = harness.currentRecord()
+    expect(current?._tag).toBe("Running")
+    if (current?._tag !== "Running") return
+
+    const { _tag: _currentTag, ...safeFields } = current
+    harness.setRecord(CodexAttemptRecord.cases.SafelySuspended.make(safeFields))
+    const resumed = yield* executor.resume(request)
+    expect(resumed._tag).toBe("ExecutorWorkTerminal")
+    if (resumed._tag === "ExecutorWorkTerminal") {
+      expect(resumed.correlation).toEqual(correlation)
+      expect(resumed.result._tag).toBe("Accepted")
+      if (resumed.result._tag === "Accepted") expect(resumed.result.acceptedResult.commit).toBe(head)
+    }
+    expect(harness.turnCount()).toBe(1)
+    expect(harness.currentRecord()?._tag).toBe("Terminal")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("keeps a Safe Resume ambiguous when the exact provider turn is missing", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request)
+    const current = harness.currentRecord()
+    expect(current?._tag).toBe("Running")
+    if (current?._tag !== "Running") return
+
+    const { _tag: _currentTag, ...safeFields } = current
+    harness.setRecord(CodexAttemptRecord.cases.SafelySuspended.make(safeFields))
+    harness.setThread({ id: current.threadId, cwd: current.worktree, status: "idle", turns: [] })
+    const failure = yield* executor.resume(request).pipe(Effect.flip)
+    expect(failure.command).toBe("Resume")
+    expect(failure.correlation).toEqual(correlation)
+    expect(harness.turnCount()).toBe(1)
+    expect(harness.currentRecord()?._tag).toBe("SafelySuspended")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("rejects Resume before a Safe private record and reports the exact command correlation", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request)
+    const failure = yield* executor.resume(request).pipe(Effect.flip)
+    expect(failure.command).toBe("Resume")
+    expect(failure.correlation).toEqual(correlation)
+    expect(harness.turnCount()).toBe(1)
+    expect(harness.currentRecord()?._tag).toBe("Running")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("passively reports no lifecycle state for an idle AssociatedPreTurn record", () => {
+  const harness = makeHarness()
+  harness.setRecord(
+    CodexAttemptRecord.cases.AssociatedPreTurn.make({
+      attemptId: attempt.attemptId,
+      correlationAttemptId: attempt.attemptId,
+      correlationRunId: attempt.runId,
+      threadId: CodexThreadId.make("codex-thread-issue-58"),
+      worktree
+    })
+  )
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const projection = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+    expect(projection).toEqual(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }))
+    expect(harness.turnCount()).toBe(0)
+    expect(harness.currentRecord()?._tag).toBe("AssociatedPreTurn")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("returns a foreign executing report when Resume rereads a foreign thread correlation", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    yield* executor.begin(request)
+    yield* executor.requestSuspension(attempt)
+    const safe = harness.currentRecord()
+    expect(safe?._tag).toBe("SafelySuspended")
+    harness.makeForeignResume()
+    const foreign = yield* executor.resume(request)
+    expect(foreign).toEqual(
+      PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: { attemptId: AttemptId.make("foreign-attempt"), runId: RunId.make("foreign-run") }
+      })
+    )
+    expect(harness.turnCount()).toBe(1)
+    expect(harness.currentRecord()?._tag).toBe("SafelySuspended")
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("rejects replacement when a sealed ledger meets an unowned TurnIntent private record", () =>
+  Effect.gen(function* () {
+    const harness = seedReplacementHarness()
+    const request = replacementRequestFor("foreign-private-intent")
+    expect((yield* runReplacement(harness, request, replacementAuthorityLayer()))._tag).toBe("Replaced")
+    const current = harness.currentRecord()
+    expect(current?._tag).toBe("TurnObserved")
+    if (current?._tag !== "TurnObserved") return
+
+    const { _tag: _currentTag, observedTurnId, ...intentFields } = current
+    harness.setRecord(
+      CodexAttemptRecord.cases.TurnIntentRecorded.make({
+        ...intentFields,
+        currentToken: current.currentToken,
+        priorObservedTurnId: current.priorObservedTurnId
+      })
+    )
+    const result = yield* runReplacement(harness, request, replacementAuthorityLayer())
+    expect(result._tag).toBe("CorrelationConflict")
+    expect(harness.turnCount()).toBe(1)
+    expect(harness.replacementLedger()?.history.at(-1)?._tag).toBe("Sealed")
+    expect(observedTurnId).toBeDefined()
+  })
+)
+
+it.effect("rejects replacement when a sealed ledger meets either unowned pre-turn private record", () =>
+  Effect.gen(function* () {
+    for (const tag of ["AssociatedPreTurn", "EmptyPreTurn"] as const) {
+      const harness = seedReplacementHarness()
+      const request = replacementRequestFor(`foreign-private-${tag}`)
+      expect((yield* runReplacement(harness, request, replacementAuthorityLayer()))._tag).toBe("Replaced")
+      const current = harness.currentRecord()
+      expect(current?._tag).toBe("TurnObserved")
+      if (current?._tag !== "TurnObserved") continue
+
+      harness.setRecord(
+        tag === "AssociatedPreTurn"
+          ? CodexAttemptRecord.cases.AssociatedPreTurn.make({
+              attemptId: current.attemptId,
+              correlationAttemptId: current.correlationAttemptId,
+              correlationRunId: current.correlationRunId,
+              threadId: current.threadId,
+              worktree: current.worktree
+            })
+          : CodexAttemptRecord.cases.EmptyPreTurn.make({
+              attemptId: current.attemptId,
+              correlationAttemptId: current.correlationAttemptId,
+              correlationRunId: current.correlationRunId,
+              worktree: current.worktree
+            })
+      )
+
+      const result = yield* runReplacement(harness, request, replacementAuthorityLayer())
+      expect(result._tag).toBe("CorrelationConflict")
+      expect(harness.turnCount()).toBe(1)
+      expect(harness.replacementLedger()?.history.at(-1)?._tag).toBe("Sealed")
+    }
+  })
+)
+
+it.effect("refuses replacement when no observed private turn can prove a purged predecessor", () =>
+  Effect.gen(function* () {
+    const harness = seedReplacementHarness()
+    const current = harness.currentRecord()
+    expect(current?._tag).toBe("Running")
+    if (current?._tag !== "Running") return
+
+    const { _tag: _currentTag, observedTurnId, ...intentFields } = current
+    harness.setRecord(
+      CodexAttemptRecord.cases.TurnIntentRecorded.make({
+        ...intentFields,
+        currentToken: current.currentToken,
+        priorObservedTurnId: current.priorObservedTurnId
+      })
+    )
+    const result = yield* runReplacement(
+      harness,
+      replacementRequestFor("unobserved-private-turn"),
+      replacementAuthorityLayer()
+    )
+    expect(result._tag).toBe("PurgeUnconfirmed")
+    expect(harness.turnCount()).toBe(0)
+    expect(harness.replacementLedger()).toBeUndefined()
+    expect(observedTurnId).toBeDefined()
+  })
 )

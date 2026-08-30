@@ -344,17 +344,20 @@ export {
 export { nodeCoordinatorLockLayer } from "./authorities/coordinator-ownership/node-lock.js"
 export { nodeGitWorktreeLayer } from "./authorities/git/node-worktree.js"
 export {
-  continuePlannedAttemptExecutorWork,
+  beginPlannedAttemptExecutorWork,
   observePlannedAttemptExecutorState,
+  resumePlannedAttemptExecutorWork,
   requestPlannedAttemptExecutorSuspension
 } from "./workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
 export {
   beginPlannedAttemptExecutorResponsibility,
-  plannedAttemptExecutorContinuationDisposition,
+  PlannedAttemptExecutorAlreadyBegan,
+  PlannedAttemptExecutorBeginReportContradiction,
   PlannedAttemptExecutorCommandReconciliationRequired,
-  PlannedAttemptExecutorContinuationLimitReached,
   PlannedAttemptExecutorCorrelationMismatch,
   PlannedAttemptExecutorInitializationCorrelationContradiction,
+  PlannedAttemptExecutorInitialReportCausalityContradiction,
+  PlannedAttemptExecutorLifecycleTransitionContradiction,
   PlannedAttemptExecutorProjectionCorrelationMismatch,
   PlannedAttemptExecutorProjectionTemporarilyUnavailable,
   PlannedAttemptExecutorProjectionUnreadable,
@@ -362,12 +365,17 @@ export {
   PlannedAttemptExecutorResponsibilityAbandoned,
   PlannedAttemptExecutorResponsibilityContradiction,
   PlannedAttemptExecutorResponsibilityMissing,
+  PlannedAttemptExecutorResumeInvalidatedByTerminalChoice,
+  PlannedAttemptExecutorResumeNotAuthorized,
   PlannedAttemptExecutorTaskWorkSpecificationMissing,
   PlannedAttemptExecutorTaskWorkSpecificationMismatch,
   PlannedAttemptExecutorStateNoCurrentReport,
   PlannedAttemptExecutorStateTemporarilyUnavailable,
   PlannedAttemptExecutorStateUnreadable,
-  PlannedAttemptExecutorSuspensionLimitReached
+  PlannedAttemptExecutorSuspensionLimitReached,
+  PlannedAttemptExecutorSuspensionNotAuthorized,
+  PlannedAttemptExecutorTerminalReportContradiction,
+  PlannedAttemptExecutorWorkAlreadyTerminal
 } from "./workflow/protocols/planned-attempt-executor-work/protocol.js"
 export {
   makePlannedAttemptProtocolController,

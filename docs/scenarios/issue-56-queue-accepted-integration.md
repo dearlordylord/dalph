@@ -19,10 +19,10 @@ that planned attempt. No integration responsibility or integration-start fact
 exists yet. Neither task-work capacity nor the serialized integration resource
 is occupied.
 
-This ordinary path applies when no exact pre-integration Restart choice is
-already carried by the terminal attempt. The late-`Accepted` exception after
-an applied Restart is the separate chronology below: it preserves the result
-without creating an integration responsibility.
+This ordinary path applies to every current accepted terminal result. A prior
+terminal choice cannot suppress it or turn Terminal into replacement
+authority. The separate chronology below documents only historical records
+written under the former executor protocol.
 
 ### Trigger and ordered boundary calls
 
@@ -115,76 +115,19 @@ construction.
   `startedPrecedesRemainingQueue` check the corresponding state-machine
   ordering and serialization properties.
 
-## A late accepted result after Restart remains evidence without integration
+## Superseded historical late-accepted result after Restart
 
-### Starting situation
-
-Alice is the Operator for Run R. Task A has immutable planned attempt P1,
-current task revision F2, exact claim K1, and preserved worktree W1. Issue #136
-proved that A changed while P1 was unfinished, and Alice's exact Restart
-choice correlated with request D1 is already durably applied. P1 was initially safely suspended,
-but a later start-or-continue command made that earlier proof no longer
-unbroken. No `PlannedAttemptReplaced` event, P2, integration responsibility,
-or integration start exists. The tracker, Git, executor, and Journal are the
-authorities for their respective facts.
-
-### Trigger and ordered boundary calls
-
-The executor reports an exact terminal `Accepted` result for R/P1, naming
-commit C1, after the Restart choice was recorded and before replacement.
-Dalph records that report and preserves C1 and its evidence. The report ends
-P1's planned-attempt executor-work responsibility and proves that no P1 writer
-remains. It may therefore replace the earlier safe-suspension report as the
-current executor quiescence fact. It does not complete A in the tracker,
-create an integration responsibility, cross the integration cutoff, or by
-itself authorize P2.
-
-Dalph performs fresh complete task facts and exact Git reads. If they still
-prove A at F2 with exact K1, W1 is the exact ready worktree with its required
-lineage, and the configured target head is H2, the choice correlated with D1 remains
-valid. Dalph appends one atomic `PlannedAttemptReplaced` event that makes P1
-superseded and records P2. P2 then enters ordinary bounded task-work admission;
-Alice sends no second Restart command. The accepted C1 remains preserved P1
-evidence and is not paired with the integration target.
-
-If any fresh read is missing, unreadable, contradictory, or reports changed
-task facts, Dalph records the exact wait or contradiction and appends no P2.
-It still creates no integration responsibility for C1. A later activation uses
-the same Run-establishment entry and ordinary bounded activation; it does not
-ask Alice to reapply D1 merely because the terminal result arrived late.
-
-### Crash, retry, visible result, and forbidden result
-
-If Dalph dies after the terminal report is durable, restart reconstructs C1,
-the ended P1 writer responsibility, and D1 before another outside request. It
-performs the fresh task and Git reads again. If the replacement append was
-ambiguous, absence leaves P1 unsettled with no P2 and presence reconstructs
-the one P1/P2 event; neither branch creates another integration responsibility
-or allocates P3. If the report itself was not durable, existing executor
-reconciliation decides whether an exact R/P1 terminal result can be recorded;
-process loss alone proves neither acceptance nor quiescence.
-
-Alice sees C1 and its evidence preserved, no P1 integration responsibility,
-and either P2 admitted through ordinary capacity or the exact fresh-facts wait.
-Dalph must not queue or integrate C1, discard W1 or K1, infer tracker
-completion, require a second Restart command, or treat a terminal `Accepted`
-report as permission to replace P1 without D1 and the fresh task/Git facts.
-
-### Acceptance-test and model mapping
-
-- `preserves a late Accepted result as P1 evidence without creating issue 56's
-  integration responsibility` proves the terminal report, exact commit, and
-  absent integration obligation remain distinct.
-- `uses late Accepted as current quiescence after fresh checks and honors the
-  applied Restart without a second command` proves the quiescence replacement,
-  fresh task/Git reads, atomic P1/P2 replacement, and ordinary P2 admission.
-- `reconciles late Accepted replacement across process loss without P3 or
-  duplicate integration responsibility` proves both replacement-append crash
-  prefixes and same-entry restart.
-- The `acceptedResultIntegration` model and its production adapter retain the
-  ordinary terminal-to-responsibility path for A/B above while rejecting the
-  late-Restart exception; issue #66's `taskFactReconciliation` seam owns D1,
-  the replacement event, and the fresh-facts guard.
+Journals written before issue #264 may contain the former `StartOrContinue`
+command vocabulary and a Restart followed by an accepted terminal report.
+That vocabulary remains historical documentation and proof terminology only.
+The current journal schema does not accept it, because mapping one ambiguous
+legacy command to Begin or Resume could grant false live authority. Any
+retained provisional journal requires an explicit offline migration outside
+issue #264. Current reconstruction of canonical records treats the accepted
+terminal report as absorbing, rejects replacement or abandonment under the
+earlier choice, and sends the accepted result through ordinary integration
+admission. The current chronology and acceptance tests are governed by
+`issue-264-autonomous-executor-work.md`.
 
 ## A new tracker blocker waits the started responsibility without losing it
 

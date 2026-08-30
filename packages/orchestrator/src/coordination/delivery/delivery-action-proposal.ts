@@ -191,7 +191,7 @@ export type NewRecoveredWorkflowAction =
 
 type FreshExecutorStep = Extract<
   FreshWorkflowStep,
-  { readonly _tag: "ContinuePlannedAttemptExecutorWork" | "StartPlannedAttemptExecutorWork" }
+  { readonly _tag: "ObservePlannedAttemptExecutorWork" | "BeginPlannedAttemptExecutorWork" }
 >
 export type FreshOperationStep = Exclude<FreshWorkflowStep, FreshExecutorStep>
 
@@ -307,7 +307,7 @@ export type DeliveryProposalDerivationIssue =
       readonly transition:
         | "CommitFreshTaskClaimIntent"
         | "ContinueFreshWorkflowOperation"
-        | "StartPlannedAttemptExecutorWork"
+        | "BeginPlannedAttemptExecutorWork"
     }
   | {
       readonly _tag: "TypedRoutePolicyContradiction"

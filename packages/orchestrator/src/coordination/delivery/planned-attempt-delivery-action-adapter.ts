@@ -18,13 +18,17 @@ import {
   type PlannedAttemptExecutorEvidence
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import type { AttemptQuiescenceProof } from "../../workflow/protocols/attempt-choice/events.js"
-import { reconcileOrObservePlannedAttemptExecutorStateWithPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import {
-  continuePlannedAttemptExecutorWorkWithPermit,
+  observePlannedAttemptExecutorStateResultWithPermit,
+  reconcileOrObservePlannedAttemptExecutorStateResultWithPermit
+} from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
+import {
+  beginPlannedAttemptExecutorWorkWithPermit,
+  resumePlannedAttemptExecutorWorkWithPermit,
   requestPlannedAttemptExecutorSuspensionWithPermit
 } from "../../workflow/protocols/planned-attempt-executor-work/suspension-commands.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
-import { authorizePlannedAttemptContinuation } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
+import { authorizePlannedAttemptContinuationWithPermit } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
 import {
   advanceAttemptStoppageWithPermit,
   observeAttemptStoppageExecutorWithPermit,
@@ -40,12 +44,12 @@ type PlannedAttemptTransition = Extract<
   IdentityFreeWorkflowTransition,
   {
     readonly _tag:
-      | "ContinuePlannedAttemptExecutorWork"
+      | "ObservePlannedAttemptExecutorWork"
       | "AdvanceAttemptRestart"
-      | "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
+      | "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
       | "AdvanceAttemptStoppage"
       | "ObserveAttemptStoppageExecutor"
-      | "ObservePlannedAttemptContinuationExecutor"
+      | "ReconcilePlannedAttemptExecutorWork"
       | "RecordStoppedAttemptClaimNoRelease"
       | "RelinquishCancelledAttemptImplementation"
       | "RecordCancelledAttemptClaimNoRelease"
@@ -65,17 +69,7 @@ const quiescenceProofMatchesEvidence = (
   proof: AttemptQuiescenceProof,
   evidence: PlannedAttemptExecutorEvidence
 ): boolean => {
-  if (proof._tag === "CommandResponse") {
-    return evidence.source._tag === "CommandResponse" && evidence.source.ordinal === proof.reportOrdinal
-  }
-  if (proof._tag === "CommandProjection") {
-    return (
-      evidence.source._tag === "CommandProjection" &&
-      evidence.source.commandOrdinal === proof.commandOrdinal &&
-      evidence.source.projectionOrdinal === proof.projectionOrdinal
-    )
-  }
-  return evidence.source._tag === "StateProjection" && evidence.source.ordinal === proof.observationOrdinal
+  return evidence.source._tag === "AcceptedReport" && evidence.source.ordinal === proof.reportOrdinal
 }
 
 type CancelledAttemptRelinquishmentTransition = Extract<
@@ -89,7 +83,7 @@ const cancelledAttemptRelinquishmentIsQuiescent = (
   evidence: PlannedAttemptExecutorEvidence | undefined
 ): boolean =>
   evidence !== undefined &&
-  (evidence.report._tag === "SafelySuspended" || evidence.report._tag === "Terminal") &&
+  (evidence.report._tag === "ExecutorWorkSafelySuspended" || evidence.report._tag === "ExecutorWorkTerminal") &&
   !records.some(
     ({ event, position }) =>
       position > evidence.observedAt &&
@@ -282,22 +276,25 @@ const executorReportFor = (
   correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>,
   lease: DeliveryActionExecutionLease
 ) =>
-  transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
+  transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
     ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
-        authorizePlannedAttemptContinuation(transition.plannedAttempt, transition.witness).pipe(
-          Effect.andThen(continuePlannedAttemptExecutorWorkWithPermit(permit, transition.plannedAttempt))
+        authorizePlannedAttemptContinuationWithPermit(permit, transition.plannedAttempt, transition.witness).pipe(
+          Effect.andThen(resumePlannedAttemptExecutorWorkWithPermit(permit, transition.plannedAttempt)),
+          Effect.map((report) => ({ acceptedFacts: "Changed" as const, report }))
         )
       )
-    : transition._tag === "ContinuePlannedAttemptExecutorWork"
+    : transition._tag === "ObservePlannedAttemptExecutorWork"
       ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
-          continuePlannedAttemptExecutorWorkWithPermit(permit, transition.plannedAttempt)
+          observePlannedAttemptExecutorStateResultWithPermit(permit, transition.plannedAttempt)
         )
-      : transition._tag === "ObservePlannedAttemptContinuationExecutor"
+      : transition._tag === "ReconcilePlannedAttemptExecutorWork"
         ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
-            reconcileOrObservePlannedAttemptExecutorStateWithPermit(permit, transition.plannedAttempt)
+            reconcileOrObservePlannedAttemptExecutorStateResultWithPermit(permit, transition.plannedAttempt)
           )
         : lease.withPlannedAttemptProtocol(correlation, (permit) =>
-            requestPlannedAttemptExecutorSuspensionWithPermit(permit, transition.plannedAttempt)
+            requestPlannedAttemptExecutorSuspensionWithPermit(permit, transition.plannedAttempt).pipe(
+              Effect.map((report) => ({ acceptedFacts: "Changed" as const, report }))
+            )
           )
 
 const executeExecutorTransition = Effect.fn("DeliveryAction.executeExecutorTransition")(function* (
@@ -305,20 +302,15 @@ const executeExecutorTransition = Effect.fn("DeliveryAction.executeExecutorTrans
   lease: DeliveryActionExecutionLease
 ) {
   const correlation = plannedAttemptExecutorCorrelation(transition.plannedAttempt)
-  if (
-    transition._tag === "ContinuePlannedAttemptExecutorWork" ||
-    transition._tag === "ContinuePlannedAttemptExecutorWorkAfterCurrentFacts"
-  ) {
+  if (transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts") {
     yield* lease.bindPlannedAttemptPosition(correlation)
   }
-  const report = yield* executorReportFor(transition, correlation, lease)
-  if (
-    transition._tag !== "ObservePlannedAttemptContinuationExecutor" &&
-    (report._tag === "SafelySuspended" || report._tag === "Terminal")
-  ) {
+  const result = yield* executorReportFor(transition, correlation, lease)
+  const report = result.report
+  if (report._tag === "ExecutorWorkSafelySuspended" || report._tag === "ExecutorWorkTerminal") {
     yield* lease.releasePlannedAttemptPosition(correlation)
   }
-  return report
+  return result
 })
 
 export const executeFreshPlannedAttempt = Effect.fn("DeliveryAction.executeFreshPlannedAttempt")(function* (
@@ -329,13 +321,27 @@ export const executeFreshPlannedAttempt = Effect.fn("DeliveryAction.executeFresh
   const plannedAttempt = route.step.plannedAttempt
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
   yield* lease.bindPlannedAttemptPosition(correlation)
-  const report = yield* lease.withPlannedAttemptProtocol(correlation, (permit) =>
-    continuePlannedAttemptExecutorWorkWithPermit(permit, plannedAttempt, undefined, route.step.specification)
+  const result = yield* lease.withPlannedAttemptProtocol(correlation, (permit) =>
+    Effect.gen(function* () {
+      return route.step._tag === "BeginPlannedAttemptExecutorWork"
+        ? {
+            acceptedFacts: "Changed" as const,
+            report: yield* beginPlannedAttemptExecutorWorkWithPermit(permit, plannedAttempt, route.step.specification)
+          }
+        : yield* observePlannedAttemptExecutorStateResultWithPermit(permit, plannedAttempt)
+    })
   )
-  if (report._tag === "SafelySuspended" || report._tag === "Terminal") {
+  const report = result.report
+  if (report._tag === "ExecutorWorkSafelySuspended" || report._tag === "ExecutorWorkTerminal") {
     yield* lease.releasePlannedAttemptPosition(correlation)
   }
-  return { _tag: "ExecutorReportPublished" as const, plannedAttempt, proposalId: action.proposal.id, report }
+  return {
+    _tag: "ExecutorReportPublished" as const,
+    acceptedFacts: result.acceptedFacts,
+    plannedAttempt,
+    proposalId: action.proposal.id,
+    report
+  }
 })
 
 export const executePlannedAttemptTransition = Effect.fn("DeliveryAction.executePlannedAttemptTransition")(function* (
@@ -365,21 +371,22 @@ export const executePlannedAttemptTransition = Effect.fn("DeliveryAction.execute
     yield* executeCancelledAttemptClaimNoRelease(transition)
     return deliveryActionCompleted(action.proposal.id)
   }
-  const report = yield* executeExecutorTransition(transition, lease).pipe(
-    Effect.map((report) => ({ _tag: "ExecutorReport" as const, report })),
+  const result = yield* executeExecutorTransition(transition, lease).pipe(
+    Effect.map((result) => ({ _tag: "ExecutorReport" as const, result })),
     Effect.catchTag("PlannedAttemptContinuationAuthorizationRejected", (rejection) =>
       rejection.reason === "StaleWitness"
         ? Effect.succeed({ _tag: "ContinuationAuthorizationStale" as const })
         : Effect.fail(rejection)
     )
   )
-  if (report._tag === "ContinuationAuthorizationStale") {
+  if (result._tag === "ContinuationAuthorizationStale") {
     return deliveryActionDeferred(action.proposal.id, "ContinuationAuthorizationStale")
   }
   return {
     _tag: "ExecutorReportPublished" as const,
+    acceptedFacts: result.result.acceptedFacts,
     plannedAttempt: transition.plannedAttempt,
     proposalId: action.proposal.id,
-    report: report.report
+    report: result.result.report
   }
 })

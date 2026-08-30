@@ -1,11 +1,14 @@
 import { Schema } from "effect"
 
 const CodexExecutorStoryItem = Schema.TaggedUnion({
-  StartOrContinue: {},
+  Begin: {},
+  Observe: {},
   CodexTurnResponseLost: {},
   CodexTurnCompletes: {},
   RequestSuspension: {},
-  ExpectReport: { report: Schema.Literals(["Running", "Accepted", "SafelySuspended"]) },
+  ExpectReport: {
+    report: Schema.Literals(["ExecutorWorkExecuting", "ExecutorWorkTerminal", "ExecutorWorkSafelySuspended"])
+  },
   /** Alice explicitly asks to replace one previously observed, now purged turn. */
   ReplacePurgedWorkUnit: {},
   /** The replacement result is visible only after fresh authority reads. */
@@ -37,10 +40,10 @@ const CodexExecutorStoryItem = Schema.TaggedUnion({
 export const CodexPlannedAttemptExecutorCassette = Schema.Struct({
   name: Schema.NonEmptyString,
   scenario: Schema.Literals([
-    "FirstTurnRunning",
+    "FirstTurnExecutorWorkExecuting",
     "LostTurnResponse",
-    "AcceptedTerminal",
-    "SafelySuspended",
+    "AcceptedExecutorWorkTerminal",
+    "ExecutorWorkSafelySuspended",
     "PurgedWorkUnitReplacement",
     "PurgedWorkUnitUnreadable",
     "PurgedWorkUnitWriterConflict",
@@ -60,35 +63,35 @@ const cassette = (
 ) => CodexPlannedAttemptExecutorCassette.make({ name, scenario, story })
 
 export const maintainedCodexPlannedAttemptExecutorCassetteCatalog = {
-  firstTurnRunning: cassette(
+  firstTurnExecutorWorkExecuting: cassette(
     "the concrete Codex executor records one thread before starting one task turn",
-    "FirstTurnRunning",
-    [{ _tag: "StartOrContinue" }, { _tag: "ExpectReport", report: "Running" }]
+    "FirstTurnExecutorWorkExecuting",
+    [{ _tag: "Begin" }, { _tag: "ExpectReport", report: "ExecutorWorkExecuting" }]
   ),
   lostTurnResponseReconciled: cassette(
     "the concrete Codex executor rereads one lost turn response without starting another turn",
     "LostTurnResponse",
-    [{ _tag: "StartOrContinue" }, { _tag: "CodexTurnResponseLost" }, { _tag: "ExpectReport", report: "Running" }]
+    [{ _tag: "Begin" }, { _tag: "CodexTurnResponseLost" }, { _tag: "ExpectReport", report: "ExecutorWorkExecuting" }]
   ),
-  acceptedTerminal: cassette(
+  acceptedExecutorWorkTerminal: cassette(
     "the concrete Codex executor seals one correlated accepted commit and its evidence",
-    "AcceptedTerminal",
+    "AcceptedExecutorWorkTerminal",
     [
-      { _tag: "StartOrContinue" },
-      { _tag: "ExpectReport", report: "Running" },
+      { _tag: "Begin" },
+      { _tag: "ExpectReport", report: "ExecutorWorkExecuting" },
       { _tag: "CodexTurnCompletes" },
-      { _tag: "StartOrContinue" },
-      { _tag: "ExpectReport", report: "Accepted" }
+      { _tag: "Observe" },
+      { _tag: "ExpectReport", report: "ExecutorWorkTerminal" }
     ]
   ),
-  safelySuspended: cassette(
+  executorWorkSafelySuspended: cassette(
     "the concrete Codex executor interrupts its exact turn before reporting safe suspension",
-    "SafelySuspended",
+    "ExecutorWorkSafelySuspended",
     [
-      { _tag: "StartOrContinue" },
-      { _tag: "ExpectReport", report: "Running" },
+      { _tag: "Begin" },
+      { _tag: "ExpectReport", report: "ExecutorWorkExecuting" },
       { _tag: "RequestSuspension" },
-      { _tag: "ExpectReport", report: "SafelySuspended" }
+      { _tag: "ExpectReport", report: "ExecutorWorkSafelySuspended" }
     ]
   ),
   purgedWorkUnitReplacement: cassette(
@@ -102,7 +105,7 @@ export const maintainedCodexPlannedAttemptExecutorCassetteCatalog = {
       { _tag: "ExpectNoSemanticReview" },
       { _tag: "ExpectNoIntegration" },
       { _tag: "ExpectNoCleanup" },
-      { _tag: "ExpectReport", report: "Running" }
+      { _tag: "ExpectReport", report: "ExecutorWorkExecuting" }
     ]
   ),
   purgedWorkUnitUnreadable: cassette(
@@ -186,7 +189,9 @@ export const CodexPlannedAttemptExecutorRecordedCassette = Schema.Struct({
   }),
   name: Schema.NonEmptyString,
   replacementResultTag: Schema.NullOr(CodexReplacementResultTag),
-  reportTags: Schema.Array(Schema.Literals(["Running", "Terminal", "SafelySuspended"])),
+  reportTags: Schema.Array(
+    Schema.Literals(["ExecutorWorkExecuting", "ExecutorWorkTerminal", "ExecutorWorkSafelySuspended"])
+  ),
   scenario: CodexPlannedAttemptExecutorCassette.fields.scenario,
   threadStartCount: NonNegativeCount,
   turnStartCount: NonNegativeCount,

@@ -28,14 +28,21 @@ interface CompleteAuthoredObservedBehavior {
 
 const authoredExecutorReportKind = (
   report: PlannedAttemptExecutorReport
-): "Running" | "SafelySuspended" | "TerminalAccepted" | "TerminalCompleted" | "TerminalFailed" =>
-  report._tag === "Terminal"
+):
+  | "ExecutorWorkExecuting"
+  | "ExecutorWorkSafelySuspended"
+  | "ExecutorWorkTerminalAccepted"
+  | "ExecutorWorkTerminalCompleted"
+  | "ExecutorWorkTerminalFailed" =>
+  report._tag === "ExecutorWorkTerminal"
     ? report.result._tag === "Accepted"
-      ? "TerminalAccepted"
+      ? "ExecutorWorkTerminalAccepted"
       : report.result._tag === "Completed"
-        ? "TerminalCompleted"
-        : "TerminalFailed"
-    : report._tag
+        ? "ExecutorWorkTerminalCompleted"
+        : "ExecutorWorkTerminalFailed"
+    : report._tag === "ExecutorWorkExecuting"
+      ? "ExecutorWorkExecuting"
+      : "ExecutorWorkSafelySuspended"
 
 const orchestrationReportEvidence = (
   report: PlannedAttemptExecutorReport

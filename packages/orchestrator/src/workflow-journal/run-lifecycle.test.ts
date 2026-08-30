@@ -25,6 +25,8 @@ import { taskTrackerReadIntent } from "../workflow/registry/event.js"
 import { makeTaskTrackerFactsObservedFromRead } from "../workflow/protocols/task-tracker-read/protocol.js"
 import { makeTrackerGraphObservationOperation } from "../workflow/registry/operation.js"
 import { decideWorkflowRunTermination, makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { hasLaterCompleteObservation } from "./run-termination-freshness.js"
+import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
 
 const runId = RunId.make("lifecycle-evidence-run")
 const target = FixtureTarget.make("lifecycle-evidence-target")
@@ -477,6 +479,8 @@ it("rejects finality evidence superseded by a later complete graph observation",
     }
   ]
 
+  expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
+
   expect(
     decideWorkflowRunTermination(
       records,
@@ -494,6 +498,111 @@ it("rejects finality evidence superseded by a later complete graph observation",
       detail: expect.stringContaining("latest complete graph observation")
     }
   })
+})
+
+it("keeps target-A termination evidence current when a later graph belongs to target B", () => {
+  const operation = makeTrackerGraphObservationOperation(
+    OperationId.make("lifecycle-target-a-terminal-observation"),
+    target
+  )
+  const snapshot = validSnapshot({
+    revision: "lifecycle-target-a-terminal-observation",
+    rootTaskId: "root",
+    tasks: [{ id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  const foreignTarget = FixtureTarget.make("lifecycle-target-b-later-observation")
+  const foreignOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("lifecycle-target-b-later-observation"),
+    foreignTarget
+  )
+  const foreignSnapshot = validSnapshot({
+    revision: "lifecycle-target-b-later-observation",
+    rootTaskId: "root",
+    tasks: [{ id: "root", lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  const records: ReadonlyArray<JournalRecord> = [
+    makeWorkflowRunBeganRecord(runId, target, policy),
+    {
+      event: taskTrackerReadIntent(operation),
+      key: intentRecordKey(operation.operationId),
+      position: JournalPosition.make(2),
+      runId
+    },
+    {
+      event: taskTrackerFactsObservedEvent(
+        operation.operationId,
+        makeCompleteTaskTrackerFactsObserved(operation, snapshot)
+      ),
+      key: outcomeRecordKey(operation.operationId),
+      position: JournalPosition.make(3),
+      runId
+    },
+    {
+      event: taskTrackerReadIntent(foreignOperation),
+      key: intentRecordKey(foreignOperation.operationId),
+      position: JournalPosition.make(4),
+      runId
+    },
+    {
+      event: taskTrackerFactsObservedEvent(
+        foreignOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(foreignOperation, foreignSnapshot)
+      ),
+      key: outcomeRecordKey(foreignOperation.operationId),
+      position: JournalPosition.make(5),
+      runId
+    }
+  ]
+
+  expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
+  expect(
+    decideWorkflowRunTermination(records, runId, "Completed", makeRunFinalityEvidenceForTest(operation, snapshot))._tag
+  ).toBe("LifecycleTransitionAccepted")
+})
+
+it("does not refresh terminal evidence from a later graph when the Run target was never begun", () => {
+  const fixture = completedRunFinalityFixture({ runId, target })
+  const laterOperation = makeTrackerGraphObservationOperation(
+    OperationId.make("lifecycle-no-begin-later-complete-observation"),
+    target,
+    [fixture.operation.operationId]
+  )
+  const laterSnapshot = validSnapshot({
+    revision: "lifecycle-no-begin-later-complete-observation",
+    rootTaskId: "root",
+    tasks: [{ id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  const records: ReadonlyArray<JournalRecord> = [
+    {
+      event: fixture.intent,
+      key: intentRecordKey(fixture.operation.operationId),
+      position: JournalPosition.make(2),
+      runId
+    },
+    {
+      event: fixture.observation,
+      key: outcomeRecordKey(fixture.operation.operationId),
+      position: JournalPosition.make(3),
+      runId
+    },
+    {
+      event: taskTrackerReadIntent(laterOperation),
+      key: intentRecordKey(laterOperation.operationId),
+      position: JournalPosition.make(4),
+      runId
+    },
+    {
+      event: taskTrackerFactsObservedEvent(
+        laterOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(laterOperation, laterSnapshot)
+      ),
+      key: outcomeRecordKey(laterOperation.operationId),
+      position: JournalPosition.make(5),
+      runId
+    }
+  ]
+
+  expect(hasLaterCompleteObservation(records, fixture.evidence, JournalPosition.make(6))).toBe(false)
 })
 
 it("rejects unchanged finality evidence whose named complete observation is absent", () => {

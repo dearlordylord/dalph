@@ -2,16 +2,13 @@ import {
   type PlannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorCorrelation as PlannedAttemptExecutorCorrelationSchema,
+  PlannedAttemptExecutorReport as PlannedAttemptExecutorReportSchema,
   samePlannedAttemptExecutorCorrelation,
   PlannedTaskAttempt as PlannedTaskAttemptSchema,
   TaskWorkSpecification as TaskWorkSpecificationSchema
 } from "@dalph/contracts"
 import { Schema } from "effect"
-import {
-  PlannedAttemptExecutorCommandOrdinal,
-  PlannedAttemptExecutorContinuationLimit,
-  PlannedAttemptExecutorSuspensionLimit
-} from "./events.js"
+import { PlannedAttemptExecutorCommandOrdinal, PlannedAttemptExecutorSuspensionLimit } from "./events.js"
 
 /** An executor response named a different planned attempt than Dalph requested. */
 export class PlannedAttemptExecutorCorrelationMismatch extends Schema.TaggedError<PlannedAttemptExecutorCorrelationMismatch>()(
@@ -19,10 +16,61 @@ export class PlannedAttemptExecutorCorrelationMismatch extends Schema.TaggedErro
   { expected: PlannedAttemptExecutorCorrelationSchema, observed: PlannedAttemptExecutorCorrelationSchema }
 ) {}
 
-/** The exact attempt consumed its durable start-or-continue budget while the executor still reported Running. */
-export class PlannedAttemptExecutorContinuationLimitReached extends Schema.TaggedError<PlannedAttemptExecutorContinuationLimitReached>()(
-  "PlannedAttemptExecutorContinuationLimitReached",
-  { correlation: PlannedAttemptExecutorCorrelationSchema, limit: PlannedAttemptExecutorContinuationLimit }
+/** Begin is a once-only command and this exact attempt already has a durable begin intent. */
+export class PlannedAttemptExecutorAlreadyBegan extends Schema.TaggedError<PlannedAttemptExecutorAlreadyBegan>()(
+  "PlannedAttemptExecutorAlreadyBegan",
+  { correlation: PlannedAttemptExecutorCorrelationSchema }
+) {}
+
+/** Resume requires a distinct accepted safe-suspension report not consumed by another begin or resume. */
+export class PlannedAttemptExecutorResumeNotAuthorized extends Schema.TaggedError<PlannedAttemptExecutorResumeNotAuthorized>()(
+  "PlannedAttemptExecutorResumeNotAuthorized",
+  { correlation: PlannedAttemptExecutorCorrelationSchema }
+) {}
+
+/** A durable Stop or Restart choice consumed the accepted Safe report before Resume reached the executor. */
+export class PlannedAttemptExecutorResumeInvalidatedByTerminalChoice extends Schema.TaggedError<PlannedAttemptExecutorResumeInvalidatedByTerminalChoice>()(
+  "PlannedAttemptExecutorResumeInvalidatedByTerminalChoice",
+  {
+    choice: Schema.Literals(["RestartTaskImplementation", "StopTaskImplementation"]),
+    correlation: PlannedAttemptExecutorCorrelationSchema
+  }
+) {}
+
+/** Suspend requires the latest current lifecycle authority to be an accepted executing-work report. */
+export class PlannedAttemptExecutorSuspensionNotAuthorized extends Schema.TaggedError<PlannedAttemptExecutorSuspensionNotAuthorized>()(
+  "PlannedAttemptExecutorSuspensionNotAuthorized",
+  { correlation: PlannedAttemptExecutorCorrelationSchema }
+) {}
+
+/** No work-changing executor command is valid after the exact attempt reached a terminal lifecycle condition. */
+export class PlannedAttemptExecutorWorkAlreadyTerminal extends Schema.TaggedError<PlannedAttemptExecutorWorkAlreadyTerminal>()(
+  "PlannedAttemptExecutorWorkAlreadyTerminal",
+  { correlation: PlannedAttemptExecutorCorrelationSchema }
+) {}
+
+/** An executor projection contradicted the terminal lifecycle condition already accepted for the exact attempt. */
+export class PlannedAttemptExecutorTerminalReportContradiction extends Schema.TaggedError<PlannedAttemptExecutorTerminalReportContradiction>()(
+  "PlannedAttemptExecutorTerminalReportContradiction",
+  { accepted: PlannedAttemptExecutorReportSchema, observed: PlannedAttemptExecutorReportSchema }
+) {}
+
+/** A passive executor projection attempted to create lifecycle authority before an exact Begin settlement. */
+export class PlannedAttemptExecutorInitialReportCausalityContradiction extends Schema.TaggedError<PlannedAttemptExecutorInitialReportCausalityContradiction>()(
+  "PlannedAttemptExecutorInitialReportCausalityContradiction",
+  { observed: PlannedAttemptExecutorReportSchema }
+) {}
+
+/** A settled Begin returned a lifecycle report other than the required first Executing report. */
+export class PlannedAttemptExecutorBeginReportContradiction extends Schema.TaggedError<PlannedAttemptExecutorBeginReportContradiction>()(
+  "PlannedAttemptExecutorBeginReportContradiction",
+  { observed: PlannedAttemptExecutorReportSchema }
+) {}
+
+/** A passive executor projection attempted a lifecycle transition that requires an exact work-changing command. */
+export class PlannedAttemptExecutorLifecycleTransitionContradiction extends Schema.TaggedError<PlannedAttemptExecutorLifecycleTransitionContradiction>()(
+  "PlannedAttemptExecutorLifecycleTransitionContradiction",
+  { accepted: PlannedAttemptExecutorReportSchema, observed: PlannedAttemptExecutorReportSchema }
 ) {}
 
 /** Executor work cannot restart after Dalph durably abandoned the exact planned attempt. */
