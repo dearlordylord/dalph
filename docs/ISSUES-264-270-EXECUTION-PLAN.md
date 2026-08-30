@@ -22,9 +22,9 @@ review. It changes no Dalph runtime behavior.
   #264 was merged. Its notification/timer owner and task-local consequences are
   useful, but its private Git-read history protocol contradicts #266's accepted
   requirement to reuse the ordinary #190/#53/#164 read owners.
-- The #266 scenario is currently misnamed
-  `docs/scenarios/issue-281-active-work-authority-refresh.md`, attributes the
-  behavior to the unrelated closed #281, and uses obsolete `Running` language.
+- The #266 scenario is
+  `docs/scenarios/issue-266-active-work-authority-refresh.md`; it attributes the
+  behavior to #266 and uses the accepted executor lifecycle vocabulary.
 - A direct rejected-handoff acceptance test already exists:
   `retains one trailing ordinary activation when the active handoff rejects`.
   Do not add a test-only production seam or duplicate this test.
@@ -48,8 +48,8 @@ of these tickets.
 3. Send active-work graph, focused tracker, worktree, and target-lineage reads
    through the existing ordinary journal-first protocols owned by
    #190/#53/#164.
-4. Rename and relink the active-work refresh scenario to #266 and replace
-   `Running` with the accepted executor lifecycle vocabulary.
+4. Keep the active-work refresh scenario linked to #266 and use the accepted
+   executor lifecycle vocabulary.
 5. Correct the rejected-handoff scenario mapping to name its existing direct
    acceptance test.
 
@@ -150,9 +150,9 @@ evidence is resolved and when another passive read is admitted.
 
 ### 3. Reconcile and complete #266
 
-First rename the scenario to
-`docs/scenarios/issue-266-active-work-authority-refresh.md`, update the scenario
-catalog, link it to #266, and use `ExecutorWorkExecuting`,
+The scenario is
+`docs/scenarios/issue-266-active-work-authority-refresh.md`; keep the scenario
+catalog and #266 link current, and use `ExecutorWorkExecuting`,
 `ExecutorWorkSafelySuspended`, and `ExecutorWorkTerminal` consistently.
 
 Preserve:
@@ -163,7 +163,8 @@ Preserve:
 - task-local changed-instruction, claim, worktree, and lineage consequences;
 - no continuation command after healthy reads;
 - unreadable evidence authorizes neither continuation nor suspension; and
-- exact Safe or Terminal evidence is required before releasing a position.
+- exact `ExecutorWorkSafelySuspended` or `ExecutorWorkTerminal` evidence is
+  required before releasing a position.
 
 Remove:
 
@@ -178,22 +179,42 @@ must not own a second read protocol or cache.
 
 Scenario-to-test mapping:
 
-- Tracker notification changes B's instructions → the existing vertical
-  active-refresh test, revised to assert ordinary graph/focused/Git intent and
-  observation events.
-- Lost notification → the existing controlled timer test.
-- Healthy current facts → the existing test asserting no Begin, Resume, or
-  continuation authorization.
-- Foreign claim, lost worktree, and incompatible lineage → existing localized
-  suspension tests, revised to consume ordinary read evidence.
-- Unreadable graph/focused/Git facts → existing no-command/no-suspension tests
-  plus the Quint negative control when the model changes.
-- Rejected active handoff → `retains one trailing ordinary activation when the
-  active handoff rejects`.
-- Pause, Exit, termination, and coalescing → the existing run-reactivation
-  owner and production-wiring tests named by the scenario.
-- Crash after read intent or response loss → revised recovery tests proving the
-  ordinary operation identity is replayed without a private refresh ordinal.
+- Live healthy notification → existing `production owner refreshes Running
+  work once for a TrackerNotification without an executor command`.
+- Accepted B/F2 with A1/B1/C1 executing → required direct vertical seam that
+  calls `Suspend(B1)` only, retains B1's position until exact
+  `ExecutorWorkSafelySuspended` or `ExecutorWorkTerminal` acceptance, and
+  leaves A1/C1 executing.
+- Lost or pre-subscription notification → required controlled-timer seam;
+  existing `configured timer refreshes a Running attempt and suspends it after
+  its exact worktree is lost` proves only that Timer can supply an opportunity.
+- Notification, timer, and accepted-publication coalescing → required direct
+  production seam with one active read and one trailing ordinary activation;
+  existing owner/production coalescing tests remain narrower support.
+- Complete authoritative missing or foreign exact claim and lost worktree →
+  existing localized projection tests; changed instructions,
+  lifecycle/membership/blocker constraints, incompatible lineage, and the
+  complete three-attempt chronology still require the parameterized vertical
+  seam named by the scenario.
+- Incomplete, unavailable, unreadable, malformed, throttled,
+  cross-repository, or foreign-correlation graph/focused/Git boundary failure →
+  required typed vertical seam with no command, no busy-loop, and a later fresh
+  opportunity. These uncertain failures do not include a complete missing or
+  foreign exact claim observation. Existing Git-failure waits and existing
+  task-fact positive and mutation-catching negative model tests are supporting
+  evidence only; #266 requires no Quint change.
+- Rejected active handoff → existing direct `retains one trailing ordinary
+  activation when the active handoff rejects`.
+- Pause, Exit, restart with no timer/hint state, and #194 finality-read
+  separation → required direct seams; existing run-reactivation owner and
+  projection tests prove only their narrower timer, drain, and ordering rules.
+- Crash after an ordinary read intent or response loss → required revised
+  recovery tests proving #190/#53/#164 and the ordinary focused/Git owners reuse
+  their operation identities. Private `ActiveWorkAuthorityRefreshGitRead...`
+  fixtures and refresh ordinals are rejected evidence for this mapping.
+- Crash around B1 suspension → required revision of the existing projection
+  fixture to execute crash-before-intent, intent-before-call, and lost-response
+  cuts through the executor boundary.
 
 After focused verification, re-review #264, #265, and #266 in dependency order
 and close #265 and #266 only when their scenario mappings are direct and green.
