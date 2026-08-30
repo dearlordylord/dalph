@@ -28,7 +28,7 @@ import {
   priorObservedTurnIsConsistent
 } from "./codex-planned-attempt-executor.js"
 import { CodexAttemptRecord, CodexOwnedTurnToken, CodexThreadId, CodexTurnId } from "./codex-attempt-store.js"
-import type { CodexThreadSnapshot, CodexTurnSnapshot } from "./codex-app-server.js"
+import { CodexThreadWorkingDirectory, type CodexThreadSnapshot, type CodexTurnSnapshot } from "./codex-app-server.js"
 
 const correlation = PlannedAttemptExecutorCorrelation.make({
   attemptId: AttemptId.make("policy-attempt"),
@@ -56,7 +56,7 @@ const turn = (overrides: TurnOverrides = {}): CodexTurnSnapshot => {
   }
 }
 const thread = (turns: ReadonlyArray<CodexTurnSnapshot>, status: CodexThreadSnapshot["status"] = "idle") => ({
-  cwd: worktree,
+  cwd: CodexThreadWorkingDirectory.make(worktree),
   id: threadId,
   status,
   turns

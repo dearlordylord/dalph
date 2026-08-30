@@ -53,6 +53,9 @@ const responseFor = (method, params = {}) => {
   if (mode === "thread-list-invalid-fields" && method === "thread/list") {
     return { data: [{ ...validThread, cwd: "", status: "unknown" }] }
   }
+  if (mode === "thread-list-invalid-status" && method === "thread/list") {
+    return { data: [{ ...validThread, status: "unknown" }] }
+  }
   if (mode === "thread-list-valid" && method === "thread/list") return { data: [validThread] }
   if (mode === "thread-list-threads-key" && method === "thread/list") return { threads: [validThread] }
   if (mode === "thread-list-missing-status" && method === "thread/list") {
@@ -463,6 +466,7 @@ it.effect("reads a complete persistent thread list and preserves malformed-list 
       "thread-list-not-array",
       "thread-list-invalid-item",
       "thread-list-invalid-fields",
+      "thread-list-invalid-status",
       "thread-list-rpc-error"
     ] as const) {
       const result = yield* withFixture(mode, (app) => {

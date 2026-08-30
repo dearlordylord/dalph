@@ -53,6 +53,7 @@ import {
   CodexAppServer,
   CodexAppServerFailure,
   CodexOwnedActivityCensus,
+  CodexThreadWorkingDirectory,
   type CodexAppServerService,
   type CodexOwnedActivityCensusProjection,
   type CodexTurnSnapshot
@@ -244,7 +245,7 @@ const runCase = <A>(
               ]
         const thread = {
           id: CodexThreadId.make("cleanup-thread"),
-          cwd: candidatePath,
+          cwd: CodexThreadWorkingDirectory.make(candidatePath),
           status: terminalTurnMode === "active" ? ("active" as const) : ("idle" as const),
           turns,
           ...(options.threadTokenMode === "tokenless"

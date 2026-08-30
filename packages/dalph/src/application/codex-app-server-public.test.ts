@@ -11,6 +11,7 @@ import {
   type CodexBackgroundTerminal,
   CodexOwnedActivityCensus,
   CodexProcessStartIdentity,
+  CodexThreadWorkingDirectory,
   controlledCodexAppServerLayer,
   controlledCodexOwnedActivityCensusLayer,
   codexAppServerNodeLayer,
@@ -44,7 +45,7 @@ const thread = (
   turns: ReadonlyArray<CodexTurnSnapshot>,
   id = "public-thread",
   cwd = "/public/worktree"
-): CodexThreadSnapshot => ({ id: CodexThreadId.make(id), cwd, status, turns })
+): CodexThreadSnapshot => ({ id: CodexThreadId.make(id), cwd: CodexThreadWorkingDirectory.make(cwd), status, turns })
 
 const turn = (id: string, status: CodexTurnSnapshot["status"]): CodexTurnSnapshot => ({
   id: CodexTurnId.make(id),
@@ -293,12 +294,12 @@ it.effect("keeps controlled app-server and owned-activity substitutions at their
     const service: CodexAppServerService = {
       incarnation: CodexServerIncarnation.make("controlled-incarnation"),
       startThread: (cwd: string) =>
-        Effect.succeed(thread("idle", [] as const) as CodexThreadSnapshot).pipe(
-          Effect.map((value) => ({ ...value, cwd }))
+        Effect.succeed(thread("idle", [])).pipe(
+          Effect.map((value) => ({ ...value, cwd: CodexThreadWorkingDirectory.make(cwd) }))
         ),
-      readThread: () => Effect.succeed(thread("idle", [] as const)),
+      readThread: () => Effect.succeed(thread("idle", [])),
       resumeThread: (threadId: CodexThreadId, cwd: string) =>
-        Effect.succeed({ ...thread("idle", [] as const), id: threadId, cwd }),
+        Effect.succeed({ ...thread("idle", []), id: threadId, cwd: CodexThreadWorkingDirectory.make(cwd) }),
       startTurn: () => Effect.succeed(turn("controlled-turn", "inProgress")),
       interruptTurn: () => Effect.void,
       listBackgroundTerminals: () => Effect.succeed([]),

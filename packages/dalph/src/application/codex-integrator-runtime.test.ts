@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest"
 import {
   CodexAppServer,
   CodexAppServerFailure,
+  CodexThreadWorkingDirectory,
   type CodexAppServerService,
   type CodexThreadSnapshot
 } from "./codex-app-server.js"
@@ -13,7 +14,12 @@ import { errorDetail, observedThread } from "./codex-integrator-runtime.js"
 
 const threadId = CodexThreadId.make("runtime-thread")
 const candidatePath = IntegratorCandidateWorktreePath.make("/tmp/runtime-candidate")
-const exactThread: CodexThreadSnapshot = { id: threadId, cwd: candidatePath, status: "idle", turns: [] }
+const exactThread: CodexThreadSnapshot = {
+  id: threadId,
+  cwd: CodexThreadWorkingDirectory.make(candidatePath),
+  status: "idle",
+  turns: []
+}
 
 const appFor = (resume: CodexAppServerService["resumeThread"]): CodexAppServerService =>
   CodexAppServer.of({
@@ -61,7 +67,9 @@ describe("Codex Integrator runtime boundary", () => {
     const foreignCwd = await Effect.runPromise(
       Effect.exit(
         observedThread(
-          appFor(() => Effect.succeed({ ...exactThread, cwd: "/tmp/foreign-candidate" })),
+          appFor(() =>
+            Effect.succeed({ ...exactThread, cwd: CodexThreadWorkingDirectory.make("/tmp/foreign-candidate") })
+          ),
           threadId,
           candidatePath
         )

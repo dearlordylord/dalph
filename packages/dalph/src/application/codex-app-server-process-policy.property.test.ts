@@ -4,6 +4,7 @@ import * as fc from "fast-check"
 import { describe, expect, it } from "vitest"
 import {
   CodexAppServerFailure,
+  CodexThreadWorkingDirectory,
   CodexProcessStartIdentity,
   applicationServerCloseAfterExecutorDrains,
   appendDiscoveredProcessCandidate,
@@ -295,7 +296,12 @@ describe("Codex process observation policy", () => {
       Exit.isFailure(
         await Effect.runPromiseExit(
           activityCensus.observe(
-            { cwd: "/worktree", id: CodexThreadId.make("census-thread"), status: "idle", turns: [] },
+            {
+              cwd: CodexThreadWorkingDirectory.make("/worktree"),
+              id: CodexThreadId.make("census-thread"),
+              status: "idle",
+              turns: []
+            },
             [{ command: "work", cwd: "/worktree", itemId: "item", osPid: 40, processId: "process" }],
             "PlannedAttempt"
           )
@@ -803,7 +809,12 @@ describe("Codex process observation policy", () => {
     expect(
       await Effect.runPromise(
         darwinActivityCensus.observe(
-          { cwd: "/worktree", id: CodexThreadId.make("darwin-thread"), status: "idle", turns: [] },
+          {
+            cwd: CodexThreadWorkingDirectory.make("/worktree"),
+            id: CodexThreadId.make("darwin-thread"),
+            status: "idle",
+            turns: []
+          },
           [],
           "IntegratorSession"
         )
@@ -813,7 +824,12 @@ describe("Codex process observation policy", () => {
     expect(
       await Effect.runPromise(
         darwinActivityCensus.observe(
-          { cwd: "/worktree", id: CodexThreadId.make("darwin-thread"), status: "idle", turns: [] },
+          {
+            cwd: CodexThreadWorkingDirectory.make("/worktree"),
+            id: CodexThreadId.make("darwin-thread"),
+            status: "idle",
+            turns: []
+          },
           [],
           "PlannedAttempt"
         )

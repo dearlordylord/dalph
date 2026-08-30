@@ -1,5 +1,5 @@
 import { Effect } from "effect"
-import { type CodexAppServer, type CodexThreadSnapshot } from "./codex-app-server.js"
+import { CodexThreadWorkingDirectory, type CodexAppServer, type CodexThreadSnapshot } from "./codex-app-server.js"
 import {
   bump,
   CodexIntegratorPrivateLifecycle,
@@ -44,7 +44,7 @@ const startOwnedThread = Effect.fn("CodexIntegrator.startOwnedThread")(function*
   if (intent !== record) yield* boundary(store.write(intent))
   const started = yield* boundary(app.startThread(record.candidatePath, record.threadToken))
   if (
-    started.cwd !== record.candidatePath ||
+    started.cwd !== CodexThreadWorkingDirectory.make(record.candidatePath) ||
     started.correlation !== undefined ||
     started.ownedThreadToken !== record.threadToken
   ) {
@@ -75,7 +75,8 @@ const adoptOrStartListedThread = Effect.fn("CodexIntegrator.adoptOrStartListedTh
   store: CodexIntegratorPrivateStoreService,
   listed: ReadonlyArray<CodexThreadSnapshot>
 ) {
-  const matches = listed.filter((thread) => thread.cwd === record.candidatePath)
+  const candidateDirectory = CodexThreadWorkingDirectory.make(record.candidatePath)
+  const matches = listed.filter((thread) => thread.cwd === candidateDirectory)
   if (matches.length > 1) {
     return yield* Effect.fail(providerFailure("persistent thread list has duplicate candidate cwd"))
   }

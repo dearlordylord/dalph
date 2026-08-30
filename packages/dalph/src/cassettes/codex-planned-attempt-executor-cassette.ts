@@ -28,6 +28,7 @@ import {
 import { Effect, Layer, Option, Ref, Schema, type Crypto } from "effect"
 import {
   CodexAppServerFailure,
+  CodexThreadWorkingDirectory,
   controlledCodexAppServerLayer,
   controlledCodexOwnedActivityCensusLayer,
   type CodexAppServerService,
@@ -214,7 +215,7 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (
   const replacementThreadHasPredecessor = replacementScenario === "PurgedWorkUnitStillPresent"
   const thread = yield* Ref.make<CodexThreadSnapshot>({
     id: threadId,
-    cwd: worktree,
+    cwd: CodexThreadWorkingDirectory.make(worktree),
     status: "idle",
     turns: replacementThreadHasPredecessor ? [predecessorTurn] : []
   })
@@ -351,11 +352,12 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (
   const app: CodexAppServerService = {
     incarnation: CodexServerIncarnation.make("codex-cassette-incarnation"),
     startThread: (cwd) =>
-      Ref.updateAndGet(thread, (current) => ({ ...current, cwd })).pipe(
+      Ref.updateAndGet(thread, (current) => ({ ...current, cwd: CodexThreadWorkingDirectory.make(cwd) })).pipe(
         Effect.tap(() => Ref.update(threadStartCount, (count) => count + 1))
       ),
     readThread: () => Ref.get(thread),
-    resumeThread: (_threadId, cwd) => Ref.updateAndGet(thread, (current) => ({ ...current, cwd })),
+    resumeThread: (_threadId, cwd) =>
+      Ref.updateAndGet(thread, (current) => ({ ...current, cwd: CodexThreadWorkingDirectory.make(cwd) })),
     startTurn: (_threadId, cwd, _text, ownedTurnToken = defaultOwnedTurnToken) =>
       Effect.gen(function* () {
         yield* Ref.set(authorityCallsBeforeProviderBoundary, yield* Ref.get(authorityObservationCount))
@@ -371,7 +373,12 @@ const makeHarness = Effect.fn("CodexExecutorCassette.makeHarness")(function* (
         }
         yield* Ref.update(
           thread,
-          (current): CodexThreadSnapshot => ({ ...current, cwd, status: "active", turns: [...current.turns, turn] })
+          (current): CodexThreadSnapshot => ({
+            ...current,
+            cwd: CodexThreadWorkingDirectory.make(cwd),
+            status: "active",
+            turns: [...current.turns, turn]
+          })
         )
         if (loseTurnResponse && !(yield* Ref.get(responseWasLost))) {
           yield* Ref.set(responseWasLost, true)

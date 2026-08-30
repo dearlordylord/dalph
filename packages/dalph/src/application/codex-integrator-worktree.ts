@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect"
+import { Effect, Result, Schema } from "effect"
 import type { FileSystem } from "effect"
 import { GitCommitSha, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
 import {
@@ -26,6 +26,20 @@ export type GitWorktreeRecord = {
   readonly prunable: boolean
 }
 
+const GitWorktreePorcelainRecord = Schema.Struct({
+  branch: Schema.optionalKey(TaskBranchRef),
+  detached: Schema.Boolean,
+  head: GitCommitSha,
+  prunable: Schema.Boolean,
+  worktree: WorktreeLocator
+}).check(
+  Schema.makeFilter((record) =>
+    record.branch !== undefined || record.detached
+      ? undefined
+      : "worktree registration must name a branch or be detached"
+  )
+)
+
 const parseWorktreeFields = (block: string): Map<string, string> | undefined => {
   const fields = block.split("\n").map((line) => {
     const separator = line.indexOf(" ")
@@ -43,23 +57,15 @@ const parseWorktreeFields = (block: string): Map<string, string> | undefined => 
 }
 
 const worktreeRecordFromFields = (values: ReadonlyMap<string, string>): GitWorktreeRecord | undefined => {
-  const worktree = Option.flatMap(
-    Option.fromUndefinedOr(values.get("worktree")),
-    Schema.decodeUnknownOption(WorktreeLocator)
-  )
-  const head = Option.flatMap(Option.fromUndefinedOr(values.get("HEAD")), Schema.decodeUnknownOption(GitCommitSha))
   const branchValue = values.get("branch")
-  const branch = Option.flatMap(Option.fromUndefinedOr(branchValue), Schema.decodeUnknownOption(TaskBranchRef))
-  const detached = values.has("detached")
-  const prunable = values.has("prunable")
-  return Option.isSome(worktree) &&
-    Option.isSome(head) &&
-    (branchValue === undefined || Option.isSome(branch)) &&
-    (Option.isSome(branch) || detached)
-    ? Option.isNone(branch)
-      ? { worktree: worktree.value, head: head.value, detached, prunable }
-      : { worktree: worktree.value, head: head.value, branch: branch.value, detached, prunable }
-    : undefined
+  const decoded = Schema.decodeUnknownResult(GitWorktreePorcelainRecord)({
+    ...(branchValue === undefined ? {} : { branch: branchValue }),
+    detached: values.has("detached"),
+    head: values.get("HEAD"),
+    prunable: values.has("prunable"),
+    worktree: values.get("worktree")
+  })
+  return Result.isSuccess(decoded) ? decoded.success : undefined
 }
 
 const parseWorktreeBlock = (block: string): GitWorktreeRecord | undefined => {

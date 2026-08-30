@@ -45,6 +45,7 @@ import {
   type CodexOwnedProcessIdentity,
   CodexProcessStartIdentity,
   type CodexAppServerService,
+  CodexThreadWorkingDirectory,
   type CodexThreadSnapshot,
   type CodexTurnSnapshot
 } from "./codex-app-server.js"
@@ -205,7 +206,12 @@ const makeHarness = (
   const turnCwds: Array<string> = []
   const turnTexts: Array<string> = []
   const resumeCwds: Array<string> = []
-  let currentThread: CodexThreadSnapshot = { id: threadId, cwd: worktree, status: "idle", turns }
+  let currentThread: CodexThreadSnapshot = {
+    id: threadId,
+    cwd: CodexThreadWorkingDirectory.make(worktree),
+    status: "idle",
+    turns
+  }
   let currentTurn: CodexTurnSnapshot | undefined
   let turnNumber = 0
   let associationAtTurn: CodexAttemptRecord | undefined
@@ -253,7 +259,7 @@ const makeHarness = (
     startThread: (cwd) =>
       Effect.sync(() => {
         threadStartCount += 1
-        currentThread = { ...currentThread, cwd, status: "idle", turns: [] }
+        currentThread = { ...currentThread, cwd: CodexThreadWorkingDirectory.make(cwd), status: "idle", turns: [] }
         return currentThread
       }),
     readThread: () => Effect.succeed(currentThread),
@@ -273,7 +279,7 @@ const makeHarness = (
       return Effect.sync(() => {
         currentThread = {
           ...currentThread,
-          cwd: preserveResumeCwdOnResume ? currentThread.cwd : cwd,
+          cwd: preserveResumeCwdOnResume ? currentThread.cwd : CodexThreadWorkingDirectory.make(cwd),
           ...(foreignResume
             ? { correlation: { runId: RunId.make("foreign-run"), attemptId: AttemptId.make("foreign-attempt") } }
             : {})
@@ -308,7 +314,7 @@ const makeHarness = (
             : {})
         }
         turns.push(currentTurn)
-        currentThread = { ...currentThread, cwd, status: "active", turns }
+        currentThread = { ...currentThread, cwd: CodexThreadWorkingDirectory.make(cwd), status: "active", turns }
         if (options.dieAfterReplacementTurnStartOnce === true && !replacementTurnStartDeath) {
           replacementTurnStartDeath = true
           return yield* Effect.die("controlled process loss after replacement turn/start")
@@ -1634,7 +1640,10 @@ it.effect("fails closed for malformed thread states and unresolved turn intents"
       Effect.gen(function* () {
         const executor = yield* PlannedAttemptExecutor
         yield* executor.startOrContinue(request)
-        cwdMismatchHarness.setThread({ ...cwdMismatchHarness.currentThread(), cwd: "/tmp/foreign-worktree" })
+        cwdMismatchHarness.setThread({
+          ...cwdMismatchHarness.currentThread(),
+          cwd: CodexThreadWorkingDirectory.make("/tmp/foreign-worktree")
+        })
         cwdMismatchHarness.preserveResumeCwd()
         expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
       }).pipe(Effect.provide(layerFor(cwdMismatchHarness)))
@@ -1658,7 +1667,7 @@ it.effect("fails closed for malformed thread states and unresolved turn intents"
           expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
           associatedActivityHarness.setThread({
             id: current.threadId,
-            cwd: current.worktree,
+            cwd: CodexThreadWorkingDirectory.make(current.worktree),
             status: "idle",
             turns: []
           })
@@ -1683,7 +1692,12 @@ it.effect("fails closed for malformed thread states and unresolved turn intents"
             worktree: current.worktree
           })
           unresolvedHarness.setRecord(intent)
-          unresolvedHarness.setThread({ id: current.threadId, cwd: current.worktree, status: "idle", turns: [] })
+          unresolvedHarness.setThread({
+            id: current.threadId,
+            cwd: CodexThreadWorkingDirectory.make(current.worktree),
+            status: "idle",
+            turns: []
+          })
           expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
           expect(yield* executor.requestSuspension(attempt).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
           expect(yield* executor.startOrContinue(request).pipe(Effect.exit)).toHaveProperty("_tag", "Failure")
@@ -1709,7 +1723,12 @@ it.effect("fails closed for malformed thread states and unresolved turn intents"
               worktree: current.worktree
             })
           )
-          observedMissingHarness.setThread({ id: current.threadId, cwd: current.worktree, status: "idle", turns: [] })
+          observedMissingHarness.setThread({
+            id: current.threadId,
+            cwd: CodexThreadWorkingDirectory.make(current.worktree),
+            status: "idle",
+            turns: []
+          })
           expect((yield* executor.project(correlation))._tag).toBe("Unreadable")
         }
       }).pipe(Effect.provide(layerFor(observedMissingHarness)))
@@ -2007,7 +2026,7 @@ it.effect("projects no report, safe suspension, and an idle running record throu
       )
       harness.setThread({
         id: current.threadId,
-        cwd: current.worktree,
+        cwd: CodexThreadWorkingDirectory.make(current.worktree),
         status: "idle",
         turns: [{ id: current.observedTurnId, status: "interrupted", items: [], ownedTurnToken: current.currentToken }]
       })
@@ -2162,7 +2181,7 @@ it.effect("fails closed when an associated thread already contains owned activit
       )
       harness.setThread({
         id: current.threadId,
-        cwd: current.worktree,
+        cwd: CodexThreadWorkingDirectory.make(current.worktree),
         status: "active",
         turns: [{ id: current.observedTurnId, status: "inProgress", items: [], ownedTurnToken: current.currentToken }]
       })
@@ -2265,7 +2284,7 @@ const seedReplacementHarness = (options: Parameters<typeof makeHarness>[0] = {})
   const threadId = CodexThreadId.make("codex-thread-issue-58")
   const predecessorToken = CodexOwnedTurnToken.make("issue-111-u1-token")
   const predecessorTurnId = CodexTurnId.make("issue-111-u1-turn")
-  harness.setThread({ id: threadId, cwd: worktree, status: "idle", turns: [] })
+  harness.setThread({ id: threadId, cwd: CodexThreadWorkingDirectory.make(worktree), status: "idle", turns: [] })
   harness.setRecord(
     CodexAttemptRecord.cases.Running.make({
       attemptId: attempt.attemptId,
@@ -2427,7 +2446,10 @@ it.effect("fails closed for changed retained-thread, activity, and second author
         expected: "CorrelationConflict",
         mutate: (harness) => {
           harness.preserveResumeCwd()
-          harness.setThread({ ...harness.currentThread(), cwd: WorktreeLocator.make("/tmp/foreign-worktree") })
+          harness.setThread({
+            ...harness.currentThread(),
+            cwd: CodexThreadWorkingDirectory.make("/tmp/foreign-worktree")
+          })
         },
         name: "changed-worktree"
       },

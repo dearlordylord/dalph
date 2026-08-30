@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect"
-import type { CodexAppServer, CodexThreadSnapshot } from "./codex-app-server.js"
+import { CodexThreadWorkingDirectory, type CodexAppServer, type CodexThreadSnapshot } from "./codex-app-server.js"
 import type { CodexThreadId } from "./codex-attempt-store.js"
 import type { IntegratorCandidateWorktreePath } from "./codex-integrator-private-store.js"
 
@@ -37,7 +37,9 @@ export const observedThread = (
 ): Effect.Effect<CodexThreadSnapshot, CodexIntegratorProviderFailure> =>
   boundary(app.resumeThread(threadId, candidatePath)).pipe(
     Effect.flatMap((thread) =>
-      thread.id !== threadId || thread.cwd !== candidatePath || thread.correlation !== undefined
+      thread.id !== threadId ||
+      thread.cwd !== CodexThreadWorkingDirectory.make(candidatePath) ||
+      thread.correlation !== undefined
         ? Effect.fail(providerFailure("Codex thread identity or cwd is foreign"))
         : Effect.succeed(thread)
     )

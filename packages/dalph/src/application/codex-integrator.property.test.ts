@@ -37,6 +37,7 @@ import {
 import {
   CodexAppServer,
   CodexOwnedActivityCensus,
+  CodexThreadWorkingDirectory,
   type CodexAppServerService,
   type CodexOwnedActivityCensusProjection,
   type CodexTurnSnapshot
@@ -240,7 +241,7 @@ const authorityFixtureLayer = (
           Ref.set(threadToken, ownedThreadToken).pipe(
             Effect.as({
               id: CodexThreadId.make("property-thread"),
-              cwd,
+              cwd: CodexThreadWorkingDirectory.make(cwd),
               status: "idle" as const,
               turns: [],
               ...(ownedThreadToken === undefined ? {} : { ownedThreadToken })
@@ -252,7 +253,7 @@ const authorityFixtureLayer = (
             const ownedThreadToken = yield* Ref.get(threadToken)
             return {
               id: CodexThreadId.make("property-thread"),
-              cwd: options.candidatePath,
+              cwd: CodexThreadWorkingDirectory.make(options.candidatePath),
               status: "idle" as const,
               turns: current,
               ...(ownedThreadToken === undefined ? {} : { ownedThreadToken })
@@ -264,7 +265,7 @@ const authorityFixtureLayer = (
             const ownedThreadToken = yield* Ref.get(threadToken)
             return {
               id: CodexThreadId.make("property-thread"),
-              cwd,
+              cwd: CodexThreadWorkingDirectory.make(cwd),
               status: "idle" as const,
               turns: current,
               ...(ownedThreadToken === undefined ? {} : { ownedThreadToken })

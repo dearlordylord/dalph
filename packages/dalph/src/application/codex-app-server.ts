@@ -5,7 +5,7 @@ import nodePath from "node:path"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import type { ChildProcessHandle } from "effect/unstable/process/ChildProcessSpawner"
 import { AttemptId, PlannedAttemptExecutorCorrelation, RunId } from "@dalph/contracts"
-import { Context, Deferred, Duration, Effect, Layer, Option, Ref, Schema, Semaphore, Stream } from "effect"
+import { Context, Deferred, Duration, Effect, Layer, Option, Ref, Result, Schema, Semaphore, Stream } from "effect"
 import {
   ApplicationExitDiagnostic,
   ApplicationExitDrainFailure,
@@ -35,7 +35,28 @@ import {
 } from "./codex-process-native.js"
 
 /** The process-owned status projection returned by one Codex thread read. */
-type CodexThreadStatus = "active" | "idle" | "notLoaded" | "systemError"
+const CodexThreadStatus = Schema.Literals(["active", "idle", "notLoaded", "systemError"])
+type CodexThreadStatus = typeof CodexThreadStatus.Type
+
+/** The exact filesystem resource locator returned for one Codex thread. */
+export const CodexThreadWorkingDirectory = Schema.NonEmptyString.pipe(Schema.brand("CodexThreadWorkingDirectory"))
+export type CodexThreadWorkingDirectory = typeof CodexThreadWorkingDirectory.Type
+
+/** Opaque continuation identity returned by the Codex thread-list boundary. */
+const CodexThreadListCursor = Schema.NonEmptyString.pipe(Schema.brand("CodexThreadListCursor"))
+type CodexThreadListCursor = typeof CodexThreadListCursor.Type
+
+const CodexTurnStatus = Schema.Literals(["completed", "interrupted", "failed", "inProgress"])
+
+const CodexTurnBoundaryIdentity = Schema.Struct({ id: CodexTurnId, status: CodexTurnStatus })
+
+const CodexTurnItems = Schema.Array(Schema.Unknown)
+
+const CodexThreadBoundaryIdentity = Schema.Struct({ cwd: CodexThreadWorkingDirectory, id: CodexThreadId })
+
+const CodexThreadStatusBoundary = Schema.Union([CodexThreadStatus, Schema.Struct({ type: CodexThreadStatus })])
+
+const CodexThreadListValues = Schema.Array(Schema.Unknown)
 
 /** One persisted Codex turn. Items remain opaque except for private input identity and correlation. */
 export interface CodexTurnSnapshot {
@@ -51,7 +72,7 @@ export interface CodexTurnSnapshot {
 /** The exact thread state needed to reconcile a private attempt association. */
 export interface CodexThreadSnapshot {
   readonly id: CodexThreadId
-  readonly cwd: string
+  readonly cwd: CodexThreadWorkingDirectory
   readonly status: CodexThreadStatus
   readonly turns: ReadonlyArray<CodexTurnSnapshot>
   /** Exact private marker returned by a thread-start request, when supplied. */
@@ -1124,9 +1145,6 @@ const normalizeTurnCorrelation = (
 ): PlannedAttemptExecutorCorrelation | CodexAppServerFailure | undefined =>
   normalizeCorrelation(value, operation, "turn")
 
-const isCodexTurnStatus = (value: unknown): value is CodexTurnSnapshot["status"] =>
-  value === "completed" || value === "interrupted" || value === "failed" || value === "inProgress"
-
 const normalizeOwnedTurnToken = (
   value: unknown,
   operation: CodexAppServerOperation
@@ -1185,18 +1203,29 @@ const normalizeOwnedTurnTokenFromTurnSource = (
 }
 
 const normalizedTurnSnapshot = (
-  id: string,
+  id: CodexTurnId,
   status: CodexTurnSnapshot["status"],
-  items: unknown,
+  items: ReadonlyArray<unknown>,
   ownedTurnToken: CodexOwnedTurnToken | undefined,
   correlation: PlannedAttemptExecutorCorrelation | undefined
 ): CodexTurnSnapshot => ({
-  id: CodexTurnId.make(id),
+  id,
   status,
-  items: Array.isArray(items) ? items : [],
+  items,
   ...(ownedTurnToken === undefined ? {} : { ownedTurnToken }),
   ...(correlation === undefined ? {} : { correlation })
 })
+
+const normalizeTurnItems = (
+  value: unknown,
+  operation: CodexAppServerOperation
+): ReadonlyArray<unknown> | CodexAppServerFailure => {
+  if (value === undefined) return []
+  const decoded = Schema.decodeUnknownResult(CodexTurnItems)(value)
+  return Result.isSuccess(decoded)
+    ? decoded.success
+    : operationFailure(operation, "Malformed", "turn items are invalid")
+}
 
 const normalizeTurn = (
   value: unknown,
@@ -1204,19 +1233,23 @@ const normalizeTurn = (
 ): CodexTurnSnapshot | CodexAppServerFailure => {
   if (!isJsonObject(value)) return operationFailure(operation, "Malformed", "missing turn object")
   const source = value
-  const id = stringValue(source["id"])
-  const status = source["status"]
-  if (id === undefined || !isCodexTurnStatus(status)) {
+  const decoded = Schema.decodeUnknownResult(CodexTurnBoundaryIdentity)(source)
+  if (Result.isFailure(decoded)) {
     return operationFailure(operation, "Malformed", "turn id or status is invalid")
   }
-  const items = source["items"]
-  if (items !== undefined && !Array.isArray(items))
-    return operationFailure(operation, "Malformed", "turn items are invalid")
+  const items = normalizeTurnItems(source["items"], operation)
+  if (items instanceof CodexAppServerFailure) return items
   const normalizedCorrelation = normalizeTurnCorrelation(source["correlation"], operation)
   if (normalizedCorrelation instanceof CodexAppServerFailure) return normalizedCorrelation
   const ownedTurnToken = normalizeOwnedTurnTokenFromTurnSource(source, operation)
   if (ownedTurnToken instanceof CodexAppServerFailure) return ownedTurnToken
-  return normalizedTurnSnapshot(id, status, items, ownedTurnToken, normalizedCorrelation)
+  return normalizedTurnSnapshot(
+    decoded.success.id,
+    decoded.success.status,
+    items,
+    ownedTurnToken,
+    normalizedCorrelation
+  )
 }
 
 const normalizeThreadTurns = (
@@ -1232,10 +1265,11 @@ const normalizeThreadTurns = (
   return turns.filter((turn): turn is CodexTurnSnapshot => !(turn instanceof CodexAppServerFailure))
 }
 
-const isCodexThreadStatus = (value: unknown): value is CodexThreadSnapshot["status"] =>
-  value === "active" || value === "idle" || value === "notLoaded" || value === "systemError"
-
-const threadStatusValue = (value: unknown): unknown => (isJsonObject(value) ? value["type"] : value)
+const threadStatusValue = (value: unknown): CodexThreadStatus | undefined => {
+  const decoded = Schema.decodeUnknownResult(CodexThreadStatusBoundary)(value)
+  if (Result.isFailure(decoded)) return undefined
+  return typeof decoded.success === "string" ? decoded.success : decoded.success.type
+}
 
 const normalizedThreadIdentity = (
   value: JsonObject,
@@ -1243,20 +1277,19 @@ const normalizedThreadIdentity = (
 ):
   | {
       readonly source: JsonObject
-      readonly id: string
-      readonly cwd: string
+      readonly id: CodexThreadId
+      readonly cwd: CodexThreadWorkingDirectory
       readonly status: CodexThreadSnapshot["status"]
     }
   | CodexAppServerFailure => {
-  const id = stringValue(value["id"])
-  const cwd = stringValue(value["cwd"])
-  const rawStatus = threadStatusValue(value["status"])
+  const decoded = Schema.decodeUnknownResult(CodexThreadBoundaryIdentity)(value)
+  const rawStatus =
+    value["status"] === undefined && operation === "thread/list" ? "idle" : threadStatusValue(value["status"])
   // `thread/list` summaries may omit a live status while still carrying the
   // durable id and cwd needed to resume and complete the identity read.
-  const status = rawStatus === undefined && operation === "thread/list" ? "idle" : rawStatus
-  return id === undefined || cwd === undefined || !isCodexThreadStatus(status)
+  return Result.isFailure(decoded) || rawStatus === undefined
     ? operationFailure(operation, "Malformed", "thread id, cwd, or status is invalid")
-    : { source: value, id, cwd, status }
+    : { source: value, id: decoded.success.id, cwd: decoded.success.cwd, status: rawStatus }
 }
 
 const normalizeOwnedThreadToken = (
@@ -1286,7 +1319,7 @@ const normalizeThread = (
   const ownedThreadToken = normalizeOwnedThreadToken(identity.source, operation)
   if (ownedThreadToken instanceof CodexAppServerFailure) return ownedThreadToken
   return {
-    id: CodexThreadId.make(identity.id),
+    id: identity.id,
     cwd: identity.cwd,
     status: identity.status,
     turns: normalizedTurns,
@@ -1305,8 +1338,9 @@ const maximumThreadListPages = 100
 const normalizeThreadListThreads = (
   rawThreads: unknown
 ): ReadonlyArray<CodexThreadSnapshot> | CodexAppServerFailure => {
-  if (!Array.isArray(rawThreads)) return operationFailure("thread/list", "Malformed", "thread list is invalid")
-  const normalizedThreads = rawThreads.map((thread) => normalizeThread(thread, "thread/list"))
+  const decoded = Schema.decodeUnknownResult(CodexThreadListValues)(rawThreads)
+  if (Result.isFailure(decoded)) return operationFailure("thread/list", "Malformed", "thread list is invalid")
+  const normalizedThreads = decoded.success.map((thread) => normalizeThread(thread, "thread/list"))
   const failure = normalizedThreads.find(
     (thread): thread is CodexAppServerFailure => thread instanceof CodexAppServerFailure
   )
@@ -1316,18 +1350,22 @@ const normalizeThreadListThreads = (
 
 const normalizeThreadListCursor = (
   response: Record<string, unknown>
-): string | null | undefined | CodexAppServerFailure => {
+): CodexThreadListCursor | null | undefined | CodexAppServerFailure => {
   const nextCursor = response["nextCursor"] ?? response["next_cursor"]
   if (nextCursor === undefined || nextCursor === null) return nextCursor
-  return typeof nextCursor === "string" && nextCursor.length > 0
-    ? nextCursor
+  const decoded = Schema.decodeUnknownResult(CodexThreadListCursor)(nextCursor)
+  return Result.isSuccess(decoded)
+    ? decoded.success
     : operationFailure("thread/list", "Malformed", "thread list cursor is invalid")
 }
 
 const threadListPage = (
   response: Record<string, unknown>
 ):
-  | { readonly threads: ReadonlyArray<CodexThreadSnapshot>; readonly nextCursor: string | null | undefined }
+  | {
+      readonly threads: ReadonlyArray<CodexThreadSnapshot>
+      readonly nextCursor: CodexThreadListCursor | null | undefined
+    }
   | CodexAppServerFailure => {
   const threads = normalizeThreadListThreads(response["data"] ?? response["threads"])
   if (threads instanceof CodexAppServerFailure) return threads
@@ -2592,8 +2630,8 @@ export const codexAppServerLayer = (
       })
       const listThreads = Effect.fn("CodexAppServer.listThreads")(function* () {
         let pages: ReadonlyArray<ReadonlyArray<CodexThreadSnapshot>> = []
-        let cursors: ReadonlySet<string> = new Set<string>()
-        let cursor: string | undefined
+        let cursors: ReadonlySet<CodexThreadListCursor> = new Set<CodexThreadListCursor>()
+        let cursor: CodexThreadListCursor | undefined
         for (let page = 0; page < maximumThreadListPages; page += 1) {
           const response = responseObject(
             yield* rpc.request(

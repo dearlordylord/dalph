@@ -35,6 +35,7 @@ import {
   CodexAppServer,
   CodexAppServerFailure,
   CodexOwnedActivityCensus,
+  CodexThreadWorkingDirectory,
   nodeCodexOwnedActivityCensusLayer,
   type CodexOwnedActivityCensusProjection,
   type CodexOwnedProcessIdentity,
@@ -647,7 +648,8 @@ const replacementThreadIdentityMatches = (
   request: CodexProviderWorkUnitReplacementRequest,
   predecessor: CodexPurgedWorkUnitEvidence,
   thread: CodexThreadSnapshot
-): boolean => thread.id === predecessor.threadId && thread.cwd === request.plannedAttempt.worktree
+): boolean =>
+  thread.id === predecessor.threadId && thread.cwd === CodexThreadWorkingDirectory.make(request.plannedAttempt.worktree)
 
 const replacementThreadCorrelationMatches = (
   request: CodexProviderWorkUnitReplacementRequest,
@@ -857,7 +859,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       expectedThreadId: CodexThreadId,
       thread: CodexThreadSnapshot
     ) => {
-      if (thread.id !== expectedThreadId || thread.cwd !== attempt.worktree) {
+      if (thread.id !== expectedThreadId || thread.cwd !== CodexThreadWorkingDirectory.make(attempt.worktree)) {
         return Effect.fail(new CodexThreadMismatch({}))
       }
       if (thread.correlation !== undefined && !sameCorrelation(thread.correlation, correlation)) {
@@ -1266,7 +1268,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       if (turn.ownedTurnToken !== currentToken) return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
       yield* enforceThreadIdentity(attempt, correlation, record.threadId, {
         id: record.threadId,
-        cwd: attempt.worktree,
+        cwd: CodexThreadWorkingDirectory.make(attempt.worktree),
         status: turn.status === "inProgress" ? "active" : "idle",
         turns: [turn],
         ...(turn.correlation === undefined ? {} : { correlation: turn.correlation })
@@ -1279,7 +1281,12 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       }
       return yield* terminalOrRunning(attempt, correlation, observed, {
         _tag: "Terminal" as const,
-        thread: { id: record.threadId, cwd: attempt.worktree, status: "idle", turns: [turn] },
+        thread: {
+          id: record.threadId,
+          cwd: CodexThreadWorkingDirectory.make(attempt.worktree),
+          status: "idle",
+          turns: [turn]
+        },
         turn
       })
     })

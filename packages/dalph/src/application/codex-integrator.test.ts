@@ -38,6 +38,7 @@ import {
   CodexAppServer,
   CodexAppServerFailure,
   CodexOwnedActivityCensus,
+  CodexThreadWorkingDirectory,
   controlledCodexOwnedActivityCensusLayer,
   type CodexAppServerService,
   type CodexOwnedActivityCensusProjection
@@ -238,7 +239,7 @@ const fixtureLayer = (
                 : threads
             ).map((thread) => ({
               id: thread.id,
-              cwd: fixtureWorktreePath,
+              cwd: CodexThreadWorkingDirectory.make(fixtureWorktreePath),
               status: "idle" as const,
               turns: [],
               ...(options.listedThreadTokenMode === "tokenless"
@@ -262,7 +263,7 @@ const fixtureLayer = (
             if (options.threadStarts !== undefined) options.threadStarts.value += 1
             const thread = {
               id: CodexThreadId.make("fixture-thread"),
-              cwd,
+              cwd: CodexThreadWorkingDirectory.make(cwd),
               status: "idle" as const,
               turns: [],
               ...(ownedThreadToken === undefined ? {} : { ownedThreadToken }),
@@ -308,7 +309,7 @@ const fixtureLayer = (
                   : persistedThreadToken
             return {
               id: CodexThreadId.make("fixture-thread"),
-              cwd: fixtureWorktreePath,
+              cwd: CodexThreadWorkingDirectory.make(fixtureWorktreePath),
               status: "idle" as const,
               turns:
                 options.hideTurnsOnRead === true
@@ -388,7 +389,7 @@ const fixtureLayer = (
                   )
             return {
               id: CodexThreadId.make("fixture-thread"),
-              cwd,
+              cwd: CodexThreadWorkingDirectory.make(cwd),
               status: options.resumeThreadState === "active" ? ("active" as const) : ("idle" as const),
               turns: visibleTurns,
               ...(ownedThreadToken === undefined ? {} : { ownedThreadToken })
