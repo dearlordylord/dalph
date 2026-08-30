@@ -141,18 +141,37 @@ it.effect("before G2 admits the tracker graph read", () =>
 it.effect("before G2 admits a fresh active-attempt authority read and defers independent work", () =>
   Effect.gen(function* () {
     const base = yield* baseEvaluation
-    const freshActiveRead = proposalFor(activeWorktreeTransition, plannedAttempt)
-    const independentContinuation = proposalFor(
-      RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
-        acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
-        plannedAttempt: independentAttempt
-      }),
-      independentAttempt
-    )
+    const independentTransition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+      acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(2) },
+      plannedAttempt: independentAttempt
+    })
+    const jointlyDerived = deliveryProposalsOf({
+      acceptedOperationIds: new Set(),
+      fresh: [],
+      responsibilities: [
+        { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(1), plannedAttempt },
+        {
+          _tag: "PlannedAttemptExecutorWorkResponsibility",
+          beganAt: JournalPosition.make(2),
+          plannedAttempt: independentAttempt
+        }
+      ],
+      runId,
+      transitions: [activeWorktreeTransition, independentTransition]
+    }).ticketDelivery
+    expect(jointlyDerived).toHaveLength(2)
+    const [freshActiveRead, independentContinuation] = jointlyDerived
+    if (freshActiveRead === undefined || independentContinuation === undefined) {
+      return expect.fail("the joint A+B frontier must derive both production proposals")
+    }
+    expect([freshActiveRead.order, independentContinuation.order]).toMatchObject([
+      { frontierOrdinal: 0, responsibilityBeganAt: 1 },
+      { frontierOrdinal: 1, responsibilityBeganAt: 2 }
+    ])
 
     const phased = evaluationForPhase(
       DeliveryRuntimePhase.ActiveRefreshPreG2([{ runId, attemptId: plannedAttempt.attemptId }]),
-      withProposals(base, [freshActiveRead, independentContinuation])
+      withProposals(base, jointlyDerived)
     )
 
     expect(phased.proposedActions).toMatchObject({ _tag: "DeliveryProposalsAvailable", proposals: [freshActiveRead] })
@@ -203,21 +222,38 @@ it.effect("before G2 admits the active attempt's executor read", () =>
 it.effect("after G2 suppresses captured A suspension and preserves independent B continuation", () =>
   Effect.gen(function* () {
     const base = yield* baseEvaluation
-    const activeSuspension = proposalFor(
-      RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt }),
-      plannedAttempt
-    )
-    const independentContinuation = proposalFor(
-      RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
-        acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
-        plannedAttempt: independentAttempt
-      }),
-      independentAttempt
-    )
+    const activeTransition = RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
+    const independentTransition = RunnableFrontierTransition.ContinuePlannedAttemptExecutorWork({
+      acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(2) },
+      plannedAttempt: independentAttempt
+    })
+    const jointlyDerived = deliveryProposalsOf({
+      acceptedOperationIds: new Set(),
+      fresh: [],
+      responsibilities: [
+        { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(1), plannedAttempt },
+        {
+          _tag: "PlannedAttemptExecutorWorkResponsibility",
+          beganAt: JournalPosition.make(2),
+          plannedAttempt: independentAttempt
+        }
+      ],
+      runId,
+      transitions: [activeTransition, independentTransition]
+    }).ticketDelivery
+    expect(jointlyDerived).toHaveLength(2)
+    const [activeSuspension, independentContinuation] = jointlyDerived
+    if (activeSuspension === undefined || independentContinuation === undefined) {
+      return expect.fail("the joint A+B frontier must derive both production proposals")
+    }
+    expect([activeSuspension.order, independentContinuation.order]).toMatchObject([
+      { frontierOrdinal: 0, responsibilityBeganAt: 1 },
+      { frontierOrdinal: 1, responsibilityBeganAt: 2 }
+    ])
 
     const phased = evaluationForPhase(
       DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }]),
-      withProposals(base, [activeSuspension, independentContinuation])
+      withProposals(base, jointlyDerived)
     )
 
     expect(phased.proposedActions).toMatchObject({
