@@ -21,13 +21,14 @@ import { Effect, Exit, FileSystem, Layer, Option, PlatformError, Schema } from "
 import { describe, expect, it } from "vitest"
 import {
   CodexServerIncarnation,
-  CodexThreadId,
   CodexThreadOwnershipToken,
   CodexTurnId,
   CodexOwnedTurnToken
 } from "./codex-attempt-store.js"
 import {
   CodexIntegratorPrivateRecord,
+  CodexIntegratorPrivateLifecycle,
+  CodexIntegratorPrivateRun,
   CodexIntegratorPrivateStore,
   CodexIntegratorStoreFailure,
   IntegratorCandidateWorktreePath,
@@ -84,14 +85,9 @@ const record = (
     candidatePath: IntegratorCandidateWorktreePath.make(path),
     correlation,
     revision: revision(1),
-    removed: false,
-    removalIntent: false,
+    lifecycle: CodexIntegratorPrivateLifecycle.cases.CandidateUnmaterialized.make({}),
     runs: [],
-    threadId: null,
-    threadToken: CodexThreadOwnershipToken.make("private-store-thread"),
-    threadStartIntent: false,
-    worktreeMaterializationIntent: false,
-    worktreeReady: false
+    threadToken: CodexThreadOwnershipToken.make("private-store-thread")
   })
 
 const runCorrelation = (ordinal: number, runSession: IntegratorSessionCorrelation = session) =>
@@ -109,14 +105,11 @@ const preparedResult = (correlation = runCorrelation(1)) =>
     correlation
   })
 
-const validRun = (ordinal = 1) => ({
-  correlation: runCorrelation(ordinal),
-  phase: "IntentRecorded" as const,
-  result: null,
-  terminalStatus: null,
-  token: CodexOwnedTurnToken.make(`private-store-turn-${ordinal}`),
-  turnId: null
-})
+const validRun = (ordinal = 1) =>
+  CodexIntegratorPrivateRun.cases.IntentRecorded.make({
+    correlation: runCorrelation(ordinal),
+    token: CodexOwnedTurnToken.make(`private-store-turn-${ordinal}`)
+  })
 
 describe("Codex Integrator private store", () => {
   it("reads absence, writes a record, and finds it by exact candidate path", async () => {
@@ -186,9 +179,7 @@ describe("Codex Integrator private store", () => {
       runs: [
         {
           correlation: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session }),
-          phase: "Sealed",
-          result: null,
-          terminalStatus: "completed",
+          _tag: "CompletedTurnSealed",
           token: CodexOwnedTurnToken.make("malformed-turn"),
           turnId: CodexTurnId.make("malformed-turn-id")
         }
@@ -236,17 +227,14 @@ describe("Codex Integrator private store", () => {
     }
 
     const invalidRuns: ReadonlyArray<unknown> = [
-      { ...validRun(), result: terminalResult() },
-      { ...validRun(), turnId: CodexTurnId.make("turn-before-boundary") },
-      { ...validRun(), phase: "TurnObserved", result: terminalResult(), turnId: CodexTurnId.make("observed") },
-      { ...validRun(), phase: "TurnObserved", turnId: null },
-      { ...validRun(), phase: "Sealed", turnId: CodexTurnId.make("sealed") },
-      { ...validRun(), phase: "Sealed", result: terminalResult(), turnId: null },
+      { ...validRun(), _tag: "Unknown" },
+      { ...validRun(), _tag: "TurnObserved" },
+      { ...validRun(), _tag: "CompletedTurnSealed", turnId: CodexTurnId.make("sealed") },
+      { ...validRun(), _tag: "CompletedTurnSealed", result: terminalResult() },
       {
         ...validRun(),
-        phase: "Sealed" as const,
+        _tag: "FailedTurnSealed" as const,
         result: preparedResult(),
-        terminalStatus: "failed" as const,
         turnId: CodexTurnId.make("failed-prepared")
       }
     ]
@@ -256,14 +244,17 @@ describe("Codex Integrator private store", () => {
       ).toBe(true)
     }
 
-    const observedRun = { ...validRun(), phase: "TurnObserved" as const, turnId: CodexTurnId.make("observed-valid") }
-    const sealedRun = {
-      ...validRun(),
-      phase: "Sealed" as const,
+    const observedRun = CodexIntegratorPrivateRun.cases.TurnObserved.make({
+      correlation: runCorrelation(1),
+      token: CodexOwnedTurnToken.make("private-store-turn-1"),
+      turnId: CodexTurnId.make("observed-valid")
+    })
+    const sealedRun = CodexIntegratorPrivateRun.cases.CompletedTurnSealed.make({
+      correlation: runCorrelation(1),
+      token: CodexOwnedTurnToken.make("private-store-turn-1"),
       result: terminalResult(),
-      terminalStatus: "completed" as const,
       turnId: CodexTurnId.make("sealed-valid")
-    }
+    })
     expect(
       Option.isSome(Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)({ ...record(), runs: [observedRun] }))
     ).toBe(true)
@@ -272,10 +263,7 @@ describe("Codex Integrator private store", () => {
     ).toBe(true)
     expect(
       Option.isSome(
-        Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)({
-          ...record(),
-          runs: [sealedRun, { ...validRun(2), turnId: null }]
-        })
+        Schema.decodeUnknownOption(CodexIntegratorPrivateRecord)({ ...record(), runs: [sealedRun, validRun(2)] })
       )
     ).toBe(true)
 
@@ -291,19 +279,16 @@ describe("Codex Integrator private store", () => {
       { ...record(), runs: [validRun(2), validRun(1)] },
       { ...record(), runs: [sealedRun, { ...validRun(2), token: sealedRun.token }] },
       { ...record(), runs: [{ ...validRun(), correlation: { ...runCorrelation(1), ordinal: 0 } }] },
-      { ...record(), threadId: CodexThreadId.make("thread-with-intent"), threadStartIntent: true },
-      { ...record(), removalIntent: true, removed: true },
-      { ...record(), worktreeMaterializationIntent: true, worktreeReady: true },
-      { ...record(), removed: true, worktreeReady: true },
-      { ...record(), removed: true, threadStartIntent: true },
-      { ...record(), removed: true, threadId: CodexThreadId.make("removed-thread") },
+      { ...record(), lifecycle: { _tag: "ThreadStarted" } },
+      { ...record(), lifecycle: { _tag: "RemovalIntentRecorded" } },
+      { ...record(), lifecycle: { _tag: "UnknownLifecycle" } },
       { ...record(), runs: [{ ...validRun(), correlation: runCorrelation(1, foreignSession) }] },
       {
         ...record(),
         runs: [
           {
             ...validRun(),
-            phase: "Sealed" as const,
+            _tag: "CompletedTurnSealed" as const,
             result: terminalResult(runCorrelation(2)),
             turnId: CodexTurnId.make("sealed-mismatch")
           }

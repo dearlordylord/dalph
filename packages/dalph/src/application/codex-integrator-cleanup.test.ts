@@ -59,7 +59,9 @@ import {
 } from "./codex-app-server.js"
 import {
   CodexIntegratorConfiguration,
+  CodexIntegratorPrivateLifecycle,
   CodexIntegratorPrivateRecord,
+  CodexIntegratorPrivateRun,
   type CodexIntegratorPrivateStoreService,
   candidateWorktreePathFor,
   IntegratorCandidateWorktreePath,
@@ -360,31 +362,46 @@ const recordFor = (
 ) => {
   const correlation = overrides.correlation ?? predecessor
   const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
+  const threadId = overrides.threadId === undefined ? CodexThreadId.make("cleanup-thread") : overrides.threadId
+  const lifecycle = overrides.removed
+    ? CodexIntegratorPrivateLifecycle.cases.Removed.make({})
+    : overrides.worktreeMaterializationIntent
+      ? CodexIntegratorPrivateLifecycle.cases.WorktreeMaterializationIntentRecorded.make({})
+      : overrides.worktreeReady === false
+        ? CodexIntegratorPrivateLifecycle.cases.CandidateUnmaterialized.make({})
+        : overrides.threadStartIntent
+          ? CodexIntegratorPrivateLifecycle.cases.ThreadStartIntentRecorded.make({})
+          : threadId === null
+            ? CodexIntegratorPrivateLifecycle.cases.CandidateReady.make({})
+            : overrides.removalIntent
+              ? CodexIntegratorPrivateLifecycle.cases.RemovalIntentRecorded.make({ threadId })
+              : CodexIntegratorPrivateLifecycle.cases.ThreadStarted.make({ threadId })
+  const result = IntegratorResult.cases.NotPrepared.make({
+    correlation: run,
+    detail: IntegratorNotPreparedDetail.make("cleanup test terminal result")
+  })
+  const sealedRun =
+    overrides.terminalStatus === "failed"
+      ? CodexIntegratorPrivateRun.cases.FailedTurnSealed.make({
+          correlation: run,
+          result,
+          token: CodexOwnedTurnToken.make("cleanup-turn-token"),
+          turnId: CodexTurnId.make("cleanup-turn")
+        })
+      : CodexIntegratorPrivateRun.cases.CompletedTurnSealed.make({
+          correlation: run,
+          result,
+          token: CodexOwnedTurnToken.make("cleanup-turn-token"),
+          turnId: CodexTurnId.make("cleanup-turn")
+        })
   return CodexIntegratorPrivateRecord.make({
     appServerIncarnation: CodexServerIncarnation.make("cleanup-incarnation"),
     candidatePath: IntegratorCandidateWorktreePath.make(candidatePath),
     correlation,
     revision: revision(overrides.revision ?? 1),
-    removed: overrides.removed ?? false,
-    removalIntent: overrides.removalIntent ?? false,
-    runs: [
-      {
-        correlation: run,
-        phase: "Sealed",
-        result: IntegratorResult.cases.NotPrepared.make({
-          correlation: run,
-          detail: IntegratorNotPreparedDetail.make("cleanup test terminal result")
-        }),
-        terminalStatus: overrides.terminalStatus ?? "completed",
-        token: CodexOwnedTurnToken.make("cleanup-turn-token"),
-        turnId: CodexTurnId.make("cleanup-turn")
-      }
-    ],
-    threadId: overrides.threadId === undefined ? CodexThreadId.make("cleanup-thread") : overrides.threadId,
-    threadToken: CodexThreadOwnershipToken.make("cleanup-thread-token"),
-    threadStartIntent: overrides.threadStartIntent ?? false,
-    worktreeMaterializationIntent: overrides.worktreeMaterializationIntent ?? false,
-    worktreeReady: overrides.worktreeReady ?? true
+    lifecycle,
+    runs: [sealedRun],
+    threadToken: CodexThreadOwnershipToken.make("cleanup-thread-token")
   })
 }
 

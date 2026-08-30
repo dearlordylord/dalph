@@ -24,10 +24,15 @@ import { describe, expect, it } from "vitest"
 import { codexIntegratorLayer } from "./codex-integrator.js"
 import {
   CodexIntegratorConfiguration,
+  CodexIntegratorPrivateLifecycle,
+  CodexIntegratorPrivateRecord,
+  CodexIntegratorPrivateRun,
+  IntegratorCandidateWorktreePath,
   IntegratorCandidateWorktreeRoot,
   IntegratorPrivateStoreLocator,
   candidateWorktreePathFor,
-  memoryCodexIntegratorPrivateStoreLayer
+  memoryCodexIntegratorPrivateStoreLayer,
+  revision
 } from "./codex-integrator-private-store.js"
 import {
   CodexAppServer,
@@ -37,9 +42,10 @@ import {
   type CodexTurnSnapshot
 } from "./codex-app-server.js"
 import {
+  CodexOwnedTurnToken,
   CodexServerIncarnation,
   CodexThreadId,
-  type CodexThreadOwnershipToken,
+  CodexThreadOwnershipToken,
   CodexTurnId
 } from "./codex-attempt-store.js"
 import {
@@ -56,6 +62,8 @@ import {
   IntegratorCandidateCleanupOwner,
   IntegratorCandidateResourceLocator,
   IntegratorRequest,
+  IntegratorNotPreparedDetail,
+  IntegratorResult,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorSessionCorrelation,
@@ -99,6 +107,64 @@ const baseSession = IntegratorSessionCorrelation.make({
   sessionId: IntegratorSessionId.make("session:property"),
   startedAt: JournalPosition.make(2),
   targetLineageObservedAt: JournalPosition.make(3)
+})
+
+const roundtripRun = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: baseSession })
+const roundtripTurnId = CodexTurnId.make("property-turn")
+const roundtripThreadId = CodexThreadId.make("property-thread")
+const roundtripToken = CodexOwnedTurnToken.make("property-turn-token")
+const roundtripResult = IntegratorResult.cases.NotPrepared.make({
+  correlation: roundtripRun,
+  detail: IntegratorNotPreparedDetail.make("property terminal result")
+})
+const privateRunArbitrary = fc.constantFrom<CodexIntegratorPrivateRun | undefined>(
+  undefined,
+  CodexIntegratorPrivateRun.cases.IntentRecorded.make({ correlation: roundtripRun, token: roundtripToken }),
+  CodexIntegratorPrivateRun.cases.TurnBoundaryCrossing.make({ correlation: roundtripRun, token: roundtripToken }),
+  CodexIntegratorPrivateRun.cases.TurnObserved.make({
+    correlation: roundtripRun,
+    token: roundtripToken,
+    turnId: roundtripTurnId
+  }),
+  CodexIntegratorPrivateRun.cases.CompletedTurnSealed.make({
+    correlation: roundtripRun,
+    result: roundtripResult,
+    token: roundtripToken,
+    turnId: roundtripTurnId
+  }),
+  CodexIntegratorPrivateRun.cases.FailedTurnSealed.make({
+    correlation: roundtripRun,
+    result: roundtripResult,
+    token: roundtripToken,
+    turnId: roundtripTurnId
+  })
+)
+const privateLifecycleArbitrary = fc.constantFrom<CodexIntegratorPrivateLifecycle>(
+  CodexIntegratorPrivateLifecycle.cases.CandidateUnmaterialized.make({}),
+  CodexIntegratorPrivateLifecycle.cases.WorktreeMaterializationIntentRecorded.make({}),
+  CodexIntegratorPrivateLifecycle.cases.CandidateReady.make({}),
+  CodexIntegratorPrivateLifecycle.cases.ThreadStartIntentRecorded.make({}),
+  CodexIntegratorPrivateLifecycle.cases.ThreadStarted.make({ threadId: roundtripThreadId }),
+  CodexIntegratorPrivateLifecycle.cases.RemovalIntentRecorded.make({ threadId: roundtripThreadId }),
+  CodexIntegratorPrivateLifecycle.cases.Removed.make({})
+)
+
+it("roundtrips every private Integrator lifecycle and provider-turn variant", () => {
+  fc.assert(
+    fc.property(privateLifecycleArbitrary, privateRunArbitrary, (lifecycle, run) => {
+      const record = CodexIntegratorPrivateRecord.make({
+        appServerIncarnation: CodexServerIncarnation.make("property-incarnation"),
+        candidatePath: IntegratorCandidateWorktreePath.make("/tmp/property-candidate"),
+        correlation: baseSession,
+        lifecycle,
+        revision: revision(1),
+        runs: run === undefined ? [] : [run],
+        threadToken: CodexThreadOwnershipToken.make("property-thread-token")
+      })
+      const encoded = Schema.encodeUnknownSync(CodexIntegratorPrivateRecord)(record)
+      expect(Schema.decodeUnknownSync(CodexIntegratorPrivateRecord)(encoded)).toEqual(record)
+    })
+  )
 })
 
 const locatorArbitrary = fc

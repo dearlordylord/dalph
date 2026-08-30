@@ -22,7 +22,9 @@ import { describe, expect, expectTypeOf, it } from "vitest"
 import { codexIntegratorLayer, nodeCodexIntegratorLayer } from "./codex-integrator.js"
 import {
   CodexIntegratorConfiguration,
+  CodexIntegratorPrivateLifecycle,
   CodexIntegratorPrivateRecord,
+  CodexIntegratorPrivateRun,
   CodexIntegratorPrivateStore,
   IntegratorCandidateWorktreePath,
   IntegratorCandidateWorktreeRoot,
@@ -1160,9 +1162,9 @@ describe("Codex Integrator", () => {
     )
     expect(Option.isSome(result.stored)).toBe(true)
     if (Option.isSome(result.stored)) {
-      expect(result.stored.value.runs[0]?.result?._tag).toBe("NotPrepared")
-      expect(result.stored.value.runs[0]?.result?._tag).not.toBe("PreparedCandidate")
-      expect(result.stored.value.runs[0]?.terminalStatus).toBe("failed")
+      expect(result.stored.value.runs[0]?._tag).toBe("FailedTurnSealed")
+      const sealed = result.stored.value.runs[0]
+      expect(sealed?._tag === "FailedTurnSealed" ? sealed.result._tag : undefined).toBe("NotPrepared")
     }
   })
 
@@ -1467,7 +1469,11 @@ describe("Codex Integrator", () => {
         const store = yield* CodexIntegratorPrivateStore
         const current = yield* store.read(session.sessionId)
         if (Option.isNone(current)) return yield* Effect.fail("private record was not written")
-        yield* store.write(preserveRevision(current.value, { threadId: null, threadStartIntent: true }))
+        yield* store.write(
+          preserveRevision(current.value, {
+            lifecycle: CodexIntegratorPrivateLifecycle.cases.ThreadStartIntentRecorded.make({})
+          })
+        )
         const fileSystem = yield* FileSystem.FileSystem
         yield* fileSystem.remove(candidatePath, { recursive: true })
         registration.value = "missing"
@@ -1722,7 +1728,15 @@ describe("Codex Integrator", () => {
         const run = stored.value.runs[0]
         if (run === undefined) return yield* Effect.fail("provider run was not written")
         yield* store.write(
-          updateRun(stored.value, run, { phase: "TurnObserved", turnId: CodexTurnId.make("hidden-turn") })
+          updateRun(
+            stored.value,
+            run,
+            CodexIntegratorPrivateRun.cases.TurnObserved.make({
+              correlation: run.correlation,
+              token: run.token,
+              turnId: CodexTurnId.make("hidden-turn")
+            })
+          )
         )
         return yield* Effect.flip(integrator.prepare(requestFor(1)))
       }).pipe(Effect.provide(providerLayer(hiddenConfig, { failAfterRecordingFirstTurn: true, hideTurnsOnRead: true })))
@@ -1770,7 +1784,9 @@ describe("Codex Integrator", () => {
           })
         )
         const pathFailure = yield* Effect.flip(integrator.prepare(requestFor(1)))
-        yield* store.write(preserveRevision(stored.value, { removed: true, threadId: null, worktreeReady: false }))
+        yield* store.write(
+          preserveRevision(stored.value, { lifecycle: CodexIntegratorPrivateLifecycle.cases.Removed.make({}) })
+        )
         const tombstoneFailure = yield* Effect.flip(integrator.prepare(requestFor(1)))
         return { pathFailure, tombstoneFailure }
       }).pipe(Effect.provide(providerLayer(config)))

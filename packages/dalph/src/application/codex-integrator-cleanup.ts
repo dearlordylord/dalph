@@ -11,6 +11,7 @@ import type {
 } from "./codex-app-server.js"
 import {
   candidateWorktreePathFor,
+  CodexIntegratorPrivateLifecycle,
   preserveRevision,
   type CodexIntegratorConfiguration,
   type CodexIntegratorPrivateRecord,
@@ -67,54 +68,19 @@ type SealedTerminalRunValidation =
   | { readonly _tag: "Invalid"; readonly detail: string }
 
 /** Cleanup evidence whose durable result, turn, and terminal status are mutually compatible. */
-type SealedTerminalRun =
-  | (CodexIntegratorPrivateRecord["runs"][number] & {
-      readonly phase: "Sealed"
-      readonly result: Extract<
-        NonNullable<CodexIntegratorPrivateRecord["runs"][number]["result"]>,
-        { readonly _tag: "PreparedCandidate" }
-      >
-      readonly terminalStatus: "completed"
-      readonly turnId: NonNullable<CodexIntegratorPrivateRecord["runs"][number]["turnId"]>
-    })
-  | (CodexIntegratorPrivateRecord["runs"][number] & {
-      readonly phase: "Sealed"
-      readonly result: Extract<
-        NonNullable<CodexIntegratorPrivateRecord["runs"][number]["result"]>,
-        { readonly _tag: "NotPrepared" }
-      >
-      readonly terminalStatus: "completed" | "failed"
-      readonly turnId: NonNullable<CodexIntegratorPrivateRecord["runs"][number]["turnId"]>
-    })
-
-type SealedTerminalRunEvidence = CodexIntegratorPrivateRecord["runs"][number] & {
-  readonly phase: "Sealed"
-  readonly result: NonNullable<CodexIntegratorPrivateRecord["runs"][number]["result"]>
-  readonly terminalStatus: Exclude<CodexIntegratorPrivateRecord["runs"][number]["terminalStatus"], null>
-  readonly turnId: NonNullable<CodexIntegratorPrivateRecord["runs"][number]["turnId"]>
-}
+type SealedTerminalRun = Extract<
+  CodexIntegratorPrivateRecord["runs"][number],
+  { readonly _tag: "CompletedTurnSealed" | "FailedTurnSealed" }
+>
 
 const hasSealedTerminalRunEvidence = (
   expected: CodexIntegratorPrivateRecord["runs"][number] | undefined
-): expected is SealedTerminalRunEvidence => {
-  if (expected === undefined || expected.phase !== "Sealed") return false
-  return expected.result !== null && expected.terminalStatus !== null && expected.turnId !== null
-}
-
-const sealedTerminalRunContradictsResult = (expected: SealedTerminalRunEvidence): boolean =>
-  (expected.terminalStatus === "failed" && expected.result._tag !== "NotPrepared") ||
-  (expected.result._tag === "PreparedCandidate" && expected.terminalStatus !== "completed")
-
-const isCompatibleSealedTerminalRun = (expected: SealedTerminalRunEvidence): expected is SealedTerminalRun =>
-  !sealedTerminalRunContradictsResult(expected)
+): expected is SealedTerminalRun => expected?._tag === "CompletedTurnSealed" || expected?._tag === "FailedTurnSealed"
 
 const validateSealedTerminalRun = (record: CodexIntegratorPrivateRecord): SealedTerminalRunValidation => {
   const expected = record.runs[record.runs.length - 1]
   if (!hasSealedTerminalRunEvidence(expected)) {
     return { _tag: "Invalid", detail: "private predecessor has no sealed terminal turn evidence" }
-  }
-  if (!isCompatibleSealedTerminalRun(expected)) {
-    return { _tag: "Invalid", detail: "private predecessor has contradictory sealed terminal outcome evidence" }
   }
   return { _tag: "Valid", expected }
 }
@@ -161,7 +127,8 @@ const terminalTurnObservation = (
   if (!isConclusiveTerminalStatus(exact.status)) {
     return cleanupUnreadable(authorization, "candidate terminal turn status is not conclusive")
   }
-  return exact.status !== expected.terminalStatus
+  const expectedStatus = expected._tag === "FailedTurnSealed" ? "failed" : "completed"
+  return exact.status !== expectedStatus
     ? cleanupUnreadable(authorization, "candidate terminal turn status contradicts the private sealed result")
     : undefined
 }
@@ -233,7 +200,7 @@ const cleanupRemovalIntent = Effect.fn("CodexIntegrator.cleanupRemovalIntent")(f
   const observation = removalProjectionObservation(authorization, predecessor, projection, revision)
   if (observation !== undefined) return observation
   yield* boundary(
-    store.write(preserveRevision(record, { removalIntent: false, removed: true, threadId: null, worktreeReady: false }))
+    store.write(preserveRevision(record, { lifecycle: CodexIntegratorPrivateLifecycle.cases.Removed.make({}) }))
   )
   return cleanupAbsent(authorization, revision)
 })
@@ -245,11 +212,11 @@ const cleanupWithoutRegistrationBaseObservation = (
   pathExists: boolean,
   revision: IntegratorCandidateCleanupEvidenceRevision
 ): IntegratorCandidateCleanupObservation | undefined => {
-  if (record.worktreeMaterializationIntent === true) {
+  if (record.lifecycle._tag === "WorktreeMaterializationIntentRecorded") {
     return cleanupUnreadable(authorization, "candidate worktree materialization remains unresolved")
   }
   if (pathExists) return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
-  return record.removed === true ? cleanupAbsent(authorization, revision) : undefined
+  return record.lifecycle._tag === "Removed" ? cleanupAbsent(authorization, revision) : undefined
 }
 
 const cleanupWithoutRegistration = Effect.fn("CodexIntegrator.cleanupWithoutRegistration")(function* (
@@ -270,18 +237,18 @@ const cleanupWithoutRegistration = Effect.fn("CodexIntegrator.cleanupWithoutRegi
     revision
   )
   if (baseObservation !== undefined) return baseObservation
-  if (record.threadStartIntent) {
+  if (record.lifecycle._tag === "ThreadStartIntentRecorded") {
     return cleanupUnreadable(authorization, "provider thread ownership is unresolved; absence cannot be inferred")
   }
-  if (record.threadId === null) {
+  if (record.lifecycle._tag !== "ThreadStarted" && record.lifecycle._tag !== "RemovalIntentRecorded") {
     return cleanupUnreadable(authorization, "provider thread ownership is unresolved; absence cannot be inferred")
   }
-  if (record.removalIntent === true) {
+  if (record.lifecycle._tag === "RemovalIntentRecorded") {
     return yield* cleanupRemovalIntent(
       authorization,
       predecessor,
       record,
-      record.threadId,
+      record.lifecycle.threadId,
       store,
       app,
       census,
@@ -324,10 +291,12 @@ const cleanupRegisteredBaseObservation = (
   pathExists: boolean,
   revision: IntegratorCandidateCleanupEvidenceRevision
 ): IntegratorCandidateCleanupObservation | undefined => {
-  if (record.worktreeMaterializationIntent === true) {
+  if (record.lifecycle._tag === "WorktreeMaterializationIntentRecorded") {
     return cleanupUnreadable(authorization, "candidate worktree materialization remains unresolved")
   }
-  if (record.removed === true) return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
+  if (record.lifecycle._tag === "Removed") {
+    return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
+  }
   if (registrationIsForeign(registration, predecessor)) {
     return cleanupForeign(authorization, predecessor.sessionId, "Transferred", revision)
   }
@@ -337,7 +306,9 @@ const cleanupRegisteredBaseObservation = (
 }
 
 const settledCandidateThreadId = (record: CodexIntegratorPrivateRecord): CodexThreadSnapshot["id"] | undefined =>
-  record.threadStartIntent || record.threadId === null ? undefined : record.threadId
+  record.lifecycle._tag === "ThreadStarted" || record.lifecycle._tag === "RemovalIntentRecorded"
+    ? record.lifecycle.threadId
+    : undefined
 
 const cleanupRegistered = Effect.fn("CodexIntegrator.cleanupRegistered")(function* (
   authorization: IntegratorCandidateCleanupAuthorization,
@@ -506,7 +477,7 @@ const checkRemovalIntentRecord = (
   const record = intent.value
   return removalRecordIsForeign(record, authorization, candidatePath) ||
     privateRevision(record) !== authorization.evidenceRevision ||
-    record.removalIntent !== true
+    record.lifecycle._tag !== "RemovalIntentRecorded"
     ? "private predecessor correlation or path changed before Git removal"
     : undefined
 }
@@ -540,7 +511,9 @@ const confirmedTombstoneError = (
   candidatePath: IntegratorCandidateWorktreePath,
   confirmed: Option.Option<CodexIntegratorPrivateRecord>
 ): string | undefined =>
-  Option.isNone(confirmed) || !confirmed.value.removed || confirmed.value.candidatePath !== candidatePath
+  Option.isNone(confirmed) ||
+  confirmed.value.lifecycle._tag !== "Removed" ||
+  confirmed.value.candidatePath !== candidatePath
     ? "Git remove returned but the private predecessor tombstone was not durable"
     : undefined
 
@@ -568,10 +541,7 @@ const executeGitRemoval = Effect.fn("CodexIntegrator.executeGitRemoval")(functio
   if (foundAfterError !== undefined) return unknownRemoval(authorization, foundAfterError)
   if (Option.isNone(foundAfter)) return unknownRemoval(authorization, "private predecessor record disappeared")
   const tombstone = preserveRevision(foundAfter.value, {
-    removalIntent: false,
-    removed: true,
-    threadId: null,
-    worktreeReady: false
+    lifecycle: CodexIntegratorPrivateLifecycle.cases.Removed.make({})
   })
   yield* boundary(store.write(tombstone))
   const confirmed = yield* boundary(store.read(authorization.owner.sessionId))
@@ -598,7 +568,23 @@ const removeOwnedCandidate = Effect.fn("CodexIntegrator.removeOwnedCandidate")(f
   const found = yield* boundary(store.read(authorization.owner.sessionId))
   const initialCheck = checkInitialRemovalRecord(authorization, candidatePath, found)
   if (initialCheck._tag === "Invalid") return unknownRemoval(authorization, initialCheck.detail)
-  yield* boundary(store.write(preserveRevision(initialCheck.record, { removalIntent: true, removed: false })))
+  if (
+    initialCheck.record.lifecycle._tag !== "ThreadStarted" &&
+    initialCheck.record.lifecycle._tag !== "RemovalIntentRecorded"
+  ) {
+    return unknownRemoval(authorization, "private predecessor has no settled thread before removal intent")
+  }
+  if (initialCheck.record.lifecycle._tag === "ThreadStarted") {
+    yield* boundary(
+      store.write(
+        preserveRevision(initialCheck.record, {
+          lifecycle: CodexIntegratorPrivateLifecycle.cases.RemovalIntentRecorded.make({
+            threadId: initialCheck.record.lifecycle.threadId
+          })
+        })
+      )
+    )
+  }
   const intent = yield* boundary(store.read(authorization.owner.sessionId))
   const intentError = checkRemovalIntentRecord(authorization, candidatePath, intent)
   if (intentError !== undefined) return unknownRemoval(authorization, intentError)

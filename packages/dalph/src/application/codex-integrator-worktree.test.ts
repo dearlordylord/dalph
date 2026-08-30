@@ -30,6 +30,7 @@ import { Effect, Exit, FileSystem, Option } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   CodexIntegratorConfiguration,
+  CodexIntegratorPrivateLifecycle,
   CodexIntegratorPrivateRecord,
   type CodexIntegratorPrivateStoreService,
   IntegratorCandidateWorktreePath,
@@ -77,22 +78,18 @@ const worktreeSession = IntegratorSessionCorrelation.make({
 
 const privateRecordFor = (
   candidatePath: IntegratorCandidateWorktreePath,
-  worktreeReady = false,
-  worktreeMaterializationIntent = false
+  worktreeReady = false
 ): CodexIntegratorPrivateRecord =>
   CodexIntegratorPrivateRecord.make({
     appServerIncarnation: CodexServerIncarnation.make("worktree-incarnation"),
     candidatePath,
     correlation: worktreeSession,
     revision: revision(1),
-    removed: false,
-    removalIntent: false,
+    lifecycle: worktreeReady
+      ? CodexIntegratorPrivateLifecycle.cases.CandidateReady.make({})
+      : CodexIntegratorPrivateLifecycle.cases.CandidateUnmaterialized.make({}),
     runs: [],
-    threadId: null,
-    threadToken: CodexThreadOwnershipToken.make("worktree-thread"),
-    threadStartIntent: false,
-    worktreeMaterializationIntent,
-    worktreeReady
+    threadToken: CodexThreadOwnershipToken.make("worktree-thread")
   })
 
 const porcelain = (
