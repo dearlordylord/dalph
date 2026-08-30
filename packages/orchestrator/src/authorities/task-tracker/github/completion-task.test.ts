@@ -23,7 +23,7 @@ import { githubCompletionClaimBoundaryLayer, githubCompletionClaimFingerprintFor
 import { githubCompletionTaskBoundaryLayer } from "./completion-task.js"
 import {
   GithubGraphqlClient,
-  type GithubGraphqlRequest,
+  GithubGraphqlRequest,
   GithubGraphqlRequestError,
   type GithubGraphqlResponse,
   GithubGraphqlThrottled,
@@ -88,6 +88,7 @@ interface CompletionHarnessOptions {
     | "GraphqlError"
     | "ForeignTaskRepository"
     | "InaccessibleBlockedBy"
+    | "InaccessibleSubIssues"
     | "InaccessibleTarget"
     | "MalformedBlockedBy"
     | "MalformedEnvelope"
@@ -160,6 +161,7 @@ const makeHarness = (options: CompletionHarnessOptions = {}) =>
                   id:
                     options.targetRootNodeId ??
                     (options.focusedReadFault === "ContradictoryClosureParent" ||
+                    options.focusedReadFault === "InaccessibleSubIssues" ||
                     options.focusedReadFault === "TargetClosureLimit"
                       ? rootNodeId
                       : issueNodeId)
@@ -279,6 +281,9 @@ const makeHarness = (options: CompletionHarnessOptions = {}) =>
         )
       }
       if (request._tag === "ReadSubIssues") {
+        if (options.focusedReadFault === "InaccessibleSubIssues") {
+          return { body: { data: { node: null } } }
+        }
         if (options.focusedReadFault === "ContradictoryClosureParent" && request.issueNodeId === rootNodeId) {
           return connectionBody("subIssues", request.issueNodeId, [prerequisiteNodeId])
         }
@@ -567,6 +572,29 @@ it.effect("fails every incomplete focused GitHub read without publishing facts o
   })
 )
 
+it.effect("fails closed when GitHub cannot expose the target subissue connection", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness({ focusedReadFault: "InaccessibleSubIssues" })
+    const failure = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionTaskBoundary)
+        .readFocusedTaskCompletion(focusedRequest("inaccessible-subissues"))
+        .pipe(Effect.flip)
+    }).pipe(Effect.provide(harness.layer))
+
+    expect(failure).toEqual(
+      new FocusedTaskCompletionReadFailure({ detail: `GitHub issue ${rootNodeId} is inaccessible`, taskId })
+    )
+    expect(yield* Ref.get(harness.calls)).toEqual([
+      GithubGraphqlRequest.cases.ResolveIssue.make({ target }),
+      GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId }),
+      GithubGraphqlRequest.cases.ReadTaskWorkSpecification.make({ issueNodeId }),
+      GithubGraphqlRequest.cases.ReadIssue.make({ issueNodeId: rootNodeId }),
+      GithubGraphqlRequest.cases.ReadBlockedBy.make({ cursor: null, issueNodeId: rootNodeId }),
+      GithubGraphqlRequest.cases.ReadSubIssues.make({ cursor: null, issueNodeId: rootNodeId })
+    ])
+  })
+)
+
 it.effect("rejects a fixture target before reading GitHub task facts", () =>
   Effect.gen(function* () {
     const harness = yield* makeHarness()
@@ -612,6 +640,42 @@ it.effect("rejects a legacy task identity before sending a focused GitHub read",
     }).pipe(Effect.provide(harness.layer))
     expect(failure).toBeInstanceOf(FocusedTaskCompletionReadFailure)
     expect(yield* Ref.get(harness.calls)).toEqual([expect.objectContaining({ _tag: "ResolveIssue" })])
+  })
+)
+
+it.effect("rejects a task identity from another repository before reading task facts", () =>
+  Effect.gen(function* () {
+    const foreignTaskId = githubTaskIdFor(foreignRepositoryNodeId, issueNodeId)
+    const foreignPlannedAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, taskId: foreignTaskId })
+    const foreignQualifiedCandidate = IntegratorRunQualifiedCandidate.make({
+      ...qualifiedCandidate,
+      run: {
+        ...qualifiedCandidate.run,
+        session: { ...qualifiedCandidate.run.session, plannedAttempt: foreignPlannedAttempt }
+      }
+    })
+    const foreignClaim = CompletionTaskClaim.make({
+      originalClaim: ActiveTaskClaim.make({ ...activeClaim, taskId: foreignTaskId }),
+      plannedAttempt: foreignPlannedAttempt,
+      promotionCorrelation: targetPromotionCorrelationFor(foreignQualifiedCandidate)
+    })
+    const request = FocusedTaskCompletionReadRequest.make({
+      expectedClaim: foreignClaim,
+      operationId: OperationId.make("completion-task-foreign-task-id"),
+      target,
+      taskId: foreignTaskId
+    })
+    const harness = yield* makeHarness()
+    const failure = yield* Effect.gen(function* () {
+      return yield* (yield* CompletionTaskBoundary).readFocusedTaskCompletion(request).pipe(Effect.flip)
+    }).pipe(Effect.provide(harness.layer))
+    expect(failure).toEqual(
+      new FocusedTaskCompletionReadFailure({
+        detail: "GitHub task identity belongs to another repository",
+        taskId: foreignTaskId
+      })
+    )
+    expect(yield* Ref.get(harness.calls)).toEqual([GithubGraphqlRequest.cases.ResolveIssue.make({ target })])
   })
 )
 
