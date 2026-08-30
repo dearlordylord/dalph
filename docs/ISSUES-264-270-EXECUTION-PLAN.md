@@ -103,11 +103,17 @@ Before implementation, add or accept a chronological issue-265 scenario under
    later passive change without busy looping.
 4. A later exact Safe or Terminal projection is published, accepted once at
    the next report ordinal, and releases only that attempt's position.
-5. After process loss, Dalph reconstructs the exact responsibility and command
-   history, performs one current projection, then reattaches. It never repeats
-   Begin because process-local ownership disappeared.
-6. Absent, unavailable, unreadable, or foreign projections preserve the
-   responsibility and position and authorize no successor.
+5. After process loss, when history contains no pending or unresolved
+   executor-state observation evidence, Dalph reconstructs the exact
+   responsibility and command history, performs one current projection, then
+   reattaches. It never repeats Begin because process-local ownership
+   disappeared. A pending exact observation follows its existing acceptance
+   path instead.
+6. The serialized protocol records absent, unavailable, unreadable, or foreign
+   projections as typed non-exact observation or contradiction evidence. That
+   evidence remains unresolved and non-authoritative, the attachment ends, the
+   responsibility and position remain, and no successor or passive reread is
+   scheduled.
 
 Required scenario-to-test mapping:
 
@@ -117,18 +123,30 @@ Required scenario-to-test mapping:
   vertical test asserting only the exact attempt is released.
 - Several unchanged projections → a named controlled-clock test asserting no
   duplicate Journal report and no busy loop.
-- Restart while executing → a named production-composition test asserting one
-  current reprojection, observer reattachment, and zero repeated Begin calls.
+- Restart while executing with no pending or unresolved observation evidence →
+  a named production-composition test asserting one current reprojection,
+  observer reattachment, and zero repeated Begin calls.
 - Process loss before and after a changed observation → named crash-cut tests
   asserting exactly-once acceptance.
 - Absent/unavailable/unreadable/foreign projection → a parameterized test
-  asserting retained responsibility, retained position, and no successor.
+  asserting typed unresolved non-authoritative evidence, an ended attachment,
+  retained responsibility and position, no successor, and no scheduled reread,
+  including after restart.
 - Capability restriction → a contract or Layer test proving the passive owner
   cannot call tracker, Git, cleanup, or executor mutation boundaries.
 
 Run focused executor protocol, delivery-runtime, restart, capacity, and
 production-composition tests while developing. Run `pnpm check:quint` only if
 the model or its executable conformance adapter changes.
+
+Rejected standards finding: restart must always reproject after an unresolved
+typed projection failure. Issue #265 requires the responsibility and position
+to remain and authorizes no successor, but grants no failure-resolution or
+retry rule. The current Quint model's `recoverActivation` action requires
+`NoEvidence`, and no action clears a recorded non-exact fresh-state projection.
+Reprojection from that prefix would therefore invent authority absent from the
+accepted issue and model; a separately accepted rule must first define how the
+evidence is resolved and when another passive read is admitted.
 
 ### 3. Reconcile and complete #266
 
