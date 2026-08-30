@@ -1604,11 +1604,18 @@ it.effect("rejects changed focused task facts before another tracker completion 
   Effect.gen(function* () {
     const request = completionTaskRequestFor(fixture.claim)
     const replacementOperationId = completionClaimReplacementOperationIdFor(fixture.claim)
-    const cases = [
+    const cases: ReadonlyArray<{
+      readonly expectedReason: "TaskIdentityOrRevisionChanged" | "TaskNotInTarget"
+      readonly facts: typeof authorization.focusedFacts
+      readonly label: string
+    }> = [
       {
         expectedReason: "TaskIdentityOrRevisionChanged",
         label: "task revision",
-        facts: { ...authorization.focusedFacts, taskRevision: TaskRevision.make("focused-completion-another-revision") }
+        facts: {
+          ...authorization.focusedFacts,
+          taskRevision: TaskRevision.make("focused-completion-another-revision")
+        } satisfies typeof authorization.focusedFacts
       },
       {
         expectedReason: "TaskNotInTarget",
@@ -1642,7 +1649,10 @@ it.effect("rejects changed focused task facts before another tracker completion 
         }
       ])
       const boundary: CompletionTaskBoundaryService = {
-        completeTask: () => Ref.update(completionCalls, (count) => count + 1),
+        completeTask: () =>
+          Ref.update(completionCalls, (count) => count + 1).pipe(
+            Effect.as({ operationId: request.operationId, taskId: request.taskId })
+          ),
         readCompletionRequest: () => Effect.die(`${scenario.label} conflict must stop before request lookup`),
         readFocusedTaskCompletion: ({ operationId }) =>
           Effect.succeed({ ...scenario.facts, lifecycle: "CompletedSuccessfully", operationId })

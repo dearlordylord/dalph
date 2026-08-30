@@ -876,6 +876,9 @@ it.effect(
       const reader = readerFromRecords(records)
       const historyFailure = yield* reader.read(runId).pipe(Effect.flip)
       expect(historyFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId })
+      if (historyFailure._tag !== "TraceProjectionInvalid") {
+        return yield* Effect.die("invalid Git outcome must fail trace projection")
+      }
       expect(historyFailure.detail).toContain("GitOutcomeWithoutReadIntent")
       const cursorFailure = yield* reader
         .readAt(TraceCursor.make({ position: JournalPosition.make(2), runId }))

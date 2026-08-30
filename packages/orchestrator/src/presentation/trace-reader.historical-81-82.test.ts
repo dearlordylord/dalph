@@ -2110,6 +2110,7 @@ it.effect("#83 rejects a coordinator's cleanup or ancestry read when committed f
     }
 
     const releaseIntent = releaseIntentRecord.event
+    const deletionIntent = deletionIntentRecord.event
     const wrongClaimRelease = makeTaskClaimReleaseOperation({
       authority: releaseIntent.operation.authority,
       predecessorOperationIds: releaseIntent.operation.predecessorOperationIds,
@@ -2124,7 +2125,7 @@ it.effect("#83 rejects a coordinator's cleanup or ancestry read when committed f
     const missingPredecessorRelease = makeTaskClaimReleaseOperation({
       authority: releaseIntent.operation.authority,
       predecessorOperationIds: releaseIntent.operation.predecessorOperationIds.filter(
-        (operationId) => operationId !== deletionIntentRecord.event.successObservation.operationId
+        (operationId) => operationId !== deletionIntent.successObservation.operationId
       ),
       release: releaseIntent.operation.release
     })

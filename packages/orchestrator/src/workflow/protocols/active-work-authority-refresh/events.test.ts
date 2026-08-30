@@ -3,7 +3,9 @@ import { Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
   IntegrationTarget,
+  IntegrationTargetRef,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -139,8 +141,8 @@ it("pairs crash-replayed Git outcomes only with the exact active-refresh intent 
     makeActiveWorkAuthorityRefreshGitReadOperation(
       WorkflowOperation.cases.ReadTargetLineage.make({
         integrationTarget: IntegrationTarget.make({
-          ref: "refs/heads/main",
-          repository: "git@example.invalid:team/project.git"
+          ref: IntegrationTargetRef.make("refs/heads/main"),
+          repository: GitRepositoryLocator.make("git@example.invalid:team/project.git")
         }),
         operationId: rawOperation.operationId,
         plannedAttempt,
@@ -161,7 +163,10 @@ it("pairs crash-replayed Git outcomes only with the exact active-refresh intent 
 })
 
 it("rejects a target-lineage failure unless its target and planned Base SHA are exact", () => {
-  const target = IntegrationTarget.make({ ref: "refs/heads/main", repository: "git@example.invalid:team/project.git" })
+  const target = IntegrationTarget.make({
+    ref: IntegrationTargetRef.make("refs/heads/main"),
+    repository: GitRepositoryLocator.make("git@example.invalid:team/project.git")
+  })
   const lineageOperation = makeActiveWorkAuthorityRefreshGitReadOperation(
     WorkflowOperation.cases.ReadTargetLineage.make({
       integrationTarget: target,

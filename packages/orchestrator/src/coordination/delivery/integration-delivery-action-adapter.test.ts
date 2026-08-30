@@ -139,7 +139,10 @@ it.effect("translates a changed focused revision into a deferred completion acti
     const completionCalls = yield* Ref.make(0)
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
     const boundary = CompletionTaskBoundary.of({
-      completeTask: () => Ref.update(completionCalls, (count) => count + 1),
+      completeTask: () =>
+        Ref.update(completionCalls, (count) => count + 1).pipe(
+          Effect.as({ operationId: request.operationId, taskId: request.taskId })
+        ),
       readCompletionRequest: () => Effect.die("changed revision must stop before request lookup"),
       readFocusedTaskCompletion: ({ operationId }) =>
         Effect.succeed({
