@@ -251,14 +251,16 @@ conformance evidence for the required forbidden outcomes:
 The accepted-result conformance adapter also exercises `observeWrongParentCandidateOne`,
 `redeliverFullRerunOne`, `rejectConflictingFullRerunOne`, and
 `startFullRerunOne` against the collected `acceptedResultIntegration.qnt`
-laws. Its directed exact-head scenario additionally executes the production
-promotion protocol in `reconcilePromotionReadOnlyOne` and
-`resumePromotionRetryWithAuthorityOne`: the controls record both permitted
-read-only deferrals, prove stable redelivery makes no Git call, and prove the
-exact-head authority resume performs only attempt two's compare-and-set. Quint
-selects the modeled current-authority transition separately from those
-production-effect assertions. These are negative and restart-prefix evidence,
-not substitutes for the maintained DS-14–DS-17 cassette chronology.
+laws. Its directed promotion scenarios execute production transitions at the
+same action boundaries as Quint. `reconcilePromotionReadOnlyOne` selects one
+process-local read authorization but does not call Git; the following
+observation performs one read and records the selected exact-head or unreadable
+deferral. `resumePromotionRetryWithAuthorityOne` selects attempt two without a
+read, append, or compare-and-set; the following attempt-intent, send, and
+result-observation actions append, call Git, and settle separately. Both paths
+check phase equivalence after every action and their full production call order
+through success. These are negative and restart-prefix evidence, not
+substitutes for the maintained DS-14–DS-17 cassette chronology.
 
 <!-- DELIVERY-STORY-MANIFEST:START -->
 cassette|authored:deliveryInvariantStoryCapstone

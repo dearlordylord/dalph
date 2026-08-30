@@ -204,13 +204,16 @@ completely enumerate those rules. `integrationFinality` separately models lost
 replacement/deletion responses and requires a fresh claim read before a second
 request. `acceptedResultIntegration.promotionRetryAuthorityDeferralIsStable`
 admits the resume action only after tracker, claim, and target authority are
-current. Its production-backed controls separately record exact-head and
-unreadable-target `TargetPromotionReconciliationDeferred` outcomes, prove that
-repeated read-only reconciliation performs no Git call, and prove that the
-authorized exact-head resume records attempt two and performs one
-compare-and-set without rereading Git. The model selects the permitted
-authority transition; the production control asserts the complete effect of
-the promotion protocol. The dual-store restart matrix proves that
+current. Each promotion action calls the matching production transition:
+entering read-only reconciliation selects one process-local read authorization
+without calling Git; the later exact-head or unreadable observation performs
+that one read and records the corresponding
+`TargetPromotionReconciliationDeferred`; authority resume selects attempt two
+without a read, journal append, or compare-and-set; the later attempt-intent,
+send, and result-observation actions separately append the intent, request one
+compare-and-set, and record its settlement. The directed adapter checks the
+production/model phase after every action and checks the complete boundary
+order for both deferral variants. The dual-store restart matrix proves that
 reconstruction does not retry the Git mutation.
 
 **D23 Incomplete and unreadable never prove absence.** Missing coverage,

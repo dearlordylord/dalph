@@ -2,7 +2,7 @@
 import { expect, it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, ITFMap, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
-import { Effect, Schema } from "effect"
+import { Deferred, Effect, Fiber, Schema } from "effect"
 import type { AcceptedResult } from "@dalph/contracts"
 import {
   AttemptId,
@@ -104,14 +104,23 @@ import {
   TargetPromotionGit,
   TargetPromotionGitReadFailure,
   TargetPromotionGitReadObservation,
-  TargetPromotionReconciliationDeferral,
+  targetPromotionCorrelationEquals,
   targetPromotionCorrelationFor,
   targetPromotionGitRequestFor
 } from "../../../orchestrator/src/workflow/protocols/target-promotion/events.js"
+import { deriveTargetPromotionState } from "../../../orchestrator/src/workflow/protocols/target-promotion/protocol.js"
 import {
-  reconcileTargetPromotionAttempt,
-  runTargetPromotion
-} from "../../../orchestrator/src/workflow/protocols/target-promotion/protocol.js"
+  authorizeTargetPromotionProgress,
+  observeTargetPromotionRead,
+  recordTargetPromotionAttemptIntent,
+  recordTargetPromotionIntent,
+  sendTargetPromotionAttempt,
+  settleTargetPromotionAttempt,
+  type TargetPromotionAttemptAuthorization,
+  type TargetPromotionAttemptBoundaryResult,
+  type TargetPromotionIntendedAttempt,
+  type TargetPromotionReadAuthorization
+} from "../../../orchestrator/src/workflow/protocols/target-promotion/transitions.js"
 
 const runId = RunId.make("accepted-result-integration-model-run")
 const target = IntegrationTarget.make({
@@ -511,10 +520,24 @@ type RuntimeState = {
   readonly setGitMode: (mode: GitMode) => void
   readonly failNextGitRead: () => void
   readonly failNextIntegratorCall: () => void
-  readonly reconcilePromotionReadOnly: (candidate: IntegratorRunQualifiedCandidate) => Effect.Effect<void, unknown>
-  readonly resumePromotionRetryWithAuthority: (
-    candidate: IntegratorRunQualifiedCandidate
+  readonly recordPromotionIntent: (candidate: IntegratorRunQualifiedCandidate) => Effect.Effect<void, unknown>
+  readonly enterPromotionReconciliation: (
+    candidate: IntegratorRunQualifiedCandidate,
+    authority: "ReadOnly" | "RetryAuthorized"
   ) => Effect.Effect<void, unknown>
+  readonly observePromotionRead: (
+    candidate: IntegratorRunQualifiedCandidate,
+    observation: "CandidateAncestor" | "CandidateCurrent" | "ExpectedHead" | "OtherHead" | "Unreadable"
+  ) => Effect.Effect<void, unknown>
+  readonly recordPromotionAttemptIntent: () => Effect.Effect<void, unknown>
+  readonly sendPromotionAttempt: (candidate: IntegratorRunQualifiedCandidate) => Effect.Effect<void, unknown>
+  readonly losePromotionAttempt: () => Effect.Effect<void, unknown>
+  readonly observePromotionAttempt: (
+    candidate: IntegratorRunQualifiedCandidate,
+    observation: "Applied" | "OtherHead"
+  ) => Effect.Effect<void, unknown>
+  readonly recoverPromotion: () => Effect.Effect<void, unknown>
+  readonly assertPromotionAlignment: (model: ModelResult) => void
   readonly reset: () => void
   readonly updateTargetLineageTarget: (id: bigint, integrationTarget: IntegrationTarget) => void
   readonly integratorCallCount: () => number
@@ -814,178 +837,316 @@ const makeRuntime = (
   let failNextGit = false
   let integratorCalls = 0
   let failNextIntegrator = false
-  let exactPromotionLane: PromotionJournalLane | undefined
+  let promotionLane: PromotionJournalLane | undefined
+  let promotionReadAuthorization: TargetPromotionReadAuthorization | undefined
+  let promotionReadPhase: "PromotionIntent" | "PromotionReconciliation" | undefined
+  let promotionAttemptAuthorization: TargetPromotionAttemptAuthorization | undefined
+  let promotionIntendedAttempt: TargetPromotionIntendedAttempt | undefined
+  let promotionAttemptResponse = Deferred.makeUnsafe<
+    TargetPromotionCompareAndSetResult | TargetPromotionCompareAndSetFailure
+  >()
+  let promotionAttemptStarted = Deferred.makeUnsafe<void>()
+  let pendingPromotionAttempt: Fiber.Fiber<TargetPromotionAttemptBoundaryResult, unknown> | undefined
+  let promotionReadPending = false
+  let promotionResponseLost = false
 
-  const runReadOnlyPromotionLane = Effect.fn("AcceptedResultIntegration.runReadOnlyPromotionLane")(function* (
-    candidate: IntegratorRunQualifiedCandidate,
-    mode: "ExpectedHead" | "Unreadable"
+  const requirePromotionLane = (): PromotionJournalLane =>
+    promotionLane ?? rejectImpossibleTransition("promotion transition has no production journal lane")
+
+  const providePromotionJournal = <A, E>(effect: Effect.Effect<A, E, InRunJournal>) =>
+    effect.pipe(Effect.provideService(InRunJournal, requirePromotionLane().journal))
+
+  const recordPromotionIntent = Effect.fn("AcceptedResultIntegration.recordPromotionIntent")(function* (
+    candidate: IntegratorRunQualifiedCandidate
   ) {
-    const lane = makePromotionJournalLane(records)
-    const correlation = targetPromotionCorrelationFor(candidate)
-    const expectedRequest = targetPromotionGitRequestFor(correlation)
+    if (promotionLane !== undefined) return yield* Effect.die("promotion intent was already recorded")
+    promotionLane = makePromotionJournalLane(records)
+    const authorization = yield* providePromotionJournal(recordTargetPromotionIntent(candidate))
+    promotionReadAuthorization = authorization
+    promotionReadPhase = "PromotionIntent"
+    promotionReadPending = false
+    promotionResponseLost = false
+  })
+
+  const enterPromotionReconciliation = Effect.fn("AcceptedResultIntegration.enterPromotionReconciliation")(function* (
+    candidate: IntegratorRunQualifiedCandidate,
+    authority: "ReadOnly" | "RetryAuthorized"
+  ) {
+    const progress = yield* providePromotionJournal(authorizeTargetPromotionProgress(candidate, authority))
+    if (progress._tag === "TargetPromotionReadAuthorized") {
+      promotionReadAuthorization = progress
+      promotionAttemptAuthorization = undefined
+    } else if (progress._tag === "TargetPromotionAttemptAuthorized") {
+      promotionAttemptAuthorization = progress
+      promotionReadAuthorization = undefined
+    } else {
+      return yield* Effect.die(`promotion reconciliation selected terminal production state ${progress._tag}`)
+    }
+    promotionReadPhase = "PromotionReconciliation"
+    promotionReadPending = false
+    promotionResponseLost = false
+  })
+
+  const observePromotionRead = Effect.fn("AcceptedResultIntegration.observePromotionRead")(function* (
+    candidate: IntegratorRunQualifiedCandidate,
+    observation: "CandidateAncestor" | "CandidateCurrent" | "ExpectedHead" | "OtherHead" | "Unreadable"
+  ) {
+    const authorization = promotionReadAuthorization
+    if (authorization === undefined) return yield* Effect.die("promotion Git observation lacks one read authorization")
+    const lane = requirePromotionLane()
+    const expectedRequest = targetPromotionGitRequestFor(targetPromotionCorrelationFor(candidate))
     const git = TargetPromotionGit.of({
-      compareAndSet: (request) =>
-        Effect.sync(() => {
-          lane.calls.push("compareAndSet:initial")
-          expect(request).toEqual(expectedRequest)
-          return new TargetPromotionCompareAndSetFailure({
-            candidateCommit: request.candidateCommit,
-            detail: "controlled promotion response lost",
-            expectedHead: request.expectedTargetHead,
-            target: request.integrationTarget
-          })
-        }).pipe(Effect.flatMap(Effect.fail)),
+      compareAndSet: () => Effect.die("promotion read transition requested a compare-and-set"),
       read: (request) =>
         Effect.sync(() => {
           expect(request).toEqual(expectedRequest)
-          const readCount = lane.calls.filter((call) => call.startsWith("read:")).length
-          lane.calls.push(readCount === 0 ? "read:initial" : "read:reconciliation")
-          return readCount === 0 || mode === "ExpectedHead"
-            ? TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
-                currentHeadSha: candidate.run.session.expectedTargetHead
-              })
-            : new TargetPromotionGitReadFailure({
-                candidateCommit: request.candidateCommit,
-                detail: "controlled promotion destination unavailable",
-                target: request.integrationTarget
-              })
+          lane.calls.push(`read:${observation}`)
+          if (observation === "Unreadable") {
+            return new TargetPromotionGitReadFailure({
+              candidateCommit: request.candidateCommit,
+              detail: "controlled promotion destination unavailable",
+              target: request.integrationTarget
+            })
+          }
+          if (observation === "CandidateCurrent") {
+            return TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
+              currentHeadSha: candidate.candidateCommit
+            })
+          }
+          if (observation === "CandidateAncestor") {
+            return TargetPromotionGitReadObservation.cases.CandidateAncestor.make({
+              currentHeadSha: GitCommitSha.make(`${candidate.candidateCommit}-descendant`)
+            })
+          }
+          return TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({
+            currentHeadSha:
+              observation === "ExpectedHead"
+                ? candidate.run.session.expectedTargetHead
+                : GitCommitSha.make(`${candidate.run.session.expectedTargetHead}-other`)
+          })
         }).pipe(
           Effect.flatMap((result) =>
             result instanceof TargetPromotionGitReadFailure ? Effect.fail(result) : Effect.succeed(result)
           )
         )
     })
-    const provideLane = <A, E>(effect: Effect.Effect<A, E, InRunJournal | TargetPromotionGit>) =>
-      effect.pipe(Effect.provideService(InRunJournal, lane.journal), Effect.provideService(TargetPromotionGit, git))
-
-    const pending = yield* provideLane(runTargetPromotion(candidate))
-    expect(pending._tag).toBe("PromotionPending")
-    expect(lane.calls).toEqual(["read:initial", "compareAndSet:initial"])
-
-    const deferred = yield* provideLane(reconcileTargetPromotionAttempt(candidate))
-    const expectedDeferral =
-      mode === "ExpectedHead"
-        ? TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({
-            observedHeadSha: candidate.run.session.expectedTargetHead
-          })
-        : TargetPromotionReconciliationDeferral.cases.TargetReadFailed.make({
-            detail: "controlled promotion destination unavailable"
-          })
-    expect(deferred).toEqual({
-      _tag: "PromotionReconciliationDeferred",
-      afterAttemptOrdinal: 1,
-      correlation,
-      deferral: expectedDeferral
-    })
-    expect(lane.calls).toEqual(["read:initial", "compareAndSet:initial", "read:reconciliation"])
-    const recordsAfterDeferral = lane.readRecords()
-    expect(recordsAfterDeferral.slice(records.length).map(({ event }) => event._tag)).toEqual([
-      "TargetPromotionIntended",
-      "TargetPromotionAttemptIntended",
-      "TargetPromotionReconciliationDeferred"
-    ])
-    const initialAttempts = recordsAfterDeferral.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
-    expect(initialAttempts).toHaveLength(1)
-    expect(initialAttempts[0]?.event).toMatchObject({
-      _tag: "TargetPromotionAttemptIntended",
-      attemptOrdinal: 1,
-      correlation,
-      reason: { _tag: "Initial", observedHeadSha: candidate.run.session.expectedTargetHead },
-      version: workflowJournalEventVersion
-    })
-    const durableDeferral = recordsAfterDeferral.at(-1)
-    expect(durableDeferral?.event).toMatchObject({
-      _tag: "TargetPromotionReconciliationDeferred",
-      afterAttemptOrdinal: 1,
-      correlation,
-      deferral: expectedDeferral,
-      version: workflowJournalEventVersion
-    })
-
-    const callCountAfterDeferral = lane.calls.length
-    expect((yield* provideLane(reconcileTargetPromotionAttempt(candidate)))._tag).toBe(
-      "PromotionReconciliationDeferred"
+    const outcome = yield* observeTargetPromotionRead(authorization).pipe(
+      Effect.provideService(InRunJournal, lane.journal),
+      Effect.provideService(TargetPromotionGit, git),
+      Effect.result
     )
-    expect(lane.calls).toHaveLength(callCountAfterDeferral)
-    expect(lane.readRecords()).toEqual(recordsAfterDeferral)
-    return lane
+    promotionReadAuthorization = undefined
+    promotionReadPhase = undefined
+    if (outcome._tag === "Failure") {
+      if (observation !== "Unreadable") return yield* outcome.failure
+      promotionReadPending = true
+      promotionResponseLost = false
+      return
+    }
+    if (outcome.success._tag === "TargetPromotionAttemptAuthorized") {
+      promotionAttemptAuthorization = outcome.success
+    }
+    promotionReadPending =
+      outcome.success._tag === "PromotionReconciliationDeferred" && outcome.success.deferral._tag === "TargetReadFailed"
+    promotionResponseLost = false
   })
 
-  const reconcilePromotionReadOnly = Effect.fn("AcceptedResultIntegration.reconcilePromotionReadOnly")(function* (
-    candidate: IntegratorRunQualifiedCandidate
-  ) {
-    // Quint selects the Git observation in a later action, while the production
-    // protocol observes Git and records the deferral atomically. Exercise both
-    // permitted production outcomes here; the driver's later observation action
-    // selects only the shadow-model branch and cannot substitute for these checks.
-    exactPromotionLane = yield* runReadOnlyPromotionLane(candidate, "ExpectedHead")
-    yield* runReadOnlyPromotionLane(candidate, "Unreadable")
-  })
-
-  const resumePromotionRetryWithAuthority = Effect.fn("AcceptedResultIntegration.resumePromotionRetryWithAuthority")(
-    function* (candidate: IntegratorRunQualifiedCandidate) {
-      const lane = exactPromotionLane
-      if (lane === undefined) return yield* Effect.die("promotion retry authority resumed without a durable deferral")
-      const expectedRequest = targetPromotionGitRequestFor(targetPromotionCorrelationFor(candidate))
-      const callsBeforeResume = lane.calls.length
-      const recordsBeforeResume = lane.readRecords()
-      const git = TargetPromotionGit.of({
-        compareAndSet: (request) =>
-          Effect.sync(() => {
-            lane.calls.push("compareAndSet:authorized")
-            expect(request).toEqual(expectedRequest)
-            return TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidate.candidateCommit })
-          }),
-        read: (request) =>
-          Effect.sync(() => {
-            lane.calls.push("read:forbidden-after-exact-deferral")
-            return new TargetPromotionGitReadFailure({
-              candidateCommit: request.candidateCommit,
-              detail: "exact-head authority resume must not reread Git",
-              target: request.integrationTarget
-            })
-          }).pipe(Effect.flatMap(Effect.fail))
-      })
-      const run = <A, E>(effect: Effect.Effect<A, E, InRunJournal | TargetPromotionGit>) =>
-        effect.pipe(Effect.provideService(InRunJournal, lane.journal), Effect.provideService(TargetPromotionGit, git))
-
-      const promoted = yield* run(runTargetPromotion(candidate))
-      expect(promoted._tag).toBe("PromotionSucceeded")
-      expect(lane.calls.slice(callsBeforeResume)).toEqual(["compareAndSet:authorized"])
-      const recordsAfterPromotion = lane.readRecords()
-      expect(recordsAfterPromotion.slice(recordsBeforeResume.length).map(({ event }) => event._tag)).toEqual([
-        "TargetPromotionAttemptIntended",
-        "TargetPromotionObservedSuccess"
-      ])
-      const attempts = recordsAfterPromotion.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
-      expect(attempts).toHaveLength(2)
-      const resumedAttempt = attempts[1]
-      if (resumedAttempt?.event._tag !== "TargetPromotionAttemptIntended") {
-        return yield* Effect.die("authority-resumed promotion did not record its exact second attempt")
-      }
-      expect(resumedAttempt.event).toMatchObject({
-        attemptOrdinal: 2,
-        correlation: targetPromotionCorrelationFor(candidate),
-        reason: {
-          _tag: "ReconciledExpectedHead",
-          observedHeadSha: candidate.run.session.expectedTargetHead,
-          previousAttemptOrdinal: 1
-        }
-      })
-      expect(recordsAfterPromotion.at(-1)?.event).toMatchObject({
-        _tag: "TargetPromotionObservedSuccess",
-        basis: { _tag: "AfterAttempt", attemptOrdinal: 2 },
-        correlation: targetPromotionCorrelationFor(candidate),
-        observation: { _tag: "CompareAndSetApplied" },
-        version: workflowJournalEventVersion
-      })
-      const callsAfterPromotion = lane.calls.length
-      const durableSuccessRecords = lane.readRecords()
-      expect((yield* run(runTargetPromotion(candidate)))._tag).toBe("PromotionSucceeded")
-      expect(lane.calls).toHaveLength(callsAfterPromotion)
-      expect(lane.readRecords()).toEqual(durableSuccessRecords)
+  const recordPromotionAttemptIntent = Effect.fn("AcceptedResultIntegration.recordPromotionAttemptIntent")(
+    function* () {
+      const authorization = promotionAttemptAuthorization
+      if (authorization === undefined)
+        return yield* Effect.die("promotion attempt intent lacks exact-head authorization")
+      promotionIntendedAttempt = yield* providePromotionJournal(recordTargetPromotionAttemptIntent(authorization))
+      promotionAttemptAuthorization = undefined
+      promotionResponseLost = false
     }
   )
+
+  const sendPromotionAttempt = Effect.fn("AcceptedResultIntegration.sendPromotionAttempt")(function* (
+    candidate: IntegratorRunQualifiedCandidate
+  ) {
+    const attempt = promotionIntendedAttempt
+    if (attempt === undefined) return yield* Effect.die("promotion compare-and-set lacks its durable attempt intent")
+    const lane = requirePromotionLane()
+    const expectedRequest = targetPromotionGitRequestFor(targetPromotionCorrelationFor(candidate))
+    promotionAttemptResponse = Deferred.makeUnsafe()
+    promotionAttemptStarted = Deferred.makeUnsafe<void>()
+    const git = TargetPromotionGit.of({
+      compareAndSet: (request) =>
+        Effect.gen(function* () {
+          expect(request).toEqual(expectedRequest)
+          lane.calls.push(`compareAndSet:${attempt.attemptOrdinal}`)
+          yield* Deferred.succeed(promotionAttemptStarted, undefined)
+          const result = yield* Deferred.await(promotionAttemptResponse)
+          return result instanceof TargetPromotionCompareAndSetFailure ? yield* result : result
+        }),
+      read: () => Effect.die("promotion compare-and-set transition reread Git")
+    })
+    pendingPromotionAttempt = yield* sendTargetPromotionAttempt(attempt).pipe(
+      Effect.provideService(InRunJournal, lane.journal),
+      Effect.provideService(TargetPromotionGit, git),
+      Effect.forkDetach({ startImmediately: true })
+    )
+    yield* Deferred.await(promotionAttemptStarted)
+  })
+
+  const finishPendingPromotionAttempt = Effect.fn("AcceptedResultIntegration.finishPendingPromotionAttempt")(function* (
+    response: TargetPromotionCompareAndSetResult | TargetPromotionCompareAndSetFailure
+  ) {
+    const fiber = pendingPromotionAttempt
+    if (fiber === undefined) return yield* Effect.die("promotion response arrived without one in-flight request")
+    yield* Deferred.succeed(promotionAttemptResponse, response)
+    const result = yield* Fiber.join(fiber)
+    pendingPromotionAttempt = undefined
+    promotionIntendedAttempt = undefined
+    return result
+  })
+
+  const losePromotionAttempt = Effect.fn("AcceptedResultIntegration.losePromotionAttempt")(function* () {
+    const attempt = promotionIntendedAttempt
+    if (attempt === undefined) return yield* Effect.die("promotion loss lacks its exact in-flight attempt")
+    const result = yield* finishPendingPromotionAttempt(
+      new TargetPromotionCompareAndSetFailure({
+        candidateCommit: attempt.correlation.qualifiedCandidate.candidateCommit,
+        detail: "controlled promotion response lost",
+        expectedHead: attempt.correlation.qualifiedCandidate.run.session.expectedTargetHead,
+        target: attempt.correlation.qualifiedCandidate.run.session.integrationTarget
+      })
+    )
+    if (result._tag !== "TargetPromotionAttemptAmbiguous") {
+      return yield* Effect.die("lost promotion response unexpectedly produced an observed result")
+    }
+    promotionResponseLost = true
+  })
+
+  const observePromotionAttempt = Effect.fn("AcceptedResultIntegration.observePromotionAttempt")(function* (
+    candidate: IntegratorRunQualifiedCandidate,
+    observation: "Applied" | "OtherHead"
+  ) {
+    const response =
+      observation === "Applied"
+        ? TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidate.candidateCommit })
+        : TargetPromotionCompareAndSetResult.cases.RejectedExpectedHead.make({
+            observedHeadSha: GitCommitSha.make(`${candidate.run.session.expectedTargetHead}-other`)
+          })
+    const result = yield* finishPendingPromotionAttempt(response)
+    if (result._tag !== "TargetPromotionAttemptObserved") {
+      return yield* Effect.die("observed promotion response was classified as ambiguous")
+    }
+    yield* providePromotionJournal(settleTargetPromotionAttempt(result))
+    promotionResponseLost = false
+  })
+
+  const recoverPromotion = Effect.fn("AcceptedResultIntegration.recoverPromotion")(function* () {
+    if (pendingPromotionAttempt !== undefined) yield* losePromotionAttempt()
+    if (
+      promotionReadAuthorization !== undefined ||
+      promotionAttemptAuthorization !== undefined ||
+      promotionIntendedAttempt !== undefined
+    ) {
+      promotionResponseLost = true
+    }
+    promotionReadAuthorization = undefined
+    promotionReadPhase = undefined
+    promotionAttemptAuthorization = undefined
+    promotionIntendedAttempt = undefined
+  })
+
+  const assertPromotionAlignment = (model: ModelResult): void => {
+    const lane = promotionLane
+    if (lane === undefined) {
+      if (model.promotionIntentRecorded) rejectImpossibleTransition("model promotion intent lacks production intent")
+      return
+    }
+    const intent = lane.readRecords().find(({ event }) => event._tag === "TargetPromotionIntended")
+    if (intent?.event._tag !== "TargetPromotionIntended") {
+      return rejectImpossibleTransition("production promotion lane lacks its exact intent")
+    }
+    const correlation = intent.event.correlation
+    for (const record of lane.readRecords()) {
+      const event = record.event
+      if (
+        (event._tag === "TargetPromotionAttemptIntended" ||
+          event._tag === "TargetPromotionIntended" ||
+          event._tag === "TargetPromotionNonConvergence" ||
+          event._tag === "TargetPromotionObservedSuccess" ||
+          event._tag === "TargetPromotionReconciliationDeferred" ||
+          event._tag === "TargetPromotionStale") &&
+        !targetPromotionCorrelationEquals(event.correlation, correlation)
+      ) {
+        rejectImpossibleTransition("production promotion event escaped its exact correlation")
+      }
+    }
+    const durable = deriveTargetPromotionState(lane.readRecords(), correlation)
+    if (durable === undefined) return rejectImpossibleTransition("production promotion intent did not reduce")
+    const attempts = lane.readRecords().filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
+    const terminal = lane
+      .readRecords()
+      .find(({ event }) =>
+        ["TargetPromotionObservedSuccess", "TargetPromotionStale", "TargetPromotionNonConvergence"].includes(event._tag)
+      )
+    const actualPhase: Phase =
+      pendingPromotionAttempt !== undefined
+        ? "PromotionInFlight"
+        : promotionIntendedAttempt !== undefined
+          ? "PromotionAttemptIntended"
+          : promotionAttemptAuthorization !== undefined
+            ? "PromotionRetryReady"
+            : promotionReadAuthorization !== undefined
+              ? (promotionReadPhase ?? "PromotionReconciliation")
+              : durable._tag === "PromotionSucceeded"
+                ? "PromotionSucceeded"
+                : durable._tag === "PromotionStale"
+                  ? "PromotionStale"
+                  : durable._tag === "PromotionNonConvergent"
+                    ? "PromotionExhausted"
+                    : durable._tag === "PromotionReconciliationDeferred"
+                      ? durable.deferral._tag === "RetryAuthorityRequired"
+                        ? "PromotionRetryAuthorityRequired"
+                        : "PromotionReadPending"
+                      : promotionReadPending
+                        ? "PromotionReadPending"
+                        : promotionResponseLost || attempts.length > 0
+                          ? "PromotionResponseLost"
+                          : "PromotionIntent"
+    if (actualPhase !== model.phase) {
+      rejectImpossibleTransition(`model/production promotion phase mismatch: ${model.phase} / ${actualPhase}`)
+    }
+    if (attempts.length !== Number(model.promotionAttemptCount)) {
+      rejectImpossibleTransition("model/production promotion attempt count mismatch")
+    }
+    if ((terminal !== undefined) !== model.promotionResultRecorded) {
+      rejectImpossibleTransition("model/production promotion terminal-result mismatch")
+    }
+    const latestAttempt = attempts.at(-1)
+    const latestAttemptOrdinal =
+      latestAttempt?.event._tag === "TargetPromotionAttemptIntended" ? latestAttempt.event.attemptOrdinal : undefined
+    const latestAttemptWasSent =
+      latestAttemptOrdinal !== undefined && lane.calls.includes(`compareAndSet:${latestAttemptOrdinal}`)
+    const latestAttemptWasDeferred =
+      latestAttemptOrdinal !== undefined &&
+      lane
+        .readRecords()
+        .some(
+          ({ event }) =>
+            event._tag === "TargetPromotionReconciliationDeferred" && event.afterAttemptOrdinal === latestAttemptOrdinal
+        )
+    if (model.promotionCompareAndSetRequested !== (latestAttemptWasSent && !latestAttemptWasDeferred)) {
+      rejectImpossibleTransition("model/production promotion compare-and-set request mismatch")
+    }
+    const deferral = lane.readRecords().find(({ event }) => event._tag === "TargetPromotionReconciliationDeferred")
+    if (
+      model.phase === "PromotionSucceeded" &&
+      attempts.length === 2 &&
+      deferral?.event._tag === "TargetPromotionReconciliationDeferred"
+    ) {
+      expect(lane.calls).toEqual(
+        deferral.event.deferral._tag === "RetryAuthorityRequired"
+          ? ["read:ExpectedHead", "compareAndSet:1", "read:ExpectedHead", "compareAndSet:2"]
+          : ["read:ExpectedHead", "compareAndSet:1", "read:Unreadable", "read:ExpectedHead", "compareAndSet:2"]
+      )
+    }
+  }
 
   const appendRecord = (requestedRunId: RunId, key: JournalRecordKey, event: AppendableWorkflowJournalEvent) =>
     Effect.sync(() => {
@@ -1101,7 +1262,14 @@ const makeRuntime = (
     failNextGit = false
     integratorCalls = 0
     failNextIntegrator = false
-    exactPromotionLane = undefined
+    promotionLane = undefined
+    promotionReadAuthorization = undefined
+    promotionReadPhase = undefined
+    promotionAttemptAuthorization = undefined
+    promotionIntendedAttempt = undefined
+    pendingPromotionAttempt = undefined
+    promotionReadPending = false
+    promotionResponseLost = false
   }
 
   return {
@@ -1119,8 +1287,15 @@ const makeRuntime = (
     failNextIntegratorCall: () => {
       failNextIntegrator = true
     },
-    reconcilePromotionReadOnly,
-    resumePromotionRetryWithAuthority,
+    recordPromotionIntent,
+    enterPromotionReconciliation,
+    observePromotionRead,
+    recordPromotionAttemptIntent,
+    sendPromotionAttempt,
+    losePromotionAttempt,
+    observePromotionAttempt,
+    recoverPromotion,
+    assertPromotionAlignment,
     reset,
     updateTargetLineageTarget,
     integratorCallCount: () => integratorCalls
@@ -2090,6 +2265,7 @@ const acceptedResultIntegrationDriver = defineDriver(
 
     const modelStateFor = (id: bigint): ModelResult => {
       const model = modelResultFor(id)
+      if (id === 1n && model.phase.startsWith("Promotion")) runtime.assertPromotionAlignment(model)
       const records = runtime.readRecords()
       const responsibility = responsibilityFor(id)
       const actual = deriveIntegratorRunState(records, responsibility, currentRunFor(id))
@@ -2385,7 +2561,11 @@ const acceptedResultIntegrationDriver = defineDriver(
         }),
       loseCandidateGitResponseTwo: () => Effect.void,
       loseIntegratorResponseOne: () => Effect.sync(() => modelLoseIntegrator(1n)),
-      losePromotionAttemptResponseOne: () => Effect.sync(() => modelLosePromotion(1n)),
+      losePromotionAttemptResponseOne: () =>
+        Effect.gen(function* () {
+          yield* runtime.losePromotionAttempt()
+          modelLosePromotion(1n)
+        }),
       observeAppliedRestartBeforeAcceptedOne: () =>
         Effect.sync(() =>
           updateModelResult(1n, (result) => ({ ...result, restartChoiceCommittedBeforeTerminal: true }))
@@ -2395,17 +2575,44 @@ const acceptedResultIntegrationDriver = defineDriver(
         Effect.sync(() => updateModelResult(1n, (result) => ({ ...result, lineageCompatible: false }))),
       observeMissingCandidateOne: () => observeCandidate(1n, "Missing", "CandidateMissing"),
       observeNonCommitCandidateOne: () => observeCandidate(1n, "NonCommit", "CandidateNonCommit"),
-      observePromotionCandidateAncestorOne: () => Effect.sync(() => modelPromotionCurrent(1n, true)),
-      observePromotionCandidateCurrentOne: () => Effect.sync(() => modelPromotionCurrent(1n, false)),
+      observePromotionCandidateAncestorOne: () =>
+        Effect.gen(function* () {
+          yield* runtime.observePromotionRead(promotionCandidateFor(1n), "CandidateAncestor")
+          modelPromotionCurrent(1n, true)
+        }),
+      observePromotionCandidateCurrentOne: () =>
+        Effect.gen(function* () {
+          const model = modelResultFor(1n)
+          if (model.phase === "PromotionInFlight") {
+            yield* runtime.observePromotionAttempt(promotionCandidateFor(1n), "Applied")
+          } else {
+            yield* runtime.observePromotionRead(promotionCandidateFor(1n), "CandidateCurrent")
+          }
+          modelPromotionCurrent(1n, false)
+        }),
       observePromotionExactExpectedHeadOne: () =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           const retryAuthorityCurrent = trackerFactsCurrent && targetFactsCurrent
+          yield* runtime.observePromotionRead(promotionCandidateFor(1n), "ExpectedHead")
           targetFactsCurrent = true
           targetHeadProof = modelResultFor(1n).expectedTargetHead
           modelPromotionExactHead(1n, retryAuthorityCurrent)
         }),
-      observePromotionGitUnreadableOne: () => Effect.sync(() => modelPromotionUnreadable(1n)),
-      observePromotionOtherHeadOne: () => Effect.sync(() => modelPromotionOtherHead(1n)),
+      observePromotionGitUnreadableOne: () =>
+        Effect.gen(function* () {
+          yield* runtime.observePromotionRead(promotionCandidateFor(1n), "Unreadable")
+          modelPromotionUnreadable(1n)
+        }),
+      observePromotionOtherHeadOne: () =>
+        Effect.gen(function* () {
+          const model = modelResultFor(1n)
+          if (model.phase === "PromotionInFlight") {
+            yield* runtime.observePromotionAttempt(promotionCandidateFor(1n), "OtherHead")
+          } else {
+            yield* runtime.observePromotionRead(promotionCandidateFor(1n), "OtherHead")
+          }
+          modelPromotionOtherHead(1n)
+        }),
       observeTargetFactsOne: () => Effect.sync(() => modelObserveTargetFacts(1n)),
       observeTargetFactsTwo: () => Effect.sync(() => modelObserveTargetFacts(2n)),
       observeTrackerFactsStep: () =>
@@ -2425,7 +2632,11 @@ const acceptedResultIntegrationDriver = defineDriver(
           modelQueue(2n)
         }),
       reacquireIntegrationTargetOne: () => Effect.sync(() => modelReacquire(1n)),
-      recoverCoordinatorStep: () => Effect.sync(modelRecover),
+      recoverCoordinatorStep: () =>
+        Effect.gen(function* () {
+          yield* runtime.recoverPromotion()
+          modelRecover()
+        }),
       recordCandidateGitReadIntentOne: () =>
         Effect.gen(function* () {
           yield* appendCandidateIntent(1n)
@@ -2589,19 +2800,31 @@ const acceptedResultIntegrationDriver = defineDriver(
           modelStartSuccessor(1n)
         }),
       loseSuccessorResponseOne: () => Effect.sync(() => modelLoseSuccessor(1n)),
-      recordPromotionAttemptIntentOne: () => Effect.sync(() => modelPromotionAttemptIntent(1n)),
-      recordPromotionIntentOne: () => Effect.sync(() => modelPromotionIntent(1n)),
+      recordPromotionAttemptIntentOne: () =>
+        Effect.gen(function* () {
+          yield* runtime.recordPromotionAttemptIntent()
+          modelPromotionAttemptIntent(1n)
+        }),
+      recordPromotionIntentOne: () =>
+        Effect.gen(function* () {
+          yield* runtime.recordPromotionIntent(promotionCandidateFor(1n))
+          modelPromotionIntent(1n)
+        }),
       readCandidateGitOne: () => Effect.sync(() => modelReadGit(1n)),
       reconcileCandidateGitOne: () => Effect.sync(() => modelReconcileGit(1n)),
       reconcilePromotionReadOnlyOne: () =>
         Effect.gen(function* () {
-          yield* runtime.reconcilePromotionReadOnly(promotionCandidateFor(1n))
+          yield* runtime.enterPromotionReconciliation(promotionCandidateFor(1n), "ReadOnly")
           modelReconcilePromotionReadOnly(1n)
         }),
-      reconcilePromotionOne: () => Effect.sync(() => modelReconcilePromotion(1n)),
+      reconcilePromotionOne: () =>
+        Effect.gen(function* () {
+          yield* runtime.enterPromotionReconciliation(promotionCandidateFor(1n), "RetryAuthorized")
+          modelReconcilePromotion(1n)
+        }),
       resumePromotionRetryWithAuthorityOne: () =>
         Effect.gen(function* () {
-          yield* runtime.resumePromotionRetryWithAuthority(promotionCandidateFor(1n))
+          yield* runtime.enterPromotionReconciliation(promotionCandidateFor(1n), "RetryAuthorized")
           modelResumePromotionRetryWithAuthority(1n)
         }),
       resumeIntegratorOne: () =>
@@ -2610,7 +2833,11 @@ const acceptedResultIntegrationDriver = defineDriver(
           yield* runtime.integrator.prepare(request)
           modelResume(1n)
         }),
-      sendPromotionAttemptOne: () => Effect.sync(() => modelSendPromotion(1n)),
+      sendPromotionAttemptOne: () =>
+        Effect.gen(function* () {
+          yield* runtime.sendPromotionAttempt(promotionCandidateFor(1n))
+          modelSendPromotion(1n)
+        }),
       startIntegrationOne: () =>
         Effect.gen(function* () {
           yield* appendIntegrationStart(1n)
@@ -2702,6 +2929,7 @@ it.effect(
         const action = driver.actions[actionName]
         if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
         yield* action.handler({})
+        yield* getState()
       }
 
       const deferred = (yield* getState()).results.get(1n)
@@ -2722,6 +2950,7 @@ it.effect(
         const action = driver.actions[actionName]
         if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
         yield* action.handler({})
+        yield* getState()
       }
       const recovered = (yield* getState()).results.get(1n)
       expect(recovered).toMatchObject({
@@ -2741,6 +2970,7 @@ it.effect(
         const action = driver.actions[actionName]
         if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
         yield* action.handler({})
+        yield* getState()
       }
       expect((yield* getState()).results.get(1n)).toMatchObject({
         phase: "PromotionRetryReady",
@@ -2749,6 +2979,23 @@ it.effect(
         promotionFreshExactHeadObservation: true,
         promotionTargetFactsCurrent: true,
         targetHeld: true
+      })
+      for (const actionName of [
+        "recordPromotionAttemptIntentOne",
+        "sendPromotionAttemptOne",
+        "observePromotionCandidateCurrentOne"
+      ] as const) {
+        const action = driver.actions[actionName]
+        if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
+        yield* action.handler({})
+        yield* getState()
+      }
+      expect((yield* getState()).results.get(1n)).toMatchObject({
+        phase: "PromotionSucceeded",
+        promotionAttemptCount: 2n,
+        promotionCompareAndSetRequested: true,
+        promotionResultRecorded: true,
+        targetHeld: false
       })
     }),
   30_000
@@ -2770,6 +3017,7 @@ it.effect(
         const action = driver.actions[actionName]
         if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
         yield* action.handler({})
+        yield* getState()
       }
 
       expect((yield* getState()).results.get(1n)).toMatchObject({
@@ -2791,6 +3039,7 @@ it.effect(
         const action = driver.actions[actionName]
         if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
         yield* action.handler({})
+        yield* getState()
       }
       expect((yield* getState()).results.get(1n)).toMatchObject({
         phase: "PromotionRetryReady",
@@ -2799,6 +3048,23 @@ it.effect(
         promotionGitObservation: "PromotionExactExpectedHead",
         promotionTargetFactsCurrent: true,
         targetHeld: true
+      })
+      for (const actionName of [
+        "recordPromotionAttemptIntentOne",
+        "sendPromotionAttemptOne",
+        "observePromotionCandidateCurrentOne"
+      ] as const) {
+        const action = driver.actions[actionName]
+        if (action === undefined) return yield* Effect.die(`missing directed MBT action ${actionName}`)
+        yield* action.handler({})
+        yield* getState()
+      }
+      expect((yield* getState()).results.get(1n)).toMatchObject({
+        phase: "PromotionSucceeded",
+        promotionAttemptCount: 2n,
+        promotionCompareAndSetRequested: true,
+        promotionResultRecorded: true,
+        targetHeld: false
       })
     }),
   30_000
