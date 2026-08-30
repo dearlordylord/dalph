@@ -390,7 +390,6 @@ export * from "./workflow/protocols/planned-attempt-continuation/protocol.js"
 export * from "./workflow/protocols/active-work-authority-refresh/events.js"
 export {
   makePassivePlannedAttemptObserver,
-  passivePlannedAttemptObserverLayer,
   PassivePlannedAttemptObserver,
   PassivePlannedAttemptProjectionPublication,
   type PassivePlannedAttemptObserverService,

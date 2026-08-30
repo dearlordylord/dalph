@@ -5,7 +5,7 @@ import {
   type PlannedAttemptExecutorProjection,
   type PlannedTaskAttempt
 } from "@dalph/contracts"
-import { Context, Deferred, Effect, Layer, Ref, Semaphore, Stream } from "effect"
+import { Context, Deferred, Effect, Ref, Semaphore, Stream } from "effect"
 import * as Scope from "effect/Scope"
 import {
   type publishPlannedAttemptExecutorProjectionResultWithPermit,
@@ -113,8 +113,3 @@ export const makePassivePlannedAttemptObserver = Effect.fn("PassivePlannedAttemp
 
   return { attach } satisfies PassivePlannedAttemptObserverService
 })
-
-export const passivePlannedAttemptObserverLayer = Layer.effect(
-  PassivePlannedAttemptObserver,
-  makePassivePlannedAttemptObserver()
-)

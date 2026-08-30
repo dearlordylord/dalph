@@ -321,6 +321,7 @@ export const processWasAbsent = (error: unknown): boolean => {
 
 const processIdentitySeparator = "|"
 const codexServerIncarnationEnvironment = "DALPH_CODEX_SERVER_INCARNATION"
+const codexThreadEnvironment = "CODEX_THREAD_ID"
 const processStatAfterCommandOffset = 2
 const linuxProcessStatStartTimeFieldIndex = 19
 
@@ -721,7 +722,8 @@ const tokenReadFailure = async (
 const readTokenMember = async (
   stat: LinuxProcessStat,
   token: CodexServerIncarnation,
-  native: CodexProcessNativeService
+  native: CodexProcessNativeService,
+  threadId?: CodexThreadId
 ): Promise<TokenMemberObservation> => {
   try {
     const environment =
@@ -730,6 +732,12 @@ const readTokenMember = async (
         ? await native.readFile(`/proc/${stat.pid}/environ`)
         : (await native.execFile("ps", ["eww", "-o", "command=", "-p", String(stat.pid)])).stdout
     if (!environmentCarriesToken(environment, `${codexServerIncarnationEnvironment}=${token}`, native.platform)) {
+      return undefined
+    }
+    if (
+      threadId !== undefined &&
+      !environmentCarriesToken(environment, `${codexThreadEnvironment}=${threadId}`, native.platform)
+    ) {
       return undefined
     }
     return {
@@ -747,14 +755,18 @@ const readTokenMember = async (
 const readDarwinTokenMembers = async (
   stats: ReadonlyArray<LinuxProcessStat>,
   token: CodexServerIncarnation,
-  native: CodexProcessNativeService
+  native: CodexProcessNativeService,
+  threadId?: CodexThreadId
 ): Promise<ReadonlyArray<TokenMemberObservation>> => {
   const observation = await readDarwinProcessCommands(native)
   if ("failure" in observation) return [observation.failure]
   const tokenEntry = `${codexServerIncarnationEnvironment}=${token}`
+  const threadEntry = threadId === undefined ? undefined : `${codexThreadEnvironment}=${threadId}`
   return stats.flatMap((stat) => {
     const command = observation.commands.get(stat.pid)
-    return command !== undefined && environmentCarriesToken(command, tokenEntry, "darwin")
+    return command !== undefined &&
+      environmentCarriesToken(command, tokenEntry, "darwin") &&
+      (threadEntry === undefined || environmentCarriesToken(command, threadEntry, "darwin"))
       ? [
           {
             pid: stat.pid,
@@ -833,7 +845,8 @@ const observeOwnedActivityProcesses = async (
   roots: ReadonlyArray<number>,
   native: CodexProcessNativeService = nodeCodexProcessNativeService,
   incarnation?: CodexServerIncarnation,
-  appServerPid?: number
+  appServerPid?: number,
+  threadId?: CodexThreadId
 ): Promise<OwnedActivityProcessProjection> => {
   if (roots.length === 0 && incarnation === undefined) return { _tag: "Absent" }
   if (native.platform !== "linux" && native.platform !== "darwin") {
@@ -855,8 +868,8 @@ const observeOwnedActivityProcesses = async (
     token === undefined
       ? []
       : native.platform === "darwin"
-        ? await readDarwinTokenMembers([...byPid.values()], token, native)
-        : await Promise.all([...byPid.values()].map((stat) => readTokenMember(stat, token, native)))
+        ? await readDarwinTokenMembers([...byPid.values()], token, native, threadId)
+        : await Promise.all([...byPid.values()].map((stat) => readTokenMember(stat, token, native, threadId)))
   const tokenFailure = tokenMembers.find((member) => member !== undefined && "detail" in member)
   if (tokenFailure !== undefined && "detail" in tokenFailure) return { _tag: "Unreadable", detail: tokenFailure.detail }
   const exactTokenMembers = tokenMembers.filter(
@@ -971,7 +984,8 @@ export const makeNodeCodexOwnedActivityCensusService = (
           ),
           native,
           incarnation,
-          appServerPid
+          appServerPid,
+          thread.id
         )
         if (processProjection._tag === "Unreadable" || processProjection._tag === "Contradictory") {
           return processProjection
@@ -1374,7 +1388,7 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
             if (message["method"] === "turn/completed") {
               return PubSub.publish(turnCompletedHints, undefined).pipe(Effect.asVoid)
             }
-            return message["method"] === "item/completed" || message["method"] === "process/exited"
+            return message["method"] === "item/completed"
               ? PubSub.publish(ownedActivityHints, undefined).pipe(Effect.asVoid)
               : Effect.void
           }

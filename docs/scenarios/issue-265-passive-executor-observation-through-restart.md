@@ -72,13 +72,9 @@ the executor report into permission to reread the tracker.
 
 ### Acceptance-test mapping
 
-- `observes a live executing attempt become terminal without another begin`
-  must assert one Begin call, one terminal acceptance at the next ordinal, and
-  one exact position release.
-- `several unchanged passive projections append nothing and do not busy loop`
-  must use a controlled clock or controlled executor signal.
-- `process loss before and after terminal publication accepts one terminal
-  report` must exercise both crash cuts.
+The live transition, equal-projection wait, and both publication crash cuts map
+to the exact maintained tests in the [canonical scenario-to-test
+mapping](#canonical-scenario-to-test-mapping).
 
 ## A later Dalph process reattaches to the exact Codex attempt
 
@@ -138,18 +134,10 @@ safe-suspension or terminal proof.
 
 ### Acceptance-test mapping
 
-- `reattaches after same-host Dalph and app-server restart without another
-  begin` must use the durable attempt-thread association and assert one current
-  projection plus one newly attached process-local owner.
-- `restart accepts a persisted terminal projection once` and `restart accepts
-  a proved safe projection once` must assert exact correlation and the next
-  report ordinal.
-- `restart preserves responsibility for absent unavailable unreadable and
-  foreign projections` must be parameterized and assert no successor or
-  position release.
-- `the passive observation owner has no mutation or authority-read
-  capabilities` must prove the Layer or contract cannot access Begin, Resume,
-  suspension, tracker, Git, cleanup, or Journal append boundaries.
+The generic workflow-owner restart, durable Codex association, retained Safe,
+typed failure, and capability-boundary outcomes map to the exact maintained
+tests in the [canonical scenario-to-test
+mapping](#canonical-scenario-to-test-mapping).
 
 ## Same-attempt safe suspension remains separate
 
@@ -160,9 +148,9 @@ Resume remains a later work-changing command selected through current tracker,
 claim, worktree, control, capacity, and Git facts. #265 neither requests
 suspension nor authorizes Resume.
 
-The acceptance mapping is `observes safe only after the exact suspension
-intent and releases only that attempt`; it must also reject a Safe projection
-without the matching intent.
+The causal Safe acceptance and the rejection without matching intent map to
+separate exact maintained tests in the [canonical scenario-to-test
+mapping](#canonical-scenario-to-test-mapping).
 
 ## Scheduling and failure clarifications
 
@@ -171,9 +159,20 @@ current projection. An executor notification is only a wake hint: Dalph
 rereads the exact attempt and filters an equal projection in process memory.
 For Codex, both a completed turn and the later completion of owned background
 activity are wake sources because a background terminal may outlive its turn.
+Codex `item/completed` truthfully wakes the observer when a unified-exec root
+finishes. An exact descendant carrying both the application incarnation and
+Codex thread identity can outlive that root without another provider
+notification. Only while the exact turn is terminal and the fresh exact
+owned-activity census is the sole reason its normalized report remains
+Executing, one process-local owner schedules a paced census recheck. The timer
+is only a wake: every recheck rereads the durable exact attempt-thread
+association, fresh thread, and fresh activity census. It stops on a changed
+projection, typed failure, attachment interruption, or loss of that qualifying
+held-terminal state.
+
 The fresh thread and owned-activity census remain authoritative. No timer,
-poll, notification payload, or restored observer cursor proves a lifecycle
-change.
+notification payload, or restored observer cursor proves a lifecycle change.
+Broad all-attempt polling and a tight census loop remain forbidden.
 
 An unchanged Executing projection appends nothing and leaves one owner blocked.
 Repeated equal wakes coalesce through that same owner. A notification that
@@ -195,17 +194,31 @@ that exact command once before considering passive attachment. If history
 contains a pending exact lifecycle observation, ordinary recovery accepts that
 observation before another executor read.
 
-## Concrete acceptance seams
+## Canonical scenario-to-test mapping
 
-| Chronology | Direct acceptance test |
-|---|---|
-| Live Executing becomes Terminal | `observes live terminal executor change once and releases the exact position` |
-| Exact Suspend is followed by Safe | `observes safe suspension only after exact suspend intent and releases only that attempt` |
-| Equal Executing waits without durable progress | `awaits after unchanged executing projection without another read or journal append` |
-| A background activity exits after an equal turn-completed wake | `observes activity exit after an equal turn-completed wake without another turn hint` |
-| Current changes between subscription and await | `current-first attachment cannot miss a terminal change between projection and await` |
-| Same-host restart rebuilds the owner | `restart reprojects the exact executing attempt once then reattaches without Begin` |
-| Restart sees a retained Terminal before publication | `recovers process death before terminal publication by reprojecting and accepting terminal once` |
-| Restart sees a pending Terminal observation | `accepts a pending terminal observation after process death without rereading or duplicating the report` |
-| Four non-exact projections fail closed | `retains responsibility and position for absent unavailable unreadable or foreign projection` |
-| Observer capability remains read-only | `passive lifecycle owner has only current projection await and publication capabilities` |
+Every test name below is the exact name in the cited test file. This is the
+only acceptance mapping for this scenario; the chronology sections above link
+here instead of maintaining parallel narrative names.
+
+| Chronology | Direct acceptance test | Test file |
+|---|---|---|
+| Live Executing becomes Terminal and releases exactly A1 | `observes live terminal executor change once and releases the exact position` | `packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts` |
+| Exact Suspend causally precedes Safe; A1 is released while an independent position remains held | `observes safe suspension only after exact suspend intent and releases only that attempt` | `packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts` |
+| A pending Safe projection after process death retains its causal Suspend history and releases once | `accepts a pending Safe observation after process death with causal Suspend history and one release` | `packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts` |
+| Safe without an exact Suspend intent is rejected | `rejects a passive Safe report without an exact Suspend intent` | `packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol.test.ts` |
+| Equal Executing waits without another read or Journal append | `awaits after unchanged executing projection without another read or journal append` | `packages/orchestrator/src/coordination/run/passive-planned-attempt-observer.test.ts` |
+| A unified-exec item-completed wake rereads equal Executing; its exact descendant later exits without another provider event and the targeted cadence observes Terminal | `observes descendant exit at targeted cadence after an equal item-completed wake` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
+| Closing a held-terminal attachment cancels its targeted cadence | `closing a held-terminal attachment stops targeted owned-activity census checks` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
+| A targeted recheck returns a typed projection failure and no later cadence read occurs | `a typed held-terminal projection failure stops targeted census checks without retry` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
+| Processes share one app-server incarnation but only A carries A's exact Codex thread identity; a foreign or missing thread id cannot keep A Executing | `attributes escaped activity to the exact Codex thread and rejects foreign or missing thread ids` | `packages/dalph/src/application/codex-app-server-public.test.ts` |
+| A suspension census signals A's exact descendants and never B's | `suspension census for one Codex thread never signals another thread` | `packages/dalph/src/application/codex-app-server-public.test.ts` |
+| A notification arrives after subscription and before the consumer awaits | `current-first attachment cannot miss a terminal change between projection and await` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
+| The generic workflow owner is rebuilt from the shared Journal and retains one executing attempt without another Begin | `restart reprojects the exact executing attempt once then reattaches without Begin` | `packages/dalph/test/scenarios/production.test.ts` |
+| A rebuilt Codex adapter uses the durable exact attempt-thread association, reads Executing, and later observes Terminal without another turn | `rebuilds Codex lifecycle attachment from durable association across scoped restart` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
+| Process 1 retains causally proved Safe; the rebuilt Codex adapter reads that exact Safe projection without another suspension or turn command | `rebuilds a causally proved Safe Codex projection from durable association across scoped restart` | `packages/dalph/src/application/codex-planned-attempt-executor.test.ts` |
+| Restart sees retained Terminal before publication | `recovers process death before terminal publication by reprojecting and accepting terminal once` | `packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol.test.ts` |
+| Restart sees a pending Terminal observation | `accepts a pending terminal observation after process death without rereading or duplicating the report` | `packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol.test.ts` |
+| Absent, unavailable, unreadable, and foreign projections retain responsibility and position | `retains responsibility and position for absent unavailable unreadable or foreign projection` | `packages/dalph/test/scenarios/production.test.ts` |
+| Each unresolved passive projection remains inert in a later process | `does not schedule another passive executor read after an unresolved $name projection` | `packages/orchestrator/src/coordination/run/recovery-activation.test.ts` |
+| An unsettled command with a prior non-exact observation still reconciles once | `reconciles one unsettled command when its prior activation recorded a non-exact projection` | `packages/orchestrator/src/coordination/run/recovery-activation.test.ts` |
+| The passive owner has only lifecycle projection and publication capabilities | `passive lifecycle owner has only current projection await and publication capabilities` | `packages/orchestrator/src/coordination/run/passive-planned-attempt-observer.test.ts` |

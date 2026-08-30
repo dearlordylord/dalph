@@ -1034,11 +1034,6 @@ export const capabilityRegistrationInventory = {
       "packages/orchestrator/src/workflow/protocols/attempt-choice/control.ts"
     ),
     support(
-      "passivePlannedAttemptObserverLayer",
-      "process-scoped lifecycle-observation owner around the registered executor boundary",
-      "packages/orchestrator/src/coordination/run/passive-planned-attempt-observer.ts"
-    ),
-    support(
       "coordinatorOwnershipLayer",
       "coordinator wrapper implementation support",
       "packages/orchestrator/src/authorities/coordinator-ownership/live-task-work-start.ts"
