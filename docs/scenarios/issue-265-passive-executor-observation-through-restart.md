@@ -203,6 +203,7 @@ here instead of maintaining parallel narrative names.
 | Chronology | Direct acceptance test | Test file |
 |---|---|---|
 | Live Executing becomes Terminal and releases exactly A1 | `observes live terminal executor change once and releases the exact position` | `packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts` |
+| Accepting an executor report grants no report-specific tracker refresh; any later generic reactivation remains ordinary | `accepted executor report publication grants no report-specific tracker read and leaves generic reactivation ordinary` | `packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts` |
 | Exact Suspend causally precedes Safe; A1 is released while an independent position remains held | `observes safe suspension only after exact suspend intent and releases only that attempt` | `packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts` |
 | A pending Safe projection after process death retains its causal Suspend history and releases once | `accepts a pending Safe observation after process death with causal Suspend history and one release` | `packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts` |
 | Safe without an exact Suspend intent is rejected | `rejects a passive Safe report without an exact Suspend intent` | `packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol.test.ts` |
