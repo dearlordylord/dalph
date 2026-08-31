@@ -48,7 +48,11 @@ it.effect("keeps the immutable run target graph in the public delivery frame", (
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(runId, target, initial, storage)
     const graph = (operationId: OperationId, operationTarget: typeof target, revision: string, taskId: string) => {
-      const operation = makeTrackerGraphObservationOperation(operationId, operationTarget)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        operationId,
+        operationTarget
+      )
       const projected = projectTrackerSnapshot({
         revision,
         tasks: [

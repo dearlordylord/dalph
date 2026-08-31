@@ -761,6 +761,7 @@ it("requires no-release event observation to equal the focused tracker observati
   const cancellationRecord = baseRecords.find(({ event }) => event._tag === "RunCancellationApplied")
   if (cancellationRecord === undefined) return expect.fail("test fixture lacks cancellation")
   const unrelatedGraphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("cancelled-history-no-release-unrelated-graph"),
     target
   )
@@ -1751,6 +1752,7 @@ it("covers termination responsibility settlement and graph comparability control
   expect(reduceWorkflowJournalHistory(runId, sameTargetLaterRecords)._tag).toBe("InvalidWorkflowJournalHistory")
 
   const finalityGraphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("cancelled-history-termination-foreign-claim-finality"),
     target
   )
@@ -1861,10 +1863,12 @@ it("covers termination responsibility settlement and graph comparability control
     ])
   ]
   const firstGraphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("cancelled-history-precondition-graph-first"),
     target
   )
   const secondGraphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("cancelled-history-precondition-graph-second"),
     target
   )
@@ -1887,6 +1891,7 @@ it("covers termination responsibility settlement and graph comparability control
   )
 
   const causallyRelatedSecond = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("cancelled-history-precondition-graph-causal-second"),
     target,
     [firstGraphOperation.operationId]
@@ -1903,6 +1908,7 @@ it("covers termination responsibility settlement and graph comparability control
   ).toEqual([])
 
   const foreignTargetOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("cancelled-history-precondition-graph-foreign-target"),
     FixtureTarget.make("cancelled-history-precondition-foreign-target")
   )
@@ -1918,12 +1924,14 @@ it("covers termination responsibility settlement and graph comparability control
   ).toEqual([])
 
   const disjointFirst = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("cancelled-history-precondition-graph-disjoint-first"),
     target,
     [],
     [TaskId.make("root")]
   )
   const disjointSecond = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("cancelled-history-precondition-graph-disjoint-second"),
     target,
     [],

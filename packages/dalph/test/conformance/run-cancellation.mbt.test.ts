@@ -1050,6 +1050,7 @@ const makeCancellationDriverImplementation = () => {
         Effect.gen(function* () {
           graphLifecycle = lifecycle
           const operation = makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
             OperationId.make(`run-cancellation-graph-${operationNumber}`),
             target,
             [],
@@ -1255,6 +1256,7 @@ const makeCancellationDriverImplementation = () => {
           yield* Deferred.succeed(command.completed, effectivePause)
         } else if (command._tag === "PublishUnreadableGraph") {
           const operation = makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
             OperationId.make(`run-cancellation-unreadable-graph-${command.operationNumber}`),
             target,
             [],

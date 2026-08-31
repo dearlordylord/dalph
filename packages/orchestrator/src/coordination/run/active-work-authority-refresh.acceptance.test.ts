@@ -20,8 +20,8 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
-import { GitWorktreeReadFailure, UntrackedWorktreePath } from "../../authorities/git/worktree.js"
-import { GitTargetLineageReadFailure, TargetLineageObservation } from "../../authorities/git/target-lineage.js"
+import { UntrackedWorktreePath } from "../../authorities/git/worktree.js"
+import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 import { deriveRunnableFrontier, RunnableFrontierTransition } from "../frontier/frontier.js"
@@ -39,7 +39,6 @@ import {
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import {
@@ -58,7 +57,6 @@ import {
   makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTargetLineageObservationOperation,
-  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import {
@@ -69,13 +67,6 @@ import {
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import {
-  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
-  ActiveWorkAuthorityRefreshAuthority,
-  ActiveWorkAuthorityRefreshGitReadFailedEvent,
-  ActiveWorkAuthorityRefreshOrdinal,
-  makeActiveWorkAuthorityRefreshGitReadOperation
-} from "../../workflow/protocols/active-work-authority-refresh/events.js"
-import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorCommandResponseObservedEvent,
@@ -85,8 +76,6 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
-import { deliveryProposalsOf } from "../delivery/delivery-proposal.js"
-import { materializeDeliveryAction } from "../delivery/delivery-action-materialization.js"
 
 const runId = RunId.make("active-work-refresh-acceptance-run")
 const target = FixtureTarget.make("active-work-refresh-acceptance-target")
@@ -169,10 +158,11 @@ const buildPrefix = (
     predecessorOperationIds: [exactAcquisition.operationId]
   })
   const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "ExecutingWorkAuthorityCheck" },
     OperationId.make("active-work-refresh-graph"),
     target,
-    [],
-    [taskId, independentTaskId]
+    [plan.operationId],
+    [taskId]
   )
   const graph = snapshotFor(`active-work-refresh-graph-${constraint}`)
   const specificationOperation = makeTaskWorkSpecificationObservationOperation(
@@ -366,7 +356,7 @@ const buildTwoRunningPrefix = (): ReadonlyArray<JournalRecord> => {
     OperationId.make("active-work-refresh-specification-B"),
     target,
     independentTaskId,
-    [OperationId.make("active-work-refresh-graph")]
+    []
   )
   const plan = makeTaskAttemptPlanOperation({
     operationId: OperationId.make("active-work-refresh-plan-B"),
@@ -460,22 +450,13 @@ const appendActiveWorktreeObservation = (
     { readonly _tag: "ObservePlannedAttemptContinuationWorktree" }
   >["operation"]
 ): ReadonlyArray<JournalRecord> => {
-  const authority = ActiveWorkAuthorityRefreshAuthority.make({
-    attemptId: operation.plannedAttempt.attemptId,
-    runId: operation.plannedAttempt.runId
-  })
-  const activeOperation = makeActiveWorkAuthorityRefreshGitReadOperation(
-    operation,
-    authority,
-    ActiveWorkAuthorityRefreshOrdinal.make(1)
-  )
   return appendRecord(
     appendRecord(
       records,
-      ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
+      GitReadIntentRecordedEvent.make({
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
-        operation: activeOperation,
+        operation,
         version: workflowJournalEventVersion
       })
     ),
@@ -494,66 +475,6 @@ const appendActiveWorktreeObservation = (
   )
 }
 
-const activeReadIntentFor = (
-  operation: Extract<
-    RunnableFrontierTransition,
-    { readonly _tag: "ObservePlannedAttemptContinuationWorktree" | "ObservePlannedAttemptContinuationTargetLineage" }
-  >["operation"],
-  ordinal: number
-) => {
-  const authority = ActiveWorkAuthorityRefreshAuthority.make({
-    attemptId: operation.plannedAttempt.attemptId,
-    runId: operation.plannedAttempt.runId
-  })
-  return ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
-    initiatedBy: { _tag: "DalphCoordinator" },
-    occurrenceClassification: "InitiatedAction",
-    operation: makeActiveWorkAuthorityRefreshGitReadOperation(
-      operation,
-      authority,
-      ActiveWorkAuthorityRefreshOrdinal.make(ordinal)
-    ),
-    version: workflowJournalEventVersion
-  })
-}
-
-const activeWorktreeObservationFor = (
-  operation: Extract<
-    RunnableFrontierTransition,
-    { readonly _tag: "ObservePlannedAttemptContinuationWorktree" }
-  >["operation"]
-) =>
-  PlannedAttemptWorktreeObservedEvent.make({
-    observation: {
-      _tag: "PlannedWorktreeReady",
-      baseSha: operation.plannedAttempt.baseSha,
-      branch: operation.plannedAttempt.branch,
-      headSha: operation.plannedAttempt.baseSha,
-      worktree: operation.plannedAttempt.worktree
-    },
-    occurrenceClassification: "NonActionOccurrence",
-    operationId: operation.operationId,
-    version: workflowJournalEventVersion
-  })
-
-const activeLineageObservationFor = (
-  operation: Extract<
-    RunnableFrontierTransition,
-    { readonly _tag: "ObservePlannedAttemptContinuationTargetLineage" }
-  >["operation"]
-) =>
-  TargetLineageObservedEvent.make({
-    observation: TargetLineageObservation.make({
-      plannedBaseIsAncestorOfTargetHead: true,
-      plannedBaseSha: operation.plannedAttempt.baseSha,
-      targetHeadSha: GitCommitSha.make("b".repeat(40))
-    }),
-    occurrenceClassification: "NonActionOccurrence",
-    operationId: operation.operationId,
-    plannedAttempt: operation.plannedAttempt,
-    version: workflowJournalEventVersion
-  })
-
 const appendActiveLineageObservation = (
   records: ReadonlyArray<JournalRecord>,
   operation: Extract<
@@ -562,22 +483,13 @@ const appendActiveLineageObservation = (
   >["operation"],
   plannedBaseIsAncestorOfTargetHead: boolean
 ): ReadonlyArray<JournalRecord> => {
-  const authority = ActiveWorkAuthorityRefreshAuthority.make({
-    attemptId: operation.plannedAttempt.attemptId,
-    runId: operation.plannedAttempt.runId
-  })
-  const activeOperation = makeActiveWorkAuthorityRefreshGitReadOperation(
-    operation,
-    authority,
-    ActiveWorkAuthorityRefreshOrdinal.make(1)
-  )
   return appendRecord(
     appendRecord(
       records,
-      ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
+      GitReadIntentRecordedEvent.make({
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
-        operation: activeOperation,
+        operation,
         version: workflowJournalEventVersion
       })
     ),
@@ -593,66 +505,6 @@ const appendActiveLineageObservation = (
       version: workflowJournalEventVersion
     })
   )
-}
-
-const activeGitFailureRecords = (
-  kind: "worktree" | "lineage",
-  position = 19,
-  ordinal = 1,
-  priorRecords: ReadonlyArray<JournalRecord> = buildPrefix("Healthy"),
-  source: "TrackerNotification" | "Timer" = "TrackerNotification"
-): ReadonlyArray<JournalRecord> => {
-  const rawOperation =
-    kind === "worktree"
-      ? makeTaskWorktreeObservationOperation({
-          operationId: OperationId.make(`active-work-refresh-failed-${kind}-${ordinal}`),
-          plannedAttempt,
-          predecessorOperationIds: []
-        })
-      : makeTargetLineageObservationOperation({
-          integrationTarget,
-          operationId: OperationId.make(`active-work-refresh-failed-${kind}-${ordinal}`),
-          plannedAttempt,
-          predecessorOperationIds: []
-        })
-  const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: plannedAttempt.attemptId, runId })
-  const ordinalValue = ActiveWorkAuthorityRefreshOrdinal.make(ordinal)
-  const operation = makeActiveWorkAuthorityRefreshGitReadOperation(rawOperation, authority, ordinalValue)
-  const failure =
-    kind === "worktree"
-      ? new GitWorktreeReadFailure({
-          detail: "controlled worktree read is unavailable",
-          worktree: plannedAttempt.worktree
-        })
-      : new GitTargetLineageReadFailure({
-          detail: "controlled target lineage read is unavailable",
-          plannedBaseSha: plannedAttempt.baseSha,
-          target: integrationTarget
-        })
-  return [
-    ...priorRecords,
-    record(
-      position,
-      ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        operation,
-        version: workflowJournalEventVersion
-      })
-    ),
-    record(
-      position + 1,
-      ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
-        authority,
-        failure,
-        occurrenceClassification: "NonActionOccurrence",
-        operation,
-        ordinal: ordinalValue,
-        source,
-        version: workflowJournalEventVersion
-      })
-    )
-  ]
 }
 
 const projectionFor = (
@@ -719,7 +571,6 @@ it.effect("shares one active graph read across Running attempts before their own
     if (graphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
       return yield* Effect.die("expected one shared active graph read")
     }
-    expect(graphRead.operation.purpose).toBe("ActiveWorkAuthorityRefresh")
     expect(graphRead.operation.readShape.explicitlyCoveredTaskIds).toEqual(
       [independentTaskId, taskId].toSorted((left, right) => left.localeCompare(right))
     )
@@ -775,12 +626,14 @@ it.effect("shares one active graph read across Running attempts before their own
 it.effect("retains the active boundary while a pending G2 intent awaits replay", () =>
   Effect.gen(function* () {
     const graphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "ExecutingWorkAuthorityCheck" },
       OperationId.make("active-work-refresh-graph"),
       target,
       [],
       [taskId, independentTaskId]
     )
-    const pendingG2Operation = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+    const pendingG2Operation = makeTrackerGraphObservationOperation(
+      { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: graphOperation.operationId },
       OperationId.make("opaque-g2-after-active-graph"),
       target,
       [graphOperation.operationId]
@@ -808,303 +661,6 @@ it.effect("retains the active boundary while a pending G2 intent awaits replay",
     expect(
       projection.frontier.transitions.filter(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
     ).toEqual([])
-  })
-)
-
-it.effect(
-  "reuses an intent-only active graph operation after a crash and allocates a new one on later activation",
-  () =>
-    Effect.gen(function* () {
-      const records = buildTwoRunningPrefix()
-      const opportunity = activeWorkAuthorityRefreshForOwner(
-        "TrackerNotification",
-        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
-      )
-      const first = yield* projectionFor(records, opportunity)
-      const graphRead = first.frontier.transitions.find(
-        (
-          transition
-        ): transition is Extract<
-          RunnableFrontierTransition,
-          { readonly _tag: "ObservePlannedAttemptContinuationGraph" }
-        > => transition._tag === "ObservePlannedAttemptContinuationGraph"
-      )
-      if (graphRead === undefined) return yield* Effect.die("expected an active graph read before the crash cut")
-
-      const operationId = graphRead.operation.operationId
-      const [proposal] = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
-        fresh: [],
-        responsibilities: [
-          { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(5), plannedAttempt }
-        ],
-        runId,
-        transitions: [graphRead]
-      }).ticketDelivery
-      expect(proposal?.actionIdentity).toEqual({
-        _tag: "FreshOperationIdRequired",
-        source: { _tag: "Preserve", operationId }
-      })
-      if (proposal === undefined) return yield* Effect.die("expected a delivery proposal for the active graph read")
-      const materialized = yield* materializeDeliveryAction(proposal).pipe(
-        Effect.provideService(
-          OperationIdAllocator,
-          OperationIdAllocator.of({ allocate: () => Effect.die("active graph materialization must not allocate") })
-        ),
-        Effect.provideService(
-          PlannedTaskAttemptPlanner,
-          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("active graph materialization must not plan") })
-        )
-      )
-      expect(materialized).toMatchObject({ _tag: "FreshOperationAction", operationId })
-
-      const intentOnly = appendRecord(records, taskTrackerReadIntent(graphRead.operation))
-      const restarted = yield* projectionFor(intentOnly, opportunity)
-      const restartedGraphRead = restarted.frontier.transitions.find(
-        (
-          transition
-        ): transition is Extract<
-          RunnableFrontierTransition,
-          { readonly _tag: "ObservePlannedAttemptContinuationGraph" }
-        > => transition._tag === "ObservePlannedAttemptContinuationGraph"
-      )
-      expect(restartedGraphRead?.operation.operationId).toBe(operationId)
-
-      const graphObservation = taskTrackerFactsObservedEvent(
-        operationId,
-        makeCompleteTaskTrackerFactsObserved(graphRead.operation, snapshotFor("active-work-refresh-crash-replay"))
-      )
-      const completed = appendRecord(intentOnly, graphObservation)
-      const afterObservation = yield* projectionFor(completed, opportunity)
-      expect(
-        afterObservation.frontier.transitions.filter(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
-      ).toEqual([])
-
-      const laterActivation = completed
-      const later = yield* projectionFor(laterActivation, opportunity)
-      const laterGraphRead = later.frontier.transitions.find(
-        (
-          transition
-        ): transition is Extract<
-          RunnableFrontierTransition,
-          { readonly _tag: "ObservePlannedAttemptContinuationGraph" }
-        > => transition._tag === "ObservePlannedAttemptContinuationGraph"
-      )
-      expect(laterGraphRead?.operation.operationId).not.toBe(operationId)
-    })
-)
-
-it.effect(
-  "reuses an intent-only active worktree operation after a crash and uses a fresh identity after observation",
-  () =>
-    Effect.gen(function* () {
-      const opportunity = activeWorkAuthorityRefreshForOwner(
-        "TrackerNotification",
-        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
-      )
-      const worktreeOperation = makeTaskWorktreeObservationOperation({
-        operationId: OperationId.make("active-refresh-crash-worktree-first"),
-        plannedAttempt,
-        predecessorOperationIds: [OperationId.make("active-work-refresh-claim-observation")]
-      })
-      const intentOnly = appendRecord(buildPrefix("Healthy"), activeReadIntentFor(worktreeOperation, 1))
-
-      // The first read is the journal prefix seen before the process died; the
-      // second read includes the intent, but no worktree observation.
-      const restarted = yield* projectionFor(intentOnly, opportunity)
-      const replayed = restarted.frontier.transitions.find(
-        (
-          transition
-        ): transition is Extract<
-          RunnableFrontierTransition,
-          { readonly _tag: "ObservePlannedAttemptContinuationWorktree" }
-        > => transition._tag === "ObservePlannedAttemptContinuationWorktree"
-      )
-      if (replayed === undefined) return yield* Effect.die("expected the active worktree read after the crash cut")
-      expect(replayed.operation).toEqual(worktreeOperation)
-      const [replayedProposal] = deliveryProposalsOf({
-        acceptedOperationIds: new Set([worktreeOperation.operationId]),
-        fresh: [],
-        responsibilities: [
-          { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(5), plannedAttempt }
-        ],
-        runId,
-        transitions: [replayed]
-      }).ticketDelivery
-      expect(replayedProposal?.actionIdentity).toEqual({ _tag: "ExistingOperationId" })
-
-      const observed = appendRecord(intentOnly, activeWorktreeObservationFor(worktreeOperation))
-      const laterOperation = makeTaskWorktreeObservationOperation({
-        operationId: OperationId.make("active-refresh-crash-worktree-second"),
-        plannedAttempt,
-        predecessorOperationIds: [worktreeOperation.operationId]
-      })
-      const laterIntentOnly = appendRecord(observed, activeReadIntentFor(laterOperation, 2))
-      const later = yield* projectionFor(laterIntentOnly, opportunity)
-      const laterRead = later.frontier.transitions.find(
-        (
-          transition
-        ): transition is Extract<
-          RunnableFrontierTransition,
-          { readonly _tag: "ObservePlannedAttemptContinuationWorktree" }
-        > => transition._tag === "ObservePlannedAttemptContinuationWorktree"
-      )
-      if (laterRead === undefined) return yield* Effect.die("expected the later active worktree read")
-      expect(laterRead.operation).toEqual(laterOperation)
-      expect(laterRead.operation.operationId).not.toBe(worktreeOperation.operationId)
-      expect(intentOnly.at(-1)?.event._tag).toBe("ActiveWorkAuthorityRefreshGitReadIntentRecorded")
-      expect(laterIntentOnly.at(-1)?.event._tag).toBe("ActiveWorkAuthorityRefreshGitReadIntentRecorded")
-      const activeIntents = laterIntentOnly.flatMap(({ event }) =>
-        event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" ? [event] : []
-      )
-      expect(activeIntents.slice(-2).map(({ operation }) => operation.ordinal)).toEqual([1, 2])
-    })
-)
-
-it.effect(
-  "reuses an intent-only active target-lineage operation after a crash and uses a fresh identity after observation",
-  () =>
-    Effect.gen(function* () {
-      const opportunity = activeWorkAuthorityRefreshForOwner(
-        "Timer",
-        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
-      )
-      const lineageOperation = makeTargetLineageObservationOperation({
-        integrationTarget,
-        operationId: OperationId.make("active-refresh-crash-lineage-first"),
-        plannedAttempt,
-        predecessorOperationIds: [OperationId.make("active-work-refresh-worktree")]
-      })
-      const intentOnly = appendRecord(buildPrefix("Healthy"), activeReadIntentFor(lineageOperation, 1))
-
-      // The operation carried by the recovered transition is the ordinary Git
-      // payload derived from the exact active journal intent. Its identity is
-      // therefore still the one acknowledged before the crash.
-      const restarted = yield* projectionFor(intentOnly, opportunity, integrationTarget)
-      const replayed = restarted.frontier.transitions.find(
-        (
-          transition
-        ): transition is Extract<
-          RunnableFrontierTransition,
-          { readonly _tag: "ObservePlannedAttemptContinuationTargetLineage" }
-        > => transition._tag === "ObservePlannedAttemptContinuationTargetLineage"
-      )
-      if (replayed === undefined)
-        return yield* Effect.die("expected the active target-lineage read after the crash cut")
-      expect(replayed.operation).toEqual(lineageOperation)
-      const [replayedProposal] = deliveryProposalsOf({
-        acceptedOperationIds: new Set([lineageOperation.operationId]),
-        fresh: [],
-        responsibilities: [
-          { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(5), plannedAttempt }
-        ],
-        runId,
-        transitions: [replayed]
-      }).ticketDelivery
-      expect(replayedProposal?.actionIdentity).toEqual({ _tag: "ExistingOperationId" })
-
-      const observed = appendRecord(intentOnly, activeLineageObservationFor(lineageOperation))
-      const laterOperation = makeTargetLineageObservationOperation({
-        integrationTarget,
-        operationId: OperationId.make("active-refresh-crash-lineage-second"),
-        plannedAttempt,
-        predecessorOperationIds: [lineageOperation.operationId]
-      })
-      const laterIntentOnly = appendRecord(observed, activeReadIntentFor(laterOperation, 2))
-      const later = yield* projectionFor(laterIntentOnly, opportunity, integrationTarget)
-      const laterRead = later.frontier.transitions.find(
-        (
-          transition
-        ): transition is Extract<
-          RunnableFrontierTransition,
-          { readonly _tag: "ObservePlannedAttemptContinuationTargetLineage" }
-        > => transition._tag === "ObservePlannedAttemptContinuationTargetLineage"
-      )
-      if (laterRead === undefined) return yield* Effect.die("expected the later active target-lineage read")
-      expect(laterRead.operation).toEqual(laterOperation)
-      expect(laterRead.operation.operationId).not.toBe(lineageOperation.operationId)
-      const activeIntents = laterIntentOnly.flatMap(({ event }) =>
-        event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" ? [event] : []
-      )
-      expect(activeIntents.slice(-2).map(({ operation }) => operation.ordinal)).toEqual([1, 2])
-    })
-)
-
-it.effect("keeps one recovered proposal for each exact pending active Git read", () =>
-  Effect.sync(() => {
-    const worktreeOperation = makeTaskWorktreeObservationOperation({
-      operationId: OperationId.make("active-refresh-pending-worktree"),
-      plannedAttempt,
-      predecessorOperationIds: [OperationId.make("active-refresh-pending-claim")]
-    })
-    const lineageOperation = makeTargetLineageObservationOperation({
-      integrationTarget,
-      operationId: OperationId.make("active-refresh-pending-lineage"),
-      plannedAttempt,
-      predecessorOperationIds: [worktreeOperation.operationId]
-    })
-    const cases = [
-      {
-        operation: worktreeOperation,
-        transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
-          operation: worktreeOperation,
-          plannedAttempt
-        })
-      },
-      {
-        operation: lineageOperation,
-        transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
-          operation: lineageOperation,
-          plannedAttempt
-        })
-      }
-    ] as const
-
-    for (const { operation, transition } of cases) {
-      const activeOperation = activeReadIntentFor(operation, 1).operation
-      const proposals = deliveryProposalsOf({
-        acceptedOperationIds: new Set([operation.operationId]),
-        activeRefreshPendingGitReadOperations: [activeOperation],
-        fresh: [],
-        responsibilities: [
-          { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(5), plannedAttempt }
-        ],
-        runId,
-        transitions: [transition]
-      }).ticketDelivery
-      expect(proposals).toHaveLength(1)
-      expect(proposals[0]?.route._tag).toBe("RecoveredNewActionRoute")
-      expect(proposals[0]?.actionIdentity).toEqual({
-        _tag: "FreshOperationIdRequired",
-        source: { _tag: "Preserve", operationId: operation.operationId }
-      })
-    }
-  })
-)
-
-it.effect("does not recover an active Git intent for an unselected Running attempt", () =>
-  Effect.gen(function* () {
-    const secondWorktreeOperation = makeTaskWorktreeObservationOperation({
-      operationId: OperationId.make("active-refresh-unselected-worktree"),
-      plannedAttempt: secondPlannedAttempt,
-      predecessorOperationIds: [OperationId.make("active-work-refresh-specification-B")]
-    })
-    const intentOnly = appendRecord(buildTwoRunningPrefix(), activeReadIntentFor(secondWorktreeOperation, 1))
-    const projection = yield* projectionFor(
-      intentOnly,
-      activeWorkAuthorityRefreshForOwner(
-        "TrackerNotification",
-        activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
-      )
-    )
-
-    expect(
-      projection.frontier.transitions.some(
-        (transition) =>
-          transition._tag === "ObservePlannedAttemptContinuationWorktree" &&
-          transition.operation.operationId === secondWorktreeOperation.operationId
-      )
-    ).toBe(false)
   })
 )
 
@@ -1225,7 +781,10 @@ it.effect(
             { readonly _tag: "ObservePlannedAttemptContinuationWorktree" }
           > => transition._tag === "ObservePlannedAttemptContinuationWorktree"
         )
-        expect(worktreeReads).toHaveLength(expectedGitSubjects)
+        expect(
+          worktreeReads,
+          `${constraint}: ${JSON.stringify({ transitions: projection.frontier.transitions, facts: availableEvidenceFor(projection).facts })}`
+        ).toHaveLength(expectedGitSubjects)
         expect(worktreeReads.map(({ plannedAttempt }) => plannedAttempt.attemptId)).toEqual(
           (constraint === "TargetRewrite"
             ? [plannedAttempt.attemptId, secondPlannedAttempt.attemptId]
@@ -1353,19 +912,16 @@ it.effect(
           )
         ).toHaveLength(1)
 
-        const activeGitIntents = records.flatMap(({ event }) =>
-          event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" ? [event] : []
+        const gitIntents = records.flatMap(({ event, position }) =>
+          position > JournalPosition.make(27) && event._tag === "GitReadIntentRecorded" ? [event] : []
         )
-        expect(new Set(activeGitIntents.map(({ operation }) => operation.authority.attemptId))).toEqual(
+        expect(new Set(gitIntents.map(({ operation }) => operation.plannedAttempt.attemptId))).toEqual(
           new Set(
             constraint === "TargetRewrite"
               ? [plannedAttempt.attemptId, secondPlannedAttempt.attemptId]
               : [healthyAttempt.attemptId]
           )
         )
-        for (const intent of activeGitIntents) {
-          expect(intent.operation.authority).toEqual({ runId, attemptId: intent.operation.plannedAttempt.attemptId })
-        }
         expect(
           records.filter(
             ({ event, position }) =>
@@ -1435,35 +991,6 @@ const expectSuspendAndIndependentProgress = (
   )
 }
 
-const expectUnreadableWaitAndIndependentProgress = (
-  records: ReadonlyArray<JournalRecord>,
-  facts: ReturnType<typeof deriveJournalResponsibilityFacts>
-) => {
-  const reduction = reduceWorkflowJournalHistory(runId, records)
-  if (reduction._tag !== "ValidWorkflowJournalHistory") return expect.fail("acceptance prefix must reduce")
-  const frontier = deriveRunnableFrontier({
-    freshEligibleTasks: [{ taskId: independentTaskId, taskRevision: independentSpecification.fingerprint }],
-    responsibility: reduction.runState.responsibility,
-    responsibilityFacts: facts
-  })
-  expect(frontier.transitions).toEqual([
-    RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-      taskId: independentTaskId,
-      taskRevision: independentSpecification.fingerprint
-    })
-  ])
-  expect(frontier.explanations).toContainEqual({
-    _tag: "PlannedAttemptUnreadableFactWait",
-    boundary: "Git",
-    correlation: { attemptId: plannedAttempt.attemptId, runId },
-    taskId,
-    wakeCondition: "BoundaryRereadSucceeded"
-  })
-  expect(reduction.runState.responsibility.entries).toContainEqual(
-    expect.objectContaining({ _tag: "PlannedAttemptExecutorWorkResponsibility", plannedAttempt })
-  )
-}
-
 it.effect(
   "AcceptedFact publication for a Running attempt uses the ordinary owner entry and performs no authority reads",
   () =>
@@ -1492,7 +1019,7 @@ it.effect(
     })
 )
 
-it.effect("active refresh retains the exact Running responsibility when tracker or Git authority is unreadable", () =>
+it.effect("active refresh retains the exact Running responsibility without retrying an unreadable graph", () =>
   Effect.gen(function* () {
     const records = buildPrefix("UnreadableGraph")
     const projection = yield* projectionFor(
@@ -1528,7 +1055,7 @@ it.effect("active refresh retains the exact Running responsibility when tracker 
         expect.objectContaining({ _tag: "ReconcilePlannedAttemptExecutorWork" })
       ])
     )
-    expect(counts).toEqual({ graph: 1, specification: 0, claim: 0, worktree: 0, lineage: 0, executor: 0 })
+    expect(counts).toEqual({ graph: 0, specification: 0, claim: 0, worktree: 0, lineage: 0, executor: 0 })
   })
 )
 
@@ -1602,101 +1129,4 @@ it.effect("recovers the exact active-work suspension after process loss without 
       continuationDecisionFor(suspend, records, undefined, Option.some(JournalPosition.make(17)), Option.none())
     ).toEqual({ transition: suspend })
   })
-)
-
-it.effect(
-  "post-Running active worktree and target-lineage Git failures wait without suspending while independent work remains runnable",
-  () =>
-    Effect.gen(function* () {
-      for (const kind of ["worktree", "lineage"] as const) {
-        const records = activeGitFailureRecords(kind)
-        const projection = yield* projectionFor(
-          records,
-          activeWorkAuthorityRefreshForOwner(
-            "TrackerNotification",
-            activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
-          )
-        )
-        const executorFacts = availableEvidenceFor(projection).facts.find(
-          ({ _tag }) => _tag === "PlannedAttemptExecutorFreshFacts"
-        )
-        expect(executorFacts).toMatchObject({
-          _tag: "PlannedAttemptExecutorFreshFacts",
-          responsibility: { beganAt: JournalPosition.make(5), plannedAttempt },
-          disposition: { _tag: "UnreadableFactWait", boundary: "Git" }
-        })
-        expect(projection.frontier.transitions).not.toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ _tag: "ObservePlannedAttemptExecutorWork" }),
-            expect.objectContaining({ _tag: "ResumePlannedAttemptExecutorWorkAfterCurrentFacts" }),
-            expect.objectContaining({ _tag: "SuspendPlannedAttemptExecutorWork" }),
-            expect.objectContaining({ _tag: "ReconcilePlannedAttemptExecutorWork" })
-          ])
-        )
-        expectUnreadableWaitAndIndependentProgress(records, availableEvidenceFor(projection).facts)
-      }
-    })
-)
-
-it("does not treat an active-refresh Git failure at or before Running as current unreadable authority", () => {
-  const preRunningPrefix = buildPrefix("Healthy").filter(({ position }) => position <= JournalPosition.make(4))
-  const staleRecords = [
-    ...activeGitFailureRecords("worktree", 5, 1, preRunningPrefix),
-    record(
-      7,
-      PlannedAttemptExecutorWorkReportedEvent.make({
-        ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-        report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-          correlation: { attemptId: plannedAttempt.attemptId, runId }
-        }),
-        version: workflowJournalEventVersion
-      })
-    )
-  ]
-  const reduction = reduceWorkflowJournalHistory(runId, buildPrefix("Healthy"))
-  if (reduction._tag !== "ValidWorkflowJournalHistory") return expect.fail("acceptance prefix must reduce")
-  const facts = deriveJournalResponsibilityFacts({
-    ...reduction.runState,
-    appliedThrough: staleRecords.at(-1)?.position ?? null,
-    responsibility: reduction.runState.responsibility,
-    workflowHistory: { records: staleRecords }
-  })
-  const executorFacts = facts.find(({ _tag }) => _tag === "PlannedAttemptExecutorFreshFacts")
-  expect(executorFacts).toMatchObject({ disposition: { _tag: "Ready" } })
-})
-
-it.effect(
-  "a later tracker or timer refresh uses a fresh Git operation and ordinal after the prior unreadable wait",
-  () =>
-    Effect.gen(function* () {
-      const first = activeGitFailureRecords("worktree", 19, 1)
-      const second = activeGitFailureRecords("worktree", 21, 2, first, "Timer")
-      const activeFailures = second.flatMap(({ event }) =>
-        event._tag === "ActiveWorkAuthorityRefreshGitReadFailed" ? [event] : []
-      )
-      expect(activeFailures.map(({ ordinal }) => ordinal)).toEqual([
-        ActiveWorkAuthorityRefreshOrdinal.make(1),
-        ActiveWorkAuthorityRefreshOrdinal.make(2)
-      ])
-      expect(activeFailures.map(({ operation }) => operation.operationId)).toEqual([
-        OperationId.make("active-work-refresh-failed-worktree-1"),
-        OperationId.make("active-work-refresh-failed-worktree-2")
-      ])
-      expect(activeFailures.map(({ source }) => source)).toEqual(["TrackerNotification", "Timer"])
-
-      const projection = yield* projectionFor(
-        second,
-        activeWorkAuthorityRefreshForOwner(
-          "Timer",
-          activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
-        )
-      )
-      expect(projection.frontier.transitions).not.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ _tag: "ObservePlannedAttemptExecutorWork" }),
-          expect.objectContaining({ _tag: "SuspendPlannedAttemptExecutorWork" })
-        ])
-      )
-      expectUnreadableWaitAndIndependentProgress(second, availableEvidenceFor(projection).facts)
-    })
 )

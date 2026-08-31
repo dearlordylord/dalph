@@ -14,6 +14,7 @@ import {
   InitialControlPolicy,
   JournaledRunBootstrap,
   JournalDatabaseLocator,
+  JournalPosition,
   type JournalRecord,
   JournalStore,
   makeTaskAttemptPlanOperation,
@@ -46,6 +47,7 @@ import {
   RunReactivationHint,
   RunReactivationOwner,
   TaskClaimAcquisitionPlanner,
+  TaskClaimReadFailure,
   TaskWorkCapacity,
   TrackerGraphReader,
   TrackerReadError,
@@ -503,7 +505,11 @@ type ProductionRefreshHarnessOptions = {
   readonly source?: "TrackerNotification" | "Timer" | "AcceptedFactPublication" | "OperatorWake"
   readonly report?: "Running" | "SafelySuspended" | "Terminal"
   readonly coalesce?: boolean
-  readonly claim?: "Exact" | "Missing" | "Foreign"
+  readonly claim?: "Exact" | "Missing" | "Foreign" | "Unreadable"
+  readonly specification?: "Exact" | "Changed"
+  readonly changedTask?: "A" | "B"
+  readonly threeExecuting?: boolean
+  readonly suspensionSettlement?: "Safe" | "Terminal"
   readonly graph?: "Readable" | "Unreadable"
   readonly git?: "Ready" | "LostWorktree" | "LineageRewrite" | "Unreadable"
   readonly includeIndependentTask?: boolean
@@ -537,19 +543,43 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const source = options.source ?? "TrackerNotification"
       const coalesce = options.coalesce === true && source === "TrackerNotification"
       const claimMode = options.claim ?? "Exact"
+      const specificationMode = options.specification ?? "Exact"
       const graphMode = options.graph ?? "Readable"
       const gitMode = options.git ?? "Ready"
-      const includeIndependentTask = options.includeIndependentTask === true
+      const threeExecuting = options.threeExecuting === true
+      const includeIndependentTask = options.includeIndependentTask === true || threeExecuting
+      const changedTask = options.changedTask ?? "A"
       const target = FixtureTarget.make("production-refresh-healthy-target")
       const runId = RunId.make("production-refresh-healthy-run")
       const taskId = TaskId.make("A")
       const independentTaskId = TaskId.make("B")
+      const thirdTaskId = TaskId.make("C")
       const specification = makeTaskWorkSpecification({ body: "Complete A.", taskId, title: "Complete A" })
       const independentSpecification = makeTaskWorkSpecification({
         body: "Complete B.",
         taskId: independentTaskId,
         title: "Complete B"
       })
+      const thirdSpecification = makeTaskWorkSpecification({
+        body: "Complete C.",
+        taskId: thirdTaskId,
+        title: "Complete C"
+      })
+      const changedSpecification = makeTaskWorkSpecification({
+        body: "Changed F2 instructions.",
+        taskId,
+        title: "Changed F2"
+      })
+      const changedIndependentSpecification = makeTaskWorkSpecification({
+        body: "Changed F2 instructions.",
+        taskId: independentTaskId,
+        title: "Changed F2"
+      })
+      const graphTaskIds = [
+        taskId,
+        ...(includeIndependentTask ? [independentTaskId] : []),
+        ...(threeExecuting ? [thirdTaskId] : [])
+      ]
       const projected = projectTrackerSnapshot({
         revision: "production-refresh-healthy-graph",
         rootTaskId: taskId,
@@ -557,6 +587,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
           { id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
           ...(includeIndependentTask
             ? [{ id: independentTaskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+            : []),
+          ...(threeExecuting
+            ? [{ id: thirdTaskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
             : [])
         ]
       })
@@ -581,6 +614,16 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         taskId: independentTaskId,
         taskRevision: independentSpecification.fingerprint,
         worktree: WorktreeLocator.make(`${directory}/independent-worktree`)
+      })
+      const thirdAttempt = PlannedTaskAttempt.make({
+        attemptId: AttemptId.make("production-refresh-third-attempt"),
+        baseSha,
+        branch: TaskBranchRef.make("refs/heads/dalph/production-refresh-third"),
+        executor: TaskExecutorLocator.make("executor:production-refresh-third"),
+        runId,
+        taskId: thirdTaskId,
+        taskRevision: thirdSpecification.fingerprint,
+        worktree: WorktreeLocator.make(`${directory}/third-worktree`)
       })
       const targetRef =
         gitMode === "LineageRewrite"
@@ -620,6 +663,16 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
           independentAttempt.baseSha
         ])
       }
+      if (threeExecuting) {
+        yield* git.runInWorktree(directory, [
+          "worktree",
+          "add",
+          "-b",
+          thirdAttempt.branch.slice("refs/heads/".length),
+          thirdAttempt.worktree,
+          thirdAttempt.baseSha
+        ])
+      }
       if (gitMode === "LostWorktree") {
         yield* git.runInWorktree(directory, ["worktree", "remove", "--force", attempt.worktree])
       }
@@ -632,10 +685,11 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       }
       const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
       const graphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make("production-refresh-healthy-graph"),
         target,
         [acquisition.operationId],
-        includeIndependentTask ? [taskId, independentTaskId] : [taskId]
+        graphTaskIds
       )
       const specificationOperation = makeTaskWorkSpecificationObservationOperation(
         OperationId.make("production-refresh-healthy-specification"),
@@ -654,13 +708,25 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         predecessorOperationIds: [planOperation.operationId]
       })
       const claim = ActiveTaskClaim.make(acquisition)
+      const independentAcquisition = {
+        operationId: OperationId.make("production-refresh-independent-claim"),
+        owner: ClaimOwner.make("dalph"),
+        taskId: independentTaskId,
+        token: ClaimToken.make("production-refresh-independent-token")
+      }
+      const thirdAcquisition = {
+        operationId: OperationId.make("production-refresh-third-claim"),
+        owner: ClaimOwner.make("dalph"),
+        taskId: thirdTaskId,
+        token: ClaimToken.make("production-refresh-third-token")
+      }
       yield* Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* JournalStore
           yield* journal.beginRun(
             runId,
             target,
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(threeExecuting ? 3 : 1) })
           )
           yield* journal.append(
             runId,
@@ -682,7 +748,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             outcomeRecordKey(graphOperation.operationId),
             taskTrackerGraphFactsObserved(graphOperation, {
               revision: TrackerRevision.make("production-refresh-healthy-seed"),
-              taskIds: includeIndependentTask ? [taskId, independentTaskId] : [taskId]
+              taskIds: graphTaskIds
             })
           )
           yield* journal.append(
@@ -766,6 +832,109 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               version: workflowJournalEventVersion
             })
           )
+          const seedExecutingPeer = Effect.fn("ProductionRefreshTest.seedExecutingPeer")(function* (
+            peerAttempt: PlannedTaskAttempt,
+            peerAcquisition: typeof independentAcquisition,
+            peerSpecification: typeof independentSpecification
+          ) {
+            const peerClaimOperation = makeTaskClaimAcquisitionOperation({
+              acquisition: peerAcquisition,
+              predecessorOperationIds: []
+            })
+            const peerSpecificationOperation = makeTaskWorkSpecificationObservationOperation(
+              OperationId.make(`production-refresh-${peerAttempt.taskId}-specification`),
+              target,
+              peerAttempt.taskId,
+              []
+            )
+            const peerPlanOperation = makeTaskAttemptPlanOperation({
+              operationId: OperationId.make(`production-refresh-${peerAttempt.taskId}-plan`),
+              plannedAttempt: peerAttempt,
+              predecessorOperationIds: [peerAcquisition.operationId, peerSpecificationOperation.operationId]
+            })
+            yield* journal.append(
+              runId,
+              intentRecordKey(peerAcquisition.operationId),
+              TaskClaimAcquisitionIntendedEvent.make({
+                operation: peerClaimOperation,
+                version: workflowJournalEventVersion
+              })
+            )
+            yield* journal.append(
+              runId,
+              outcomeRecordKey(peerAcquisition.operationId),
+              TaskClaimAcquiredEvent.make({
+                claim: ActiveTaskClaim.make(peerAcquisition),
+                version: workflowJournalEventVersion
+              })
+            )
+            yield* journal.append(
+              runId,
+              intentRecordKey(peerSpecificationOperation.operationId),
+              taskTrackerReadIntent(peerSpecificationOperation)
+            )
+            yield* journal.append(
+              runId,
+              outcomeRecordKey(peerSpecificationOperation.operationId),
+              taskTrackerWorkSpecificationFactsObserved(peerSpecificationOperation, peerSpecification)
+            )
+            yield* journal.append(
+              runId,
+              attemptPlanRecordKey(peerAttempt.attemptId),
+              TaskAttemptPlannedEvent.make({ operation: peerPlanOperation, version: workflowJournalEventVersion })
+            )
+            yield* journal.append(
+              runId,
+              plannedAttemptExecutorWorkResponsibilityBeganRecordKey(peerAttempt.attemptId),
+              PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+                plannedAttempt: peerAttempt,
+                version: workflowJournalEventVersion
+              })
+            )
+            const peerCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+            yield* journal.append(
+              runId,
+              plannedAttemptExecutorCommandIntendedRecordKey(peerAttempt.attemptId, peerCommandOrdinal),
+              PlannedAttemptExecutorCommandIntendedEvent.make({
+                command: "Begin",
+                initiatedBy: { _tag: "DalphCoordinator" },
+                occurrenceClassification: "InitiatedAction",
+                ordinal: peerCommandOrdinal,
+                plannedAttempt: peerAttempt,
+                version: workflowJournalEventVersion
+              })
+            )
+            const peerExecuting = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+              correlation: plannedAttemptExecutorCorrelation(peerAttempt)
+            })
+            yield* journal.append(
+              runId,
+              plannedAttemptExecutorCommandResponseObservedRecordKey(peerAttempt.attemptId, peerCommandOrdinal),
+              PlannedAttemptExecutorCommandResponseObservedEvent.make({
+                commandOrdinal: peerCommandOrdinal,
+                occurrenceClassification: "NonActionOccurrence",
+                plannedAttempt: peerAttempt,
+                report: peerExecuting,
+                version: workflowJournalEventVersion
+              })
+            )
+            yield* journal.append(
+              runId,
+              plannedAttemptExecutorWorkReportedRecordKey(
+                peerAttempt.attemptId,
+                PlannedAttemptExecutorReportOrdinal.make(1)
+              ),
+              PlannedAttemptExecutorWorkReportedEvent.make({
+                ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+                report: peerExecuting,
+                version: workflowJournalEventVersion
+              })
+            )
+          })
+          if (threeExecuting) {
+            yield* seedExecutingPeer(independentAttempt, independentAcquisition, independentSpecification)
+            yield* seedExecutingPeer(thirdAttempt, thirdAcquisition, thirdSpecification)
+          }
           if (options.report !== undefined && options.report !== "Running") {
             const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
             yield* journal.append(
@@ -825,7 +994,14 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       })
       const claimObservation =
         claimMode === "Missing" ? UnclaimedTask.make({ taskId }) : claimMode === "Foreign" ? foreignClaim : claim
-      const acquiredClaims = yield* Ref.make<ReadonlyMap<TaskId, ActiveTaskClaim>>(new Map())
+      const acquiredClaims = yield* Ref.make<ReadonlyMap<TaskId, ActiveTaskClaim>>(
+        threeExecuting
+          ? new Map([
+              [independentTaskId, ActiveTaskClaim.make(independentAcquisition)],
+              [thirdTaskId, ActiveTaskClaim.make(thirdAcquisition)]
+            ])
+          : new Map()
+      )
       const phase = yield* Ref.make<"Startup" | "Active">("Startup")
       const trackerCalls = yield* Ref.make<ReadonlyArray<"graph" | "specification" | "claim" | "acquire">>([])
       const activeSelections = yield* Ref.make<ReadonlyArray<string>>([])
@@ -894,12 +1070,14 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               readTaskClaim: (selectedTaskId) =>
                 Ref.update(trackerCalls, (calls) => [...calls, "claim" as const]).pipe(
                   Effect.andThen(
-                    selectedTaskId === taskId
-                      ? Effect.succeed(claimObservation)
-                      : Effect.map(
-                          Ref.get(acquiredClaims),
-                          (current) => current.get(selectedTaskId) ?? UnclaimedTask.make({ taskId: selectedTaskId })
-                        )
+                    selectedTaskId === taskId && claimMode === "Unreadable"
+                      ? Effect.fail(new TaskClaimReadFailure({ detail: "claim unreadable", taskId: selectedTaskId }))
+                      : selectedTaskId === taskId
+                        ? Effect.succeed(claimObservation)
+                        : Effect.map(
+                            Ref.get(acquiredClaims),
+                            (current) => current.get(selectedTaskId) ?? UnclaimedTask.make({ taskId: selectedTaskId })
+                          )
                   )
                 ),
               releaseTaskClaim: () => Effect.void
@@ -923,7 +1101,19 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 ),
               readTaskWorkSpecification: (_target, selectedTaskId) =>
                 Ref.update(trackerCalls, (calls) => [...calls, "specification" as const]).pipe(
-                  Effect.andThen(Effect.succeed(selectedTaskId === taskId ? specification : independentSpecification))
+                  Effect.andThen(
+                    Effect.succeed(
+                      selectedTaskId === taskId
+                        ? specificationMode === "Changed" && changedTask === "A"
+                          ? changedSpecification
+                          : specification
+                        : selectedTaskId === independentTaskId
+                          ? specificationMode === "Changed" && changedTask === "B"
+                            ? changedIndependentSpecification
+                            : independentSpecification
+                          : thirdSpecification
+                    )
+                  )
                 )
             })
             const runStartedCommand = (command: "Begin" | "Resume", request: PlannedAttemptExecutorRequest) =>
@@ -943,7 +1133,12 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             const executor = PlannedAttemptExecutor.of({
               observe: (correlation) =>
                 Effect.gen(function* () {
-                  const projectedTaskId = correlation.attemptId === attempt.attemptId ? taskId : independentTaskId
+                  const projectedTaskId =
+                    correlation.attemptId === attempt.attemptId
+                      ? taskId
+                      : correlation.attemptId === independentAttempt.attemptId
+                        ? independentTaskId
+                        : thirdTaskId
                   const call = { command: "observe" as const, taskId: projectedTaskId }
                   yield* Ref.update(executorEntries, (calls) => [...calls, call])
                   yield* Ref.update(executorCalls, (calls) => [...calls, call])
@@ -955,7 +1150,10 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   })
                 }),
               requestSuspension: (requested) =>
-                claimMode !== "Exact" || gitMode === "LostWorktree" || gitMode === "LineageRewrite"
+                claimMode !== "Exact" ||
+                specificationMode === "Changed" ||
+                gitMode === "LostWorktree" ||
+                gitMode === "LineageRewrite"
                   ? Effect.gen(function* () {
                       const call = { command: "Suspend" as const, taskId: requested.taskId }
                       yield* Ref.update(executorEntries, (calls) => [...calls, call])
@@ -975,9 +1173,14 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                       }
                       yield* Ref.update(executorCalls, (calls) => [...calls, call])
                       yield* Ref.update(suspendedTasks, (current) => new Set([...current, requested.taskId]))
-                      return PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
-                        correlation: plannedAttemptExecutorCorrelation(requested)
-                      })
+                      return options.suspensionSettlement === "Terminal"
+                        ? PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                            correlation: plannedAttemptExecutorCorrelation(requested),
+                            result: { _tag: "Completed" }
+                          })
+                        : PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+                            correlation: plannedAttemptExecutorCorrelation(requested)
+                          })
                     })
                   : Effect.die("healthy refresh must not suspend executor work"),
               begin: (request) => runStartedCommand("Begin", request),
@@ -1158,7 +1361,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             const applicationExit = Context.get(applicationContext, ApplicationExitShell)
             const ownerLayer = productionRunReactivationLayer(
               target,
-              Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })),
+              Effect.succeed(
+                InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(threeExecuting ? 3 : 1) })
+              ),
               runId,
               {
                 activationInterval: ProductionRunReactivationInterval.make(
@@ -1189,7 +1394,13 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   PlannedTaskAttemptPlanner,
                   PlannedTaskAttemptPlanner.of({
                     plan: (request) =>
-                      Effect.succeed(request.specification.taskId === taskId ? attempt : independentAttempt)
+                      Effect.succeed(
+                        request.specification.taskId === taskId
+                          ? attempt
+                          : request.specification.taskId === independentTaskId
+                            ? independentAttempt
+                            : thirdAttempt
+                      )
                   })
                 )
               )
@@ -1343,20 +1554,13 @@ it.effect("production owner refreshes Running work once for a TrackerNotificatio
       "ReadTaskWorktree",
       "ReadTargetLineage"
     ])
-    expect(result.activeSelectionTrace).toEqual([
-      "ReadTrackerGraph",
-      "ReadTaskWorkSpecification",
-      "ReadTaskClaim",
-      "ReadTaskClaim",
-      "ReadTaskWorktree",
-      "ReadTargetLineage",
-      "ReadTrackerGraph"
-    ])
     const activeGitSelectionKeys = result.activeSelectionOperationKeys.filter(
       (key) => key.startsWith("ReadTaskWorktree:") || key.startsWith("ReadTargetLineage:")
     )
     expect(activeGitSelectionKeys).toHaveLength(2)
-    expect(new Set(activeGitSelectionKeys).size).toBe(activeGitSelectionKeys.length)
+    expect(new Set(activeGitSelectionKeys).size).toBe(2)
+    expect(result.journalRecords.filter(({ event }) => event._tag === "PlannedAttemptWorktreeObserved")).toHaveLength(1)
+    expect(result.journalRecords.filter(({ event }) => event._tag === "TargetLineageObserved")).toHaveLength(1)
     expect(result.trackerCalls).toEqual(["graph", "specification", "claim", "graph"])
     expect(result.executorCalls).toEqual([])
     expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "ActiveWorkAuthorityRefresh"])
@@ -1409,6 +1613,91 @@ it.effect("timer refresh suspends A after a foreign claim without consuming inde
         event.observation.observation._tag === "ActiveTaskClaim" &&
         event.observation.observation.owner === "another-dalph"
     )
+  })
+)
+
+it.effect("accepted B F2 refresh suspends only B1 while A1 and C1 continue executing", () =>
+  Effect.gen(function* () {
+    for (const suspensionSettlement of ["Safe", "Terminal"] as const) {
+      const result = yield* runProductionRefreshHarness({
+        source: "Timer",
+        specification: "Changed",
+        changedTask: "B",
+        threeExecuting: true,
+        suspensionSettlement
+      })
+      expect(result.graphTaskIds).toEqual(["A", "B", "C"])
+      expect(result.executorCalls.filter(({ command }) => command !== "observe")).toEqual([
+        { command: "Suspend", taskId: "B" }
+      ])
+      expect(result.executorCalls.filter(({ taskId }) => taskId === "A" || taskId === "C")).toEqual([])
+      const activeGraph = result.journalRecords.findLast(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.cause._tag === "ExecutingWorkAuthorityCheck"
+      )
+      expect(activeGraph).toBeDefined()
+      const activeGraphPosition = activeGraph?.position ?? JournalPosition.make(0)
+      const focused = result.journalRecords.filter(
+        ({ event, position }) =>
+          position > activeGraphPosition &&
+          event._tag === "TaskTrackerFactsObserved" &&
+          (event.observation._tag === "FocusedTaskWorkSpecificationFacts" ||
+            event.observation._tag === "FocusedTaskClaimFacts")
+      )
+      for (const selectedTaskId of ["A", "B", "C"]) {
+        expect(
+          focused.filter(({ event }) =>
+            event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+              ? event.observation.factFamily.taskId === selectedTaskId
+              : false
+          )
+        ).toHaveLength(1)
+        if (selectedTaskId !== "B") {
+          expect(
+            focused.filter(({ event }) =>
+              event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskClaimFacts"
+                ? event.observation.coverage.taskId === selectedTaskId
+                : false
+            )
+          ).toHaveLength(1)
+        }
+      }
+      const activeGitSelections = result.activeSelectionOperationKeys.filter(
+        (key) => key.startsWith("ReadTaskWorktree:") || key.startsWith("ReadTargetLineage:")
+      )
+      expect(activeGitSelections).toHaveLength(4)
+      expect(new Set(activeGitSelections).size).toBe(4)
+      const changed = focused.find(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+          event.observation.factFamily.taskId === "B" &&
+          event.observation.factFamily.body === "Changed F2 instructions."
+      )
+      const suspend = result.journalRecords.find(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandIntended" &&
+          event.command === "Suspend" &&
+          event.plannedAttempt.taskId === "B"
+      )
+      const settlement = result.journalRecords.find(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report.correlation.attemptId === "production-refresh-independent-attempt" &&
+          event.report._tag ===
+            (suspensionSettlement === "Safe" ? "ExecutorWorkSafelySuspended" : "ExecutorWorkTerminal")
+      )
+      expect(changed?.position).toBeDefined()
+      expect(suspend?.position).toBeDefined()
+      expect(settlement?.position).toBeDefined()
+      if (changed === undefined || suspend === undefined || settlement === undefined) {
+        return yield* Effect.die("missing B F2 suspension chronology")
+      }
+      expect(changed.position < suspend.position).toBe(true)
+      expect(suspend.position < settlement.position).toBe(true)
+    }
   })
 )
 
@@ -1470,18 +1759,30 @@ it.effect("timer refresh records an unreadable graph without issuing an executor
   })
 )
 
-it.effect("timer refresh records an unreadable Git outcome without issuing an executor command", () =>
+it.effect("timer refresh records an unreadable focused claim and issues no executor command", () =>
+  Effect.gen(function* () {
+    const result = yield* runProductionRefreshHarness({ source: "Timer", claim: "Unreadable" })
+    expect(result.executorCalls).toEqual([])
+    expect(
+      result.journalRecords.some(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskClaimFactsUnreadable"
+      )
+    ).toBe(true)
+    expectRunningResponsibilityRemains(result.journalRecords)
+  })
+)
+
+it.effect("timer refresh leaves an unreadable ordinary Git intent unsettled without issuing an executor command", () =>
   Effect.gen(function* () {
     const result = yield* runProductionRefreshHarness({ source: "Timer", git: "Unreadable" })
     expect(result.executorCalls).toEqual([])
     expect(result.activeActivation).toBe("Failure")
-    expect(
-      result.journalRecords.some(
-        ({ event }) =>
-          event._tag === "ActiveWorkAuthorityRefreshGitReadFailed" &&
-          event.failure._tag === "GitTargetLineageReadFailure"
-      )
-    ).toBe(true)
+    const targetLineageIntent = result.journalRecords.findLast(
+      ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage"
+    )
+    expect(targetLineageIntent).toBeDefined()
+    expect(result.journalRecords.some(({ event }) => event._tag === "TargetLineageObserved")).toBe(false)
     expectRunningResponsibilityRemains(result.journalRecords)
   })
 )

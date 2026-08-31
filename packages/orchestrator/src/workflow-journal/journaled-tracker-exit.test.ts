@@ -77,6 +77,7 @@ it.effect("records the authored tracker interruption and ordinary replay cassett
       )
       const interpreter = yield* WorkflowInterpreter
       const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make("application-exit-interrupted-tracker-read"),
         target
       )

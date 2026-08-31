@@ -80,7 +80,11 @@ const executeGithubDryRun = Effect.fn("Cli.executeGithubDryRun")(function* (targ
   const reader = yield* TrackerGraphReader
   const allocator = yield* OperationIdAllocator
   const trace = yield* WorkflowTrace
-  const operation = makeTrackerGraphObservationOperation(yield* allocator.allocate(), target)
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    yield* allocator.allocate(),
+    target
+  )
   yield* trace.emit(OperationSelected.make({ operation }))
   const snapshot = yield* reader
     .read(target)

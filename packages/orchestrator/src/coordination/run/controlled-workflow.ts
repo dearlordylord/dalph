@@ -55,7 +55,7 @@ const controlledJournaledRunLayer = (runId: RunId) =>
           opportunity
         ).pipe(
           Layer.provide(
-            journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter), opportunity)
+            journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter))
           ),
           Layer.provide(controls),
           Layer.provide(Layer.succeed(OperationIdAllocator, operationIdAllocator)),

@@ -13,8 +13,7 @@ export const freshOperationIdentity = (): FreshOperationIdentity => ({
 
 export const recoveredIdentityFor = (
   action: NewRecoveredWorkflowAction,
-  preselectedOperationId?: OperationId,
-  preservePreselectedOperationId = false
+  preselectedOperationId?: OperationId
 ): FreshOperationIdentity => {
   if (action._tag === "TaskClaimReacquisition") {
     return {
@@ -29,18 +28,8 @@ export const recoveredIdentityFor = (
     }
   }
   if (
-    preservePreselectedOperationId &&
     preselectedOperationId !== undefined &&
-    (action._tag === "ReadTaskWorktree" || action._tag === "ReadTargetLineage")
-  ) {
-    return { _tag: "FreshOperationIdRequired", source: { _tag: "Preserve", operationId: preselectedOperationId } }
-  }
-  // The active-refresh prefix is a human-readable allocator identity only;
-  // typed operation provenance authorizes preserving this graph boundary.
-  if (
-    action._tag === "ReadTrackerGraph" &&
-    preselectedOperationId !== undefined &&
-    action.operation.purpose === "ActiveWorkAuthorityRefresh"
+    (action._tag === "ReadTaskWorktree" || action._tag === "ReadTargetLineage" || action._tag === "ReadTrackerGraph")
   ) {
     return { _tag: "FreshOperationIdRequired", source: { _tag: "Preserve", operationId: preselectedOperationId } }
   }

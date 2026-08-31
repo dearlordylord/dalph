@@ -126,7 +126,11 @@ const historyDetailsFor = (records: ReadonlyArray<JournalRecord>): ReadonlyArray
 
 it("rejects Completed termination when the fresh graph is unsettled without cancellation", () => {
   const target = FixtureTarget.make("unsettled-termination-target")
-  const operation = makeTrackerGraphObservationOperation(OperationId.make("unsettled-termination-graph"), target)
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("unsettled-termination-graph"),
+    target
+  )
   const snapshot = validSnapshot({
     revision: "unsettled-termination-revision",
     rootTaskId: "root",

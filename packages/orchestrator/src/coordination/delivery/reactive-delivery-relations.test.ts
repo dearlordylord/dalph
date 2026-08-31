@@ -337,7 +337,11 @@ it.effect("records the initial and later exact production bundles without changi
         journal,
         currentProjection(journal.state.get.pipe(Effect.orDie))
       ).pipe(Effect.provideService(DeliveryRelationPublicationObserver, observer))
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("observed-production-bundle"), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("observed-production-bundle"),
+        target
+      )
       const projected = projectTrackerSnapshot({
         revision: "observed-production-revision",
         tasks: [{ id: TaskId.make("A"), lifecycle: { _tag: "Open" as const }, parentTaskId: null, prerequisiteIds: [] }]
@@ -386,7 +390,11 @@ it.effect("keeps foreign tracker facts out of the target-bound public delivery r
         revision: string,
         taskIds: ReadonlyArray<string>
       ) {
-        const operation = makeTrackerGraphObservationOperation(operationId, graphTarget)
+        const operation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          operationId,
+          graphTarget
+        )
         const projected = projectTrackerSnapshot({
           revision,
           tasks: taskIds.map((id) => ({
@@ -630,8 +638,16 @@ it.effect("publishes journaled G1 and equal-content G2 through one reactive deli
       const current = yield* signal.get
       expect(current.graph._tag).toBe("GraphNotEstablished")
       const firstDeliverySeen = yield* Deferred.make<void>()
-      const first = makeTrackerGraphObservationOperation(OperationId.make("integrated-G1"), target)
-      const second = makeTrackerGraphObservationOperation(OperationId.make("integrated-G2"), target)
+      const first = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("integrated-G1"),
+        target
+      )
+      const second = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("integrated-G2"),
+        target
+      )
       const observed = yield* signal.changes.pipe(
         Stream.tap((value) =>
           value.graph._tag === "GraphEstablished" && value.graph.observation.operationId === first.operationId
@@ -711,7 +727,11 @@ it.effect("waits for the accepted journal position to reach delivery planning be
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
       const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("publication-handshake"), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("publication-handshake"),
+        target
+      )
 
       yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
       yield* Deferred.await(refreshStarted)
@@ -747,7 +767,11 @@ it.effect("removes an interrupted accepted-fact waiter before the next publicati
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
       const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("interrupted-publication-waiter"), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("interrupted-publication-waiter"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
       yield* Deferred.await(refreshStarted)
 
@@ -781,7 +805,11 @@ it.effect("cancels an accepted-fact waiter after it has crossed the publication 
         currentProjection(journal.state.get.pipe(Effect.orDie))
       )
       const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("cancelled-publication-waiter"), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("cancelled-publication-waiter"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
 
       const waiting = yield* publication.awaitCurrent.pipe(Effect.forkChild)
@@ -891,7 +919,11 @@ it.effect("retries reconstruction when a journal append lands during recovery pr
       )
 
       yield* Deferred.await(firstProjectionRead)
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("coherent-race-read"), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("coherent-race-read"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
       const projected = projectTrackerSnapshot({ revision: "coherent-race", tasks: [] })
       if (projected._tag === "Invalid") return yield* Effect.die(new Error("race graph must be valid"))
@@ -1060,7 +1092,11 @@ it.effect("publishes a typed relation failure when a later recovery projection f
 
       yield* Ref.set(failProjection, true)
       const failed = yield* relation.changes.pipe(Stream.drop(1), Stream.runHead, Effect.flip, Effect.forkChild)
-      const trigger = makeTrackerGraphObservationOperation(OperationId.make("projection-failure-trigger"), target)
+      const trigger = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("projection-failure-trigger"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(trigger.operationId), taskTrackerReadIntent(trigger))
       const failure = yield* Fiber.join(failed)
       const currentFailure = yield* relation.get.pipe(Effect.flip)
@@ -1084,7 +1120,11 @@ it.effect("derives safely when recovery evidence is unavailable before and after
       const initial = Option.getOrThrow(yield* initialRelation.changes.pipe(Stream.runHead))
       expect(initial.current.trackerGraph._tag).toBe("GraphNotEstablished")
 
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("unavailable-evidence-graph"), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("unavailable-evidence-graph"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
       const projected = projectTrackerSnapshot({ revision: "unavailable-evidence", tasks: [] })
       if (projected._tag === "Invalid") return yield* Effect.die("unavailable-evidence graph must be valid")
@@ -1136,7 +1176,11 @@ it.effect("publishes a typed failure when journal-triggered reconciliation canno
       yield* Ref.set(failRead, true)
       const publicationFailure = yield* publication.awaitCurrent.pipe(Effect.flip)
       const failed = yield* relation.changes.pipe(Stream.drop(1), Stream.runHead, Effect.flip, Effect.forkChild)
-      const trigger = makeTrackerGraphObservationOperation(OperationId.make("journal-read-failure-trigger"), target)
+      const trigger = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("journal-read-failure-trigger"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(trigger.operationId), taskTrackerReadIntent(trigger))
       const failure = yield* Fiber.join(failed)
 
@@ -1218,7 +1262,11 @@ it.effect("fails an accepted-fact waiter when the journal signal fails", () =>
         currentProjection(journal.state.get.pipe(Effect.orDie))
       )
       const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
-      const trigger = makeTrackerGraphObservationOperation(OperationId.make("pending-waiter-failure-trigger"), target)
+      const trigger = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("pending-waiter-failure-trigger"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(trigger.operationId), taskTrackerReadIntent(trigger))
       const waiting = yield* publication.awaitCurrent.pipe(Effect.flip, Effect.forkChild)
       yield* Effect.yieldNow

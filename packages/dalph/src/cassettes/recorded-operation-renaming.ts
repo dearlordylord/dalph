@@ -83,6 +83,13 @@ export const renameWorkflowOperation = (
       }),
       ReadTrackerGraph: (operation) => ({
         ...operation,
+        cause:
+          operation.cause._tag === "PostQuiescenceReconfirmation"
+            ? {
+                ...operation.cause,
+                quiescentGraphOperationId: renamed(operation.cause.quiescentGraphOperationId, maps.operationIds)
+              }
+            : operation.cause,
         operationId: renamed(operation.operationId, maps.operationIds),
         predecessorOperationIds: renamePredecessors(operation.predecessorOperationIds, maps)
       }),

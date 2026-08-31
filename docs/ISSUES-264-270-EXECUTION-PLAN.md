@@ -48,9 +48,8 @@ of these tickets.
 ### Repair now
 
 1. Implement #265 before accepting #266 as complete.
-2. Remove #266's `ActiveWorkAuthorityRefreshGitReadOperation`, private intent
-   event, refresh ordinal, failed-read event, record key, replay runner, and
-   special interpreter routing.
+2. Remove #266's work-in-progress private Git-read operation, intent, ordinal,
+   failure, record-key, replay-runner, and interpreter-routing vocabulary.
 3. Send active-work graph, focused tracker, worktree, and target-lineage reads
    through the existing ordinary journal-first protocols owned by
    #190/#53/#164.
@@ -220,8 +219,8 @@ Scenario-to-test mapping:
   projection tests prove only their narrower timer, drain, and ordering rules.
 - Crash after an ordinary read intent or response loss → required revised
   recovery tests proving #190/#53/#164 and the ordinary focused/Git owners reuse
-  their operation identities. Private `ActiveWorkAuthorityRefreshGitRead...`
-  fixtures and refresh ordinals are rejected evidence for this mapping.
+  their operation identities. Removed private-read fixtures and refresh
+  ordinals are rejected evidence for this mapping.
 - Crash around B1 suspension → required revision of the existing projection
   fixture to execute crash-before-intent, intent-before-call, and lost-response
   cuts through the executor boundary.

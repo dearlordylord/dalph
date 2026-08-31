@@ -18,10 +18,7 @@ import {
 } from "../frontier/run-finality.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
-import {
-  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
-  makeTrackerGraphObservationOperation
-} from "../../workflow/registry/operation.js"
+import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { executeTrackerGraphRead } from "../delivery/delivery-action-adapter-common.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
 import { InRunJournal, type InRunJournalService, type JournalRecord } from "../../workflow-journal/store.js"
@@ -221,14 +218,38 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
       if (currentGraph === undefined) return proofOf(target, firstQuiescence)
 
       const journal = yield* InRunJournal
-      const applicationExitAdmission = (yield* DeliveryRuntimeResources).applicationExitAdmission
-      const owner = yield* applicationExitAdmission.acquireForwardOwner("InterruptibleBoundary").pipe(Effect.option)
-      if (Option.isNone(owner)) return proofOf(target, firstQuiescence)
-
       const currentGraphOperationId = currentGraph.observation.operationId
       const runId = firstQuiescence.current.runId
       let journalRecords: ReadonlyArray<JournalRecord> = []
       if (runId !== undefined) journalRecords = yield* journal.read(runId)
+      if (
+        opportunity._tag === "ActiveWorkAuthorityRefresh" &&
+        currentGraph.observation.cause._tag !== "ExecutingWorkAuthorityCheck"
+      ) {
+        const activeSubjectStillExecuting = [...opportunity.subjects].some((subject) => {
+          const latest = journalRecords.findLast(
+            ({ event }) =>
+              (event._tag === "PlannedAttemptExecutorWorkReported" ||
+                event._tag === "PlannedAttemptExecutorCommandResponseObserved") &&
+              event.report.correlation.runId === subject.runId &&
+              event.report.correlation.attemptId === subject.attemptId
+          )
+          return (
+            latest !== undefined &&
+            (latest.event._tag === "PlannedAttemptExecutorWorkReported" ||
+              latest.event._tag === "PlannedAttemptExecutorCommandResponseObserved") &&
+            latest.event.report._tag === "ExecutorWorkExecuting"
+          )
+        })
+        if (!activeSubjectStillExecuting) {
+          return proofOf(target, yield* runDeliveryRuntimePhase(evaluations))
+        }
+        return proofOf(target, firstQuiescence)
+      }
+
+      const applicationExitAdmission = (yield* DeliveryRuntimeResources).applicationExitAdmission
+      const owner = yield* applicationExitAdmission.acquireForwardOwner("InterruptibleBoundary").pipe(Effect.option)
+      if (Option.isNone(owner)) return proofOf(target, firstQuiescence)
       const pendingOperation =
         opportunity._tag === "ActiveWorkAuthorityRefresh" && runId !== undefined
           ? pendingActiveRefreshG2OperationFor(journalRecords, runId, target, {
@@ -243,13 +264,12 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
           const operationId = yield* allocator.allocate()
           const journaledPredecessors = yield* journaledPredecessorOperationIds(journal, runId, target)
           const predecessorOperationIds = distinctOperationIds([...journaledPredecessors, currentGraphOperationId])
-          return opportunity._tag === "ActiveWorkAuthorityRefresh"
-            ? makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
-                operationId,
-                target,
-                predecessorOperationIds
-              )
-            : makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
+          return makeTrackerGraphObservationOperation(
+            { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: currentGraphOperationId },
+            operationId,
+            target,
+            predecessorOperationIds
+          )
         }))
       const operationId = operation.operationId
       const accepted = yield* executeTrackerGraphRead(operation).pipe(

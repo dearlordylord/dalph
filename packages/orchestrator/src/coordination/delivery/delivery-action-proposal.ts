@@ -16,7 +16,6 @@ import type {
   WorkflowTaskClaimReleaseOperation
 } from "../../workflow/registry/operation.js"
 import type { IntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
-import type { ActiveWorkAuthorityRefreshGitReadOperation } from "../../workflow/protocols/active-work-authority-refresh/events.js"
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import type { RunnableFrontierTransition } from "../frontier/frontier.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
@@ -326,10 +325,9 @@ export interface FreshDecision {
 export interface DeliveryProposalsInput {
   readonly acceptedAt?: JournalPosition | null
   readonly acceptedOperationIds: ReadonlySet<OperationId>
-  /** Active-refresh Git intents still pending at this exact journal evaluation. */
-  readonly activeRefreshPendingGitReadOperations?: ReadonlyArray<ActiveWorkAuthorityRefreshGitReadOperation>
   readonly fresh: ReadonlyArray<FreshDecision>
   readonly integrationResponsibilities?: ReadonlyArray<IntegrationResponsibility>
+  readonly pendingReadOperationIds?: ReadonlySet<OperationId>
   readonly responsibilities?: ReadonlyArray<WorkflowResponsibilityEntry>
   readonly runId: RunId
   readonly transitions: ReadonlyArray<RunnableFrontierTransition>

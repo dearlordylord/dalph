@@ -45,6 +45,7 @@ it("rejects a complete graph receipt paired with a different reduced snapshot", 
   )
   if (first._tag === "Invalid" || second._tag === "Invalid") return expect.fail("fixture graphs must be valid")
   const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("receipt-mismatch-operation"),
     FixtureTarget.make("test-graph-target")
   )

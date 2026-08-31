@@ -1256,6 +1256,7 @@ it.effect("keeps P1 restart eligibility independent from a later task C graph re
     yield* appendExposedRestart
     const journal = yield* JournalStore
     const cGraph = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("attempt-restart-independent-C-graph"),
       target,
       [],

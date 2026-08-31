@@ -75,11 +75,6 @@ import {
 import { validateCancelledAttemptHistory } from "./cancelled-attempt-history.js"
 import { appliedTerminalChoiceFor } from "../../workflow/protocols/attempt-choice/terminal-choice-authority.js"
 import { plannedAttemptExecutorLifecycleTransitionError } from "../../workflow/protocols/planned-attempt-executor-work/report-acceptance.js"
-import {
-  activeWorkAuthorityRefreshGitReadOperationMatchesIntent,
-  ordinaryGitReadOperationFor,
-  type ActiveWorkAuthorityRefreshGitReadOperation
-} from "../../workflow/protocols/active-work-authority-refresh/events.js"
 
 const finalArrayElementOffset = -1
 
@@ -120,7 +115,6 @@ interface FoldIndexes extends IntegrationHistoryIndexes {
     OperationId,
     Extract<WorkflowOperation, { readonly _tag: "ReadTargetLineage" | "ReadTaskWorktree" }>
   >
-  readonly activeGitReadIntents: HashMap.HashMap<OperationId, ActiveWorkAuthorityRefreshGitReadOperation>
   readonly latestRunPolicyRevision: number | undefined
   readonly seenEventKindsByOperation: HashMap.HashMap<OperationId, HashSet.HashSet<WorkflowJournalEvent["_tag"]>>
   readonly seenKeys: HashSet.HashSet<JournalRecordKey>
@@ -176,7 +170,6 @@ const emptyIndexes = (): FoldIndexes => ({
   latestControlDirectionOrdinal: 0,
   plans: HashMap.empty(),
   gitReadIntents: HashMap.empty(),
-  activeGitReadIntents: HashMap.empty(),
   latestRunPolicyRevision: undefined,
   seenEventKindsByOperation: HashMap.empty(),
   seenKeys: HashSet.empty(),
@@ -938,16 +931,6 @@ const validateContinuationAuthorization = (
   }
 }
 const recordGitReadIntent = (record: JournalRecord, indexes: FoldIndexes): FoldIndexes => {
-  if (record.event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded") {
-    return {
-      ...indexes,
-      activeGitReadIntents: HashMap.set(
-        indexes.activeGitReadIntents,
-        record.event.operation.operationId,
-        record.event.operation
-      )
-    }
-  }
   if (record.event._tag !== "GitReadIntentRecorded") return indexes
   return {
     ...indexes,
@@ -959,10 +942,7 @@ const gitReadOperationForObservation = (
   indexes: FoldIndexes,
   operationId: OperationId
 ): Extract<WorkflowOperation, { readonly _tag: "ReadTargetLineage" | "ReadTaskWorktree" }> | undefined => {
-  const ordinary = mapGet(indexes.gitReadIntents, operationId)
-  if (ordinary !== undefined) return ordinary
-  const active = mapGet(indexes.activeGitReadIntents, operationId)
-  return active === undefined ? undefined : ordinaryGitReadOperationFor(active)
+  return mapGet(indexes.gitReadIntents, operationId)
 }
 
 const validateWorktreeObservationIntent = (
@@ -1006,81 +986,6 @@ const validateTargetLineageObservationIntent = (
         `target-lineage observation ${record.event.operationId} requires its exact prior target-lineage-read intent and planned attempt`
       )
     }
-  }
-}
-
-/**
- * Accepts an active-refresh Git failure only when its owner authority, exact
- * journal-first intent, ordinal, and latest executor state all line up. The
- * event is deliberately separate from the Restart failure validator below.
- */
-const validateActiveWorkAuthorityRefreshGitReadFailure = (
-  record: JournalRecord,
-  runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
-  indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
-): void => {
-  if (record.event._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") return
-  const event = record.event
-  if (event.authority.runId !== runId || event.operation.plannedAttempt.runId !== runId) {
-    identityIssue(
-      issues,
-      runId,
-      record.position,
-      `active-refresh Git failure ${event.operation.operationId} binds another Run`
-    )
-  }
-  if (event.authority.attemptId !== event.operation.plannedAttempt.attemptId) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      `active-refresh Git failure ${event.operation.operationId} binds a different attempt and authority`
-    )
-  }
-  const intent = mapGet(indexes.activeGitReadIntents, event.operation.operationId)
-  if (intent === undefined || !activeWorkAuthorityRefreshGitReadOperationMatchesIntent(event.operation, intent)) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      `active-refresh Git failure ${event.operation.operationId} requires its exact prior Git read intent`
-    )
-  }
-  const prior = records.filter(({ position }) => position < record.position)
-  const latestExecutorReport = prior.findLast(
-    ({ event: candidate }) =>
-      candidate._tag === "PlannedAttemptExecutorWorkReported" &&
-      candidate.report.correlation.runId === event.authority.runId &&
-      candidate.report.correlation.attemptId === event.authority.attemptId
-  )
-  if (
-    latestExecutorReport?.event._tag !== "PlannedAttemptExecutorWorkReported" ||
-    latestExecutorReport.event.report._tag !== "ExecutorWorkExecuting"
-  ) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      `active-refresh Git failure ${event.operation.operationId} requires the latest exact Running executor report`
-    )
-  }
-  const latestPriorOrdinal = prior.reduce(
-    (latest, { event: candidate }) =>
-      candidate._tag === "ActiveWorkAuthorityRefreshGitReadFailed" &&
-      candidate.authority.attemptId === event.authority.attemptId
-        ? Math.max(latest, candidate.ordinal)
-        : latest,
-    0
-  )
-  if (event.ordinal <= latestPriorOrdinal) {
-    semanticIssue(
-      issues,
-      runId,
-      record.position,
-      `active-refresh Git failure for attempt ${event.authority.attemptId} must exceed prior durable ordinal ${latestPriorOrdinal}, found ${event.ordinal}`
-    )
   }
 }
 
@@ -3299,7 +3204,6 @@ const validateRecord = (
     return next
   }
   next = validateOperationEvent(record, runId, next, issues)
-  validateActiveWorkAuthorityRefreshGitReadFailure(record, runId, records, next, issues)
   validateAttemptRestartAuthorityReadFailure(record, runId, records, issues)
   next = validatePlannedAttemptReplacement(record, runId, records, next, issues)
   validateContinuationAuthorization(record, runId, records, issues)

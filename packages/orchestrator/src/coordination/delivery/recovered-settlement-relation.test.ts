@@ -208,7 +208,11 @@ const seedTerminalAccepted = Effect.gen(function* () {
 const installFreshTrackerFacts = Effect.fn("RecoveredSettlementTest.installFreshTrackerFacts")(function* (
   journalService: Effect.Success<ReturnType<typeof makeJournal>>
 ) {
-  const graphRead = makeTrackerGraphObservationOperation(OperationId.make("recovered-settlement-graph"), trackerTarget)
+  const graphRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("recovered-settlement-graph"),
+    trackerTarget
+  )
   const projected = projectTrackerSnapshot({
     revision: "recovered-settlement-current",
     tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]

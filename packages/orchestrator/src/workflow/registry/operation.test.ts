@@ -6,13 +6,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { ActiveTaskClaim, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { OperationId } from "../identity.js"
-import {
-  ActiveWorkAuthorityRefreshTrackerGraphReadOperation,
-  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
-  makeTrackerGraphObservationOperation,
-  TaskClaimReleaseAuthority,
-  WorkflowOperation
-} from "./operation.js"
+import { makeTrackerGraphObservationOperation, TaskClaimReleaseAuthority, WorkflowOperation } from "./operation.js"
 import { AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
 import {
   CompletionTaskConfirmationReadOrdinal,
@@ -97,37 +91,55 @@ it.effect("requires a completion facts read to use its deterministic operation i
   })
 )
 
-it.effect("decodes active graph provenance separately from an ordinary graph read", () =>
+it.effect("decodes one ordinary complete graph-read operation", () =>
   Effect.gen(function* () {
     const target = FixtureTarget.make("operation-test-graph-target")
     const predecessor = OperationId.make("operation-test-graph-predecessor")
-    const ordinary = makeTrackerGraphObservationOperation(OperationId.make("operation-test-ordinary-graph"), target, [
-      predecessor
-    ])
-    const active = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
-      OperationId.make("operation-test-active-graph"),
+    const ordinary = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("operation-test-ordinary-graph"),
       target,
       [predecessor]
     )
-    expect(ordinary.purpose).toBeUndefined()
-    expect(active).toMatchObject({ purpose: "ActiveWorkAuthorityRefresh" })
-
     const decode = Schema.decodeUnknownEffect(WorkflowOperation)
-    const decodedActive = yield* decode(active)
-    expect(decodedActive._tag).toBe("ReadTrackerGraph")
-    if (decodedActive._tag !== "ReadTrackerGraph") return
-    expect(decodedActive.purpose).toBe("ActiveWorkAuthorityRefresh")
-    expect(decodedActive).toEqual(ActiveWorkAuthorityRefreshTrackerGraphReadOperation.make(active))
-
-    const decodedHistorical = yield* decode({
+    const decoded = yield* decode({
       _tag: "ReadTrackerGraph",
+      cause: ordinary.cause,
       operationId: ordinary.operationId,
       predecessorOperationIds: ordinary.predecessorOperationIds,
       readShape: ordinary.readShape,
       target: ordinary.target
     })
-    expect(decodedHistorical._tag).toBe("ReadTrackerGraph")
-    if (decodedHistorical._tag !== "ReadTrackerGraph") return
-    expect(decodedHistorical.purpose).toBeUndefined()
+    expect(decoded).toEqual(ordinary)
+  })
+)
+
+it.effect("requires a post-quiescence graph read to name its distinct causal graph predecessor", () =>
+  Effect.gen(function* () {
+    const target = FixtureTarget.make("operation-test-post-quiescence-target")
+    const currentGraphOperationId = OperationId.make("operation-test-current-graph")
+    const decode = Schema.decodeUnknownEffect(WorkflowOperation)
+    const candidate = {
+      _tag: "ReadTrackerGraph",
+      cause: { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: currentGraphOperationId },
+      operationId: OperationId.make("operation-test-post-quiescence-graph"),
+      predecessorOperationIds: [] as ReadonlyArray<OperationId>,
+      readShape: { _tag: "CompleteTargetClosure", explicitlyCoveredTaskIds: [] },
+      target
+    } as const
+
+    expect((yield* decode(candidate).pipe(Effect.flip))._tag).toBe("SchemaError")
+    expect(
+      (yield* decode({
+        ...candidate,
+        cause: { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: candidate.operationId },
+        predecessorOperationIds: [candidate.operationId]
+      }).pipe(Effect.flip))._tag
+    ).toBe("SchemaError")
+    expect(yield* decode({ ...candidate, predecessorOperationIds: [currentGraphOperationId] })).toMatchObject({
+      cause: candidate.cause,
+      operationId: candidate.operationId,
+      predecessorOperationIds: [currentGraphOperationId]
+    })
   })
 )

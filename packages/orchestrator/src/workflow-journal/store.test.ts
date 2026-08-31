@@ -138,6 +138,7 @@ const seedSchemaV1 = (filename: JournalDatabaseLocator, record: JournalRecord) =
 const intent = (operationId: string, taskId: string) =>
   taskTrackerReadIntent(
     WorkflowOperation.cases.ReadTrackerGraph.make({
+      cause: { _tag: "WorkflowEstablishment" },
       operationId: OperationId.make(operationId),
       predecessorOperationIds: [],
       readShape: { _tag: "CompleteTargetClosure", explicitlyCoveredTaskIds: [] },
@@ -152,6 +153,7 @@ const appendTerminalDisposition = (
   disposition: "Completed" | "Blocked" | "Cancelled"
 ) => {
   const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make(`retirement-disposition:${disposition}:${runId}`),
     target
   )
@@ -709,6 +711,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
         yield* journal.append(runId, intentRecordKey(first.operation.operationId), first.intent)
         yield* journal.append(runId, outcomeRecordKey(first.operation.operationId), first.observation)
         const secondOperation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
           OperationId.make(`incomparable-graph:${runId}`),
           target
         )
@@ -757,6 +760,7 @@ const journalAppendContract = (name: string, makeLayer: () => Layer.Layer<Journa
         yield* journal.append(runId, intentRecordKey(first.operation.operationId), first.intent)
         yield* journal.append(runId, outcomeRecordKey(first.operation.operationId), first.observation)
         const secondOperation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
           OperationId.make(`causal-graph:${runId}`),
           target,
           [first.operation.operationId]

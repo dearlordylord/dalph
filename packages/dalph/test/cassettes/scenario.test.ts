@@ -20,8 +20,6 @@ import {
 } from "@dalph/contracts"
 import {
   AttemptWorktreeLost,
-  ActiveWorkAuthorityRefreshAuthority,
-  ActiveWorkAuthorityRefreshOrdinal,
   ActiveTaskContinuationRead,
   controlledTrackerMutationLayerFrom,
   ClaimOwner,
@@ -65,7 +63,6 @@ import {
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskClaimFactsUnreadable,
   makeCompleteTaskTrackerFactsObserved,
-  makeActiveWorkAuthorityRefreshGitReadOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
@@ -2914,6 +2911,7 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
       blockerLifecycle: "Open" | "CompletedSuccessfully"
     ) => {
       const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make(`post-promotion-blocker:${revision}`),
         graph.observation.target,
         [],
@@ -6302,41 +6300,6 @@ it.effect(
       if (executorResponsibilityEntry?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") {
         return yield* Effect.die("missing executor responsibility entry")
       }
-      const activeRefreshAuthority = ActiveWorkAuthorityRefreshAuthority.make({
-        attemptId: executorResponsibilityEntry.plannedAttempt.attemptId,
-        runId: executorResponsibilityEntry.plannedAttempt.runId
-      })
-      const activeRefreshOrdinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
-      const activeRefreshBaseOperation = makeTaskWorktreeObservationOperation({
-        operationId: OperationId.make(`cassette-active-refresh-read:${run.runId}`),
-        plannedAttempt: executorResponsibilityEntry.plannedAttempt,
-        predecessorOperationIds: []
-      })
-      const activeRefreshOperation = makeActiveWorkAuthorityRefreshGitReadOperation(
-        activeRefreshBaseOperation,
-        activeRefreshAuthority,
-        activeRefreshOrdinal
-      )
-      const activeRefreshEntries: ReadonlyArray<RecordedCassetteEntry> = [
-        {
-          _tag: "ActiveWorkAuthorityRefreshGitReadInitiated",
-          initiatedBy: { _tag: "DalphCoordinator" },
-          occurrenceClassification: "InitiatedAction",
-          operation: activeRefreshOperation
-        },
-        {
-          _tag: "ActiveWorkAuthorityRefreshGitReadFailed",
-          authority: activeRefreshAuthority,
-          failure: new GitWorktreeReadFailure({
-            detail: "alpha-renaming fixture active-refresh worktree read failed",
-            worktree: activeRefreshOperation.plannedAttempt.worktree
-          }),
-          occurrenceClassification: "NonActionOccurrence",
-          operation: activeRefreshOperation,
-          ordinal: activeRefreshOrdinal,
-          source: "Timer"
-        }
-      ]
       const acquiredClaimEntry = projected.entries.find((entry) => entry._tag === "TaskClaimAcquired")
       if (acquiredClaimEntry?._tag !== "TaskClaimAcquired") {
         return yield* Effect.die("missing acquired claim entry")
@@ -6345,29 +6308,6 @@ it.effect(
       if (runBeganEntry?._tag !== "WorkflowRunBegan") {
         return yield* Effect.die("missing workflow run entry")
       }
-      const runningEntryIndex = projected.entries.findIndex(
-        (entry) => entry._tag === "PlannedAttemptExecutorWorkReported" && entry.report._tag === "ExecutorWorkExecuting"
-      )
-      if (runningEntryIndex < 0) {
-        return yield* Effect.die("active-refresh alpha-renaming fixture requires a Running report")
-      }
-      const activeRefreshRecorded = RecordedCassette.make({
-        ...projected,
-        entries: [
-          ...projected.entries.slice(0, runningEntryIndex + 1),
-          ...activeRefreshEntries,
-          ...projected.entries.slice(runningEntryIndex + 1)
-        ]
-      })
-      const activeRefreshHistory = foldRecordedCassette(activeRefreshRecorded)
-      if (activeRefreshHistory._tag !== "ValidWorkflowJournalHistory") {
-        return yield* Effect.die(
-          `active-refresh alpha-renaming fixture must remain valid: ${activeRefreshHistory.issues
-            .map((issue) => JSON.stringify(issue))
-            .join("; ")}`
-        )
-      }
-      expectRecordedRoundTrip(activeRefreshHistory.records, activeRefreshRecorded)
       const acceptedResult = AcceptedResult.make({
         commit: GitCommitSha.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         evidenceManifest: EvidenceReference.make({
@@ -6588,6 +6528,7 @@ it.effect(
         }
       ] satisfies ReadonlyArray<RecordedCassetteEntry>
       const trackerGraphFailureOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make(`cassette-tracker-failure:${run.runId}`),
         runBeganEntry.target
       )
@@ -6695,7 +6636,6 @@ it.effect(
             from: operationId,
             to: `renamed-operation:${ordinal}`
           })),
-          { from: activeRefreshOperation.operationId, to: "renamed-active-refresh-operation" },
           { from: `cassette-release:${run.runId}`, to: "renamed-operation:claim-release" },
           { from: rejectedClaimOperationId, to: "renamed-rejected-claim-operation" },
           { from: `cassette-worktree-read:${run.runId}`, to: "renamed-operation:worktree-read" },
@@ -6708,55 +6648,6 @@ it.effect(
         worktreeLocators: [{ from: "/dalph/cassettes/attempt-A-0", to: "/dalph/cassettes/renamed-attempt-A" }]
       })
       const renamed = yield* renameRecordedCassette(recorded, renaming)
-      const renamedActiveRefresh = yield* renameRecordedCassette(activeRefreshRecorded, renaming)
-      const renamedActiveRefreshIntent = renamedActiveRefresh.entries.find(
-        (
-          entry
-        ): entry is Extract<RecordedCassetteEntry, { readonly _tag: "ActiveWorkAuthorityRefreshGitReadInitiated" }> =>
-          entry._tag === "ActiveWorkAuthorityRefreshGitReadInitiated" &&
-          entry.operation.operationId === "renamed-active-refresh-operation"
-      )
-      const renamedActiveRefreshFailure = renamedActiveRefresh.entries.find(
-        (
-          entry
-        ): entry is Extract<RecordedCassetteEntry, { readonly _tag: "ActiveWorkAuthorityRefreshGitReadFailed" }> =>
-          entry._tag === "ActiveWorkAuthorityRefreshGitReadFailed"
-      )
-      if (
-        renamedActiveRefreshIntent === undefined ||
-        renamedActiveRefreshIntent.operation._tag !== "ReadTaskWorktree" ||
-        renamedActiveRefreshFailure === undefined ||
-        renamedActiveRefreshFailure.operation._tag !== "ReadTaskWorktree" ||
-        renamedActiveRefreshFailure.failure._tag !== "GitWorktreeReadFailure"
-      ) {
-        return yield* Effect.die("active-refresh alpha-renaming fixture lost its typed intent or failure")
-      }
-      expect(renamedActiveRefreshIntent.operation.operationId).toBe("renamed-active-refresh-operation")
-      expect(renamedActiveRefreshIntent.operation.plannedAttempt.attemptId).toBe("renamed-attempt-A")
-      expect(renamedActiveRefreshIntent.operation.plannedAttempt.runId).toBe("renamed-run")
-      expect(renamedActiveRefreshIntent.operation.plannedAttempt.branch).toBe("refs/heads/dalph/renamed-attempt-A")
-      expect(renamedActiveRefreshIntent.operation.plannedAttempt.worktree).toBe("/dalph/cassettes/renamed-attempt-A")
-      expect(renamedActiveRefreshIntent.operation.authority.attemptId).toBe("renamed-attempt-A")
-      expect(renamedActiveRefreshIntent.operation.authority.runId).toBe("renamed-run")
-      expect(renamedActiveRefreshIntent.operation.ordinal).toBe(activeRefreshOrdinal)
-      expect(renamedActiveRefreshFailure.authority.attemptId).toBe("renamed-attempt-A")
-      expect(renamedActiveRefreshFailure.authority.runId).toBe("renamed-run")
-      expect(renamedActiveRefreshFailure.ordinal).toBe(activeRefreshOrdinal)
-      expect(renamedActiveRefreshFailure.source).toBe("Timer")
-      expect(renamedActiveRefreshFailure.operation.operationId).toBe("renamed-active-refresh-operation")
-      expect(renamedActiveRefreshFailure.operation.plannedAttempt.branch).toBe("refs/heads/dalph/renamed-attempt-A")
-      expect(renamedActiveRefreshFailure.operation.plannedAttempt.worktree).toBe("/dalph/cassettes/renamed-attempt-A")
-      expect(renamedActiveRefreshFailure.failure.worktree).toBe("/dalph/cassettes/renamed-attempt-A")
-      expect(
-        (yield* verifyRecordedCassetteRoundTripWithRenaming(
-          activeRefreshHistory.records,
-          renamedActiveRefresh,
-          invertCassetteIdentityRenaming(renaming)
-        )).every(
-          ({ operationalStateEquivalent, pureSelectionEquivalent, workflowHistoryEquivalent }) =>
-            workflowHistoryEquivalent && operationalStateEquivalent && pureSelectionEquivalent
-        )
-      ).toBe(true)
       const renamedRejectedEntry = renamed.entries.find((entry) => entry._tag === "TaskClaimAcquisitionRejected")
       if (renamedRejectedEntry?._tag !== "TaskClaimAcquisitionRejected") {
         return yield* Effect.die("alpha-renaming fixture requires the rejected claim entry")
@@ -6780,9 +6671,6 @@ it.effect(
         invertCassetteIdentityRenaming(renaming)
       )
       const encodedAfter = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(renamed))
-      const encodedActiveRefreshAfter = JSON.stringify(
-        yield* Schema.encodeUnknownEffect(RecordedCassette)(renamedActiveRefresh)
-      )
       const allRenamings = [
         ...renaming.attemptIds,
         ...renaming.claimTokens,
@@ -6793,8 +6681,6 @@ it.effect(
         ...renaming.worktreeLocators
       ]
       const entryVariants = {
-        ActiveWorkAuthorityRefreshGitReadInitiated: true,
-        ActiveWorkAuthorityRefreshGitReadFailed: true,
         AttemptChoiceApplied: true,
         AttemptImplementationAbandoned: true,
         AttemptRestartAuthorityReadFailed: true,
@@ -6914,7 +6800,7 @@ it.effect(
 
       expect(checkpoints.every((checkpoint) => checkpoint.workflowHistoryEquivalent)).toBe(true)
       for (const { from, to } of allRenamings) {
-        const encodedRenamedFixtures = `${encodedAfter}${encodedActiveRefreshAfter}`
+        const encodedRenamedFixtures = encodedAfter
         expect(encodedRenamedFixtures).not.toContain(`"${from}"`)
         expect(encodedRenamedFixtures).toContain(`"${to}"`)
       }
@@ -7271,7 +7157,6 @@ it.effect(
         new Set(
           [
             ...recorded.entries,
-            ...activeRefreshRecorded.entries,
             ...stoppageRecorded.entries,
             ...noReleaseRecorded.entries,
             ...foreignNoReleaseRecorded.entries,

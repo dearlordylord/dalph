@@ -25,7 +25,6 @@ import { OperationId } from "../../workflow/identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   makeTargetLineageObservationOperation,
-  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
@@ -153,53 +152,11 @@ describe("deliveryProposalsOf", () => {
     })
   })
 
-  it.effect("preserves a selected active-refresh graph identity until admission", () =>
-    Effect.gen(function* () {
-      const operationId = OperationId.make("active-refresh:proposal-run:after:17:graph")
-      const operation = makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
-        operationId,
-        FixtureTarget.make("proposal-target"),
-        [],
-        [taskId]
-      )
-      const transition = RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
-        operation,
-        plannedAttempt
-      })
-
-      const [proposal] = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
-        fresh: [],
-        responsibilities: [
-          { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(2), plannedAttempt }
-        ],
-        runId,
-        transitions: [transition]
-      }).ticketDelivery
-
-      expect(proposal?.actionIdentity).toEqual({
-        _tag: "FreshOperationIdRequired",
-        source: { _tag: "Preserve", operationId }
-      })
-      if (proposal === undefined) return
-      const materialized = yield* materializeDeliveryAction(proposal).pipe(
-        Effect.provideService(
-          OperationIdAllocator,
-          OperationIdAllocator.of({ allocate: () => Effect.succeed(OperationId.make("must-not-be-used")) })
-        ),
-        Effect.provideService(
-          PlannedTaskAttemptPlanner,
-          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("active graph materialization must not plan") })
-        )
-      )
-      expect(materialized).toMatchObject({ _tag: "FreshOperationAction", operationId })
-    })
-  )
-
   it.effect("allocates for a historical graph read whose prefix only looks active", () =>
     Effect.gen(function* () {
       const operationId = OperationId.make("active-refresh:proposal-run:after:17:graph")
       const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         operationId,
         FixtureTarget.make("proposal-target"),
         [],

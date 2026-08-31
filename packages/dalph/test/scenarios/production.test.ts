@@ -488,6 +488,7 @@ const makePublicRunFixture = (projectionPlan: PublicExecutorProjectionPlan, opti
     }
     const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
     const observation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("production-executor-projection-graph"),
       target,
       [claimOperation.acquisition.operationId],
@@ -2058,7 +2059,11 @@ it.effect("ticket delivery checks the tracker after a lost claim response and re
       const runId = RunId.make("production-lost-claim-run")
       const target = FixtureTarget.make("production-lost-claim-target")
       const taskId = TaskId.make("A")
-      const graphRead = makeTrackerGraphObservationOperation(OperationId.make("production-lost-claim-graph"), target)
+      const graphRead = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("production-lost-claim-graph"),
+        target
+      )
       const acquisition = {
         operationId: OperationId.make("production-lost-claim-operation"),
         owner: ClaimOwner.make("dalph"),
@@ -2221,6 +2226,7 @@ it.effect("ticket delivery reads Git after ambiguous worktree creation and prese
       }
       const claim = ActiveTaskClaim.make(acquisition)
       const graphRead = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make("production-ambiguous-worktree-graph"),
         target
       )
@@ -2688,6 +2694,7 @@ it.effect("publishes a changed terminal observation before continuing", () =>
       const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
       const trackerTarget = FixtureTarget.make("production-target")
       const observation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make("production-observation"),
         trackerTarget,
         [claimOperation.acquisition.operationId],
@@ -2949,12 +2956,14 @@ it.effect("blocks Run establishment before activation when preserved history has
       const invalidRunId = RunId.make("invalid-preserved-run")
       const missingIntent = OperationId.make("missing-observation-intent")
       const missingIntentOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         missingIntent,
         FixtureTarget.make("missing-observation-target")
       )
       yield* Effect.gen(function* () {
         const journal = yield* JournalStore
         const validObservation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
           OperationId.make("valid-preserved-observation"),
           FixtureTarget.make("valid-preserved-target")
         )

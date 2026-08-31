@@ -83,7 +83,13 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
   return yield* Match.valueTags(step, {
     ReadCurrentTaskGraph: (step) =>
       Effect.gen(function* () {
-        const operation = makeTrackerGraphObservationOperation(action.operationId, target, [], [step.task.id])
+        const operation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          action.operationId,
+          target,
+          [],
+          [step.task.id]
+        )
         yield* executeTrackerGraphRead(operation, lease)
         return deliveryActionCompleted(action.proposal.id)
       }),
@@ -95,6 +101,7 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
     ReadPostClaimGraph: (step) =>
       Effect.gen(function* () {
         const operation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
           action.operationId,
           target,
           [step.predecessorOperationId],

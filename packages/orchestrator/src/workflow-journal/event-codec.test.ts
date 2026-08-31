@@ -30,7 +30,13 @@ import { JournalPosition } from "./identity.js"
 it.effect("round-trips the current generic journal vocabulary", () =>
   Effect.gen(function* () {
     const event = taskTrackerReadIntent(
-      makeTrackerGraphObservationOperation(OperationId.make("read-graph"), FixtureTarget.make("fixture"), [], [])
+      makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("read-graph"),
+        FixtureTarget.make("fixture"),
+        [],
+        []
+      )
     )
     const decoded = yield* decodeJournalEvent(encodeJournalEvent(event))
     expect(decoded).toEqual(event)
@@ -76,6 +82,7 @@ it.effect("rejects malformed payloads, unsupported versions, and invalid event s
 
     const currentEvent = taskTrackerReadIntent(
       makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make("prior-version-read"),
         FixtureTarget.make("fixture"),
         [],

@@ -22,7 +22,7 @@ import type { TaskLifecycle } from "../../authorities/task-tracker/task.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
-import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
+import { makeTrackerGraphObservationOperation, type TrackerGraphReadCause } from "../../workflow/registry/operation.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import {
@@ -90,12 +90,18 @@ const snapshot = (
   return projected.snapshot
 }
 
-const graph = (operation: string, recordedAt: number, current: TaskDagSnapshot) => {
+const graph = (
+  operation: string,
+  recordedAt: number,
+  current: TaskDagSnapshot,
+  cause: typeof TrackerGraphReadCause.Type = { _tag: "WorkflowEstablishment" }
+) => {
   const established = TrackerGraphState.cases.GraphEstablished.make({
     observation: makeTestJournaledTrackerGraphObservation({
       operationId: OperationId.make(operation),
       recordedAt: JournalPosition.make(recordedAt),
-      snapshot: current
+      snapshot: current,
+      cause
     })
   })
   if (established._tag !== "GraphEstablished") throw new Error("established graph constructor must be exact")
@@ -435,7 +441,8 @@ it.effect("active refresh performs mandatory G2 once after its typed completion 
         1,
         snapshot("active-boundary-G1", [
           { id: TaskId.make("A"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
-        ])
+        ]),
+        { _tag: "ExecutingWorkAuthorityCheck" }
       )
       const attemptId = AttemptId.make("active-boundary-attempt")
       const boundary: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]> = {
@@ -493,7 +500,7 @@ it.effect("keeps a new active-refresh G2 nonterminal when its accepted publicati
           const currentSnapshot = snapshot(`active-G2-contract-${kind}`, [
             { id: TaskId.make("A"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
           ])
-          const g1 = graph(`active-G2-contract-${kind}-G1`, 1, currentSnapshot)
+          const g1 = graph(`active-G2-contract-${kind}-G1`, 1, currentSnapshot, { _tag: "ExecutingWorkAuthorityCheck" })
           const attemptId = AttemptId.make(`active-G2-contract-${kind}-attempt`)
           const boundary: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]> = {
             _tag: "ActiveRefreshRuntimeBoundary",
@@ -550,15 +557,19 @@ it.effect("keeps a new active-refresh G2 nonterminal when its accepted publicati
   )
 )
 
-it.effect("replays an intent-only G2 after a crash and allocates a fresh identity after its outcome", () =>
+it.effect("replays an intent-only G2 after a crash without allocating a second identity", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const base = yield* baseEvaluation
       const contents = snapshot("g2-crash-replay", [
         { id: activeVerticalTaskA, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
       ])
-      const g1Operation = makeTrackerGraphObservationOperation(OperationId.make("g2-crash-G1"), target)
-      const g1 = graph(g1Operation.operationId, 2, contents)
+      const g1Operation = makeTrackerGraphObservationOperation(
+        { _tag: "ExecutingWorkAuthorityCheck" },
+        OperationId.make("g2-crash-G1"),
+        target
+      )
+      const g1 = graph(g1Operation.operationId, 2, contents, g1Operation.cause)
       const g1Records: ReadonlyArray<JournalRecord> = [
         {
           event: taskTrackerReadIntent(g1Operation),
@@ -644,12 +655,7 @@ it.effect("replays an intent-only G2 after a crash and allocates a fresh identit
           event.operation._tag === "ReadTrackerGraph" &&
           event.operation.operationId === OperationId.make("g2-crash-fresh-0")
       )
-      expect(
-        replayableActiveIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
-          replayableActiveIntent.event.operation._tag === "ReadTrackerGraph"
-          ? replayableActiveIntent.event.operation.purpose
-          : undefined
-      ).toBe("ActiveWorkAuthorityRefresh")
+      expect(replayableActiveIntent).toBeDefined()
       expect(
         afterCrash
           .filter(({ event }) => event._tag === "TaskTrackerReadIntentRecorded")
@@ -680,43 +686,12 @@ it.effect("replays an intent-only G2 after a crash and allocates a fresh identit
       ])
       expect(yield* Ref.get(allocated)).toEqual([OperationId.make("g2-crash-fresh-0")])
 
-      yield* runStabilizedDelivery(target, signalOf(state), opportunity).pipe(
-        Effect.provide(supportWithResourcesWithoutAllocator),
-        Effect.provideService(InRunJournal, journal),
-        Effect.provideService(OperationIdAllocator, allocator),
-        Effect.provideService(
-          DeliveryActionExecutor,
-          DeliveryActionExecutor.of({ execute: () => Effect.die("G2 replay fixture has no action") })
-        ),
-        Effect.provide(interpreter)
-      )
-      expect(yield* Ref.get(reads)).toEqual([
-        OperationId.make("g2-crash-fresh-0"),
-        OperationId.make("g2-crash-fresh-0"),
-        OperationId.make("g2-crash-fresh-1")
-      ])
-      expect(yield* Ref.get(allocated)).toEqual([
-        OperationId.make("g2-crash-fresh-0"),
-        OperationId.make("g2-crash-fresh-1")
-      ])
       const finalRecords = yield* Ref.get(records)
-      const freshActiveIntent = finalRecords.find(
-        ({ event }) =>
-          event._tag === "TaskTrackerReadIntentRecorded" &&
-          event.operation._tag === "ReadTrackerGraph" &&
-          event.operation.operationId === OperationId.make("g2-crash-fresh-1")
-      )
-      expect(
-        freshActiveIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
-          freshActiveIntent.event.operation._tag === "ReadTrackerGraph"
-          ? freshActiveIntent.event.operation.purpose
-          : undefined
-      ).toBe("ActiveWorkAuthorityRefresh")
       expect(
         finalRecords
           .filter(({ event }) => event._tag === "TaskTrackerFactsObserved")
           .map(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? event.operationId : undefined))
-      ).toEqual([g1Operation.operationId, OperationId.make("g2-crash-fresh-0"), OperationId.make("g2-crash-fresh-1")])
+      ).toEqual([g1Operation.operationId, OperationId.make("g2-crash-fresh-0")])
     })
   )
 )
@@ -742,7 +717,8 @@ it.effect("holds an actual independent fresh route until G2 after direct safe or
           snapshot(`active-vertical-${report._tag}-G1`, [
             { id: activeVerticalTaskA, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
             { id: activeVerticalTaskB, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
-          ])
+          ]),
+          { _tag: "ExecutingWorkAuthorityCheck" }
         )
         const activeProposal = activeVerticalSuspensionProposal()
         const preG2Independent = freshGraphReadProposal(g1, activeVerticalTaskB)
@@ -879,7 +855,8 @@ it.effect("runs independent work revealed by G2 while the active subject remains
         1,
         snapshot("active-boundary-independent-G1", [
           { id: taskA, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
-        ])
+        ]),
+        { _tag: "ExecutingWorkAuthorityCheck" }
       )
       const g2 = graph(
         "active-boundary-independent-G2",

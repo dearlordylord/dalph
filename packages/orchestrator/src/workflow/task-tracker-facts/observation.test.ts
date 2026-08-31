@@ -80,7 +80,11 @@ const snapshot = (
 it("a crash before append authorizes no work; restart after append reconstructs facts and only a later observed completion releases B", () => {
   const runId = RunId.make("journal-first-tracker-facts")
   const target = FixtureTarget.make("target")
-  const beforeCompletion = makeTrackerGraphObservationOperation(OperationId.make("read-before-completion"), target)
+  const beforeCompletion = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("read-before-completion"),
+    target
+  )
   const intent = {
     event: taskTrackerReadIntent(beforeCompletion),
     key: intentRecordKey(beforeCompletion.operationId),
@@ -127,9 +131,12 @@ it("a crash before append authorizes no work; restart after append reconstructs 
       .map(String)
   ).toEqual(["A"])
 
-  const afterCompletion = makeTrackerGraphObservationOperation(OperationId.make("read-after-completion"), target, [
-    beforeCompletion.operationId
-  ])
+  const afterCompletion = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("read-after-completion"),
+    target,
+    [beforeCompletion.operationId]
+  )
   const observedAfterCompletion = makeCompleteTaskTrackerFactsObserved(
     afterCompletion,
     snapshot("after-completion", "CompletedSuccessfully")
@@ -161,6 +168,7 @@ it("a crash before append authorizes no work; restart after append reconstructs 
 
 it("a potentially mixed-time complete read is schedulable only when every fact family is complete and consistent", () => {
   const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("incomplete-read"),
     FixtureTarget.make("target")
   )
@@ -263,6 +271,7 @@ it("a potentially mixed-time complete read is schedulable only when every fact f
   }
   const absentTaskId = TaskId.make("removed-from-target")
   const absenceSensitiveRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("absence-sensitive-read"),
     operation.target,
     [],
@@ -299,10 +308,12 @@ it("a potentially mixed-time complete read is schedulable only when every fact f
 it("rejects canonical facts whose target contradicts the initiating logical read", () => {
   const runId = RunId.make("mismatched-tracker-read")
   const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("mismatched-target-read"),
     FixtureTarget.make("intended-target")
   )
   const contradictoryOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     operation.operationId,
     FixtureTarget.make("observed-other-target")
   )
@@ -394,6 +405,7 @@ it("rejects canonical facts whose target contradicts the initiating logical read
   expect(graphFactsForFocusedRead._tag).toBe("InvalidWorkflowJournalHistory")
 
   const explicitlyCoveredRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     operation.operationId,
     operation.target,
     [],
@@ -422,10 +434,17 @@ it("rejects canonical facts whose target contradicts the initiating logical read
 it("a fresh unchanged read records later freshness compactly and restart reuses the earlier full facts", () => {
   const runId = RunId.make("unchanged-reconfirmation")
   const target = FixtureTarget.make("target")
-  const firstRead = makeTrackerGraphObservationOperation(OperationId.make("first-read"), target)
-  const unchangedRead = makeTrackerGraphObservationOperation(OperationId.make("unchanged-read"), target, [
-    firstRead.operationId
-  ])
+  const firstRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("first-read"),
+    target
+  )
+  const unchangedRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("unchanged-read"),
+    target,
+    [firstRead.operationId]
+  )
   const unchangedSnapshot = snapshot("unchanged-content", "Open")
   const firstObservation = makeCompleteTaskTrackerFactsObserved(firstRead, unchangedSnapshot)
   const priorRecords = [
@@ -617,7 +636,9 @@ it("a fresh unchanged read records later freshness compactly and restart reuses 
     invalidHistoryFor(mismatchedSubjects),
     invalidHistoryFor(
       mismatchedTarget,
-      makeTrackerGraphObservationOperation(unchangedRead.operationId, otherTarget, [firstRead.operationId])
+      makeTrackerGraphObservationOperation({ _tag: "WorkflowEstablishment" }, unchangedRead.operationId, otherTarget, [
+        firstRead.operationId
+      ])
     )
   ]
   for (const history of invalidHistories) {
@@ -625,9 +646,12 @@ it("a fresh unchanged read records later freshness compactly and restart reuses 
     expect("runState" in history).toBe(false)
   }
 
-  const futureFullRead = makeTrackerGraphObservationOperation(OperationId.make("future-full-read"), target, [
-    unchangedRead.operationId
-  ])
+  const futureFullRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("future-full-read"),
+    target,
+    [unchangedRead.operationId]
+  )
   const forwardReference = decodeReconfirmation({
     ...reconfirmation.observation,
     priorFullObservationOperationId: futureFullRead.operationId
@@ -689,9 +713,21 @@ it("appends one canonical observation for each logical provider read", async () 
   const events = await Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter
     const journal = yield* JournalStore
-    const first = makeTrackerGraphObservationOperation(OperationId.make("journaled-first"), target)
-    const second = makeTrackerGraphObservationOperation(OperationId.make("journaled-second"), target)
-    const third = makeTrackerGraphObservationOperation(OperationId.make("journaled-third"), target)
+    const first = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("journaled-first"),
+      target
+    )
+    const second = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("journaled-second"),
+      target
+    )
+    const third = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("journaled-third"),
+      target
+    )
     yield* interpreter.readTrackerGraph(first)
     yield* interpreter.readTrackerGraph(second)
     yield* interpreter.readTrackerGraph(third)
@@ -715,7 +751,11 @@ it("appends one canonical observation for each logical provider read", async () 
 it("restarts from a durable unreadable graph read without calling the tracker again", async () => {
   const runId = RunId.make("journaled-unreadable-graph-read")
   const target = FixtureTarget.make("target")
-  const operation = makeTrackerGraphObservationOperation(OperationId.make("unreadable-graph-read"), target)
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("unreadable-graph-read"),
+    target
+  )
   const unreadable = TaskTrackerFactsReadFailed.make({
     completeness: "Unreadable",
     failure: {
@@ -764,10 +804,17 @@ it("a lost post-success graph response authorizes no dependant and resumes only 
   const fixture = integrationFinalityFixture
   const runId = fixture.runId
   const target = fixture.target
-  const oldRead = makeTrackerGraphObservationOperation(OperationId.make("old-open-graph"), target)
-  const laterRead = makeTrackerGraphObservationOperation(OperationId.make("later-completed-graph"), target, [
-    oldRead.operationId
-  ])
+  const oldRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("old-open-graph"),
+    target
+  )
+  const laterRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("later-completed-graph"),
+    target,
+    [oldRead.operationId]
+  )
   const focusedRead = makeCompletionTaskFactsObservationOperation(
     fixture.completionRequest,
     target,
@@ -876,10 +923,17 @@ it("an invalid post-success graph read keeps the focused success and B blocked w
   const fixture = integrationFinalityFixture
   const runId = fixture.runId
   const target = fixture.target
-  const oldRead = makeTrackerGraphObservationOperation(OperationId.make("invalid-graph-old-open"), target)
-  const invalidRead = makeTrackerGraphObservationOperation(OperationId.make("invalid-post-success-graph"), target, [
-    oldRead.operationId
-  ])
+  const oldRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("invalid-graph-old-open"),
+    target
+  )
+  const invalidRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("invalid-post-success-graph"),
+    target,
+    [oldRead.operationId]
+  )
   const focusedRead = makeCompletionTaskFactsObservationOperation(
     fixture.completionRequest,
     target,
@@ -959,7 +1013,11 @@ it("an invalid post-success graph read keeps the focused success and B blocked w
 it("fails replay with a typed error when recorded facts cannot reconstruct the promised knowledge", async () => {
   const runId = RunId.make("unavailable-reconstructed-knowledge")
   const target = FixtureTarget.make("target")
-  const graphRead = makeTrackerGraphObservationOperation(OperationId.make("invalid-replayed-graph"), target)
+  const graphRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("invalid-replayed-graph"),
+    target
+  )
   const validGraphEvent = taskTrackerFactsObservedEvent(
     graphRead.operationId,
     makeCompleteTaskTrackerFactsObserved(graphRead, snapshot("invalid-replayed-graph", "Open"))
@@ -1297,7 +1355,11 @@ it("the live workflow interpreter delegates the focused read through its tracker
 
 it("records exact normalized title and body only through the focused attempt read", () => {
   const target = FixtureTarget.make("target")
-  const graphRead = makeTrackerGraphObservationOperation(OperationId.make("graph-read"), target)
+  const graphRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("graph-read"),
+    target
+  )
   const graphObservation = makeCompleteTaskTrackerFactsObserved(graphRead, snapshot("graph-only", "Open"))
   expect(JSON.stringify(graphObservation)).not.toContain("title")
   expect(JSON.stringify(graphObservation)).not.toContain("body")

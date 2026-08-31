@@ -1022,6 +1022,7 @@ it.effect("keeps Alice's subscription through a later activation that confirms G
             const resources = yield* DeliveryRuntimeResources
             yield* Deferred.succeed(firstIntegrationTargets, resources.integrationTargets)
             const graphRead = makeTrackerGraphObservationOperation(
+              { _tag: "WorkflowEstablishment" },
               OperationId.make("pause-public-across-activation-read-G1"),
               target
             )
@@ -1090,6 +1091,7 @@ it.effect("keeps Alice's subscription through a later activation that confirms G
             const resources = yield* DeliveryRuntimeResources
             expect(resources.integrationTargets).toBe(yield* Deferred.await(firstIntegrationTargets))
             const graphRead = makeTrackerGraphObservationOperation(
+              { _tag: "WorkflowEstablishment" },
               OperationId.make("pause-public-across-activation-read-G2"),
               target
             )
@@ -1479,6 +1481,7 @@ it.effect("ends Alice's old subscription on coordinator death, then restarts G2 
             yield* appendExecutingAttempt(journal, aAttempt)
             yield* appendExecutingAttempt(journal, dAttempt)
             const graphRead = makeTrackerGraphObservationOperation(
+              { _tag: "WorkflowEstablishment" },
               OperationId.make("pause-public-restart-read-G2"),
               target
             )
@@ -1537,6 +1540,7 @@ it.effect("ends Alice's old subscription on coordinator death, then restarts G2 
           Effect.gen(function* () {
             const journal = yield* Journal
             const restartedGraphRead = makeTrackerGraphObservationOperation(
+              { _tag: "WorkflowEstablishment" },
               OperationId.make("pause-public-restart-read-G2-after-restart"),
               target
             )

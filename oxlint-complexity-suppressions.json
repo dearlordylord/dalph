@@ -54,11 +54,6 @@
       "count": 6
     }
   },
-  "packages/orchestrator/src/workflow/protocols/active-work-authority-refresh/events.ts": {
-    "complexity": {
-      "count": 2
-    }
-  },
   "packages/orchestrator/src/workflow/protocols/attempt-choice/restart-authority-evidence.ts": {
     "complexity": {
       "count": 1

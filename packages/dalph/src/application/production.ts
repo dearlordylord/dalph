@@ -248,8 +248,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       const runtimeLayer = ({ opportunity, runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const interpreterLayer = journaledWorkflowInterpreterLayer(
           activeRunId,
-          Layer.succeed(WorkflowInterpreter, interpreter),
-          opportunity
+          Layer.succeed(WorkflowInterpreter, interpreter)
         )
         const operatorControlLayer = Layer.mergeAll(
           attemptChoiceControlWithProvidedProtocolLayer,

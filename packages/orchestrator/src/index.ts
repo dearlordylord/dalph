@@ -387,7 +387,6 @@ export {
 export * from "./workflow/protocols/planned-attempt-executor-work/events.js"
 export * from "./workflow/protocols/planned-attempt-continuation/events.js"
 export * from "./workflow/protocols/planned-attempt-continuation/protocol.js"
-export * from "./workflow/protocols/active-work-authority-refresh/events.js"
 export {
   makePassivePlannedAttemptObserver,
   PassivePlannedAttemptObserver,
@@ -835,7 +834,6 @@ export {
   AppliedControlDirection,
   AppliedTaskClaimReacquisitionDirection,
   AppliedTaskWorkCapacity,
-  ActiveWorkAuthorityRefreshGitReadFailed,
   AttemptRestartAuthorityReadFailed,
   decodeWorkflowOccurrence,
   describeWorkflowOccurrence,
@@ -897,12 +895,9 @@ export {
   makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,
-  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
   makeTrackerGraphObservationOperation,
-  ActiveWorkAuthorityRefreshTrackerGraphReadOperation,
   TaskClaimAcquisitionAuthority,
   TaskClaimReleaseAuthority,
-  TrackerGraphReadPurpose,
   WorkflowOperation,
   workflowOperationId
 } from "./workflow/registry/operation.js"

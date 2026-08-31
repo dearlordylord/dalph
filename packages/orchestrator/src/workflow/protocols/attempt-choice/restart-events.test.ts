@@ -154,6 +154,7 @@ it("matches all exact Restart read-failure operations and rejects a different bo
     ref: IntegrationTargetRef.make("refs/heads/main")
   })
   const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("restart-event-graph"),
     trackerTarget,
     [],

@@ -346,6 +346,7 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
       predecessorOperationIds: []
     })
     const graphRead = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("membership-removal-read"),
       FixtureTarget.make("membership-constraint-target")
     )
@@ -421,7 +422,11 @@ it.effect("fresh-run journal facts expose membership constraints without recover
     },
     predecessorOperationIds: []
   })
-  const graphRead = makeTrackerGraphObservationOperation(OperationId.make("fresh-membership-removal-read"), target)
+  const graphRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("fresh-membership-removal-read"),
+    target
+  )
 
   return Effect.gen(function* () {
     const journal = yield* JournalStore
@@ -642,6 +647,7 @@ it.effect("rechecks the tracker claim after same-process suspension and blocks c
     yield* Effect.gen(function* () {
       const activation = yield* makeRunRecoveryProjection(runId)
       const closedRead = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make("same-process-closed-read"),
         target,
         [plan.operationId],
@@ -676,6 +682,7 @@ it.effect("rechecks the tracker claim after same-process suspension and blocks c
 
       yield* Ref.set(currentClaim, replacementClaim)
       const reopenedRead = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make("same-process-reopened-read"),
         target,
         [plan.operationId],
@@ -765,6 +772,7 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       taskId
     }
     const graphRead = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("executor-membership-removal-read"),
       FixtureTarget.make("executor-membership-constraint-target"),
       [plan.operationId],
@@ -905,6 +913,7 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       transitions: []
     })
     const closedRead = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("executor-lifecycle-close-read"),
       FixtureTarget.make("executor-membership-constraint-target"),
       [plan.operationId],
@@ -945,6 +954,7 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       transitions: []
     })
     const reopenedRead = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("executor-lifecycle-reopen-read"),
       FixtureTarget.make("executor-membership-constraint-target"),
       [plan.operationId],
@@ -1017,6 +1027,7 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       transitions: []
     })
     const externallyCompletedRead = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("executor-external-success-read"),
       FixtureTarget.make("executor-membership-constraint-target"),
       [plan.operationId],

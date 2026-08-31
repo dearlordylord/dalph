@@ -866,6 +866,7 @@ const makeRunActivationDriverImplementation = () => {
               const allocator = yield* OperationIdAllocator
               const snapshot = snapshotForGraphOutcome(graphOutcome)
               const operation = makeTrackerGraphObservationOperation(
+                { _tag: "WorkflowEstablishment" },
                 yield* allocator.allocate(),
                 target,
                 [],

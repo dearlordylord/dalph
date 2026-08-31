@@ -207,7 +207,11 @@ const completedFinalityProof = (runId: RunId, target: ReturnType<typeof FixtureT
   Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter
     const journal = yield* InRunJournal
-    const operation = makeTrackerGraphObservationOperation(OperationId.make(`finality:${runId}`), target)
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make(`finality:${runId}`),
+      target
+    )
     const snapshot = yield* interpreter.readTrackerGraph(operation)
     const observation = (yield* journal.read(runId)).findLast(
       ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
@@ -241,7 +245,11 @@ it.effect("fails closed when a terminal proof does not name its established grap
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
       const bootstrap = yield* buildBootstrap(runId, storage)
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("unrecorded-finality-read"), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("unrecorded-finality-read"),
+        target
+      )
       const evidence = makeRunFinalityEvidence({
         observedAt: JournalPosition.make(2),
         operationId: operation.operationId,
@@ -2054,8 +2062,16 @@ it.effect(
         const firstAppended = yield* Deferred.make<void>()
         const finishFirst = yield* Deferred.make<void>()
         const secondActive = yield* Deferred.make<void>()
-        const firstOperation = makeTrackerGraphObservationOperation(OperationId.make("recovery-first-prefix"), target)
-        const secondOperation = makeTrackerGraphObservationOperation(OperationId.make("recovery-second-prefix"), target)
+        const firstOperation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          OperationId.make("recovery-first-prefix"),
+          target
+        )
+        const secondOperation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          OperationId.make("recovery-second-prefix"),
+          target
+        )
 
         const first = yield* bootstrap
           .activate(

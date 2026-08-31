@@ -164,7 +164,11 @@ const cancelledFinalityProof = (runId: RunId, target: ReturnType<typeof FixtureT
   Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter
     const journal = yield* InRunJournal
-    const operation = makeTrackerGraphObservationOperation(OperationId.make(`cancel-finality:${runId}`), target)
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make(`cancel-finality:${runId}`),
+      target
+    )
     const snapshot = yield* interpreter.readTrackerGraph(operation)
     const observation = (yield* journal.read(runId)).findLast(
       ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId

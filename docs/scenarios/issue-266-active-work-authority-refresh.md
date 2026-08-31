@@ -345,15 +345,15 @@ traceability; scenario-owned prose uses `ExecutorWorkExecuting`,
   Running attempts through independent authority chains and suspends only the
   constrained subject` asserts task-local evidence and disposition for its two
   subjects.
-- **Required vertical seam:** `accepted B F2 refresh suspends only B1 while A1
-  and C1 continue executing` must start with accepted
-  `ExecutorWorkExecuting` reports for A1, B1, and C1; make B's focused
-  title/body observation prove F2 against B1's planned F1; record and call
-  `Suspend(B1)` only; retain B1's position until exact
-  `ExecutorWorkSafelySuspended(B1)` or `ExecutorWorkTerminal(B1)` acceptance;
-  and assert no Begin, Resume, Suspend, or position change for A1 or C1. The
-  foreign-claim and two-subject fixtures do not prove this accepted issue
-  chronology.
+- **Existing direct test:** `accepted B F2 refresh suspends only B1 while A1
+  and C1 continue executing` starts all three exact attempts with accepted
+  `ExecutorWorkExecuting` reports, records each exact focused instruction read,
+  completes A1/C1's claim and Git chains, and proves only B1 receives Suspend.
+  Its Safe and Terminal table proves the suspension intent precedes the exact
+  settlement while A1/C1 receive no executor action. Once B's exact F2 read
+  already proves the constraint, Dalph deliberately does not spend additional
+  claim or Git reads on B; this preserves the minimal-provider-call rule while
+  A1 and C1 still complete their healthy authority checks.
 - **Existing test:** `accepted executor report publication never refreshes
   tracker or Git authority` covers accepted publication of
   `ExecutorWorkExecuting`, `ExecutorWorkSafelySuspended`, and
@@ -397,21 +397,10 @@ traceability; scenario-owned prose uses `ExecutorWorkExecuting`,
   intent and before their call, then after a returned response is lost. Restart
   must reuse the ordinary operation identity, ask the read-only boundary again
   when no observation was recorded, and record the returned fact before use.
-  The current fixtures `reuses an intent-only active
-  graph operation after a crash and allocates a new one on later activation`,
-  `reuses an intent-only active worktree operation after a crash and uses a
-  fresh identity after observation`, `reuses an intent-only active
-  target-lineage operation after a crash and uses a fresh identity after
-  observation`, `keeps one recovered proposal for each exact pending active
-  Git read`, `does not recover an active Git intent for an unselected Running
-  attempt`, and `a later tracker or timer refresh uses a fresh Git operation
-  and ordinal after the prior unreadable wait` are **rejected evidence for #266
-  recovery**. The graph fixture uses a private active-refresh graph operation;
-  the Git fixtures depend on private
-  `ActiveWorkAuthorityRefreshGitRead...` events and an
-  `ActiveWorkAuthorityRefreshOrdinal`. Neither is the accepted ordinary read
-  ownership and history, so their current passing status cannot satisfy this
-  seam.
+  Removed work-in-progress fixtures that relied on a second refresh-specific
+  read history are not evidence for #266. Recovery evidence must instead name
+  the existing ordinary tracker or Git operation and prove that its ordinary
+  owner rereads with the same identity after an intent-only crash cut.
 - **Required vertical seam:** `complete authoritative constraints including a
   missing or foreign exact claim suspend only their affected attempt` must
   parameterize changed instructions, lifecycle closure or completion,

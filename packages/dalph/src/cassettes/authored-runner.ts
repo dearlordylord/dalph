@@ -1965,7 +1965,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         activationOrdinal: AuthoredRunActivationOrdinalType,
         opportunity: RunActivationOpportunityValue
       ) => {
-        const interpreterLayer = journaledWorkflowInterpreterLayer(runId, boundaryAdjustedInterpreterLayer, opportunity)
+        const interpreterLayer = journaledWorkflowInterpreterLayer(runId, boundaryAdjustedInterpreterLayer)
         const planning = planningLayer(activationOrdinal)
         const activationLayer = validatedRunActivationLayer(
           runId,

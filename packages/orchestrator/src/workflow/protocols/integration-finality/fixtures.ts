@@ -128,6 +128,7 @@ export const integrationFinalityFixture = (() => {
     version: workflowJournalEventVersion
   })
   const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("integration-finality-fresh-success"),
     target,
     [],

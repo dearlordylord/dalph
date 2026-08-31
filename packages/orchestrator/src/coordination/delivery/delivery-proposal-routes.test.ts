@@ -554,7 +554,13 @@ effectIt.effect("executes cancellation no-release only for a fresh foreign claim
       )
     }
     const mismatchedReadKind: JournalRecord = {
-      event: taskTrackerReadIntent(makeTrackerGraphObservationOperation(observationOperation.operationId, target)),
+      event: taskTrackerReadIntent(
+        makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          observationOperation.operationId,
+          target
+        )
+      ),
       key: JournalRecordKey.make("route-matrix-cancelled-claim-mismatched-read-kind"),
       position: JournalPosition.make(3),
       runId
@@ -1185,7 +1191,11 @@ describe("delivery proposal route matrix", () => {
   })
 
   it("distinguishes new observation reads from accepted observation reconciliation", () => {
-    const graphOperation = makeTrackerGraphObservationOperation(OperationId.make("observe-graph"), target)
+    const graphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("observe-graph"),
+      target
+    )
     const specificationOperation = makeTaskWorkSpecificationObservationOperation(
       OperationId.make("observe-specification"),
       target,
@@ -3065,7 +3075,11 @@ describe("delivery proposal route matrix", () => {
       const projected = projectTrackerSnapshot({ revision: "fresh-graph-read-success", tasks: [] })
       if (projected._tag === "Invalid") return yield* Effect.die("the empty tracker graph must be valid")
       const snapshot = yield* executeTrackerGraphRead(
-        makeTrackerGraphObservationOperation(OperationId.make("fresh-graph-read-success"), target)
+        makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          OperationId.make("fresh-graph-read-success"),
+          target
+        )
       ).pipe(
         Effect.provideService(
           WorkflowInterpreter,
@@ -3608,6 +3622,7 @@ describe("delivery proposal route matrix", () => {
     const claimPlanOperationId =
       options?.foreignPlanWitness === "Claim" ? foreignPlanOperationId : attemptPlanOperationId
     const graphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("continuation-current-graph"),
       trackerReadTarget,
       [graphPlanOperationId],
@@ -3835,6 +3850,7 @@ describe("delivery proposal route matrix", () => {
     const supersededBy = options?.supersededBy
     if (supersededBy === "Graph") {
       const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make("continuation-later-graph"),
         trackerReadTarget,
         [attemptPlanOperationId],
@@ -3964,6 +3980,7 @@ describe("delivery proposal route matrix", () => {
       const operation =
         family === "Graph"
           ? makeTrackerGraphObservationOperation(
+              { _tag: "WorkflowEstablishment" },
               OperationId.make(`continuation-refresh-${refresh.toLowerCase()}`),
               trackerReadTarget,
               [attemptPlanOperationId],
@@ -4007,6 +4024,7 @@ describe("delivery proposal route matrix", () => {
     if (options?.foreignTrackerRead === true) {
       const foreignTaskId = TaskId.make("foreign-continuation-task")
       const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make("continuation-foreign-graph"),
         trackerReadTarget,
         [attemptPlanOperationId],
@@ -4025,6 +4043,7 @@ describe("delivery proposal route matrix", () => {
       const family = options.foreignPlanLaterRead
       if (family === "Graph") {
         const operation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
           OperationId.make("continuation-foreign-plan-later-graph"),
           trackerReadTarget,
           [foreignPlanOperationId],
@@ -4770,6 +4789,7 @@ describe("delivery proposal route matrix", () => {
   effectIt.effect("defers a recovered continuation when newer executor evidence makes its witnesses stale", () =>
     Effect.gen(function* () {
       const graphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make("stale-continuation-graph"),
         target,
         [],
@@ -5041,7 +5061,11 @@ describe("delivery proposal route matrix", () => {
           ),
           Effect.provideService(WorkflowInterpreter, interpreter)
         )
-      const graphOperation = makeTrackerGraphObservationOperation(OperationId.make("adapter-observe-graph"), target)
+      const graphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("adapter-observe-graph"),
+        target
+      )
       const specificationOperation = makeTaskWorkSpecificationObservationOperation(
         OperationId.make("adapter-observe-specification"),
         target,

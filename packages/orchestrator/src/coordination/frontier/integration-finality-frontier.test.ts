@@ -340,6 +340,7 @@ describe("#141 integration-finality frontier", () => {
     const priorGraph = record(7, fixture.graphRecordEvent)
     const waiting = [...replacementRecords, priorGraph, record(8, unreadable)]
     const reconfirmationOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("integration-finality-unchanged-graph-reconfirmation"),
       fixture.target,
       [fixture.graphOperation.operationId],
