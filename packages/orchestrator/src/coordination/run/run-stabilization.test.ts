@@ -87,6 +87,7 @@ import {
 } from "../../workflow/task-tracker-facts/observation.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
+import { makePreparedBeginFixture, preparedBeginProposalsOf } from "../../../test/support/prepared-begin-proposal.js"
 const runId = RunId.make("run-stabilization")
 const target = FixtureTarget.make("run-stabilization-target")
 const emptyFrontier = { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [] }
@@ -354,41 +355,50 @@ it.effect("returns RunMustRemainActive without G2 when task-work admission is st
   Effect.scoped(
     Effect.gen(function* () {
       const base = yield* baseEvaluation
-      const taskId = TaskId.make("stabilization-admission-stalled-D")
+      const [a, b, c, d, e] = ["A", "B", "C", "D", "E"].map((name) =>
+        makePreparedBeginFixture(activeVerticalAttempt, "stabilization-admission-stalled", name)
+      )
+      if (a === undefined || b === undefined || c === undefined || d === undefined || e === undefined) {
+        return yield* Effect.die("five exact stabilization fixtures must be present")
+      }
       const g1 = graph(
         "stabilization-admission-stalled-G1",
         1,
-        snapshot("stabilization-admission-stalled-G1", [
-          { id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
-        ])
+        snapshot("stabilization-admission-stalled-G1", [d.task, e.task])
       )
-      const fresh = freshGraphReadProposal(g1, taskId)
-      const blockedAttempt = PlannedTaskAttempt.make({
-        ...activeVerticalAttempt,
-        attemptId: AttemptId.make("stabilization-admission-stalled-D-attempt"),
-        taskId
-      })
-      const blocked = {
-        ...fresh,
-        admission: {
-          ...fresh.admission,
-          plannedAttemptProtocol: {
-            _tag: "PlannedAttemptProtocolRequired" as const,
-            correlation: plannedAttemptExecutorCorrelation(blockedAttempt)
+      const blocked = preparedBeginProposalsOf(runId, [d, e])
+      expect(blocked).toMatchObject([
+        {
+          admission: {
+            plannedAttemptProtocol: {
+              _tag: "PlannedAttemptProtocolRequired",
+              correlation: plannedAttemptExecutorCorrelation(d.attempt)
+            },
+            taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId: d.attempt.taskId }
           },
-          taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId }
+          order: { _tag: "FreshWorkflowOrder", frontierOrdinal: 0 },
+          route: { _tag: "FreshExecutorWorkflowRoute", step: { plannedAttempt: d.attempt } }
+        },
+        {
+          admission: {
+            plannedAttemptProtocol: {
+              _tag: "PlannedAttemptProtocolRequired",
+              correlation: plannedAttemptExecutorCorrelation(e.attempt)
+            },
+            taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId: e.attempt.taskId }
+          },
+          order: { _tag: "FreshWorkflowOrder", frontierOrdinal: 1 },
+          route: { _tag: "FreshExecutorWorkflowRoute", step: { plannedAttempt: e.attempt } }
         }
-      }
+      ])
       const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
-        ...withRunFacts(evaluation(base, g1, { ...emptyFrontier, proposals: [blocked] }), false),
+        ...withRunFacts(evaluation(base, g1, { ...emptyFrontier, proposals: blocked }), false),
         taskWork: {
-          capacity,
-          held: [
-            {
-              taskId: activeVerticalAttempt.taskId,
-              correlation: plannedAttemptExecutorCorrelation(activeVerticalAttempt)
-            }
-          ]
+          capacity: TaskWorkCapacity.make(3),
+          held: [a, b, c].map(({ attempt }) => ({
+            taskId: attempt.taskId,
+            correlation: plannedAttemptExecutorCorrelation(attempt)
+          }))
         }
       })
       const reads = yield* Ref.make(0)
@@ -397,7 +407,7 @@ it.effect("returns RunMustRemainActive without G2 when task-work admission is st
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,
-          DeliveryActionExecutor.of({ execute: () => Effect.die("full capacity must not execute D") })
+          DeliveryActionExecutor.of({ execute: () => Effect.die("full capacity must not execute D or E") })
         ),
         Effect.provide(
           Layer.mock(WorkflowInterpreter, {
