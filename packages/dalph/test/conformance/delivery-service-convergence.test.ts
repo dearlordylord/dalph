@@ -23,41 +23,68 @@ const sourceFilesUnder = (root: string): ReadonlyArray<string> =>
     return extname(path) === ".ts" && !path.endsWith(".test.ts") ? [path] : []
   })
 
-interface RuntimeImportBinding {
+interface DeliveryImportBinding {
   readonly exportedName: string
   readonly localName: string
+  readonly source: string
 }
 
-const composedRuntimeCapabilitiesBelow = (
+interface DeliveryNamespaceBinding {
+  readonly localName: string
+  readonly source: string
+}
+
+const canonicalDeliveryRuntimeCall = "../delivery/run-delivery-runtime.js#runDeliveryRuntimePhase"
+
+/**
+ * Run stabilization has one closed direct-call boundary into delivery. The
+ * runtime operation and its existing support operations are classified here;
+ * any other delivery-module call requires an explicit architecture decision.
+ * “Direct” means invoking a named/default import or a member of a named or
+ * namespace import. Local value-flow aliases are outside this deliberately
+ * syntactic boundary.
+ */
+const allowedDeliveryCompositionCalls: ReadonlySet<string> = new Set([
+  "../delivery/delivery-action-adapter-common.js#executeTrackerGraphRead",
+  "../delivery/relations.js#attachCurrentSignal",
+  "../delivery/relations.js#deliveryFinalityOf",
+  "../delivery/run-delivery-runtime.js#DeliveryRuntimePhase.ActiveRefreshPostG2",
+  "../delivery/run-delivery-runtime.js#DeliveryRuntimePhase.ActiveRefreshPreG2",
+  canonicalDeliveryRuntimeCall
+])
+
+const composedDeliveryCallsBelow = (
   node: ts.Node,
-  namedBindings: ReadonlyArray<RuntimeImportBinding>,
-  namespaceNames: ReadonlyArray<string>
+  namedBindings: ReadonlyArray<DeliveryImportBinding>,
+  namespaceBindings: ReadonlyArray<DeliveryNamespaceBinding>
 ): ReadonlyArray<string> => {
   const expression = ts.isCallExpression(node) ? node.expression : undefined
   const directBinding =
     expression !== undefined && ts.isIdentifier(expression)
       ? namedBindings.find(({ localName }) => localName === expression.text)
       : undefined
-  const namespaceCapability =
-    expression !== undefined &&
-    ts.isPropertyAccessExpression(expression) &&
-    ts.isIdentifier(expression.expression) &&
-    namespaceNames.includes(expression.expression.text)
-      ? expression.name.text
+  const propertyAccess = expression !== undefined && ts.isPropertyAccessExpression(expression) ? expression : undefined
+  const propertyOwner =
+    propertyAccess !== undefined && ts.isIdentifier(propertyAccess.expression)
+      ? propertyAccess.expression.text
       : undefined
+  const namespaceBinding = namespaceBindings.find(({ localName }) => localName === propertyOwner)
+  const namedObjectBinding = namedBindings.find(({ localName }) => localName === propertyOwner)
   const current =
     directBinding !== undefined
-      ? [directBinding.exportedName]
-      : namespaceCapability === undefined
-        ? []
-        : [namespaceCapability]
+      ? [`${directBinding.source}#${directBinding.exportedName}`]
+      : namespaceBinding !== undefined && propertyAccess !== undefined
+        ? [`${namespaceBinding.source}#${propertyAccess.name.text}`]
+        : namedObjectBinding !== undefined && propertyAccess !== undefined
+          ? [`${namedObjectBinding.source}#${namedObjectBinding.exportedName}.${propertyAccess.name.text}`]
+          : []
   return [
     ...current,
-    ...node.getChildren().flatMap((child) => composedRuntimeCapabilitiesBelow(child, namedBindings, namespaceNames))
+    ...node.getChildren().flatMap((child) => composedDeliveryCallsBelow(child, namedBindings, namespaceBindings))
   ]
 }
 
-const deliveryRuntimeCapabilityIssues = (stabilizationSource: string): ReadonlyArray<string> => {
+const deliveryCompositionBoundaryIssues = (stabilizationSource: string): ReadonlyArray<string> => {
   const stabilization = ts.createSourceFile(
     stabilizationSourcePath,
     stabilizationSource,
@@ -65,39 +92,53 @@ const deliveryRuntimeCapabilityIssues = (stabilizationSource: string): ReadonlyA
     true,
     ts.ScriptKind.TS
   )
-  const runtimeImports = stabilization.statements.filter(
+  const deliveryImports = stabilization.statements.filter(
     (statement): statement is ts.ImportDeclaration =>
       ts.isImportDeclaration(statement) &&
       ts.isStringLiteral(statement.moduleSpecifier) &&
-      statement.moduleSpecifier.text === "../delivery/run-delivery-runtime.js"
+      statement.moduleSpecifier.text.startsWith("../delivery/")
   )
-  const namedBindings: ReadonlyArray<RuntimeImportBinding> = runtimeImports.flatMap(({ importClause }) => {
-    if (importClause === undefined || importClause.isTypeOnly) return []
-    const defaultBinding =
-      importClause.name === undefined ? [] : [{ exportedName: "default", localName: importClause.name.text }]
-    const named = importClause.namedBindings
-    const explicitlyNamed =
-      named !== undefined && ts.isNamedImports(named)
-        ? named.elements.flatMap((binding) =>
-            binding.isTypeOnly
-              ? []
-              : [{ exportedName: binding.propertyName?.text ?? binding.name.text, localName: binding.name.text }]
-          )
+  const namedBindings: ReadonlyArray<DeliveryImportBinding> = deliveryImports.flatMap(
+    ({ importClause, moduleSpecifier }) => {
+      if (importClause === undefined || importClause.isTypeOnly || !ts.isStringLiteral(moduleSpecifier)) return []
+      const source = moduleSpecifier.text
+      const defaultBinding =
+        importClause.name === undefined ? [] : [{ exportedName: "default", localName: importClause.name.text, source }]
+      const named = importClause.namedBindings
+      const explicitlyNamed =
+        named !== undefined && ts.isNamedImports(named)
+          ? named.elements.flatMap((binding) =>
+              binding.isTypeOnly
+                ? []
+                : [
+                    {
+                      exportedName: binding.propertyName?.text ?? binding.name.text,
+                      localName: binding.name.text,
+                      source
+                    }
+                  ]
+            )
+          : []
+      return [...defaultBinding, ...explicitlyNamed]
+    }
+  )
+  const namespaceBindings: ReadonlyArray<DeliveryNamespaceBinding> = deliveryImports.flatMap(
+    ({ importClause, moduleSpecifier }) => {
+      if (!ts.isStringLiteral(moduleSpecifier)) return []
+      const bindings = importClause?.namedBindings
+      return importClause?.isTypeOnly !== true && bindings !== undefined && ts.isNamespaceImport(bindings)
+        ? [{ localName: bindings.name.text, source: moduleSpecifier.text }]
         : []
-    return [...defaultBinding, ...explicitlyNamed]
-  })
-  const namespaceNames = runtimeImports.flatMap(({ importClause }) => {
-    const bindings = importClause?.namedBindings
-    return importClause?.isTypeOnly !== true && bindings !== undefined && ts.isNamespaceImport(bindings)
-      ? [bindings.name.text]
-      : []
-  })
-  const capabilities = [
-    ...new Set(composedRuntimeCapabilitiesBelow(stabilization, namedBindings, namespaceNames))
-  ].toSorted()
-  return capabilities.length === 1 && capabilities[0] === "runDeliveryRuntimePhase"
+    }
+  )
+  const calls = [...new Set(composedDeliveryCallsBelow(stabilization, namedBindings, namespaceBindings))].toSorted()
+  const missingCanonical = calls.includes(canonicalDeliveryRuntimeCall)
     ? []
-    : [`delivery runtime capability boundary is ${capabilities.join(", ")}`]
+    : ["canonical delivery runtime capability is not composed"]
+  const unclassified = calls
+    .filter((call) => !allowedDeliveryCompositionCalls.has(call))
+    .map((call) => `unclassified delivery composition call: ${call}`)
+  return [...missingCanonical, ...unclassified]
 }
 
 it("one idempotent Run entry installs the delivery service contracts", () => {
@@ -108,7 +149,7 @@ it("one idempotent Run entry installs the delivery service contracts", () => {
   expect(runSource.match(/\brunStabilizedDelivery\(/g)).toHaveLength(1)
   // Ordinary delivery, active refresh, and accepted-lifecycle fallback may
   // enter distinct phases, but all paths use the same runtime operation.
-  expect(deliveryRuntimeCapabilityIssues(stabilizationSource)).toEqual([])
+  expect(deliveryCompositionBoundaryIssues(stabilizationSource)).toEqual([])
   // Ordinary and active-refresh bootstrap paths both use this one shared
   // journaled composition; neither path creates a second delivery program.
   expect(runSource.match(/\brunJournaledDelivery\(/g)).toHaveLength(2)
@@ -124,8 +165,22 @@ it("rejects a differently named second delivery runtime capability", () => {
     .replace("  runDeliveryRuntimePhase,", "  runDeliveryRuntimePhase,\n  alternateDeliveryService as hiddenService,")
     .concat("\nvoid hiddenService(undefined as never, undefined as never)\n")
 
-  expect(deliveryRuntimeCapabilityIssues(sourceWithSecondCapability)).toEqual([
-    "delivery runtime capability boundary is alternateDeliveryService, runDeliveryRuntimePhase"
+  expect(deliveryCompositionBoundaryIssues(sourceWithSecondCapability)).toEqual([
+    "unclassified delivery composition call: ../delivery/run-delivery-runtime.js#alternateDeliveryService"
+  ])
+})
+
+it("rejects a delivery runtime capability imported from a second module", () => {
+  const stabilizationSource = readFileSync(stabilizationSourcePath, "utf8")
+  const sourceWithSecondModule = stabilizationSource
+    .replace(
+      'import { Effect, Option, Stream } from "effect"',
+      'import { Effect, Option, Stream } from "effect"\nimport { hiddenService } from "../delivery/alternate-runtime.js"'
+    )
+    .concat("\nvoid hiddenService(undefined as never, undefined as never)\n")
+
+  expect(deliveryCompositionBoundaryIssues(sourceWithSecondModule)).toEqual([
+    "unclassified delivery composition call: ../delivery/alternate-runtime.js#hiddenService"
   ])
 })
 
