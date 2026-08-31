@@ -4851,20 +4851,6 @@ it.effect("safely suspends A after membership removal while independent B contin
           )
         }
       })
-      .flatMap((item) =>
-        item._tag === "PlannedAttemptExecutorProjectionReturned" &&
-        "report" in item &&
-        item.report._tag === "ExecutorWorkTerminal" &&
-        item.report.attemptId === bAttemptId
-          ? [
-              {
-                _tag: "PlannedAttemptExecutorProjectionReturned" as const,
-                report: { _tag: "ExecutorWorkExecuting" as const, attemptId: aAttemptId }
-              },
-              item
-            ]
-          : [item]
-      )
     const changedInstructionsCassette = {
       ...localizedCassette,
       name: "A instructions change while independent B continues",
