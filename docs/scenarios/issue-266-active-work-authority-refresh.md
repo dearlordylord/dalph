@@ -2,7 +2,8 @@
 
 Owning issue: [#266](https://github.com/dearlordylord/dalph/issues/266)
 
-Status: accepted implementation correction awaiting integration. Issue #266
+Status: accepted candidate integrated on the issue task branch and under final
+review. Issue #266
 closes the active-work bridge left when autonomous executor work replaced
 repeated continuation commands: an accepted `ExecutorWorkExecuting` report
 must not keep one live Run activation from checking whether current tracker or
@@ -308,15 +309,16 @@ refresh/frontier state.
 An **existing test** (or **existing tests** when exact peers are grouped) below
 names its literal current source title and owns only the assertions stated. An
 **existing direct test** additionally executes the accepted chronology named by
-this scenario. An **existing model test** names an executable Quint scenario
-and proves only its model law. A **required vertical seam** gives a proposed
-title for accepted behavior that no current accepted fixture directly executes;
-it is not claimed to exist or pass. A **required revision** identifies an exact
-existing partial fixture whose assertions must change or expand. A **supporting
-test** (or **supporting tests** for grouped peers) names an exact current test
-that owns a narrower adjacent fact but not the accepted vertical chronology.
-**Rejected evidence** names a current fixture whose premise conflicts with
-accepted authority ownership and cannot satisfy the mapping even if it passes.
+this scenario. An **existing composed mapping** names complementary direct tests
+that together own the accepted chronology without claiming that one test body
+asserts every part. An **existing model test** names an executable Quint
+scenario and proves only its model law. A **supporting test** (or **supporting
+tests** for grouped peers) names an exact current test that owns a narrower
+adjacent fact but not the accepted vertical chronology. **Rejected evidence**
+names a current fixture whose premise conflicts with accepted authority
+ownership and cannot satisfy the mapping even if it passes. Every previously
+required vertical seam now has a direct or composed mapping below; issue
+closure still waits for final review and the declared verification gates.
 Exact existing titles that contain `Running` retain their source spelling for
 traceability; scenario-owned prose uses `ExecutorWorkExecuting`,
 `ExecutorWorkSafelySuspended`, and `ExecutorWorkTerminal`.
@@ -325,26 +327,33 @@ traceability; scenario-owned prose uses `ExecutorWorkExecuting`,
   suspends it after an exact foreign claim while independent work continues`
   exercises both complete authoritative missing-claim and foreign-exact-claim
   cases, selects the existing suspension disposition for the affected attempt,
-  and leaves the independent attempt eligible. It does not substitute for the
-  required B/F2 or three-attempt localization seams below.
+  and leaves the independent attempt eligible in
+  `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`.
+  It does not substitute for the direct B/F2 or three-attempt production
+  chronologies below.
 - **Existing test:** `configured timer refreshes a Running attempt and suspends
   it after its exact worktree is lost` selects the existing lost-worktree
   suspension transition from a timer opportunity and preserves independent
-  eligibility. **Required vertical seam:** `lost or pre-subscription tracker
-  notification is recovered by the ordinary bounded timer` must deliberately
-  lose the notification, advance the configured #218 timer with controlled
-  time, and prove one later active-work refresh with no task-edit-specific
-  cadence. The existing timer-source test does not simulate notification loss.
-- **Existing test:** `production owner refreshes Running work once for a
-  TrackerNotification without an executor command` exercises the production
-  graph, focused instruction, claim, worktree, and lineage selection and
-  asserts zero executor commands for healthy authority.
+  eligibility in
+  `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`.
+  **Existing direct test:** `lost or pre-subscription tracker notification is
+  recovered by the ordinary timer and executes an active authority read` in
+  `packages/dalph/src/application/production-reactivation.test.ts` drives the
+  Timer source through the production-shaped owner and executes graph,
+  instruction, claim, worktree, and lineage reads with no executor call.
+- **Existing direct test:** `unchanged active-work refresh calls each ordinary
+  provider once records reconfirmation and does not loop` in
+  `packages/dalph/src/application/production-reactivation.test.ts` exercises
+  the production graph, focused instruction, claim, worktree, and lineage
+  selection, records the equal-graph reconfirmation after the provider call,
+  and asserts one active opportunity and zero executor calls.
 - **Existing test:** `shares one active graph read across Running attempts
   before their own focused reads` asserts one complete graph read precedes both
   exact attempts' focused instruction reads. **Existing test:** `refreshes two
   Running attempts through independent authority chains and suspends only the
   constrained subject` asserts task-local evidence and disposition for its two
-  subjects.
+  subjects. Both are in
+  `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`.
 - **Existing direct test:** `accepted B F2 refresh suspends only B1 while A1
   and C1 continue executing` starts all three exact attempts with accepted
   `ExecutorWorkExecuting` reports, records each exact focused instruction read,
@@ -353,127 +362,127 @@ traceability; scenario-owned prose uses `ExecutorWorkExecuting`,
   settlement while A1/C1 receive no executor action. Once B's exact F2 read
   already proves the constraint, Dalph deliberately does not spend additional
   claim or Git reads on B; this preserves the minimal-provider-call rule while
-  A1 and C1 still complete their healthy authority checks.
+  A1 and C1 still complete their healthy authority checks. The test is in
+  `packages/dalph/src/application/production-reactivation.test.ts` and its
+  Safe/Terminal table proves three positions remain held through the Suspend
+  intent and B's position is absent only after the exact settlement.
+  `restart holds the task-work position until an exact Safe or Terminal
+  observation is accepted` and `restart releases the task-work position after
+  an unchanged accepted Safe or Terminal passive replay` in
+  `packages/orchestrator/src/control/task-work-capacity.test.ts` separately own
+  the generic restart/capacity rule; they do not replace the A/B/C chronology.
 - **Existing test:** `accepted executor report publication never refreshes
   tracker or Git authority` covers accepted publication of
   `ExecutorWorkExecuting`, `ExecutorWorkSafelySuspended`, and
-  `ExecutorWorkTerminal` and asserts zero authority reads.
-- **Required vertical seam:** `accepted publication notification and timer
-  coalesce behind one active refresh and one trailing ordinary activation`
-  must admit the notification as one active-work refresh, deliver an accepted
-  publication plus notification and timer while its ordinary authority read is
-  in flight, assert one serialized active read and no busy-loop, and retain
-  exactly one trailing ordinary establishment/activation. **Existing test:**
-  `coalesces concurrent active-work refresh hints through one production owner`
-  covers notification/timer coalescing and one trailing ordinary entry, but it
-  does not inject accepted publication. **Supporting test:** `turns hints
-  arriving during an active refresh into one trailing ordinary activation`
-  covers the owner's one-trailing-marker rule.
-- **Required vertical seam:** `edit after one completed active-work refresh
-  waits for the next independent notification or timer` must change B from F2
-  to F3 only after the first refresh completes, assert no authority read or
-  executor command is self-scheduled from the edit or completed opportunity,
-  then prove a later independent notification or timer observes F3.
-- **Required vertical seam:** `unchanged active-work refresh calls the provider
-  once records reconfirmation and does not busy-loop` must return normalized
-  graph contents equal to the previous observation, prove #164's compact
-  unchanged record follows a real provider call, make no executor call, and
-  perform no second refresh until a later independent notification or timer.
-- **Required revision:** the existing test `recovers the exact active-work
-  suspension after process loss without releasing its position early` only
-  reconstructs a projection from an already-recorded foreign-claim constraint;
-  it does not cut a process or cross the executor boundary. Revise it or add a
-  direct vertical test that cuts before the `Suspend(B1)` intent, after that
-  intent and before the call, and after an accepted call response is lost. It
-  must assert one durable B1 intent, one initial call, an exact executor-report
-  reread before any resend, no duplicate Suspend call, and position release
-  only after exact `ExecutorWorkSafelySuspended(B1)` or
-  `ExecutorWorkTerminal(B1)` acceptance.
-- **Required vertical seam:** `active-work refresh recovers ordinary authority
-  reads without a private refresh protocol` must use #190/#53/#164's ordinary
-  coordination and tracker-observation identity/history and the existing
-  ordinary focused-task and Git read owners. It must cut graph, focused
-  instruction/claim, worktree, and target-lineage reads after their ordinary
-  intent and before their call, then after a returned response is lost. Restart
-  must reuse the ordinary operation identity, ask the read-only boundary again
-  when no observation was recorded, and record the returned fact before use.
-  Removed work-in-progress fixtures that relied on a second refresh-specific
-  read history are not evidence for #266. Recovery evidence must instead name
-  the existing ordinary tracker or Git operation and prove that its ordinary
-  owner rereads with the same identity after an intent-only crash cut.
-- **Required vertical seam:** `complete authoritative constraints including a
-  missing or foreign exact claim suspend only their affected attempt` must
-  parameterize changed instructions, lifecycle closure or completion,
-  target-membership loss, a newly unfinished blocker, a complete observation
-  that B has no claim, a complete observation that B's exact claim belongs to
-  another owner, incompatible lineage, and lost or mismatched worktree. Each
-  complete authority observation must enter only the affected executing
-  attempt's existing suspension route. Every attempt with an accepted
-  `ExecutorWorkExecuting` report is checked; attempts with accepted
-  `ExecutorWorkSafelySuspended` or `ExecutorWorkTerminal` reports remain on
-  their ordinary paths.
-- **Required vertical seam:** `incomplete unavailable unreadable malformed or
-  identity-contradictory active-work reads authorize no executor action` must
-  cover incomplete graph coverage and unavailable, unreadable, malformed,
-  throttled, cross-repository, or foreign-correlation boundary failures from
-  focused instruction, claim, worktree, and lineage reads where their boundary
-  types admit those distinctions. None contains a complete authoritative claim
-  disposition. The seam must assert no Begin, Resume, or Suspend from
-  uncertainty, retained responsibility and position, independent work still
-  eligible, no immediate retry or busy-loop, and one fresh bounded read only
-  after a later independent notification or timer. A complete authoritative
-  observation that B has no claim or that B's exact claim belongs to another
-  owner is not a failure in this seam: it enters the task-local `Suspend(B1)`
-  route in the preceding seam.
-- **Existing test:** `post-Running active worktree and target-lineage Git
-  failures wait without suspending while independent work remains runnable`
-  covers the current typed Git-failure wait and task locality. **Supporting
-  test:** `a later timer retries an unreadable active-work refresh as a fresh
-  authority check` covers only owner scheduling of a later opportunity; it
-  does not prove ordinary authority-operation recovery.
+  `ExecutorWorkTerminal` and asserts zero authority reads in
+  `packages/dalph/src/application/production-reactivation.test.ts`.
+- **Existing direct test:** `accepted publication notification and timer
+  coalesce behind one active refresh and one trailing ordinary activation` in
+  `packages/dalph/src/application/production-reactivation.test.ts` injects all
+  three hints while the production-shaped refresh is active and asserts one
+  serialized active entry followed by one ordinary entry. **Supporting test:**
+  `turns hints arriving during an active refresh into one trailing ordinary
+  activation` in
+  `packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts`
+  owns the lower-level one-trailing-marker rule.
+- **Existing direct test:** `a later tracker edit waits for the next independent
+  notification or timer` in
+  `packages/dalph/src/application/production-reactivation.test.ts` records the
+  post-first-refresh cut with no executor call, then supplies a second tracker
+  notification and observes the changed instructions and suspension.
+- **Existing direct tests:** `production refresh recovers a constraint observed
+  before a crashed suspension intent`, `production refresh reuses a persisted
+  suspension intent after a provider-entry crash`, and `production refresh
+  reconciles an accepted suspension when its response append is lost` in
+  `packages/dalph/src/application/production-reactivation.test.ts` execute the
+  three suspension crash cuts. They prove one durable Suspend intent, reconcile
+  current executor evidence before any resend, and accept the exact Safe report
+  after response loss. The older projection test `recovers the exact active-work
+  suspension after process loss without releasing its position early` remains
+  supporting projection evidence, not the crash vertical.
+- **Existing direct test:** `active-work refresh recovers ordinary authority
+  reads without a private refresh protocol` in
+  `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`
+  tables graph, focused instruction, claim, worktree, and target-lineage reads
+  at intent-before-call and response-before-observation cuts. It proves the
+  existing ordinary owners reuse the same operation identity, reread only when
+  no observation exists, and append only ordinary intent/outcome events.
+- **Existing direct parameterized test:** `complete authoritative constraints
+  including a missing or foreign exact claim suspend only their affected
+  attempt: $name` in
+  `packages/dalph/src/application/production-reactivation.test.ts` covers
+  changed instructions, completed lifecycle, target-membership loss, a new
+  unfinished blocker, missing claim, foreign claim, lost worktree, and
+  incompatible lineage. Every case observes B's complete authority fact before
+  one B-only Suspend/Safe chronology and asserts no A/C executor command.
+- **Existing direct test:** `incomplete unavailable unreadable malformed or
+  identity-contradictory active-work reads authorize no executor action` in
+  `packages/dalph/src/application/production-reactivation.test.ts` executes the
+  production boundary distinctions that remain representable after
+  normalization: tracker failures become one typed `TrackerReadError`, bounded
+  claim unreadability remains focused claim evidence, and a Git failure leaves
+  its ordinary lineage intent unsettled. For each case it proves no executor
+  call, one live activation at a time, retained executing responsibility, no
+  immediate self-retry, and a second read only after another independent
+  notification. It does not claim that the normalized graph boundary can emit
+  an incomplete snapshot or preserve provider-specific malformed/throttled
+  subtypes.
+- **Supporting test:** `a later timer retries an unreadable active-work refresh
+  as a fresh authority check` in
+  `packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts`
+  covers only owner scheduling of a later opportunity; the production
+  uncertainty matrix above owns the boundary calls and no-action assertions.
 - **Existing tests:** `AcceptedFactPublication for a Running report uses
   ordinary entry without A authority reads` and `Operator Wake remains an
   ordinary entry without active authority reads` prove those generic #218 hints
-  use the ordinary executing-work shortcut. The broader accepted-report test
-  above owns all three lifecycle report variants.
+  use the ordinary executing-work shortcut in
+  `packages/dalph/src/application/production-reactivation.test.ts`. The broader
+  accepted-report test above owns all three lifecycle report variants.
 - **Existing direct test:** `retains one trailing ordinary activation when the
   active handoff rejects` proves a rejected active handoff retains one marker,
   starts no concurrent activation, and performs exactly one trailing ordinary
-  establishment/activation.
-- **Required vertical seam:** `accepted Pause suppresses active refresh until
-  Unpause completes ordinary current reads` must accept Pause with a retained
-  or pending refresh marker, finish only an already-admitted boundary, prove no
-  timer/hint-driven active read while paused, and require Unpause's ordinary
-  current reads before a later opportunity. **Supporting tests:** `stops the
-  Run-specific timer on accepted Pause and starts one fresh timer on Unpause`
-  and `replays durable Pause between observer attachment and the mandatory
-  current read` cover timer lifecycle and the attach/read race, not the full
-  active-refresh chronology.
-- **Required vertical seam:** `Exit closes later active-refresh admission after
-  the admitted recoverable boundary` must assert that Exit admits no retained
-  or later refresh while allowing an already-admitted ordinary read to reach
-  its recoverable boundary. **Supporting test:** `keeps one owner per exact Run
-  composition and lets Exit stop after the active boundary` covers owner
-  identity and drain ordering.
-- **Required vertical seam:** `restart restores no active-refresh timer hint or
-  coalescing state` must crash with timer/hint/trailing state present, restart
-  from journal history, assert no refresh until a new notification or timer,
-  and show that only ordinary read and executor intents survive. This is
-  distinct from authority-read and suspension-intent recovery.
-- **Required vertical seam:** `active-work refresh and post-quiescence finality
-  perform cause-ordered separate complete graph reads` must observe one
-  notification/timer-caused graph read while executor work is active, later
-  reach G1 quiescence, then perform #194's G2 read with its own ordinary cause
-  and operation identity. Neither observation may satisfy the other cause and
-  their recorded order must match the chronology. **Supporting test:**
-  `retains the active boundary while a pending G2 intent awaits replay` covers
-  only projection ordering.
+  establishment/activation in
+  `packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts`.
+- **Existing direct test:** `accepted Pause suppresses active refresh until
+  Unpause completes its ordinary current read` in
+  `packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts`
+  accepts Pause, offers notification/timer hints and advances controlled time,
+  proves no active read while paused or during Unpause's blocked ordinary read,
+  then observes a later notification only after that read completes.
+  `stops the Run-specific timer on accepted Pause and starts one fresh timer on
+  Unpause` and `replays durable Pause between observer attachment and the
+  mandatory current read` remain narrower support for timer lifecycle and the
+  attach/read race.
+- **Existing direct test:** `lets an admitted active refresh record its read
+  outcome before Exit rejects a later refresh` in
+  `packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts`
+  blocks after the ordinary graph intent, requests Exit, proves a later Timer
+  refresh never enters, then lets the admitted provider response become one
+  durable observation before Exit completes. `keeps one owner per exact Run
+  composition and lets Exit stop after the active boundary` remains narrower
+  owner/drain evidence.
+- **Existing composed mapping:** `starts each restarted owner with fresh timer,
+  hint, and coalescing state` in
+  `packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts`
+  abandons a first owner with timer progress and queued hints, starts a second
+  owner for the same Run, and proves it performs only its ordinary startup read
+  until a new notification arrives. The ordinary-read and suspension crash
+  tests above separately prove that ordinary operation and executor intent
+  history survives; this owner test does not inspect journal records.
+- **Existing direct test:** `active-work refresh and post-quiescence finality
+  perform cause-ordered separate complete graph reads` in
+  `packages/orchestrator/src/coordination/run/run-stabilization.test.ts` executes
+  both provider calls through the ordinary journaled graph owner. It proves
+  distinct identities, `ExecutingWorkAuthorityCheck` before
+  `PostQuiescenceReconfirmation`, the G1 causal predecessor on G2, and separate
+  ordered intent/outcome pairs. `retains the active boundary while a pending G2
+  intent awaits replay` remains supporting projection evidence.
 - **Supporting tests:** `stops its timer when activation returns
   RunMayTerminate` and `treats terminated history as closure and never
   schedules a fresh activation` cover the terminal decision and already
   terminated restart. `production composition wires current-first tracker
   notifications and fresh checks` covers production owner installation. None
-  replaces the direct Pause, Exit, restart-state, or finality-separation seams.
+  replaces the direct Pause, Exit, restart-state, or finality-separation tests.
 - **Existing model test:** Quint scenario
   `activeRefreshUnreadableDoesNotSuspendOrContinueTest` proves
   active-refresh unreadability selects no executor action while the ordinary
@@ -484,7 +493,7 @@ traceability; scenario-owned prose uses `ExecutorWorkExecuting`,
   model's one representative subject does not replace runtime coverage
   selection and locality tests.
 
-Aggregate gate totals do not replace any required seam. In particular, a
+Aggregate gate totals do not replace any direct scenario test. In particular, a
 supporting projection or owner test is not promoted to vertical evidence for a
 boundary call, crash cut, or accepted issue chronology that it does not
 execute.

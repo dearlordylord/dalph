@@ -24,10 +24,15 @@ review. It changes no Dalph runtime behavior.
   39 skipped, 35 MBT tests passed, and 100% changed production and maintained-
   evaluation coverage. The final `pnpm check:quint` gate also passed, including
   deterministic, sampled, exhaustive, temporal, and negative-control checks.
-- Issue #266 behavior was already present in the integration baseline before
-  #264 was merged. Its notification/timer owner and task-local consequences are
-  useful, but its private Git-read history protocol contradicts #266's accepted
-  requirement to reuse the ordinary #190/#53/#164 read owners.
+- The #266 correction candidate is integrated on its task branch through
+  `c9631986d`, atop the ordinary-read implementation `a802db641`, exact graph-
+  cause repair `19128e9fd`, recovery/finality evidence `e45df8811`, and
+  Pause/Exit/restart evidence `361bed75b`. It is under final review; #266 is not
+  yet declared complete or closed.
+- The candidate removes the private active-refresh Git-read history and routes
+  graph, focused tracker, worktree, and lineage reads through the ordinary
+  journal-first owners. Production matrices now cover sources, coalescing,
+  complete constraints, uncertainty, later edits, and suspension crash cuts.
 - The #266 scenario is
   `docs/scenarios/issue-266-active-work-authority-refresh.md`; it attributes the
   behavior to #266 and uses the accepted executor lifecycle vocabulary.
@@ -45,18 +50,16 @@ of these tickets.
 
 ## Accepted review findings
 
-### Repair now
+### Resolved in the current #266 candidate
 
-1. Implement #265 before accepting #266 as complete.
-2. Remove #266's work-in-progress private Git-read operation, intent, ordinal,
-   failure, record-key, replay-runner, and interpreter-routing vocabulary.
-3. Send active-work graph, focused tracker, worktree, and target-lineage reads
-   through the existing ordinary journal-first protocols owned by
-   #190/#53/#164.
-4. Keep the active-work refresh scenario linked to #266 and use the accepted
-   executor lifecycle vocabulary.
-5. Correct the rejected-handoff scenario mapping to name its existing direct
-   acceptance test.
+1. #265 was integrated before the #266 correction candidate.
+2. #266's work-in-progress private Git-read operation, intent, ordinal,
+   failure, record-key, replay runner, and interpreter routing were removed.
+3. Active-work graph, focused tracker, worktree, and target-lineage reads now
+   use the existing ordinary journal-first protocols owned by #190/#53/#164.
+4. The active-work refresh scenario remains linked to #266 and uses the
+   accepted executor lifecycle vocabulary.
+5. The rejected-handoff mapping names its existing direct acceptance test.
 
 ### Do not act on
 
@@ -157,14 +160,14 @@ Reprojection from that prefix would therefore invent authority absent from the
 accepted issue and model; a separately accepted rule must first define how the
 evidence is resolved and when another passive read is admitted.
 
-### 3. Reconcile and complete #266
+### 3. Finish final review of the integrated #266 candidate
 
 The scenario is
 `docs/scenarios/issue-266-active-work-authority-refresh.md`; keep the scenario
 catalog and #266 link current, and use `ExecutorWorkExecuting`,
 `ExecutorWorkSafelySuspended`, and `ExecutorWorkTerminal` consistently.
 
-Preserve:
+Final review must confirm the candidate preserves:
 
 - #218's one serialized notification/timer opportunity owner;
 - coalescing and at most one trailing ordinary activation;
@@ -175,7 +178,7 @@ Preserve:
 - exact `ExecutorWorkSafelySuspended` or `ExecutorWorkTerminal` evidence is
   required before releasing a position.
 
-Remove:
+Final review must confirm the candidate removed:
 
 - the active-refresh-specific Git operation wrapper;
 - its authority and ordinal history;
@@ -186,47 +189,56 @@ Remove:
 The active-work opportunity may select which ordinary reads are needed, but it
 must not own a second read protocol or cache.
 
-Scenario-to-test mapping:
+Scenario-to-test mapping (the scenario document records the complete ownership
+and supporting-test qualifications):
 
-- Live healthy notification → existing `production owner refreshes Running
-  work once for a TrackerNotification without an executor command`.
-- Accepted B/F2 with A1/B1/C1 executing → required direct vertical seam that
-  calls `Suspend(B1)` only, retains B1's position until exact
-  `ExecutorWorkSafelySuspended` or `ExecutorWorkTerminal` acceptance, and
-  leaves A1/C1 executing.
-- Lost or pre-subscription notification → required controlled-timer seam;
-  existing `configured timer refreshes a Running attempt and suspends it after
-  its exact worktree is lost` proves only that Timer can supply an opportunity.
-- Notification, timer, and accepted-publication coalescing → required direct
-  production seam with one active read and one trailing ordinary activation;
-  existing owner/production coalescing tests remain narrower support.
-- Complete authoritative missing or foreign exact claim and lost worktree →
-  existing localized projection tests; changed instructions,
-  lifecycle/membership/blocker constraints, incompatible lineage, and the
-  complete three-attempt chronology still require the parameterized vertical
-  seam named by the scenario.
-- Incomplete, unavailable, unreadable, malformed, throttled,
-  cross-repository, or foreign-correlation graph/focused/Git boundary failure →
-  required typed vertical seam with no command, no busy-loop, and a later fresh
-  opportunity. These uncertain failures do not include a complete missing or
-  foreign exact claim observation. Existing Git-failure waits and existing
-  task-fact positive and mutation-catching negative model tests are supporting
-  evidence only; #266 requires no Quint change.
-- Rejected active handoff → existing direct `retains one trailing ordinary
-  activation when the active handoff rejects`.
-- Pause, Exit, restart with no timer/hint state, and #194 finality-read
-  separation → required direct seams; existing run-reactivation owner and
-  projection tests prove only their narrower timer, drain, and ordering rules.
-- Crash after an ordinary read intent or response loss → required revised
-  recovery tests proving #190/#53/#164 and the ordinary focused/Git owners reuse
-  their operation identities. Removed private-read fixtures and refresh
-  ordinals are rejected evidence for this mapping.
-- Crash around B1 suspension → required revision of the existing projection
-  fixture to execute crash-before-intent, intent-before-call, and lost-response
-  cuts through the executor boundary.
+- Healthy/equal notification and ordinary provider calls → `unchanged
+  active-work refresh calls each ordinary provider once records reconfirmation
+  and does not loop` in
+  `packages/dalph/src/application/production-reactivation.test.ts`.
+- Accepted B/F2 with A1/B1/C1 executing → `accepted B F2 refresh suspends only
+  B1 while A1 and C1 continue executing` in the same file, plus the generic
+  exact Safe/Terminal position tests in
+  `packages/orchestrator/src/control/task-work-capacity.test.ts`.
+- Lost/pre-subscription notification, later edit, and notification/timer/
+  accepted-publication coalescing → `lost or pre-subscription tracker
+  notification is recovered by the ordinary timer and executes an active
+  authority read`, `a later tracker edit waits for the next independent
+  notification or timer`, and `accepted publication notification and timer
+  coalesce behind one active refresh and one trailing ordinary activation` in
+  `packages/dalph/src/application/production-reactivation.test.ts`.
+- Complete task-local constraints and normalized uncertain boundary outcomes →
+  the parameterized `complete authoritative constraints including a missing or
+  foreign exact claim suspend only their affected attempt: $name` and
+  `incomplete unavailable unreadable malformed or identity-contradictory
+  active-work reads authorize no executor action` production matrices in that
+  file. The latter asserts only the typed distinctions preserved by production
+  normalization; #266 requires no Quint change.
+- Ordinary read crash recovery → `active-work refresh recovers ordinary
+  authority reads without a private refresh protocol` in
+  `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`.
+- Suspension crash cuts → `production refresh recovers a constraint observed
+  before a crashed suspension intent`, `production refresh reuses a persisted
+  suspension intent after a provider-entry crash`, and `production refresh
+  reconciles an accepted suspension when its response append is lost` in
+  `packages/dalph/src/application/production-reactivation.test.ts`.
+- Pause, restart-state reset, and Exit → `accepted Pause suppresses active
+  refresh until Unpause completes its ordinary current read`, `starts each
+  restarted owner with fresh timer, hint, and coalescing state` in
+  `packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts`,
+  and `lets an admitted active refresh record its read outcome before Exit
+  rejects a later refresh` in
+  `packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts`.
+- #194 finality separation → `active-work refresh and post-quiescence finality
+  perform cause-ordered separate complete graph reads` in
+  `packages/orchestrator/src/coordination/run/run-stabilization.test.ts`.
+- Rejected active handoff → `retains one trailing ordinary activation when the
+  active handoff rejects` in
+  `packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts`.
 
-After focused verification, re-review #264, #265, and #266 in dependency order
-and close #265 and #266 only when their scenario mappings are direct and green.
+The #266 candidate remains under final review. Close #266 only after its direct
+scenario mappings and declared focused/final gates are green; this document
+does not predeclare that result.
 
 ### 4. Implement #267 and #269 independently
 
