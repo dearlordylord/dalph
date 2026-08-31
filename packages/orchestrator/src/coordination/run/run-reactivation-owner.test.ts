@@ -331,6 +331,72 @@ it.effect("coalesces concurrent hints behind one activation", () =>
   )
 )
 
+it.effect("runs one queued active refresh after admission-stalled delivery yields", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const ordinaryStarted = yield* Deferred.make<void>()
+      const releaseAdmissionStall = yield* Deferred.make<void>()
+      const activeStarted = yield* Deferred.make<void>()
+      const kinds = yield* Ref.make<ReadonlyArray<"OrdinaryRunEntry" | "ActiveWorkAuthorityRefresh">>([])
+      const concurrent = yield* Ref.make(0)
+      const maximumConcurrent = yield* Ref.make(0)
+      const enter = (kind: "OrdinaryRunEntry" | "ActiveWorkAuthorityRefresh") =>
+        Effect.gen(function* () {
+          yield* Ref.update(kinds, (current) => [...current, kind])
+          const active = yield* Ref.updateAndGet(concurrent, (current) => current + 1)
+          yield* Ref.update(maximumConcurrent, (current) => Math.max(current, active))
+        })
+      const leave = Ref.update(concurrent, (current) => current - 1)
+
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-admission-stalled-trailing-refresh"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Effect.gen(function* () {
+              yield* enter("OrdinaryRunEntry")
+              yield* Deferred.succeed(ordinaryStarted, undefined)
+              yield* Deferred.await(releaseAdmissionStall)
+              return RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" })
+            }).pipe(Effect.ensuring(leave)),
+          activateActiveWorkAuthorityRefresh: () =>
+            Effect.gen(function* () {
+              yield* enter("ActiveWorkAuthorityRefresh")
+              yield* Deferred.succeed(activeStarted, undefined)
+              return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+            }).pipe(Effect.ensuring(leave)),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onFailure: () => Effect.void
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(ordinaryStarted)
+            yield* Effect.forEach(
+              [
+                RunReactivationHint.TrackerNotification(),
+                RunReactivationHint.Timer(),
+                RunReactivationHint.TrackerNotification(),
+                RunReactivationHint.Timer()
+              ],
+              owner.hint
+            )
+            expect(yield* Ref.get(kinds)).toEqual(["OrdinaryRunEntry"])
+            yield* Deferred.succeed(releaseAdmissionStall, undefined)
+            yield* Deferred.await(activeStarted)
+            yield* Effect.yieldNow
+            expect(yield* Ref.get(kinds)).toEqual(["OrdinaryRunEntry", "ActiveWorkAuthorityRefresh"])
+            expect(yield* Ref.get(maximumConcurrent)).toBe(1)
+          })
+      )
+    })
+  )
+)
+
 it.effect("coalesces hints arriving during an active refresh into one trailing active refresh", () =>
   Effect.scoped(
     Effect.gen(function* () {

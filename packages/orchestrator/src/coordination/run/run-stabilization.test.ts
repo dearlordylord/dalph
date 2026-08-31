@@ -350,6 +350,71 @@ it.effect("starts no tracker stabilization read after the application Exit cutof
   )
 )
 
+it.effect("returns RunMustRemainActive without G2 when task-work admission is stalled", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const taskId = TaskId.make("stabilization-admission-stalled-D")
+      const g1 = graph(
+        "stabilization-admission-stalled-G1",
+        1,
+        snapshot("stabilization-admission-stalled-G1", [
+          { id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+        ])
+      )
+      const fresh = freshGraphReadProposal(g1, taskId)
+      const blockedAttempt = PlannedTaskAttempt.make({
+        ...activeVerticalAttempt,
+        attemptId: AttemptId.make("stabilization-admission-stalled-D-attempt"),
+        taskId
+      })
+      const blocked = {
+        ...fresh,
+        admission: {
+          ...fresh.admission,
+          plannedAttemptProtocol: {
+            _tag: "PlannedAttemptProtocolRequired" as const,
+            correlation: plannedAttemptExecutorCorrelation(blockedAttempt)
+          },
+          taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId }
+        }
+      }
+      const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
+        ...withRunFacts(evaluation(base, g1, { ...emptyFrontier, proposals: [blocked] }), false),
+        taskWork: {
+          capacity,
+          held: [
+            {
+              taskId: activeVerticalAttempt.taskId,
+              correlation: plannedAttemptExecutorCorrelation(activeVerticalAttempt)
+            }
+          ]
+        }
+      })
+      const reads = yield* Ref.make(0)
+
+      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+        Effect.provide(support),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({ execute: () => Effect.die("full capacity must not execute D") })
+        ),
+        Effect.provide(
+          Layer.mock(WorkflowInterpreter, {
+            readTrackerGraph: () => Ref.update(reads, (count) => count + 1).pipe(Effect.andThen(Effect.die("no G2")))
+          })
+        )
+      )
+
+      expect(yield* Ref.get(reads)).toBe(0)
+      expect(proof).toEqual({
+        acceptedAt: g1.observation.recordedAt,
+        decision: { _tag: "RunMustRemainActive", reason: "RunnableTransition" }
+      })
+    })
+  )
+)
+
 it.effect("records a stabilization read admitted before Exit but starts no phase-two action", () =>
   Effect.scoped(
     Effect.gen(function* () {

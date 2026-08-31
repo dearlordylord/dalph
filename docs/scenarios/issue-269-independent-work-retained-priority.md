@@ -4,8 +4,10 @@ Owning issue: [#269](https://github.com/dearlordylord/dalph/issues/269)
 
 Status: complete and composed on `integrate/issues-264-268` through exact
 commit `a1b81c4fbcd189d62b480d6e637c62278ca7b829`; issue #269 is closed. This
-scenario refines admission after restart; it does not add a durable queue,
-another capacity counter, or task-ID authority over an exact planned attempt.
+scenario's full-capacity handoff refinement below is accepted for repair on
+`work/issue-269-admission-stalled-quiescence` before #268 composition. It does
+not add a durable queue, another capacity counter, or task-ID authority over an
+exact planned attempt.
 
 ## Governing behavior
 
@@ -165,8 +167,79 @@ position correlation derive the same decision again.
   changed-work chronology: one causal exact choice, bounded fresh authority
   reads, one immutable attempt, and no duplicate choice on redelivery.
 
-Closure evidence: every direct mapping above is green. The #269 full repository
+Original closure evidence: every direct mapping above is green. The #269 full repository
 gate passed before composition, and the combined #267/#269 focused suites
 passed 194/194 tests at integration tip `a1b81c4fb`. Independent standards
 review found no runtime or architecture interaction between exact retained
 position admission and #267's exact passive lifecycle publication.
+
+## Full capacity yields to one queued active refresh without losing D or E
+
+### Starting situation and trigger
+
+No person directly triggers this handoff. The running coordinator has capacity
+for three task attempts. Exact attempts A1, B1, and C1 are executing in the
+executor and hold all three positions under their exact `RunId` and
+`AttemptId` correlations. Exact attempts D1 and E1 have prepared worktrees and
+their current delivery proposals require `ReserveOrReuse`, but neither has an
+available position and neither has received an executor command.
+
+The activation that admitted A1, B1, and C1 has no local delivery-action owner
+left: their executor sessions now own the unfinished work. While that
+activation is still running, the coordinator's sole reactivation owner receives
+a tracker notification and timer hint. The hints wait outside the activation;
+they do not start another scheduler or graph-read protocol. The tracker has G1
+available when the queued refresh eventually reads it. Git, claims, and a
+person's command do not change at this handoff.
+
+### Ordered runtime handoff and result
+
+1. The ordinary delivery runtime sees A1, B1, and C1 holding all capacity, D1
+   and E1 still present as exact position-gated proposals, and no local action
+   owner able to release a position.
+2. Instead of waiting for an event that only the outside executor or a later
+   activation can supply, the runtime returns
+   `TaskWorkAdmissionStalledRuntimeQuiescence`. That descriptive result keeps
+   D1 and E1's proposals and every held exact-attempt correlation intact.
+3. Stabilization reports `RunMustRemainActive` immediately. It does not issue a
+   post-quiescence G2 tracker read because the non-empty retained frontier is
+   already proof that this Run is not final.
+4. The same sole reactivation owner completes that activation, coalesces the
+   queued notification and timer, and starts exactly one trailing active-work
+   refresh. That activation performs the ordinary journal-first tracker read
+   and accepts G1; it never overlaps the first activation.
+
+The operator sees the Run remain active and later react to G1. Dalph must not
+erase D1 or E1 to fabricate an empty frontier, mark the Run terminal, issue a
+G2 read before yielding, start a concurrent activation, create a second
+scheduler or read authority, change configured capacity, or send D1/E1 an
+executor command without a position.
+
+If Dalph dies before returning the descriptive result, process-local ownership
+disappears and ordinary journal-first restart reconstructs the same held and
+prepared facts. If it dies after returning but before consuming the hint, a
+fresh sole owner obtains current durable facts; no durable hint or admission
+queue is invented. Retrying either activation reuses exact attempt identities
+and must not duplicate an executor command.
+
+### Acceptance-test mapping
+
+- `returns admission-stalled quiescence with the blocked proposals when exact
+  attempts hold all ordinary capacity` in
+  `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`
+  proves steps 1 and 2.
+- `does not report admission-stalled quiescence while a local owner can finish
+  or for work that needs no task position` in the same file proves that only
+  the concrete capacity boundary yields this result.
+- `returns RunMustRemainActive without G2 when task-work admission is stalled`
+  in `packages/orchestrator/src/coordination/run/run-stabilization.test.ts`
+  proves step 3 and the preserved non-empty frontier.
+- `runs one queued active refresh after admission-stalled delivery yields`
+  in `packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts`
+  proves step 4's single trailing activation and maximum concurrent activation
+  count one.
+- `active-work refresh recovers ordinary authority reads without a private
+  refresh protocol` in
+  `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`
+  remains the governing #266 evidence that the trailing activation performs
+  G1 through the ordinary journal-first tracker read protocol.

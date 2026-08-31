@@ -2903,6 +2903,156 @@ it.effect("quiesces after G2 when retained active capacity cannot be freed local
   )
 )
 
+it.effect(
+  "returns admission-stalled quiescence with the blocked proposals when exact attempts hold all ordinary capacity",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const base = yield* baseEvaluation
+        const attempt = (name: string, taskId: TaskId) =>
+          PlannedTaskAttempt.make({
+            ...plannedAttempt,
+            attemptId: AttemptId.make(`runtime-admission-stalled-${name}`),
+            taskId
+          })
+        const a = attempt("A", TaskId.make("runtime-admission-stalled-A"))
+        const b = attempt("B", TaskId.make("runtime-admission-stalled-B"))
+        const c = attempt("C", TaskId.make("runtime-admission-stalled-C"))
+        const d = attempt("D", TaskId.make("runtime-admission-stalled-D"))
+        const e = attempt("E", TaskId.make("runtime-admission-stalled-E"))
+        const preparedProposal = (ordinal: number, prepared: PlannedTaskAttempt) => ({
+          ...proposal(ordinal, prepared.taskId),
+          admission: {
+            integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+            plannedAttemptProtocol: {
+              _tag: "PlannedAttemptProtocolRequired" as const,
+              correlation: plannedAttemptExecutorCorrelation(prepared)
+            },
+            taskWorkPosition: {
+              _tag: "TaskWorkPositionRequired" as const,
+              mode: "ReserveOrReuse" as const,
+              taskId: prepared.taskId
+            }
+          }
+        })
+        const blocked = [preparedProposal(0, d), preparedProposal(1, e)]
+        const relation = yield* dynamicEvaluationSignal({
+          ...withProposals(base, blocked, 3),
+          taskWork: {
+            capacity: TaskWorkCapacity.make(3),
+            held: [a, b, c].map((held) => ({
+              taskId: held.taskId,
+              correlation: plannedAttemptExecutorCorrelation(held)
+            }))
+          }
+        })
+
+        const result = yield* runDeliveryRuntimePhase(relation).pipe(
+          Effect.provide(identityLayers),
+          Effect.provideService(
+            DeliveryActionExecutor,
+            DeliveryActionExecutor.of({ execute: () => Effect.die("full capacity must not execute D or E") })
+          )
+        )
+
+        expect(result._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+        expect(result.proposedActions.proposals).toEqual(blocked)
+        if (result._tag !== "TaskWorkAdmissionStalledRuntimeQuiescence") {
+          return yield* Effect.die("ordinary full capacity must return its typed descriptive result")
+        }
+        expect(result.taskWork.held.map(({ correlation }) => correlation)).toEqual(
+          [a, b, c].map(plannedAttemptExecutorCorrelation)
+        )
+      })
+    )
+)
+
+it.effect(
+  "does not report admission-stalled quiescence while a local owner can finish or for work that needs no task position",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const base = yield* baseEvaluation
+        const heldAttempt = PlannedTaskAttempt.make({
+          ...plannedAttempt,
+          attemptId: AttemptId.make("runtime-admission-stalled-held"),
+          taskId: TaskId.make("runtime-admission-stalled-held-task")
+        })
+        const blockedAttempt = PlannedTaskAttempt.make({
+          ...plannedAttempt,
+          attemptId: AttemptId.make("runtime-admission-stalled-blocked"),
+          taskId: TaskId.make("runtime-admission-stalled-blocked-task")
+        })
+        const blocked = {
+          ...proposal(1, blockedAttempt.taskId),
+          admission: {
+            integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+            plannedAttemptProtocol: {
+              _tag: "PlannedAttemptProtocolRequired" as const,
+              correlation: plannedAttemptExecutorCorrelation(blockedAttempt)
+            },
+            taskWorkPosition: {
+              _tag: "TaskWorkPositionRequired" as const,
+              mode: "ReserveOrReuse" as const,
+              taskId: blockedAttempt.taskId
+            }
+          }
+        }
+        const positionless = {
+          ...proposal(0, TaskId.make("runtime-admission-stalled-positionless")),
+          admission: {
+            integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+            plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+            taskWorkPosition: { _tag: "NoTaskWorkPosition" as const }
+          }
+        }
+        const initial = {
+          ...withProposals(base, [positionless, blocked], 1),
+          taskWork: {
+            capacity: TaskWorkCapacity.make(1),
+            held: [{ taskId: heldAttempt.taskId, correlation: plannedAttemptExecutorCorrelation(heldAttempt) }]
+          }
+        } satisfies DeliveryRuntimeEvaluation
+        const relation = yield* dynamicEvaluationSignal(initial)
+        const positionlessStarted = yield* Deferred.make<void>()
+        const finishPositionless = yield* Deferred.make<void>()
+        const runtime = yield* runDeliveryRuntimePhase(relation).pipe(
+          Effect.provide(identityLayers),
+          Effect.provideService(
+            DeliveryActionExecutor,
+            DeliveryActionExecutor.of({
+              execute: ({ proposal: action }) =>
+                action.id !== positionless.id
+                  ? Effect.die("full capacity must not execute the position-gated proposal")
+                  : Effect.gen(function* () {
+                      yield* relation.publish({
+                        ...initial,
+                        proposedActions: {
+                          _tag: "DeliveryProposalsAvailable",
+                          isolatedIssues: [],
+                          proposals: [blocked]
+                        }
+                      })
+                      yield* Deferred.succeed(positionlessStarted, undefined)
+                      yield* Deferred.await(finishPositionless)
+                      return { _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult
+                    })
+            })
+          ),
+          Effect.forkChild
+        )
+
+        yield* Deferred.await(positionlessStarted)
+        yield* Effect.yieldNow
+        expect(runtime.pollUnsafe()).toBeUndefined()
+        yield* Deferred.succeed(finishPositionless, undefined)
+        const result = yield* Fiber.join(runtime)
+        expect(result._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+        expect(result.proposedActions.proposals).toEqual([blocked])
+      })
+    )
+)
+
 it.effect("continues waiting after G2 while an in-flight action can free retained capacity", () =>
   Effect.scoped(
     Effect.gen(function* () {
