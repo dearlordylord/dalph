@@ -15,10 +15,13 @@ import {
   IntegratorCandidateProviderAuthority,
   RunLifecycleJournal,
   CoordinatorOwnership,
+  CoordinatorLockHeld,
+  type CoordinatorLockUnavailable,
   GithubGraphqlClient,
   GithubIssueNodeId,
   GithubIssueTarget,
   GithubRepositoryNodeId,
+  GitCommonDirectoryTarget,
   InitialControlPolicy,
   JournalDatabaseLocator,
   JournalPosition,
@@ -40,6 +43,7 @@ import {
   TaskWorkCapacity,
   TraceCursor,
   currentSignalOf,
+  journalStoreCapabilities,
   memoryJournalStoreLayer,
   ProductionRunSelectionConflict,
   RunPolicyRevision,
@@ -912,6 +916,154 @@ it.effect(
         })
         assertNoProviderOrJournalStateChanges(yield* Ref.get(calls))
       }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
+    )
+)
+
+it.effect(
+  "second canonical production host fails before every state-changing boundary and releases for fresh discovery",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem
+        const path = yield* Path.Path
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-host-ownership-" })
+        const commonDirectory = path.join(root, "repository.git")
+        const alias = path.join(root, "repository-alias")
+        yield* fileSystem.makeDirectory(commonDirectory)
+        yield* fileSystem.symlink(commonDirectory, alias)
+
+        const journalLayer = yield* Layer.build(memoryJournalStoreLayer)
+        const journal = Context.get(journalLayer, JournalStore)
+        const scans = yield* Ref.make(0)
+        const journalAcquisitions = yield* Ref.make(0)
+        const runAcquisitions = yield* Ref.make(0)
+        const beginCalls = yield* Ref.make(0)
+        const observedJournal = JournalStore.of({
+          ...journal,
+          scanHot: Effect.fn("ProductionHostOwnershipTest.scanHot")(function* () {
+            yield* Ref.update(scans, (count) => count + 1)
+            return yield* journal.scanHot()
+          }),
+          beginRun: Effect.fn("ProductionHostOwnershipTest.beginRun")(function* (runId, target, policy) {
+            yield* Ref.update(beginCalls, (count) => count + 1)
+            return yield* journal.beginRun(runId, target, policy)
+          })
+        })
+        const ownershipLayerFor = (configuration: ProductionRepositoryHostConfiguration) =>
+          productionCoordinatorOwnershipLayer(GitCommonDirectoryTarget.make(configuration.commonDirectory)).pipe(
+            Layer.provide(NodeServices.layer)
+          )
+        const foundation = (configuration: ProductionRepositoryHostConfiguration) => {
+          const ownership = ownershipLayerFor(configuration)
+          const journalCapabilities = journalStoreCapabilities(
+            Layer.effect(
+              JournalStore,
+              Ref.update(journalAcquisitions, (count) => count + 1).pipe(Effect.as(observedJournal))
+            )
+          )
+          return journalCapabilities.pipe(Layer.provideMerge(ownership))
+        }
+        const makeRunLayer = (
+          configuration: ProductionRepositoryHostConfiguration,
+          selection: ProductionRunSelection
+        ) =>
+          Layer.effectContext(
+            Effect.gen(function* () {
+              yield* Ref.update(runAcquisitions, (count) => count + 1)
+              const journalService = yield* JournalStore
+              const established = Effect.gen(function* () {
+                const records = yield* journalService.read(selection.runId)
+                if (records.length === 0) {
+                  const record = yield* journalService.beginRun(
+                    selection.runId,
+                    configuration.target,
+                    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+                  )
+                  return JournaledRunEstablished.make({
+                    acceptedAt: record.position,
+                    runId: selection.runId,
+                    target: configuration.target
+                  })
+                }
+                const last = records.at(-1)
+                if (last === undefined) return yield* Effect.die("host ownership fixture lost its Run beginning")
+                return JournaledRunEstablished.make({
+                  acceptedAt: last.position,
+                  runId: selection.runId,
+                  target: configuration.target
+                })
+              }).pipe(Effect.orDie)
+              return Context.empty().pipe(
+                Context.add(
+                  JournaledRunObservationSource,
+                  JournaledRunObservationSource.of({
+                    acceptedHistory: currentSignalOf(
+                      TraceCursor.make({ position: JournalPosition.make(1), runId: selection.runId })
+                    ),
+                    awaitEstablished: established,
+                    current: currentSignalOf({ _tag: "NotReady" as const })
+                  })
+                ),
+                Context.add(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))
+              )
+            })
+          )
+        const graph = { foundation, run: makeRunLayer } satisfies ProductionRepositoryHostGraph<
+          CoordinatorLockHeld | CoordinatorLockUnavailable,
+          never,
+          never,
+          never,
+          never
+        >
+        const firstReady = yield* Deferred.make<void>()
+        const releaseFirst = yield* Deferred.make<void>()
+        const firstSelectionRunId = yield* Deferred.make<RunId>()
+        const firstInput = {
+          ...validRawConfiguration(),
+          repository: commonDirectory,
+          commonDirectory,
+          journalDatabase: path.join(root, "journal.sqlite"),
+          evidenceStoreRoot: path.join(root, "evidence"),
+          plannedAttemptWorktreeRoot: path.join(root, "planned-attempts"),
+          codexStateDirectory: path.join(root, "codex-state"),
+          integratorCandidateWorktreeRoot: path.join(root, "integrator-candidates"),
+          integratorPrivateStore: path.join(root, "integrator-private.json")
+        }
+        const firstHost = withProductionRepositoryHost(firstInput, graph, (observation) =>
+          Deferred.succeed(firstSelectionRunId, observation.selection.runId).pipe(
+            Effect.andThen(Deferred.succeed(firstReady, undefined)),
+            Effect.andThen(Deferred.await(releaseFirst))
+          )
+        )
+        const firstFiber = yield* firstHost.pipe(Effect.forkScoped)
+        yield* Deferred.await(firstReady)
+
+        const secondInput = { ...firstInput, commonDirectory: alias }
+        const secondFailure = yield* withProductionRepositoryHost(secondInput, graph, () =>
+          Effect.die("H2 must not build")
+        ).pipe(Effect.flip)
+        expect(secondFailure).toBeInstanceOf(CoordinatorLockHeld)
+        if (secondFailure instanceof CoordinatorLockHeld) {
+          expect(secondFailure.gitCommonDirectory).toBe(commonDirectory)
+        }
+        expect(yield* Ref.get(scans)).toBe(1)
+        expect(yield* Ref.get(journalAcquisitions)).toBe(1)
+        expect(yield* Ref.get(runAcquisitions)).toBe(1)
+        expect(yield* Ref.get(beginCalls)).toBe(1)
+
+        yield* Deferred.succeed(releaseFirst, undefined)
+        yield* Fiber.join(firstFiber)
+
+        const secondSelection = yield* withProductionRepositoryHost(secondInput, graph, (observation) =>
+          Effect.succeed(observation.selection)
+        )
+        expect(secondSelection._tag).toBe("Recovered")
+        expect(secondSelection.runId).toBe(yield* Deferred.await(firstSelectionRunId))
+        expect(yield* Ref.get(scans)).toBe(2)
+        expect(yield* Ref.get(journalAcquisitions)).toBe(2)
+        expect(yield* Ref.get(runAcquisitions)).toBe(2)
+        expect(yield* Ref.get(beginCalls)).toBe(1)
+      }).pipe(Effect.provide(NodeServices.layer), Effect.provide(NodeCrypto.layer))
     )
 )
 

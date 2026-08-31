@@ -219,9 +219,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
     const ownership = productionCoordinatorOwnershipLayer(
       GitCommonDirectoryTarget.make(configuration.commonDirectory)
     ).pipe(Layer.provide(NodeServices.layer))
-    const defaultJournalLayer = sqliteJournalStoreLayer({ filename: configuration.journalDatabase })
-    const journalStoreLayer = adapters.journalStore?.(configuration, defaultJournalLayer) ?? defaultJournalLayer
-    const journal = journalStoreCapabilities(journalStoreLayer)
+    const journal = journalStoreCapabilities(sqliteJournalStoreLayer({ filename: configuration.journalDatabase }))
     return journal.pipe(Layer.provideMerge(ownership))
   },
   run: (
