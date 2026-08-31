@@ -128,6 +128,10 @@ import {
 } from "./authored-domain.js"
 import { controlledExecutorLayer, controlledTrace, controlledTrackerGraphReaderLayer } from "./authored-adapters.js"
 import {
+  consumeControlledTaskWorkSpecification,
+  consumeControlledTrackerGraph
+} from "./authored-tracker-read-results.js"
+import {
   AuthoredCassetteInteractionMismatch,
   AuthoredCoordinatorProcessDies,
   makeStoryCursor,
@@ -1459,6 +1463,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       })
       const admittedContinuationChoiceApplied = yield* Deferred.make<void>()
       const targetPromotionStory = cassette.story.some((item) => item._tag.startsWith("TargetPromotion"))
+      const exactCausalTrackerReadStory = cassette.story.some((item) => item._tag === "ConcurrentTrackerReadBatch")
       const initial = yield* cursor.consumeInitialPolicy
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
@@ -1870,6 +1875,20 @@ const runAuthoredScenarioCassetteWith = (request: {
           const gitWorktree = yield* GitWorktree
           return WorkflowInterpreter.of({
             ...interpreter,
+            ...(exactCausalTrackerReadStory
+              ? {
+                  readTrackerGraph: (operation) =>
+                    consumeControlledTrackerGraph(cursor, operation.target, {
+                      operationId: operation.operationId,
+                      predecessorOperationIds: operation.predecessorOperationIds
+                    }),
+                  readTaskWorkSpecification: (operation) =>
+                    consumeControlledTaskWorkSpecification(cursor, operation.taskId, {
+                      operationId: operation.operationId,
+                      predecessorOperationIds: operation.predecessorOperationIds
+                    })
+                }
+              : {}),
             readTaskWorktree: (operation) =>
               Effect.gen(function* () {
                 const change = yield* cursor.consumeGitWorktreeObservationChange

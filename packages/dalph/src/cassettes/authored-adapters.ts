@@ -13,20 +13,19 @@ import {
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   samePlannedAttemptExecutorCorrelation,
+  makeTaskWorkSpecification,
   type PlannedTaskAttempt,
   type RunId,
-  makeTaskWorkSpecification,
   type TaskId
 } from "@dalph/contracts"
 import {
   projectTrackerSnapshot,
   TraceOutputError,
-  TrackerAdapterReadContext,
-  TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
   TrackerGraphReader,
   type TraceItem,
   type WorkflowOperation,
+  workflowOperationId,
   WorkflowTrace
 } from "@dalph/orchestrator"
 import {
@@ -35,18 +34,9 @@ import {
   type AuthoredCassetteStoryItem
 } from "./authored-domain.js"
 import type { StoryCursor } from "./authored-cursor.js"
+import { trackerReadFailure } from "./authored-tracker-read-results.js"
 
 const evidenceDigestHexLength = 64
-
-const trackerReadFailure = (
-  detail: string,
-  reason: TrackerAdapterReadFailureReason = TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({})
-) =>
-  new TrackerAdapterReadError({
-    context: TrackerAdapterReadContext.cases.Fixture.make({ operation: "TrackerGraphReader.selectAdapter" }),
-    detail,
-    reason
-  })
 
 export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
   Layer.succeed(
@@ -230,16 +220,22 @@ export const controlledTrace = (cursor: StoryCursor, options: ControlledTraceOpt
       if (item._tag === "OperationSelected") yield* cursor.pauseAtCoordinatorProcessDeath
       const actual = actualDecision(item)
       if (actual === undefined) return
+      /* v8 ignore next -- @preserve A cassette decision is derived only from an OperationSelected trace item. */
+      if (item._tag !== "OperationSelected") return
       yield* awaitTraceBoundaries(cursor, item, actual, options)
       const expected = yield* cursor
-        .consumeDalphSelectionFor(actual)
+        .consumeDalphSelectionFor(actual, {
+          operationId: workflowOperationId(item.operation),
+          predecessorOperationIds: item.operation.predecessorOperationIds
+        })
         .pipe(
           Effect.mapError(
             (failure) =>
               new TraceOutputError({
                 detail:
                   `${failure._tag} at story position ${failure.storyPosition}: ` +
-                  `expected ${failure.expected}, received ${failure.actual} while emitting ${encodedDecision(actual)}`
+                  `${failure._tag === "AuthoredCassetteInteractionMismatch" ? `expected ${failure.expected}, received ${failure.actual}` : failure.detail} ` +
+                  `while emitting ${encodedDecision(actual)}`
               })
           )
         )
@@ -357,7 +353,9 @@ export const controlledExecutorLayer = (
   const executor = PlannedAttemptExecutor.of({
     observe: (correlation) =>
       Effect.gen(function* () {
-        const projection = yield* cursor.consumeExecutorProjection
+        const projection = yield* cursor.exactCausalSynchronization()
+          ? cursor.consumeExecutorProjectionFor(correlation.attemptId)
+          : cursor.consumeExecutorProjection
         if (Option.isNone(projection)) {
           const unresolved = yield* Ref.get(unresolvedLostResponses)
           if (unresolved.has(plannedAttemptExecutorCorrelationKey(correlation))) {
