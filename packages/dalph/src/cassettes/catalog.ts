@@ -4151,13 +4151,9 @@ const doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems = (
   deferredTasks: ReadonlyArray<{
     readonly attemptId: string
     readonly taskId: (typeof doubleDiamondTaskIds)[number]
-  }> = [],
-  repeatedCurrentTaskGraphReads: ReadonlyArray<{ readonly taskId: (typeof doubleDiamondTaskIds)[number] }> = []
+  }> = []
 ) => [
   ...Array.from({ length: claimTasks.length + 1 }, () => doubleDiamondGraphRead(graph)).flat(),
-  // The authored response carries the same complete graph; the production
-  // operation retains each exact task subject in its typed read shape.
-  ...repeatedCurrentTaskGraphReads.flatMap(() => doubleDiamondGraphRead(graph)),
   ...claimTasks.map(({ taskId }) => ({
     _tag: "DalphSelects" as const,
     operation: { _tag: "AcquireTaskClaim" as const, taskId }
@@ -4234,10 +4230,10 @@ const defaultDiamondIntegrationPositions = {
 
 const fiveTaskDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 117, startedAt: 126, targetLineageObservedAt: 140 },
-  C: { queuedAt: 124, startedAt: 172, targetLineageObservedAt: 174 },
-  D: { queuedAt: 259, startedAt: 260, targetLineageObservedAt: 270 },
-  E: { queuedAt: 125, startedAt: 206, targetLineageObservedAt: 208 },
+  B: { queuedAt: 111, startedAt: 120, targetLineageObservedAt: 134 },
+  C: { queuedAt: 118, startedAt: 166, targetLineageObservedAt: 168 },
+  D: { queuedAt: 253, startedAt: 254, targetLineageObservedAt: 264 },
+  E: { queuedAt: 119, startedAt: 200, targetLineageObservedAt: 202 },
   F: defaultDiamondIntegrationPositions,
   G: defaultDiamondIntegrationPositions,
   H: defaultDiamondIntegrationPositions,
@@ -4693,8 +4689,7 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
       [fiveTaskDiamondAttempts.b, fiveTaskDiamondAttempts.c],
       [fiveTaskDiamondAttempts.b, fiveTaskDiamondAttempts.c, fiveTaskDiamondAttempts.e],
       [fiveTaskDiamondAttempts.b, fiveTaskDiamondAttempts.c, fiveTaskDiamondAttempts.e],
-      [fiveTaskDiamondAttempts.e],
-      [fiveTaskDiamondAttempts.c, fiveTaskDiamondAttempts.e, fiveTaskDiamondAttempts.e]
+      [fiveTaskDiamondAttempts.e]
     ),
     doubleDiamondExecutorReport(fiveTaskDiamondAttempts.b),
     { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:E:2", taskId: "E" } },

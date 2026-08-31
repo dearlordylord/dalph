@@ -22,6 +22,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { TaskLifecycle, type Task } from "../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
@@ -78,6 +79,7 @@ import {
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import { liveActionKeyOf, proposalIsPresent } from "./live-delivery-action.js"
+import { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import {
   currentSignalOf,
   currentSignalFromCurrentFirstStream,
@@ -942,6 +944,87 @@ it.effect("does not repeat one recovered observation after only its causal route
     const first = specificationRead("first")
     const superseding = specificationRead("superseding")
     yield* assertCausalRouteChangeDoesNotRepeat(first, superseding, TaskId.make("independent-after-superseding-route"))
+  }).pipe(Effect.scoped)
+)
+
+it.effect("does not repeat task C's current-graph read when task B's accepted read changes its predecessor", () =>
+  Effect.gen(function* () {
+    const taskId = TaskId.make("C")
+    const task: Task = {
+      id: taskId,
+      lifecycle: TaskLifecycle.cases.Open.make({}),
+      parentTaskId: null,
+      prerequisiteIds: []
+    }
+    const currentGraphRead = (predecessor: string) => {
+      const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+        taskId,
+        taskRevision: TaskRevision.make("runtime-current-graph-C")
+      })
+      const step = FreshWorkflowStep.ReadCurrentTaskGraph({
+        predecessorOperationId: OperationId.make(predecessor),
+        task
+      })
+      return Option.getOrThrow(
+        Option.fromUndefinedOr(
+          deliveryProposalsOf({
+            acceptedOperationIds: new Set(),
+            fresh: [{ step, transition }],
+            runId,
+            transitions: [transition]
+          }).ticketDelivery[0]
+        )
+      )
+    }
+
+    const first = currentGraphRead("graph-before-B-read")
+    const superseding = currentGraphRead("accepted-B-read")
+    const independent = proposal(1, TaskId.make("independent-after-B-read"))
+    expect(superseding.id).not.toBe(first.id)
+    const initial = withProposals(yield* baseEvaluation, [first], 2)
+    const relation = yield* dynamicEvaluationSignal(initial)
+    const firstStarted = yield* Deferred.make<void>()
+    const finishFirst = yield* Deferred.make<void>()
+    const firstOutcome = yield* Deferred.make<void>()
+    const supersedingStarted = yield* Deferred.make<void>()
+    const independentStarted = yield* Deferred.make<void>()
+    const executor = DeliveryActionExecutor.of({
+      execute: (action) =>
+        Effect.gen(function* () {
+          if (action.proposal.id === first.id) {
+            yield* Deferred.succeed(firstStarted, undefined)
+            yield* relation.publish(withProposals(initial, [superseding], 2))
+            yield* Deferred.await(finishFirst)
+          } else if (action.proposal.id === superseding.id) {
+            yield* Deferred.succeed(supersedingStarted, undefined)
+          } else {
+            yield* Deferred.succeed(independentStarted, undefined)
+            yield* relation.publish(withProposals(initial, [], 2))
+          }
+          return { _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult
+        })
+    })
+    const trace = DeliverySemanticTrace.of({
+      emit: (event) =>
+        event._tag === "ActionOutcome" && event.result.proposalId === first.id
+          ? Deferred.succeed(firstOutcome, undefined)
+          : Effect.void
+    })
+    const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
+      Effect.provide(identityLayers),
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.provideService(DeliverySemanticTrace, trace),
+      Effect.forkChild
+    )
+
+    yield* Deferred.await(firstStarted)
+    expect(yield* Deferred.isDone(supersedingStarted)).toBe(false)
+    yield* Deferred.succeed(finishFirst, undefined)
+    yield* Deferred.await(firstOutcome)
+    yield* relation.publish(withProposals(initial, [superseding, independent], 2))
+    yield* Deferred.await(independentStarted)
+    expect(yield* Deferred.isDone(supersedingStarted)).toBe(false)
+    expect(yield* Fiber.join(runtime)).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
   }).pipe(Effect.scoped)
 )
 

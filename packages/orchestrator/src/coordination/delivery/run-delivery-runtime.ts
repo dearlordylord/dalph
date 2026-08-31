@@ -33,7 +33,7 @@ import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 import * as RuntimeObservation from "./delivery-runtime-observation.js"
 import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { installInterruptibleDeliveryChild } from "./delivery-child-handoff.js"
-import { proposalIsPresent } from "./live-delivery-action.js"
+import { liveActionIsPresent, proposalIsPresent } from "./live-delivery-action.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import {
   DeliveryRuntimePhase,
@@ -330,7 +330,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                   (owners) => new Map([...owners].filter(([id]) => id !== completion.proposalId))
                 )
                 yield* publishRuntimeObservationInsideGate()
-              } else if (!proposalIsPresent(current.proposedActions, owner.proposal.id)) {
+              } else if (!liveActionIsPresent(current.proposedActions, owner.proposal)) {
                 yield* Ref.update(
                   owners,
                   (owners) => new Map([...owners].filter(([id]) => id !== completion.proposalId))

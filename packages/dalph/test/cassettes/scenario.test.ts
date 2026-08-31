@@ -2879,7 +2879,7 @@ it.effect(
         )
 
       expect([...settledAt.keys()]).toEqual(["A", "B", "C", "E", "D"])
-      expect(currentGraphSubjectsBeforeB).toEqual([[], ["B"], ["C"], ["E"], ["C"], ["E"], ["E"]])
+      expect(currentGraphSubjectsBeforeB).toEqual([[], ["B"], ["C"], ["E"]])
       expect(beganAt.get(TaskId.make("D"))).toBeGreaterThan(settledAt.get(TaskId.make("B")) ?? Number.POSITIVE_INFINITY)
       expect(beganAt.get(TaskId.make("D"))).toBeGreaterThan(settledAt.get(TaskId.make("C")) ?? Number.POSITIVE_INFINITY)
       expect(beganAt.get(TaskId.make("D"))).toBeGreaterThan(settledAt.get(TaskId.make("E")) ?? Number.POSITIVE_INFINITY)

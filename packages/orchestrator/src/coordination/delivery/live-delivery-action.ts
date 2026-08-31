@@ -129,6 +129,12 @@ export const liveActionKeyOf = (proposal: DeliveryActionProposal): LiveDeliveryA
       proposal.route.step.plannedAttempt.attemptId
     ])
   }
+  // Accepting another task's graph read can replace this read's causal
+  // predecessor before its tracker call returns. The task is the stable
+  // process-local subject; the predecessor is chronology, not a second call.
+  if (proposal.route._tag === "FreshWorkflowRoute" && proposal.route.step._tag === "ReadCurrentTaskGraph") {
+    return liveActionKey(["FreshCurrentTaskGraphRead", proposal.route.step.task.id])
+  }
   const subject = recoveredReadSubject(proposal)
   return subject === undefined
     ? liveActionKey(["DeliveryProposal", proposal.id])
@@ -168,3 +174,9 @@ export const proposalIsPresent = (frontier: DeliveryProposalFrontier, proposalId
   frontier._tag === "DeliveryProposalsAvailable"
     ? frontier.proposals.some(({ id }) => id === proposalId)
     : frontier.conflicts.some(({ id }) => id === proposalId)
+
+/** A causally refreshed proposal still names the same process-local boundary action. */
+export const liveActionIsPresent = (frontier: DeliveryProposalFrontier, proposal: DeliveryActionProposal): boolean =>
+  frontier._tag === "DeliveryProposalsAvailable"
+    ? frontier.proposals.some((candidate) => liveActionKeyOf(candidate) === liveActionKeyOf(proposal))
+    : frontier.conflicts.some(({ id }) => id === proposal.id)
