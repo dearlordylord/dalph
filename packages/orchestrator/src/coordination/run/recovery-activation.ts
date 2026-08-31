@@ -127,6 +127,9 @@ type FocusedTaskClaim = Extract<
   { readonly _tag: "FocusedTaskClaimFacts" }
 >["observation"]
 type ContinuationGitReadIntentEvent = Extract<JournalRecord["event"], { readonly _tag: "GitReadIntentRecorded" }>
+type TrackerReadIntentRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerReadIntentRecorded" }>
+}
 
 /** An ordinary Git intent authorizes one observed read. */
 const isContinuationGitReadIntentEvent = (event: JournalRecord["event"]): event is ContinuationGitReadIntentEvent =>
@@ -3485,35 +3488,81 @@ const continuationGitReadIntentHasExactCausalOwner = (
   }
   const exactPlan = recordedTaskAttemptPlanFor(records, operation.plannedAttempt)
   if (exactPlan === undefined || !operation.predecessorOperationIds.includes(exactPlan.operationId)) return false
-  const trackerIntents = records.flatMap(({ event: candidate }) =>
-    candidate._tag === "TaskTrackerReadIntentRecorded" &&
-    operation.predecessorOperationIds.includes(candidate.operation.operationId)
-      ? [candidate.operation]
-      : []
+  const worktreeIntent = records.findLast(
+    ({ event: candidate }) =>
+      candidate._tag === "GitReadIntentRecorded" &&
+      candidate.operation._tag === "ReadTaskWorktree" &&
+      candidate.operation.operationId === operation.operationId &&
+      plannedTaskAttemptEquivalence(candidate.operation.plannedAttempt, operation.plannedAttempt)
   )
-  const graph = trackerIntents.find(
-    (candidate) =>
+  if (worktreeIntent === undefined) return false
+  const trackerIntents = records.filter(
+    (candidate): candidate is TrackerReadIntentRecord =>
+      candidate.event._tag === "TaskTrackerReadIntentRecorded" &&
+      candidate.position < worktreeIntent.position &&
+      operation.predecessorOperationIds.includes(candidate.event.operation.operationId)
+  )
+  const graphIntent = trackerIntents.findLast(
+    ({ event: { operation: candidate } }) =>
       candidate._tag === "ReadTrackerGraph" &&
       (candidate.cause._tag === "AttemptContinuation" || candidate.cause._tag === "ExecutingWorkAuthorityCheck") &&
       candidate.predecessorOperationIds.includes(exactPlan.operationId) &&
       candidate.readShape.explicitlyCoveredTaskIds.includes(operation.plannedAttempt.taskId)
   )
-  if (graph?._tag !== "ReadTrackerGraph") return false
-  const specification = trackerIntents.find(
-    (candidate) =>
+  if (graphIntent?.event.operation._tag !== "ReadTrackerGraph") return false
+  const graph = graphIntent.event.operation
+  const graphOutcome = records.findLast(
+    ({ event: candidate, position }) =>
+      candidate._tag === "TaskTrackerFactsObserved" &&
+      candidate.operationId === graph.operationId &&
+      position > graphIntent.position &&
+      position < worktreeIntent.position &&
+      (candidate.observation._tag === "CompleteTaskTrackerFacts" ||
+        candidate.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
+      taskTrackerObservationMatchesRead(candidate.observation, graph)
+  )
+  if (graphOutcome === undefined) return false
+  const specificationIntent = trackerIntents.findLast(
+    ({ event: { operation: candidate }, position }) =>
       candidate._tag === "ReadTaskWorkSpecification" &&
+      position > graphOutcome.position &&
       candidate.taskId === operation.plannedAttempt.taskId &&
+      taskTrackerTargetKey(candidate.target) === taskTrackerTargetKey(graph.target) &&
       candidate.predecessorOperationIds.includes(exactPlan.operationId) &&
       candidate.predecessorOperationIds.includes(graph.operationId)
   )
-  if (specification?._tag !== "ReadTaskWorkSpecification") return false
-  return trackerIntents.some(
-    (candidate) =>
+  if (specificationIntent?.event.operation._tag !== "ReadTaskWorkSpecification") return false
+  const specification = specificationIntent.event.operation
+  const specificationOutcome = records.findLast(
+    ({ event: candidate, position }) =>
+      candidate._tag === "TaskTrackerFactsObserved" &&
+      candidate.operationId === specification.operationId &&
+      position > specificationIntent.position &&
+      position < worktreeIntent.position &&
+      candidate.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+      taskTrackerObservationMatchesRead(candidate.observation, specification)
+  )
+  if (specificationOutcome === undefined) return false
+  const claimIntent = trackerIntents.findLast(
+    ({ event: { operation: candidate }, position }) =>
       candidate._tag === "ReadTaskClaim" &&
+      position > specificationOutcome.position &&
       candidate.taskId === operation.plannedAttempt.taskId &&
+      taskTrackerTargetKey(candidate.target) === taskTrackerTargetKey(graph.target) &&
       candidate.predecessorOperationIds.includes(exactPlan.operationId) &&
       candidate.predecessorOperationIds.includes(graph.operationId) &&
       candidate.predecessorOperationIds.includes(specification.operationId)
+  )
+  if (claimIntent?.event.operation._tag !== "ReadTaskClaim") return false
+  const claim = claimIntent.event.operation
+  return records.some(
+    ({ event: candidate, position }) =>
+      candidate._tag === "TaskTrackerFactsObserved" &&
+      candidate.operationId === claim.operationId &&
+      position > claimIntent.position &&
+      position < worktreeIntent.position &&
+      candidate.observation._tag === "FocusedTaskClaimFacts" &&
+      taskTrackerObservationMatchesRead(candidate.observation, claim)
   )
 }
 

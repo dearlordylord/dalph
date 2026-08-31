@@ -3559,7 +3559,7 @@ it("fails closed for a valid no-begin prefix with a paired pending Git read", ()
 })
 
 effectIt.effect(
-  "restart replays worktree before a premature lineage intent and lineage only after worktree observation",
+  "restart excludes premature worktree while specification is pending and replays the completed tracker chain",
   () =>
     Effect.gen(function* () {
       const worktreeOperation = makeTaskWorktreeObservationOperation({
@@ -3631,15 +3631,101 @@ effectIt.effect(
             lineageOperation.integrationTarget,
             resources
           ).pipe(Effect.provideService(InRunJournal, journal))
-          return (yield* recovery.readDeliveryProjection).frontier.transitions.filter(
-            (transition) =>
-              transition._tag === "ObservePlannedAttemptContinuationWorktree" ||
-              transition._tag === "ObservePlannedAttemptContinuationTargetLineage"
-          )
+          return (yield* recovery.readDeliveryProjection).frontier.transitions
         })
 
+      const pendingSpecification = coverageRecordsWithBeginning([
+        ...coveragePlanRecords(),
+        coverageRecord(5, taskTrackerReadIntent(coverageGraphOperation)),
+        coverageRecord(6, coverageGraphEvent),
+        coverageRecord(7, taskTrackerReadIntent(coverageSpecificationOperation)),
+        coverageRecord(8, taskTrackerReadIntent(coverageClaimOperation)),
+        coverageRecord(9, intentFor(worktreeOperation))
+      ])
+      const whileSpecificationPending = yield* projectionFor(pendingSpecification)
+      expect(
+        whileSpecificationPending.filter(
+          ({ _tag }) =>
+            _tag === "ObservePlannedAttemptContinuationWorktree" ||
+            _tag === "ObservePlannedAttemptContinuationTargetLineage"
+        )
+      ).toEqual([])
+
+      const failedGraph = TaskTrackerFactsReadFailed.make({
+        completeness: "Unreadable",
+        failure: { _tag: "FixtureReadError", detail: "tracker unavailable before the pending worktree" },
+        operationId: coverageGraphOperation.operationId,
+        target: coverageTarget
+      })
+      const foreignSpecificationOperation = makeTaskWorkSpecificationObservationOperation(
+        coverageSpecificationOperation.operationId,
+        FixtureTarget.make("recovery-activation-foreign-target"),
+        coverageAttempt.taskId,
+        coverageSpecificationOperation.predecessorOperationIds
+      )
+      const invalidTrackerChains = [
+        [
+          ...coveragePlanRecords(),
+          coverageRecord(5, taskTrackerReadIntent(coverageGraphOperation)),
+          coverageRecord(6, taskTrackerFactsObservedEvent(coverageGraphOperation.operationId, failedGraph)),
+          coverageRecord(7, taskTrackerReadIntent(coverageSpecificationOperation)),
+          coverageRecord(8, coverageSpecificationEvent),
+          coverageRecord(9, taskTrackerReadIntent(coverageClaimOperation)),
+          coverageRecord(10, coverageClaimEvent),
+          coverageRecord(11, intentFor(worktreeOperation))
+        ],
+        [
+          ...coveragePlanRecords(),
+          coverageRecord(5, taskTrackerReadIntent(coverageGraphOperation)),
+          coverageRecord(6, coverageGraphEvent),
+          coverageRecord(7, taskTrackerReadIntent(coverageSpecificationOperation)),
+          coverageRecord(8, coverageSpecificationEvent),
+          coverageRecord(9, taskTrackerReadIntent(coverageClaimOperation)),
+          coverageRecord(
+            10,
+            taskTrackerFactsObservedEvent(
+              coverageClaimOperation.operationId,
+              makeFocusedTaskClaimFactsUnreadable(coverageClaimOperation)
+            )
+          ),
+          coverageRecord(11, intentFor(worktreeOperation))
+        ],
+        [
+          ...coveragePlanRecords(),
+          coverageRecord(5, taskTrackerReadIntent(coverageGraphOperation)),
+          coverageRecord(6, coverageGraphEvent),
+          coverageRecord(7, taskTrackerReadIntent(foreignSpecificationOperation)),
+          coverageRecord(
+            8,
+            taskTrackerFactsObservedEvent(
+              foreignSpecificationOperation.operationId,
+              makeFocusedTaskWorkSpecificationFactsObserved(foreignSpecificationOperation, coverageSpecification)
+            )
+          ),
+          coverageRecord(9, taskTrackerReadIntent(coverageClaimOperation)),
+          coverageRecord(10, coverageClaimEvent),
+          coverageRecord(11, intentFor(worktreeOperation))
+        ]
+      ]
+      for (const invalidTrackerChain of invalidTrackerChains) {
+        const transitions = yield* projectionFor(coverageRecordsWithBeginning(invalidTrackerChain))
+        expect(
+          transitions.filter(
+            ({ _tag }) =>
+              _tag === "ObservePlannedAttemptContinuationWorktree" ||
+              _tag === "ObservePlannedAttemptContinuationTargetLineage"
+          )
+        ).toEqual([])
+      }
+
       const premature = yield* projectionFor([...prefix, coverageRecord(13, intentFor(lineageOperation))])
-      expect(premature).toMatchObject([
+      expect(
+        premature.filter(
+          ({ _tag }) =>
+            _tag === "ObservePlannedAttemptContinuationWorktree" ||
+            _tag === "ObservePlannedAttemptContinuationTargetLineage"
+        )
+      ).toMatchObject([
         { _tag: "ObservePlannedAttemptContinuationWorktree", operation: { operationId: worktreeOperation.operationId } }
       ])
 
@@ -3648,7 +3734,13 @@ effectIt.effect(
         worktreeObserved,
         coverageRecord(14, intentFor(lineageOperation))
       ])
-      expect(afterWorktree).toMatchObject([
+      expect(
+        afterWorktree.filter(
+          ({ _tag }) =>
+            _tag === "ObservePlannedAttemptContinuationWorktree" ||
+            _tag === "ObservePlannedAttemptContinuationTargetLineage"
+        )
+      ).toMatchObject([
         {
           _tag: "ObservePlannedAttemptContinuationTargetLineage",
           operation: { operationId: lineageOperation.operationId }

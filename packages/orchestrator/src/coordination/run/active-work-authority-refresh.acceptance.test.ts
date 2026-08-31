@@ -14,7 +14,7 @@ import {
   WorktreeLocator,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { Effect, Layer, Option, Ref } from "effect"
+import { Effect, Layer, Option, Ref, Stream } from "effect"
 import { expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
@@ -81,9 +81,17 @@ import {
   AuthoritativeTaskClaimObserved,
   AuthoritativeTargetLineageObserved,
   WorkflowInterpreter,
+  WorkflowTrace,
   type WorkflowInterpreterService
 } from "../../workflow/interpretation/interpreter.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
+import { acceptedOperationIdsOf, pendingReadOperationIdsOf } from "../delivery/delivery-evidence.js"
+import { deliveryProposalsOf } from "../delivery/delivery-proposal.js"
+import { materializeDeliveryAction } from "../delivery/delivery-action-materialization.js"
+import { executeNewRecoveredAction } from "../delivery/recovered-delivery-action-adapter.js"
+import type { DeliveryActionExecutionLease } from "../delivery/delivery-action-executor.js"
+import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
+import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 
 const runId = RunId.make("active-work-refresh-acceptance-run")
 const target = FixtureTarget.make("active-work-refresh-acceptance-target")
@@ -587,6 +595,27 @@ const eventOperationId = (event: JournalRecord["event"]): OperationId | undefine
   return undefined
 }
 
+const recoveredReadLease: DeliveryActionExecutionLease = {
+  acceptIntegrationTargetOwnership: Effect.void,
+  bindPlannedAttemptPosition: () => Effect.void,
+  forwardBoundary: {
+    _tag: "InterruptibleBoundary",
+    execution: { run: (_intent, effect, recordResult) => effect.pipe(Effect.flatMap(recordResult)) }
+  },
+  integrationTargets: {
+    acquire: () => Effect.void,
+    changes: Stream.empty,
+    publishAcceptedOwnership: () => Effect.void,
+    release: () => Effect.void,
+    releaseAll: Effect.void,
+    snapshot: Effect.succeed({ activeResponsibilityPositions: new Set(), heldResponsibilityPositions: new Set() }),
+    withPermit: (_responsibility, effect) => effect
+  },
+  recordIntent: () => Effect.void,
+  releasePlannedAttemptPosition: () => Effect.void,
+  withPlannedAttemptProtocol: () => Effect.die("ordinary read recovery does not use the executor protocol")
+}
+
 it.effect("active-work refresh recovers ordinary authority reads without a private refresh protocol", () =>
   Effect.gen(function* () {
     const operations = healthyAuthorityOperations()
@@ -742,6 +771,196 @@ it.effect("active-work refresh recovers ordinary authority reads without a priva
           (yield* Ref.get(retainedRecords)).map(({ event }) => event._tag).filter((tag) => tag.includes("ActiveWork"))
         ).toEqual([])
       }
+    }
+  })
+)
+
+it.effect("production delivery composition settles the exact pending specification and claim identities", () =>
+  Effect.gen(function* () {
+    const ordinaryReads = [
+      { kind: "specification", prefixPosition: 10 },
+      { kind: "claim", prefixPosition: 10 }
+    ] as const
+    const opportunity = activeWorkAuthorityRefreshForOwner(
+      "TrackerNotification",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+    )
+
+    for (const ordinaryRead of ordinaryReads) {
+      let initialRecords: ReadonlyArray<JournalRecord> = buildPrefix("Healthy").filter(
+        ({ position }) => position <= JournalPosition.make(ordinaryRead.prefixPosition)
+      )
+      if (ordinaryRead.kind === "claim") {
+        const specificationProjection = yield* projectionFor(initialRecords, opportunity)
+        const specificationTransition = specificationProjection.frontier.transitions.find(
+          (candidate) => candidate._tag === "ObservePlannedAttemptContinuationSpecification"
+        )
+        if (specificationTransition?._tag !== "ObservePlannedAttemptContinuationSpecification") {
+          return yield* Effect.die("missing production specification transition before claim")
+        }
+        initialRecords = appendRecord(
+          appendRecord(initialRecords, taskTrackerReadIntent(specificationTransition.operation)),
+          taskTrackerFactsObservedEvent(
+            specificationTransition.operation.operationId,
+            makeFocusedTaskWorkSpecificationFactsObserved(specificationTransition.operation, specification)
+          )
+        )
+      }
+      const retainedRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
+      const beforeCrash = yield* projectionFor(yield* Ref.get(retainedRecords), opportunity)
+      const selectedTransition =
+        ordinaryRead.kind === "specification"
+          ? beforeCrash.frontier.transitions.find(
+              (
+                candidate
+              ): candidate is Extract<
+                RunnableFrontierTransition,
+                { readonly _tag: "ObservePlannedAttemptContinuationSpecification" }
+              > => candidate._tag === "ObservePlannedAttemptContinuationSpecification"
+            )
+          : beforeCrash.frontier.transitions.find(
+              (
+                candidate
+              ): candidate is Extract<
+                RunnableFrontierTransition,
+                { readonly _tag: "ObservePlannedAttemptContinuationClaim" }
+              > => candidate._tag === "ObservePlannedAttemptContinuationClaim"
+            )
+      if (
+        selectedTransition?._tag !== "ObservePlannedAttemptContinuationSpecification" &&
+        selectedTransition?._tag !== "ObservePlannedAttemptContinuationClaim"
+      ) {
+        return yield* Effect.die(
+          `missing initial ${ordinaryRead.kind} transition: ${beforeCrash.frontier.transitions
+            .map(({ _tag }) => _tag)
+            .join(", ")}`
+        )
+      }
+      const operation = selectedTransition.operation
+      const journal = InRunJournal.of({
+        append: (appendedRunId, key, event) =>
+          Ref.modify(retainedRecords, (current) => {
+            const existing = current.find((candidate) => candidate.key === key)
+            if (existing !== undefined) return [existing, current] as const
+            const appended: JournalRecord = {
+              event,
+              key,
+              position: JournalPosition.make(Number(current.at(-1)?.position ?? 0) + 1),
+              runId: appendedRunId
+            }
+            return [appended, [...current, appended]] as const
+          }),
+        read: () => Ref.get(retainedRecords)
+      })
+      const unused = () => Effect.die("focused read recovery used an unrelated interpreter method")
+      const provider = WorkflowInterpreter.of({
+        acquireTaskClaim: unused,
+        readTaskClaim: () => Effect.succeed(AuthoritativeTaskClaimObserved.make({ observation: exactClaim })),
+        readTaskWorktree: unused,
+        readTargetLineage: unused,
+        readTrackerGraph: unused,
+        readTaskWorkSpecification: () => Effect.succeed(specification),
+        reconcileTaskWorktree: unused,
+        recordTaskAttemptPlan: unused,
+        releaseTaskClaim: unused
+      })
+      const interpreterLayer = journaledWorkflowInterpreterLayer(
+        runId,
+        Layer.succeed(WorkflowInterpreter, provider)
+      ).pipe(Layer.provide(Layer.succeed(InRunJournal, journal)))
+      const crashAfterIntent = Effect.gen(function* () {
+        const interpreter = yield* WorkflowInterpreter
+        if (ordinaryRead.kind === "specification") {
+          if (operation._tag !== "ReadTaskWorkSpecification") {
+            return yield* Effect.die("specification transition carried the wrong read family")
+          }
+          return yield* interpreter.readTaskWorkSpecification(
+            operation,
+            Effect.die("controlled process loss after specification intent")
+          )
+        }
+        if (operation._tag !== "ReadTaskClaim") {
+          return yield* Effect.die("claim transition carried the wrong read family")
+        }
+        return yield* interpreter.readTaskClaim(operation, Effect.die("controlled process loss after claim intent"))
+      }).pipe(Effect.provide(interpreterLayer))
+      expect((yield* Effect.exit(crashAfterIntent))._tag).toBe("Failure")
+
+      const recordsAfterCrash = yield* Ref.get(retainedRecords)
+      const projection = yield* projectionFor(recordsAfterCrash, opportunity)
+      const recoveredTransition =
+        ordinaryRead.kind === "specification"
+          ? projection.frontier.transitions.find(
+              (
+                candidate
+              ): candidate is Extract<
+                RunnableFrontierTransition,
+                { readonly _tag: "ObservePlannedAttemptContinuationSpecification" }
+              > => candidate._tag === "ObservePlannedAttemptContinuationSpecification"
+            )
+          : projection.frontier.transitions.find(
+              (
+                candidate
+              ): candidate is Extract<
+                RunnableFrontierTransition,
+                { readonly _tag: "ObservePlannedAttemptContinuationClaim" }
+              > => candidate._tag === "ObservePlannedAttemptContinuationClaim"
+            )
+      if (recoveredTransition?.operation.operationId !== operation.operationId) {
+        return yield* Effect.die(
+          `missing recovered ${ordinaryRead.kind} transition: ${projection.frontier.transitions
+            .map(({ _tag }) => _tag)
+            .join(", ")}`
+        )
+      }
+      const [proposal] = deliveryProposalsOf({
+        acceptedOperationIds: acceptedOperationIdsOf(recordsAfterCrash),
+        fresh: [],
+        pendingReadOperationIds: pendingReadOperationIdsOf(recordsAfterCrash),
+        runId,
+        transitions: [recoveredTransition]
+      }).ticketDelivery
+      if (proposal === undefined) return yield* Effect.die(`missing recovered ${ordinaryRead.kind} proposal`)
+      const materialized = yield* materializeDeliveryAction(proposal).pipe(
+        Effect.provideService(
+          OperationIdAllocator,
+          OperationIdAllocator.of({ allocate: () => Effect.die("pending read must preserve its journal identity") })
+        ),
+        Effect.provideService(
+          PlannedTaskAttemptPlanner,
+          PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("pending read must not plan an attempt") })
+        )
+      )
+      if (
+        materialized._tag !== "FreshOperationAction" ||
+        materialized.proposal.route._tag !== "RecoveredNewActionRoute"
+      ) {
+        return yield* Effect.die(`pending ${ordinaryRead.kind} did not materialize as a recovered action`)
+      }
+      expect(materialized.operationId).toBe(operation.operationId)
+      yield* executeNewRecoveredAction(
+        materialized.proposal.route.action,
+        materialized.operationId,
+        recoveredReadLease,
+        runId
+      ).pipe(
+        Effect.provide(interpreterLayer),
+        Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+        Effect.provideService(InRunJournal, journal),
+        Effect.provideService(
+          TaskClaimAcquisitionPlanner,
+          TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("ordinary read recovery must not plan a claim") })
+        )
+      )
+
+      const targetRecords = (yield* Ref.get(retainedRecords)).filter(
+        ({ event }) => eventOperationId(event) === operation.operationId
+      )
+      expect(targetRecords.map(({ event }) => event._tag)).toEqual([
+        "TaskTrackerReadIntentRecorded",
+        "TaskTrackerFactsObserved"
+      ])
+      expect(targetRecords.every(({ event }) => eventOperationId(event) === operation.operationId)).toBe(true)
     }
   })
 )

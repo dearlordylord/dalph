@@ -24,6 +24,9 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { OperationId } from "../../workflow/identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
+  makeTaskClaimObservationOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeObservationOperation,
   makeTargetLineageObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
@@ -193,6 +196,105 @@ describe("deliveryProposalsOf", () => {
         _tag: "FreshOperationAction",
         operationId: OperationId.make("historical-g1-fresh")
       })
+    })
+  )
+
+  it.effect("preserves each pending ordinary-read identity through proposal materialization", () =>
+    Effect.gen(function* () {
+      const graphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "AttemptContinuation" },
+        OperationId.make("pending-graph-read"),
+        FixtureTarget.make("proposal-target"),
+        [],
+        [taskId]
+      )
+      const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("pending-specification-read"),
+        FixtureTarget.make("proposal-target"),
+        taskId
+      )
+      const claimOperation = makeTaskClaimObservationOperation(
+        OperationId.make("pending-claim-read"),
+        FixtureTarget.make("proposal-target"),
+        taskId
+      )
+      const worktreeOperation = makeTaskWorktreeObservationOperation({
+        operationId: OperationId.make("pending-worktree-read"),
+        plannedAttempt,
+        predecessorOperationIds: [claimOperation.operationId]
+      })
+      const lineageOperation = makeTargetLineageObservationOperation({
+        integrationTarget: IntegrationTarget.make({
+          ref: IntegrationTargetRef.make("refs/heads/main"),
+          repository: GitRepositoryLocator.make("/repositories/pending-ordinary-read.git")
+        }),
+        operationId: OperationId.make("pending-lineage-read"),
+        plannedAttempt,
+        predecessorOperationIds: [worktreeOperation.operationId]
+      })
+      const cases = [
+        {
+          operation: graphOperation,
+          transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+            operation: graphOperation,
+            plannedAttempt
+          })
+        },
+        {
+          operation: specificationOperation,
+          transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationSpecification({
+            operation: specificationOperation,
+            plannedAttempt
+          })
+        },
+        {
+          operation: claimOperation,
+          transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({
+            operation: claimOperation,
+            plannedAttempt
+          })
+        },
+        {
+          operation: worktreeOperation,
+          transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
+            operation: worktreeOperation,
+            plannedAttempt
+          })
+        },
+        {
+          operation: lineageOperation,
+          transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+            operation: lineageOperation,
+            plannedAttempt
+          })
+        }
+      ] as const
+
+      for (const candidate of cases) {
+        const [proposal] = deliveryProposalsOf({
+          acceptedOperationIds: new Set(),
+          fresh: [],
+          pendingReadOperationIds: new Set([candidate.operation.operationId]),
+          runId,
+          transitions: [candidate.transition]
+        }).ticketDelivery
+        if (proposal === undefined) return yield* Effect.die("pending read must produce one proposal")
+
+        const materialized = yield* materializeDeliveryAction(proposal).pipe(
+          Effect.provideService(
+            OperationIdAllocator,
+            OperationIdAllocator.of({ allocate: () => Effect.die("pending read must not allocate a new identity") })
+          ),
+          Effect.provideService(
+            PlannedTaskAttemptPlanner,
+            PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("pending read must not plan an attempt") })
+          )
+        )
+        expect(materialized).toMatchObject({
+          _tag: "FreshOperationAction",
+          operationId: candidate.operation.operationId
+        })
+      }
     })
   )
 

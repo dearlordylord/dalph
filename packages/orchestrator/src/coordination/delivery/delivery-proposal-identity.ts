@@ -29,7 +29,11 @@ export const recoveredIdentityFor = (
   }
   if (
     preselectedOperationId !== undefined &&
-    (action._tag === "ReadTaskWorktree" || action._tag === "ReadTargetLineage" || action._tag === "ReadTrackerGraph")
+    (action._tag === "ReadTrackerGraph" ||
+      action._tag === "ReadTaskWorkSpecification" ||
+      action._tag === "ReadTaskClaim" ||
+      action._tag === "ReadTaskWorktree" ||
+      action._tag === "ReadTargetLineage")
   ) {
     return { _tag: "FreshOperationIdRequired", source: { _tag: "Preserve", operationId: preselectedOperationId } }
   }
