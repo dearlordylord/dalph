@@ -421,26 +421,13 @@ export const journaledRunBootstrapLayer = (
                 Layer.provide(Layer.succeed(ApplicationExitAdmission, admission)),
                 Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
               )
-              const runtimeJournalLayer = Layer.effectContext(
-                Effect.gen(function* () {
-                  const journal = yield* Journal
-                  const acceptedJournal = Journal.of({
-                    ...journal,
-                    append: (...input) =>
-                      journal
-                        .append(...input)
-                        .pipe(Effect.tap((record) => publishAcceptedHistory(record.runId, record.position)))
-                  })
-                  return Context.empty().pipe(
-                    Context.add(Journal, acceptedJournal),
-                    Context.add(
-                      InRunJournal,
-                      InRunJournal.of({ append: acceptedJournal.append, read: acceptedJournal.read })
-                    )
+              const runtime = downstream.pipe(
+                Layer.provideMerge(
+                  journalLayer(runId, target, initial, exitAwareStorage, (record) =>
+                    publishAcceptedHistory(record.runId, record.position)
                   )
-                })
-              ).pipe(Layer.provide(journalLayer(runId, target, initial, exitAwareStorage)))
-              const runtime = downstream.pipe(Layer.provideMerge(runtimeJournalLayer))
+                )
+              )
               const context = yield* Layer.build(runtime)
               const journal = Context.get(context, Journal)
               const publishedIntegrationQuarantineDirection = yield* makeIntegrationQuarantineDirectionControl(
@@ -519,12 +506,25 @@ export const journaledRunBootstrapLayer = (
         if (Option.isNone(owner)) {
           return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
         }
-        const termination = yield* observeProducedWrite(
-          `terminate:${runId}`,
-          "terminate",
-          lifecycle.terminateRun(runId, terminalProof.disposition, terminalProof.evidence)
-        ).pipe(Effect.ensuring(owner.value.release))
-        yield* publishAcceptedHistory(termination.runId, termination.position)
+        const termination = yield* Effect.gen(function* () {
+          const currentRecords = yield* lifecycle.read(runId)
+          const cancellationInvalidatedEvidence = currentRecords.some(
+            ({ event, position }) =>
+              event._tag === "RunCancellationApplied" && terminalProof.evidence.observedAt <= position
+          )
+          if (cancellationInvalidatedEvidence) return Option.none()
+          return Option.some(
+            yield* observeProducedWrite(
+              `terminate:${runId}`,
+              "terminate",
+              lifecycle.terminateRun(runId, terminalProof.disposition, terminalProof.evidence)
+            )
+          )
+        }).pipe(Effect.ensuring(owner.value.release))
+        if (Option.isNone(termination)) {
+          return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+        }
+        yield* publishAcceptedHistory(termination.value.runId, termination.value.position)
         const shouldAttemptRetirement = yield* Ref.modify(startupRetirementAttempts, (attempted) => {
           /* v8 ignore next -- @preserve lifecycle.terminateRun accepts one terminal append per Run; a second finish for the same Run is rejected before this guard. */
           if (attempted.has(runId)) return [false, attempted] as const

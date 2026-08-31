@@ -202,7 +202,8 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
   runId: RunId,
   target: TrackerTarget,
   initial: ValidWorkflowJournalHistory,
-  storage: JournalStorageAppend
+  storage: JournalStorageAppend,
+  onAcceptedRecord: (record: JournalRecord) => Effect.Effect<void> = () => Effect.void
 ) {
   const first = initial.records.at(0)
   const last = initial.records.at(lastElementOffset)
@@ -295,6 +296,7 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
           }
           const next = advanceJournalState(nextHistory, before, target)
           yield* SubscriptionRef.set(publicationState, { _tag: "JournalOpen", history: nextHistory, value: next })
+          yield* onAcceptedRecord(record)
           return record
         })
       )
@@ -311,10 +313,11 @@ export const journalLayer = (
   runId: RunId,
   target: TrackerTarget,
   initial: ValidWorkflowJournalHistory,
-  storage: JournalStorageAppend
+  storage: JournalStorageAppend,
+  onAcceptedRecord?: (record: JournalRecord) => Effect.Effect<void>
 ) =>
   Layer.effectContext(
-    makeJournal(runId, target, initial, storage).pipe(
+    makeJournal(runId, target, initial, storage, onAcceptedRecord).pipe(
       Effect.map((journal) =>
         Context.empty().pipe(
           Context.add(Journal, journal),
