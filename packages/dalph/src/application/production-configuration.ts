@@ -160,11 +160,13 @@ const safeSchemaIssueFormatter = SchemaIssue.makeFormatterStandardSchemaV1({
 
 const safeConfigurationError = (failure: { readonly issue: SchemaIssue.Issue }) => {
   const issue = safeSchemaIssueFormatter(failure.issue).issues[0]
+  /* v8 ignore next -- @preserve A formatted Schema decode failure always contains at least one Standard Schema issue. */
   const issuePath = issue?.path ?? []
   const field = typeof issuePath[0] === "string" ? issuePath[0] : "configuration"
   return new ProductionRepositoryHostConfigurationError({
     field,
     subject: field === "configuration" ? "production repository host" : `production repository host field ${field}`,
+    /* v8 ignore next -- @preserve A formatted Schema decode failure always contains at least one Standard Schema issue. */
     detail: issue?.message ?? "is invalid"
   })
 }
