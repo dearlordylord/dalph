@@ -1,3 +1,6 @@
+/* eslint-disable import/no-nodejs-modules -- this adapter is the explicit Git worktree boundary. */
+
+import nodePath from "node:path"
 import { Effect, Result, Schema } from "effect"
 import type { FileSystem } from "effect"
 import { GitCommitSha, TaskBranchRef, WorktreeLocator } from "@dalph/contracts"
@@ -16,6 +19,20 @@ import { type GitCommandService } from "@dalph/orchestrator"
 interface CoordinatorMutationGuard {
   readonly runMutation: <A, E, R>(mutation: Effect.Effect<A, E, R>) => Effect.Effect<A, unknown, R>
 }
+
+const pathContains = (container: string, subject: string): boolean => {
+  const relative = nodePath.relative(nodePath.resolve(container), nodePath.resolve(subject))
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${nodePath.sep}`) && !nodePath.isAbsolute(relative))
+  )
+}
+
+/** Candidate preparation must never place either worktree inside the other. */
+export const candidateOverlapsPlannedWorktree = (
+  candidatePath: IntegratorCandidateWorktreePath,
+  plannedWorktree: WorktreeLocator
+): boolean => pathContains(candidatePath, plannedWorktree) || pathContains(plannedWorktree, candidatePath)
 
 export type GitWorktreeRecord = {
   readonly worktree: WorktreeLocator

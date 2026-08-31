@@ -42,7 +42,7 @@ import {
   observedThread,
   providerFailure
 } from "./codex-integrator-runtime.js"
-import { ensureCandidateWorktree } from "./codex-integrator-worktree.js"
+import { candidateOverlapsPlannedWorktree, ensureCandidateWorktree } from "./codex-integrator-worktree.js"
 import { ensureThread } from "./codex-integrator-thread.js"
 import { providerAuthorityFor } from "./codex-integrator-cleanup.js"
 import { exactEnvelope } from "./codex-integrator-envelope.js"
@@ -373,6 +373,9 @@ const checkConfigAndRecord = Effect.fn("CodexIntegrator.checkConfigAndRecord")(f
   if (run.session.integrationTarget.repository !== config.repository)
     return yield* Effect.fail(providerFailure("request repository is not the configured canonical repository"))
   const candidatePath = candidateWorktreePathFor(config, run.session.candidateResource)
+  if (candidateOverlapsPlannedWorktree(candidatePath, run.session.plannedAttempt.worktree)) {
+    return yield* Effect.fail(providerFailure("candidate worktree must be disjoint from the planned-attempt worktree"))
+  }
   const found = yield* boundary(store.read(run.session.sessionId))
   if (Option.isSome(found)) return yield* reconcilePrivateRecord(found.value, run, candidatePath, app, store)
   return yield* createPrivateRecord(run, candidatePath, app, store)

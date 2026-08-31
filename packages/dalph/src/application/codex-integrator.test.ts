@@ -657,6 +657,53 @@ describe("Codex Integrator", () => {
     expect(gitCalls.length).toBeGreaterThan(0)
   })
 
+  it("rejects overlapping candidate and planned-attempt worktrees before any mutable boundary", async () => {
+    const plannedContainsCandidate = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make(session.plannedAttempt.worktree),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/overlap-store.json"),
+      repository
+    })
+    const candidateContainsPlanned = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-overlap"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-overlap/store.json"),
+      repository
+    })
+    const nestedPlannedSession = IntegratorSessionCorrelation.make({
+      ...session,
+      plannedAttempt: PlannedTaskAttempt.make({
+        ...session.plannedAttempt,
+        worktree: WorktreeLocator.make(
+          `${candidateWorktreePathFor(candidateContainsPlanned, session.candidateResource)}/planned-attempt`
+        )
+      })
+    })
+
+    for (const [config, request] of [
+      [plannedContainsCandidate, requestFor(1)],
+      [candidateContainsPlanned, requestForSession(nestedPlannedSession, 1)]
+    ] as const) {
+      const gitCalls: Array<ReadonlyArray<string>> = []
+      const privateWrites: Array<CodexIntegratorPrivateRecord> = []
+      const threadStarts = { value: 0 }
+      const turnStarts = { value: 0 }
+      const failure = await Effect.runPromise(
+        Effect.gen(function* () {
+          const integrator = yield* Integrator
+          return yield* Effect.flip(integrator.prepare(request))
+        }).pipe(Effect.provide(providerLayer(config, { gitCalls, privateWrites, threadStarts, turnStarts })))
+      )
+
+      expect(failure._tag).toBe("IntegratorCallFailure")
+      expect(failure.detail).toBe("candidate worktree must be disjoint from the planned-attempt worktree")
+      expect(gitCalls).toEqual([])
+      expect(privateWrites).toEqual([])
+      expect(threadStarts.value).toBe(0)
+      expect(turnStarts.value).toBe(0)
+    }
+  })
+
   it("rejects a mismatched recovery run before another provider or Git boundary call", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
