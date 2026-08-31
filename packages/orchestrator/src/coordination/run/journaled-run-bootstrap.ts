@@ -289,6 +289,7 @@ export const journaledRunBootstrapLayer = (
         acceptedHistoryPublication.withPermit(
           SubscriptionRef.get(acceptedHistoryState).pipe(
             Effect.flatMap((current) => {
+              /* v8 ignore next -- @preserve Journal validation and JournalStore identity checks reject a foreign Run before accepted-history publication. */
               if (runId !== expectedRunId) {
                 return Effect.die(new Error("accepted history cannot publish another Run identity"))
               }
