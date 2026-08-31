@@ -45,6 +45,8 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       CassetteKillsCoordinatorAtTargetPromotionReconciliationRead: noLandmark,
       CassetteReleasesHeldTargetPromotionReconciliationRead: noLandmark,
       CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: noLandmark,
+      CassetteOffersRunReactivationHints: noLandmark,
+      CassettePublishesCurrentTrackerNotification: noLandmark,
       CassetteReleasesHeldTaskWorkSpecificationRead: noLandmark,
       ConcurrentTrackerReadBatch: noLandmark,
       DalphSelects: noLandmark,
@@ -427,6 +429,10 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         "The cassette releases the exact held target-promotion reconciliation read.",
       CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: (item) =>
         `The cassette holds task ${item.taskId}'s specification read before its boundary.`,
+      CassetteOffersRunReactivationHints: (item) =>
+        `The cassette offers ${item.hints.length} tracker-notification or timer hints while active refresh is already running.`,
+      CassettePublishesCurrentTrackerNotification: () =>
+        "The tracker notification source publishes its current value when the restarted Run reactivation owner attaches.",
       CassetteReleasesHeldTaskWorkSpecificationRead: (item) =>
         `The cassette releases task ${item.taskId}'s held specification read.`,
       ConcurrentTrackerReadBatch: (item) =>

@@ -2,9 +2,13 @@
 
 Owning issue: [#267](https://github.com/dearlordylord/dalph/issues/267)
 
-Status: implementation candidate. This scenario changes only the authored
-cassette harness. It adds no Dalph runtime decision, provider authority,
-refresh cadence, executor state, journal event, or presentation behavior.
+Status: complete implementation candidate; integration review and closure are
+pending. The maintained proof is cassette-owned and exposed one missing
+composition of already-accepted #265/#266 behavior:
+when Suspend returns the unchanged Executing projection, the ordinary passive
+owner must remain attached to that exact attempt. The repair adds no provider
+authority, refresh cadence, executor state, journal event, or presentation
+behavior.
 
 ## Governing behavior
 
@@ -41,9 +45,10 @@ array position, completion order, a private read ordinal, a second tracker
 history, or a report-triggered refresh premise.
 
 No person-facing boundary call is added: Alice's existing tracker edit is the
-only person action. Crash and retry behavior do not apply to this harness
-ordering boundary because #266 and the ordinary journal protocols continue
-to own restart recovery.
+only person action. The causal matcher introduces no crash or retry behavior;
+the maintained production composition below crosses an existing coordinator
+process-death boundary governed by #265/#266 and the ordinary journal
+protocols.
 
 Acceptance tests:
 
@@ -76,6 +81,39 @@ Acceptance tests:
   without advancing or manufacturing another report”
 - `authored-active-work-causal-sync.test.ts` — “allows only B1 safe or
   terminal observations to consume B1's lifecycle result”
+- `delivery-proposal-routes.test.ts` — “after Suspend returns Executing
+  observes exact Safe and releases only that attempt”
+- `authored-active-work-causal-sync.test.ts` — “coalesces notification and
+  timer hints then retains B1 until its exact safe report”
+
+## Maintained production chronology
+
+The first coordinator has accepted A1 and B1 as executing, then its process
+dies. A fresh process attaches the production Run reactivation owner to a
+current tracker notification. That current value selects one active-work
+refresh before Startup can replace it. The workflow reads shared graph G1,
+then reads A's unchanged F1 and B's changed F2 with their exact immediate
+predecessors. Only after G1 is selected does the cassette offer the later
+notification/timer burst; the owner coalesces it into one trailing refresh.
+
+The unchanged A path performs the ordinary claim, worktree, lineage, and
+executing-observer checks. The changed B path requests exactly one Suspend for
+B1. An unchanged Executing response retains B1 and its position while the
+same-attempt passive owner waits. A foreign projection, a missing owner, or
+another Executing projection cannot release B1. Exact B1 Safe or Terminal is
+published through the ordinary report protocol, releases B1, and permits the
+separate post-quiescence G2 read. When that activation returns, the four hints
+produce exactly one trailing production refresh. That refresh sees only A
+still executing, completes A's focused claim/Git checks, and performs its own
+post-quiescence graph read; it neither rechecks safely suspended B nor requests
+another Suspend. Repeated playback must drain all harness fibers and leave no
+duplicate G1, F1/F2, Suspend, report ordinal, or second trailing activation.
+
+The controlled active-refresh entry point changes composition capability only:
+it lets dry-run, test, and production interpret the same workflow algebra with
+their selected executor. The production wrapper still selects the live
+executor and cleanup. Therefore this entry point introduces no new operational
+scenario; the #265, #266, and #267 scenarios continue to govern its behavior.
 
 ## Scenario-to-test mapping
 
@@ -86,4 +124,5 @@ Acceptance tests:
 | Missing, crossed, foreign, and duplicate ownership fails closed | `authored-active-work-causal-sync.test.ts`, fail-closed test |
 | Repeated concurrent schedules drain one surrounding story position | `authored-active-work-causal-sync.test.ts`, repeatedly-forked test |
 | Unchanged executing and foreign attempts do not release B1 | `authored-active-work-causal-sync.test.ts`, executing and exact-owner tests |
-| Exact B1 Safe or Terminal releases B1 | `authored-active-work-causal-sync.test.ts`, exact-owner test |
+| Exact B1 Safe or Terminal releases B1 | `authored-active-work-causal-sync.test.ts`, exact-owner test; `delivery-proposal-routes.test.ts`, exact production adapter regression |
+| Current notification wins Startup, later hints coalesce into one trailing refresh, real G1/F1/F2 run, and B1 releases only after exact Safe | `authored-active-work-causal-sync.test.ts`, maintained composed cassette test |
