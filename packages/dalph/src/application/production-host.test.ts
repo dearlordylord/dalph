@@ -1,10 +1,14 @@
-/* eslint-disable import/no-nodejs-modules -- This test guards the neighboring production composition source. */
+/* eslint-disable import/no-nodejs-modules, max-lines -- Host composition and its chronological acceptance seam stay together. */
 import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { RunId } from "@dalph/contracts"
+import { RunId, TaskId } from "@dalph/contracts"
+import { DatabaseSync } from "node:sqlite"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import {
+  ActiveTaskClaim,
+  ClaimOwner,
+  ClaimToken,
   type RunLifecycleJournal,
   CoordinatorOwnership,
   GithubGraphqlClient,
@@ -15,13 +19,23 @@ import {
   JournaledRunEstablished,
   JournaledRunObservationSource,
   JournalStore,
+  intentRecordKey,
+  makeTaskClaimAcquisitionOperation,
+  OperationId,
+  outcomeRecordKey,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
   type ProductionRunSelection,
   RunReactivationOwner,
   TaskWorkCapacity,
   TraceCursor,
+  WorkflowTrace,
   currentSignalOf,
   memoryJournalStoreLayer,
-  sqliteJournalStoreLayer
+  ProductionRunSelectionConflict,
+  sqliteJournalStoreLayer,
+  StartupRecoveryBlocked,
+  workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import { Context, Deferred, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect"
 import { expect } from "vitest"
@@ -34,6 +48,7 @@ import type { ProductionRepositoryHostConfiguration } from "./production-configu
 import { ProductionRepositoryHostConfigurationError } from "./production-configuration.js"
 import { CodexAppServer } from "./codex-app-server.js"
 import { CodexServerIncarnation } from "./codex-attempt-store.js"
+import { completedRunFinalityFixture } from "../../../orchestrator/test/run-finality.js"
 
 const validRawConfiguration = () => ({
   target: { _tag: "GithubIssue", issueNumber: 293, owner: "dearlordylord", repository: "dalph" },
@@ -58,6 +73,30 @@ const validRawConfiguration = () => ({
   codexProvider: "openai",
   githubToken: "github-secret",
   codexProviderCredential: "codex-secret"
+})
+
+const makeTemporaryProductionInput = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem
+  const path = yield* Path.Path
+  const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-host-" })
+  const repository = path.join(root, "repository.git")
+  const evidence = path.join(root, "evidence")
+  const codexState = path.join(root, "codex-state")
+  yield* fileSystem.makeDirectory(repository, { recursive: true })
+  yield* fileSystem.makeDirectory(evidence, { recursive: true })
+  yield* fileSystem.makeDirectory(codexState, { recursive: true })
+  yield* fileSystem.chmod(codexState, 0o700)
+  return {
+    ...validRawConfiguration(),
+    repository,
+    commonDirectory: repository,
+    journalDatabase: path.join(root, "journal.sqlite"),
+    evidenceStoreRoot: evidence,
+    plannedAttemptWorktreeRoot: path.join(root, "planned-attempts"),
+    codexStateDirectory: codexState,
+    integratorCandidateWorktreeRoot: path.join(root, "integrator-candidates"),
+    integratorPrivateStore: path.join(root, "integrator-private.json")
+  }
 })
 
 const ownershipLayer = Layer.succeed(
@@ -292,6 +331,370 @@ it.effect("cold production host records one beginning before the first GitHub de
       )
       expect(yield* Ref.get(appAcquisitions)).toBe(1)
       expect(yield* Ref.get(githubAcquisitions)).toBe(1)
+    }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
+  )
+)
+
+const restartHostRecoveryScenario = () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-restart-" })
+      const repository = path.join(root, "repository")
+      const evidence = path.join(root, "evidence")
+      const codexState = path.join(root, "codex-state")
+      yield* fileSystem.makeDirectory(repository, { recursive: true })
+      yield* fileSystem.makeDirectory(evidence, { recursive: true })
+      yield* fileSystem.makeDirectory(codexState, { recursive: true })
+      yield* fileSystem.chmod(codexState, 0o700)
+
+      const input = {
+        ...validRawConfiguration(),
+        repository,
+        commonDirectory: repository,
+        journalDatabase: path.join(root, "journal.sqlite"),
+        evidenceStoreRoot: evidence,
+        plannedAttemptWorktreeRoot: path.join(root, "planned-attempts"),
+        codexStateDirectory: codexState,
+        integratorCandidateWorktreeRoot: path.join(root, "integrator-candidates"),
+        integratorPrivateStore: path.join(root, "integrator-private.json")
+      }
+      const target = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(input.target)
+      const acquisition = {
+        operationId: OperationId.make("production-restart-claim-acquisition"),
+        owner: ClaimOwner.make("dalph:production-restart"),
+        taskId: TaskId.make("production-restart-task"),
+        token: ClaimToken.make("production-restart-token")
+      }
+      const acquisitionOperation = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
+      const seededRunId = RunId.make("production-restart-run")
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const journalContext = yield* Layer.build(
+            sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
+          )
+          const journal = Context.get(journalContext, JournalStore)
+          yield* journal.beginRun(
+            seededRunId,
+            target,
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+          )
+          yield* journal.append(
+            seededRunId,
+            intentRecordKey(acquisition.operationId),
+            TaskClaimAcquisitionIntendedEvent.make({
+              operation: acquisitionOperation,
+              version: workflowJournalEventVersion
+            })
+          )
+          yield* journal.append(
+            seededRunId,
+            outcomeRecordKey(acquisition.operationId),
+            TaskClaimAcquiredEvent.make({
+              claim: ActiveTaskClaim.make(acquisition),
+              version: workflowJournalEventVersion
+            })
+          )
+        })
+      )
+      const traceItems = yield* Ref.make<ReadonlyArray<string>>([])
+      const selectedOperations = yield* Ref.make<ReadonlyArray<unknown>>([])
+      const secondHostProviderRead = yield* Deferred.make<void>()
+      const firstHostProviderRead = yield* Deferred.make<void>()
+      const providerCallCount = yield* Ref.make(0)
+      const appAcquisitionCount = yield* Ref.make(0)
+      const githubLayerAcquisitionCount = yield* Ref.make(0)
+      const githubClient = GithubGraphqlClient.of({
+        execute: () =>
+          Effect.gen(function* () {
+            const count = yield* Ref.updateAndGet(providerCallCount, (current) => current + 1)
+            const trace = yield* Ref.get(traceItems)
+            yield* Ref.update(traceItems, (current) => [...current, `provider-${count}:${trace.length}`])
+            if (count === 1) {
+              yield* Deferred.succeed(firstHostProviderRead, undefined)
+            } else {
+              yield* Deferred.succeed(secondHostProviderRead, undefined)
+            }
+            return yield* Effect.never
+          })
+      })
+      const app = CodexAppServer.of({
+        incarnation: CodexServerIncarnation.make("production-restart-test-incarnation"),
+        startThread: () => Effect.die("restart fixture must not start a task thread"),
+        readThread: () => Effect.die("restart fixture must not read a task thread"),
+        resumeThread: () => Effect.die("restart fixture must not resume a task thread"),
+        startTurn: () => Effect.die("restart fixture must not start a task turn"),
+        interruptTurn: () => Effect.die("restart fixture must not interrupt a task turn"),
+        listBackgroundTerminals: () => Effect.die("restart fixture must not inspect terminals"),
+        terminateBackgroundTerminal: () => Effect.die("restart fixture must not terminate a terminal"),
+        close: Effect.void
+      })
+      const adapters = {
+        codexAppServer: () =>
+          Layer.effect(
+            CodexAppServer,
+            Ref.updateAndGet(appAcquisitionCount, (count) => count + 1).pipe(Effect.as(app))
+          ),
+        githubClient: () =>
+          Layer.effect(
+            GithubGraphqlClient,
+            Ref.updateAndGet(githubLayerAcquisitionCount, (count) => count + 1).pipe(Effect.as(githubClient))
+          ),
+        workflowTrace: () =>
+          Layer.succeed(
+            WorkflowTrace,
+            WorkflowTrace.of({
+              emit: (item) =>
+                Ref.update(traceItems, (current) => [...current, item._tag]).pipe(
+                  Effect.andThen(
+                    item._tag === "OperationSelected"
+                      ? Ref.update(selectedOperations, (current) => [...current, item.operation])
+                      : Effect.void
+                  )
+                )
+            })
+          )
+      }
+
+      const firstSelection = yield* withProductionRepositoryHost(
+        input,
+        productionRepositoryHostGraph(adapters),
+        (observation) => Deferred.await(firstHostProviderRead).pipe(Effect.as(observation.selection))
+      )
+      const secondSelection = yield* withProductionRepositoryHost(
+        { ...input, taskWorkCapacity: 7 },
+        productionRepositoryHostGraph(adapters),
+        (observation) => Deferred.await(secondHostProviderRead).pipe(Effect.as(observation.selection))
+      )
+
+      expect(firstSelection).toEqual({ _tag: "Recovered", runId: seededRunId })
+      expect(secondSelection).toEqual({ _tag: "Recovered", runId: seededRunId })
+      expect(yield* Ref.get(providerCallCount)).toBeGreaterThanOrEqual(2)
+      expect(yield* Ref.get(appAcquisitionCount)).toBe(2)
+      expect(yield* Ref.get(githubLayerAcquisitionCount)).toBe(2)
+      expect(yield* Ref.get(traceItems)).toEqual([
+        "OperationSelected",
+        "provider-1:1",
+        "OperationSelected",
+        "provider-2:3"
+      ])
+      const operations = yield* Ref.get(selectedOperations)
+      expect(operations).toHaveLength(2)
+      expect(operations[1]).toMatchObject({ _tag: "ReadTrackerGraph" })
+      const recordsContext = yield* Layer.build(
+        sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
+      )
+      const records = yield* Context.get(recordsContext, JournalStore).read(firstSelection.runId)
+      expect(records.map(({ event }) => event._tag)).toEqual(
+        expect.arrayContaining(["TaskClaimAcquisitionIntended", "TaskClaimAcquired"])
+      )
+      const responsibility = records.find(({ event }) => event._tag === "TaskClaimAcquired")
+      const authorityRead = records.find(({ event }) => event._tag === "TaskTrackerReadIntentRecorded")
+      expect(responsibility).toBeDefined()
+      expect(authorityRead).toBeDefined()
+      expect(Number(responsibility?.position)).toBeLessThan(Number(authorityRead?.position))
+      const beginnings = records.filter(({ event }) => event._tag === "WorkflowRunBegan")
+      expect(beginnings).toHaveLength(1)
+      expect(beginnings[0]?.event).toMatchObject({
+        _tag: "WorkflowRunBegan",
+        initialControlPolicy: { taskExecutionCapacity: 2 }
+      })
+    }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
+  )
+
+it.effect(
+  "unfinished SQLite restart selects the same Run and skips replacement initial policy",
+  restartHostRecoveryScenario
+)
+it.effect(
+  "restarted production host reconstructs responsibilities before current authority reads and mutations",
+  restartHostRecoveryScenario
+)
+
+it.effect("terminal Run is not reactivated", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const input = yield* makeTemporaryProductionInput
+      const target = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(input.target)
+      const terminalRunId = RunId.make("production-terminal-run")
+      const providerStarted = yield* Deferred.make<void>()
+      const appAcquisitions = yield* Ref.make(0)
+      const githubAcquisitions = yield* Ref.make(0)
+      const fixture = completedRunFinalityFixture({ runId: terminalRunId, target })
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(
+            sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
+          )
+          const journal = Context.get(context, JournalStore)
+          yield* journal.beginRun(
+            terminalRunId,
+            target,
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+          )
+          yield* journal.append(terminalRunId, intentRecordKey(fixture.operation.operationId), fixture.intent)
+          yield* journal.append(terminalRunId, outcomeRecordKey(fixture.operation.operationId), fixture.observation)
+          yield* journal.terminateRun(terminalRunId, "Completed", fixture.evidence)
+        })
+      )
+      const githubClient = GithubGraphqlClient.of({
+        execute: () => Deferred.succeed(providerStarted, undefined).pipe(Effect.andThen(Effect.never))
+      })
+      const app = CodexAppServer.of({
+        incarnation: CodexServerIncarnation.make("production-terminal-test-incarnation"),
+        startThread: () => Effect.die("terminal fixture must not start a task thread"),
+        readThread: () => Effect.die("terminal fixture must not read a task thread"),
+        resumeThread: () => Effect.die("terminal fixture must not resume a task thread"),
+        startTurn: () => Effect.die("terminal fixture must not start a task turn"),
+        interruptTurn: () => Effect.die("terminal fixture must not interrupt a task turn"),
+        listBackgroundTerminals: () => Effect.die("terminal fixture must not inspect terminals"),
+        terminateBackgroundTerminal: () => Effect.die("terminal fixture must not terminate a background terminal"),
+        close: Effect.void
+      })
+      const adapters = {
+        codexAppServer: () =>
+          Layer.effect(CodexAppServer, Ref.updateAndGet(appAcquisitions, (count) => count + 1).pipe(Effect.as(app))),
+        githubClient: () =>
+          Layer.effect(
+            GithubGraphqlClient,
+            Ref.updateAndGet(githubAcquisitions, (count) => count + 1).pipe(Effect.as(githubClient))
+          )
+      }
+      const observed = yield* withProductionRepositoryHost(
+        input,
+        productionRepositoryHostGraph(adapters),
+        (observation) => Deferred.await(providerStarted).pipe(Effect.as(observation.selection))
+      )
+
+      expect(observed._tag).toBe("Allocated")
+      expect(observed.runId).not.toBe(terminalRunId)
+      expect(yield* Ref.get(appAcquisitions)).toBe(1)
+      expect(yield* Ref.get(githubAcquisitions)).toBe(1)
+      const recordsContext = yield* Layer.build(
+        sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
+      )
+      const audit = yield* Context.get(recordsContext, JournalStore).auditAll()
+      expect(audit.runs).toContainEqual(expect.objectContaining({ runId: terminalRunId, partition: "Cold" }))
+    }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
+  )
+)
+
+it.effect(
+  "two unfinished Runs fail before GitHub, Git, executor, or Integrator mutation and name both identities",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const input = yield* makeTemporaryProductionInput
+        const target = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(input.target)
+        const firstRunId = RunId.make("production-conflicting-run-a")
+        const secondRunId = RunId.make("production-conflicting-run-b")
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(
+              sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
+            )
+            const journal = Context.get(context, JournalStore)
+            for (const runId of [firstRunId, secondRunId]) {
+              yield* journal.beginRun(
+                runId,
+                target,
+                InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+              )
+            }
+          })
+        )
+        const failure = yield* withProductionRepositoryHost(
+          input,
+          productionRepositoryHostGraph({
+            codexAppServer: () =>
+              Layer.effect(CodexAppServer, Effect.die("conflicting history must stop before Codex")),
+            githubClient: () =>
+              Layer.effect(GithubGraphqlClient, Effect.die("conflicting history must stop before GitHub"))
+          }),
+          () => Effect.die("conflicting history must not expose a host observation")
+        ).pipe(Effect.flip)
+
+        expect(failure).toBeInstanceOf(ProductionRunSelectionConflict)
+        expect(failure).toMatchObject({
+          conflicts: expect.arrayContaining([
+            expect.objectContaining({ runId: firstRunId }),
+            expect.objectContaining({ runId: secondRunId })
+          ])
+        })
+      }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
+    )
+)
+
+it.effect("mismatched unfinished history fails before provider mutation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const input = yield* makeTemporaryProductionInput
+      const requestedTarget = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(input.target)
+      const recordedTarget = yield* Schema.decodeUnknownEffect(GithubIssueTarget)({ ...input.target, issueNumber: 292 })
+      const runId = RunId.make("production-mismatched-run")
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(
+            sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
+          )
+          yield* Context.get(context, JournalStore).beginRun(
+            runId,
+            recordedTarget,
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+          )
+        })
+      )
+      const failure = yield* withProductionRepositoryHost(
+        input,
+        productionRepositoryHostGraph({
+          codexAppServer: () => Layer.effect(CodexAppServer, Effect.die("mismatched history must stop before Codex")),
+          githubClient: () =>
+            Layer.effect(GithubGraphqlClient, Effect.die("mismatched history must stop before GitHub"))
+        }),
+        () => Effect.die("mismatched history must not expose a host observation")
+      ).pipe(Effect.flip)
+
+      expect(failure).toBeInstanceOf(ProductionRunSelectionConflict)
+      expect(failure).toMatchObject({ requestedTarget, conflicts: [{ runId, target: recordedTarget }] })
+    }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
+  )
+)
+
+it.effect("malformed history fails before provider mutation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const input = yield* makeTemporaryProductionInput
+      const target = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(input.target)
+      const runId = RunId.make("production-malformed-run")
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const context = yield* Layer.build(
+            sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
+          )
+          yield* Context.get(context, JournalStore).beginRun(
+            runId,
+            target,
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+          )
+        })
+      )
+      yield* Effect.sync(() => {
+        const database = new DatabaseSync(input.journalDatabase)
+        database.prepare("UPDATE journal_records SET position = 99 WHERE run_id = ? AND position = 1").run(runId)
+        database.close()
+      })
+      const failure = yield* withProductionRepositoryHost(
+        input,
+        productionRepositoryHostGraph({
+          codexAppServer: () => Layer.effect(CodexAppServer, Effect.die("malformed history must stop before Codex")),
+          githubClient: () => Layer.effect(GithubGraphqlClient, Effect.die("malformed history must stop before GitHub"))
+        }),
+        () => Effect.die("malformed history must not expose a host observation")
+      ).pipe(Effect.flip)
+
+      expect(failure).toBeInstanceOf(StartupRecoveryBlocked)
+      expect(failure).toMatchObject({ issues: [expect.objectContaining({ runId })] })
     }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
   )
 )
