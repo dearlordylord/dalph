@@ -342,6 +342,12 @@ it.effect("runs one queued active refresh after admission-stalled delivery yield
       const activeFinalizationStarted = yield* Deferred.make<void>()
       const activeIdle = yield* Deferred.make<void>()
       const activeIdleArmed = yield* Ref.make(false)
+      const ordinaryActivations = yield* Ref.make(0)
+      const sentinelOrdinaryStarted = yield* Deferred.make<void>()
+      const releaseSentinelOrdinary = yield* Deferred.make<void>()
+      const sentinelFinalizationStarted = yield* Deferred.make<void>()
+      const sentinelIdle = yield* Deferred.make<void>()
+      const sentinelIdleArmed = yield* Ref.make(false)
       const kinds = yield* Ref.make<ReadonlyArray<"OrdinaryRunEntry" | "ActiveWorkAuthorityRefresh">>([])
       const concurrent = yield* Ref.make(0)
       const maximumConcurrent = yield* Ref.make(0)
@@ -363,8 +369,14 @@ it.effect("runs one queued active refresh after admission-stalled delivery yield
           activate: () =>
             Effect.gen(function* () {
               yield* enter("OrdinaryRunEntry")
-              yield* Deferred.succeed(ordinaryStarted, undefined)
-              yield* Deferred.await(releaseAdmissionStall)
+              const ordinal = yield* Ref.updateAndGet(ordinaryActivations, (current) => current + 1)
+              if (ordinal === 1) {
+                yield* Deferred.succeed(ordinaryStarted, undefined)
+                yield* Deferred.await(releaseAdmissionStall)
+              } else {
+                yield* Deferred.succeed(sentinelOrdinaryStarted, undefined)
+                yield* Deferred.await(releaseSentinelOrdinary)
+              }
               return RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" })
             }).pipe(Effect.ensuring(leave)),
           activateActiveWorkAuthorityRefresh: () =>
@@ -379,11 +391,16 @@ it.effect("runs one queued active refresh after admission-stalled delivery yield
               ? Ref.set(activeIdleArmed, true).pipe(
                   Effect.andThen(Deferred.succeed(activeFinalizationStarted, undefined))
                 )
-              : Effect.void,
+              : Effect.gen(function* () {
+                  if ((yield* Ref.get(ordinaryActivations)) !== 2) return
+                  yield* Ref.set(sentinelIdleArmed, true)
+                  yield* Deferred.succeed(sentinelFinalizationStarted, undefined)
+                }),
           onActivationHandoffIdle: () =>
-            Ref.getAndSet(activeIdleArmed, false).pipe(
-              Effect.flatMap((armed) => (armed ? Deferred.succeed(activeIdle, undefined) : Effect.void))
-            ),
+            Effect.gen(function* () {
+              if (yield* Ref.getAndSet(activeIdleArmed, false)) yield* Deferred.succeed(activeIdle, undefined)
+              if (yield* Ref.getAndSet(sentinelIdleArmed, false)) yield* Deferred.succeed(sentinelIdle, undefined)
+            }),
           isTerminationFailure: () => false,
           installAcceptedRunReactivationObservers: () => Effect.void,
           onFailure: () => Effect.void
@@ -407,12 +424,28 @@ it.effect("runs one queued active refresh after admission-stalled delivery yield
             yield* Deferred.succeed(releaseActive, undefined)
             yield* Deferred.await(activeFinalizationStarted)
             yield* Deferred.await(activeIdle)
+            yield* owner.hint(RunReactivationHint.OperatorWake())
+            yield* Deferred.await(sentinelOrdinaryStarted)
+            expect(yield* Ref.get(kinds)).toEqual([
+              "OrdinaryRunEntry",
+              "ActiveWorkAuthorityRefresh",
+              "OrdinaryRunEntry"
+            ])
+            expect(yield* Ref.get(concurrent)).toBe(1)
+            expect(yield* Ref.get(maximumConcurrent)).toBe(1)
+            yield* Deferred.succeed(releaseSentinelOrdinary, undefined)
+            yield* Deferred.await(sentinelFinalizationStarted)
+            yield* Deferred.await(sentinelIdle)
             const [drain] = yield* Ref.get(shell.drains)
             if (drain === undefined) return yield* Effect.die("owner did not register its process-local drain")
             yield* Effect.orDie(drain)
             yield* owner.hint(RunReactivationHint.Timer())
             yield* owner.hint(RunReactivationHint.TrackerNotification())
-            expect(yield* Ref.get(kinds)).toEqual(["OrdinaryRunEntry", "ActiveWorkAuthorityRefresh"])
+            expect(yield* Ref.get(kinds)).toEqual([
+              "OrdinaryRunEntry",
+              "ActiveWorkAuthorityRefresh",
+              "OrdinaryRunEntry"
+            ])
             expect(yield* Ref.get(concurrent)).toBe(0)
             expect(yield* Ref.get(maximumConcurrent)).toBe(1)
           })
