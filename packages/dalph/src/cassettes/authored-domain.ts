@@ -66,6 +66,20 @@ export const AuthoredRunActivationOrdinal = Schema.Int.check(Schema.isGreaterTha
 )
 export type AuthoredRunActivationOrdinal = typeof AuthoredRunActivationOrdinal.Type
 
+/**
+ * Stable cassette-only name for one exact operation occurrence. The authored
+ * story can therefore constrain generated operation identities without
+ * hard-coding a Run-local identifier.
+ */
+const AuthoredCausalRole = Schema.NonEmptyString.pipe(Schema.brand("AuthoredCausalRole"))
+
+/** Exact symbolic predecessor contract for one authored operation selection. */
+export const AuthoredCausalSelection = Schema.Struct({
+  occurrenceRole: AuthoredCausalRole,
+  predecessorRoles: Schema.Array(AuthoredCausalRole).check(Schema.isUnique())
+})
+export type AuthoredCausalSelection = typeof AuthoredCausalSelection.Type
+
 export const AuthoredTaskWorkSpecification = Schema.Struct({
   body: Schema.String,
   taskId: TaskId,
@@ -85,6 +99,43 @@ export const AuthoredCassetteDecision = Schema.TaggedUnion({
   RecordTaskAttemptPlan: { attemptId: AttemptId, taskId: TaskId }
 })
 export type AuthoredCassetteDecision = typeof AuthoredCassetteDecision.Type
+
+/**
+ * Result owned by one cassette-only concurrent tracker read. These are the
+ * two tracker boundaries used by the active-work G1/F2 chronology; Git and
+ * claim reads keep their ordinary ordered story items.
+ */
+export const AuthoredConcurrentTrackerReadResult = Schema.TaggedUnion({
+  TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,
+  TrackerGraphReadFailed: { reason: Schema.Literal("IncompleteSnapshot") },
+  TrackerGraphReadReturned: { graph: AuthoredTrackerGraph }
+})
+export type AuthoredConcurrentTrackerReadResult = typeof AuthoredConcurrentTrackerReadResult.Type
+
+const AuthoredConcurrentTrackerRead = Schema.Union([
+  Schema.Struct({
+    causal: AuthoredCausalSelection,
+    operation: AuthoredCassetteDecision.cases.ReadTaskWorkSpecification,
+    result: AuthoredConcurrentTrackerReadResult.cases.TaskWorkSpecificationReadReturned
+  }),
+  Schema.Struct({
+    causal: AuthoredCausalSelection,
+    operation: AuthoredCassetteDecision.cases.ReadTrackerGraph,
+    result: Schema.Union([
+      AuthoredConcurrentTrackerReadResult.cases.TrackerGraphReadFailed,
+      AuthoredConcurrentTrackerReadResult.cases.TrackerGraphReadReturned
+    ])
+  })
+]).check(
+  Schema.makeFilter((member) =>
+    member.operation._tag === "ReadTaskWorkSpecification" && member.result._tag === "TaskWorkSpecificationReadReturned"
+      ? member.operation.taskId === member.result.taskId
+        ? undefined
+        : "a concurrent task-work specification result must name the selected task"
+      : undefined
+  )
+)
+export type AuthoredConcurrentTrackerRead = typeof AuthoredConcurrentTrackerRead.Type
 
 /**
  * Executor reports in authored input name the attempt but never a RunId.
@@ -718,7 +769,9 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
     request: Schema.Literals(["Begin", "Resume", "Suspend"]),
     taskId: TaskId
   },
-  DalphSelects: { operation: AuthoredCassetteDecision },
+  /** One bounded tracker-read phase whose causally named members may complete in either order. */
+  ConcurrentTrackerReadBatch: { members: Schema.NonEmptyArray(AuthoredConcurrentTrackerRead) },
+  DalphSelects: { causal: Schema.optionalKey(AuthoredCausalSelection), operation: AuthoredCassetteDecision },
   /** Task-work assertions with optional complete lower-level evidence projections. */
   ExpectedBehavior: AuthoredExpectedBehavior.fields,
   GitWorktreeObservationChanged: {
@@ -918,7 +971,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
     "CassetteReleasesHeldTaskWorkSpecificationRead"
   ],
-  DalphOperationTrace: ["DalphSelects"],
+  DalphOperationTrace: ["DalphSelects", "ConcurrentTrackerReadBatch"],
   Git: ["GitPlannedWorktreeCreateResponseLost", "GitWorktreeObservationChanged"],
   OuterIntegrator: [
     "IntegratorRequestReceived",

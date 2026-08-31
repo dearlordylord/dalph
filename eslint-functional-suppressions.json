@@ -15,9 +15,6 @@
     }
   },
   "packages/dalph/src/cassettes/authored-cursor.ts": {
-    "functional/immutable-data": {
-      "count": 1
-    },
     "functional/no-mixed-types": {
       "count": 1
     },
