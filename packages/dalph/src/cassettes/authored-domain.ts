@@ -73,6 +73,13 @@ export type AuthoredRunActivationOrdinal = typeof AuthoredRunActivationOrdinal.T
  */
 const AuthoredCausalRole = Schema.NonEmptyString.pipe(Schema.brand("AuthoredCausalRole"))
 
+/**
+ * Symbolic name for one operation selected at the real trace seam whose own
+ * ancestry is outside this causal check. Later batch members may name this
+ * exact raw operation identity as an immediate predecessor.
+ */
+const AuthoredCausalAnchor = Schema.Struct({ occurrenceRole: AuthoredCausalRole })
+
 /** Exact symbolic predecessor contract for one authored operation selection. */
 export const AuthoredCausalSelection = Schema.Struct({
   occurrenceRole: AuthoredCausalRole,
@@ -763,6 +770,12 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: { taskId: TaskId },
   /** Harness synchronization: release the exact task specification read named by its paired hold. */
   CassetteReleasesHeldTaskWorkSpecificationRead: { taskId: TaskId },
+  /** Harness input: offer these non-authoritative hints to the real Run reactivation owner. */
+  CassetteOffersRunReactivationHints: {
+    hints: Schema.NonEmptyArray(Schema.Literals(["TrackerNotification", "Timer"]))
+  },
+  /** Harness input: publish one current tracker notification while the real Run reactivation owner attaches. */
+  CassettePublishesCurrentTrackerNotification: {},
   /** Harness synchronization: keep this exact executor request in flight while the next ordinary delivery fact publishes. */
   DalphHoldsExecutorRequestThroughNextDeliveryPublication: {
     attemptId: AttemptId,
@@ -771,7 +784,11 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   },
   /** One bounded tracker-read phase whose causally named members may complete in either order. */
   ConcurrentTrackerReadBatch: { members: Schema.NonEmptyArray(AuthoredConcurrentTrackerRead) },
-  DalphSelects: { causal: Schema.optionalKey(AuthoredCausalSelection), operation: AuthoredCassetteDecision },
+  DalphSelects: {
+    causal: Schema.optionalKey(AuthoredCausalSelection),
+    causalAnchor: Schema.optionalKey(AuthoredCausalAnchor),
+    operation: AuthoredCassetteDecision
+  },
   /** Task-work assertions with optional complete lower-level evidence projections. */
   ExpectedBehavior: AuthoredExpectedBehavior.fields,
   GitWorktreeObservationChanged: {
@@ -937,6 +954,8 @@ const defineStoryItemOwners = <
 
 export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   CassetteControl: [
+    "CassetteOffersRunReactivationHints",
+    "CassettePublishesCurrentTrackerNotification",
     "InitialControlPolicy",
     "OperatorAppliesControlDirection",
     "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
@@ -1098,6 +1117,14 @@ const behaviorAssertionsAreConsistent = Schema.makeFilter((cassette: typeof Auth
   cassette.story
     .flatMap((item) => (item._tag === "ExpectedBehavior" ? [expectedBehaviorIssue(item)] : []))
     .find((issue) => issue !== undefined)
+)
+
+const causalAnchorsAndChecksAreDistinct = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+  cassette.story.every(
+    (item) => item._tag !== "DalphSelects" || item.causal === undefined || item.causalAnchor === undefined
+  )
+    ? undefined
+    : "one authored selection cannot be both an accepted causal anchor and an exact causal check"
 )
 
 const minimumItemsAfterCoordinatorDeath = 2
@@ -1419,6 +1446,7 @@ const AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteShape.check(
   )
   .check(startingFactsAreConsistent)
   .check(behaviorAssertionsAreConsistent)
+  .check(causalAnchorsAndChecksAreDistinct)
   .check(coordinatorLifecycleBoundariesHaveFollowingActivationWork)
   .check(finalTrackerReadClosesCurrentActivation)
   .check(ambiguousBoundaryLossesImmediatelyCrash)

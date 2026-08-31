@@ -413,7 +413,18 @@ export const controlledExecutorLayer = (
                         : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
                     )
                   )
-            return { changes: Stream.empty, close: Effect.void, current }
+            const exactCausalSynchronization = cursor.exactCausalSynchronization()
+            const changes = exactCausalSynchronization
+              ? cursor.storyItems.pipe(
+                  Stream.filter(
+                    (item) =>
+                      item?._tag === "PlannedAttemptExecutorProjectionReturned" &&
+                      item.report.attemptId === correlation.attemptId
+                  ),
+                  Stream.mapEffect(() => executor.observe(correlation, passiveLifecycleObservationPurpose))
+                )
+              : Stream.empty
+            return { changes, close: Effect.void, current }
           })
       })
     )

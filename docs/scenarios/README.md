@@ -87,7 +87,7 @@ not claim that either correction is on `master` or shipped.
 |---|---:|---|
 | `issue-265-passive-executor-observation-through-restart.md` | 265 | Complete and integrated through `acdf5a715`; issue closed |
 | `issue-266-active-work-authority-refresh.md` | 266 | Integrated candidate through `7ffd22699`; final gates and issue closure pending |
-| `issue-267-exact-causal-active-work-cassette.md` | 267 | Cassette-only implementation candidate; focused exact-read and lifecycle slices green |
+| `issue-267-exact-causal-active-work-cassette.md` | 267 | Complete candidate; maintained production composition and direct exact-read/lifecycle proofs are green; integration review pending |
 
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state

@@ -302,6 +302,12 @@ export interface StoryCursor {
   readonly consumeCapacityChange: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type>
   >
+  readonly consumeRunReactivationHints: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteOffersRunReactivationHints.Type>
+  >
+  readonly consumeCurrentTrackerNotification: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassettePublishesCurrentTrackerNotification.Type>
+  >
   readonly consumeAttemptChoice: Effect.Effect<Option.Option<AttemptChoiceItem>>
   readonly consumeDalphSelection: Effect.Effect<typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type, CursorFailure>
   /** Concurrent operations wait for their exact authored selection instead of consuming a sibling selection. */
@@ -476,19 +482,17 @@ export interface AuthoredStoryOccurrenceObserved {
 
 interface StoryCursorOptions {
   readonly onOccurrence?: (occurrence: AuthoredStoryOccurrenceObserved) => Effect.Effect<void>
-  readonly exactCausalSynchronization?: () => boolean
 }
 
 export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(function* (
   story: ReadonlyArray<StoryItem>,
   options: StoryCursorOptions = {}
 ): Effect.fn.Return<StoryCursor> {
-  const exactCausalStory =
-    options.exactCausalSynchronization?.() === true ||
-    story.some(
-      (item) =>
-        item._tag === "ConcurrentTrackerReadBatch" || (item._tag === "DalphSelects" && item.causal !== undefined)
-    )
+  const exactCausalStory = story.some(
+    (item) =>
+      item._tag === "ConcurrentTrackerReadBatch" ||
+      (item._tag === "DalphSelects" && (item.causal !== undefined || item.causalAnchor !== undefined))
+  )
   const position = yield* SubscriptionRef.make(0)
   const transition = yield* Semaphore.make(1)
   interface ConcurrentTrackerReadMemberState {
@@ -563,7 +567,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   )
 
   const causalBindingIssue = (
-    causal: AuthoredCausalSelection,
+    causal: { readonly occurrenceRole: AuthoredCausalSelection["occurrenceRole"] },
     context: AuthoredOperationCausalContext,
     registry: CausalRegistry
   ): string | undefined => {
@@ -601,7 +605,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     return expectedPredecessors.length === actualPredecessors.length &&
       expectedPredecessors.every((operationId) => actualPredecessors.includes(operationId))
       ? undefined
-      : `operation ${context.operationId} does not name exactly the predecessors authored for ${role}`
+      : `operation ${context.operationId} predecessors [${actualPredecessors.join(", ")}] do not exactly match authored ${role} predecessors [${expectedPredecessors.join(", ")}]`
   }
 
   const causalSelectionIssue = (
@@ -613,8 +617,20 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       ? "a causally authored selection requires its exact raw operation identity"
       : (causalBindingIssue(causal, context, registry) ?? causalPredecessorIssue(causal, context, registry))
 
+  const standaloneCausalSelectionIssue = (
+    item: typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type,
+    context: AuthoredOperationCausalContext | undefined,
+    registry: CausalRegistry
+  ): string | undefined => {
+    if (context === undefined) return "a causally authored selection requires its exact raw operation identity"
+    if (item.causal !== undefined) return causalSelectionIssue(item.causal, context, registry)
+    return item.causalAnchor === undefined
+      ? "a causally authored selection requires one exact constraint"
+      : causalBindingIssue(item.causalAnchor, context, registry)
+  }
+
   const registerCausalSelection = (
-    causal: AuthoredCausalSelection,
+    causal: { readonly occurrenceRole: AuthoredCausalSelection["occurrenceRole"] },
     context: AuthoredOperationCausalContext,
     registry: CausalRegistry
   ): CausalRegistry => ({
@@ -840,17 +856,23 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       Effect.gen(function* () {
         const index = yield* SubscriptionRef.get(position)
         const item = story[index]
-        if (!authoredDalphSelectionMatches(item, operation) || item.causal === undefined) {
+        if (
+          !authoredDalphSelectionMatches(item, operation) ||
+          (item.causal === undefined && item.causalAnchor === undefined)
+        ) {
           return { _tag: "None" as const }
         }
         const state = yield* Ref.get(exactCausalState)
-        const issue = causalSelectionIssue(item.causal, context, state.causal)
+        const constraint = item.causal ?? item.causalAnchor
+        /* v8 ignore next -- @preserve The enclosing condition requires one exact constraint. */
+        if (constraint === undefined) return { _tag: "Failure" as const, detail: "missing constraint", index }
+        const issue = standaloneCausalSelectionIssue(item, context, state.causal)
         if (issue !== undefined) return { _tag: "Failure" as const, detail: issue, index }
         /* v8 ignore next -- @preserve A successful causal check requires the context. */
         if (context === undefined) return { _tag: "Failure" as const, detail: "missing context", index }
         yield* Ref.set(exactCausalState, {
           ...state,
-          causal: registerCausalSelection(item.causal, context, state.causal)
+          causal: registerCausalSelection(constraint, context, state.causal)
         })
         yield* SubscriptionRef.set(position, index + 1)
         return { _tag: "Selected" as const, index, item }
@@ -1162,6 +1184,20 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     const remaining = new Map([...gates].filter(([taskId]) => taskId !== claimed.item.taskId))
     yield* SubscriptionRef.set(taskWorkSpecificationReadBoundaries, remaining)
     return Option.some(claimed.item)
+  })
+  const consumeRunReactivationHints = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CassetteOffersRunReactivationHints.Type =>
+        item?._tag === "CassetteOffersRunReactivationHints"
+    )
+    return claimed._tag === "Mismatch" ? Option.none() : Option.some(claimed.item)
+  })
+  const consumeCurrentTrackerNotification = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CassettePublishesCurrentTrackerNotification.Type =>
+        item?._tag === "CassettePublishesCurrentTrackerNotification"
+    )
+    return claimed._tag === "Mismatch" ? Option.none() : Option.some(claimed.item)
   })
   const awaitTaskWorkSpecificationReadBoundary = (taskId: TaskId) =>
     SubscriptionRef.get(taskWorkSpecificationReadBoundaries).pipe(
@@ -1899,6 +1935,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeAttemptChoice,
     consumeAttemptChoiceRace,
     consumeCapacityChange,
+    consumeRunReactivationHints,
+    consumeCurrentTrackerNotification,
     consumeControlDirection,
     consumeControlDirectionFailure,
     consumeRunCancellation,

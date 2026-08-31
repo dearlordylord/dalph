@@ -57,6 +57,9 @@ const twoEligibleTasksGraph = {
   ]
 }
 
+const activeWorkF1Graph = { ...twoEligibleTasksGraph, revision: "active-work-G0-F1" }
+const activeWorkF2Graph = { ...twoEligibleTasksGraph, revision: "active-work-G1-F2" }
+
 const threeEligibleTasksGraph = {
   revision: "three-eligible-tasks-revision",
   tasks: [
@@ -2481,6 +2484,124 @@ export const contractedCapacityRetainsTwoAttemptsAuthoredCassette: ScenarioCasse
   ]
 })
 
+/** Alice's F2 edit reaches the exact active B1 refresh through the production reactivation owner. */
+export const activeWorkF2SafelySuspendsAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...singletonTaskCompletesAuthoredCassette,
+  name: "notification and timer coalesce before B1 safely suspends for F2",
+  startingFacts: {
+    ...singletonTaskCompletesAuthoredCassette.startingFacts,
+    taskWorkSpecifications: [
+      ...singletonTaskCompletesAuthoredCassette.startingFacts.taskWorkSpecifications,
+      { body: "Implement B from F1.", taskId: "B", title: "Implement B F1" }
+    ],
+    trackerGraph: activeWorkF1Graph
+  },
+  story: [
+    ...twoEligiblePlannedStoryBeforeExecutingExecutorReport.map((item) => {
+      if (item._tag === "InitialControlPolicy") return { ...item, policy: { taskExecutionCapacity: 2 } }
+      if (item._tag === "TrackerGraphReadReturned") return { ...item, graph: activeWorkF1Graph }
+      if (item._tag === "TaskWorkSpecificationReadReturned" && item.taskId === "B") {
+        return { ...item, body: "Implement B from F1.", title: "Implement B F1" }
+      }
+      if (item._tag === "DalphSelects" && item.operation._tag === "RecordTaskAttemptPlan") {
+        return { ...item, causalAnchor: { occurrenceRole: item.operation.taskId === "A" ? "plan-A-F1" : "plan-B-F1" } }
+      }
+      return item
+    }),
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
+      request: "Begin"
+    },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:B:1" },
+      request: "Begin"
+    },
+    { _tag: "CoordinatorProcessDies" },
+    { _tag: "CassettePublishesCurrentTrackerNotification" },
+    {
+      _tag: "DalphSelects",
+      causal: { occurrenceRole: "active-shared-G1", predecessorRoles: ["plan-A-F1", "plan-B-F1"] },
+      operation: { _tag: "ReadTrackerGraph", target: "cassette-target" }
+    },
+    { _tag: "TrackerGraphReadReturned", graph: activeWorkF2Graph },
+    {
+      _tag: "CassetteOffersRunReactivationHints",
+      hints: ["TrackerNotification", "Timer", "TrackerNotification", "Timer"]
+    },
+    {
+      _tag: "ConcurrentTrackerReadBatch",
+      members: [
+        {
+          causal: { occurrenceRole: "active-A-F1", predecessorRoles: ["plan-A-F1", "active-shared-G1"] },
+          operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" },
+          result: {
+            _tag: "TaskWorkSpecificationReadReturned",
+            body: "Implement the accepted singleton behavior.",
+            taskId: "A",
+            title: "Implement singleton"
+          }
+        },
+        {
+          causal: { occurrenceRole: "active-B-F2", predecessorRoles: ["plan-B-F1", "active-shared-G1"] },
+          operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" },
+          result: {
+            _tag: "TaskWorkSpecificationReadReturned",
+            body: "Implement changed B from F2.",
+            taskId: "B",
+            title: "Implement B F2"
+          }
+        }
+      ]
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:B:1" },
+      request: "Suspend"
+    },
+    {
+      _tag: "PlannedAttemptExecutorProjectionReturned",
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:B:1" }
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: activeWorkF2Graph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: activeWorkF2Graph },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
+    {
+      _tag: "TaskWorkSpecificationReadReturned",
+      body: "Implement the accepted singleton behavior.",
+      taskId: "A",
+      title: "Implement singleton"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } },
+    { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorktree", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: activeWorkF2Graph },
+    {
+      _tag: "ExpectedBehavior",
+      orchestration: [
+        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:A:0", taskId: "A" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkExecuting" },
+        { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:B:1", taskId: "B" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:B:1", report: "ExecutorWorkExecuting" },
+        { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:B:1", report: "ExecutorWorkSafelySuspended" }
+      ],
+      protocol: null,
+      taskWork: { absences: [], results: [] }
+    }
+  ]
+})
+
 /** Accepted executor output remains ordered by journal position and starts integration in the next activation. */
 export const acceptedResultRestartsIntoIntegrationAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
@@ -4854,6 +4975,7 @@ const defineAuthoredCassetteCatalog = <const Name extends string>(
 ): Readonly<Record<Name, AuthoredScenarioCassette>> => catalog
 
 type MaintainedAuthoredCassetteName =
+  | "activeWorkF2SafelySuspends"
   | "acceptedResultRestartsIntoIntegration"
   | "postIntegrationAttemptChoiceRejected"
   | "prePromotionBlocker"
@@ -4918,6 +5040,7 @@ type MaintainedAuthoredCassetteName =
 
 export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthoredCassetteName, ScenarioCassette>> =
   defineAuthoredCassetteCatalog({
+    activeWorkF2SafelySuspends: activeWorkF2SafelySuspendsAuthoredCassette,
     acceptedResultRestartsIntoIntegration: acceptedResultRestartsIntoIntegrationAuthoredCassette,
     postIntegrationAttemptChoiceRejected: postIntegrationAttemptChoiceRejectedAuthoredCassette,
     prePromotionBlocker: prePromotionBlockerAuthoredCassette,

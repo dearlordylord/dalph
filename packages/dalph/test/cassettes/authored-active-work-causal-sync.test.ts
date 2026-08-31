@@ -1,4 +1,5 @@
 import { it } from "@effect/vitest"
+import { NodeCrypto } from "@effect/platform-node"
 import { Cause, Effect, Exit, Fiber, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import {
@@ -17,7 +18,11 @@ import {
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
 } from "@dalph/orchestrator"
-import { AuthoredCassetteStoryItem, AuthoredCausalSelection } from "../../src/cassettes/authored-domain.js"
+import {
+  type AuthoredCassetteDecision,
+  AuthoredCassetteStoryItem,
+  AuthoredCausalSelection
+} from "../../src/cassettes/authored-domain.js"
 import {
   AuthoredCausalSelectionFailure,
   type AuthoredOperationCausalContext,
@@ -29,6 +34,7 @@ import {
   consumeControlledTaskWorkSpecification,
   consumeControlledTrackerGraph
 } from "../../src/cassettes/authored-tracker-read-results.js"
+import { activeWorkF2SafelySuspendsAuthoredCassette, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 
 const taskB = TaskId.make("B")
 const target = FixtureTarget.make("active-work-target")
@@ -52,6 +58,13 @@ const causalContext = (
 
 const selection = (occurrenceRole: string, predecessorRoles: ReadonlyArray<string>, operation = readGraph) =>
   AuthoredCassetteStoryItem.cases.DalphSelects.make({ causal: causal({ occurrenceRole, predecessorRoles }), operation })
+
+const anchorSelection = (occurrenceRole: string, operation: AuthoredCassetteDecision = readGraph) =>
+  Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.DalphSelects)({
+    _tag: "DalphSelects",
+    causalAnchor: { occurrenceRole },
+    operation
+  })
 
 const graphResult = (revision: string) =>
   AuthoredCassetteStoryItem.cases.TrackerGraphReadReturned.make({ graph: graph(revision) })
@@ -91,6 +104,42 @@ const bindCausalPrefix = Effect.fn("AuthoredCassetteTest.bindCausalPrefix")(func
   yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:G1", []))
   yield* cursor.consumeTrackerGraphFor(target, causalContext("operation:G1", []))
 })
+
+it.effect("binds an exact operation anchor without revalidating its earlier Journal-owned ancestry", () =>
+  Effect.gen(function* () {
+    const checked = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)({
+      _tag: "ConcurrentTrackerReadBatch",
+      members: [
+        {
+          causal: causal({ occurrenceRole: "active-G1", predecessorRoles: ["plan-B-F1"] }),
+          operation: readGraph,
+          result: { _tag: "TrackerGraphReadReturned", graph: graph("G1") }
+        }
+      ]
+    })
+    const cursor = yield* makeStoryCursor([anchorSelection("plan-B-F1", readBSpecification), checked, terminal])
+    const plan = causalContext("operation:plan-B", ["operation:historical-graph", "operation:claim-B"])
+    yield* cursor.consumeDalphSelectionFor(readBSpecification, plan)
+    yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:G1", ["operation:plan-B"]))
+    const returned = yield* cursor.consumeTrackerGraphFor(target, causalContext("operation:G1", ["operation:plan-B"]))
+    expect(returned._tag).toBe("TrackerGraphReadReturned")
+    if (returned._tag === "TrackerGraphReadReturned") expect(returned.graph.revision).toBe("G1")
+
+    for (const predecessors of [
+      ["operation:unknown"],
+      ["operation:plan-B", "operation:extra"],
+      ["operation:historical-graph"]
+    ]) {
+      const failing = yield* makeStoryCursor([anchorSelection("plan-B-F1", readBSpecification), checked, terminal])
+      yield* failing.consumeDalphSelectionFor(readBSpecification, plan)
+      const exit = yield* Effect.exit(
+        failing.consumeDalphSelectionFor(readGraph, causalContext("operation:G1:invalid", predecessors))
+      )
+      expect(Exit.isFailure(exit), predecessors.join(",")).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain(AuthoredCausalSelectionFailure.name)
+    }
+  })
+)
 
 it.effect("binds authored roles at the real operation-selection trace seam", () =>
   Effect.gen(function* () {
@@ -233,7 +282,8 @@ it.effect("reobserves B1 executing without advancing or manufacturing another re
     const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(
       new Map([[plannedAttemptExecutorCorrelationKey(correlation), executing]])
     )
-    const cursor = yield* makeStoryCursor([terminal], { exactCausalSynchronization: () => true })
+    const cursor = yield* makeStoryCursor([anchorSelection("lifecycle-mode"), terminal])
+    yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:lifecycle-mode", []))
 
     expect(yield* observeThroughControlledExecutor(cursor, runId, correlation, reports)).toEqual({
       _tag: "Exact",
@@ -243,7 +293,7 @@ it.effect("reobserves B1 executing without advancing or manufacturing another re
       _tag: "Exact",
       report: executing
     })
-    expect(yield* cursor.storyPosition).toBe(0)
+    expect(yield* cursor.storyPosition).toBe(1)
   })
 )
 
@@ -260,18 +310,58 @@ it.effect("allows only B1 safe or terminal observations to consume B1's lifecycl
       const runId = RunId.make(`active-work-${report._tag}`)
       const b = { attemptId: report.attemptId, runId }
       const foreign = { attemptId: AttemptId.make("attempt:C:1"), runId }
-      const cursor = yield* makeStoryCursor(
-        [AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.make({ report }), terminal],
-        { exactCausalSynchronization: () => true }
-      )
+      const cursor = yield* makeStoryCursor([
+        anchorSelection("lifecycle-mode"),
+        AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.make({ report }),
+        terminal
+      ])
+      yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:lifecycle-mode", []))
       const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
 
       expect((yield* observeThroughControlledExecutor(cursor, runId, foreign, reports))._tag).toBe(
         "CorrelationContradiction"
       )
-      expect(yield* cursor.storyPosition).toBe(0)
-      expect((yield* observeThroughControlledExecutor(cursor, runId, b, reports))._tag).toBe("Exact")
       expect(yield* cursor.storyPosition).toBe(1)
+      expect((yield* observeThroughControlledExecutor(cursor, runId, b, reports))._tag).toBe("Exact")
+      expect(yield* cursor.storyPosition).toBe(2)
     }
   })
+)
+
+it.effect("coalesces notification and timer hints then retains B1 until its exact safe report", () =>
+  Effect.gen(function* () {
+    const run = yield* runAuthoredScenarioCassette(activeWorkF2SafelySuspendsAuthoredCassette)
+    const bAttemptId = AttemptId.make("attempt:B:1")
+    const bReports = run.records.flatMap(({ event, position }) =>
+      event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === bAttemptId
+        ? [{ position, report: event.report._tag }]
+        : []
+    )
+    const suspends = run.records.filter(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorCommandIntended" &&
+        event.command === "Suspend" &&
+        event.plannedAttempt.attemptId === bAttemptId
+    )
+    const suspend = suspends[0]
+    const changedF2 = run.records.find(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+        event.observation.factFamily.taskId === taskB &&
+        event.observation.factFamily.body === "Implement changed B from F2."
+    )
+
+    expect(run.cassette).toStrictEqual(activeWorkF2SafelySuspendsAuthoredCassette)
+    expect(run.activationOrdinals).toEqual([1, 2, 3])
+    expect(suspends).toHaveLength(1)
+    expect(bReports.map(({ report }) => report)).toEqual(["ExecutorWorkExecuting", "ExecutorWorkSafelySuspended"])
+    expect(changedF2?.position).toBeDefined()
+    expect(suspend?.position).toBeDefined()
+    expect(changedF2 !== undefined && suspend !== undefined && changedF2.position < suspend.position).toBe(true)
+    const finalBReport = bReports.at(-1)
+    expect(finalBReport).toBeDefined()
+    expect(suspend !== undefined && finalBReport !== undefined && suspend.position < finalBReport.position).toBe(true)
+    expect(run.observedBehavior.taskWorkResults).toEqual([])
+  }).pipe(Effect.provide(NodeCrypto.layer))
 )

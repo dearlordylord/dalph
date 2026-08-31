@@ -3262,6 +3262,7 @@ describe("delivery proposal route matrix", () => {
         ).pipe(Effect.provideService(PlannedAttemptProtocolController, protocolController))
         const suspensionCalls = yield* Ref.make(0)
         const attachments = yield* Ref.make(0)
+        const boundaryCalls = yield* Ref.make<ReadonlyArray<"Suspend" | "Attach">>([])
         const lifecycleChanges = yield* Queue.unbounded<PlannedAttemptExecutorProjection>()
         const changePublished = yield* Deferred.make<void>()
         const processScope = yield* Effect.scope
@@ -3290,6 +3291,7 @@ describe("delivery proposal route matrix", () => {
           attach: (input) =>
             Effect.gen(function* () {
               yield* Ref.update(attachments, (count) => count + 1)
+              yield* Ref.update(boundaryCalls, (calls) => [...calls, "Attach" as const])
               yield* Queue.take(lifecycleChanges).pipe(
                 Effect.flatMap(input.publishChange),
                 Effect.andThen(Deferred.succeed(changePublished, undefined)),
@@ -3313,13 +3315,13 @@ describe("delivery proposal route matrix", () => {
             PlannedAttemptExecutor.of({
               observe: () => Effect.die("Suspend attachment reads through the passive observer"),
               requestSuspension: (attempt) =>
-                Ref.update(suspensionCalls, (count) => count + 1).pipe(
-                  Effect.as(
-                    PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-                      correlation: plannedAttemptExecutorCorrelation(attempt)
-                    })
-                  )
-                ),
+                Effect.gen(function* () {
+                  yield* Ref.update(suspensionCalls, (count) => count + 1)
+                  yield* Ref.update(boundaryCalls, (calls) => [...calls, "Suspend" as const])
+                  return PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                    correlation: plannedAttemptExecutorCorrelation(attempt)
+                  })
+                }),
               begin: () => Effect.die("suspension must not begin work"),
               resume: () => Effect.die("suspension must not resume work")
             })
@@ -3331,6 +3333,7 @@ describe("delivery proposal route matrix", () => {
         expect(result).toMatchObject({ _tag: "ExecutorReportPublished", report: executing })
         expect(yield* Ref.get(suspensionCalls)).toBe(1)
         expect(yield* Ref.get(attachments)).toBe(1)
+        expect(yield* Ref.get(boundaryCalls)).toEqual(["Suspend", "Attach"])
         expect((yield* admission.snapshot).positions.get(plannedAttempt.taskId)).toMatchObject({ correlation })
         expect((yield* admission.snapshot).positions.get(foreignAttempt.taskId)).toMatchObject({
           correlation: foreignCorrelation
