@@ -4,6 +4,11 @@
       "count": 6
     }
   },
+  "packages/orchestrator/src/coordination/delivery/delivery-proposal-derivation.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
   "packages/orchestrator/src/coordination/delivery/delivery-proposal-identity.ts": {
     "complexity": {
       "count": 1
@@ -20,11 +25,6 @@
     }
   },
   "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
-  "packages/orchestrator/src/coordination/reconstruction/history.ts": {
     "complexity": {
       "count": 1
     }
@@ -124,9 +124,9 @@
       "count": 2
     }
   },
-  "packages/orchestrator/src/workflow/registry/occurrence-projection.ts": {
+  "packages/orchestrator/src/workflow/protocols/planned-attempt-continuation/tracker-read-freshness.ts": {
     "complexity": {
-      "count": 2
+      "count": 1
     }
   }
 }
