@@ -206,8 +206,6 @@ type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
   | { readonly _tag: "Mismatch"; readonly index: number; readonly item: StoryItem | undefined }
 export interface StoryCursor {
-  /** True only for authored stories that opt into #267's harness-local exact matching. */
-  readonly exactCausalSynchronization: () => boolean
   /** Release the exact pre-admission control latch after its production application has completed. */
   readonly completeControlDirectionBeforeDeliveryActionAdmission: Effect.Effect<void>
   /** Current zero-based position after all successfully consumed authored items. */
@@ -334,12 +332,16 @@ export interface StoryCursor {
   readonly consumeExecutorProjection: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type>
   >
-  /** Consume a passive lifecycle result only for its exact attempt owner. */
-  readonly consumeExecutorProjectionFor: (
+  /** Consume an executor lifecycle change only for its exact attached attempt owner. */
+  readonly consumePassiveExecutorLifecycleChangeFor: (
     attemptId: AttemptId
   ) => Effect.Effect<
-    Option.Option<typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type>
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorPassiveLifecycleChanged.Type>
   >
+  /** Exact passive changes for one attached attempt; stories without that typed capability complete immediately. */
+  readonly passiveExecutorLifecycleChangesFor: (
+    attemptId: AttemptId
+  ) => Stream.Stream<typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorPassiveLifecycleChanged.Type>
   readonly consumeGitWorktreeObservationChange: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.GitWorktreeObservationChanged.Type>
   >
@@ -1307,23 +1309,46 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       ).pipe(Effect.orDie)
     )
   })
-  const consumeExecutorProjectionFor: StoryCursor["consumeExecutorProjectionFor"] = (attemptId) =>
+  const consumePassiveExecutorLifecycleChangeFor: StoryCursor["consumePassiveExecutorLifecycleChangeFor"] = (
+    attemptId
+  ) =>
     Effect.gen(function* () {
-      const current = story[yield* SubscriptionRef.get(position)]
-      if (current?._tag === "PlannedAttemptExecutorProjectionReturned" && current.report.attemptId !== attemptId) {
-        return Option.some(current)
-      }
       const claimed = yield* claimNext(
-        (item): item is typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type =>
-          item?._tag === "PlannedAttemptExecutorProjectionReturned" && item.report.attemptId === attemptId
+        (item): item is typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorPassiveLifecycleChanged.Type =>
+          item?._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" && item.report.attemptId === attemptId
       )
       if (claimed._tag === "Mismatch") return Option.none()
       return Option.some(
-        yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned)(
-          claimed.item
-        ).pipe(Effect.orDie)
+        yield* Schema.decodeUnknownEffect(
+          AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorPassiveLifecycleChanged
+        )(claimed.item).pipe(Effect.orDie)
       )
     })
+  const passiveExecutorLifecycleChangesFor: StoryCursor["passiveExecutorLifecycleChangesFor"] = (attemptId) => {
+    if (
+      !story.some(
+        (item) => item._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" && item.report.attemptId === attemptId
+      )
+    ) {
+      return Stream.empty
+    }
+    return SubscriptionRef.changes(position).pipe(
+      Stream.map((index) => story[index]),
+      Stream.filter(
+        (item) => item?._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" && item.report.attemptId === attemptId
+      ),
+      Stream.mapEffect(() =>
+        consumePassiveExecutorLifecycleChangeFor(attemptId).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () => Effect.die(new Error(`authored passive lifecycle change for ${attemptId} disappeared`)),
+              onSome: Effect.succeed
+            })
+          )
+        )
+      )
+    )
+  }
   const consumeInitialPolicy = consume("InitialControlPolicy").pipe(
     Effect.flatMap((item) =>
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.InitialControlPolicy)(item).pipe(Effect.orDie)
@@ -1897,7 +1922,6 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     return yield* consumeTrackerGraph
   })
   return {
-    exactCausalSynchronization: () => exactCausalStory,
     completeControlDirectionBeforeDeliveryActionAdmission: Effect.gen(function* () {
       const gate = yield* SubscriptionRef.get(controlDirectionBeforeAdmission)
       /* v8 ignore next -- @preserve Closure pairs this completion with the exact earlier before-admission control item. */
@@ -1951,7 +1975,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     beginExecutorReportRequest,
     endExecutorReportRequest,
     consumeExecutorProjection,
-    consumeExecutorProjectionFor,
+    consumePassiveExecutorLifecycleChangeFor,
+    passiveExecutorLifecycleChangesFor,
     consumeExecutorRequestPublicationHold,
     consumeExecutorReport,
     consumeExecutorReportFor,

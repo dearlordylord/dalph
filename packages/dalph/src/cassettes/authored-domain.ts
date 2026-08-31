@@ -831,6 +831,16 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   },
   /** A read-only executor projection returns this exact current authority state. */
   PlannedAttemptExecutorProjectionReturned: { report: AuthoredPlannedAttemptExecutorReport },
+  /**
+   * An already-attached passive owner observes this exact attempt change.
+   * Unlike a requested projection, only the matching lifecycle subscription may consume it.
+   */
+  PlannedAttemptExecutorPassiveLifecycleChanged: {
+    report: Schema.Union([
+      AuthoredPlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended,
+      AuthoredPlannedAttemptExecutorReport.cases.ExecutorWorkTerminal
+    ])
+  },
   /** Executor applied the request and changed its authority state, but Dalph lost the response before journaling it. */
   PlannedAttemptExecutorResponseLost: {
     detail: Schema.String,
@@ -1005,6 +1015,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "TargetPromotionGitReadFailed"
   ],
   PlannedAttemptExecutor: [
+    "PlannedAttemptExecutorPassiveLifecycleChanged",
     "PlannedAttemptExecutorProjectionReturned",
     "PlannedAttemptExecutorResponseLost",
     "PlannedAttemptExecutorWorkReported"

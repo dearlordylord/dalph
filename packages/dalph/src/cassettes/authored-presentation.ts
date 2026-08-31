@@ -85,6 +85,7 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       OperatorRacesContinueAndStop: noLandmark,
       OperatorRestartsAttempt: noLandmark,
       OperatorStopsAttempt: noLandmark,
+      PlannedAttemptExecutorPassiveLifecycleChanged: noLandmark,
       PlannedAttemptExecutorProjectionReturned: noLandmark,
       PlannedAttemptExecutorResponseLost: noLandmark,
       PlannedAttemptExecutorWorkReported: (item) =>
@@ -467,6 +468,8 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         `Git cannot observe reported candidate ${item.candidateText}: ${item.detail}`,
       PlannedAttemptExecutorWorkReported: (item) =>
         `The executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`,
+      PlannedAttemptExecutorPassiveLifecycleChanged: (item) =>
+        `The attached passive owner observes ${item.report._tag} for attempt ${item.report.attemptId}.`,
       PlannedAttemptExecutorProjectionReturned: (item) =>
         `A read-only executor projection returns ${item.report._tag} for attempt ${item.report.attemptId}.`,
       PlannedAttemptExecutorResponseLost: (item) =>

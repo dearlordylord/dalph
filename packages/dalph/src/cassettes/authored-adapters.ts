@@ -253,6 +253,7 @@ const executorReport = (
     AuthoredCassetteStoryItem,
     {
       readonly _tag:
+        | "PlannedAttemptExecutorPassiveLifecycleChanged"
         | "PlannedAttemptExecutorProjectionReturned"
         | "PlannedAttemptExecutorResponseLost"
         | "PlannedAttemptExecutorWorkReported"
@@ -353,9 +354,7 @@ export const controlledExecutorLayer = (
   const executor = PlannedAttemptExecutor.of({
     observe: (correlation) =>
       Effect.gen(function* () {
-        const projection = yield* cursor.exactCausalSynchronization()
-          ? cursor.consumeExecutorProjectionFor(correlation.attemptId)
-          : cursor.consumeExecutorProjection
+        const projection = yield* cursor.consumeExecutorProjection
         if (Option.isNone(projection)) {
           const unresolved = yield* Ref.get(unresolvedLostResponses)
           if (unresolved.has(plannedAttemptExecutorCorrelationKey(correlation))) {
@@ -413,17 +412,18 @@ export const controlledExecutorLayer = (
                         : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
                     )
                   )
-            const exactCausalSynchronization = cursor.exactCausalSynchronization()
-            const changes = exactCausalSynchronization
-              ? cursor.storyItems.pipe(
-                  Stream.filter(
-                    (item) =>
-                      item?._tag === "PlannedAttemptExecutorProjectionReturned" &&
-                      item.report.attemptId === correlation.attemptId
-                  ),
-                  Stream.mapEffect(() => executor.observe(correlation, passiveLifecycleObservationPurpose))
-                )
-              : Stream.empty
+            const changes = cursor.passiveExecutorLifecycleChangesFor(correlation.attemptId).pipe(
+              Stream.mapEffect((item) =>
+                Effect.gen(function* () {
+                  const report = yield* prepareReport(executorReport(item, runId))
+                  yield* Ref.update(
+                    reports,
+                    (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])
+                  )
+                  return PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+                })
+              )
+            )
             return { changes, close: Effect.void, current }
           })
       })
