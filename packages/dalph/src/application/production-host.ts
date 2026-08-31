@@ -126,10 +126,9 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const ownership = yield* CoordinatorOwnership
         const journal = yield* JournalStore
         const lifecycle = yield* RunLifecycleJournal
-        const githubClientLayer =
-          adapters.githubClient?.(configuration) ??
-          /* v8 ignore next -- @preserve Hermetic host tests replace the live GitHub boundary; the default is the production-only provider composition. */
-          defaultGithubClientLayer(configuration)
+        /* v8 ignore start -- @preserve Hermetic host tests replace the live GitHub boundary; this assignment retains the production-only provider default. */
+        const githubClientLayer = adapters.githubClient?.(configuration) ?? defaultGithubClientLayer(configuration)
+        /* v8 ignore stop */
         const githubAuthorityLayer = githubDeliveryAuthorityLayer.pipe(
           Layer.provide(githubClientLayer),
           Layer.provide(NodeCrypto.layer)
@@ -140,13 +139,12 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const attemptStoreLayer = nodeCodexAttemptStoreLayer({
           stateDirectory: configuration.codexStateDirectory
         }).pipe(Layer.provide(NodeServices.layer))
+        /* v8 ignore start -- @preserve Hermetic host tests replace the process boundary; this assignment retains the production Codex app-server default. */
         const appLayer: Layer.Layer<
           CodexAppServer,
           ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>
-        > =
-          adapters.codexAppServer?.(configuration) ??
-          /* v8 ignore next -- @preserve Hermetic host tests replace the process boundary; the default launches the production Codex app server. */
-          defaultCodexAppServerLayer(configuration, attemptStoreLayer)
+        > = adapters.codexAppServer?.(configuration) ?? defaultCodexAppServerLayer(configuration, attemptStoreLayer)
+        /* v8 ignore stop */
         const gitCommandLayer = nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer))
         const activityCensusLayer = nodeCodexOwnedActivityCensusLayer.pipe(Layer.provide(appLayer))
         const executorLayer = nodeCodexPlannedAttemptExecutorLayer.pipe(
