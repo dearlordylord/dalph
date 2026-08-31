@@ -1572,30 +1572,62 @@ describe("Codex Integrator", () => {
     expect(failure.detail).toContain("still live")
   })
 
-  it("observes and removes only the authorized predecessor resource", async () => {
+  it("removes only the authorized predecessor and preserves every successor resource", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
       commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/cleanup-store.json"),
       repository
     })
+    const successorPath = candidateWorktreePathFor(config, successorSession.candidateResource)
+    const successorRun = requestForSession(successorSession, 1).correlation
+    const successorResult = IntegratorResult.cases.NotPrepared.make({
+      correlation: successorRun,
+      detail: IntegratorNotPreparedDetail.make("retained successor result")
+    })
+    const successorRecord = CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({
+      appServerIncarnation: CodexServerIncarnation.make("successor-incarnation"),
+      candidatePath: successorPath,
+      correlation: successorSession,
+      initialRun: successorRun,
+      revision: revision(9),
+      runs: [
+        CodexIntegratorPrivateRun.cases.CompletedTurnSealed.make({
+          correlation: successorRun,
+          result: successorResult,
+          token: CodexOwnedTurnToken.make("successor-turn-token"),
+          turnId: CodexTurnId.make("successor-turn")
+        })
+      ],
+      threadId: CodexThreadId.make("successor-thread"),
+      threadToken: CodexThreadOwnershipToken.make("successor-thread-token")
+    })
     const gitCalls: Array<ReadonlyArray<string>> = []
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const integrator = yield* Integrator
         yield* integrator.prepare(requestFor(1))
+        const store = yield* CodexIntegratorPrivateStore
+        const successorBefore = yield* store.read(successorSession.sessionId)
         const authority = yield* IntegratorCandidateProviderAuthority
         const observed = yield* authority.observe(cleanupAuthorization)
         const removed = yield* authority.remove(cleanupAuthorization, CleanupMutationOrdinal.make(1))
         const after = yield* authority.observe(cleanupAuthorization)
-        return { after, observed, removed }
-      }).pipe(Effect.provide(providerLayer(config, { gitCalls })))
+        const successorAfter = yield* store.read(successorSession.sessionId)
+        return { after, observed, removed, successorAfter, successorBefore }
+      }).pipe(Effect.provide(providerLayer(config, { gitCalls, initialRecords: [successorRecord] })))
     )
     expect(result.observed._tag).toBe("Present")
     expect(result.removed._tag).toBe("Removed")
     expect(result.after._tag).toBe("Absent")
-    expect(gitCalls.filter((args) => args[0] === "worktree" && args[1] === "remove")).toHaveLength(1)
-    expect(gitCalls.some((args) => args.includes(candidatePath))).toBe(true)
+    expect(result.successorBefore).toEqual(Option.some(successorRecord))
+    expect(result.successorAfter).toEqual(result.successorBefore)
+    const removals = gitCalls.filter((args) => args[0] === "worktree" && args[1] === "remove")
+    expect(removals).toEqual([["worktree", "remove", "--force", "--", candidatePath]])
+    expect(gitCalls.some((args) => args.includes(successorPath))).toBe(false)
+    expect(gitCalls.some((args) => args.includes(session.integrationTarget.ref))).toBe(false)
+    expect(gitCalls.some((args) => args.includes(session.acceptedResult.commit))).toBe(false)
+    expect(gitCalls.some((args) => args.includes(session.plannedAttempt.worktree))).toBe(false)
   })
 
   it("returns foreign live-writer evidence and performs zero removal requests", async () => {
