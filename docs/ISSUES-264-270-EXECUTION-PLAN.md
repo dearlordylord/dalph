@@ -24,10 +24,12 @@ review. It changes no Dalph runtime behavior.
   39 skipped, 35 MBT tests passed, and 100% changed production and maintained-
   evaluation coverage. The final `pnpm check:quint` gate also passed, including
   deterministic, sampled, exhaustive, temporal, and negative-control checks.
-- The #266 correction candidate is integrated on its task branch through
-  `c9631986d`, atop the ordinary-read implementation `a802db641`, exact graph-
-  cause repair `19128e9fd`, recovery/finality evidence `e45df8811`, and
-  Pause/Exit/restart evidence `361bed75b`. It is under final review; #266 is not
+- The reviewed #266 runtime candidate is on its task branch through
+  `cad300af8`, atop the ordinary-read implementation `a802db641` and its
+  subsequent causality, recovery, lifecycle, and acceptance repairs. The
+  evidence/documentation follow-up is the commit containing this plan and
+  therefore cannot self-reference its own SHA; replace this note with the exact
+  integrated SHA after composition. #266 remains under final review and is not
   yet declared complete or closed.
 - The candidate removes the private active-refresh Git-read history and routes
   graph, focused tracker, worktree, and lineage reads through the ordinary

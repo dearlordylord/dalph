@@ -71,6 +71,9 @@ import {
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
@@ -616,28 +619,78 @@ const recoveredReadLease: DeliveryActionExecutionLease = {
   withPlannedAttemptProtocol: () => Effect.die("ordinary read recovery does not use the executor protocol")
 }
 
-it.effect("does not start G1 from an Executing command response before its lifecycle report is accepted", () =>
+it.effect("starts G1 only from a current accepted Executing lifecycle report", () =>
   Effect.gen(function* () {
     const opportunity = activeWorkAuthorityRefreshForOwner(
       "Timer",
       activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
     )
-    const responseOnlyPrefix = buildPrefix("Healthy").filter(({ position }) => position <= JournalPosition.make(7))
-    const beforeAcceptance = yield* projectionFor(responseOnlyPrefix, opportunity)
-    expect(
-      beforeAcceptance.frontier.transitions.filter(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
-    ).toEqual([])
-
     const acceptedPrefix = buildPrefix("Healthy").filter(({ position }) => position <= JournalPosition.make(8))
-    const afterAcceptance = yield* projectionFor(acceptedPrefix, opportunity)
-    expect(
-      afterAcceptance.frontier.transitions.filter(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
-    ).toMatchObject([
+    const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+    const cases = [
       {
-        operation: { cause: { _tag: "ExecutingWorkAuthorityCheck" } },
-        plannedAttempt: { attemptId: plannedAttempt.attemptId, runId }
+        expectedG1: false,
+        name: "command response awaiting lifecycle acceptance",
+        records: acceptedPrefix.filter(({ position }) => position <= JournalPosition.make(7))
+      },
+      { expectedG1: true, name: "accepted Executing lifecycle report", records: acceptedPrefix },
+      {
+        expectedG1: false,
+        name: "distinct exact state projection awaiting lifecycle acceptance",
+        records: [
+          ...acceptedPrefix,
+          record(
+            9,
+            PlannedAttemptExecutorStateObservedEvent.make({
+              observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+                report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                  correlation: { attemptId: plannedAttempt.attemptId, runId },
+                  result: { _tag: "Completed" }
+                })
+              }),
+              occurrenceClassification: "NonActionOccurrence",
+              ordinal: observationOrdinal,
+              plannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+        ]
+      },
+      {
+        expectedG1: false,
+        name: "later non-exact state projection",
+        records: [
+          ...acceptedPrefix,
+          record(
+            9,
+            PlannedAttemptExecutorStateObservedEvent.make({
+              observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateTemporarilyUnavailable.make({}),
+              occurrenceClassification: "NonActionOccurrence",
+              ordinal: observationOrdinal,
+              plannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+        ]
       }
-    ])
+    ] as const
+
+    for (const lifecycleCase of cases) {
+      const projection = yield* projectionFor(lifecycleCase.records, opportunity)
+      const graphReads = projection.frontier.transitions.filter(
+        ({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph"
+      )
+      expect(graphReads, lifecycleCase.name).toMatchObject(
+        lifecycleCase.expectedG1
+          ? [
+              {
+                operation: { cause: { _tag: "ExecutingWorkAuthorityCheck" } },
+                plannedAttempt: { attemptId: plannedAttempt.attemptId, runId }
+              }
+            ]
+          : []
+      )
+    }
   })
 )
 

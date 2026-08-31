@@ -376,6 +376,17 @@ traceability; scenario-owned prose uses `ExecutorWorkExecuting`,
   `ExecutorWorkExecuting`, `ExecutorWorkSafelySuspended`, and
   `ExecutorWorkTerminal` and asserts zero authority reads in
   `packages/dalph/src/application/production-reactivation.test.ts`.
+- **Existing direct tests:** `selects an active subject only from a current
+  accepted Executing lifecycle report` in
+  `packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts`
+  and `starts G1 only from a current accepted Executing lifecycle report` in
+  `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`
+  each exercise the same four lifecycle prefixes. An Executing command
+  response awaiting lifecycle acceptance grants neither the subject nor G1; a
+  distinct exact Terminal state projection still awaiting lifecycle acceptance
+  grants neither; an accepted
+  `PlannedAttemptExecutorWorkReported` Executing report grants both; and a later
+  non-exact projection invalidates both permissions.
 - **Existing direct test:** `accepted publication notification and timer
   coalesce into one trailing active refresh` in
   `packages/dalph/src/application/production-reactivation.test.ts` injects all
@@ -427,8 +438,11 @@ traceability; scenario-owned prose uses `ExecutorWorkExecuting`,
 - **Existing direct test:** `reopens ordinary delivery only from exact settled
   executor lifecycle evidence` in
   `packages/orchestrator/src/coordination/run/run-stabilization.test.ts`
-  permits the ordinary phase after exact Safe or Terminal evidence and keeps it
-  closed for Executing, missing, or later non-exact evidence.
+  permits the ordinary phase only after an accepted
+  `PlannedAttemptExecutorWorkReported` Safe or Terminal report. It keeps the
+  phase closed for an exact Safe state projection or exact Terminal command
+  response still awaiting lifecycle acceptance, as well as for Executing,
+  missing, or later non-exact evidence.
 - **Existing direct test:** `incomplete unavailable unreadable malformed or
   identity-contradictory active-work reads authorize no executor action` in
   `packages/dalph/src/application/production-reactivation.test.ts` executes the

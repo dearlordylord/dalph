@@ -83,6 +83,9 @@ import {
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
@@ -107,6 +110,7 @@ import {
   outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorCommandResponseObservedRecordKey,
+  plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
@@ -542,45 +546,92 @@ const captureTestAttempt = (runId: RunId, suffix: string, taskSuffix: string) =>
     worktree: WorktreeLocator.make(`/worktrees/bootstrap-capture-${suffix}`)
   })
 
-it.effect("captures Executing work only after its lifecycle report is accepted", () =>
+it.effect("selects an active subject only from a current accepted Executing lifecycle report", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const target = FixtureTarget.make("journaled-bootstrap-active-refresh-accepted-report")
-      const runId = yield* freshWorkflowRunId(target)
-      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
-      const storage = Context.get(journalContext, JournalStore)
-      yield* storage.beginRun(runId, target, initialPolicy)
+      const cases = [
+        {
+          expectedSelected: false,
+          kind: "ResponseAwaitingAcceptance",
+          name: "command response awaiting lifecycle acceptance",
+          suffix: "response-only"
+        },
+        {
+          expectedSelected: true,
+          kind: "AcceptedReport",
+          name: "accepted Executing lifecycle report",
+          suffix: "accepted"
+        },
+        {
+          expectedSelected: false,
+          kind: "ExactProjectionAwaitingAcceptance",
+          name: "distinct exact state projection awaiting lifecycle acceptance",
+          suffix: "unaccepted-state-projection"
+        },
+        {
+          expectedSelected: false,
+          kind: "LaterNonExactProjection",
+          name: "later non-exact state projection",
+          suffix: "later-non-exact"
+        }
+      ] as const
 
-      const plannedAttempt = captureTestAttempt(runId, "response-before-report", "response-before-report")
-      yield* appendExecutorHistory(storage, runId, plannedAttempt, "Running", false)
-      const responseOnly = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
-      if (responseOnly._tag !== "ValidWorkflowJournalHistory") {
-        return yield* Effect.die("an executor response awaiting lifecycle acceptance must be a valid crash prefix")
-      }
-      expect([...activeWorkAuthorityRefreshSubjectsForRunState(responseOnly.runState)]).toEqual([])
+      for (const lifecycleCase of cases) {
+        const target = FixtureTarget.make(`journaled-bootstrap-active-refresh-${lifecycleCase.suffix}`)
+        const runId = yield* freshWorkflowRunId(target)
+        const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+        const storage = Context.get(journalContext, JournalStore)
+        yield* storage.beginRun(runId, target, initialPolicy)
 
-      const report = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-        correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
-      })
-      yield* storage.append(
-        runId,
-        plannedAttemptExecutorWorkReportedRecordKey(
-          plannedAttempt.attemptId,
-          PlannedAttemptExecutorReportOrdinal.make(1)
-        ),
-        PlannedAttemptExecutorWorkReportedEvent.make({
-          ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-          report,
-          version: workflowJournalEventVersion
-        })
-      )
-      const accepted = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
-      if (accepted._tag !== "ValidWorkflowJournalHistory") {
-        return yield* Effect.die("accepted Executing lifecycle fixture must preserve valid history")
+        const plannedAttempt = captureTestAttempt(runId, lifecycleCase.suffix, lifecycleCase.suffix)
+        yield* appendExecutorHistory(
+          storage,
+          runId,
+          plannedAttempt,
+          "Running",
+          lifecycleCase.kind !== "ResponseAwaitingAcceptance"
+        )
+        const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+        if (lifecycleCase.kind === "ExactProjectionAwaitingAcceptance") {
+          yield* storage.append(
+            runId,
+            plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, observationOrdinal),
+            PlannedAttemptExecutorStateObservedEvent.make({
+              observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+                report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                  correlation: plannedAttemptExecutorCorrelation(plannedAttempt),
+                  result: { _tag: "Completed" }
+                })
+              }),
+              occurrenceClassification: "NonActionOccurrence",
+              ordinal: observationOrdinal,
+              plannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+        }
+        if (lifecycleCase.kind === "LaterNonExactProjection") {
+          yield* storage.append(
+            runId,
+            plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, observationOrdinal),
+            PlannedAttemptExecutorStateObservedEvent.make({
+              observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateTemporarilyUnavailable.make({}),
+              occurrenceClassification: "NonActionOccurrence",
+              ordinal: observationOrdinal,
+              plannedAttempt,
+              version: workflowJournalEventVersion
+            })
+          )
+        }
+
+        const history = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+        if (history._tag !== "ValidWorkflowJournalHistory") {
+          return yield* Effect.die(`${lifecycleCase.name} must preserve valid journal history`)
+        }
+        expect([...activeWorkAuthorityRefreshSubjectsForRunState(history.runState)], lifecycleCase.name).toEqual(
+          lifecycleCase.expectedSelected ? [{ attemptId: plannedAttempt.attemptId, runId }] : []
+        )
       }
-      expect([...activeWorkAuthorityRefreshSubjectsForRunState(accepted.runState)]).toEqual([
-        { attemptId: plannedAttempt.attemptId, runId }
-      ])
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
