@@ -1,16 +1,13 @@
 import { NodeCrypto, NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { PlannedAttemptExecutor, RunId } from "@dalph/contracts"
+import { RunId } from "@dalph/contracts"
 import {
   RunLifecycleJournal,
   CoordinatorOwnership,
   CoordinatorLockHeld,
   GithubGraphqlClient,
   GithubIssueTarget,
-  GitCommand,
   InitialControlPolicy,
-  Integrator,
-  IntegratorCandidateProviderAuthority,
   JournalDatabaseLocator,
   JournalPosition,
   JournaledRunEstablished,
@@ -22,12 +19,12 @@ import {
   TraceCursor,
   currentSignalOf,
   memoryJournalStoreLayer,
-  sqliteJournalStoreLayer,
-  unavailableIntegratorCandidateProviderAuthority
+  sqliteJournalStoreLayer
 } from "@dalph/orchestrator"
 import { Context, Deferred, Effect, FileSystem, Fiber, Layer, Path, Ref, Schema } from "effect"
-import { expect } from "vitest"
+import { expect, expectTypeOf } from "vitest"
 import {
+  type ProductionRepositoryHostAdapters,
   type ProductionRepositoryHostGraph,
   productionRepositoryHostGraph,
   withProductionRepositoryHost
@@ -66,6 +63,14 @@ const ownershipLayer = Layer.succeed(
   CoordinatorOwnership,
   CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
 )
+
+it("production host adapter surface cannot replace workflow mutation capabilities", () => {
+  type CapabilityReplacementKey = Extract<
+    keyof ProductionRepositoryHostAdapters,
+    "journalStore" | "gitCommand" | "plannedAttemptExecutor" | "integrator"
+  >
+  expectTypeOf<CapabilityReplacementKey>().toEqualTypeOf<never>()
+})
 
 it.effect(
   "production host returns ProductionHostObservation only after exact Run selection and acknowledged WorkflowRunBegan",
@@ -299,7 +304,7 @@ it.effect("cold production host records one beginning before the first GitHub de
 )
 
 it.effect(
-  "second canonical production host fails before every state-changing boundary and releases for fresh discovery",
+  "default production graph keeps one owner per mutation capability while H2 fails before every boundary and fresh H2 recovers",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -335,53 +340,9 @@ it.effect(
               Effect.andThen(Effect.never)
             )
         })
-        const gitCommand = GitCommand.of({
-          run: () => boundaryCall("git.run"),
-          runInWorktree: () => boundaryCall("git.runInWorktree"),
-          runBytesInWorktree: () => boundaryCall("git.runBytesInWorktree")
-        })
-        const executor = PlannedAttemptExecutor.of({
-          observe: () => boundaryCall("executor.observe"),
-          begin: () => boundaryCall("executor.begin"),
-          requestSuspension: () => boundaryCall("executor.requestSuspension"),
-          resume: () => boundaryCall("executor.resume")
-        })
-        const integrator = Integrator.of({ prepare: () => boundaryCall("integrator.prepare") })
         const adapters = {
-          journalStore: (
-            _configuration: ProductionRepositoryHostConfiguration,
-            defaultLayer: ReturnType<typeof sqliteJournalStoreLayer>
-          ) =>
-            Layer.effectContext(
-              Effect.gen(function* () {
-                // Record before the supplied SQLite layer builds its connection, migration, and writer resources.
-                yield* record("journal.sqlite.open")
-                return yield* Layer.build(defaultLayer)
-              })
-            ),
-          gitCommand: () => Layer.effect(GitCommand, record("git.acquire").pipe(Effect.as(gitCommand))),
-          plannedAttemptExecutor: () =>
-            Layer.effectContext(
-              Effect.gen(function* () {
-                yield* GitCommand
-                yield* CodexAppServer
-                yield* record("executor.acquire")
-                return Context.add(Context.empty(), PlannedAttemptExecutor, executor)
-              })
-            ),
-          integrator: () =>
-            Layer.effectContext(
-              Effect.gen(function* () {
-                yield* GitCommand
-                yield* CodexAppServer
-                yield* CoordinatorOwnership
-                yield* record("integrator.acquire")
-                return Context.empty().pipe(
-                  Context.add(Integrator, integrator),
-                  Context.add(IntegratorCandidateProviderAuthority, unavailableIntegratorCandidateProviderAuthority)
-                )
-              })
-            ),
+          // This callback observes production layers and service methods; it cannot replace any of them.
+          boundaryObserver: record,
           codexAppServer: () => Layer.effect(CodexAppServer, record("codex.acquire").pipe(Effect.as(app))),
           githubClient: () => Layer.effect(GithubGraphqlClient, record("github.acquire").pipe(Effect.as(githubClient)))
         }
@@ -468,21 +429,28 @@ it.effect(
         const afterFirst = yield* Ref.get(trace)
         const count = (event: string, events: ReadonlyArray<string> = afterFirst) =>
           events.filter((observed) => observed === event).length
-        expect(count("journal.sqlite.open")).toBe(1)
+        // Only the network/process edges are replaceable in this fixture. The default graph owns every
+        // workflow mutation capability, and the observer wraps those real services instead of installing fakes.
+        for (const capability of ["journalStore", "gitCommand", "plannedAttemptExecutor", "integrator"]) {
+          expect(capability in adapters).toBe(false)
+        }
+        for (const event of [
+          "coordinator.acquire",
+          "journal.sqlite.open",
+          "git.acquire",
+          "executor.acquire",
+          "integrator.acquire",
+          "github.authority.acquire",
+          "github.acquire",
+          "codex.acquire"
+        ]) {
+          expect(count(event), `${event}: ${JSON.stringify(afterFirst)}`).toBe(1)
+        }
         expect(count("journal.scan")).toBeGreaterThan(0)
         expect(count("journal.begin")).toBe(1)
         expect(afterFirst.indexOf("journal.sqlite.open")).toBeLessThan(afterFirst.indexOf("journal.scan"))
         expect(afterFirst.indexOf("journal.scan")).toBeLessThan(afterFirst.indexOf("journal.begin"))
-        for (const event of [
-          "git.acquire",
-          "executor.acquire",
-          "integrator.acquire",
-          "github.acquire",
-          "codex.acquire",
-          "github.execute"
-        ]) {
-          expect(count(event)).toBe(1)
-        }
+        expect(count("github.execute")).toBe(1)
 
         const secondInput = { ...firstInput, commonDirectory: alias }
         // H2 names the same directory through a symlink while H1 still owns it; ownership must fail first.
@@ -494,6 +462,40 @@ it.effect(
           expect(secondFailure.gitCommonDirectory).toBe(commonDirectory)
         }
         const duringSecond = yield* Ref.get(trace)
+        for (const event of [
+          "coordinator.acquire",
+          "journal.sqlite.open",
+          "journal.scan",
+          "journal.begin",
+          "journal.append",
+          "journal.retireTerminalRun",
+          "journal.terminateRun",
+          "git.acquire",
+          "git.run",
+          "git.runInWorktree",
+          "git.runBytesInWorktree",
+          "executor.acquire",
+          "executor.observe",
+          "executor.begin",
+          "executor.requestSuspension",
+          "executor.resume",
+          "github.authority.acquire",
+          "integrator.acquire",
+          "integrator.prepare",
+          "github.acquire",
+          "github.execute",
+          "codex.acquire",
+          "codex.startThread",
+          "codex.readThread",
+          "codex.resumeThread",
+          "codex.startTurn",
+          "codex.interruptTurn",
+          "codex.listBackgroundTerminals",
+          "codex.terminateBackgroundTerminal",
+          "codex.close"
+        ]) {
+          expect(count(event, duringSecond)).toBe(count(event, afterFirst))
+        }
         expect(duringSecond.slice(afterFirst.length)).toEqual([])
         expect(duringSecond).toEqual(afterFirst)
         yield* record("h2.lock-conflict")
@@ -509,6 +511,17 @@ it.effect(
         expect(secondSelection.runId).toBe(yield* Deferred.await(firstSelectionRunId))
         const finalTrace = yield* Ref.get(trace)
         expect(count("journal.sqlite.open", finalTrace)).toBe(2)
+        for (const event of [
+          "coordinator.acquire",
+          "git.acquire",
+          "executor.acquire",
+          "integrator.acquire",
+          "github.authority.acquire",
+          "github.acquire",
+          "codex.acquire"
+        ]) {
+          expect(count(event, finalTrace)).toBe(2)
+        }
         expect(count("journal.scan", finalTrace)).toBe(count("journal.scan") + 2)
         expect(count("journal.begin", finalTrace)).toBe(1)
         expect(finalTrace.indexOf("h2.lock-conflict")).toBeGreaterThan(finalTrace.indexOf("github.execute"))

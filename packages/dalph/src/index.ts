@@ -15,6 +15,8 @@ export {
 } from "./application/codex-attempt-store.js"
 export { codexAppServerNodeLayer, type CodexAppServerLayerConfig } from "./application/codex-app-server.js"
 export {
+  type ProductionRepositoryHostBoundary,
+  type ProductionRepositoryHostBoundaryObserver,
   type ProductionHostObservation,
   type ProductionRepositoryHostAdapters,
   type ProductionRepositoryHostGraph,
