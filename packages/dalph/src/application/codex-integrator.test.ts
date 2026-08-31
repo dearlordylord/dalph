@@ -1075,13 +1075,17 @@ describe("Codex Integrator", () => {
     >()
   })
 
-  it("keeps run two distinct from the sealed run-one result", async () => {
+  it("starts exactly one fresh run-two turn on the retained session resources", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
       commonDirectory,
       privateStoreLocator: IntegratorPrivateStoreLocator.make("/tmp/dalph-integrator-test/retry-store.json"),
       repository
     })
+    const threadStarts = { value: 0 }
+    const turnStarts = { value: 0 }
+    const turnTokens: Array<CodexOwnedTurnToken> = []
+    const worktreeAdds = { value: 0 }
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const integrator = yield* Integrator
@@ -1094,7 +1098,11 @@ describe("Codex Integrator", () => {
             envelopes: [
               '{"version":1,"outcome":"PreparedCandidate","candidate":"M1"}',
               '{"version":1,"outcome":"PreparedCandidate","candidate":"M2"}'
-            ]
+            ],
+            threadStarts,
+            turnStarts,
+            turnTokens,
+            worktreeAdds
           })
         )
       )
@@ -1104,6 +1112,54 @@ describe("Codex Integrator", () => {
     expect(result.second.correlation.ordinal).toBe(2)
     expect(result.first._tag === "PreparedCandidate" ? result.first.candidateText : "").toBe("M1")
     expect(result.second._tag === "PreparedCandidate" ? result.second.candidateText : "").toBe("M2")
+    expect(worktreeAdds.value).toBe(1)
+    expect(threadStarts.value).toBe(1)
+    expect(turnStarts.value).toBe(2)
+    expect(turnTokens).toHaveLength(2)
+    expect(turnTokens[1]).not.toBe(turnTokens[0])
+  })
+
+  it("checks retained thread activity before recording a fresh run-two token", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/retry-live-writer-store.json"
+      ),
+      repository
+    })
+    const privateWrites: Array<CodexIntegratorPrivateRecord> = []
+    const turnStarts = { value: 0 }
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        const first = yield* integrator.prepare(requestFor(1))
+        const writesAfterRunOne = privateWrites.length
+        const retryFailure = yield* Effect.flip(integrator.prepare(requestFor(2)))
+        const store = yield* CodexIntegratorPrivateStore
+        return { first, retryFailure, stored: yield* store.read(session.sessionId), writesAfterRunOne }
+      }).pipe(
+        Effect.provide(
+          providerLayer(config, {
+            activitySequence: [
+              { _tag: "Absent" },
+              { _tag: "Absent" },
+              {
+                _tag: "ExactLive",
+                activities: [{ _tag: "ActiveTurn", turnId: CodexTurnId.make("foreign-retry-writer") }]
+              }
+            ],
+            privateWrites,
+            turnStarts
+          })
+        )
+      )
+    )
+    expect(result.first._tag).toBe("PreparedCandidate")
+    expect(result.retryFailure.detail).toContain("still live")
+    expect(privateWrites).toHaveLength(result.writesAfterRunOne)
+    expect(Option.isSome(result.stored) ? privateRuns(result.stored.value) : []).toHaveLength(1)
+    expect(turnStarts.value).toBe(1)
   })
 
   it("restarts an unfinished run two with its same durable token", async () => {
@@ -1140,7 +1196,7 @@ describe("Codex Integrator", () => {
     expect(result.runTwoToken).toBe(turnTokens[1])
   })
 
-  it("materializes a FullRerun successor beneath a distinct candidate path", async () => {
+  it("materializes a FullRerun successor with distinct provider resources", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
       commonDirectory,
@@ -1149,20 +1205,82 @@ describe("Codex Integrator", () => {
     })
     const predecessorPath = candidateWorktreePathFor(config, session.candidateResource)
     const successorPath = candidateWorktreePathFor(config, successorSession.candidateResource)
+    const predecessorRun = requestFor(1).correlation
+    const predecessorResult = IntegratorResult.cases.NotPrepared.make({
+      correlation: predecessorRun,
+      detail: IntegratorNotPreparedDetail.make("retained predecessor result")
+    })
+    const predecessorRecord = CodexIntegratorPrivateRecord.cases.ThreadWithRuns.make({
+      appServerIncarnation: CodexServerIncarnation.make("predecessor-incarnation"),
+      candidatePath: predecessorPath,
+      correlation: session,
+      initialRun: predecessorRun,
+      revision: revision(9),
+      runs: [
+        CodexIntegratorPrivateRun.cases.CompletedTurnSealed.make({
+          correlation: predecessorRun,
+          result: predecessorResult,
+          token: CodexOwnedTurnToken.make("predecessor-turn-token"),
+          turnId: CodexTurnId.make("predecessor-turn")
+        })
+      ],
+      threadId: CodexThreadId.make("predecessor-thread"),
+      threadToken: CodexThreadOwnershipToken.make("predecessor-thread-token")
+    })
     const gitCalls: Array<ReadonlyArray<string>> = []
+    const privateWrites: Array<CodexIntegratorPrivateRecord> = []
+    const threadStarts = { value: 0 }
+    const turnStarts = { value: 0 }
     const result = await Effect.runPromise(
       Effect.gen(function* () {
         const integrator = yield* Integrator
-        return yield* integrator.prepare(requestForSession(successorSession, 1))
-      }).pipe(Effect.provide(providerLayer(config, { gitCalls, worktreePath: successorPath })))
+        const prepared = yield* integrator.prepare(requestForSession(successorSession, 1))
+        const replayed = yield* integrator.prepare(requestForSession(successorSession, 1))
+        const store = yield* CodexIntegratorPrivateStore
+        return {
+          predecessor: yield* store.read(session.sessionId),
+          prepared,
+          replayed,
+          successor: yield* store.read(successorSession.sessionId)
+        }
+      }).pipe(
+        Effect.provide(
+          providerLayer(config, {
+            gitCalls,
+            initialRecords: [predecessorRecord],
+            privateWrites,
+            threadStarts,
+            turnStarts,
+            worktreePath: successorPath
+          })
+        )
+      )
     )
-    expect(result._tag).toBe("PreparedCandidate")
-    expect(result.correlation.session.sessionId).toBe(successorSession.sessionId)
+    expect(result.prepared._tag).toBe("PreparedCandidate")
+    expect(result.prepared.correlation.session.sessionId).toBe(successorSession.sessionId)
+    expect(result.replayed).toEqual(result.prepared)
     expect(successorPath).not.toBe(predecessorPath)
     expect(gitCalls.some((args) => args[0] === "worktree" && args[1] === "add" && args.includes(successorPath))).toBe(
       true
     )
     expect(gitCalls.some((args) => args.includes(predecessorPath))).toBe(false)
+    expect(result.predecessor).toEqual(Option.some(predecessorRecord))
+    expect(Option.isSome(result.successor)).toBe(true)
+    if (Option.isSome(result.successor)) {
+      const successorRecord = result.successor.value
+      const successorRun = privateRuns(successorRecord)[0]
+      expect(successorRecord.correlation.candidateResource).not.toBe(predecessorRecord.correlation.candidateResource)
+      expect(successorRecord.threadToken).not.toBe(predecessorRecord.threadToken)
+      expect(successorRecord._tag).toBe("ThreadWithRuns")
+      if (successorRecord._tag === "ThreadWithRuns") {
+        expect(successorRecord.threadId).not.toBe(predecessorRecord.threadId)
+      }
+      expect(successorRun?.token).not.toBe(privateRuns(predecessorRecord)[0]?.token)
+      expect(successorRun?.correlation).toEqual(result.prepared.correlation)
+    }
+    expect(privateWrites.every((record) => record.correlation.sessionId === successorSession.sessionId)).toBe(true)
+    expect(threadStarts.value).toBe(1)
+    expect(turnStarts.value).toBe(1)
   })
 
   it("rejects a foreign Git registration before starting a provider turn", async () => {

@@ -30,6 +30,7 @@ import {
 } from "./codex-integrator-private-store.js"
 import {
   isInitialProviderRun,
+  isRetryProviderRun,
   isSealedPrivateRun,
   newPrivateRecordRunError,
   providerRunAdmissionError
@@ -135,6 +136,7 @@ const ensureRun = Effect.fn("CodexIntegrator.ensureRun")(function* (
   yield* boundary(store.write(next))
   return { record: next, run: created }
 })
+
 const markTurnBoundaryCrossing = Effect.fn("CodexIntegrator.markTurnBoundaryCrossing")(function* (
   store: CodexIntegratorPrivateStoreService,
   record: CodexIntegratorPrivateRecord,
@@ -399,6 +401,10 @@ const integratorServiceFor = (
             const initial = yield* checkConfigAndRecord(config, store, run, app)
             const materialized = yield* ensureCandidateWorktree(commands, fileSystem, config, initial, store, ownership)
             const threaded = yield* ensureThread(app, materialized, store)
+            // A new Retry may record its run-two token only after the retained thread is freshly writer-free.
+            if (isRetryProviderRun(run) && runFor(threaded.record, run) === undefined) {
+              yield* observeQuiescence(app, census, threaded.thread)
+            }
             // The thread id is durable before the first exact provider-run token is recorded.
             const ensured = yield* ensureRun(store, threaded.record, run, app)
             return yield* executeRun(app, census, store, ensured.record, ensured.run, threaded.thread)
