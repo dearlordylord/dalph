@@ -203,6 +203,39 @@ import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-out
 
 const evidenceDigestHexLength = 64
 
+const expectCompleteCurrentGraphReadsBeforeFirstClaim = (
+  records: ReadonlyArray<JournalRecord>,
+  exactTaskSubjects: ReadonlyArray<TaskId>
+): void => {
+  const firstClaimAt = records.findIndex(({ event }) => event._tag === "TaskClaimAcquisitionIntended")
+  expect(firstClaimAt).toBeGreaterThan(0)
+  const reads = records
+    .slice(0, firstClaimAt)
+    .flatMap(({ event }) =>
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation._tag === "ReadTrackerGraph" &&
+      event.operation.cause._tag === "WorkflowEstablishment"
+        ? [event.operation]
+        : []
+    )
+  expect(reads.map(({ readShape }) => readShape.explicitlyCoveredTaskIds)).toEqual([
+    [],
+    ...exactTaskSubjects.map((taskId) => [taskId])
+  ])
+  expect(
+    reads.every(({ operationId }) => {
+      const event = records
+        .slice(0, firstClaimAt)
+        .find(({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operationId)?.event
+      return (
+        event?._tag === "TaskTrackerFactsObserved" &&
+        (event.observation._tag === "CompleteTaskTrackerFacts" ||
+          event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
+      )
+    })
+  ).toBe(true)
+}
+
 const expectFocusedCompletionReadCorrelation = (
   records: ReadonlyArray<JournalRecord>,
   observationPosition: number
@@ -1239,6 +1272,7 @@ it.effect("pauses A and its grouping child while recording only A's direction", 
       )
     ).toEqual([{ direction: "Pause", subject: { _tag: "Task", runId: run.runId, taskId: "A" } }])
     expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A"])
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A"), TaskId.make("B")])
     expect(waiting).toEqual({
       _tag: "PauseProgressObserved",
       result: {
@@ -1412,6 +1446,7 @@ it.effect("stops before the next forward operation after Alice pauses the Run", 
     const afterPause = run.records.slice(pauseAt + 1)
 
     expect(pauseAt).toBeGreaterThan(0)
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A"), TaskId.make("B")])
     expect(
       run.records.some(
         ({ event }) => event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.taskId === TaskId.make("B")
@@ -1490,6 +1525,7 @@ it.effect("Alice unpauses task A before its Pause observation confirms", () =>
     expect(taskPauseObservationUnpausedAuthoredCassette.name).toBe(
       "Alice unpauses task A before its Pause observation confirms"
     )
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A"), TaskId.make("B")])
     expect(
       run.records
         .filter(({ event }) => event._tag === "ControlDirectionApplied")
@@ -1559,6 +1595,7 @@ it.effect("restarts a confirmed paused Run without selecting new forward progres
 
     expect(run.activationOrdinals).toEqual([1, 2])
     expect(pauseAt).toBeGreaterThan(0)
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A"), TaskId.make("B")])
     expect(afterPause.some(({ event }) => event._tag === "TaskTrackerFactsObserved")).toBe(false)
     expect(
       afterPause.flatMap(({ event }) =>
@@ -1773,6 +1810,7 @@ it.effect("A tracker client changes A while Dalph's completion request is pendin
         event.observation.purpose._tag === "Confirmation" &&
         event.observation.facts.lifecycle === "TerminalWithoutSuccess"
     )
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A"), TaskId.make("C")])
     expect(rejection).toBeDefined()
     expect(terminalRead).toBeDefined()
     expect(run.records.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toHaveLength(1)
