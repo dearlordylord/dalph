@@ -21,7 +21,11 @@ import { projectTrackerSnapshot, type TaskDagSnapshot } from "../../authorities/
 import type { TaskLifecycle } from "../../authorities/task-tracker/task.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { OperationId } from "../../workflow/identity.js"
-import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
+import {
+  WorkflowInterpreter,
+  type WorkflowInterpreterService,
+  WorkflowTrace
+} from "../../workflow/interpretation/interpreter.js"
 import { makeTrackerGraphObservationOperation, type TrackerGraphReadCause } from "../../workflow/registry/operation.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
@@ -69,6 +73,7 @@ import {
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 const runId = RunId.make("run-stabilization")
 const target = FixtureTarget.make("run-stabilization-target")
 const emptyFrontier = { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [] }
@@ -90,22 +95,34 @@ const snapshot = (
   return projected.snapshot
 }
 
+type EstablishedTrackerGraphState = Extract<TrackerGraphState, { readonly _tag: "GraphEstablished" }>
+type TrackerGraphObservationOperation = Extract<
+  Parameters<WorkflowInterpreterService["readTrackerGraph"]>[0],
+  { readonly _tag: "ReadTrackerGraph" }
+>
+
 const graph = (
   operation: string,
   recordedAt: number,
   current: TaskDagSnapshot,
   cause: typeof TrackerGraphReadCause.Type = { _tag: "WorkflowEstablishment" }
-) => {
+): EstablishedTrackerGraphState => {
+  // The shared fixture creates its own graph operation without predecessors,
+  // which cannot itself encode a valid post-quiescence cause. Preserve its
+  // private journal receipt brand, then publish the cause from the real
+  // operation that the journaled interpreter just executed.
   const established = TrackerGraphState.cases.GraphEstablished.make({
     observation: makeTestJournaledTrackerGraphObservation({
       operationId: OperationId.make(operation),
       recordedAt: JournalPosition.make(recordedAt),
       snapshot: current,
-      cause
+      cause: cause._tag === "PostQuiescenceReconfirmation" ? { _tag: "WorkflowEstablishment" } : cause
     })
   })
   if (established._tag !== "GraphEstablished") throw new Error("established graph constructor must be exact")
-  return established
+  return cause._tag === "PostQuiescenceReconfirmation"
+    ? { _tag: "GraphEstablished", observation: { ...established.observation, cause } }
+    : established
 }
 
 const baseEvaluation = Effect.gen(function* () {
@@ -432,17 +449,17 @@ it.effect("requests accepted G2 only after G1 becomes quiescent", () =>
   )
 )
 
-it.effect("active refresh performs mandatory G2 once after its typed completion boundary", () =>
+it.effect("active-work refresh and post-quiescence finality perform cause-ordered separate complete graph reads", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const base = yield* baseEvaluation
-      const g1 = graph(
-        "active-boundary-G1",
-        1,
-        snapshot("active-boundary-G1", [
-          { id: TaskId.make("A"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
-        ]),
-        { _tag: "ExecutingWorkAuthorityCheck" }
+      const currentSnapshot = snapshot("active-boundary", [
+        { id: TaskId.make("A"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+      ])
+      const g1Operation = makeTrackerGraphObservationOperation(
+        { _tag: "ExecutingWorkAuthorityCheck" },
+        OperationId.make("active-boundary-G1"),
+        target
       )
       const attemptId = AttemptId.make("active-boundary-attempt")
       const boundary: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]> = {
@@ -450,41 +467,87 @@ it.effect("active refresh performs mandatory G2 once after its typed completion 
         runId,
         reconciledAttempts: [{ runId, attemptId }]
       }
-      const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
-        ...withRunFacts(evaluation(base, g1), false),
-        activeRefreshBoundary: boundary
+      const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>(
+        withRunFacts(evaluation(base, TrackerGraphState.cases.GraphNotEstablished.make({})), false)
+      )
+      const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+      const journal = appendableJournalFor(records)
+      const providerOperations = yield* Ref.make<ReadonlyArray<TrackerGraphObservationOperation>>([])
+      const provider = Layer.mock(WorkflowInterpreter, {
+        readTrackerGraph: (operation: TrackerGraphObservationOperation) =>
+          Ref.update(providerOperations, (current) => [...current, operation]).pipe(Effect.as(currentSnapshot))
       })
-      const reads = yield* Ref.make(0)
-      const executions = yield* Ref.make(0)
-      const interpreter = Layer.mock(WorkflowInterpreter, {
-        readTrackerGraph: (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) =>
-          Ref.update(reads, (count) => count + 1).pipe(
-            Effect.andThen(
-              SubscriptionRef.set(state, {
-                ...withRunFacts(evaluation(base, graph(operation.operationId, 4, g1.observation.snapshot)), false),
-                activeRefreshBoundary: boundary
+      const journaledInterpreter = yield* WorkflowInterpreter.pipe(
+        Effect.provide(
+          journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(Layer.succeed(InRunJournal, journal)))
+        )
+      )
+      const observingInterpreter = WorkflowInterpreter.of({
+        ...journaledInterpreter,
+        readTrackerGraph: (operation, onIntentRecorded, interruptibleBoundary) =>
+          journaledInterpreter.readTrackerGraph(operation, onIntentRecorded, interruptibleBoundary).pipe(
+            Effect.tap(() =>
+              Effect.gen(function* () {
+                const outcome = (yield* Ref.get(records)).find(
+                  ({ event }) =>
+                    event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
+                )
+                if (outcome === undefined) return yield* Effect.die("ordinary graph read must append its outcome")
+                yield* SubscriptionRef.set(state, {
+                  ...withRunFacts(
+                    evaluation(base, graph(operation.operationId, outcome.position, currentSnapshot, operation.cause)),
+                    false
+                  ),
+                  activeRefreshBoundary: boundary
+                })
               })
-            ),
-            Effect.as(g1.observation.snapshot)
+            )
           )
       })
+
+      yield* observingInterpreter.readTrackerGraph(g1Operation)
       const proof = yield* runStabilizedDelivery(
         target,
         signalOf(state),
         activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId }]))
       ).pipe(
         Effect.provide(support),
+        Effect.provideService(InRunJournal, journal),
+        Effect.provideService(WorkflowInterpreter, observingInterpreter),
         Effect.provideService(
           DeliveryActionExecutor,
-          DeliveryActionExecutor.of({
-            execute: () => Ref.update(executions, (count) => count + 1).pipe(Effect.andThen(Effect.die("G2 only")))
-          })
-        ),
-        Effect.provide(interpreter)
+          DeliveryActionExecutor.of({ execute: () => Effect.die("separate graph reads require no delivery action") })
+        )
       )
 
-      expect(yield* Ref.get(reads)).toBe(1)
-      expect(yield* Ref.get(executions)).toBe(0)
+      const operations = yield* Ref.get(providerOperations)
+      expect(operations).toHaveLength(2)
+      expect(operations[0]).toEqual(g1Operation)
+      expect(operations[1]?.operationId).not.toBe(g1Operation.operationId)
+      expect(operations.map(({ cause }) => cause._tag)).toEqual([
+        "ExecutingWorkAuthorityCheck",
+        "PostQuiescenceReconfirmation"
+      ])
+      const g2Operation = operations[1]
+      if (g2Operation?.cause._tag !== "PostQuiescenceReconfirmation") {
+        return yield* Effect.die("the second ordinary graph read must be post-quiescence finality")
+      }
+      expect(g2Operation.cause.quiescentGraphOperationId).toBe(g1Operation.operationId)
+      expect(g2Operation.predecessorOperationIds).toContain(g1Operation.operationId)
+      expect(
+        (yield* Ref.get(records)).map(({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
+            ? [event._tag, event.operation.operationId, event.operation.cause._tag]
+            : event._tag === "TaskTrackerFactsObserved"
+              ? [event._tag, event.operationId]
+              : [event._tag]
+        )
+      ).toEqual([
+        ["TaskTrackerReadIntentRecorded", g1Operation.operationId, "ExecutingWorkAuthorityCheck"],
+        ["TaskTrackerFactsObserved", g1Operation.operationId],
+        ["TaskTrackerReadIntentRecorded", g2Operation.operationId, "PostQuiescenceReconfirmation"],
+        ["TaskTrackerFactsObserved", g2Operation.operationId]
+      ])
       expect(proof.acceptedAt).toBe(JournalPosition.make(4))
     })
   )
