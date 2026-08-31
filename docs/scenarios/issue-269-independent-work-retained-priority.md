@@ -249,3 +249,99 @@ and must not duplicate an executor command.
   `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`
   remains the governing #266 evidence that the trailing activation performs
   G1 through the ordinary journal-first tracker read protocol.
+
+## Unchanged passive attachment does not hide the full-capacity handoff
+
+### Starting situation and trigger
+
+No person triggers this composition. Capacity is three and exact attempts A1,
+B1, and C1 are executing and hold all three positions. Restart reconstruction
+produces one exact passive `Observe` proposal for each attempt. Exact prepared
+attempts D1 and E1 are also present as `ReserveOrReuse` proposals, but neither
+has a position and neither has received `Begin`. An already-recorded ordinary
+tracker-read intent for independent task F also has one exact
+`ObserveResponsibleTaskClaim` proposal. No Git lineage, ref, or worktree fact
+changes in this scenario because none of these actions crosses a Git boundary.
+
+The ordinary activation starts the three executor projection reads. Each read
+finds the same already-accepted `Executing` report, attaches that exact
+attempt's process-local passive observer, and returns
+`UnchangedPassiveObservation`. While those reads settle, the task tracker
+returns `UnclaimedTask` for F. The ordinary journal-first tracker-read protocol
+accepts that exact result as `TaskTrackerFactsObserved` at the next Journal
+position and removes F's completed read proposal. Production delivery-relation
+assembly preserves the exact A1–E1 proposal identities. F's publication is not
+evidence that A1, B1, or C1 needs another projection read.
+
+### Ordered runtime handoff and later passive change
+
+1. Dalph calls the executor projection boundary exactly once for A1, B1, and
+   C1. Each call attaches one process-local passive owner and sends no `Begin`,
+   `Resume`, or `Suspend` command.
+2. Dalph remembers within this activation that each exact `Observe` proposal
+   already has its passive owner attached. Unlike an action deferred while it
+   waits for changed accepted facts, an unrelated accepted ordinal does not
+   erase that marker while the exact proposal remains present. If current task
+   grouping facts causally refresh the proposal identity while the projection
+   read is still settling, the marker follows the current `Observe` proposal
+   for the same exact run and attempt; Dalph removes the settled old owner.
+3. Admission excludes the three locally attached `Observe` proposals from the
+   remaining frontier. With only exact blocked D1 and E1 left, the ordinary
+   runtime returns `TaskWorkAdmissionStalledRuntimeQuiescence`, preserving D1,
+   E1, and the held A1/B1/C1 correlations. D1 and E1 receive no executor call.
+4. Later the passive owner for one exact attempt, B1, observes `Safe` or a
+   terminal executor result. It publishes that exact report at the next
+   Journal ordinal. Only B1's held position is released; A1 and C1 remain held.
+5. If a new Dalph process starts, the old process-local attachment marker does
+   not survive. Restart reconstruction may call each still-required exact
+   `Observe` boundary once and attach fresh passive owners.
+
+The operator sees Startup return control instead of repeatedly rereading A1,
+B1, and C1. Dalph must not treat an unrelated Journal advance as permission to
+reattach the same observer, persist attachment markers, remove D1 or E1, send
+either blocked attempt an executor command, release A1 or C1 when B1 changes,
+recreate a marker after its proposal disappears while an observation settles,
+leave a settled old owner blocking its causally refreshed proposal, or broaden
+the full-capacity classifier to non-exact work.
+
+If Dalph dies, all activation-local markers and passive owners disappear. A
+fresh activation reconstructs exact obligations from the Journal and may
+reattach. If an `Observe` action is genuinely deferred before attachment, its
+accepted-ordinal marker remains the existing wait-for-changed-facts rule and
+may clear when accepted facts change. The two outcomes are not interchangeable.
+
+### Acceptance-test mapping
+
+- `keeps exact passive attachments across unrelated accepted facts and returns
+  blocked D and E as admission-stalled` in
+  `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`
+  proves steps 1–3, validates F's exact tracker-read intent and
+  `TaskTrackerFactsObserved` outcome as canonical Journal history, feeds that
+  concrete publication through production delivery-relation assembly, checks
+  exact one-call counts and preserved A–E identities, and makes no D/E executor
+  call.
+- `moves a passive-attachment marker across an in-flight route refresh and
+  removes it on disappearance` in the same file derives two production-valid
+  Fresh `Observe` routes for the same exact attempt, proves the refreshed route
+  inherits the attachment without a second boundary call or settled old owner,
+  and proves disappearance prunes the marker so a later exact proposal is not
+  hidden.
+- `waits for changed accepted facts after unchanged reconciliation instead of
+  retaining an attachment` in the same file proves that a non-attaching
+  unchanged `Reconcile` remains excluded at the same accepted Journal position
+  and becomes runnable after accepted facts change.
+- `observes live terminal executor change once and releases the exact position`
+  and `observes safe suspension only after exact suspend intent and releases
+  only that attempt` in
+  `packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts`
+  provide the vertical executor-lifecycle, serialized Journal publication,
+  ordinal, and exact position-release evidence for step 4.
+- `restart reprojects the exact executing attempt once then reattaches without
+  Begin` in `packages/dalph/test/scenarios/production.test.ts` proves step 5
+  through the production restart composition. `recovers process death before
+  terminal publication by reprojecting and accepting terminal once` in the
+  bootstrap file remains the terminal-at-restart control.
+- Existing `settles one unchanged passive observation owner without
+  re-admission or successor permission` and `admits an independently proposed
+  suspension after one unchanged passive observation` remain the local
+  one-proposal and independent-successor controls.

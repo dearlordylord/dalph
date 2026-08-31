@@ -25,7 +25,7 @@ import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 import * as RuntimeObservation from "./delivery-runtime-observation.js"
 import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { installInterruptibleDeliveryChild } from "./delivery-child-handoff.js"
-import { liveActionIsPresent, proposalIsPresent } from "./live-delivery-action.js"
+import { liveActionIsPresent, proposalIsPresent, proposalsForLiveAction } from "./live-delivery-action.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import {
   DeliveryRuntimePhase,
@@ -34,9 +34,15 @@ import {
 } from "./delivery-runtime-phase.js"
 import {
   classifyTaskWorkAdmissionStalledRuntimeQuiescence,
+  type AvailableProposalFrontier,
   type DeliveryRuntimeQuiescence,
   type EmptyProposalFrontier
 } from "./delivery-runtime-quiescence.js"
+import {
+  deliveryRuntimeLocalDeferralAfter,
+  deliveryRuntimeLocalDeferralAppliesAt,
+  type DeliveryRuntimeLocalDeferral
+} from "./delivery-runtime-local-deferral.js"
 
 export { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
 export * from "./delivery-runtime-phase.js"
@@ -118,7 +124,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         Option.match(semanticTrace, { onNone: () => Effect.void, onSome: ({ emit }) => emit(event) })
       const events = yield* Queue.unbounded<RuntimeEvent<E>>()
       const owners = yield* Ref.make<ReadonlyMap<DeliveryProposalId, LiveOwner>>(new Map())
-      const deferredAt = yield* Ref.make<ReadonlyMap<DeliveryProposalId, JournalPosition | null>>(new Map())
+      const localDeferrals = yield* Ref.make<ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>>(new Map())
       const latest = yield* Ref.make<Option.Option<DeliveryRuntimeEvaluation>>(Option.none())
       const selectionGate = yield* Semaphore.make(1)
       const integrationTargets = resources.integrationTargets
@@ -219,7 +225,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
 
       const admissionLoop = yield* makeDeliveryRuntimeAdmissionLoop({
         admission,
-        deferredAt,
+        localDeferrals,
         emit,
         latest,
         owners,
@@ -245,12 +251,12 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             }
             yield* Ref.set(latest, Option.some(phaseEvaluation))
             yield* Ref.update(
-              deferredAt,
+              localDeferrals,
               (current) =>
                 new Map(
                   [...current].filter(
-                    ([proposalId, acceptedAt]) =>
-                      acceptedAt === phaseEvaluation.acceptedAt &&
+                    ([proposalId, localDeferral]) =>
+                      deliveryRuntimeLocalDeferralAppliesAt(localDeferral, phaseEvaluation.acceptedAt) &&
                       proposalIsPresent(phaseEvaluation.proposedActions, proposalId)
                   )
                 )
@@ -285,16 +291,28 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               const current = Option.getOrThrow(yield* Ref.get(latest))
               yield* Ref.set(latest, Option.some(current))
               yield* admission.synchronize(current.taskWork)
-              const unchangedPassiveObservation =
-                completion.exit.value._tag === "ExecutorReportPublished" &&
-                completion.exit.value.acceptedFacts === "UnchangedPassiveObservation"
-              if (completion.exit.value._tag === "ActionDeferred" || unchangedPassiveObservation) {
-                // A finite passive read that returned the already-accepted exact report must release its
-                // process-local owner without immediately re-admitting the same proposal. A later accepted
-                // signal may clear this deferral; #265 owns when such an observation signal is scheduled.
-                yield* Ref.update(deferredAt, (deferred) =>
-                  new Map(deferred).set(completion.proposalId, current.acceptedAt)
-                )
+              const localDeferral = deliveryRuntimeLocalDeferralAfter(
+                completion.exit.value,
+                owner.proposal,
+                current.acceptedAt
+              )
+              if (Option.isSome(localDeferral)) {
+                const proposalIds =
+                  localDeferral.value._tag === "PassiveOwnerAttached"
+                    ? proposalsForLiveAction(current.proposedActions, owner.proposal).map(({ id }) => id)
+                    : proposalIsPresent(current.proposedActions, completion.proposalId)
+                      ? [completion.proposalId]
+                      : []
+                if (proposalIds.length > 0) {
+                  yield* Ref.update(
+                    localDeferrals,
+                    (deferred) =>
+                      new Map([
+                        ...deferred,
+                        ...proposalIds.map((proposalId) => [proposalId, localDeferral.value] as const)
+                      ])
+                  )
+                }
                 yield* Ref.update(
                   owners,
                   (owners) => new Map([...owners].filter(([id]) => id !== completion.proposalId))
@@ -325,13 +343,18 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             proposalIds: proposedActions.conflicts.map(({ id }) => id)
           })
         }
-        const deferred = yield* Ref.get(deferredAt)
-        // An action deferred against these exact accepted facts has released its owner and cannot run again
-        // until a later accepted journal position clears that deferral. Its retained proposal must not prevent
-        // the tracker-reconfirmation quiet point that can supply those later facts.
-        const everyProposalAwaitsChangedAcceptedFacts = proposedActions.proposals.every(
-          ({ id }) => deferred.get(id) === current.acceptedAt
-        )
+        const deferred = yield* Ref.get(localDeferrals)
+        const locallyRunnableProposals = proposedActions.proposals.filter(({ id }) => {
+          const localDeferral = deferred.get(id)
+          return (
+            localDeferral === undefined || !deliveryRuntimeLocalDeferralAppliesAt(localDeferral, current.acceptedAt)
+          )
+        })
+        const locallyRunnableFrontier: AvailableProposalFrontier = {
+          ...proposedActions,
+          proposals: locallyRunnableProposals
+        }
+        const everyProposalIsLocallyDeferred = locallyRunnableProposals.length === 0
         const activeRefreshG2Pending =
           phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
         /**
@@ -352,19 +375,19 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               (subject) => subject.runId === correlation.runId && subject.attemptId === correlation.attemptId
             )
           ) &&
-          proposedActions.proposals.length > 0 &&
-          proposedActions.proposals.every(
+          locallyRunnableProposals.length > 0 &&
+          locallyRunnableProposals.every(
             ({ admission: { taskWorkPosition } }) =>
               taskWorkPosition._tag === "TaskWorkPositionRequired" && taskWorkPosition.mode === "ReserveOrReuse"
           )
         const ordinaryTaskWorkAdmissionStalled =
           phase._tag === "OrdinaryDeliveryRuntimePhase"
-            ? classifyTaskWorkAdmissionStalledRuntimeQuiescence(current, proposedActions)
+            ? classifyTaskWorkAdmissionStalledRuntimeQuiescence(current, locallyRunnableFrontier)
             : Option.none()
         if (
           live.size !== 0 ||
           (!activeRefreshG2Pending &&
-            !everyProposalAwaitsChangedAcceptedFacts &&
+            !everyProposalIsLocallyDeferred &&
             !postG2RetainedCapacityBlocks &&
             Option.isNone(ordinaryTaskWorkAdmissionStalled))
         ) {
@@ -373,7 +396,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         if (Option.isSome(ordinaryTaskWorkAdmissionStalled)) {
           return Option.some<DeliveryRuntimeQuiescence>(ordinaryTaskWorkAdmissionStalled.value)
         }
-        const empty: EmptyProposalFrontier = { ...proposedActions, proposals: [] }
+        const empty: EmptyProposalFrontier = { ...locallyRunnableFrontier, proposals: [] }
         if (current.quiescence._tag === "QuiescencePassive") {
           const quiescence: DeliveryRuntimeQuiescence = {
             _tag: "PassiveRuntimeQuiescence",

@@ -8,7 +8,10 @@ import type {
   TrackerGraphState
 } from "./relations.js"
 
-type AvailableProposalFrontier = Extract<DeliveryProposalFrontier, { readonly _tag: "DeliveryProposalsAvailable" }>
+export type AvailableProposalFrontier = Extract<
+  DeliveryProposalFrontier,
+  { readonly _tag: "DeliveryProposalsAvailable" }
+>
 export type EmptyProposalFrontier = Omit<AvailableProposalFrontier, "proposals"> & { readonly proposals: readonly [] }
 type EstablishedTrackerGraph = Extract<TrackerGraphState, { readonly _tag: "GraphEstablished" }>
 type EstablishedRuntimeSnapshot = Omit<DeliveryRuntimeSnapshot, "trackerGraph"> & {

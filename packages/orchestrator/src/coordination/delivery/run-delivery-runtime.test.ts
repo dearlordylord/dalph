@@ -21,7 +21,7 @@ import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
-import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { ActiveTaskClaim, UnclaimedTask } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskLifecycle, type Task } from "../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
@@ -47,7 +47,8 @@ import {
 import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
-  TaskClaimAcquisitionIntendedEvent
+  TaskClaimAcquisitionIntendedEvent,
+  taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
@@ -121,6 +122,10 @@ import type { JournalRecord } from "../../workflow-journal/store.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { deriveJournalResponsibilityFacts } from "../run/recovery-activation.js"
 import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
+import {
+  makeFocusedTaskClaimFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../workflow/task-tracker-facts/observation.js"
 import {
   makePreparedBeginFixture,
   preparedBeginProposalsOf as derivePreparedBeginProposals
@@ -2977,6 +2982,573 @@ it.effect(
         )
       })
     )
+)
+
+it.effect(
+  "keeps exact passive attachments across unrelated accepted facts and returns blocked D and E as admission-stalled",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const [a, b, c, d, e] = ["passive-A", "passive-B", "passive-C", "blocked-D", "blocked-E"].map(
+          preparedAttemptFixture
+        )
+        if (a === undefined || b === undefined || c === undefined || d === undefined || e === undefined) {
+          return yield* Effect.die("five exact prepared-attempt fixtures must be present")
+        }
+        const observed = [a, b, c].map(({ attempt }) =>
+          recoveredProposalFor(
+            RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+              acceptedProgress: {
+                _tag: "ExecutorReportAccepted",
+                ordinal: PlannedAttemptExecutorReportOrdinal.make(1)
+              },
+              plannedAttempt: attempt
+            }),
+            new Set(),
+            attempt
+          )
+        )
+        const blocked = preparedBeginProposalsOf([d, e])
+        const independentClaimTaskId = TaskId.make("passive-independent-claim-read")
+        const independentClaimOperation = makeTaskClaimObservationOperation(
+          OperationId.make("passive-independent-claim-read-operation"),
+          target,
+          independentClaimTaskId
+        )
+        const independentClaimRead = recoveredProposalFor(
+          RunnableFrontierTransition.ObserveResponsibleTaskClaim({
+            operation: independentClaimOperation,
+            taskId: independentClaimTaskId
+          }),
+          new Set([independentClaimOperation.operationId]),
+          a.attempt
+        )
+        const claimRecord = (position: number, event: JournalRecord["event"]): JournalRecord => ({
+          event,
+          key: describeJournalEvent(event).expectedKey,
+          position: JournalPosition.make(position),
+          runId
+        })
+        const claimReadIntent = claimRecord(1, taskTrackerReadIntent(independentClaimOperation))
+        const claimReadObserved = claimRecord(
+          2,
+          taskTrackerFactsObservedEvent(
+            independentClaimOperation.operationId,
+            makeFocusedTaskClaimFactsObserved(
+              independentClaimOperation,
+              UnclaimedTask.make({ taskId: independentClaimTaskId })
+            )
+          )
+        )
+        const claimPublicationHistory = reduceWorkflowJournalHistory(runId, [claimReadIntent, claimReadObserved])
+        if (claimPublicationHistory._tag !== "ValidWorkflowJournalHistory") {
+          return yield* Effect.die(
+            `the independent claim-read publication must be valid Journal history: ${JSON.stringify(claimPublicationHistory.issues)}`
+          )
+        }
+        const acceptedAt = claimReadIntent.position
+        const graphProjection = projectTrackerSnapshot({
+          revision: "passive-attachment-claim-publication",
+          tasks: [...[a, b, c, d, e].map(({ attempt }) => attempt.taskId), independentClaimTaskId].map((id) => ({
+            id,
+            lifecycle: { _tag: "Open" as const },
+            parentTaskId: null,
+            prerequisiteIds: []
+          }))
+        })
+        if (graphProjection._tag === "Invalid") return yield* Effect.die("passive attachment graph must be valid")
+        const capacityPolicy = RunControlPolicy.make({
+          revision: initialRunPolicyRevision,
+          taskExecutionCapacity: TaskWorkCapacity.make(3)
+        })
+        const graph = TrackerGraphState.cases.GraphEstablished.make({
+          observation: makeTestJournaledTrackerGraphObservation({
+            operationId: OperationId.make("passive-attachment-current-graph"),
+            recordedAt: acceptedAt,
+            snapshot: graphProjection.snapshot
+          })
+        })
+        const proposalContributions = yield* SubscriptionRef.make({
+          deliverySettlement: [],
+          issues: [],
+          ticketDelivery: [...observed, independentClaimRead, ...blocked]
+        })
+        const coherent = yield* SubscriptionRef.make<DeliveryRelationInputBundle>({
+          actionInputs: {
+            proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+            reflectionProposals: [],
+            runtimeFacts: {
+              acceptedAt,
+              cancellationApplied: false,
+              pauseCoverage: {
+                _tag: "PauseCoverageGraphEstablished",
+                applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+                observedAt: acceptedAt,
+                snapshot: graphProjection.snapshot
+              },
+              quiescence: { _tag: "QuiescencePassive", reason: "RunPaused" },
+              runId,
+              taskWork: {
+                capacity: TaskWorkCapacity.make(3),
+                held: [a, b, c].map(({ attempt }) => ({
+                  taskId: attempt.taskId,
+                  correlation: plannedAttemptExecutorCorrelation(attempt)
+                }))
+              }
+            },
+            trackerGraphProposals: []
+          },
+          publication: { exactEvidence: [], graph, policy: capacityPolicy }
+        })
+        const relation = yield* deliveryRuntime.pipe(
+          Effect.provide(
+            makeDeliveryRelationsLayer({
+              ...deterministicDeliveryRuntimeSupport(capacityPolicy),
+              coherent: currentSignalFromCurrentFirstStream(SubscriptionRef.changes(coherent)),
+              proposalContributions: currentSignalFromCurrentFirstStream(SubscriptionRef.changes(proposalContributions))
+            })
+          )
+        )
+        const initial = yield* relation.get
+        if (initial.proposedActions._tag !== "DeliveryProposalsAvailable") {
+          return yield* Effect.die("passive attachment proposals must have one owner each")
+        }
+        expect(new Set(initial.proposedActions.proposals.map(({ id }) => id))).toEqual(
+          new Set([...observed, independentClaimRead, ...blocked].map(({ id }) => id))
+        )
+        expect(independentClaimRead.route).toMatchObject({
+          _tag: "AcceptedWorkflowRoute",
+          transition: {
+            _tag: "ObserveResponsibleTaskClaim",
+            operation: { operationId: independentClaimOperation.operationId, taskId: independentClaimTaskId }
+          }
+        })
+        const calls = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+        const observationsSettled = yield* Deferred.make<void>()
+        const observedIds = new Set(observed.map(({ id }) => id))
+        const outcomes = yield* Ref.make(0)
+        const result = yield* runDeliveryRuntimePhase(relation).pipe(
+          Effect.provide(identityLayers),
+          Effect.provideService(
+            DeliveryActionExecutor,
+            DeliveryActionExecutor.of({
+              execute: ({ proposal: action }) =>
+                Effect.gen(function* () {
+                  if (action.id === independentClaimRead.id) {
+                    yield* Deferred.await(observationsSettled)
+                    yield* SubscriptionRef.update(proposalContributions, (current) => ({
+                      ...current,
+                      ticketDelivery: current.ticketDelivery.filter(({ id }) => id !== independentClaimRead.id)
+                    }))
+                    yield* SubscriptionRef.update(coherent, (current) => ({
+                      ...current,
+                      actionInputs: {
+                        ...current.actionInputs,
+                        runtimeFacts: { ...current.actionInputs.runtimeFacts, acceptedAt: claimReadObserved.position }
+                      }
+                    }))
+                    return { _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult
+                  }
+                  if (!observedIds.has(action.id)) return yield* Effect.die("blocked D or E must not execute")
+                  const prior = yield* Ref.get(calls)
+                  if (prior.includes(action.id)) return yield* Effect.die("exact passive owner attached twice")
+                  yield* Ref.update(calls, (current) => [...current, action.id])
+                  const fixture = [a, b, c].find(({ attempt }) =>
+                    action.admission.plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired"
+                      ? action.admission.plannedAttemptProtocol.correlation.attemptId === attempt.attemptId
+                      : false
+                  )
+                  if (fixture === undefined) return yield* Effect.die("passive proposal lost its exact attempt")
+                  return {
+                    _tag: "ExecutorReportPublished",
+                    acceptedFacts: "UnchangedPassiveObservation",
+                    plannedAttempt: fixture.attempt,
+                    proposalId: action.id,
+                    report: {
+                      _tag: "ExecutorWorkExecuting",
+                      correlation: plannedAttemptExecutorCorrelation(fixture.attempt)
+                    }
+                  } satisfies DeliveryActionResult
+                })
+            })
+          ),
+          Effect.provideService(
+            DeliverySemanticTrace,
+            DeliverySemanticTrace.of({
+              emit: (event) =>
+                event._tag === "ActionOutcome" && observedIds.has(event.result.proposalId)
+                  ? Ref.updateAndGet(outcomes, (count) => count + 1).pipe(
+                      Effect.flatMap((count) =>
+                        count === observed.length ? Deferred.succeed(observationsSettled, undefined) : Effect.void
+                      )
+                    )
+                  : Effect.void
+            })
+          )
+        )
+
+        expect(yield* Ref.get(calls)).toEqual(observed.map(({ id }) => id))
+        expect((yield* relation.get).acceptedAt).toBe(claimReadObserved.position)
+        expect(result._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+        expect(result.proposedActions.proposals).toEqual(blocked)
+        if (result._tag !== "TaskWorkAdmissionStalledRuntimeQuiescence") {
+          return yield* Effect.die("locally attached Observe proposals must leave only blocked D and E")
+        }
+        expect(result.taskWork.held.map(({ correlation }) => correlation)).toEqual(
+          [a, b, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
+        )
+      })
+    )
+)
+
+it.effect("moves a passive-attachment marker across an in-flight route refresh and removes it on disappearance", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const fixture = preparedAttemptFixture("same-activation-marker-pruning")
+      const acceptedProgress = {
+        _tag: "ExecutorReportAccepted" as const,
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(1)
+      }
+      const observeTransition = RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+        acceptedProgress,
+        plannedAttempt: fixture.attempt
+      })
+      const observeFor = (task: Task) =>
+        deliveryProposalsOf({
+          acceptedOperationIds: new Set(),
+          fresh: [
+            {
+              step: FreshWorkflowStep.ObservePlannedAttemptExecutorWork({
+                acceptedProgress,
+                plannedAttempt: fixture.attempt,
+                specification: fixture.fresh.step.specification,
+                task
+              }),
+              transition: observeTransition
+            }
+          ],
+          runId,
+          transitions: [observeTransition]
+        }).ticketDelivery[0]
+      const observe = observeFor(fixture.task)
+      const refreshedObserve = observeFor({
+        ...fixture.task,
+        parentTaskId: TaskId.make("same-activation-refreshed-parent")
+      })
+      if (observe === undefined || refreshedObserve === undefined) {
+        return yield* Effect.die("fresh exact Observe proposals must be derivable")
+      }
+      expect(observe.id).not.toBe(refreshedObserve.id)
+      expect(liveActionKeyOf(observe)).toBe(liveActionKeyOf(refreshedObserve))
+      const keeper = trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(45),
+        purpose: "EstablishCurrentGraph",
+        runId,
+        target
+      })
+      const initial = {
+        ...withProposals({ ...base, acceptedAt: JournalPosition.make(45) }, [observe, keeper], 1),
+        taskWork: {
+          capacity: TaskWorkCapacity.make(1),
+          held: [{ taskId: fixture.attempt.taskId, correlation: plannedAttemptExecutorCorrelation(fixture.attempt) }]
+        }
+      } satisfies DeliveryRuntimeEvaluation
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const observeCalls = yield* Ref.make(0)
+      const firstObserveOutcome = yield* Deferred.make<void>()
+      const secondObserveOutcome = yield* Deferred.make<void>()
+      const thirdObserveOutcome = yield* Deferred.make<void>()
+      const firstAttachmentApplied = yield* Deferred.make<void>()
+      const secondObserveStarted = yield* Deferred.make<void>()
+      const finishSecondObserve = yield* Deferred.make<void>()
+      const keeperStarted = yield* Deferred.make<void>()
+      const finishKeeper = yield* Deferred.make<void>()
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal: action }) =>
+          action.id === observe.id
+            ? Ref.updateAndGet(observeCalls, (count) => count + 1).pipe(
+                Effect.tap((count) =>
+                  count === 2
+                    ? Deferred.succeed(secondObserveStarted, undefined).pipe(
+                        Effect.andThen(Deferred.await(finishSecondObserve))
+                      )
+                    : Effect.void
+                ),
+                Effect.as({
+                  _tag: "ExecutorReportPublished" as const,
+                  acceptedFacts: "UnchangedPassiveObservation" as const,
+                  plannedAttempt: fixture.attempt,
+                  proposalId: action.id,
+                  report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                    correlation: plannedAttemptExecutorCorrelation(fixture.attempt)
+                  })
+                } satisfies DeliveryActionResult)
+              )
+            : action.id === keeper.id
+              ? Deferred.succeed(keeperStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(finishKeeper)),
+                  Effect.as({ _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult)
+                )
+              : action.id === refreshedObserve.id
+                ? Effect.die("the attached passive owner must cover its causally refreshed Observe proposal")
+                : Effect.die("the marker-pruning scenario admitted an unknown proposal")
+      })
+      const integrationTargets = yield* makeIntegrationTargetResourceController()
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets).pipe(
+        Effect.provideService(
+          DeliveryRuntimeObservationObserver,
+          DeliveryRuntimeObservationObserver.of({
+            observe: (state) =>
+              Effect.gen(function* () {
+                if (
+                  state.evaluation.proposedActions._tag !== "DeliveryProposalsAvailable" ||
+                  !state.evaluation.proposedActions.proposals.some(({ id }) => id === observe.id) ||
+                  state.liveOwners.some((owner) => owner.proposal.id === observe.id) ||
+                  !(yield* Deferred.isDone(firstObserveOutcome))
+                ) {
+                  return
+                }
+                yield* Deferred.succeed(firstAttachmentApplied, undefined)
+              })
+          })
+        )
+      )
+      const runtime = yield* runDeliveryRuntimeQuiescence(relation).pipe(
+        Effect.provide(plannerLayer),
+        Effect.provide(deterministicOperationIdAllocatorLayer("runtime-passive-marker-pruning")),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(
+          DeliverySemanticTrace,
+          DeliverySemanticTrace.of({
+            emit: (event) =>
+              event._tag === "ActionOutcome" && event.result.proposalId === observe.id
+                ? Ref.get(observeCalls).pipe(
+                    Effect.flatMap((count) =>
+                      Deferred.succeed(
+                        count === 1 ? firstObserveOutcome : count === 2 ? secondObserveOutcome : thirdObserveOutcome,
+                        undefined
+                      )
+                    )
+                  )
+                : Effect.void
+          })
+        ),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(firstAttachmentApplied)
+      yield* Deferred.await(keeperStarted)
+      const markerRemoved = yield* capabilities.resources.runtimeObservation.changes.pipe(
+        Stream.filter(
+          (state) =>
+            state._tag === "Ready" &&
+            state.evaluation.proposedActions._tag === "DeliveryProposalsAvailable" &&
+            !state.evaluation.proposedActions.proposals.some(({ id }) => id === observe.id)
+        ),
+        Stream.runHead,
+        Effect.forkChild
+      )
+      const withoutObserve = {
+        ...initial,
+        acceptedAt: JournalPosition.make(46),
+        proposedActions: { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [keeper] }
+      }
+      yield* relation.publish(withoutObserve)
+      expect(Option.isSome(yield* Fiber.join(markerRemoved))).toBe(true)
+
+      yield* relation.publish({
+        ...withoutObserve,
+        proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [observe, keeper] }
+      })
+      yield* Deferred.await(secondObserveStarted)
+      const inFlightRouteRefreshed = yield* capabilities.resources.runtimeObservation.changes.pipe(
+        Stream.filter(
+          (state) =>
+            state._tag === "Ready" &&
+            state.evaluation.proposedActions._tag === "DeliveryProposalsAvailable" &&
+            !state.evaluation.proposedActions.proposals.some(({ id }) => id === observe.id) &&
+            state.evaluation.proposedActions.proposals.some(({ id }) => id === refreshedObserve.id) &&
+            state.liveOwners.some((owner) => owner.proposal.id === observe.id)
+        ),
+        Stream.runHead,
+        Effect.forkChild
+      )
+      yield* relation.publish({
+        ...withoutObserve,
+        proposedActions: {
+          _tag: "DeliveryProposalsAvailable",
+          isolatedIssues: [],
+          proposals: [refreshedObserve, keeper]
+        }
+      })
+      expect(Option.isSome(yield* Fiber.join(inFlightRouteRefreshed))).toBe(true)
+      yield* Deferred.succeed(finishSecondObserve, undefined)
+      yield* Deferred.await(secondObserveOutcome)
+      const inFlightOwnerRemoved = yield* capabilities.resources.runtimeObservation.changes.pipe(
+        Stream.filter(
+          (state) =>
+            state._tag === "Ready" &&
+            state.evaluation.proposedActions._tag === "DeliveryProposalsAvailable" &&
+            state.evaluation.proposedActions.proposals.some(({ id }) => id === refreshedObserve.id) &&
+            !state.liveOwners.some((owner) => owner.proposal.id === observe.id)
+        ),
+        Stream.runHead,
+        Effect.forkChild
+      )
+      expect(Option.isSome(yield* Fiber.join(inFlightOwnerRemoved))).toBe(true)
+      expect(yield* Ref.get(observeCalls)).toBe(2)
+
+      const transferredMarkerRemoved = yield* capabilities.resources.runtimeObservation.changes.pipe(
+        Stream.filter(
+          (state) =>
+            state._tag === "Ready" &&
+            state.evaluation.proposedActions._tag === "DeliveryProposalsAvailable" &&
+            !state.evaluation.proposedActions.proposals.some(({ id }) => id === refreshedObserve.id)
+        ),
+        Stream.runHead,
+        Effect.forkChild
+      )
+      yield* relation.publish(withoutObserve)
+      expect(Option.isSome(yield* Fiber.join(transferredMarkerRemoved))).toBe(true)
+      yield* relation.publish({
+        ...withoutObserve,
+        proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [observe, keeper] }
+      })
+      yield* Deferred.await(thirdObserveOutcome)
+      expect(yield* Ref.get(observeCalls)).toBe(3)
+
+      yield* relation.publish({
+        ...withoutObserve,
+        proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }
+      })
+      yield* Deferred.succeed(finishKeeper, undefined)
+      expect((yield* Fiber.join(runtime))._tag).toBe("PassiveRuntimeQuiescence")
+    })
+  )
+)
+
+it.effect("waits for changed accepted facts after unchanged reconciliation instead of retaining an attachment", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const fixture = preparedAttemptFixture("unchanged-reconciliation")
+      const reconcile = recoveredProposalFor(
+        RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt: fixture.attempt }),
+        new Set(),
+        fixture.attempt
+      )
+      const keeper = trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(50),
+        purpose: "EstablishCurrentGraph",
+        runId,
+        target
+      })
+      const initial = {
+        ...withProposals({ ...base, acceptedAt: JournalPosition.make(50) }, [reconcile, keeper], 1),
+        taskWork: {
+          capacity: TaskWorkCapacity.make(1),
+          held: [{ taskId: fixture.attempt.taskId, correlation: plannedAttemptExecutorCorrelation(fixture.attempt) }]
+        }
+      } satisfies DeliveryRuntimeEvaluation
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const reconcileCalls = yield* Ref.make(0)
+      const firstReconcileOutcome = yield* Deferred.make<void>()
+      const secondReconcileOutcome = yield* Deferred.make<void>()
+      const firstDeferralApplied = yield* Deferred.make<void>()
+      const sameAcceptedFactsRequested = yield* Deferred.make<void>()
+      const sameAcceptedFactsApplied = yield* Deferred.make<void>()
+      const keeperStarted = yield* Deferred.make<void>()
+      const finishKeeper = yield* Deferred.make<void>()
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal: action }) =>
+          action.id === reconcile.id
+            ? Ref.updateAndGet(reconcileCalls, (count) => count + 1).pipe(
+                Effect.as({
+                  _tag: "ExecutorReportPublished",
+                  acceptedFacts: "UnchangedPassiveObservation",
+                  plannedAttempt: fixture.attempt,
+                  proposalId: action.id,
+                  report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                    correlation: plannedAttemptExecutorCorrelation(fixture.attempt)
+                  })
+                } satisfies DeliveryActionResult)
+              )
+            : action.id === keeper.id
+              ? Deferred.succeed(keeperStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(finishKeeper)),
+                  Effect.as({ _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult)
+                )
+              : Effect.die("the unchanged-reconciliation scenario admitted an unknown proposal")
+      })
+      const integrationTargets = yield* makeIntegrationTargetResourceController()
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets).pipe(
+        Effect.provideService(
+          DeliveryRuntimeObservationObserver,
+          DeliveryRuntimeObservationObserver.of({
+            observe: (state) =>
+              Effect.gen(function* () {
+                if (
+                  state.evaluation.acceptedAt !== JournalPosition.make(50) ||
+                  state.evaluation.proposedActions._tag !== "DeliveryProposalsAvailable" ||
+                  !state.evaluation.proposedActions.proposals.some(({ id }) => id === reconcile.id) ||
+                  state.liveOwners.some((owner) => owner.proposal.id === reconcile.id) ||
+                  !(yield* Deferred.isDone(firstReconcileOutcome))
+                ) {
+                  return
+                }
+                if (yield* Deferred.isDone(sameAcceptedFactsRequested)) {
+                  yield* Deferred.succeed(sameAcceptedFactsApplied, undefined)
+                } else {
+                  yield* Deferred.succeed(firstDeferralApplied, undefined)
+                }
+              })
+          })
+        )
+      )
+      const runtime = yield* runDeliveryRuntimeQuiescence(relation).pipe(
+        Effect.provide(plannerLayer),
+        Effect.provide(deterministicOperationIdAllocatorLayer("runtime-unchanged-reconciliation")),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(
+          DeliverySemanticTrace,
+          DeliverySemanticTrace.of({
+            emit: (event) =>
+              event._tag === "ActionOutcome" && event.result.proposalId === reconcile.id
+                ? Ref.get(reconcileCalls).pipe(
+                    Effect.flatMap((count) =>
+                      Deferred.succeed(count === 1 ? firstReconcileOutcome : secondReconcileOutcome, undefined)
+                    )
+                  )
+                : Effect.void
+          })
+        ),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(firstDeferralApplied)
+      yield* Deferred.await(keeperStarted)
+      yield* Deferred.succeed(sameAcceptedFactsRequested, undefined)
+      yield* relation.publish({ ...initial })
+      yield* Deferred.await(sameAcceptedFactsApplied)
+      expect(yield* Ref.get(reconcileCalls)).toBe(1)
+      yield* relation.publish({ ...initial, acceptedAt: JournalPosition.make(51) })
+      yield* Deferred.await(secondReconcileOutcome)
+      expect(yield* Ref.get(reconcileCalls)).toBe(2)
+
+      yield* relation.publish({
+        ...initial,
+        acceptedAt: JournalPosition.make(51),
+        proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }
+      })
+      yield* Deferred.succeed(finishKeeper, undefined)
+      expect((yield* Fiber.join(runtime))._tag).toBe("PassiveRuntimeQuiescence")
+    })
+  )
 )
 
 it.effect(

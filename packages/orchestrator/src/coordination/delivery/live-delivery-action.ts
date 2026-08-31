@@ -4,6 +4,10 @@ import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { DeliveryActionProposal, DeliveryProposalId } from "./delivery-action-proposal.js"
 import type { DeliveryProposalFrontier } from "./relations.js"
+import {
+  deliveryRuntimeLocalDeferralAppliesAt,
+  type DeliveryRuntimeLocalDeferral
+} from "./delivery-runtime-local-deferral.js"
 
 /**
  * Process-local identity of an action that must not overlap itself. A recovered
@@ -161,13 +165,17 @@ export const proposalIsAvailable = (
   live: ReadonlyMap<DeliveryProposalId, unknown>,
   liveActionKeys: ReadonlySet<LiveDeliveryActionKey>,
   liveOperationIds: ReadonlySet<OperationId>,
-  deferred: ReadonlyMap<DeliveryProposalId, JournalPosition | null>,
+  deferred: ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>,
   acceptedAt: JournalPosition | null
-): boolean =>
-  !live.has(proposal.id) &&
-  !liveActionKeys.has(liveActionKeyOf(proposal)) &&
-  deferred.get(proposal.id) !== acceptedAt &&
-  (proposal.waitsForLiveOperationId === null || !liveOperationIds.has(proposal.waitsForLiveOperationId))
+): boolean => {
+  const localDeferral = deferred.get(proposal.id)
+  return (
+    !live.has(proposal.id) &&
+    !liveActionKeys.has(liveActionKeyOf(proposal)) &&
+    (localDeferral === undefined || !deliveryRuntimeLocalDeferralAppliesAt(localDeferral, acceptedAt)) &&
+    (proposal.waitsForLiveOperationId === null || !liveOperationIds.has(proposal.waitsForLiveOperationId))
+  )
+}
 
 /** A proposal remains current only while its exact identity is present in the relation frontier. */
 export const proposalIsPresent = (frontier: DeliveryProposalFrontier, proposalId: DeliveryProposalId): boolean =>
@@ -175,8 +183,17 @@ export const proposalIsPresent = (frontier: DeliveryProposalFrontier, proposalId
     ? frontier.proposals.some(({ id }) => id === proposalId)
     : frontier.conflicts.some(({ id }) => id === proposalId)
 
+/** Current exact proposals covered by one already-installed process-local action owner. */
+export const proposalsForLiveAction = (
+  frontier: DeliveryProposalFrontier,
+  proposal: DeliveryActionProposal
+): ReadonlyArray<DeliveryActionProposal> =>
+  frontier._tag === "DeliveryProposalsAvailable"
+    ? frontier.proposals.filter((candidate) => liveActionKeyOf(candidate) === liveActionKeyOf(proposal))
+    : []
+
 /** A causally refreshed proposal still names the same process-local boundary action. */
 export const liveActionIsPresent = (frontier: DeliveryProposalFrontier, proposal: DeliveryActionProposal): boolean =>
   frontier._tag === "DeliveryProposalsAvailable"
-    ? frontier.proposals.some((candidate) => liveActionKeyOf(candidate) === liveActionKeyOf(proposal))
+    ? proposalsForLiveAction(frontier, proposal).length > 0
     : frontier.conflicts.some(({ id }) => id === proposal.id)
