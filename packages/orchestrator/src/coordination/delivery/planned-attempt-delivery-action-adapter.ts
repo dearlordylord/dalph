@@ -292,6 +292,15 @@ const observeOrAttachPassiveOwner = Effect.fn("DeliveryAction.observeOrAttachPas
   })
 })
 
+const suspendAndObserveIfExecuting = Effect.fn("DeliveryAction.suspendAndObserveIfExecuting")(function* (
+  permit: PlannedAttemptProtocolPermit,
+  plannedAttempt: Parameters<typeof requestPlannedAttemptExecutorSuspensionWithPermit>[1]
+) {
+  const report = yield* requestPlannedAttemptExecutorSuspensionWithPermit(permit, plannedAttempt)
+  if (report._tag !== "ExecutorWorkExecuting") return report
+  return (yield* observeOrAttachPassiveOwner(permit, plannedAttempt)).report
+})
+
 const executorReportFor = (
   transition: ExecutorTransition,
   correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>,
@@ -313,7 +322,7 @@ const executorReportFor = (
             reconcileOrObservePlannedAttemptExecutorStateResultWithPermit(permit, transition.plannedAttempt)
           )
         : lease.withPlannedAttemptProtocol(correlation, (permit) =>
-            requestPlannedAttemptExecutorSuspensionWithPermit(permit, transition.plannedAttempt).pipe(
+            suspendAndObserveIfExecuting(permit, transition.plannedAttempt).pipe(
               Effect.map((report) => ({ acceptedFacts: "Changed" as const, report }))
             )
           )

@@ -26,7 +26,7 @@ import {
 } from "@dalph/contracts"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { it as effectIt } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Option, Ref, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Stream } from "effect"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { GraphProjectionError, projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -3224,6 +3224,133 @@ describe("delivery proposal route matrix", () => {
       expect(yield* Ref.get(appends)).toBe(0)
       expect(yield* Ref.get(releases)).toBe(0)
     })
+  )
+
+  effectIt.effect("after Suspend returns Executing observes exact Safe and releases only that attempt", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+        const foreignAttempt = PlannedTaskAttempt.make({
+          ...plannedAttempt,
+          attemptId: AttemptId.make("route-matrix-foreign-attempt"),
+          branch: TaskBranchRef.make("refs/heads/dalph/B"),
+          executor: TaskExecutorLocator.make("executor:foreign"),
+          taskId: TaskId.make("B"),
+          worktree: WorktreeLocator.make("/worktrees/B")
+        })
+        const foreignCorrelation = plannedAttemptExecutorCorrelation(foreignAttempt)
+        const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+        const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+        const transition = RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
+        const proposal = proposalsFor(transition).proposals[0]
+        if (proposal === undefined || !isIdentityFreeProposal(proposal)) {
+          return yield* Effect.die("missing executor suspension proposal")
+        }
+
+        const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(acceptedExecutingExecutorRecords())
+        const journal = appendableJournalFor(records)
+        const protocolController = yield* makePlannedAttemptProtocolController()
+        const admission = yield* makeDeliveryRuntimeAdmissionController(
+          {
+            capacity: TaskWorkCapacity.make(2),
+            held: [
+              { correlation, taskId: plannedAttempt.taskId },
+              { correlation: foreignCorrelation, taskId: foreignAttempt.taskId }
+            ]
+          },
+          yield* makeIntegrationTargetResourceController(),
+          (yield* makeApplicationExitLifecycle()).admission
+        ).pipe(Effect.provideService(PlannedAttemptProtocolController, protocolController))
+        const suspensionCalls = yield* Ref.make(0)
+        const attachments = yield* Ref.make(0)
+        const lifecycleChanges = yield* Queue.unbounded<PlannedAttemptExecutorProjection>()
+        const changePublished = yield* Deferred.make<void>()
+        const processScope = yield* Effect.scope
+
+        const publication = PassivePlannedAttemptProjectionPublication.of({
+          publish: (attempt, projection) =>
+            protocolController
+              .withPermit(plannedAttemptExecutorCorrelation(attempt), (permit) =>
+                publishPlannedAttemptExecutorProjectionResultWithPermit(permit, attempt, projection).pipe(
+                  Effect.provideService(InRunJournal, journal)
+                )
+              )
+              .pipe(
+                Effect.tap((result) =>
+                  result.report._tag === "ExecutorWorkSafelySuspended" || result.report._tag === "ExecutorWorkTerminal"
+                    ? admission.releasePlannedAttemptPosition(result.report.correlation)
+                    : Effect.void
+                )
+              ),
+          publishWithPermit: (permit, attempt, projection) =>
+            publishPlannedAttemptExecutorProjectionResultWithPermit(permit, attempt, projection).pipe(
+              Effect.provideService(InRunJournal, journal)
+            )
+        })
+        const observer = PassivePlannedAttemptObserver.of({
+          attach: (input) =>
+            Effect.gen(function* () {
+              yield* Ref.update(attachments, (count) => count + 1)
+              yield* Queue.take(lifecycleChanges).pipe(
+                Effect.flatMap(input.publishChange),
+                Effect.andThen(Deferred.succeed(changePublished, undefined)),
+                Effect.forkIn(processScope)
+              )
+              return yield* input.publishCurrent(
+                PlannedAttemptExecutorProjection.cases.Exact.make({ report: executing })
+              )
+            })
+        })
+
+        const result = yield* executePlannedAttemptTransitionRaw({ _tag: "IdentityFreeAction", proposal }, transition, {
+          ...inertLease,
+          releasePlannedAttemptPosition: (subject) =>
+            admission.releasePlannedAttemptPosition(subject).pipe(Effect.asVoid),
+          withPlannedAttemptProtocol: (subject, effect) => protocolController.withPermit(subject, effect)
+        }).pipe(
+          Effect.provideService(InRunJournal, journal),
+          Effect.provideService(
+            PlannedAttemptExecutor,
+            PlannedAttemptExecutor.of({
+              observe: () => Effect.die("Suspend attachment reads through the passive observer"),
+              requestSuspension: (attempt) =>
+                Ref.update(suspensionCalls, (count) => count + 1).pipe(
+                  Effect.as(
+                    PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                      correlation: plannedAttemptExecutorCorrelation(attempt)
+                    })
+                  )
+                ),
+              begin: () => Effect.die("suspension must not begin work"),
+              resume: () => Effect.die("suspension must not resume work")
+            })
+          ),
+          Effect.provideService(PassivePlannedAttemptObserver, observer),
+          Effect.provideService(PassivePlannedAttemptProjectionPublication, publication)
+        )
+
+        expect(result).toMatchObject({ _tag: "ExecutorReportPublished", report: executing })
+        expect(yield* Ref.get(suspensionCalls)).toBe(1)
+        expect(yield* Ref.get(attachments)).toBe(1)
+        expect((yield* admission.snapshot).positions.get(plannedAttempt.taskId)).toMatchObject({ correlation })
+        expect((yield* admission.snapshot).positions.get(foreignAttempt.taskId)).toMatchObject({
+          correlation: foreignCorrelation
+        })
+
+        yield* Queue.offer(lifecycleChanges, PlannedAttemptExecutorProjection.cases.Exact.make({ report: safe }))
+        yield* Deferred.await(changePublished)
+
+        expect((yield* admission.snapshot).positions.has(plannedAttempt.taskId)).toBe(false)
+        expect((yield* admission.snapshot).positions.get(foreignAttempt.taskId)).toMatchObject({
+          correlation: foreignCorrelation
+        })
+        expect(
+          (yield* Ref.get(records)).flatMap(({ event }) =>
+            event._tag === "PlannedAttemptExecutorWorkReported" ? [event.report._tag] : []
+          )
+        ).toEqual(["ExecutorWorkExecuting", "ExecutorWorkSafelySuspended"])
+      })
+    )
   )
 
   const assertPassiveFinalProjection = (kind: "Safe" | "Terminal") =>

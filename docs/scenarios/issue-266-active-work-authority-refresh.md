@@ -461,6 +461,13 @@ traceability; scenario-owned prose uses `ExecutorWorkExecuting`,
   an unchanged accepted Safe or Terminal passive replay` in
   `packages/orchestrator/src/control/task-work-capacity.test.ts` separately own
   the generic restart/capacity rule; they do not replace the A/B/C chronology.
+- **Existing direct test:** `after Suspend returns Executing observes exact
+  Safe and releases only that attempt` in
+  `packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts`
+  proves the production action adapter sends one Suspend, attaches the existing
+  passive owner when that command settles as still Executing, retains both the
+  affected and an independent task-work position, and releases only the exact
+  affected attempt after its later Safe report is accepted.
 - **Existing test:** `accepted executor report publication never refreshes
   tracker or Git authority` covers accepted publication of
   `ExecutorWorkExecuting`, `ExecutorWorkSafelySuspended`, and
