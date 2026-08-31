@@ -771,6 +771,173 @@ it.effect("uses current-first control state: paused restart is passive and accep
   )
 )
 
+it.effect("accepted Pause suppresses active refresh until Unpause completes its ordinary current read", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const acceptedControl = yield* Deferred.make<AcceptedRunControlObserver>()
+      const handoffIdle = yield* Queue.unbounded<void>()
+      const unpauseReadStarted = yield* Deferred.make<void>()
+      const releaseUnpauseRead = yield* Deferred.make<void>()
+      const activeReadStarted = yield* Deferred.make<void>()
+      const ordinaryReads = yield* Ref.make(0)
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-pause-unpause-active-refresh"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Effect.gen(function* () {
+              const ordinal = yield* Ref.updateAndGet(ordinaryReads, (current) => current + 1)
+              if (ordinal === 1) {
+                yield* Ref.update(chronology, (current) => [...current, "startup current read completed"])
+              } else {
+                yield* Ref.update(chronology, (current) => [...current, "Unpause current read started"])
+                yield* Deferred.succeed(unpauseReadStarted, undefined)
+                yield* Deferred.await(releaseUnpauseRead)
+                yield* Ref.update(chronology, (current) => [...current, "Unpause current read completed"])
+              }
+              return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+            }),
+          activateActiveWorkAuthorityRefresh: (source) =>
+            Ref.update(chronology, (current) => [...current, `active read started from ${source}`]).pipe(
+              Effect.andThen(Deferred.succeed(activeReadStarted, undefined)),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: ({ control }) => Deferred.succeed(acceptedControl, control),
+          onActivationHandoffIdle: () => Queue.offer(handoffIdle, undefined),
+          onFailure: () => Effect.void
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Queue.take(handoffIdle)
+            const control = yield* Deferred.await(acceptedControl)
+
+            yield* control("Pause")
+            yield* owner.hint(RunReactivationHint.TrackerNotification())
+            yield* owner.hint(RunReactivationHint.Timer())
+            yield* TestClock.adjust("2 hours")
+            expect(yield* Deferred.isDone(activeReadStarted)).toBe(false)
+
+            yield* control("Unpause")
+            yield* Deferred.await(unpauseReadStarted)
+            expect(yield* Deferred.isDone(activeReadStarted)).toBe(false)
+            yield* Deferred.succeed(releaseUnpauseRead, undefined)
+            yield* Queue.take(handoffIdle)
+
+            yield* owner.hint(RunReactivationHint.TrackerNotification())
+            yield* Deferred.await(activeReadStarted)
+            expect(yield* Ref.get(chronology)).toEqual([
+              "startup current read completed",
+              "Unpause current read started",
+              "Unpause current read completed",
+              "active read started from TrackerNotification"
+            ])
+          })
+      )
+    })
+  )
+)
+
+it.effect("starts each restarted owner with fresh timer, hint, and coalescing state", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const runId = RunId.make("test-run-active-refresh-restart")
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+      const firstActiveStarted = yield* Deferred.make<void>()
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const shell = yield* makeTestExitShell
+          const handoffIdle = yield* Queue.unbounded<void>()
+          yield* provideOwner(
+            shell.shell,
+            {
+              runId,
+              activationInterval: "1 hour",
+              failureCooldown: "1 second",
+              readControl: Effect.succeed("RunUnpaused" as const),
+              activate: () =>
+                Ref.update(chronology, (current) => [...current, "process 1 startup current read"]).pipe(
+                  Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+                ),
+              activateActiveWorkAuthorityRefresh: (source) =>
+                Ref.update(chronology, (current) => [...current, `process 1 active read from ${source}`]).pipe(
+                  Effect.andThen(Deferred.succeed(firstActiveStarted, undefined)),
+                  Effect.andThen(Effect.never)
+                ),
+              isTerminationFailure: () => false,
+              installAcceptedRunReactivationObservers: () => Effect.void,
+              onActivationHandoffIdle: () => Queue.offer(handoffIdle, undefined),
+              onFailure: () => Effect.void
+            },
+            (owner) =>
+              Effect.gen(function* () {
+                yield* Queue.take(handoffIdle)
+                yield* TestClock.adjust("59 minutes")
+                yield* owner.hint(RunReactivationHint.TrackerNotification())
+                yield* Deferred.await(firstActiveStarted)
+                yield* owner.hint(RunReactivationHint.Timer())
+                yield* owner.hint(RunReactivationHint.AcceptedFactPublication())
+              })
+          )
+        })
+      )
+
+      const secondActiveStarted = yield* Deferred.make<void>()
+      const secondShell = yield* makeTestExitShell
+      const secondHandoffIdle = yield* Queue.unbounded<void>()
+      yield* provideOwner(
+        secondShell.shell,
+        {
+          runId,
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Ref.update(chronology, (current) => [...current, "process 2 startup current read"]).pipe(
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          activateActiveWorkAuthorityRefresh: (source) =>
+            Ref.update(chronology, (current) => [...current, `process 2 active read from ${source}`]).pipe(
+              Effect.andThen(Deferred.succeed(secondActiveStarted, undefined)),
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onActivationHandoffIdle: () => Queue.offer(secondHandoffIdle, undefined),
+          onFailure: () => Effect.void
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Queue.take(secondHandoffIdle)
+            yield* TestClock.adjust("1 minute")
+            expect(yield* Deferred.isDone(secondActiveStarted)).toBe(false)
+            expect(yield* Ref.get(chronology)).toEqual([
+              "process 1 startup current read",
+              "process 1 active read from TrackerNotification",
+              "process 2 startup current read"
+            ])
+
+            yield* owner.hint(RunReactivationHint.TrackerNotification())
+            yield* Deferred.await(secondActiveStarted)
+            expect(yield* Ref.get(chronology)).toEqual([
+              "process 1 startup current read",
+              "process 1 active read from TrackerNotification",
+              "process 2 startup current read",
+              "process 2 active read from TrackerNotification"
+            ])
+          })
+      )
+    })
+  )
+)
+
 it.effect("replays durable Pause between observer attachment and the mandatory current read", () =>
   Effect.scoped(
     Effect.gen(function* () {

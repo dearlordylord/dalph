@@ -601,6 +601,118 @@ it.effect("captures only unfinished Running responsibilities at the active refre
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
+it.effect("lets an admitted active refresh record its read outcome before Exit rejects a later refresh", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-active-refresh-exit")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      yield* storage.beginRun(runId, target, initialPolicy)
+      const running = captureTestAttempt(runId, "active-refresh-exit", "active-refresh-exit")
+      yield* appendExecutorHistory(storage, runId, running, "Running")
+
+      const readStarted = yield* Deferred.make<void>()
+      const releaseRead = yield* Deferred.make<void>()
+      const readOperationId = OperationId.make("journaled-bootstrap-active-refresh-exit-read")
+      const trackerGraphReader = TrackerGraphReader.of({
+        read: () =>
+          Deferred.succeed(readStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseRead)),
+            Effect.as(settledGraph.snapshot)
+          ),
+        readTaskWorkSpecification: () => Effect.die("unused")
+      })
+      const correlation = plannedAttemptExecutorCorrelation(running)
+      const executor = PlannedAttemptExecutor.of({
+        begin: () => Effect.die("the recovered executing attempt must not begin again"),
+        observe: () => Effect.die("application Exit suspends through the command boundary"),
+        requestSuspension: () =>
+          Effect.succeed(PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })),
+        resume: () => Effect.die("application Exit must not resume executor work")
+      })
+      const applicationExit = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        storage,
+        trackerGraphReader,
+        applicationExit,
+        undefined,
+        defaultOwnership,
+        undefined,
+        noopJournalMaintenanceObservation,
+        undefined,
+        executor
+      )
+      const enteredLaterRefresh = yield* Ref.make(false)
+      const read = makeTrackerGraphObservationOperation(
+        { _tag: "ExecutingWorkAuthorityCheck" },
+        readOperationId,
+        target
+      )
+      const admittedRefresh = yield* bootstrap
+        .activateActiveWorkAuthorityRefresh(
+          target,
+          Effect.die("the established Run must not reread its initial policy"),
+          runId,
+          () =>
+            Effect.gen(function* () {
+              const interpreter = yield* WorkflowInterpreter
+              yield* interpreter.readTrackerGraph(read)
+              return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            }),
+          "TrackerNotification"
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(readStarted)
+
+      expect(
+        (yield* storage.read(runId)).filter(
+          ({ event }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" && event.operation.operationId === readOperationId
+        )
+      ).toHaveLength(1)
+      expect(
+        (yield* storage.read(runId)).filter(
+          ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === readOperationId
+        )
+      ).toHaveLength(0)
+
+      const exiting = yield* applicationExit.requestBoundary.requestExit.pipe(Effect.forkChild)
+      yield* applicationExit.awaitExitRequested
+      const laterRefresh = yield* bootstrap
+        .activateActiveWorkAuthorityRefresh(
+          target,
+          Effect.die("the established Run must not reread its initial policy"),
+          runId,
+          () =>
+            Ref.set(enteredLaterRefresh, true).pipe(
+              Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+            ),
+          "Timer"
+        )
+        .pipe(Effect.forkChild)
+
+      expect(exiting.pollUnsafe()).toBeUndefined()
+      expect(yield* Ref.get(enteredLaterRefresh)).toBe(false)
+      yield* Deferred.succeed(releaseRead, undefined)
+
+      expect(yield* Fiber.join(admittedRefresh)).toEqual({
+        _tag: "RunMustRemainActive",
+        reason: "UnsettledResponsibility"
+      })
+      expect(yield* Fiber.join(exiting)).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      expect(yield* Fiber.join(laterRefresh).pipe(Effect.flip)).toMatchObject({ _tag: "ApplicationExiting" })
+      expect(yield* Ref.get(enteredLaterRefresh)).toBe(false)
+      expect(
+        (yield* storage.read(runId)).filter(
+          ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === readOperationId
+        )
+      ).toHaveLength(1)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 const withTemporaryDatabase = <A, E, R>(use: (filename: JournalDatabaseLocator) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem
