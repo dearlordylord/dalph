@@ -61,7 +61,7 @@ import {
   GitTargetLineage,
   GitTargetLineageReadFailure,
   Integrator,
-  IntegratorSessionCorrelation,
+  IntegratorRunCorrelation,
   IntegratorGit,
   IntegratorGitReadFailure,
   IntegratorResult,
@@ -444,19 +444,25 @@ const authoredTargetPromotionRequestOf = (request: TargetPromotionRequest, runId
   })
 }
 
-/** Authored stories use the cassette run placeholder while preserving every other Integrator request fact exactly. */
-const authoredIntegratorSessionCorrelationOf = (
-  correlation: IntegratorSessionCorrelation,
+/** Authored stories use the cassette Run placeholder while preserving the exact Integrator session and run ordinal. */
+const authoredIntegratorRunCorrelationOf = (
+  correlation: IntegratorRunCorrelation,
   runId: RunId
-): IntegratorSessionCorrelation => {
-  const normalized = Schema.decodeUnknownSync(IntegratorSessionCorrelation)(
+): IntegratorRunCorrelation => {
+  const normalized = Schema.decodeUnknownSync(IntegratorRunCorrelation)(
     JSON.parse(JSON.stringify(correlation).replaceAll(String(runId), "$authored-run"))
   )
-  return Schema.decodeUnknownSync(IntegratorSessionCorrelation)({
+  return Schema.decodeUnknownSync(IntegratorRunCorrelation)({
     ...normalized,
-    acceptedResult: {
-      ...normalized.acceptedResult,
-      evidenceManifest: { ...normalized.acceptedResult.evidenceManifest, digest: authoredAcceptanceManifestDigest }
+    session: {
+      ...normalized.session,
+      acceptedResult: {
+        ...normalized.session.acceptedResult,
+        evidenceManifest: {
+          ...normalized.session.acceptedResult.evidenceManifest,
+          digest: authoredAcceptanceManifestDigest
+        }
+      }
     }
   })
 }
@@ -1951,7 +1957,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           Integrator.of({
             prepare: (request) =>
               Effect.gen(function* () {
-                const authoredCorrelation = authoredIntegratorSessionCorrelationOf(request.correlation.session, runId)
+                const authoredCorrelation = authoredIntegratorRunCorrelationOf(request.correlation, runId)
                 yield* cursor.consumeIntegratorRequest(authoredCorrelation)
                 const authored = yield* cursor.consumeIntegratorResult
                 return Match.valueTags(authored.result, {

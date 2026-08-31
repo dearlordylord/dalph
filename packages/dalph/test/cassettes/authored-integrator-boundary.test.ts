@@ -20,6 +20,8 @@ import {
   FixtureTarget,
   IntegratorCandidateResourceLocator,
   IntegratorCandidateText,
+  IntegratorRunCorrelation,
+  IntegratorRunOrdinal,
   IntegratorSessionCorrelation,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
@@ -66,7 +68,8 @@ const correlation = IntegratorSessionCorrelation.make({
   targetLineageObservedAt: JournalPosition.make(3)
 })
 
-const requestItem = AuthoredCassetteStoryItem.cases.IntegratorRequestReceived.make({ correlation })
+const runOne = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: correlation })
+const requestItem = AuthoredCassetteStoryItem.cases.IntegratorRequestReceived.make({ correlation: runOne })
 const preparedResultItem = AuthoredCassetteStoryItem.cases.IntegratorResultReturned.make({
   result: { _tag: "PreparedCandidate", candidateText }
 })
@@ -113,7 +116,7 @@ it.effect("asserts the exact request correlation before consuming its public res
       })
     ])
 
-    expect((yield* cursor.consumeIntegratorRequest(correlation)).correlation).toEqual(correlation)
+    expect((yield* cursor.consumeIntegratorRequest(runOne)).correlation).toEqual(runOne)
     expect((yield* cursor.consumeIntegratorResult).result).toEqual({ _tag: "PreparedCandidate", candidateText })
     expect((yield* cursor.consumeIntegratorGitObservation(candidateText)).observation).toEqual(gitObservation)
   })
@@ -176,7 +179,11 @@ it.effect("rejects a foreign request correlation and a Git observation for anoth
   Effect.gen(function* () {
     const foreignCorrelation = IntegratorSessionCorrelation.make({ ...correlation, expectedTargetHead: sha("c") })
     const requestCursor = yield* makeStoryCursor([requestItem])
-    const requestResult = yield* requestCursor.consumeIntegratorRequest(foreignCorrelation).pipe(Effect.exit)
+    const requestResult = yield* requestCursor
+      .consumeIntegratorRequest(
+        IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: foreignCorrelation })
+      )
+      .pipe(Effect.exit)
     expect(Exit.isFailure(requestResult)).toBe(true)
     if (Exit.isFailure(requestResult)) {
       const reason = requestResult.cause.reasons[0]
@@ -199,6 +206,27 @@ it.effect("rejects a foreign request correlation and a Git observation for anoth
     expect(Exit.isFailure(observationResult)).toBe(true)
     if (Exit.isFailure(observationResult)) {
       const reason = observationResult.cause.reasons[0]
+      expect(reason).toBeDefined()
+      if (reason !== undefined) {
+        expect(Cause.isFailReason(reason)).toBe(true)
+        if (Cause.isFailReason(reason)) expect(reason.error).toBeInstanceOf(AuthoredCassetteInteractionMismatch)
+      }
+    }
+  })
+)
+
+it.effect("rejects run two when the authored request belongs to run one of the same session", () =>
+  Effect.gen(function* () {
+    const cursor = yield* makeStoryCursor([requestItem])
+    const result = yield* cursor
+      .consumeIntegratorRequest(
+        IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(2), session: correlation })
+      )
+      .pipe(Effect.exit)
+
+    expect(Exit.isFailure(result)).toBe(true)
+    if (Exit.isFailure(result)) {
+      const reason = result.cause.reasons[0]
       expect(reason).toBeDefined()
       if (reason !== undefined) {
         expect(Cause.isFailReason(reason)).toBe(true)

@@ -18,7 +18,7 @@ import {
   ControlDirection,
   InitialControlPolicy,
   IntegratorCandidateText,
-  IntegratorSessionCorrelation,
+  IntegratorRunCorrelation,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
   PlannedBranchReady,
@@ -733,8 +733,8 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   },
   /** Git applies the planned-worktree create, but Dalph loses the response before the ordinary reread. */
   GitPlannedWorktreeCreateResponseLost: { detail: Schema.String },
-  /** The fake outer Integrator receives this exact session/responsibility correlation. */
-  IntegratorRequestReceived: { correlation: IntegratorSessionCorrelation },
+  /** The fake outer Integrator receives this exact session and run ordinal. */
+  IntegratorRequestReceived: { correlation: IntegratorRunCorrelation },
   /** Alice authorizes the exact FullRerun direction for one durable Integrator quarantine. */
   OperatorAppliesIntegrationQuarantineDirection: {
     expected: Schema.Literal("Applied"),

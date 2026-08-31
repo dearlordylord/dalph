@@ -490,7 +490,7 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       GitPlannedWorktreeCreateResponseLost: (item) =>
         `Git creates the exact planned worktree, but Dalph loses the response: ${item.detail}`,
       IntegratorRequestReceived: (item) =>
-        `The outer Integrator receives session ${item.correlation.sessionId} for target ${item.correlation.integrationTarget.ref} at head ${item.correlation.expectedTargetHead}.`,
+        `The outer Integrator receives run ${item.correlation.ordinal} of session ${item.correlation.session.sessionId} for target ${item.correlation.session.integrationTarget.ref} at head ${item.correlation.session.expectedTargetHead}.`,
       IntegratorResultReturned: (item) =>
         `The outer Integrator returns ${item.result._tag}${item.result._tag === "NotPrepared" ? `: ${item.result.detail}` : ` ${item.result.candidateText}`}.`,
       IntegratorGitObservationReturned: (item) =>

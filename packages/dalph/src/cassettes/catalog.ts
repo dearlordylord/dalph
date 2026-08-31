@@ -2276,7 +2276,7 @@ const pipelineIntegrationFinality = (
     { _tag: "TaskClaimCurrentReadReturned" as const, taskId },
     ...pipelineGraphRead(graph),
     { _tag: "DalphSelects" as const, operation: { _tag: "ReadTargetLineage" as const, attemptId, taskId } },
-    { _tag: "IntegratorRequestReceived" as const, correlation },
+    { _tag: "IntegratorRequestReceived" as const, correlation: { ordinal: 1, session: correlation } },
     { _tag: "IntegratorResultReturned" as const, result: { _tag: "PreparedCandidate" as const, candidateText } },
     {
       _tag: "IntegratorGitObservationReturned" as const,
@@ -2787,7 +2787,7 @@ const outerIntegratorSessionCorrelationA = {
 
 const outerIntegratorRequestForA = {
   _tag: "IntegratorRequestReceived" as const,
-  correlation: outerIntegratorSessionCorrelationA
+  correlation: { ordinal: 1, session: outerIntegratorSessionCorrelationA }
 }
 const outerIntegratorPreparedForA = (candidateText = outerIntegratorCandidateText) => [
   outerIntegratorRequestForA,
@@ -2986,7 +2986,7 @@ const pauseExecutorAndPromotionWaiting = (
 
 const targetPromotionSuccessTailForD = [
   { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:D:0", taskId: "D" } },
-  { _tag: "IntegratorRequestReceived", correlation: pauseExecutorAndPromotionRequestD.qualifiedCandidate.run.session },
+  { _tag: "IntegratorRequestReceived", correlation: pauseExecutorAndPromotionRequestD.qualifiedCandidate.run },
   {
     _tag: "IntegratorResultReturned",
     result: { _tag: "PreparedCandidate", candidateText: "refs/heads/pause-boundaries-candidate" }
@@ -3974,19 +3974,22 @@ const completionConflictStory = (() => {
       return []
     }
     if (item._tag === "IntegratorRequestReceived") {
-      const correlation = item.correlation
+      const correlation = item.correlation.session
       const oldPositions = `:${correlation.startedAt}:${correlation.targetLineageObservedAt}:`
       const newPositions = ":32:45:"
       return [
         {
           ...item,
           correlation: {
-            ...correlation,
-            candidateResource: correlation.candidateResource.replace(oldPositions, newPositions),
-            queuedAt: 29,
-            sessionId: correlation.sessionId.replace(oldPositions, newPositions),
-            startedAt: 32,
-            targetLineageObservedAt: 45
+            ...item.correlation,
+            session: {
+              ...correlation,
+              candidateResource: correlation.candidateResource.replace(oldPositions, newPositions),
+              queuedAt: 29,
+              sessionId: correlation.sessionId.replace(oldPositions, newPositions),
+              startedAt: 32,
+              targetLineageObservedAt: 45
+            }
           }
         }
       ]
@@ -4455,7 +4458,7 @@ const doubleDiamondIntegrationFinality = (
             operation: { _tag: "ReadTargetLineage" as const, attemptId, taskId }
           }))
         ]),
-    { _tag: "IntegratorRequestReceived" as const, correlation },
+    { _tag: "IntegratorRequestReceived" as const, correlation: { ordinal: 1, session: correlation } },
     { _tag: "IntegratorResultReturned" as const, result: { _tag: "PreparedCandidate" as const, candidateText } },
     {
       _tag: "IntegratorGitObservationReturned" as const,

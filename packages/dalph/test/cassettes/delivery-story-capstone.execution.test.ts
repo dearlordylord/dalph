@@ -168,9 +168,10 @@ const integratorBoundaryEvidenceFor = (
     capturedOccurrencesFor(captures, "IntegratorRequestReceived").filter(
       ({ captureOrder, occurrence }) =>
         captureOrder > expectation.requestCaptureAfter &&
-        occurrence.correlation.sessionId === authoredSessionId &&
-        occurrence.correlation.expectedTargetHead === expectation.expectedTargetHead &&
-        occurrence.correlation.acceptedResult.commit === expectation.acceptedCommit
+        occurrence.correlation.ordinal === 1 &&
+        occurrence.correlation.session.sessionId === authoredSessionId &&
+        occurrence.correlation.session.expectedTargetHead === expectation.expectedTargetHead &&
+        occurrence.correlation.session.acceptedResult.commit === expectation.acceptedCommit
     ),
     `${expectation.sessionId} captured Integrator request`
   )
@@ -542,11 +543,12 @@ it.effect(
       expect(predecessorEvidence.candidateGit.position).toBeGreaterThan(predecessor.targetLineageObservedAt)
       const predecessorRequest = predecessorEvidence.request
       const predecessorCandidateCapture = predecessorEvidence.candidateCapture
-      expect(predecessorRequest.occurrence.correlation).toEqual(
-        normalizeCorrelationForCapture(predecessor, String(run.runId), authoredAcceptanceManifestDigest)
-      )
-      expect(predecessorRequest.occurrence.correlation.queuedAt).toBe(predecessor.queuedAt)
-      expect(predecessorRequest.occurrence.correlation.startedAt).toBe(predecessor.startedAt)
+      expect(predecessorRequest.occurrence.correlation).toEqual({
+        ordinal: 1,
+        session: normalizeCorrelationForCapture(predecessor, String(run.runId), authoredAcceptanceManifestDigest)
+      })
+      expect(predecessorRequest.occurrence.correlation.session.queuedAt).toBe(predecessor.queuedAt)
+      expect(predecessorRequest.occurrence.correlation.session.startedAt).toBe(predecessor.startedAt)
 
       // DS15/16: promotion intent and the actual Git boundary are separate evidence; both are required.
       const predecessorPromotionIntent = exactlyOne(
@@ -679,14 +681,19 @@ it.effect(
       if (successorEvidence === undefined) return
       const successorRequest = successorEvidence.request
       const successorCandidateCapture = successorEvidence.candidateCapture
-      expect(successorRequest.occurrence.correlation.plannedAttempt.attemptId).toBe(
+      expect(successorRequest.occurrence.correlation.session.plannedAttempt.attemptId).toBe(
         successorCorrelation.plannedAttempt.attemptId
       )
-      expect(successorRequest.occurrence.correlation).toEqual(
-        normalizeCorrelationForCapture(successorCorrelation, String(run.runId), authoredAcceptanceManifestDigest)
-      )
-      expect(successorRequest.occurrence.correlation.queuedAt).toBe(predecessor.queuedAt)
-      expect(successorRequest.occurrence.correlation.startedAt).toBe(predecessor.startedAt)
+      expect(successorRequest.occurrence.correlation).toEqual({
+        ordinal: 1,
+        session: normalizeCorrelationForCapture(
+          successorCorrelation,
+          String(run.runId),
+          authoredAcceptanceManifestDigest
+        )
+      })
+      expect(successorRequest.occurrence.correlation.session.queuedAt).toBe(predecessor.queuedAt)
+      expect(successorRequest.occurrence.correlation.session.startedAt).toBe(predecessor.startedAt)
       expect(successorRequest.captureOrder).toBeGreaterThan(directionCapture.captureOrder)
 
       const releaseHeldLineage = exactlyOne(

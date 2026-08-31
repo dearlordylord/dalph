@@ -401,7 +401,7 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
     {
       _tag: "IntegratorRequestReceived",
-      correlation: integratorSessionCorrelationA(initialCandidateTargetLineageObservedAt)
+      correlation: { ordinal: 1, session: integratorSessionCorrelationA(initialCandidateTargetLineageObservedAt) }
     },
     { _tag: "IntegratorResultReturned", result: { _tag: "PreparedCandidate", candidateText: integratorCandidateA } },
     {
@@ -467,7 +467,7 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     { _tag: "CassetteReleasesHeldTargetLineageRead", attemptId: "attempt:A:0", taskId: "A" },
     {
       _tag: "IntegratorRequestReceived",
-      correlation: integratorSuccessorSessionCorrelationA(successorTargetLineageObservedAt)
+      correlation: { ordinal: 1, session: integratorSuccessorSessionCorrelationA(successorTargetLineageObservedAt) }
     },
     {
       _tag: "IntegratorResultReturned",

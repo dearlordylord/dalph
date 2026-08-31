@@ -4402,7 +4402,7 @@ it.effect("lowers capacity while A holds a position and admits B only after A re
       ...withAppliedChange,
       story: withAppliedChange.story.map((item) => {
         if (item._tag !== "IntegratorRequestReceived") return item
-        const correlation = item.correlation
+        const correlation = item.correlation.session
         const startedAt = correlation.startedAt + 1
         const targetLineageObservedAt = correlation.targetLineageObservedAt + 1
         const oldPositions = `:${correlation.startedAt}:${correlation.targetLineageObservedAt}:`
@@ -4410,12 +4410,15 @@ it.effect("lowers capacity while A holds a position and admits B only after A re
         return {
           ...item,
           correlation: {
-            ...correlation,
-            candidateResource: correlation.candidateResource.replace(oldPositions, newPositions),
-            queuedAt: correlation.queuedAt + 1,
-            sessionId: correlation.sessionId.replace(oldPositions, newPositions),
-            startedAt,
-            targetLineageObservedAt
+            ...item.correlation,
+            session: {
+              ...correlation,
+              candidateResource: correlation.candidateResource.replace(oldPositions, newPositions),
+              queuedAt: correlation.queuedAt + 1,
+              sessionId: correlation.sessionId.replace(oldPositions, newPositions),
+              startedAt,
+              targetLineageObservedAt
+            }
           }
         }
       })
