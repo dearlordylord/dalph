@@ -234,7 +234,8 @@ const journaledStepFor = (
   if (currentTaskGraph?._tag === "TaskTrackerReadIntentRecorded") {
     return FreshWorkflowStep.AcquireTaskClaim({ predecessorOperationId: currentTaskGraph.operation.operationId, task })
   }
-  // A validated journaled frame has an accepted complete read covering every task it contains.
+  // A validated complete target-closure observation covers every returned task;
+  // explicitlyCoveredTaskIds names causal subjects, not an exhaustive result set.
   const latestGraphCoveringTask = Option.getOrThrow(
     Option.fromUndefinedOr(
       records
@@ -242,9 +243,7 @@ const journaledStepFor = (
           event._tag === "TaskTrackerReadIntentRecorded" &&
           event.operation._tag === "ReadTrackerGraph" &&
           taskTrackerTargetKey(event.operation.target) === immutableRunTargetKey &&
-          observed.has(event.operation.operationId) &&
-          (event.operation.readShape.explicitlyCoveredTaskIds.length === 0 ||
-            event.operation.readShape.explicitlyCoveredTaskIds.includes(task.id))
+          observed.has(event.operation.operationId)
             ? [event.operation]
             : []
         )

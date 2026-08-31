@@ -136,6 +136,8 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
   WorkflowOperationGitConstraint: { readonly gitState: "WorktreeLost" }
   TaskLifecycleConstraint: { readonly lifecycle: "TerminalWithoutSuccess" }
   TaskMembershipConstraint: Record<never, never>
+  /** A current complete tracker graph makes this executing task ineligible because exact prerequisites are unfinished. */
+  TaskDependencyConstraint: { readonly prerequisiteTaskIds: ReadonlyArray<TaskId> }
   TaskSpecificationChangeConstraint: {
     readonly observedFingerprint: TaskRevision
     readonly plannedFingerprint: TaskRevision
@@ -197,6 +199,7 @@ export type PlannedAttemptExecutorDisposition =
           | "AppliedTaskClaimReacquisitionDirection"
           | "TaskLifecycleConstraint"
           | "TaskMembershipConstraint"
+          | "TaskDependencyConstraint"
           | "TaskSpecificationChangeConstraint"
           | "UnreadableFactWait"
       }
@@ -243,6 +246,7 @@ type WorkflowOperationDisposition = Exclude<
       | "TaskForeignClaimIsolation"
       | "AppliedTaskClaimReacquisitionDirection"
       | "TaskLifecycleConstraint"
+      | "TaskDependencyConstraint"
       | "TaskSpecificationChangeConstraint"
   }
 >

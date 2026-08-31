@@ -61,6 +61,7 @@ import {
 } from "../admission/integration-target-resource.js"
 import { OperationId } from "../../workflow/identity.js"
 import { isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { isDependencySatisfied } from "../../authorities/task-tracker/task.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import {
   latestTaskClaimReacquisitionDirection,
@@ -1445,6 +1446,19 @@ export const deriveJournalResponsibilityFacts = (
   const taskCompletedSuccessfully = (taskId: TaskId, graph: TaskDagSnapshot | undefined = ordinaryTaskGraph): boolean =>
     Option.getOrUndefined(Option.fromUndefinedOr(graph).pipe(Option.flatMap((current) => current.lifecycleOf(taskId))))
       ?._tag === "CompletedSuccessfully"
+  const unfinishedPrerequisiteTaskIds = (
+    taskId: TaskId,
+    graph: TaskDagSnapshot | undefined = ordinaryTaskGraph
+  ): ReadonlyArray<TaskId> =>
+    graph === undefined
+      ? []
+      : graph
+          .prerequisitesOf(taskId)
+          .filter((prerequisiteTaskId) => {
+            const lifecycle = Option.getOrUndefined(graph.lifecycleOf(prerequisiteTaskId))
+            return lifecycle === undefined || !isDependencySatisfied(lifecycle)
+          })
+          .toSorted((left, right) => left.localeCompare(right))
   const changedTaskSpecification = (plannedAttempt: PlannedTaskAttempt) => {
     const attempt = attemptOpportunity(plannedAttempt)
     const activeSpecificationRecord =
@@ -1833,6 +1847,12 @@ export const deriveJournalResponsibilityFacts = (
       if (taskTerminalWithoutSuccess(responsibility.plannedAttempt.taskId, attemptTaskGraph)) {
         return safelySuspended
           ? ResponsibilityDisposition.TaskLifecycleConstraint({ lifecycle: "TerminalWithoutSuccess" })
+          : suspensionRequested()
+      }
+      const prerequisiteTaskIds = unfinishedPrerequisiteTaskIds(responsibility.plannedAttempt.taskId, attemptTaskGraph)
+      if (prerequisiteTaskIds.length > 0) {
+        return safelySuspended
+          ? ResponsibilityDisposition.TaskDependencyConstraint({ prerequisiteTaskIds })
           : suspensionRequested()
       }
       return externalSuccessDisposition()

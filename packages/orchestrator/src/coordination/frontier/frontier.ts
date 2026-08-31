@@ -487,6 +487,13 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly taskId: TaskId
     readonly wakeCondition: "TaskTrackerFactsObserved"
   }
+  /** The exact attempt is safely suspended while its current tracker prerequisites remain unfinished. */
+  PlannedAttemptTaskDependencyConstraint: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly prerequisiteTaskIds: ReadonlyArray<TaskId>
+    readonly taskId: TaskId
+    readonly wakeCondition: "TaskTrackerFactsObserved"
+  }
   PlannedAttemptTaskLifecycleConstraint: {
     readonly correlation: PlannedAttemptExecutorCorrelation
     readonly lifecycle: "TerminalWithoutSuccess"
@@ -872,6 +879,14 @@ const executorDecisionFor = (
       TaskMembershipConstraint: () => ({
         explanation: FrontierExplanation.PlannedAttemptTaskMembershipConstraint({
           correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "TaskTrackerFactsObserved"
+        })
+      }),
+      TaskDependencyConstraint: ({ prerequisiteTaskIds }) => ({
+        explanation: FrontierExplanation.PlannedAttemptTaskDependencyConstraint({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          prerequisiteTaskIds: [...prerequisiteTaskIds].sort(),
           taskId: facts.responsibility.plannedAttempt.taskId,
           wakeCondition: "TaskTrackerFactsObserved"
         })
