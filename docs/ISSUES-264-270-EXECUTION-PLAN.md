@@ -194,6 +194,14 @@ must not own a second read protocol or cache.
 Scenario-to-test mapping (the scenario document records the complete ownership
 and supporting-test qualifications):
 
+- Fresh B/C admission read whose causal predecessor changes while C's tracker
+  call is live → `does not repeat task C's current-graph read when task B's
+  accepted read changes its predecessor` in
+  `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`,
+  with exact maintained-cassette chronology in `runs the five-task
+  controlled-provider diamond through exact accepted-result finality` and
+  `consumes a staggered graph while restart-added X waits for recovered
+  capacity`.
 - Healthy/equal notification and ordinary provider calls → `unchanged
   active-work refresh calls each ordinary provider once records reconfirmation
   and does not loop` in

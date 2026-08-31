@@ -572,40 +572,6 @@ returned. One system's observation never becomes another system's authority by
 being copied into a derived view.
 _Avoid_: Copied authority, inferred provider result, journal position as current fact
 
-**Active Work Authority Refresh**:
-A tracker notification or configured timer asks Dalph to reread the task-tracker
-and Git authorities for an exact task attempt whose executor report already
-proves `Running`. The reread may reconcile a proven changed fact, but by itself
-it neither continues nor suspends the executor. A successful Git read keeps its
-refresh source process-local; an unreadable Git read is a durable typed
-non-action outcome. Every matching worktree or target-lineage read intent in
-that owner activation receives a strictly increasing ordinal, whether the
-authority returns a fact or a failure.
-_Avoid_: Restart, executor continuation, tracker cache, durable wake request
-
-**Activation Read Baseline**:
-The journal boundary at which one owner begins an active-work authority refresh.
-Current task-tracker, worktree, and lineage facts used by that refresh must be
-accepted after this boundary. Earlier observations remain historical context and
-cannot stand in for the current reread.
-_Avoid_: Startup position, latest cached observation, provider timestamp
-
-**Attempt Authority Evidence Baseline**:
-The lower boundary for authority evidence belonging to one exact planned
-attempt. Ordinary crash reconstruction may reuse the latest proven `Running`
-evidence to retain an already-established constraint, while an Active Work
-Authority Refresh must obtain current owner facts after its Activation Read
-Baseline and may not treat that older evidence as a fresh read.
-_Avoid_: Attempt version, executor heartbeat, current external state
-
-**Unreadable Fact Wait**:
-The task-local disposition selected when a required tracker or Git authority
-cannot provide a complete fact. Dalph keeps the exact responsibility and task
-position, performs no executor continuation or suspension on that uncertainty,
-and leaves independent work eligible; a later tracker notification or timer can
-start a fresh bounded read.
-_Avoid_: Missing fact, failed attempt, automatic suspension, retry proof
-
 **Normalized task-graph read result**:
 The provider-independent boundary value a task-tracker adapter assembles with
 explicit coverage, completeness, temporal-consistency, and freshness evidence.
@@ -1240,11 +1206,11 @@ _Avoid_: Task version, version number, tracker revision, Git commit, journal
 position
 
 **Active-work tracker refresh opportunity**:
-A non-authoritative tracker notification or configured bounded timer occurrence
-selected and coalesced by the one Run reactivation owner while executor work is
-active. It enters the existing tracker-observation coordination and graph-read
-stack without starting a concurrent activation. Executor reports, caches, and
-the later post-quiescence finality read do not create or replace it.
+A tracker notification or configured timer occurrence that lets Dalph check
+current tracker and Git facts for exact attempts whose accepted report is
+`ExecutorWorkExecuting`. It is not evidence that those facts changed,
+permission to command the executor, a durable wake fact, or the later
+post-quiescence read.
 _Avoid_: Executor-progress read requirement, report coverage, per-executor poll,
 second scheduler
 

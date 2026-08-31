@@ -114,6 +114,96 @@ property rejects it. #266 preserves this model evidence; it requires no Quint
 change. Existing Git constraint transitions likewise need no change because the
 process-local refresh source only makes their current observations reachable.
 
+## B's returned graph check does not make Dalph ask for C twice
+
+### Governing behavior
+
+The decision whether an already-started tracker call still has one
+process-local owner is governed by [One persistent GitHub-claim proposal starts
+one live request](issue-193-run-reactive-delivery-actions.md#one-persistent-github-claim-proposal-starts-one-live-request).
+[A newer causal route does not repeat the same recovered boundary
+read](issue-193-run-reactive-delivery-actions.md#a-newer-causal-route-does-not-repeat-the-same-recovered-boundary-read)
+already preserves that rule when a reconstructed read's causal predecessor
+changes. This chronology preserves those rules and makes the same concrete
+race explicit for the ordinary current-graph check immediately before a fresh
+claim. It adds no active-work trigger, read protocol, persisted owner, or new
+tracker fact.
+
+### Starting situation
+
+No person triggers an individual boundary call. A maintainer has already
+started one Run whose latest complete tracker graph says A is successfully
+complete and B, C, and E are open, in the Run, and free of unfinished
+prerequisites. The Journal contains that complete observation and no claim
+intent for B, C, or E. The tracker contains no Dalph claim for them. No planned
+attempt, Git worktree, or executor responsibility exists for any of the three,
+so Git and the executor have no boundary call in this chronology.
+
+The current task-work policy permits B and C to be considered together. Before
+crossing either claim boundary, Dalph must ask the tracker for a complete
+current graph that explicitly covers the exact task.
+
+### Trigger and ordered boundary calls
+
+The accepted graph publication makes B and C eligible for ordinary fresh
+delivery. Dalph records B's and C's separate graph-read intents and asks the
+tracker once for each exact task. Both calls may be in flight together.
+
+B's tracker result returns first. Dalph records B's complete observation. That
+new Journal fact changes the causal predecessor named by the still-described C
+read, but it does not change the question already being asked about C. Dalph
+therefore retains the owner of C's in-flight call instead of asking the tracker
+for C again. It may independently record and perform E's exact current-graph
+read while C remains in flight.
+
+When C and E return, Dalph records each matching observation. The ordinary
+relation then removes each completed graph check and may record one claim
+intent for B, one for C, and one for E. Every task keeps its own operation and
+observation identity; B's result never becomes C's or E's graph evidence.
+
+### Crash, retry, and visible result
+
+No process death, lost response, or retry occurs in the maintained controlled
+stories: every tracker call returns a definite complete result. If the process
+instead dies while one recorded graph-read intent is unresolved, the
+process-local owner disappears and the existing journal-first tracker-read
+protocol recovers that exact intent. This same-process rule is not persisted
+and does not infer whether the tracker returned.
+
+The maintainer sees one tracker call for the shared complete graph and one
+task-scoped current-graph call before each exact claim. Independent E continues
+while C is pending. Dalph must not ask for C twice because B's accepted result
+changed C's proposal identity, suppress E, reuse B's observation for C, record
+two claim intents for one task, or make any Git or executor call before the
+ordinary claim and planning boundaries authorize it.
+
+### Acceptance-test mapping
+
+- **Existing direct test:** `does not repeat task C's current-graph read when
+  task B's accepted read changes its predecessor` in
+  `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`
+  blocks C's first call, publishes the C proposal derived after B's result with
+  its new causal predecessor, and proves that the replacement does not start
+  while an independent task does.
+- **Existing maintained cassette test:** `runs the five-task
+  controlled-provider diamond through exact accepted-result finality` in
+  `packages/dalph/test/cassettes/scenario.test.ts` requires the exact pre-claim
+  current-graph subjects `[shared, B, C, E]`, matching accepted observations,
+  and no repeated C or E read.
+- **Existing maintained capstone test:** `consumes a staggered graph while
+  restart-added X waits for recovered capacity` in
+  `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`
+  requires exactly one task-scoped current-graph intent and one claim intent
+  for every task in the ten-task execution order.
+- **Supporting maintained cassette tests:** `pauses A and its grouping child
+  while recording only A's direction`, `stops before the next forward operation
+  after Alice pauses the Run`, `Alice unpauses task A before its Pause
+  observation confirms`, `restarts a confirmed paused Run without selecting
+  new forward progress`, and `A tracker client changes A while Dalph's
+  completion request is pending` in
+  `packages/dalph/test/cassettes/scenario.test.ts` require their exact complete
+  pre-claim graph-read sequences and matching accepted outcomes.
+
 ## Alice changes B while A1, B1, and C1 execute autonomously
 
 ### Starting situation
