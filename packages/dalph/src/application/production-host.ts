@@ -10,6 +10,7 @@ import {
   type DeliveryRuntimeObservationState,
   EvidenceStore,
   GitCommonDirectoryTarget,
+  type GitCommand,
   InitialControlPolicy,
   Integrator,
   IntegratorCandidateProviderAuthority,
@@ -69,8 +70,28 @@ export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, R
   ) => Layer.Layer<JournaledRunObservationSource | RunReactivationOwner, ERun, ProductionHostFoundation | RRun>
 }
 
-/** Low-level process substitution used by hermetic host qualification. */
+/** Low-level boundary substitution used by hermetic host qualification. */
 export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = never, ETrace = never> {
+  /**
+   * Optional journal layer wrapper for qualification. The supplied default
+   * remains the SQLite-backed production layer.
+   */
+  readonly journalStore?: (
+    configuration: ProductionRepositoryHostConfiguration,
+    defaultLayer: ReturnType<typeof sqliteJournalStoreLayer>
+  ) => ReturnType<typeof sqliteJournalStoreLayer>
+  /** Optional Git command boundary used by hermetic qualification. */
+  readonly gitCommand?: () => Layer.Layer<GitCommand>
+  /** Optional executor boundary used by hermetic qualification. */
+  readonly plannedAttemptExecutor?: () => Layer.Layer<PlannedAttemptExecutor, never, CodexAppServer | GitCommand>
+  /** Optional Integrator boundary used by hermetic qualification. */
+  readonly integrator?: (
+    configuration: CodexIntegratorConfiguration
+  ) => Layer.Layer<
+    Integrator | IntegratorCandidateProviderAuthority,
+    never,
+    CodexAppServer | GitCommand | CoordinatorOwnership
+  >
   readonly codexAppServer?: (
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<CodexAppServer, ECodex>
@@ -100,9 +121,9 @@ const defaultCodexAppServerLayer = (
 }
 
 /**
- * Complete production repository graph. Optional adapters replace only the
- * network/process edge for qualification; the mutation capability topology,
- * one shared Codex service, and Run chronology remain unchanged.
+ * Complete production repository graph. Optional adapters replace only named
+ * network, persistence, or process edges for qualification; the mutation
+ * capability topology, one shared Codex service, and Run chronology remain unchanged.
  */
 export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, ETrace = never>(
   adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
@@ -111,7 +132,9 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
     const ownership = productionCoordinatorOwnershipLayer(
       GitCommonDirectoryTarget.make(configuration.commonDirectory)
     ).pipe(Layer.provide(NodeServices.layer))
-    const journal = journalStoreCapabilities(sqliteJournalStoreLayer({ filename: configuration.journalDatabase }))
+    const defaultJournalLayer = sqliteJournalStoreLayer({ filename: configuration.journalDatabase })
+    const journalStoreLayer = adapters.journalStore?.(configuration, defaultJournalLayer) ?? defaultJournalLayer
+    const journal = journalStoreCapabilities(journalStoreLayer)
     return journal.pipe(Layer.provideMerge(ownership))
   },
   run: (
@@ -120,6 +143,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
     onFailure: (failure: unknown) => Effect.Effect<void>
   ) =>
     Layer.unwrap(
+      // eslint-disable-next-line complexity -- One production graph resolves each optional qualification boundary while preserving one scoped service topology.
       Effect.gen(function* () {
         const ownership = yield* CoordinatorOwnership
         const journal = yield* JournalStore
@@ -143,9 +167,9 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>
         > = adapters.codexAppServer?.(configuration) ?? defaultCodexAppServerLayer(configuration, attemptStoreLayer)
         /* v8 ignore stop */
-        const gitCommandLayer = nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer))
+        const gitCommandLayer = (adapters.gitCommand?.() ?? nodeGitCommandLayer).pipe(Layer.provide(NodeServices.layer))
         const activityCensusLayer = nodeCodexOwnedActivityCensusLayer.pipe(Layer.provide(appLayer))
-        const executorLayer = nodeCodexPlannedAttemptExecutorLayer.pipe(
+        const executorLayer = (adapters.plannedAttemptExecutor?.() ?? nodeCodexPlannedAttemptExecutorLayer).pipe(
           Layer.provide(appLayer),
           Layer.provide(activityCensusLayer),
           Layer.provide(attemptStoreLayer),
@@ -160,7 +184,9 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           privateStoreLocator: configuration.integratorPrivateStore,
           repository: configuration.repository
         })
-        const integratorLayer = nodeCodexIntegratorLayer(integratorConfiguration).pipe(
+        const integratorLayer = (
+          adapters.integrator?.(integratorConfiguration) ?? nodeCodexIntegratorLayer(integratorConfiguration)
+        ).pipe(
           Layer.provide(appLayer),
           Layer.provide(activityCensusLayer),
           Layer.provide(gitCommandLayer),

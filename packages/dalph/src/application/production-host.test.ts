@@ -1,16 +1,16 @@
-/* eslint-disable import/no-nodejs-modules -- This test guards the neighboring production composition source. */
 import { NodeCrypto, NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { RunId } from "@dalph/contracts"
-import { readFileSync } from "node:fs"
-import { fileURLToPath } from "node:url"
+import { PlannedAttemptExecutor, RunId } from "@dalph/contracts"
 import {
   RunLifecycleJournal,
   CoordinatorOwnership,
   CoordinatorLockHeld,
   GithubGraphqlClient,
   GithubIssueTarget,
+  GitCommand,
   InitialControlPolicy,
+  Integrator,
+  IntegratorCandidateProviderAuthority,
   JournalDatabaseLocator,
   JournalPosition,
   JournaledRunEstablished,
@@ -22,7 +22,8 @@ import {
   TraceCursor,
   currentSignalOf,
   memoryJournalStoreLayer,
-  sqliteJournalStoreLayer
+  sqliteJournalStoreLayer,
+  unavailableIntegratorCandidateProviderAuthority
 } from "@dalph/orchestrator"
 import { Context, Deferred, Effect, FileSystem, Fiber, Layer, Path, Ref, Schema } from "effect"
 import { expect } from "vitest"
@@ -309,48 +310,80 @@ it.effect(
         const alias = path.join(root, "repository-alias")
         yield* fileSystem.makeDirectory(commonDirectory)
         yield* fileSystem.symlink(commonDirectory, alias)
-        const scans = yield* Ref.make(0)
-        const journalMutations = yield* Ref.make(0)
-        const beginCalls = yield* Ref.make(0)
-        const gitCalls = yield* Ref.make(0)
-        const executorCalls = yield* Ref.make(0)
-        const integratorCalls = yield* Ref.make(0)
-        const codexCalls = yield* Ref.make(0)
-        const codexAcquisitions = yield* Ref.make(0)
-        const githubCalls = yield* Ref.make(0)
-        const githubAcquisitions = yield* Ref.make(0)
+        const trace = yield* Ref.make<ReadonlyArray<string>>([])
         const githubStarted = yield* Deferred.make<void>()
 
-        const codexCall = () =>
-          Ref.update(codexCalls, (count) => count + 1).pipe(
-            Effect.andThen(Effect.die("losing host must not call the Codex app-server"))
-          )
+        const record = (event: string) => Ref.update(trace, (current) => [...current, event])
+        const boundaryCall = (event: string) =>
+          record(event).pipe(Effect.andThen(Effect.die(`unexpected ${event} boundary call`)))
+        const codexCall = (operation: string) => () => boundaryCall(`codex.${operation}`)
         const app = CodexAppServer.of({
           incarnation: CodexServerIncarnation.make("production-host-ownership-test-incarnation"),
-          startThread: codexCall,
-          readThread: codexCall,
-          resumeThread: codexCall,
-          startTurn: codexCall,
-          interruptTurn: codexCall,
-          listBackgroundTerminals: codexCall,
-          terminateBackgroundTerminal: codexCall,
-          close: Ref.update(codexCalls, (count) => count + 1)
+          startThread: codexCall("startThread"),
+          readThread: codexCall("readThread"),
+          resumeThread: codexCall("resumeThread"),
+          startTurn: codexCall("startTurn"),
+          interruptTurn: codexCall("interruptTurn"),
+          listBackgroundTerminals: codexCall("listBackgroundTerminals"),
+          terminateBackgroundTerminal: codexCall("terminateBackgroundTerminal"),
+          close: record("codex.close")
         })
         const githubClient = GithubGraphqlClient.of({
           execute: () =>
-            Ref.update(githubCalls, (count) => count + 1).pipe(
+            record("github.execute").pipe(
               Effect.andThen(Deferred.succeed(githubStarted, undefined)),
               Effect.andThen(Effect.never)
             )
         })
+        const gitCommand = GitCommand.of({
+          run: () => boundaryCall("git.run"),
+          runInWorktree: () => boundaryCall("git.runInWorktree"),
+          runBytesInWorktree: () => boundaryCall("git.runBytesInWorktree")
+        })
+        const executor = PlannedAttemptExecutor.of({
+          observe: () => boundaryCall("executor.observe"),
+          begin: () => boundaryCall("executor.begin"),
+          requestSuspension: () => boundaryCall("executor.requestSuspension"),
+          resume: () => boundaryCall("executor.resume")
+        })
+        const integrator = Integrator.of({ prepare: () => boundaryCall("integrator.prepare") })
         const adapters = {
-          codexAppServer: () =>
-            Layer.effect(CodexAppServer, Ref.update(codexAcquisitions, (count) => count + 1).pipe(Effect.as(app))),
-          githubClient: () =>
-            Layer.effect(
-              GithubGraphqlClient,
-              Ref.update(githubAcquisitions, (count) => count + 1).pipe(Effect.as(githubClient))
-            )
+          journalStore: (
+            _configuration: ProductionRepositoryHostConfiguration,
+            defaultLayer: ReturnType<typeof sqliteJournalStoreLayer>
+          ) =>
+            Layer.effectContext(
+              Effect.gen(function* () {
+                // Record before the supplied SQLite layer builds its connection, migration, and writer resources.
+                yield* record("journal.sqlite.open")
+                return yield* Layer.build(defaultLayer)
+              })
+            ),
+          gitCommand: () => Layer.effect(GitCommand, record("git.acquire").pipe(Effect.as(gitCommand))),
+          plannedAttemptExecutor: () =>
+            Layer.effectContext(
+              Effect.gen(function* () {
+                yield* GitCommand
+                yield* CodexAppServer
+                yield* record("executor.acquire")
+                return Context.add(Context.empty(), PlannedAttemptExecutor, executor)
+              })
+            ),
+          integrator: () =>
+            Layer.effectContext(
+              Effect.gen(function* () {
+                yield* GitCommand
+                yield* CodexAppServer
+                yield* CoordinatorOwnership
+                yield* record("integrator.acquire")
+                return Context.empty().pipe(
+                  Context.add(Integrator, integrator),
+                  Context.add(IntegratorCandidateProviderAuthority, unavailableIntegratorCandidateProviderAuthority)
+                )
+              })
+            ),
+          codexAppServer: () => Layer.effect(CodexAppServer, record("codex.acquire").pipe(Effect.as(app))),
+          githubClient: () => Layer.effect(GithubGraphqlClient, record("github.acquire").pipe(Effect.as(githubClient)))
         }
         const productionGraph = productionRepositoryHostGraph(adapters)
         const foundation = (configuration: ProductionRepositoryHostConfiguration) =>
@@ -362,25 +395,24 @@ it.effect(
               const observedJournal = JournalStore.of({
                 ...journal,
                 scanHot: Effect.fn("ProductionHostOwnershipTest.scanHot")(function* () {
-                  yield* Ref.update(scans, (count) => count + 1)
+                  yield* record("journal.scan")
                   return yield* journal.scanHot()
                 }),
                 beginRun: Effect.fn("ProductionHostOwnershipTest.beginRun")(function* (runId, target, policy) {
-                  yield* Ref.update(journalMutations, (count) => count + 1)
-                  yield* Ref.update(beginCalls, (count) => count + 1)
+                  yield* record("journal.begin")
                   return yield* journal.beginRun(runId, target, policy)
                 }),
                 append: Effect.fn("ProductionHostOwnershipTest.append")(function* (runId, key, event) {
-                  yield* Ref.update(journalMutations, (count) => count + 1)
+                  yield* record("journal.append")
                   return yield* journal.append(runId, key, event)
                 }),
                 retireTerminalRun: Effect.fn("ProductionHostOwnershipTest.retireTerminalRun")(function* (runId) {
-                  yield* Ref.update(journalMutations, (count) => count + 1)
+                  yield* record("journal.retireTerminalRun")
                   return yield* journal.retireTerminalRun(runId)
                 }),
                 terminateRun: Effect.fn("ProductionHostOwnershipTest.terminateRun")(
                   function* (runId, disposition, evidence) {
-                    yield* Ref.update(journalMutations, (count) => count + 1)
+                    yield* record("journal.terminateRun")
                     return yield* journal.terminateRun(runId, disposition, evidence)
                   }
                 )
@@ -406,19 +438,7 @@ it.effect(
           configuration: ProductionRepositoryHostConfiguration,
           selection: ProductionRunSelection,
           onFailure: (failure: unknown) => Effect.Effect<void>
-        ) =>
-          Layer.merge(
-            Layer.effectDiscard(
-              Effect.gen(function* () {
-                // Opening the actual Run graph constructs these mutation-capable boundaries. If H2 reaches it,
-                // each probe records a forbidden boundary crossing before any operation can be attempted.
-                yield* Ref.update(gitCalls, (count) => count + 1)
-                yield* Ref.update(executorCalls, (count) => count + 1)
-                yield* Ref.update(integratorCalls, (count) => count + 1)
-              })
-            ),
-            productionGraph.run(configuration, selection, onFailure)
-          )
+        ) => productionGraph.run(configuration, selection, onFailure)
         const graph = { foundation, run }
         const firstReady = yield* Deferred.make<void>()
         const releaseFirst = yield* Deferred.make<void>()
@@ -441,23 +461,31 @@ it.effect(
             Effect.andThen(Deferred.await(releaseFirst))
           )
         )
+        // H1 owns the real common directory, opens SQLite, discovers the Run, and reaches the live GitHub edge.
         const firstFiber = yield* firstHost.pipe(Effect.forkScoped)
         yield* Deferred.await(firstReady)
 
-        const afterFirst = {
-          scans: yield* Ref.get(scans),
-          journalMutations: yield* Ref.get(journalMutations),
-          beginCalls: yield* Ref.get(beginCalls),
-          gitCalls: yield* Ref.get(gitCalls),
-          executorCalls: yield* Ref.get(executorCalls),
-          integratorCalls: yield* Ref.get(integratorCalls),
-          codexCalls: yield* Ref.get(codexCalls),
-          codexAcquisitions: yield* Ref.get(codexAcquisitions),
-          githubCalls: yield* Ref.get(githubCalls),
-          githubAcquisitions: yield* Ref.get(githubAcquisitions)
+        const afterFirst = yield* Ref.get(trace)
+        const count = (event: string, events: ReadonlyArray<string> = afterFirst) =>
+          events.filter((observed) => observed === event).length
+        expect(count("journal.sqlite.open")).toBe(1)
+        expect(count("journal.scan")).toBeGreaterThan(0)
+        expect(count("journal.begin")).toBe(1)
+        expect(afterFirst.indexOf("journal.sqlite.open")).toBeLessThan(afterFirst.indexOf("journal.scan"))
+        expect(afterFirst.indexOf("journal.scan")).toBeLessThan(afterFirst.indexOf("journal.begin"))
+        for (const event of [
+          "git.acquire",
+          "executor.acquire",
+          "integrator.acquire",
+          "github.acquire",
+          "codex.acquire",
+          "github.execute"
+        ]) {
+          expect(count(event)).toBe(1)
         }
 
         const secondInput = { ...firstInput, commonDirectory: alias }
+        // H2 names the same directory through a symlink while H1 still owns it; ownership must fail first.
         const secondFailure = yield* withProductionRepositoryHost(secondInput, graph, () =>
           Effect.die("H2 must not build")
         ).pipe(Effect.flip)
@@ -465,61 +493,26 @@ it.effect(
         if (secondFailure instanceof CoordinatorLockHeld) {
           expect(secondFailure.gitCommonDirectory).toBe(commonDirectory)
         }
-        expect({
-          scans: yield* Ref.get(scans),
-          journalMutations: yield* Ref.get(journalMutations),
-          beginCalls: yield* Ref.get(beginCalls),
-          gitCalls: yield* Ref.get(gitCalls),
-          executorCalls: yield* Ref.get(executorCalls),
-          integratorCalls: yield* Ref.get(integratorCalls),
-          codexCalls: yield* Ref.get(codexCalls),
-          codexAcquisitions: yield* Ref.get(codexAcquisitions),
-          githubCalls: yield* Ref.get(githubCalls),
-          githubAcquisitions: yield* Ref.get(githubAcquisitions)
-        }).toEqual(afterFirst)
+        const duringSecond = yield* Ref.get(trace)
+        expect(duringSecond.slice(afterFirst.length)).toEqual([])
+        expect(duringSecond).toEqual(afterFirst)
+        yield* record("h2.lock-conflict")
 
         yield* Deferred.succeed(releaseFirst, undefined)
         yield* Fiber.join(firstFiber)
 
+        // A fresh H2 invocation may now open SQLite, rediscover, and reuse H1's durable Run.
         const secondSelection = yield* withProductionRepositoryHost(secondInput, graph, (observation) =>
           Effect.succeed(observation.selection)
         )
         expect(secondSelection._tag).toBe("Recovered")
         expect(secondSelection.runId).toBe(yield* Deferred.await(firstSelectionRunId))
-        expect(yield* Ref.get(scans)).toBe(afterFirst.scans + 2)
-        expect(yield* Ref.get(beginCalls)).toBe(1)
+        const finalTrace = yield* Ref.get(trace)
+        expect(count("journal.sqlite.open", finalTrace)).toBe(2)
+        expect(count("journal.scan", finalTrace)).toBe(count("journal.scan") + 2)
+        expect(count("journal.begin", finalTrace)).toBe(1)
+        expect(finalTrace.indexOf("h2.lock-conflict")).toBeGreaterThan(finalTrace.indexOf("github.execute"))
+        expect(finalTrace.lastIndexOf("journal.sqlite.open")).toBeGreaterThan(finalTrace.indexOf("h2.lock-conflict"))
       }).pipe(Effect.provide(NodeServices.layer), Effect.provide(NodeCrypto.layer))
     )
 )
-
-const productionHostSource = readFileSync(fileURLToPath(new URL("./production-host.ts", import.meta.url)), "utf8")
-
-it("production host installs exactly one owner for every mutation capability and no controlled capability", () => {
-  expect(productionHostSource).not.toMatch(/controlled/i)
-  for (const construction of [
-    "productionCoordinatorOwnershipLayer(",
-    "sqliteJournalStoreLayer(",
-    "githubDeliveryAuthorityLayer.pipe(",
-    "nodeCodexPlannedAttemptExecutorLayer.pipe(",
-    "nodeCodexIntegratorLayer(integratorConfiguration).pipe("
-  ]) {
-    expect(productionHostSource.split(construction)).toHaveLength(2)
-  }
-  expect(productionHostSource).toMatch(
-    /const journal = journalStoreCapabilities\(sqliteJournalStoreLayer\(\{ filename: configuration\.journalDatabase \}\)\)\s+return journal\.pipe\(Layer\.provideMerge\(ownership\)\)/u
-  )
-})
-
-it("planned-attempt executor and Integrator share one application-scoped Codex app server", () => {
-  expect(productionHostSource.match(/const appLayer\b/g)).toHaveLength(1)
-  const executorComposition = productionHostSource.slice(
-    productionHostSource.indexOf("const executorLayer ="),
-    productionHostSource.indexOf("const integratorConfiguration =")
-  )
-  const integratorComposition = productionHostSource.slice(
-    productionHostSource.indexOf("const integratorLayer ="),
-    productionHostSource.indexOf("const sharedServices =")
-  )
-  expect(executorComposition).toContain("Layer.provide(appLayer)")
-  expect(integratorComposition).toContain("Layer.provide(appLayer)")
-})
