@@ -1,7 +1,10 @@
 import { Schema } from "effect"
 import { expect, it } from "vitest"
 import { AuthoredScenarioCassette } from "../../src/cassettes/authored-domain.js"
-import { deliveryFinalitySpineAuthoredCassette } from "../../src/cassettes/catalog.js"
+import {
+  activeWorkF2SafelySuspendsAuthoredCassette,
+  deliveryFinalitySpineAuthoredCassette
+} from "../../src/cassettes/catalog.js"
 
 it("accepts an exact in-flight prefix of the completion-finality boundary chronology", () => {
   const withoutDeletion = {
@@ -58,4 +61,15 @@ it("rejects an authored Begin response that skips Executing", () => {
   expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(invalid)).toThrow(
     /an authored Begin response must report ExecutorWorkExecuting/u
   )
+})
+
+it("requires an explicit process lifecycle for reactivation-owner inputs", () => {
+  const { processLifecycle: _processLifecycle, ...withoutLifecycle } = activeWorkF2SafelySuspendsAuthoredCassette
+
+  expect(() => Schema.decodeUnknownSync(AuthoredScenarioCassette)(withoutLifecycle)).toThrow(
+    /reactivation-owner inputs require one explicit authored process lifecycle/u
+  )
+  expect(activeWorkF2SafelySuspendsAuthoredCassette.processLifecycle).toEqual({
+    _tag: "CurrentFirstReactivationAfterProcessDeath"
+  })
 })

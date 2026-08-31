@@ -6,7 +6,14 @@ import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "
 
 const lastItemIndex = -1
 const capstoneTimeout = 600_000
-const cachedRun = Effect.runSync(
+const capstoneRun = Effect.runSync(
+  Effect.cached(
+    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.autonomousExecutorDeliveryCapstone).pipe(
+      Effect.provide(NodeCrypto.layer)
+    )
+  )
+)
+const historicalRun = Effect.runSync(
   Effect.cached(
     runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory).pipe(
       Effect.provide(NodeCrypto.layer)
@@ -15,10 +22,28 @@ const cachedRun = Effect.runSync(
 )
 
 it.effect(
+  "emits the exact DS01 through DS13 delivery checkpoint table",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* capstoneRun
+      const initial = run.deliveryFrames.find(({ graph }) => graph._tag === "Established")
+
+      expect(run.reactivationOwnerProcessGenerationCount).toBe(2)
+      expect(initial?.capacity).toBe(3)
+      expect(
+        initial?.graph._tag === "Established"
+          ? initial.graph.tasks.map(({ id, prerequisiteIds }) => ({ id, prerequisiteIds }))
+          : []
+      ).toEqual(["A", "B", "C", "D", "E"].map((id) => ({ id, prerequisiteIds: [] })))
+    }),
+  capstoneTimeout
+)
+
+it.effect(
   "consumes a staggered graph while restart-added X waits for recovered capacity",
   () =>
     Effect.gen(function* () {
-      const run = yield* cachedRun
+      const run = yield* historicalRun
       const established = run.deliveryFrames.filter(({ graph }) => graph._tag === "Established")
       const completeTopology = established.find(
         ({ graph }) => graph._tag === "Established" && graph.tasks.length === 10
@@ -142,7 +167,7 @@ it.effect(
   "preserves the double-diamond middle positions across coordinator restart",
   () =>
     Effect.gen(function* () {
-      const run = yield* cachedRun
+      const run = yield* historicalRun
       const initial = run.deliveryFrames.find(
         ({ heldPositions }) =>
           heldPositions.some(({ taskId }) => taskId === "B") && heldPositions.some(({ taskId }) => taskId === "C")

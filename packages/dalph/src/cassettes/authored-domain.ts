@@ -132,7 +132,7 @@ const AuthoredConcurrentTrackerRead = Schema.Union([
       AuthoredConcurrentTrackerReadResult.cases.TrackerGraphReadFailed,
       AuthoredConcurrentTrackerReadResult.cases.TrackerGraphReadReturned
     ])
-  })
+  })?.[0]
 ]).check(
   Schema.makeFilter((member) =>
     member.operation._tag === "ReadTaskWorkSpecification" && member.result._tag === "TaskWorkSpecificationReadReturned"
@@ -1068,8 +1068,18 @@ export const assertExactlyOneAuthoredCassetteStoryItemOwner = Effect.fn(
 })
 
 const authoredScenarioCassetteVersion = 1 as const
+/**
+ * Harness-only ownership of coordinator process generations. This selects how
+ * the controlled runner composes the one production reactivation owner; it is
+ * not a durable Run fact, scheduler, or Dalph runtime policy.
+ */
+const AuthoredProcessLifecycle = Schema.TaggedUnion({
+  CurrentFirstReactivationAfterProcessDeath: {},
+  ReactivationOwnerProcessGenerations: {}
+})
 const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCassette", {
   name: Schema.NonEmptyString,
+  processLifecycle: Schema.optionalKey(AuthoredProcessLifecycle),
   schemaVersion: Schema.Literal(authoredScenarioCassetteVersion),
   startingFacts: Schema.Struct({
     executorWork: Schema.Literal("NoPriorReport"),
@@ -1084,6 +1094,30 @@ const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCasse
   }),
   story: Schema.Array(AuthoredCassetteStoryItem)
 })
+
+const reactivationInputsHaveExplicitProcessLifecycle = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+    const hasHints = cassette.story.some((item) => item._tag === "CassetteOffersRunReactivationHints")
+    const hasCurrentFirst = cassette.story.some(
+      (item) => item._tag === "CassettePublishesCurrentTrackerNotification"
+    )
+    const mode = cassette.processLifecycle?._tag
+    if (!hasHints && !hasCurrentFirst) {
+      return mode === undefined ? undefined : "an authored process lifecycle requires a reactivation-owner input"
+    }
+    if (mode === "CurrentFirstReactivationAfterProcessDeath") {
+      return hasCurrentFirst && cassette.story.some((item) => item._tag === "CoordinatorProcessDies")
+        ? undefined
+        : "current-first reactivation requires an authored process death and current tracker notification"
+    }
+    if (mode === "ReactivationOwnerProcessGenerations") {
+      return hasHints && !hasCurrentFirst
+        ? undefined
+        : "reactivation-owner process generations require authored hints without a current-first notification"
+    }
+    return "reactivation-owner inputs require one explicit authored process lifecycle"
+  }
+)
 
 const exactlyOneAt = (
   tag: AuthoredCassetteStoryItem["_tag"],
@@ -1251,7 +1285,7 @@ const completionFinalityStoryIsComplete = Schema.makeFilter((cassette: typeof Au
             : "Delete"
       )
     return actualSteps.some((step, index) => step !== expectedSteps[index]) || actualSteps.length > expectedSteps.length
-  })?.[0]
+  })
   return incompleteTaskId === undefined
     ? undefined
     : `authored completion finality for ${incompleteTaskId} must be an exact prefix of active-record presence, replacement, two completion-marker presence reads, completion-marker deletion, and completion-marker absence`
@@ -1462,6 +1496,7 @@ const AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteShape.check(
   .check(finalTrackerReadClosesCurrentActivation)
   .check(ambiguousBoundaryLossesImmediatelyCrash)
   .check(beginResponsesAreExecuting)
+  .check(reactivationInputsHaveExplicitProcessLifecycle)
   .check(lostExecutorResponsesRequireExplicitProjection)
   .check(completionFinalityStoryIsComplete)
   .check(admittedContinuationHoldHasExactAttemptChoiceClosure)

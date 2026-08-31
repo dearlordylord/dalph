@@ -3,6 +3,7 @@ import { makeTaskWorkSpecification, TaskId } from "@dalph/contracts"
 import { Option, Schema } from "effect"
 import { AuthoredScenarioCassette, type AuthoredScenarioCassette as ScenarioCassette } from "./authored.js"
 import { AuthoredCassetteStoryItem, type AuthoredOrchestrationEvidence } from "./authored-domain.js"
+import { deliveryStoryCapstoneAuthoredCassette } from "./delivery-story-capstone.js"
 
 const decodeStoryItem = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)
 const terminalStoryItemOffset = -1
@@ -2490,6 +2491,7 @@ export const activeWorkF2SafelySuspendsAuthoredCassette: ScenarioCassette = Sche
 )({
   ...singletonTaskCompletesAuthoredCassette,
   name: "notification and timer coalesce before B1 safely suspends for F2",
+  processLifecycle: { _tag: "CurrentFirstReactivationAfterProcessDeath" },
   startingFacts: {
     ...singletonTaskCompletesAuthoredCassette.startingFacts,
     taskWorkSpecifications: [
@@ -5016,6 +5018,7 @@ type MaintainedAuthoredCassetteName =
   | "completionTaskConflict"
   | "currentCompletionGraphAuthority"
   | "deliveryFinalitySpine"
+  | "autonomousExecutorDeliveryCapstone"
   | "deliveryInvariantStory"
   | "productionShapedFiveTaskDiamond"
   | "dependentTasksCompleteInOneRun"
@@ -5084,6 +5087,7 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     completionTaskConflict: completionTaskConflictAuthoredCassette,
     currentCompletionGraphAuthority: currentCompletionGraphAuthorityAuthoredCassette,
     deliveryFinalitySpine: deliveryFinalitySpineAuthoredCassette,
+    autonomousExecutorDeliveryCapstone: deliveryStoryCapstoneAuthoredCassette,
     deliveryInvariantStory: deliveryInvariantStoryAuthoredCassette,
     productionShapedFiveTaskDiamond: productionShapedFiveTaskDiamondAuthoredCassette,
     dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
