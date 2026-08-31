@@ -56,6 +56,7 @@ const decisionFor = (step: FreshWorkflowStepType): FreshWorkflowDecision => ({
 })
 
 const observedOperationIdsByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, ReadonlySet<OperationId>>()
+const completeGraphObservationIdsByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, ReadonlySet<OperationId>>()
 
 const observedOperationIds = (records: ReadonlyArray<JournalRecord>): ReadonlySet<OperationId> => {
   const cached = observedOperationIdsByPrefix.get(records)
@@ -74,6 +75,33 @@ const observedOperationIds = (records: ReadonlyArray<JournalRecord>): ReadonlySe
       : observedOperationIds(predecessor.prior)
   })()
   observedOperationIdsByPrefix.set(records, observed)
+  return observed
+}
+
+/** Only a complete current graph outcome can authorize a claim; a typed read failure merely settles its read. */
+const completeGraphObservationIds = (records: ReadonlyArray<JournalRecord>): ReadonlySet<OperationId> => {
+  const cached = completeGraphObservationIdsByPrefix.get(records)
+  if (cached !== undefined) return cached
+  const predecessor = journalPrefixPredecessorOf(records)
+  const observed = (() => {
+    if (predecessor === undefined)
+      return new Set(
+        records.flatMap(({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          (event.observation._tag === "CompleteTaskTrackerFacts" ||
+            event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
+            ? [event.operationId]
+            : []
+        )
+      )
+    const event = predecessor.appended.event
+    return event._tag === "TaskTrackerFactsObserved" &&
+      (event.observation._tag === "CompleteTaskTrackerFacts" ||
+        event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
+      ? new Set(completeGraphObservationIds(predecessor.prior)).add(event.operationId)
+      : completeGraphObservationIds(predecessor.prior)
+  })()
+  completeGraphObservationIdsByPrefix.set(records, observed)
   return observed
 }
 
@@ -107,6 +135,7 @@ const journaledStepFor = (
   records: ReadonlyArray<JournalRecord>,
   recoveredAttemptIds: ReadonlySet<AttemptId>,
   observed: ReadonlySet<OperationId>,
+  completeGraphObserved: ReadonlySet<OperationId>,
   immutableRunTargetKey: string
 ): FreshWorkflowStepType => {
   const executorResponsibility = records.findLast(
@@ -229,7 +258,7 @@ const journaledStepFor = (
       taskTrackerTargetKey(event.operation.target) === immutableRunTargetKey &&
       event.operation.predecessorOperationIds.length === 0 &&
       event.operation.readShape.explicitlyCoveredTaskIds.includes(task.id) &&
-      observed.has(event.operation.operationId)
+      completeGraphObserved.has(event.operation.operationId)
   )?.event
   if (currentTaskGraph?._tag === "TaskTrackerReadIntentRecorded") {
     return FreshWorkflowStep.AcquireTaskClaim({ predecessorOperationId: currentTaskGraph.operation.operationId, task })
@@ -325,6 +354,7 @@ export const deriveFreshWorkflowDecisions = (
       ? new Set<TaskId>()
       : new Set(frame.pause.tasks.taskIds.flatMap((taskId) => frame.currentGraph.groupingSubtreeOf(taskId)))
   const observed = observedOperationIds(records)
+  const completeGraphObserved = completeGraphObservationIds(records)
   const latestGlobalGraphRead = records.findLast(
     ({ event }) =>
       event._tag === "TaskTrackerReadIntentRecorded" &&
@@ -366,7 +396,11 @@ export const deriveFreshWorkflowDecisions = (
   const decisions = candidateGraph
     .eligibleTasks()
     .filter(({ id }) => currentlyEligibleTaskIds.has(id) && !responsibleTaskIds.has(id) && !pauseCoveredTaskIds.has(id))
-    .map((task) => decisionFor(journaledStepFor(task, records, recoveredAttemptIds, observed, immutableRunTargetKey)))
+    .map((task) =>
+      decisionFor(
+        journaledStepFor(task, records, recoveredAttemptIds, observed, completeGraphObserved, immutableRunTargetKey)
+      )
+    )
   if (decisions.some(({ step }) => step._tag === "ReadCurrentTaskGraph")) {
     return decisions.filter(({ step }) => step._tag === "ReadCurrentTaskGraph")
   }

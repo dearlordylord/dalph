@@ -16,7 +16,11 @@ import {
   workflowResponsibilityOperationId,
   type WorkflowResponsibilityState
 } from "../reconstruction/state.js"
-import type { AcceptedPlannedAttemptExecutorProgress, ResponsibilityFreshFacts } from "./fresh-facts.js"
+import type {
+  AcceptedPlannedAttemptExecutorProgress,
+  ResponsibilityFreshFacts,
+  UnfinishedPrerequisiteTaskIds
+} from "./fresh-facts.js"
 import type {
   QueuedIntegrationResponsibility,
   StartedIntegrationResponsibility,
@@ -490,7 +494,7 @@ export type FrontierExplanation = Data.TaggedEnum<{
   /** The exact attempt is safely suspended while its current tracker prerequisites remain unfinished. */
   PlannedAttemptTaskDependencyConstraint: {
     readonly correlation: PlannedAttemptExecutorCorrelation
-    readonly prerequisiteTaskIds: ReadonlyArray<TaskId>
+    readonly prerequisiteTaskIds: UnfinishedPrerequisiteTaskIds
     readonly taskId: TaskId
     readonly wakeCondition: "TaskTrackerFactsObserved"
   }
@@ -886,7 +890,7 @@ const executorDecisionFor = (
       TaskDependencyConstraint: ({ prerequisiteTaskIds }) => ({
         explanation: FrontierExplanation.PlannedAttemptTaskDependencyConstraint({
           correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
-          prerequisiteTaskIds: [...prerequisiteTaskIds].sort(),
+          prerequisiteTaskIds,
           taskId: facts.responsibility.plannedAttempt.taskId,
           wakeCondition: "TaskTrackerFactsObserved"
         })

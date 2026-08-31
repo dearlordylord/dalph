@@ -1,4 +1,5 @@
 import { expect, it } from "vitest"
+import { Result, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -33,12 +34,18 @@ import {
   makeTaskWorktreeReconciliationOperation,
   TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
+import { UnfinishedPrerequisiteTaskIds } from "./fresh-facts.js"
 
 const taskA = TaskId.make("task-A")
 const taskB = TaskId.make("task-B")
 const taskC = TaskId.make("task-C")
 const frontierRunId = RunId.make("frontier-test-run")
 const freshTask = (taskId: TaskId) => ({ taskId, taskRevision: TaskRevision.make(`revision:${taskId}`) })
+
+it("accepts only non-empty unfinished prerequisite identities at the dependency boundary", () => {
+  expect(UnfinishedPrerequisiteTaskIds.make([taskB])).toEqual([taskB])
+  expect(Result.isFailure(Schema.decodeUnknownResult(UnfinishedPrerequisiteTaskIds)([]))).toBe(true)
+})
 
 const executionResponsibilityFor = (taskId: TaskId, operationIdentity: string = taskId) => {
   const plannedAttempt = PlannedTaskAttempt.make({
@@ -607,6 +614,16 @@ it("explains each task-authority constraint without changing the planned attempt
         _tag: "PlannedAttemptTaskLifecycleConstraint",
         correlation,
         lifecycle: "TerminalWithoutSuccess",
+        taskId: taskA,
+        wakeCondition: "TaskTrackerFactsObserved"
+      }
+    },
+    {
+      disposition: ResponsibilityDisposition.TaskDependencyConstraint({ prerequisiteTaskIds: [taskB] }),
+      explanation: {
+        _tag: "PlannedAttemptTaskDependencyConstraint",
+        correlation,
+        prerequisiteTaskIds: [taskB],
         taskId: taskA,
         wakeCondition: "TaskTrackerFactsObserved"
       }

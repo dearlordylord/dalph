@@ -607,14 +607,26 @@ it.effect("lets an admitted active refresh record its read outcome before Exit r
       const target = FixtureTarget.make("journaled-bootstrap-active-refresh-exit")
       const runId = yield* freshWorkflowRunId(target)
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
-      const storage = Context.get(journalContext, JournalStore)
+      const delegate = Context.get(journalContext, JournalStore)
+      const readOperationId = OperationId.make("journaled-bootstrap-active-refresh-exit-read")
+      const outcomeAppendStarted = yield* Deferred.make<void>()
+      const releaseOutcomeAppend = yield* Deferred.make<void>()
+      const storage = JournalStore.of({
+        ...delegate,
+        append: (requestedRunId, key, event) =>
+          event._tag === "TaskTrackerFactsObserved" && event.operationId === readOperationId
+            ? Deferred.succeed(outcomeAppendStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseOutcomeAppend)),
+                Effect.andThen(delegate.append(requestedRunId, key, event))
+              )
+            : delegate.append(requestedRunId, key, event)
+      })
       yield* storage.beginRun(runId, target, initialPolicy)
       const running = captureTestAttempt(runId, "active-refresh-exit", "active-refresh-exit")
       yield* appendExecutorHistory(storage, runId, running, "Running")
 
       const readStarted = yield* Deferred.make<void>()
       const releaseRead = yield* Deferred.make<void>()
-      const readOperationId = OperationId.make("journaled-bootstrap-active-refresh-exit-read")
       const trackerGraphReader = TrackerGraphReader.of({
         read: () =>
           Deferred.succeed(readStarted, undefined).pipe(
@@ -696,6 +708,16 @@ it.effect("lets an admitted active refresh record its read outcome before Exit r
       expect(exiting.pollUnsafe()).toBeUndefined()
       expect(yield* Ref.get(enteredLaterRefresh)).toBe(false)
       yield* Deferred.succeed(releaseRead, undefined)
+      yield* Deferred.await(outcomeAppendStarted)
+
+      expect(exiting.pollUnsafe()).toBeUndefined()
+      expect(admittedRefresh.pollUnsafe()).toBeUndefined()
+      expect(
+        (yield* delegate.read(runId)).filter(
+          ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === readOperationId
+        )
+      ).toHaveLength(0)
+      yield* Deferred.succeed(releaseOutcomeAppend, undefined)
 
       expect(yield* Fiber.join(admittedRefresh)).toEqual({
         _tag: "RunMustRemainActive",
