@@ -34,6 +34,7 @@ const recordedTarget = (
   reduction: Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { readonly _tag: "ValidWorkflowJournalHistory" }>
 ): TrackerTarget | undefined => {
   const beginning = reduction.records.find(({ event }) => event._tag === "WorkflowRunBegan")
+  /* v8 ignore next -- @preserve A valid unfinished Run reduction necessarily contains its first WorkflowRunBegan record. */
   return beginning?.event._tag === "WorkflowRunBegan" ? beginning.event.target : undefined
 }
 
@@ -58,6 +59,7 @@ export const selectProductionRun = Effect.fn("ProductionHost.selectRun")(functio
   )
   const conflicts = unfinished.flatMap((reduction) => {
     const target = recordedTarget(reduction)
+    /* v8 ignore next -- @preserve The unfinished filter admits only valid Run histories, whose required beginning names the target. */
     return target === undefined ? [] : [{ runId: reduction.runId, target }]
   })
   const [firstConflict, ...remainingConflicts] = conflicts

@@ -183,3 +183,18 @@ it.effect("fails malformed production discovery before allocating a Run", () =>
     Effect.provide(NodeCrypto.layer)
   )
 )
+
+it.effect("fails when a discovered Hot Run has an invalid journal history", () => {
+  const target = FixtureTarget.make("production-host-invalid-hot-history")
+  const runId = RunId.make("invalid-hot-history-run")
+  const beginning = makeWorkflowRunBeganRecord(runId, target, policy)
+  return Effect.gen(function* () {
+    const failure = yield* selectProductionRun(target).pipe(Effect.flip)
+
+    expect(failure).toBeInstanceOf(StartupRecoveryBlocked)
+    expect(failure).toMatchObject({ issues: expect.arrayContaining([expect.objectContaining({ runId })]) })
+  }).pipe(
+    Effect.provide(journalLayer({ issues: [], runs: [{ records: [beginning, beginning], runId }] })),
+    Effect.provide(NodeCrypto.layer)
+  )
+})

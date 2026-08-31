@@ -126,7 +126,10 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const ownership = yield* CoordinatorOwnership
         const journal = yield* JournalStore
         const lifecycle = yield* RunLifecycleJournal
-        const githubClientLayer = adapters.githubClient?.(configuration) ?? defaultGithubClientLayer(configuration)
+        const githubClientLayer =
+          adapters.githubClient?.(configuration) ??
+          /* v8 ignore next -- @preserve Hermetic host tests replace the live GitHub boundary; the default is the production-only provider composition. */
+          defaultGithubClientLayer(configuration)
         const githubAuthorityLayer = githubDeliveryAuthorityLayer.pipe(
           Layer.provide(githubClientLayer),
           Layer.provide(NodeCrypto.layer)
@@ -140,7 +143,10 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const appLayer: Layer.Layer<
           CodexAppServer,
           ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>
-        > = adapters.codexAppServer?.(configuration) ?? defaultCodexAppServerLayer(configuration, attemptStoreLayer)
+        > =
+          adapters.codexAppServer?.(configuration) ??
+          /* v8 ignore next -- @preserve Hermetic host tests replace the process boundary; the default launches the production Codex app server. */
+          defaultCodexAppServerLayer(configuration, attemptStoreLayer)
         const gitCommandLayer = nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer))
         const activityCensusLayer = nodeCodexOwnedActivityCensusLayer.pipe(Layer.provide(appLayer))
         const executorLayer = nodeCodexPlannedAttemptExecutorLayer.pipe(
