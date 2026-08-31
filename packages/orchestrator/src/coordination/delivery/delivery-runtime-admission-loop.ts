@@ -14,6 +14,7 @@ import {
   proposalIsAvailable
 } from "./live-delivery-action.js"
 import type { DeliveryProposalFrontier, DeliveryRuntimeEvaluation } from "./relations.js"
+import type { DeliveryRuntimeLocalDeferral } from "./delivery-runtime-local-deferral.js"
 
 /** Two lower relations claim the same proposal identity, so no action is authorized. */
 export class DeliveryRuntimeProposalOwnershipConflict extends Schema.TaggedError<DeliveryRuntimeProposalOwnershipConflict>()(
@@ -31,7 +32,7 @@ type DeliveryRuntimeReservationResult =
 
 type DeliveryRuntimeAdmissionLoopState = {
   readonly admission: DeliveryRuntimeAdmissionController
-  readonly deferredAt: Ref.Ref<ReadonlyMap<DeliveryProposalId, JournalPosition | null>>
+  readonly localDeferrals: Ref.Ref<ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>>
   readonly latest: Ref.Ref<Option.Option<DeliveryRuntimeEvaluation>>
   readonly owners: Ref.Ref<ReadonlyMap<DeliveryProposalId, LiveOwner>>
   readonly selectionGate: Semaphore.Semaphore
@@ -63,9 +64,9 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
 ) => {
   const {
     admission,
-    deferredAt,
     emit,
     latest,
+    localDeferrals,
     owners,
     publishRuntimeObservationInsideGate,
     reserveAndStart,
@@ -78,7 +79,7 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
     live: ReadonlyMap<DeliveryProposalId, LiveOwner>,
     liveActionKeys: ReadonlySet<LiveDeliveryActionKey>,
     liveOperationIds: ReadonlySet<OperationId>,
-    deferred: ReadonlyMap<DeliveryProposalId, JournalPosition | null>,
+    deferred: ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>,
     acceptedAt: JournalPosition | null
   ) {
     for (const independent of proposals.slice(deferredIndex + 1)) {
@@ -104,7 +105,7 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
           })
         }
         const live = yield* Ref.get(owners)
-        const deferred = yield* Ref.get(deferredAt)
+        const deferred = yield* Ref.get(localDeferrals)
         const liveActionKeys = new Set([...live.values()].map(({ proposal }) => liveActionKeyOf(proposal)))
         const liveOperationIds = new Set(
           (yield* Effect.forEach(live.values(), ({ operationId }) => operationId)).flatMap(Option.toArray)
