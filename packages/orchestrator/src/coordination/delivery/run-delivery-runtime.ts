@@ -20,15 +20,7 @@ import {
   makeDeliveryRuntimeAdmissionLoop,
   DeliveryRuntimeProposalOwnershipConflict
 } from "./delivery-runtime-admission-loop.js"
-import {
-  attachCurrentSignal,
-  type CurrentSignal,
-  type DeliveryProposalFrontier,
-  type DeliveryQuiescenceDisposition,
-  type DeliveryRuntimeEvaluation,
-  type DeliveryRuntimeSnapshot,
-  type TrackerGraphState
-} from "./relations.js"
+import { attachCurrentSignal, type CurrentSignal, type DeliveryRuntimeEvaluation } from "./relations.js"
 import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 import * as RuntimeObservation from "./delivery-runtime-observation.js"
 import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
@@ -41,13 +33,14 @@ import {
   type DeliveryRuntimePhase as DeliveryRuntimePhaseType
 } from "./delivery-runtime-phase.js"
 import {
-  exactPreparedTaskWorkAdmissionIsStalled,
-  taskWorkAdmissionStalledRuntimeQuiescenceOf,
-  type TaskWorkAdmissionStalledRuntimeQuiescence
-} from "./task-work-admission-stalled-runtime-quiescence.js"
+  classifyTaskWorkAdmissionStalledRuntimeQuiescence,
+  type DeliveryRuntimeQuiescence,
+  type EmptyProposalFrontier
+} from "./delivery-runtime-quiescence.js"
 
 export { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
 export * from "./delivery-runtime-phase.js"
+export type { DeliveryRuntimeQuiescence } from "./delivery-runtime-quiescence.js"
 
 /** Reconfirmation was allowed without one exact accepted established graph, so G2 cannot be ordered after G1. */
 export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedError<DeliveryRuntimeReconfirmationStateInvalid>()(
@@ -77,35 +70,6 @@ type RuntimeEvent<E> =
  * live ownership remains process-local until that exact action settles.
  */
 export type DeliveryRuntimeInput<E = never> = CurrentSignal<DeliveryRuntimeEvaluation, E>
-
-type AvailableProposalFrontier = Extract<DeliveryProposalFrontier, { readonly _tag: "DeliveryProposalsAvailable" }>
-type EmptyProposalFrontier = Omit<AvailableProposalFrontier, "proposals"> & { readonly proposals: readonly [] }
-type EstablishedTrackerGraph = Extract<TrackerGraphState, { readonly _tag: "GraphEstablished" }>
-type EstablishedRuntimeSnapshot = Omit<DeliveryRuntimeSnapshot, "trackerGraph"> & {
-  readonly trackerGraph: EstablishedTrackerGraph
-}
-
-/** The exact descriptive state observed after no executable or admitted action remains. */
-export type DeliveryRuntimeQuiescence =
-  | TaskWorkAdmissionStalledRuntimeQuiescence
-  | {
-      readonly _tag: "PassiveRuntimeQuiescence"
-      readonly acceptedAt: DeliveryRuntimeEvaluation["acceptedAt"]
-      readonly current: DeliveryRuntimeSnapshot
-      readonly disposition: Extract<DeliveryQuiescenceDisposition, { readonly _tag: "QuiescencePassive" }>
-      readonly proposedActions: EmptyProposalFrontier
-      /** Active-refresh completion survives this quiescence until stabilization performs G2. */
-      readonly activeRefreshBoundary?: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]>
-    }
-  | {
-      readonly _tag: "TrackerReconfirmationQuiescence"
-      readonly acceptedAt: JournalPosition
-      readonly current: EstablishedRuntimeSnapshot
-      readonly disposition: Extract<DeliveryQuiescenceDisposition, { readonly _tag: "TrackerReconfirmationAllowed" }>
-      readonly proposedActions: EmptyProposalFrontier
-      /** Active-refresh completion survives this quiescence until stabilization performs G2. */
-      readonly activeRefreshBoundary?: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]>
-    }
 
 /**
  * The sole runtime-coloured consumer of the descriptive delivery relation.
@@ -394,21 +358,20 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               taskWorkPosition._tag === "TaskWorkPositionRequired" && taskWorkPosition.mode === "ReserveOrReuse"
           )
         const ordinaryTaskWorkAdmissionStalled =
-          phase._tag === "OrdinaryDeliveryRuntimePhase" &&
-          exactPreparedTaskWorkAdmissionIsStalled(current, proposedActions)
+          phase._tag === "OrdinaryDeliveryRuntimePhase"
+            ? classifyTaskWorkAdmissionStalledRuntimeQuiescence(current, proposedActions)
+            : Option.none()
         if (
           live.size !== 0 ||
           (!activeRefreshG2Pending &&
             !everyProposalAwaitsChangedAcceptedFacts &&
             !postG2RetainedCapacityBlocks &&
-            !ordinaryTaskWorkAdmissionStalled)
+            Option.isNone(ordinaryTaskWorkAdmissionStalled))
         ) {
           return Option.none<DeliveryRuntimeQuiescence>()
         }
-        if (ordinaryTaskWorkAdmissionStalled) {
-          return Option.some<DeliveryRuntimeQuiescence>(
-            taskWorkAdmissionStalledRuntimeQuiescenceOf(current, proposedActions)
-          )
+        if (Option.isSome(ordinaryTaskWorkAdmissionStalled)) {
+          return Option.some<DeliveryRuntimeQuiescence>(ordinaryTaskWorkAdmissionStalled.value)
         }
         const empty: EmptyProposalFrontier = { ...proposedActions, proposals: [] }
         if (current.quiescence._tag === "QuiescencePassive") {

@@ -121,6 +121,10 @@ import type { JournalRecord } from "../../workflow-journal/store.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { deriveJournalResponsibilityFacts } from "../run/recovery-activation.js"
 import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
+import {
+  makePreparedBeginFixture,
+  preparedBeginProposalsOf as derivePreparedBeginProposals
+} from "../../../test/support/prepared-begin-proposal.js"
 
 const deliveryRuntimeResourceCapabilitiesOf = Effect.fn("RunDeliveryRuntimeTest.makeCapabilities")(function* (
   integrationTargets: Parameters<typeof makeCapabilitiesWithAdmission>[0]
@@ -192,6 +196,11 @@ const proposal = (ordinal: number, taskId: TaskId): DeliveryActionProposal => ({
   order: { _tag: "FreshWorkflowOrder", frontierOrdinal: ordinal as never, step: "ReadCurrentTaskGraph", taskId },
   owner: "TicketDelivery"
 })
+
+const preparedAttemptFixture = (name: string) =>
+  makePreparedBeginFixture(plannedAttempt, "runtime-admission-stalled", name)
+const preparedBeginProposalsOf = (fixtures: ReadonlyArray<ReturnType<typeof preparedAttemptFixture>>) =>
+  derivePreparedBeginProposals(runId, fixtures)
 
 const handoffCorrelation = { attemptId: AttemptId.make("runtime-admission-handoff-attempt"), runId }
 const handoffIntegrationTarget = IntegrationTarget.make({
@@ -2909,40 +2918,43 @@ it.effect(
     Effect.scoped(
       Effect.gen(function* () {
         const base = yield* baseEvaluation
-        const attempt = (name: string, taskId: TaskId) =>
-          PlannedTaskAttempt.make({
-            ...plannedAttempt,
-            attemptId: AttemptId.make(`runtime-admission-stalled-${name}`),
-            taskId
-          })
-        const a = attempt("A", TaskId.make("runtime-admission-stalled-A"))
-        const b = attempt("B", TaskId.make("runtime-admission-stalled-B"))
-        const c = attempt("C", TaskId.make("runtime-admission-stalled-C"))
-        const d = attempt("D", TaskId.make("runtime-admission-stalled-D"))
-        const e = attempt("E", TaskId.make("runtime-admission-stalled-E"))
-        const preparedProposal = (ordinal: number, prepared: PlannedTaskAttempt) => ({
-          ...proposal(ordinal, prepared.taskId),
-          admission: {
-            integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
-            plannedAttemptProtocol: {
-              _tag: "PlannedAttemptProtocolRequired" as const,
-              correlation: plannedAttemptExecutorCorrelation(prepared)
+        const [a, b, c, d, e] = ["A", "B", "C", "D", "E"].map(preparedAttemptFixture)
+        if (a === undefined || b === undefined || c === undefined || d === undefined || e === undefined) {
+          return yield* Effect.die("five exact prepared-attempt fixtures must be present")
+        }
+        const blocked = preparedBeginProposalsOf([d, e])
+        expect(blocked).toHaveLength(2)
+        expect(blocked).toMatchObject([
+          {
+            admission: {
+              plannedAttemptProtocol: {
+                _tag: "PlannedAttemptProtocolRequired",
+                correlation: plannedAttemptExecutorCorrelation(d.attempt)
+              },
+              taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId: d.attempt.taskId }
             },
-            taskWorkPosition: {
-              _tag: "TaskWorkPositionRequired" as const,
-              mode: "ReserveOrReuse" as const,
-              taskId: prepared.taskId
-            }
+            order: { _tag: "FreshWorkflowOrder", frontierOrdinal: 0 },
+            route: { _tag: "FreshExecutorWorkflowRoute", step: { plannedAttempt: d.attempt } }
+          },
+          {
+            admission: {
+              plannedAttemptProtocol: {
+                _tag: "PlannedAttemptProtocolRequired",
+                correlation: plannedAttemptExecutorCorrelation(e.attempt)
+              },
+              taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId: e.attempt.taskId }
+            },
+            order: { _tag: "FreshWorkflowOrder", frontierOrdinal: 1 },
+            route: { _tag: "FreshExecutorWorkflowRoute", step: { plannedAttempt: e.attempt } }
           }
-        })
-        const blocked = [preparedProposal(0, d), preparedProposal(1, e)]
+        ])
         const relation = yield* dynamicEvaluationSignal({
           ...withProposals(base, blocked, 3),
           taskWork: {
             capacity: TaskWorkCapacity.make(3),
-            held: [a, b, c].map((held) => ({
-              taskId: held.taskId,
-              correlation: plannedAttemptExecutorCorrelation(held)
+            held: [a, b, c].map(({ attempt }) => ({
+              taskId: attempt.taskId,
+              correlation: plannedAttemptExecutorCorrelation(attempt)
             }))
           }
         })
@@ -2961,7 +2973,7 @@ it.effect(
           return yield* Effect.die("ordinary full capacity must return its typed descriptive result")
         }
         expect(result.taskWork.held.map(({ correlation }) => correlation)).toEqual(
-          [a, b, c].map(plannedAttemptExecutorCorrelation)
+          [a, b, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
         )
       })
     )
@@ -2978,34 +2990,15 @@ it.effect(
           attemptId: AttemptId.make("runtime-admission-stalled-held"),
           taskId: TaskId.make("runtime-admission-stalled-held-task")
         })
-        const blockedAttempt = PlannedTaskAttempt.make({
-          ...plannedAttempt,
-          attemptId: AttemptId.make("runtime-admission-stalled-blocked"),
-          taskId: TaskId.make("runtime-admission-stalled-blocked-task")
+        const blockedFixture = preparedAttemptFixture("blocked-by-live-owner")
+        const [blocked] = preparedBeginProposalsOf([blockedFixture])
+        if (blocked === undefined) return yield* Effect.die("prepared blocked attempt must produce Begin")
+        const positionless = trackerGraphReadProposalOf({
+          acceptedAt: JournalPosition.make(20),
+          purpose: "EstablishCurrentGraph",
+          runId,
+          target
         })
-        const blocked = {
-          ...proposal(1, blockedAttempt.taskId),
-          admission: {
-            integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
-            plannedAttemptProtocol: {
-              _tag: "PlannedAttemptProtocolRequired" as const,
-              correlation: plannedAttemptExecutorCorrelation(blockedAttempt)
-            },
-            taskWorkPosition: {
-              _tag: "TaskWorkPositionRequired" as const,
-              mode: "ReserveOrReuse" as const,
-              taskId: blockedAttempt.taskId
-            }
-          }
-        }
-        const positionless = {
-          ...proposal(0, TaskId.make("runtime-admission-stalled-positionless")),
-          admission: {
-            integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
-            plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
-            taskWorkPosition: { _tag: "NoTaskWorkPosition" as const }
-          }
-        }
         const initial = {
           ...withProposals(base, [positionless, blocked], 1),
           taskWork: {
@@ -3051,6 +3044,116 @@ it.effect(
         expect(result.proposedActions.proposals).toEqual([blocked])
       })
     )
+)
+
+it.effect("reuses a full-capacity position for its matching exact prepared attempt", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const retained = preparedAttemptFixture("matching-retained-correlation")
+      const [begin] = preparedBeginProposalsOf([retained])
+      if (begin === undefined) return yield* Effect.die("matching prepared attempt must produce Begin")
+      const initial = {
+        ...withProposals(base, [begin], 1),
+        taskWork: {
+          capacity: TaskWorkCapacity.make(1),
+          held: [{ taskId: retained.attempt.taskId, correlation: plannedAttemptExecutorCorrelation(retained.attempt) }]
+        }
+      } satisfies DeliveryRuntimeEvaluation
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+
+      const result = yield* runDeliveryRuntimePhase(relation).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: ({ proposal: action }) =>
+              Ref.update(executed, (current) => [...current, action.id]).pipe(
+                Effect.andThen(
+                  relation.publish({
+                    ...initial,
+                    proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }
+                  })
+                ),
+                Effect.as({ _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult)
+              )
+          })
+        )
+      )
+
+      expect(result._tag).not.toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+      expect(yield* Ref.get(executed)).toEqual([begin.id])
+    })
+  )
+)
+
+it.effect("does not classify fresh work without an exact planned-attempt protocol as admission-stalled", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const taskId = TaskId.make("runtime-admission-stalled-fresh-task")
+      const task: Task = {
+        id: taskId,
+        lifecycle: TaskLifecycle.cases.Open.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      }
+      const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+        taskId,
+        taskRevision: TaskRevision.make("runtime-admission-stalled-fresh-revision")
+      })
+      const [fresh] = deliveryProposalsOf({
+        acceptedOperationIds: new Set(),
+        fresh: [
+          {
+            step: FreshWorkflowStep.AcquireTaskClaim({
+              predecessorOperationId: OperationId.make("runtime-admission-stalled-fresh-graph"),
+              task
+            }),
+            transition
+          }
+        ],
+        runId,
+        transitions: [transition]
+      }).ticketDelivery
+      if (fresh === undefined) return yield* Effect.die("fresh claim must produce a proposal")
+      expect(fresh.admission).toMatchObject({
+        plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" },
+        taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId }
+      })
+      const held = preparedAttemptFixture("fresh-position-holder").attempt
+      const relation = yield* dynamicEvaluationSignal({
+        ...withProposals(base, [fresh], 1),
+        taskWork: {
+          capacity: TaskWorkCapacity.make(1),
+          held: [{ taskId: held.taskId, correlation: plannedAttemptExecutorCorrelation(held) }]
+        }
+      })
+      const deferred = yield* Deferred.make<void>()
+      const runtime = yield* runDeliveryRuntimePhase(relation).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({ execute: () => Effect.die("fresh work must remain position-gated") })
+        ),
+        Effect.provideService(
+          DeliverySemanticTrace,
+          DeliverySemanticTrace.of({
+            emit: (event) =>
+              event._tag === "ProposalDeferred" && event.proposalId === fresh.id
+                ? Deferred.succeed(deferred, undefined)
+                : Effect.void
+          })
+        ),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(deferred)
+      expect(runtime.pollUnsafe()).toBeUndefined()
+      yield* Fiber.interrupt(runtime)
+    })
+  )
 )
 
 it.effect("continues waiting after G2 while an in-flight action can free retained capacity", () =>

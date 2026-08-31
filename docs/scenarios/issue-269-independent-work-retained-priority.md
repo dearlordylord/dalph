@@ -231,6 +231,12 @@ and must not duplicate an executor command.
 - `does not report admission-stalled quiescence while a local owner can finish
   or for work that needs no task position` in the same file proves that only
   the concrete capacity boundary yields this result.
+- `reuses a full-capacity position for its matching exact prepared attempt`
+  proves that a retained exact correlation remains admissible rather than
+  being mislabeled as stalled.
+- `does not classify fresh work without an exact planned-attempt protocol as
+  admission-stalled` proves this handoff does not become a general fresh-work
+  capacity policy.
 - `returns RunMustRemainActive without G2 when task-work admission is stalled`
   in `packages/orchestrator/src/coordination/run/run-stabilization.test.ts`
   proves step 3 and the preserved non-empty frontier.
