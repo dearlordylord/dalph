@@ -331,7 +331,7 @@ it.effect("coalesces concurrent hints behind one activation", () =>
   )
 )
 
-it.effect("turns hints arriving during an active refresh into one trailing ordinary activation", () =>
+it.effect("coalesces hints arriving during an active refresh into one trailing active refresh", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const shell = yield* makeTestExitShell
@@ -339,7 +339,7 @@ it.effect("turns hints arriving during an active refresh into one trailing ordin
       const ordinaryFinished = yield* Deferred.make<void>()
       const activeStarted = yield* Deferred.make<void>()
       const releaseActive = yield* Deferred.make<void>()
-      const trailingOrdinaryStarted = yield* Deferred.make<void>()
+      const trailingActiveStarted = yield* Deferred.make<void>()
       const kinds = yield* Ref.make<ReadonlyArray<"OrdinaryRunEntry" | "ActiveWorkAuthorityRefresh">>([])
       yield* provideOwner(
         shell.shell,
@@ -351,15 +351,16 @@ it.effect("turns hints arriving during an active refresh into one trailing ordin
           activate: () =>
             Ref.updateAndGet(kinds, (current) => [...current, "OrdinaryRunEntry" as const]).pipe(
               Effect.tap((current) =>
-                current.length === 1
-                  ? Deferred.succeed(ordinaryStarted, undefined)
-                  : Deferred.succeed(trailingOrdinaryStarted, undefined)
+                current.length === 1 ? Deferred.succeed(ordinaryStarted, undefined) : Effect.void
               ),
               Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })),
               Effect.tap(() => Deferred.succeed(ordinaryFinished, undefined))
             ),
           activateActiveWorkAuthorityRefresh: () =>
-            Ref.update(kinds, (current) => [...current, "ActiveWorkAuthorityRefresh" as const]).pipe(
+            Ref.updateAndGet(kinds, (current) => [...current, "ActiveWorkAuthorityRefresh" as const]).pipe(
+              Effect.tap((current) =>
+                current.length === 3 ? Deferred.succeed(trailingActiveStarted, undefined) : Effect.void
+              ),
               Effect.andThen(Deferred.succeed(activeStarted, undefined)),
               Effect.andThen(Deferred.await(releaseActive)),
               Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
@@ -379,11 +380,11 @@ it.effect("turns hints arriving during an active refresh into one trailing ordin
             yield* owner.hint(RunReactivationHint.Timer())
             yield* owner.hint(RunReactivationHint.TrackerNotification())
             yield* Deferred.succeed(releaseActive, undefined)
-            yield* Deferred.await(trailingOrdinaryStarted)
+            yield* Deferred.await(trailingActiveStarted)
             expect(yield* Ref.get(kinds)).toEqual([
               "OrdinaryRunEntry",
               "ActiveWorkAuthorityRefresh",
-              "OrdinaryRunEntry"
+              "ActiveWorkAuthorityRefresh"
             ])
           })
       )
@@ -391,7 +392,7 @@ it.effect("turns hints arriving during an active refresh into one trailing ordin
   )
 )
 
-it.effect("coalesces a hint blocked by active finalization into one trailing ordinary activation", () =>
+it.effect("preserves an authority hint blocked by active finalization as one trailing active refresh", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const shell = yield* makeTestExitShell
@@ -401,7 +402,7 @@ it.effect("coalesces a hint blocked by active finalization into one trailing ord
       const producerFiber = yield* Deferred.make<Fiber.Fiber<void, never>>()
       const finalizationStarted = yield* Deferred.make<void>()
       const releaseFinalization = yield* Deferred.make<void>()
-      const trailingOrdinaryStarted = yield* Deferred.make<void>()
+      const trailingActiveStarted = yield* Deferred.make<void>()
       const activeCalls = yield* Ref.make(0)
       const ordinaryCalls = yield* Ref.make(0)
       yield* provideOwner(
@@ -413,12 +414,11 @@ it.effect("coalesces a hint blocked by active finalization into one trailing ord
           readControl: Effect.succeed("RunUnpaused" as const),
           activate: () =>
             Ref.updateAndGet(ordinaryCalls, (current) => current + 1).pipe(
-              Effect.tap((count) => (count === 1 ? Deferred.succeed(trailingOrdinaryStarted, undefined) : Effect.void)),
               Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
             ),
           activateActiveWorkAuthorityRefresh: () =>
             Ref.updateAndGet(activeCalls, (current) => current + 1).pipe(
-              Effect.tap(() => Deferred.succeed(activeStarted, undefined)),
+              Effect.tap((count) => Deferred.succeed(count === 1 ? activeStarted : trailingActiveStarted, undefined)),
               Effect.andThen(Deferred.await(releaseActive)),
               Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
             ),
@@ -450,10 +450,10 @@ it.effect("coalesces a hint blocked by active finalization into one trailing ord
             const producer = yield* Deferred.await(producerFiber)
             yield* Deferred.succeed(releaseFinalization, undefined)
             yield* Fiber.join(producer)
-            yield* Deferred.await(trailingOrdinaryStarted)
+            yield* Deferred.await(trailingActiveStarted)
             yield* Effect.yieldNow
-            expect(yield* Ref.get(activeCalls)).toBe(1)
-            expect(yield* Ref.get(ordinaryCalls)).toBe(1)
+            expect(yield* Ref.get(activeCalls)).toBe(2)
+            expect(yield* Ref.get(ordinaryCalls)).toBe(0)
           })
       )
     })
@@ -473,7 +473,7 @@ it.effect("keeps a blocked trailing marker ahead of a post-idle hint until it is
       const producerFiber = yield* Deferred.make<Fiber.Fiber<void, never>>()
       const trailingRecorded = yield* Deferred.make<void>()
       const postIdleHintSent = yield* Deferred.make<void>()
-      const trailingOrdinaryStarted = yield* Deferred.make<void>()
+      const trailingActiveStarted = yield* Deferred.make<void>()
       const idleHookArmed = yield* Ref.make(false)
       const kinds = yield* Ref.make<ReadonlyArray<"OrdinaryRunEntry" | "ActiveWorkAuthorityRefresh">>([])
       yield* provideOwner(
@@ -486,14 +486,15 @@ it.effect("keeps a blocked trailing marker ahead of a post-idle hint until it is
           activate: () =>
             Ref.updateAndGet(kinds, (current) => [...current, "OrdinaryRunEntry" as const]).pipe(
               Effect.tap((current) =>
-                current.length === 1
-                  ? Deferred.succeed(firstOrdinaryFinished, undefined)
-                  : Deferred.succeed(trailingOrdinaryStarted, undefined)
+                current.length === 1 ? Deferred.succeed(firstOrdinaryFinished, undefined) : Effect.void
               ),
               Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
             ),
           activateActiveWorkAuthorityRefresh: () =>
-            Ref.update(kinds, (current) => [...current, "ActiveWorkAuthorityRefresh" as const]).pipe(
+            Ref.updateAndGet(kinds, (current) => [...current, "ActiveWorkAuthorityRefresh" as const]).pipe(
+              Effect.tap((current) =>
+                current.length === 3 ? Deferred.succeed(trailingActiveStarted, undefined) : Effect.void
+              ),
               Effect.andThen(Deferred.succeed(activeStarted, undefined)),
               Effect.andThen(Deferred.await(releaseActive)),
               Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
@@ -542,11 +543,11 @@ it.effect("keeps a blocked trailing marker ahead of a post-idle hint until it is
             const producer = yield* Deferred.await(producerFiber)
             yield* Fiber.join(producer)
             yield* Deferred.await(postIdleHintSent)
-            yield* Deferred.await(trailingOrdinaryStarted)
+            yield* Deferred.await(trailingActiveStarted)
             expect(yield* Ref.get(kinds)).toEqual([
               "OrdinaryRunEntry",
               "ActiveWorkAuthorityRefresh",
-              "OrdinaryRunEntry"
+              "ActiveWorkAuthorityRefresh"
             ])
           })
       )

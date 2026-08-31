@@ -506,6 +506,7 @@ type ProductionRefreshHarnessOptions = {
   readonly source?: "TrackerNotification" | "Timer" | "AcceptedFactPublication" | "OperatorWake"
   readonly report?: "Running" | "SafelySuspended" | "Terminal"
   readonly coalesce?: boolean
+  readonly editDuringActiveRead?: boolean
   readonly claim?: "Exact" | "Missing" | "Foreign" | "Unreadable"
   readonly specification?: "Exact" | "Changed"
   readonly laterSpecificationChange?: boolean
@@ -1143,7 +1144,11 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                           new TrackerReadError({ operation: "TrackerGraphReader.parse", detail: "graph unreadable" })
                         )
                       : Effect.gen(function* () {
-                          if (coalesce && (yield* Ref.get(phase)) === "Active") {
+                          if (
+                            coalesce &&
+                            options.editDuringActiveRead !== true &&
+                            (yield* Ref.get(phase)) === "Active"
+                          ) {
                             yield* Deferred.succeed(activeReadStarted, undefined)
                             yield* Deferred.await(releaseActiveRead)
                           }
@@ -1155,6 +1160,16 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 Effect.gen(function* () {
                   yield* Ref.update(trackerCalls, (calls) => [...calls, "specification" as const])
                   const selectedSpecificationMode = yield* Ref.get(currentSpecificationMode)
+                  if (
+                    coalesce &&
+                    options.editDuringActiveRead === true &&
+                    selectedTaskId === constrainedTaskId &&
+                    (yield* Ref.get(phase)) === "Active" &&
+                    (yield* Ref.get(activeActivationCount)) === 1
+                  ) {
+                    yield* Deferred.succeed(activeReadStarted, undefined)
+                    yield* Deferred.await(releaseActiveRead)
+                  }
                   return selectedTaskId === taskId
                     ? selectedSpecificationMode === "Changed" && changedTask === "A"
                       ? changedSpecification
@@ -1486,6 +1501,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 yield* Ref.set(phase, "Active")
                 yield* owner.hint(RunReactivationHint.TrackerNotification())
                 yield* Deferred.await(activeReadStarted)
+                if (options.editDuringActiveRead === true) {
+                  yield* Ref.set(currentSpecificationMode, "Changed")
+                }
                 const observers = yield* Ref.get(registeredObservers)
                 if (observers === undefined) return yield* Effect.die("production owner did not register its observers")
                 yield* observers.acceptedFactPublication()
@@ -1493,7 +1511,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 yield* owner.hint(RunReactivationHint.TrackerNotification())
                 yield* owner.hint(RunReactivationHint.Timer())
                 yield* Deferred.succeed(releaseActiveRead, undefined)
-                yield* Deferred.await(acceptedActivation)
+                yield* Effect.raceFirst(Deferred.await(secondActiveSettled), Deferred.await(acceptedActivation))
               } else {
                 yield* Ref.set(phase, "Active")
                 if (source === "Timer") {
@@ -2023,19 +2041,52 @@ it.effect("Operator Wake remains an ordinary entry without active authority read
   })
 )
 
-it.effect(
-  "accepted publication notification and timer coalesce behind one active refresh and one trailing ordinary activation",
-  () =>
-    Effect.gen(function* () {
-      const result = yield* runProductionRefreshHarness({ coalesce: true })
-      expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "ActiveWorkAuthorityRefresh", "OrdinaryRunEntry"])
-      expect(result.activeActivationCount).toBe(1)
-      expect(result.activeSources).toEqual(["TrackerNotification"])
-      expect(result.maximumActiveConcurrent).toBe(1)
-      expect(result.activeSelectionOperationKeys.filter((key) => key.startsWith("ReadTrackerGraph:"))).toHaveLength(2)
-      expect(result.executorEntries).toEqual([])
-      expect(result.executorCalls).toEqual([])
+it.effect("accepted publication notification and timer coalesce into one trailing active refresh", () =>
+  Effect.gen(function* () {
+    const result = yield* runProductionRefreshHarness({ coalesce: true })
+    expect(result.activationKinds).toEqual([
+      "OrdinaryRunEntry",
+      "ActiveWorkAuthorityRefresh",
+      "ActiveWorkAuthorityRefresh"
+    ])
+    expect(result.activeActivationCount).toBe(2)
+    expect(result.activeSources).toEqual(["TrackerNotification", "Timer"])
+    expect(result.maximumActiveConcurrent).toBe(1)
+    expect(result.activeSelectionOperationKeys.filter((key) => key.startsWith("ReadTrackerGraph:"))).toHaveLength(4)
+    expect(result.executorEntries).toEqual([])
+    expect(result.executorCalls).toEqual([])
+  })
+)
+
+it.effect("a tracker edit during one active read is preserved as one serialized trailing active refresh", () =>
+  Effect.gen(function* () {
+    const result = yield* runProductionRefreshHarness({
+      changedTask: "B",
+      coalesce: true,
+      editDuringActiveRead: true,
+      threeExecuting: true
     })
+    expect(result.activationKinds).toEqual([
+      "OrdinaryRunEntry",
+      "ActiveWorkAuthorityRefresh",
+      "ActiveWorkAuthorityRefresh"
+    ])
+    expect(result.activeActivationCount).toBe(2)
+    expect(result.maximumActiveConcurrent).toBe(1)
+    expect(result.executorCalls.filter(({ command }) => command !== "observe")).toEqual([
+      { command: "Suspend", taskId: "B" }
+    ])
+    expect(result.executorCalls.filter(({ taskId }) => taskId === "A" || taskId === "C")).toEqual([])
+    expect(
+      result.journalRecords.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+          event.observation.factFamily.taskId === "B" &&
+          event.observation.factFamily.body === "Changed F2 instructions."
+      )
+    ).toHaveLength(1)
+  })
 )
 
 it.effect("production refresh recovers a constraint observed before a crashed suspension intent", () =>
