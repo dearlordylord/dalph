@@ -30,8 +30,9 @@ cassette does not model either hint as durable authority.
 The ordinary workflow selects the independent complete graph read G0 and the
 active-work complete graph read G1. Their raw operation identities are bound
 to the cassette's symbolic `independent-G0` and `active-G1` roles. G0 causes
-focused B read F1 and G1 causes focused B read F2. F2 and F1 return in reverse
-order. At the controlled tracker boundary, each result is consumed only by
+focused B read F1 and G1 causes focused B read F2. Dalph selects and starts F1
+first, then selects F2; F2 returns first and F1 returns last. At the controlled
+tracker boundary, each result is consumed only by
 the exact initiating operation whose predecessor set names its graph read.
 The active refresh therefore receives F2, while the independent operation
 receives F1.
@@ -54,8 +55,8 @@ Acceptance tests:
 
 - `authored-active-work-causal-sync.test.ts` — “binds authored roles at the
   real operation-selection trace seam”
-- `authored-active-work-causal-sync.test.ts` — “pairs reverse-arriving
-  same-shape B reads with their exact initiating operations exactly once”
+- `authored-active-work-causal-sync.test.ts` — “selects F1 then F2 and pairs
+  reverse-completing reads with their exact initiating operations”
 - `authored-active-work-causal-sync.test.ts` — “fails closed for missing
   crossed foreign and duplicate causal relationships”
 - `authored-active-work-causal-sync.test.ts` — “drains repeatedly forked
@@ -100,8 +101,10 @@ The unchanged A path performs the ordinary claim, worktree, lineage, and
 executing-observer checks. The changed B path requests exactly one Suspend for
 B1. An unchanged Executing response retains B1 and its position while the
 same-attempt passive owner waits. A foreign projection, a missing owner, or
-another Executing projection cannot release B1. Exact B1 Safe or Terminal is
-published through the ordinary report protocol, releases B1, and permits the
+another Executing projection cannot release B1. The cassette names a later
+passive lifecycle change separately from an explicitly requested executor
+projection, so only B1's attached owner can consume exact B1 Safe or Terminal.
+That observation is published through the ordinary report protocol, releases B1, and permits the
 separate post-quiescence G2 read. When that activation returns, the four hints
 produce exactly one trailing production refresh. That refresh sees only A
 still executing, completes A's focused claim/Git checks, and performs its own
@@ -120,9 +123,10 @@ scenario; the #265, #266, and #267 scenarios continue to govern its behavior.
 | Chronological result | Direct proof |
 |---|---|
 | Raw operation and predecessor identities enter through the real trace seam | `authored-active-work-causal-sync.test.ts`, trace-seam test |
-| Reverse F2/F1 completion preserves exact initiating operations | `authored-active-work-causal-sync.test.ts`, reverse-arrival test |
+| F1 is selected before F2 while F2 completes before F1, preserving exact initiating operations | `authored-active-work-causal-sync.test.ts`, reverse-completion test |
 | Missing, crossed, foreign, and duplicate ownership fails closed | `authored-active-work-causal-sync.test.ts`, fail-closed test |
 | Repeated concurrent schedules drain one surrounding story position | `authored-active-work-causal-sync.test.ts`, repeatedly-forked test |
 | Unchanged executing and foreign attempts do not release B1 | `authored-active-work-causal-sync.test.ts`, executing and exact-owner tests |
 | Exact B1 Safe or Terminal releases B1 | `authored-active-work-causal-sync.test.ts`, exact-owner test; `delivery-proposal-routes.test.ts`, exact production adapter regression |
+| Tracker causality does not change ordinary requested executor-projection consumption | `authored-active-work-causal-sync.test.ts`, causal-only requested-projection test |
 | Current notification wins Startup, later hints coalesce into one trailing refresh, real G1/F1/F2 run, and B1 releases only after exact Safe | `authored-active-work-causal-sync.test.ts`, maintained composed cassette test |

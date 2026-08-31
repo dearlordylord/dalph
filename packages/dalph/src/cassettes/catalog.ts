@@ -2567,7 +2567,7 @@ export const activeWorkF2SafelySuspendsAuthoredCassette: ScenarioCassette = Sche
       request: "Suspend"
     },
     {
-      _tag: "PlannedAttemptExecutorProjectionReturned",
+      _tag: "PlannedAttemptExecutorPassiveLifecycleChanged",
       report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:B:1" }
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },

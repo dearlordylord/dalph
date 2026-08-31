@@ -1,10 +1,11 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Cause, Effect, Exit, Fiber, Ref, Schema } from "effect"
+import { Cause, Effect, Exit, Fiber, Option, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorReport,
   RunId,
   TaskId,
@@ -170,29 +171,40 @@ it.effect("binds authored roles at the real operation-selection trace seam", () 
     expect((yield* consumeControlledTrackerGraph(cursor, target, contextOf(g0))).revision).toBe("G0")
     yield* trace.emit({ _tag: "OperationSelected", operation: g1 })
     expect((yield* consumeControlledTrackerGraph(cursor, target, contextOf(g1))).revision).toBe("G1")
-    yield* trace.emit({ _tag: "OperationSelected", operation: f2 })
+    const boundaryOrder: Array<string> = []
     yield* trace.emit({ _tag: "OperationSelected", operation: f1 })
-    expect((yield* consumeControlledTaskWorkSpecification(cursor, taskB, contextOf(f1))).title).toBe("B F1")
+    boundaryOrder.push("Select F1")
+    yield* trace.emit({ _tag: "OperationSelected", operation: f2 })
+    boundaryOrder.push("Select F2")
     expect((yield* consumeControlledTaskWorkSpecification(cursor, taskB, contextOf(f2))).title).toBe("B F2")
+    boundaryOrder.push("Return F2")
+    expect((yield* consumeControlledTaskWorkSpecification(cursor, taskB, contextOf(f1))).title).toBe("B F1")
+    boundaryOrder.push("Return F1")
+    expect(boundaryOrder).toEqual(["Select F1", "Select F2", "Return F2", "Return F1"])
     expect(yield* cursor.storyPosition).toBe(causalPrefix.length + 1)
   })
 )
 
-it.effect("pairs reverse-arriving same-shape B reads with their exact initiating operations exactly once", () =>
+it.effect("selects F1 then F2 and pairs reverse-completing reads with their exact initiating operations", () =>
   Effect.gen(function* () {
     const cursor = yield* makeStoryCursor([...causalPrefix, sameShapeBatch, terminal])
     yield* bindCausalPrefix(cursor)
 
     const activeF2 = causalContext("operation:B:F2", ["operation:G1"])
     const independentF1 = causalContext("operation:B:F1", ["operation:G0"])
-    const activeSelection = yield* cursor.consumeDalphSelectionFor(readBSpecification, activeF2).pipe(Effect.forkChild)
-    yield* Effect.yieldNow
+    const boundaryOrder: Array<string> = []
     const independentSelection = yield* cursor.consumeDalphSelectionFor(readBSpecification, independentF1)
+    boundaryOrder.push("Select F1")
+    const activeSelection = yield* cursor.consumeDalphSelectionFor(readBSpecification, activeF2)
+    boundaryOrder.push("Select F2")
 
     expect(independentSelection.operation).toEqual(readBSpecification)
-    expect((yield* cursor.consumeTaskWorkSpecificationFor(taskB, independentF1)).title).toBe("B F1")
-    expect((yield* Fiber.join(activeSelection)).operation).toEqual(readBSpecification)
+    expect(activeSelection.operation).toEqual(readBSpecification)
     expect((yield* cursor.consumeTaskWorkSpecificationFor(taskB, activeF2)).title).toBe("B F2")
+    boundaryOrder.push("Return F2")
+    expect((yield* cursor.consumeTaskWorkSpecificationFor(taskB, independentF1)).title).toBe("B F1")
+    boundaryOrder.push("Return F1")
+    expect(boundaryOrder).toEqual(["Select F1", "Select F2", "Return F2", "Return F1"])
     expect(yield* cursor.storyPosition).toBe(causalPrefix.length + 1)
 
     const duplicate = yield* Effect.exit(cursor.consumeDalphSelectionFor(readBSpecification, activeF2))
@@ -274,6 +286,20 @@ const observeThroughControlledExecutor = (
     }).pipe(Effect.provide(controlledExecutorLayer(cursor, runId, () => Effect.void, reports, unresolved)))
   })
 
+const attachThroughControlledExecutor = (
+  cursor: StoryCursor,
+  runId: RunId,
+  correlation: { readonly attemptId: AttemptId; readonly runId: RunId },
+  reports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>
+) =>
+  Effect.gen(function* () {
+    const unresolved = yield* Ref.make<ReadonlySet<string>>(new Set())
+    return yield* Effect.gen(function* () {
+      const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+      return yield* lifecycle.attach(correlation)
+    }).pipe(Effect.provide(controlledExecutorLayer(cursor, runId, () => Effect.void, reports, unresolved)))
+  })
+
 it.effect("reobserves B1 executing without advancing or manufacturing another report", () =>
   Effect.gen(function* () {
     const runId = RunId.make("active-work-run")
@@ -282,18 +308,17 @@ it.effect("reobserves B1 executing without advancing or manufacturing another re
     const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(
       new Map([[plannedAttemptExecutorCorrelationKey(correlation), executing]])
     )
-    const cursor = yield* makeStoryCursor([anchorSelection("lifecycle-mode"), terminal])
-    yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:lifecycle-mode", []))
+    const cursor = yield* makeStoryCursor([terminal])
 
-    expect(yield* observeThroughControlledExecutor(cursor, runId, correlation, reports)).toEqual({
+    expect((yield* attachThroughControlledExecutor(cursor, runId, correlation, reports)).current).toEqual({
       _tag: "Exact",
       report: executing
     })
-    expect(yield* observeThroughControlledExecutor(cursor, runId, correlation, reports)).toEqual({
+    expect((yield* attachThroughControlledExecutor(cursor, runId, correlation, reports)).current).toEqual({
       _tag: "Exact",
       report: executing
     })
-    expect(yield* cursor.storyPosition).toBe(1)
+    expect(yield* cursor.storyPosition).toBe(0)
   })
 )
 
@@ -311,20 +336,45 @@ it.effect("allows only B1 safe or terminal observations to consume B1's lifecycl
       const b = { attemptId: report.attemptId, runId }
       const foreign = { attemptId: AttemptId.make("attempt:C:1"), runId }
       const cursor = yield* makeStoryCursor([
-        anchorSelection("lifecycle-mode"),
-        AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.make({ report }),
+        AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorPassiveLifecycleChanged.make({ report }),
         terminal
       ])
-      yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:lifecycle-mode", []))
       const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
 
-      expect((yield* observeThroughControlledExecutor(cursor, runId, foreign, reports))._tag).toBe(
-        "CorrelationContradiction"
-      )
+      const foreignSubscription = yield* attachThroughControlledExecutor(cursor, runId, foreign, reports)
+      expect(foreignSubscription.current._tag).toBe("NoReport")
+      const foreignChange = yield* Stream.runHead(foreignSubscription.changes).pipe(Effect.forkChild)
+      expect(yield* cursor.storyPosition).toBe(0)
+      const bSubscription = yield* attachThroughControlledExecutor(cursor, runId, b, reports)
+      expect(bSubscription.current._tag).toBe("NoReport")
+      const bChange = yield* Stream.runHead(bSubscription.changes)
+      expect(Option.getOrUndefined(bChange)?._tag).toBe("Exact")
       expect(yield* cursor.storyPosition).toBe(1)
-      expect((yield* observeThroughControlledExecutor(cursor, runId, b, reports))._tag).toBe("Exact")
-      expect(yield* cursor.storyPosition).toBe(2)
+      expect(foreignChange.pollUnsafe()).toBeUndefined()
+      yield* Fiber.interrupt(foreignChange)
     }
+  })
+)
+
+it.effect("keeps requested executor projections ordered even in a causal tracker story", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("active-work-requested-projection")
+    const b = { attemptId: AttemptId.make("attempt:B:1"), runId }
+    const foreign = { attemptId: AttemptId.make("attempt:C:1"), runId }
+    const cursor = yield* makeStoryCursor([
+      anchorSelection("causal-only"),
+      AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.make({
+        report: { _tag: "ExecutorWorkSafelySuspended", attemptId: b.attemptId }
+      }),
+      terminal
+    ])
+    yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:causal-only", []))
+    const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
+
+    expect((yield* observeThroughControlledExecutor(cursor, runId, foreign, reports))._tag).toBe(
+      "CorrelationContradiction"
+    )
+    expect(yield* cursor.storyPosition).toBe(2)
   })
 )
 
