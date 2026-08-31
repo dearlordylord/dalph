@@ -3,9 +3,7 @@ import { NodeCrypto, NodeFileSystem, NodePath, NodeServices } from "@effect/plat
 import { it } from "@effect/vitest"
 import { PlannedAttemptExecutor, RunId } from "@dalph/contracts"
 import { DatabaseSync } from "node:sqlite"
-import { readFileSync } from "node:fs"
 import nodeProcess from "node:process"
-import { fileURLToPath } from "node:url"
 import {
   ClaimOwner,
   ClaimToken,
@@ -55,8 +53,10 @@ import {
 } from "@dalph/orchestrator"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Context, Deferred, Effect, Fiber, FileSystem, Layer, Path, Ref, Schema, Stream } from "effect"
-import { expect } from "vitest"
+import { expect, expectTypeOf } from "vitest"
 import {
+  type ProductionRepositoryHostAdapters,
+  type ProductionRepositoryHostBoundary,
   type ProductionRepositoryHostGraph,
   productionRepositoryHostGraph,
   withProductionRepositoryHost
@@ -126,6 +126,14 @@ const ownershipLayer = Layer.succeed(
   CoordinatorOwnership,
   CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
 )
+
+it("production host adapter surface cannot replace workflow mutation capabilities", () => {
+  type CapabilityReplacementKey = Extract<
+    keyof ProductionRepositoryHostAdapters,
+    "journalStore" | "gitCommand" | "plannedAttemptExecutor" | "integrator"
+  >
+  expectTypeOf<CapabilityReplacementKey>().toEqualTypeOf<never>()
+})
 
 it.effect(
   "production host returns ProductionHostObservation only after exact Run selection and acknowledged WorkflowRunBegan",
@@ -608,22 +616,6 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
   const boundaryFailure = (boundary: Exclude<keyof UnsafeDiscoveryBoundaryCalls, "boundaryAcquisitions">) =>
     count(boundary).pipe(Effect.andThen(Effect.die(`unsafe discovery crossed ${boundary}`)))
   const githubClient = GithubGraphqlClient.of({ execute: () => boundaryFailure("githubGraphqlRequests") })
-  const gitCommand = GitCommand.of({
-    run: () => boundaryFailure("gitCommandCalls"),
-    runInWorktree: () => boundaryFailure("gitCommandCalls"),
-    runBytesInWorktree: () => boundaryFailure("gitCommandCalls")
-  })
-  const executor = PlannedAttemptExecutor.of({
-    observe: () => boundaryFailure("executorCalls"),
-    begin: () => boundaryFailure("executorCalls"),
-    requestSuspension: () => boundaryFailure("executorCalls"),
-    resume: () => boundaryFailure("executorCalls")
-  })
-  const integrator = Integrator.of({ prepare: () => boundaryFailure("integratorOperations") })
-  const evidence = EvidenceStore.of({
-    put: () => boundaryFailure("evidenceWrites"),
-    read: () => boundaryFailure("evidenceWrites")
-  })
   const app = CodexAppServer.of({
     incarnation: CodexServerIncarnation.make("production-unsafe-discovery-incarnation"),
     startThread: () => boundaryFailure("executorCalls"),
@@ -635,72 +627,82 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
     terminateBackgroundTerminal: () => boundaryFailure("executorCalls"),
     close: boundaryFailure("executorCalls")
   })
+  const boundaryObserver = (boundary: ProductionRepositoryHostBoundary) => {
+    switch (boundary) {
+      case "journal.sqlite.open":
+        // Discovery may open the real SQLite journal before rejecting unsafe history.
+        return count("boundaryAcquisitions")
+      case "git.acquire":
+      case "git.run":
+      case "git.runInWorktree":
+      case "git.runBytesInWorktree":
+        return boundaryFailure("gitCommandCalls")
+      case "executor.acquire":
+      case "executor.observe":
+      case "executor.begin":
+      case "executor.requestSuspension":
+      case "executor.resume":
+        return boundaryFailure("executorCalls")
+      case "integrator.acquire":
+      case "integrator.prepare":
+        return boundaryFailure("integratorOperations")
+      case "github.authority.acquire":
+        return boundaryFailure("githubGraphqlRequests")
+      case "coordinator.acquire":
+        return Effect.void
+    }
+  }
   const productionGraph = productionRepositoryHostGraph({
-    journalStore: (_configuration, defaultLayer) =>
-      Layer.unwrap(
-        Effect.gen(function* () {
-          yield* count("boundaryAcquisitions")
-          const foundation = yield* Layer.build(defaultLayer)
-          const journal = Context.get(foundation, JournalStore)
-          const lifecycle = Context.get(foundation, RunLifecycleJournal)
-          const countJournalMutation = <A, E>(effect: Effect.Effect<A, E>) =>
-            boundaryFailure("journalMutations").pipe(Effect.andThen(effect))
-          const wrappedJournal = JournalStore.of({
-            ...journal,
-            append: (runId, key, event) => countJournalMutation(journal.append(runId, key, event)),
-            beginRun: (runId, target, initialControlPolicy) =>
-              countJournalMutation(journal.beginRun(runId, target, initialControlPolicy)),
-            terminateRun: (runId, disposition, journalEvidence) =>
-              countJournalMutation(journal.terminateRun(runId, disposition, journalEvidence)),
-            retireTerminalRun: (runId) => countJournalMutation(journal.retireTerminalRun(runId))
-          })
-          const wrappedLifecycle = RunLifecycleJournal.of({
-            ...lifecycle,
-            beginRun: wrappedJournal.beginRun,
-            terminateRun: wrappedJournal.terminateRun,
-            retireTerminalRun: wrappedJournal.retireTerminalRun
-          })
-          return Layer.succeedContext(
-            Context.add(Context.add(foundation, JournalStore, wrappedJournal), RunLifecycleJournal, wrappedLifecycle)
-          )
-        })
-      ),
+    boundaryObserver,
     githubClient: () => Layer.effect(GithubGraphqlClient, count("boundaryAcquisitions").pipe(Effect.as(githubClient))),
     codexAppServer: () => Layer.effect(CodexAppServer, count("boundaryAcquisitions").pipe(Effect.as(app))),
-    gitCommand: () => Layer.effect(GitCommand, count("boundaryAcquisitions").pipe(Effect.as(gitCommand))),
-    plannedAttemptExecutor: () =>
-      Layer.effect(PlannedAttemptExecutor, count("boundaryAcquisitions").pipe(Effect.as(executor))),
-    integrator: () =>
-      Layer.effectContext(
-        Effect.gen(function* () {
-          yield* count("boundaryAcquisitions")
-          const ownership = yield* CoordinatorOwnership
-          return Context.empty().pipe(
-            Context.add(Integrator, integrator),
-            Context.add(IntegratorCandidateProviderAuthority, unavailableIntegratorCandidateProviderAuthority),
-            Context.add(CoordinatorOwnership, ownership)
-          )
-        })
-      ),
-    evidenceStore: () => Layer.effect(EvidenceStore, count("boundaryAcquisitions").pipe(Effect.as(evidence))),
     workflowGitCommandObserver: (operation) =>
       count("workflowGitCommandCalls").pipe(
         Effect.andThen(Effect.die(`unsafe discovery crossed workflow Git ${operation}`))
       )
   })
+  const foundation = (configuration: ProductionRepositoryHostConfiguration) =>
+    Layer.effectContext(
+      Effect.gen(function* () {
+        const context = yield* Effect.context<CoordinatorOwnership | JournalStore | RunLifecycleJournal>()
+        const journal = Context.get(context, JournalStore)
+        const lifecycle = Context.get(context, RunLifecycleJournal)
+        const countJournalMutation = <A, E>(effect: Effect.Effect<A, E>) =>
+          boundaryFailure("journalMutations").pipe(Effect.andThen(effect))
+        const wrappedJournal = JournalStore.of({
+          ...journal,
+          append: (runId, key, event) => countJournalMutation(journal.append(runId, key, event)),
+          beginRun: (runId, target, initialControlPolicy) =>
+            countJournalMutation(journal.beginRun(runId, target, initialControlPolicy)),
+          terminateRun: (runId, disposition, journalEvidence) =>
+            countJournalMutation(journal.terminateRun(runId, disposition, journalEvidence)),
+          retireTerminalRun: (runId) => countJournalMutation(journal.retireTerminalRun(runId))
+        })
+        const wrappedLifecycle = RunLifecycleJournal.of({
+          ...lifecycle,
+          beginRun: wrappedJournal.beginRun,
+          terminateRun: wrappedJournal.terminateRun,
+          retireTerminalRun: wrappedJournal.retireTerminalRun
+        })
+        return Context.add(
+          Context.add(context, JournalStore, wrappedJournal),
+          RunLifecycleJournal,
+          wrappedLifecycle
+        )
+      })
+    ).pipe(Layer.provide(productionGraph.foundation(configuration)))
   const graph = {
     ...productionGraph,
+    foundation,
     run: (
       configuration: ProductionRepositoryHostConfiguration,
       selection: ProductionRunSelection,
       onFailure: (failure: unknown) => Effect.Effect<void>
     ) =>
-      Layer.unwrap(
-        Effect.gen(function* () {
-          yield* count("boundaryAcquisitions")
-          return productionGraph.run(configuration, selection, onFailure)
-        })
-      )
+      Layer.unwrap(Effect.gen(function* () {
+        yield* count("boundaryAcquisitions")
+        return productionGraph.run(configuration, selection, onFailure)
+      }))
   }
   return graph
 }
@@ -917,7 +919,7 @@ it.effect(
 )
 
 it.effect(
-  "second canonical production host fails before every state-changing boundary and releases for fresh discovery",
+  "default production graph keeps one owner per mutation capability while H2 fails before every boundary and fresh H2 recovers",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -953,53 +955,9 @@ it.effect(
               Effect.andThen(Effect.never)
             )
         })
-        const gitCommand = GitCommand.of({
-          run: () => boundaryCall("git.run"),
-          runInWorktree: () => boundaryCall("git.runInWorktree"),
-          runBytesInWorktree: () => boundaryCall("git.runBytesInWorktree")
-        })
-        const executor = PlannedAttemptExecutor.of({
-          observe: () => boundaryCall("executor.observe"),
-          begin: () => boundaryCall("executor.begin"),
-          requestSuspension: () => boundaryCall("executor.requestSuspension"),
-          resume: () => boundaryCall("executor.resume")
-        })
-        const integrator = Integrator.of({ prepare: () => boundaryCall("integrator.prepare") })
         const adapters = {
-          journalStore: (
-            _configuration: ProductionRepositoryHostConfiguration,
-            defaultLayer: ReturnType<typeof sqliteJournalStoreLayer>
-          ) =>
-            Layer.effectContext(
-              Effect.gen(function* () {
-                // Record before the supplied SQLite layer builds its connection, migration, and writer resources.
-                yield* record("journal.sqlite.open")
-                return yield* Layer.build(defaultLayer)
-              })
-            ),
-          gitCommand: () => Layer.effect(GitCommand, record("git.acquire").pipe(Effect.as(gitCommand))),
-          plannedAttemptExecutor: () =>
-            Layer.effectContext(
-              Effect.gen(function* () {
-                yield* GitCommand
-                yield* CodexAppServer
-                yield* record("executor.acquire")
-                return Context.add(Context.empty(), PlannedAttemptExecutor, executor)
-              })
-            ),
-          integrator: () =>
-            Layer.effectContext(
-              Effect.gen(function* () {
-                yield* GitCommand
-                yield* CodexAppServer
-                yield* CoordinatorOwnership
-                yield* record("integrator.acquire")
-                return Context.empty().pipe(
-                  Context.add(Integrator, integrator),
-                  Context.add(IntegratorCandidateProviderAuthority, unavailableIntegratorCandidateProviderAuthority)
-                )
-              })
-            ),
+          // This callback observes production layers and service methods; it cannot replace any of them.
+          boundaryObserver: record,
           codexAppServer: () => Layer.effect(CodexAppServer, record("codex.acquire").pipe(Effect.as(app))),
           githubClient: () => Layer.effect(GithubGraphqlClient, record("github.acquire").pipe(Effect.as(githubClient)))
         }
@@ -1086,21 +1044,28 @@ it.effect(
         const afterFirst = yield* Ref.get(trace)
         const count = (event: string, events: ReadonlyArray<string> = afterFirst) =>
           events.filter((observed) => observed === event).length
-        expect(count("journal.sqlite.open")).toBe(1)
+        // Only the network/process edges are replaceable in this fixture. The default graph owns every
+        // workflow mutation capability, and the observer wraps those real services instead of installing fakes.
+        for (const capability of ["journalStore", "gitCommand", "plannedAttemptExecutor", "integrator"]) {
+          expect(capability in adapters).toBe(false)
+        }
+        for (const event of [
+          "coordinator.acquire",
+          "journal.sqlite.open",
+          "git.acquire",
+          "executor.acquire",
+          "integrator.acquire",
+          "github.authority.acquire",
+          "github.acquire",
+          "codex.acquire"
+        ]) {
+          expect(count(event), `${event}: ${JSON.stringify(afterFirst)}`).toBe(1)
+        }
         expect(count("journal.scan")).toBeGreaterThan(0)
         expect(count("journal.begin")).toBe(1)
         expect(afterFirst.indexOf("journal.sqlite.open")).toBeLessThan(afterFirst.indexOf("journal.scan"))
         expect(afterFirst.indexOf("journal.scan")).toBeLessThan(afterFirst.indexOf("journal.begin"))
-        for (const event of [
-          "git.acquire",
-          "executor.acquire",
-          "integrator.acquire",
-          "github.acquire",
-          "codex.acquire",
-          "github.execute"
-        ]) {
-          expect(count(event)).toBe(1)
-        }
+        expect(count("github.execute")).toBe(1)
 
         const secondInput = { ...firstInput, commonDirectory: alias }
         // H2 names the same directory through a symlink while H1 still owns it; ownership must fail first.
@@ -1112,6 +1077,40 @@ it.effect(
           expect(secondFailure.gitCommonDirectory).toBe(commonDirectory)
         }
         const duringSecond = yield* Ref.get(trace)
+        for (const event of [
+          "coordinator.acquire",
+          "journal.sqlite.open",
+          "journal.scan",
+          "journal.begin",
+          "journal.append",
+          "journal.retireTerminalRun",
+          "journal.terminateRun",
+          "git.acquire",
+          "git.run",
+          "git.runInWorktree",
+          "git.runBytesInWorktree",
+          "executor.acquire",
+          "executor.observe",
+          "executor.begin",
+          "executor.requestSuspension",
+          "executor.resume",
+          "github.authority.acquire",
+          "integrator.acquire",
+          "integrator.prepare",
+          "github.acquire",
+          "github.execute",
+          "codex.acquire",
+          "codex.startThread",
+          "codex.readThread",
+          "codex.resumeThread",
+          "codex.startTurn",
+          "codex.interruptTurn",
+          "codex.listBackgroundTerminals",
+          "codex.terminateBackgroundTerminal",
+          "codex.close"
+        ]) {
+          expect(count(event, duringSecond)).toBe(count(event, afterFirst))
+        }
         expect(duringSecond.slice(afterFirst.length)).toEqual([])
         expect(duringSecond).toEqual(afterFirst)
         yield* record("h2.lock-conflict")
@@ -1127,6 +1126,17 @@ it.effect(
         expect(secondSelection.runId).toBe(yield* Deferred.await(firstSelectionRunId))
         const finalTrace = yield* Ref.get(trace)
         expect(count("journal.sqlite.open", finalTrace)).toBe(2)
+        for (const event of [
+          "coordinator.acquire",
+          "git.acquire",
+          "executor.acquire",
+          "integrator.acquire",
+          "github.authority.acquire",
+          "github.acquire",
+          "codex.acquire"
+        ]) {
+          expect(count(event, finalTrace)).toBe(2)
+        }
         expect(count("journal.scan", finalTrace)).toBe(count("journal.scan") + 2)
         expect(count("journal.begin", finalTrace)).toBe(1)
         expect(finalTrace.indexOf("h2.lock-conflict")).toBeGreaterThan(finalTrace.indexOf("github.execute"))
@@ -1134,34 +1144,3 @@ it.effect(
       }).pipe(Effect.provide(NodeServices.layer), Effect.provide(NodeCrypto.layer))
     )
 )
-const productionHostSource = readFileSync(fileURLToPath(new URL("./production-host.ts", import.meta.url)), "utf8")
-
-it("production host installs one coordinator-owned GitHub, Git, executor, Integrator, and Journal write boundary", () => {
-  expect(productionHostSource).not.toMatch(/controlled/i)
-  for (const construction of [
-    "productionCoordinatorOwnershipLayer(",
-    "sqliteJournalStoreLayer(",
-    "githubDeliveryAuthorityLayer.pipe(",
-    "nodeCodexPlannedAttemptExecutorLayer).pipe(",
-    "nodeCodexIntegratorLayer(integratorConfiguration)"
-  ]) {
-    expect(productionHostSource.split(construction)).toHaveLength(2)
-  }
-  expect(productionHostSource).toMatch(
-    /const journal = journalStoreCapabilities\(sqliteJournalStoreLayer\(\{ filename: configuration\.journalDatabase \}\)\)\s+return journal\.pipe\(Layer\.provideMerge\(ownership\)\)/u
-  )
-})
-
-it("planned-attempt executor and Integrator share one application-scoped Codex app server", () => {
-  expect(productionHostSource.match(/const appLayer\b/g)).toHaveLength(1)
-  const executorComposition = productionHostSource.slice(
-    productionHostSource.indexOf("const executorLayer ="),
-    productionHostSource.indexOf("const integratorConfiguration =")
-  )
-  const integratorComposition = productionHostSource.slice(
-    productionHostSource.indexOf("const integratorLayer ="),
-    productionHostSource.indexOf("const sharedServices =")
-  )
-  expect(executorComposition).toContain("Layer.provide(appLayer)")
-  expect(integratorComposition).toContain("Layer.provide(appLayer)")
-})
