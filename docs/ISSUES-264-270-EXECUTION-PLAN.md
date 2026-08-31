@@ -1,6 +1,6 @@
 # Issues 264–270 execution plan
 
-Status: active follow-on plan, recorded 2026-08-30.
+Status: active follow-on plan, recorded 2026-08-30 and updated 2026-08-31.
 
 This document lets a new implementation session continue the autonomous
 executor-work sequence without reconstructing the preceding integration and
@@ -25,12 +25,25 @@ review. It changes no Dalph runtime behavior.
   39 skipped, 35 MBT tests passed, and 100% changed production and maintained-
   evaluation coverage. The final `pnpm check:quint` gate also passed, including
   deterministic, sampled, exhaustive, temporal, and negative-control checks.
-- The reviewed #266 runtime candidate is integrated on
-  `integrate/issues-264-268` through the non-self-referential prior integration
-  commit `7ffd22699`. It includes the ordinary-read implementation and its
-  subsequent causality, recovery, lifecycle, runtime-coalescing, and acceptance
-  repairs. Final gates and issue closure remain pending; this plan does not
-  claim that #266 is complete, on `master`, or shipped.
+- The #266 candidate code and acceptance evidence are integrated on
+  `integrate/issues-264-268` through exact commit
+  `437238a8784f88da9f8daf3bb1e81d5aa348d50c`. It includes the ordinary-read
+  implementation and its subsequent causality, recovery, lifecycle,
+  runtime-coalescing, conformance-gate, and acceptance repairs. Independent
+  standards and specification reviews found no remaining findings.
+- `pnpm check:all` passed on exact commit
+  `437238a8784f88da9f8daf3bb1e81d5aa348d50c`. The governed Quint model and its
+  executable conformance adapter were unchanged; the final
+  `pnpm check:quint` run passed in 332.27 seconds within its 360-second budget.
+  #266 has completed its planned code, evidence, review, and verification
+  closure gates. `gh issue close 266` succeeded, and issue #266 is closed.
+  This status does not claim that the candidate is on `master` or shipped.
+- The separate `pnpm check:lab:browser` Playwright check remains blocked in
+  this container because `libatk-1.0.so.0` is absent. The documented
+  `pnpm --dir prototypes/reducer-lab browser:install` command needs root or
+  passwordless sudo, but this environment requires a sudo password. This does
+  not qualify the green `pnpm check:all` result because that bounded gate
+  intentionally excludes the browser smoke.
 - The candidate removes the private active-refresh Git-read history and routes
   graph, focused tracker, worktree, and lineage reads through the ordinary
   journal-first owners. Production matrices now cover sources, coalescing,
@@ -163,7 +176,7 @@ Reprojection from that prefix would therefore invent authority absent from the
 accepted issue and model; a separately accepted rule must first define how the
 evidence is resolved and when another passive read is admitted.
 
-### 3. Finish final review of the integrated #266 candidate
+### 3. Complete closure of the integrated #266 candidate
 
 The scenario is
 `docs/scenarios/issue-266-active-work-authority-refresh.md`; keep the scenario
@@ -247,15 +260,19 @@ and supporting-test qualifications):
   active handoff rejects` in
   `packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts`.
 
-The #266 candidate remains under final review. Close #266 only after its direct
-scenario mappings and declared focused/final gates are green; this document
-does not predeclare that result.
+Status: the direct scenario mappings, independent reviews, `pnpm check:all`,
+and the unchanged-model `pnpm check:quint` gate are green through exact commit
+`437238a8784f88da9f8daf3bb1e81d5aa348d50c`. #266 has completed the planned
+repository closure proof, and its tracker issue is closed. The candidate
+remains on `integrate/issues-264-268`; this status does not claim a merge to
+`master` or shipment.
 
 ### 4. Implement #267 and #269 independently
 
-Both are blocked by #266 and may be developed in separate worktrees only after
-#266 closes, from the same exact integrated #266 commit. Integrate them only
-after both focused reviews are clean.
+#266's code, evidence, review, and verification closure gates are complete, so
+#267 and #269 are unblocked for development in separate worktrees from the same
+exact integrated commit `437238a8784f88da9f8daf3bb1e81d5aa348d50c`.
+Integrate them only after both focused reviews are clean.
 
 For #267, keep synchronization inside the maintained cassette. Map the
 scenario to tests proving reverse-arriving same-shape reads correlate by exact
