@@ -2,9 +2,10 @@
 
 Owning issue: [#267](https://github.com/dearlordylord/dalph/issues/267)
 
-Status: complete implementation candidate; integration review and closure are
-pending. The maintained proof is cassette-owned and exposed one missing
-composition of already-accepted #265/#266 behavior:
+Status: complete and composed on `integrate/issues-264-268` through exact
+commit `a1b81c4fbcd189d62b480d6e637c62278ca7b829`; issue #267 is closed. The
+maintained proof is cassette-owned and exposed one missing composition of
+already-accepted #265/#266 behavior:
 when Suspend returns the unchanged Executing projection, the ordinary passive
 owner must remain attached to that exact attempt. The repair adds no provider
 authority, refresh cadence, executor state, journal event, or presentation
@@ -130,3 +131,9 @@ scenario; the #265, #266, and #267 scenarios continue to govern its behavior.
 | Exact B1 Safe or Terminal releases B1 | `authored-active-work-causal-sync.test.ts`, exact-owner test; `delivery-proposal-routes.test.ts`, exact production adapter regression |
 | Tracker causality does not change ordinary requested executor-projection consumption | `authored-active-work-causal-sync.test.ts`, causal-only requested-projection test |
 | Current notification wins Startup, later hints coalesce into one trailing refresh, real G1/F1/F2 run, and B1 releases only after exact Safe | `authored-active-work-causal-sync.test.ts`, maintained composed cassette test |
+
+Closure evidence: all direct rows above are green. The combined #267/#269
+focused suites passed 194/194 tests. The final #267 repository gate passed
+2,726 tests, 35 model-based tests, all 92 maintained cassettes, 100% changed
+executable coverage, and the gitleaks scan. Independent standards reviews of
+the repaired causal/lifecycle composition found no remaining runtime finding.

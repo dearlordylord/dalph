@@ -2,9 +2,10 @@
 
 Owning issue: [#269](https://github.com/dearlordylord/dalph/issues/269)
 
-Status: implementation candidate on the issue task branch. This scenario
-refines admission after restart; it does not add a durable queue, another
-capacity counter, or task-ID authority over an exact planned attempt.
+Status: complete and composed on `integrate/issues-264-268` through exact
+commit `a1b81c4fbcd189d62b480d6e637c62278ca7b829`; issue #269 is closed. This
+scenario refines admission after restart; it does not add a durable queue,
+another capacity counter, or task-ID authority over an exact planned attempt.
 
 ## Governing behavior
 
@@ -163,3 +164,9 @@ position correlation derive the same decision again.
   `packages/dalph/test/cassettes/scenario.test.ts` prove the maintained
   changed-work chronology: one causal exact choice, bounded fresh authority
   reads, one immutable attempt, and no duplicate choice on redelivery.
+
+Closure evidence: every direct mapping above is green. The #269 full repository
+gate passed before composition, and the combined #267/#269 focused suites
+passed 194/194 tests at integration tip `a1b81c4fb`. Independent standards
+review found no runtime or architecture interaction between exact retained
+position admission and #267's exact passive lifecycle publication.

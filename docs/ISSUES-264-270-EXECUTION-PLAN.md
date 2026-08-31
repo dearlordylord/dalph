@@ -54,6 +54,20 @@ review. It changes no Dalph runtime behavior.
 - A direct rejected-handoff acceptance test already exists:
   `retains one trailing ordinary activation when the active handoff rejects`.
   Do not add a test-only production seam or duplicate this test.
+- Issues #267 and #269 were implemented independently from exact #266 fixed
+  point `437238a8784f88da9f8daf3bb1e81d5aa348d50c`, reviewed, composed on
+  `integrate/issues-264-268` through exact tip
+  `a1b81c4fbcd189d62b480d6e637c62278ca7b829`, pushed, and closed. #267 also
+  owns the composed repair that keeps the exact passive observer attached when
+  Suspend returns `ExecutorWorkExecuting`.
+- The combined #267/#269 focused suites passed 194/194 tests. #267's final
+  repository gate passed 2,726 tests, 35 model-based tests, all 92 maintained
+  cassettes, 100% changed executable coverage, and gitleaks. #269's full
+  repository gate passed before composition. Independent combined review found
+  no remaining runtime or architecture finding.
+- With #264–#267 and #269 complete, #268 is unblocked for its accepted
+  composition-only capstone. It must not add another runtime scheduler, read
+  authority, executor lifecycle, or capacity policy.
 - Preserve the separate #270 candidate at
   `origin/integrate/live-mvp-270-sync@82c922c7f`. A separate lane owns #270
   implementation, integration, and verification. This lane must not compose or
@@ -186,7 +200,7 @@ The scenario is
 catalog and #266 link current, and use `ExecutorWorkExecuting`,
 `ExecutorWorkSafelySuspended`, and `ExecutorWorkTerminal` consistently.
 
-Final review must confirm the candidate preserves:
+The completed final review confirmed that the candidate preserves:
 
 - #218's one serialized notification/timer opportunity owner;
 - coalescing and at most one trailing ordinary activation;
@@ -197,7 +211,7 @@ Final review must confirm the candidate preserves:
 - exact `ExecutorWorkSafelySuspended` or `ExecutorWorkTerminal` evidence is
   required before releasing a position.
 
-Final review must confirm the candidate removed:
+The completed final review confirmed that the candidate removed:
 
 - the active-refresh-specific Git operation wrapper;
 - its authority and ordinal history;
@@ -270,29 +284,41 @@ repository closure proof, and its tracker issue is closed. The candidate
 remains on `integrate/issues-264-268`; this status does not claim a merge to
 `master` or shipment.
 
-### 4. Implement #267 and #269 independently
+### 4. Completed #267 and #269 independently, then composed them
 
-#266's code, evidence, review, and verification closure gates are complete, so
-#267 and #269 are unblocked for development in separate worktrees from the same
-exact integrated commit `437238a8784f88da9f8daf3bb1e81d5aa348d50c`.
-Integrate them only after both focused reviews are clean.
+#267 and #269 were developed in separate worktrees from the same exact #266
+fixed point `437238a8784f88da9f8daf3bb1e81d5aa348d50c`. Both focused reviews were
+clean before their commits were composed through exact integration tip
+`a1b81c4fbcd189d62b480d6e637c62278ca7b829`; both tracker issues are closed.
 
-For #267, keep synchronization inside the maintained cassette. Map the
-scenario to tests proving reverse-arriving same-shape reads correlate by exact
+The completed #267 work kept synchronization inside the maintained cassette.
+Its mapped tests prove reverse-arriving same-shape reads correlate by exact
 operation, duplicate/crossed/foreign relationships fail closed, unchanged
 executing observations do not advance the cassette, and only B's exact Safe or
 Terminal report releases B.
 
-For #269, represent read-only recovered obligations separately from held and
-retained task-work priority. Map the scenario to tests proving reattachment
+The completed #269 work represents read-only recovered obligations separately
+from held and retained task-work priority. Its mapped tests prove reattachment
 does not consume capacity or block independent D, retained B resumes before
 unstarted work after Continue, and same-task replacement work cannot pass B's
 existing attempt.
 
-Trade-off: separate worktrees add one integration step, but prevent cassette
-causality and admission-priority changes from becoming one unreviewable diff.
+The scenario-to-test closure is recorded in
+`docs/scenarios/issue-267-exact-causal-active-work-cassette.md` and
+`docs/scenarios/issue-269-independent-work-retained-priority.md`. The combined
+focused suites passed 194/194 tests; #267's final full gate and #269's earlier
+full gate are green.
 
-### 5. Implement #268 as the capstone only
+Trade-off: separate worktrees added one integration step, but kept cassette
+causality and admission-priority changes independently reviewable before the
+combined interaction review.
+
+### 5. Dispatch #268 as the composition-only capstone
+
+Status: unblocked at exact integration tip
+`a1b81c4fbcd189d62b480d6e637c62278ca7b829`. #268 may now compose and prove
+the accepted thirteen-beat story; its dispatch does not authorize new runtime
+policy.
 
 Do not add new runtime scheduling, read authority, executor lifecycle, or
 capacity policy in #268. If the thirteen-beat story exposes a missing behavior,

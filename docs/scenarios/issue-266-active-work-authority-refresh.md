@@ -2,9 +2,11 @@
 
 Owning issue: [#266](https://github.com/dearlordylord/dalph/issues/266)
 
-Status: accepted candidate integrated on the issue task branch and under final
-review. Issue #266
-closes the active-work bridge left when autonomous executor work replaced
+Status: complete and integrated on `integrate/issues-264-268` through exact
+commit `437238a8784f88da9f8daf3bb1e81d5aa348d50c`; issue #266 is closed. The
+later Suspend-returned-Executing observer repair is owned by closed issue #267
+and is composed at integration tip `a1b81c4fb`. Issue #266 closes the
+active-work bridge left when autonomous executor work replaced
 repeated continuation commands: an accepted `ExecutorWorkExecuting` report
 must not keep one live Run activation from checking whether current tracker or
 Git facts prove a task-local constraint. Related accepted behavior remains
