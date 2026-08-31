@@ -134,8 +134,15 @@ position correlation derive the same decision again.
 - `gives retained B1 the released position before D and rejects uncorrelated B
   replacement work` in
   `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`
-  composes real Resume, fresh-D, and malformed fresh-B proposals under one
-  released position and proves only B1 starts.
+  begins with both positions occupied, publishes the real relation snapshot
+  after one position is released, and proves only B1 starts ahead of fresh D
+  and malformed fresh B2.
+- `resumes only from accepted safe work and the exact current tracker and Git
+  facts` in
+  `packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts`
+  crosses the concrete executor boundary and proves its complete Resume-request
+  list contains exactly one request whose planned attempt carries B1's exact
+  `RunId` and `AttemptId`; therefore no B2 or duplicate Resume is sent.
 - `does not let uncorrelated replacement work reuse the exact retained attempt
   position` in
   `packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.test.ts`

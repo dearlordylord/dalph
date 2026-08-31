@@ -13,6 +13,7 @@ import {
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   type PlannedAttemptExecutorCorrelation,
+  type PlannedAttemptExecutorRequest,
   passiveLifecycleObservationPurpose,
   plannedAttemptExecutorCorrelation,
   RunId,
@@ -4282,7 +4283,7 @@ describe("delivery proposal route matrix", () => {
           return yield* Effect.die("missing exact current-facts continuation proposal")
         }
         const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(fixture.records)
-        const executorContacts = yield* Ref.make(0)
+        const resumeRequests = yield* Ref.make<ReadonlyArray<PlannedAttemptExecutorRequest>>([])
         const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
           correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
         })
@@ -4298,13 +4299,21 @@ describe("delivery proposal route matrix", () => {
               observe: () => Effect.die("settled continuation must not observe executor state"),
               requestSuspension: () => Effect.die("continuation must not request suspension"),
               begin: () => Effect.die("continuation must not begin executor work"),
-              resume: () => Ref.update(executorContacts, (count) => count + 1).pipe(Effect.as(executing))
+              resume: (request) =>
+                Ref.update(resumeRequests, (current) => [...current, request]).pipe(Effect.as(executing))
             })
           )
         )
 
         expect(result).toMatchObject({ _tag: "ExecutorReportPublished", report: executing })
-        expect(yield* Ref.get(executorContacts)).toBe(1)
+        expect(yield* Ref.get(resumeRequests)).toEqual([
+          expect.objectContaining({
+            plannedAttempt: expect.objectContaining({
+              attemptId: plannedAttempt.attemptId,
+              runId: plannedAttempt.runId
+            })
+          })
+        ])
         expect(
           (yield* Ref.get(records)).flatMap(({ event }) =>
             event._tag === "PlannedAttemptExecutorWorkReported" ? [event.report._tag] : []

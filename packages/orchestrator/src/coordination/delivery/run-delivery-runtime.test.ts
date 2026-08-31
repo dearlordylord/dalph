@@ -1080,11 +1080,16 @@ it.effect("gives retained B1 the released position before D and rejects uncorrel
       correlation: { attemptId: AttemptId.make("retained-priority-held-A"), runId },
       taskId: TaskId.make("retained-priority-A")
     }
+    const releasing = {
+      correlation: { attemptId: AttemptId.make("retained-priority-releasing"), runId },
+      taskId: TaskId.make("retained-priority-releasing")
+    }
     const initial = {
       ...withProposals(yield* baseEvaluation, proposals, 2),
-      taskWork: { capacity: TaskWorkCapacity.make(2), held: [heldA] }
+      taskWork: { capacity: TaskWorkCapacity.make(2), held: [heldA, releasing] }
     }
     const relation = yield* dynamicEvaluationSignal(initial)
+    const retainedDeferred = yield* Deferred.make<void>()
     const retainedStarted = yield* Deferred.make<void>()
     const independentStarted = yield* Deferred.make<void>()
     const replacementStarted = yield* Deferred.make<void>()
@@ -1096,12 +1101,22 @@ it.effect("gives retained B1 the released position before D and rejects uncorrel
             ? Deferred.succeed(independentStarted, undefined).pipe(Effect.andThen(Effect.never))
             : Deferred.succeed(replacementStarted, undefined).pipe(Effect.andThen(Effect.never))
     })
+    const trace = DeliverySemanticTrace.of({
+      emit: (event) =>
+        event._tag === "ProposalDeferred" && event.proposalId === retainedResume.id
+          ? Deferred.succeed(retainedDeferred, undefined)
+          : Effect.void
+    })
     const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
       Effect.provide(identityLayers),
       Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.provideService(DeliverySemanticTrace, trace),
       Effect.forkChild
     )
 
+    yield* Deferred.await(retainedDeferred)
+    expect(yield* Deferred.isDone(retainedStarted)).toBe(false)
+    yield* relation.publish({ ...initial, taskWork: { capacity: TaskWorkCapacity.make(2), held: [heldA] } })
     yield* Deferred.await(retainedStarted)
     yield* Effect.yieldNow
     expect(yield* Deferred.isDone(independentStarted)).toBe(false)
