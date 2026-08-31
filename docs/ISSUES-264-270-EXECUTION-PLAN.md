@@ -55,8 +55,11 @@ review. It changes no Dalph runtime behavior.
   `retains one trailing ordinary activation when the active handoff rejects`.
   Do not add a test-only production seam or duplicate this test.
 - Preserve the separate #270 candidate at
-  `origin/integrate/live-mvp-270-sync@82c922c7f`. Do not compose it until the
-  #264–#269 stack is ready for combined verification.
+  `origin/integrate/live-mvp-270-sync@82c922c7f`. A separate lane owns #270
+  implementation, integration, and verification. This lane must not compose or
+  merge that candidate. After this lane completes #264–#269 and establishes
+  #268 readiness, remind the user to resume the separate #270 lane at that
+  exact preserved ref.
 
 The primary worktree also contained unrelated staged tooling edits when this
 plan was recorded: `package.json` and `scripts/run-typecheck.mjs`. A later
@@ -312,14 +315,20 @@ Scenario-to-test mapping:
 - Active-work refresh versus final stabilization → one test proving the two
   graph reads have distinct causes and ordering.
 
-### 6. Compose with #270 and verify the combined stack
+### 6. Hand off #270 to its separate lane
 
-After #264–#269 are complete, inspect and compose
-`origin/integrate/live-mvp-270-sync@82c922c7f` against a pinned master commit.
-Resolve only demonstrated semantic conflicts. Run focused combined tests,
-`pnpm check:all`, the required three review passes, and one final
-`pnpm check:quint` if any governed model or adapter changed. Do not dispatch
-#271 until this combined stack is green.
+This lane ends after #264–#269 are complete and #268 is ready. At that point,
+remind the user to resume the separate #270 implementation and integration
+lane from `origin/integrate/live-mvp-270-sync@82c922c7f`. That lane owns its
+pinned integration base, semantic-conflict resolution, focused combined tests,
+repository gates, reviews, and any required final model check. This lane does
+not inspect, compose, merge, or verify #270.
+
+The separate stale-promotion lane also owns any #271 dispatch or merge
+decision. Recording #270 here does not authorize this lane to dispatch #271 or
+create a new dependency between #271 and the executor stack; the #270/#271 lane
+must continue to follow its accepted issue dependencies and preserve #272 as
+the independently owned convergence point with #268.
 
 ## Delivery discipline
 
@@ -355,6 +364,7 @@ Resolve only demonstrated semantic conflicts. Run focused combined tests,
 - Independent #267/#269 work increases merge coordination, but substantially
   reduces review coupling between cassette-only causality and production
   admission priority.
-- Deferring #270 composition postpones discovering cross-stack conflicts, but
-  keeps the #265/#266 authority repair measurable before adding another
-  candidate stack.
+- Keeping #270 in its separate lane requires an explicit user reminder and
+  defers cross-stack conflict discovery to that lane, but preserves clear
+  implementation and integration ownership instead of silently absorbing
+  #270 or #271 into this executor-work lane.
