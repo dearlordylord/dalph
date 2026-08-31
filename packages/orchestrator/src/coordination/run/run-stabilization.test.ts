@@ -5,6 +5,7 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedAttemptExecutorReport,
+  plannedAttemptExecutorCorrelation,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -27,8 +28,17 @@ import {
   WorkflowTrace
 } from "../../workflow/interpretation/interpreter.js"
 import { makeTrackerGraphObservationOperation, type TrackerGraphReadCause } from "../../workflow/registry/operation.js"
-import { JournalPosition } from "../../workflow-journal/identity.js"
+import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
@@ -755,6 +765,120 @@ it.effect("replays an intent-only G2 after a crash without allocating a second i
           .filter(({ event }) => event._tag === "TaskTrackerFactsObserved")
           .map(({ event }) => (event._tag === "TaskTrackerFactsObserved" ? event.operationId : undefined))
       ).toEqual([g1Operation.operationId, OperationId.make("g2-crash-fresh-0")])
+    })
+  )
+)
+
+it.effect("reopens ordinary delivery only from exact settled executor lifecycle evidence", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const correlation = plannedAttemptExecutorCorrelation(activeVerticalAttempt)
+      const responsibility = PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+        plannedAttempt: activeVerticalAttempt,
+        version: workflowJournalEventVersion
+      })
+      const reportRecord = (report: PlannedAttemptExecutorReport): JournalRecord => ({
+        event: PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+          report,
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make(`lifecycle-${report._tag}`),
+        position: JournalPosition.make(2),
+        runId
+      })
+      const responsibilityRecord: JournalRecord = {
+        event: responsibility,
+        key: JournalRecordKey.make("lifecycle-responsibility"),
+        position: JournalPosition.make(1),
+        runId
+      }
+      const executing = reportRecord(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
+      const safe = reportRecord(PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }))
+      const terminal = reportRecord(
+        PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Completed" } })
+      )
+      const laterNonExact: JournalRecord = {
+        event: PlannedAttemptExecutorStateObservedEvent.make({
+          observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateTemporarilyUnavailable.make({}),
+          occurrenceClassification: "NonActionOccurrence",
+          ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+          plannedAttempt: activeVerticalAttempt,
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("lifecycle-later-non-exact"),
+        position: JournalPosition.make(3),
+        runId
+      }
+      const cases = [
+        { expectedExecutions: 0, name: "missing responsibility", records: [] },
+        { expectedExecutions: 0, name: "exact Executing", records: [responsibilityRecord, executing] },
+        { expectedExecutions: 1, name: "exact Safe", records: [responsibilityRecord, safe] },
+        { expectedExecutions: 1, name: "exact Terminal", records: [responsibilityRecord, terminal] },
+        {
+          expectedExecutions: 0,
+          name: "later non-exact projection",
+          records: [responsibilityRecord, safe, laterNonExact]
+        }
+      ] as const
+
+      for (const lifecycleCase of cases) {
+        const base = yield* baseEvaluation
+        const currentGraph = graph(
+          `lifecycle-reopen-${lifecycleCase.name}`,
+          4,
+          snapshot(`lifecycle-reopen-${lifecycleCase.name}`, [
+            { id: activeVerticalTaskA, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] },
+            { id: activeVerticalTaskB, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+          ])
+        )
+        const independentProposal = freshGraphReadProposal(currentGraph, activeVerticalTaskB)
+        const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
+          ...withRunFacts(
+            evaluation(base, currentGraph, { ...emptyFrontier, proposals: [independentProposal] }),
+            false
+          ),
+          activeRefreshBoundary: { _tag: "ActiveRefreshRuntimeBoundary", reconciledAttempts: [correlation], runId }
+        })
+        const executions = yield* Ref.make(0)
+        const journal = InRunJournal.of({
+          append: () => Effect.die("lifecycle reopening reads but never appends executor evidence"),
+          read: () => Effect.succeed(lifecycleCase.records)
+        })
+
+        yield* runStabilizedDelivery(
+          target,
+          signalOf(state),
+          activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([correlation]))
+        ).pipe(
+          Effect.provide(
+            Layer.merge(
+              supportWithResourcesWithoutAllocator,
+              deterministicOperationIdAllocatorLayer(`lifecycle-reopen-${lifecycleCase.name}`)
+            )
+          ),
+          Effect.provideService(InRunJournal, journal),
+          Effect.provideService(
+            DeliveryActionExecutor,
+            DeliveryActionExecutor.of({
+              execute: ({ proposal }) =>
+                Ref.update(executions, (count) => count + 1).pipe(
+                  Effect.andThen(
+                    SubscriptionRef.update(state, (current) => ({ ...current, proposedActions: emptyFrontier }))
+                  ),
+                  Effect.as({ _tag: "ActionCompleted", proposalId: proposal.id } as const)
+                )
+            })
+          ),
+          Effect.provide(
+            Layer.mock(WorkflowInterpreter, {
+              readTrackerGraph: () => Effect.die("lifecycle reopening does not perform another tracker read")
+            })
+          )
+        )
+
+        expect(yield* Ref.get(executions), lifecycleCase.name).toBe(lifecycleCase.expectedExecutions)
+      }
     })
   )
 )

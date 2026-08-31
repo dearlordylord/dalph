@@ -4,6 +4,7 @@ import {
   PlannedAttemptExecutorRequest,
   TaskWorkSpecification,
   type PlannedTaskAttempt,
+  type PlannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorReport,
   type TaskWorkSpecification as TaskWorkSpecificationType,
   plannedAttemptExecutorCorrelation,
@@ -343,6 +344,38 @@ export const latestPlannedAttemptExecutorEvidence = (
   cache.set(key, latest)
   latestExecutorEvidenceByPrefix.set(records, cache)
   return latest
+}
+
+/**
+ * Current exact lifecycle authority for one attempt correlation. `Ambiguous`
+ * includes a missing responsibility, missing exact report, or a later
+ * non-exact projection; none may be treated as proof that work settled.
+ */
+type CurrentPlannedAttemptExecutorLifecycle =
+  | { readonly _tag: "Executing"; readonly plannedAttempt: PlannedTaskAttempt }
+  | {
+      readonly _tag: "Settled"
+      readonly plannedAttempt: PlannedTaskAttempt
+      readonly report: Exclude<PlannedAttemptExecutorReport, { readonly _tag: "ExecutorWorkExecuting" }>
+    }
+  | { readonly _tag: "Ambiguous" }
+
+export const currentPlannedAttemptExecutorLifecycleFor = (
+  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  correlation: PlannedAttemptExecutorCorrelation
+): CurrentPlannedAttemptExecutorLifecycle => {
+  const responsibility = records.findLast(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+      event.plannedAttempt.runId === correlation.runId &&
+      event.plannedAttempt.attemptId === correlation.attemptId
+  )?.event
+  if (responsibility?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return { _tag: "Ambiguous" }
+  const evidence = latestPlannedAttemptExecutorEvidence(records, responsibility.plannedAttempt)
+  if (evidence === undefined) return { _tag: "Ambiguous" }
+  return evidence.report._tag === "ExecutorWorkExecuting"
+    ? { _tag: "Executing", plannedAttempt: responsibility.plannedAttempt }
+    : { _tag: "Settled", plannedAttempt: responsibility.plannedAttempt, report: evidence.report }
 }
 
 /** Returns lifecycle authority only when the newest current exact evidence is the accepted report itself. */

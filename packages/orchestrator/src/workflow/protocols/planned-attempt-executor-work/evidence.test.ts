@@ -24,9 +24,11 @@ import {
   PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorStateObservationOrdinal,
   PlannedAttemptExecutorStateObservedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   PlannedAttemptExecutorWorkReportedEvent
 } from "./events.js"
 import {
+  currentPlannedAttemptExecutorLifecycleFor,
   latestAcceptedPlannedAttemptExecutorEvidence,
   latestPlannedAttemptExecutorEvidence,
   plannedAttemptExecutorEvidence,
@@ -140,6 +142,76 @@ it.each([
       plannedAttempt
     )?.observedAt
   ).toBe(3)
+})
+
+it.each([
+  {
+    expected: "Executing",
+    report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+      correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+    })
+  },
+  {
+    expected: "Settled",
+    report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+      correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+    })
+  },
+  {
+    expected: "Settled",
+    report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+      correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId },
+      result: { _tag: "Completed" }
+    })
+  }
+])("classifies current exact $report._tag lifecycle authority as $expected", ({ expected, report }) => {
+  const responsibility = PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  const accepted = PlannedAttemptExecutorWorkReportedEvent.make({
+    ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+    report,
+    version: workflowJournalEventVersion
+  })
+  const records = [
+    { event: responsibility, position: JournalPosition.make(1) },
+    { event: accepted, position: JournalPosition.make(2) }
+  ]
+
+  expect(currentPlannedAttemptExecutorLifecycleFor(records, report.correlation)._tag).toBe(expected)
+})
+
+it("keeps missing or invalidated exact lifecycle authority ambiguous", () => {
+  const correlation = { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+  const responsibility = PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  const executing = PlannedAttemptExecutorWorkReportedEvent.make({
+    ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+    report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
+    version: workflowJournalEventVersion
+  })
+  const unavailable = PlannedAttemptExecutorStateObservedEvent.make({
+    observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateTemporarilyUnavailable.make({}),
+    occurrenceClassification: "NonActionOccurrence",
+    ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+
+  expect(currentPlannedAttemptExecutorLifecycleFor([], correlation)).toEqual({ _tag: "Ambiguous" })
+  expect(
+    currentPlannedAttemptExecutorLifecycleFor(
+      [
+        { event: responsibility, position: JournalPosition.make(1) },
+        { event: executing, position: JournalPosition.make(2) },
+        { event: unavailable, position: JournalPosition.make(3) }
+      ],
+      correlation
+    )
+  ).toEqual({ _tag: "Ambiguous" })
 })
 
 it("does not fall back to an older accepted report when a distinct exact report still awaits acceptance", () => {
