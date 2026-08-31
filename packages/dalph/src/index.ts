@@ -2,6 +2,7 @@ export * from "./application/cli.js"
 export * from "./application/composition.js"
 export * from "./application/dry-run.js"
 export * from "./application/production.js"
+export * from "./application/production-configuration.js"
 export * from "./application/supervisor-exit.js"
 // The Codex protocol, private identities, controlled fixtures, and store
 // records stay module-local. Consumers install only the supported production
