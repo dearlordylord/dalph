@@ -858,7 +858,7 @@ const unpauseStoryItem = (
         operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" }
       }),
       decodeStoryItem({
-        _tag: "PlannedAttemptExecutorProjectionReturned",
+        _tag: "PlannedAttemptExecutorPassiveLifecycleChanged",
         report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } }
       }),
       decodeStoryItem({
