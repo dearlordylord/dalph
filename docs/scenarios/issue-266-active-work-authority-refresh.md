@@ -377,12 +377,15 @@ traceability; scenario-owned prose uses `ExecutorWorkExecuting`,
   `ExecutorWorkTerminal` and asserts zero authority reads in
   `packages/dalph/src/application/production-reactivation.test.ts`.
 - **Existing direct test:** `accepted publication notification and timer
-  coalesce behind one active refresh and one trailing ordinary activation` in
+  coalesce into one trailing active refresh` in
   `packages/dalph/src/application/production-reactivation.test.ts` injects all
   three hints while the production-shaped refresh is active and asserts one
-  serialized active entry followed by one ordinary entry. **Supporting test:**
-  `turns hints arriving during an active refresh into one trailing ordinary
-  activation` in
+  serialized trailing active entry. `a tracker edit during one active read is
+  preserved as one serialized trailing active refresh` takes the first focused
+  F1 snapshot, edits B and sends the hints while that read remains in flight,
+  then proves the one trailing active read observes F2 and suspends only B.
+  **Supporting test:** `coalesces hints arriving during an active refresh into
+  one trailing active refresh` in
   `packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts`
   owns the lower-level one-trailing-marker rule.
 - **Existing direct test:** `a later tracker edit waits for the next independent
@@ -415,6 +418,17 @@ traceability; scenario-owned prose uses `ExecutorWorkExecuting`,
   unfinished blocker, missing claim, foreign claim, lost worktree, and
   incompatible lineage. Every case observes B's complete authority fact before
   one B-only Suspend/Safe chronology and asserts no A/C executor command.
+- **Existing model-based test:** `re-establishes ordinary provenance after
+  active refresh lifecycle suspension` in
+  `packages/dalph/test/conformance/task-fact-reconciliation.mbt.test.ts`
+  executes active lifecycle closure, exact Safe settlement, a fresh lifecycle
+  reopen, and the next establishment. It proves that the reopened attempt uses
+  ordinary/no-source read provenance and retains no stale suspension decision.
+- **Existing direct test:** `reopens ordinary delivery only from exact settled
+  executor lifecycle evidence` in
+  `packages/orchestrator/src/coordination/run/run-stabilization.test.ts`
+  permits the ordinary phase after exact Safe or Terminal evidence and keeps it
+  closed for Executing, missing, or later non-exact evidence.
 - **Existing direct test:** `incomplete unavailable unreadable malformed or
   identity-contradictory active-work reads authorize no executor action` in
   `packages/dalph/src/application/production-reactivation.test.ts` executes the
