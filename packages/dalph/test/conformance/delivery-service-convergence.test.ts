@@ -28,9 +28,17 @@ it("one idempotent Run entry installs the delivery service contracts", () => {
 
   expect(runSource.match(/\bconst consequences = yield\* delivery\b/g)).toHaveLength(1)
   expect(runSource.match(/\brunStabilizedDelivery\(/g)).toHaveLength(1)
-  // Ordinary delivery has initial and post-G2 phases; active refresh adds its
-  // typed post-G2 phase while retaining the same single Run entry.
-  expect(stabilizationSource.match(/\brunDeliveryRuntimePhase\(/g)).toHaveLength(3)
+  // Ordinary delivery, active refresh, and accepted-lifecycle fallback may
+  // enter distinct phases, but all paths use the same runtime operation.
+  const runtimeModuleImport = stabilizationSource.match(
+    /import \{([\s\S]*?)\} from "\.\.\/delivery\/run-delivery-runtime\.js"/
+  )
+  const importedRuntimeOperations = runtimeModuleImport?.[1]?.match(/\brun[A-Z]\w*/g) ?? []
+  const calledRuntimeOperations = [
+    ...new Set([...stabilizationSource.matchAll(/\b(runDeliveryRuntime\w*)\(/g)].map((match) => match[1]))
+  ]
+  expect(importedRuntimeOperations).toEqual(["runDeliveryRuntimePhase"])
+  expect(calledRuntimeOperations).toEqual(["runDeliveryRuntimePhase"])
   // Ordinary and active-refresh bootstrap paths both use this one shared
   // journaled composition; neither path creates a second delivery program.
   expect(runSource.match(/\brunJournaledDelivery\(/g)).toHaveLength(2)

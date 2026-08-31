@@ -42,7 +42,7 @@ export const currentRecoveryPrefixEvidence = {
     cassette("lostPlannedWorktreeSafelySuspends"),
     focused(
       "packages/orchestrator/src/workflow-journal/journaled-worktree-observation.test.ts",
-      "reopens an intent-only Git read with the same operation identity"
+      "records the authored Git interruption and ordinary replay cassette"
     )
   ],
   targetLineage: [
