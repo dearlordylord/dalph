@@ -2863,8 +2863,23 @@ it.effect(
         })
       const settledAt = new Map(positions("IntegrationFinalitySettled"))
       const beganAt = new Map(positions("PlannedAttemptExecutorWorkResponsibilityBegan"))
+      const aSettledAt = settledAt.get(TaskId.make("A")) ?? -1
+      const bClaimAt = run.records.findIndex(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("B")
+      )
+      const currentGraphSubjectsBeforeB = run.records
+        .slice(aSettledAt + 1, bClaimAt)
+        .flatMap(({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.cause._tag === "WorkflowEstablishment"
+            ? [event.operation.readShape.explicitlyCoveredTaskIds]
+            : []
+        )
 
       expect([...settledAt.keys()]).toEqual(["A", "B", "C", "E", "D"])
+      expect(currentGraphSubjectsBeforeB).toEqual([[], ["B"], ["C"], ["E"], ["C"], ["E"], ["E"]])
       expect(beganAt.get(TaskId.make("D"))).toBeGreaterThan(settledAt.get(TaskId.make("B")) ?? Number.POSITIVE_INFINITY)
       expect(beganAt.get(TaskId.make("D"))).toBeGreaterThan(settledAt.get(TaskId.make("C")) ?? Number.POSITIVE_INFINITY)
       expect(beganAt.get(TaskId.make("D"))).toBeGreaterThan(settledAt.get(TaskId.make("E")) ?? Number.POSITIVE_INFINITY)
