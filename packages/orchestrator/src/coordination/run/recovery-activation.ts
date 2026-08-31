@@ -1850,9 +1850,12 @@ export const deriveJournalResponsibilityFacts = (
           : suspensionRequested()
       }
       const prerequisiteTaskIds = unfinishedPrerequisiteTaskIds(responsibility.plannedAttempt.taskId, attemptTaskGraph)
-      if (prerequisiteTaskIds.length > 0) {
+      const [firstPrerequisiteTaskId, ...remainingPrerequisiteTaskIds] = prerequisiteTaskIds
+      if (firstPrerequisiteTaskId !== undefined) {
         return safelySuspended
-          ? ResponsibilityDisposition.TaskDependencyConstraint({ prerequisiteTaskIds })
+          ? ResponsibilityDisposition.TaskDependencyConstraint({
+              prerequisiteTaskIds: [firstPrerequisiteTaskId, ...remainingPrerequisiteTaskIds]
+            })
           : suspensionRequested()
       }
       return externalSuccessDisposition()
