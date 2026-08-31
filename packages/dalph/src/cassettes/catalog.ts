@@ -4243,15 +4243,15 @@ const fiveTaskDiamondIntegrationPositions = {
 
 const doubleDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 108, startedAt: 116, targetLineageObservedAt: 121 },
-  C: { queuedAt: 113, startedAt: 162, targetLineageObservedAt: 164 },
-  D: { queuedAt: 216, startedAt: 258, targetLineageObservedAt: 260 },
-  E: { queuedAt: 328, startedAt: 330, targetLineageObservedAt: 342 },
-  F: { queuedAt: 329, startedAt: 374, targetLineageObservedAt: 376 },
-  G: { queuedAt: 543, startedAt: 544, targetLineageObservedAt: 554 },
-  H: { queuedAt: 444, startedAt: 446, targetLineageObservedAt: 458 },
-  I: { queuedAt: 445, startedAt: 490, targetLineageObservedAt: 492 },
-  X: { queuedAt: 150, startedAt: 196, targetLineageObservedAt: 226 }
+  B: { queuedAt: 108, startedAt: 114, targetLineageObservedAt: 119 },
+  C: { queuedAt: 111, startedAt: 160, targetLineageObservedAt: 162 },
+  D: { queuedAt: 214, startedAt: 256, targetLineageObservedAt: 258 },
+  E: { queuedAt: 326, startedAt: 328, targetLineageObservedAt: 340 },
+  F: { queuedAt: 327, startedAt: 372, targetLineageObservedAt: 374 },
+  G: { queuedAt: 541, startedAt: 542, targetLineageObservedAt: 552 },
+  H: { queuedAt: 442, startedAt: 444, targetLineageObservedAt: 456 },
+  I: { queuedAt: 443, startedAt: 488, targetLineageObservedAt: 490 },
+  X: { queuedAt: 148, startedAt: 194, targetLineageObservedAt: 224 }
 } as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
 
 const integrationPositionsForDiamondTask = (
@@ -4396,11 +4396,6 @@ const doubleDiamondRestartIntegrationAuthorization = () => [
     { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
   ]),
   { _tag: "DalphSelects" as const, operation: { _tag: "AcquireTaskClaim" as const, taskId: "X" as const } },
-  {
-    _tag: "DalphSelects" as const,
-    operation: { _tag: "ReadTaskClaim" as const, taskId: doubleDiamondAttempts.c.taskId }
-  },
-  { _tag: "TaskClaimCurrentReadReturned" as const, taskId: doubleDiamondAttempts.c.taskId },
   ...doubleDiamondGraphRead(doubleDiamondGraphs.xObservedDuringRestart),
   { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId: "X" as const } },
   { _tag: "TaskWorkSpecificationReadReturned" as const, ...doubleDiamondSpecification("X") },

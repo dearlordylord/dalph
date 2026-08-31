@@ -69,6 +69,19 @@ it.effect(
             : []
       )
       const taskIds = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "X"]
+      const expectedExecutionOrder = ["A", "B", "C", "X", "D", "E", "F", "H", "I", "G"]
+      const currentTaskGraphReads = run.records.flatMap(({ event }) =>
+        event._tag === "TaskTrackerReadIntentRecorded" &&
+        event.operation._tag === "ReadTrackerGraph" &&
+        event.operation.cause._tag === "WorkflowEstablishment" &&
+        event.operation.predecessorOperationIds.length === 0 &&
+        event.operation.readShape.explicitlyCoveredTaskIds.length === 1
+          ? event.operation.readShape.explicitlyCoveredTaskIds
+          : []
+      )
+      const claimIntents = run.records.flatMap(({ event }) =>
+        event._tag === "TaskClaimAcquisitionIntended" ? [event.operation.acquisition.taskId] : []
+      )
 
       expect(completeTopology).toBeDefined()
       expect(edges.toSorted()).toEqual([
@@ -94,6 +107,8 @@ it.effect(
       expect(taskWork.toSorted()).toEqual(
         taskIds.flatMap((taskId) => [`began:${taskId}`, `terminal:${taskId}`]).toSorted()
       )
+      expect(currentTaskGraphReads).toEqual(expectedExecutionOrder)
+      expect(claimIntents).toEqual(expectedExecutionOrder)
       const aSettledAt = run.records.findIndex(
         ({ event }) => event._tag === "IntegrationFinalitySettled" && event.claim.plannedAttempt.taskId === "A"
       )
