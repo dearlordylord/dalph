@@ -37,6 +37,25 @@ export const taskClaimAcquisitionPlannerConfigLayer = Layer.effect(
   })
 )
 
+/** Production planner with one already-decoded repository-host claim owner. */
+export const taskClaimAcquisitionPlannerLayer = (owner: ClaimOwner) =>
+  Layer.effect(
+    TaskClaimAcquisitionPlanner,
+    Effect.gen(function* () {
+      const crypto = yield* Crypto.Crypto
+      return TaskClaimAcquisitionPlanner.of({
+        plan: Effect.fn("TaskClaimAcquisitionPlanner.Fresh.plan")(function* (operationId, taskId) {
+          return TaskClaimAcquisition.make({
+            operationId,
+            owner,
+            taskId,
+            token: ClaimToken.make(yield* crypto.randomUUIDv7)
+          })
+        })
+      })
+    })
+  )
+
 export const deterministicTaskClaimAcquisitionPlannerLayer = (options: {
   readonly owner: ClaimOwner
   readonly tokenPrefix: string

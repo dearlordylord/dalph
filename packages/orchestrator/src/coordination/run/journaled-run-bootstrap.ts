@@ -1,7 +1,20 @@
 /* eslint-disable max-lines -- Run bootstrap keeps activation and its serialized operator controls in one ownership boundary. */
-import { type RunId } from "@dalph/contracts"
-import { Context, Deferred, Effect, Exit, Layer, Option, Ref, Schema, Semaphore, Stream } from "effect"
-import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
+import { RunId } from "@dalph/contracts"
+import {
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  PubSub,
+  Ref,
+  Schema,
+  Semaphore,
+  Stream,
+  SubscriptionRef
+} from "effect"
+import { TrackerTarget, taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
 import type { InitialControlPolicy } from "../../control/policy.js"
@@ -38,7 +51,6 @@ import {
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { RunFinalityDecision, type RunFinalityProof } from "../frontier/frontier.js"
 import { runFinalityEvidenceMatches } from "../frontier/run-finality.js"
-import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { InvalidWorkflowJournalHistory, ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import {
@@ -84,6 +96,31 @@ import {
   activeWorkAuthorityRefreshSubjectsForRunState,
   RunActivationOpportunity
 } from "./run-activation-opportunity.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
+import { currentSignalFromCurrentFirstStream, type CurrentSignal } from "../delivery/relations.js"
+import type { DeliveryRuntimeObservationState } from "../delivery/delivery-runtime-observation.js"
+import { TraceCursor } from "../../presentation/trace-reader.js"
+
+/** A journal prefix has acknowledged the exact beginning before delivery can call the tracker. */
+export const JournaledRunEstablished = Schema.Struct({
+  acceptedAt: JournalPosition,
+  runId: RunId,
+  target: TrackerTarget
+})
+export type JournaledRunEstablished = typeof JournaledRunEstablished.Type
+
+/** Read-only process source published by one scoped Journal-backed Run graph. */
+export interface JournaledRunObservationSourceService {
+  /** Latest exact Journal cursor published only after its append is acknowledged. */
+  readonly acceptedHistory: CurrentSignal<TraceCursor>
+  readonly awaitEstablished: Effect.Effect<JournaledRunEstablished>
+  readonly current: CurrentSignal<DeliveryRuntimeObservationState>
+}
+
+export class JournaledRunObservationSource extends Context.Service<
+  JournaledRunObservationSource,
+  JournaledRunObservationSourceService
+>()("@dalph/JournaledRunObservationSource") {}
 
 export interface JournaledRuntimeLayerInput {
   readonly runId: RunId
@@ -114,6 +151,8 @@ interface RuntimeControls {
   readonly workflowInterpreter: WorkflowInterpreter["Service"]
   readonly workflowTrace: WorkflowTrace["Service"]
 }
+
+const lastRecordOffset = -1
 
 interface RuntimeControlLease {
   readonly controls: RuntimeControls
@@ -215,8 +254,7 @@ export const journaledRunBootstrapLayer = (
   maintenanceObservation: JournalMaintenanceObservationService,
   operatorControlGraphReadBoundary: OperatorControlGraphReadBoundary = identityOperatorControlGraphReadBoundary
 ) =>
-  Layer.effect(
-    JournaledRunBootstrap,
+  Layer.effectContext(
     Effect.gen(function* () {
       const ownership = yield* CoordinatorOwnership
       const storage = yield* JournalStore
@@ -244,11 +282,38 @@ export const journaledRunBootstrapLayer = (
             )
           )
         )
+      const acceptedHistoryState = yield* SubscriptionRef.make<Option.Option<TraceCursor>>(Option.none())
+      yield* Effect.addFinalizer(() => PubSub.shutdown(acceptedHistoryState.pubsub))
+      const acceptedHistoryPublication = yield* Semaphore.make(1)
+      const publishAcceptedHistory = (runId: RunId, position: JournalPosition) =>
+        acceptedHistoryPublication.withPermit(
+          SubscriptionRef.get(acceptedHistoryState).pipe(
+            Effect.flatMap((current) => {
+              if (runId !== expectedRunId) {
+                return Effect.die(new Error("accepted history cannot publish another Run identity"))
+              }
+              if (Option.isSome(current) && current.value.position >= position) return Effect.void
+              return SubscriptionRef.set(acceptedHistoryState, Option.some(TraceCursor.make({ position, runId })))
+            })
+          )
+        )
+      const acceptedHistory = currentSignalFromCurrentFirstStream(
+        SubscriptionRef.changes(acceptedHistoryState).pipe(
+          Stream.filter(Option.isSome),
+          Stream.map((cursor) => cursor.value)
+        )
+      )
       const exitAwareStorage = JournalStore.of({
         ...storage,
         append: (...input) => observeProducedWrite(`append:${input[1]}`, "append", storage.append(...input))
       })
-      const inRunJournal = InRunJournal.of({ append: exitAwareStorage.append, read: exitAwareStorage.read })
+      const inRunJournal = InRunJournal.of({
+        append: (...input) =>
+          exitAwareStorage
+            .append(...input)
+            .pipe(Effect.tap((record) => publishAcceptedHistory(record.runId, record.position))),
+        read: exitAwareStorage.read
+      })
       const integrationQuarantineDirection = yield* makeIntegrationQuarantineDirectionControl(inRunJournal)
       const inactiveControlContext = yield* Layer.build(
         controlDirectionApplicationLayer.pipe(Layer.provide(Layer.succeed(InRunJournal, inRunJournal)))
@@ -265,6 +330,7 @@ export const journaledRunBootstrapLayer = (
       )
       yield* Effect.addFinalizer(() => processRuntimeCapabilities.observation.close)
       const processRuntimeLayer = deliveryRuntimeResourceCapabilitiesLayer(processRuntimeCapabilities)
+      const established = yield* Deferred.make<JournaledRunEstablished>()
 
       const acquireControlLease = Effect.fn("JournaledRunBootstrap.acquireControlLease")(function* () {
         const forwardOwner = yield* admission.acquireForwardOwner("InterruptibleBoundary")
@@ -355,9 +421,26 @@ export const journaledRunBootstrapLayer = (
                 Layer.provide(Layer.succeed(ApplicationExitAdmission, admission)),
                 Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
               )
-              const runtime = downstream.pipe(
-                Layer.provideMerge(journalLayer(runId, target, initial, exitAwareStorage))
-              )
+              const runtimeJournalLayer = Layer.effectContext(
+                Effect.gen(function* () {
+                  const journal = yield* Journal
+                  const acceptedJournal = Journal.of({
+                    ...journal,
+                    append: (...input) =>
+                      journal
+                        .append(...input)
+                        .pipe(Effect.tap((record) => publishAcceptedHistory(record.runId, record.position)))
+                  })
+                  return Context.empty().pipe(
+                    Context.add(Journal, acceptedJournal),
+                    Context.add(
+                      InRunJournal,
+                      InRunJournal.of({ append: acceptedJournal.append, read: acceptedJournal.read })
+                    )
+                  )
+                })
+              ).pipe(Layer.provide(journalLayer(runId, target, initial, exitAwareStorage)))
+              const runtime = downstream.pipe(Layer.provideMerge(runtimeJournalLayer))
               const context = yield* Layer.build(runtime)
               const journal = Context.get(context, Journal)
               const publishedIntegrationQuarantineDirection = yield* makeIntegrationQuarantineDirectionControl(
@@ -436,11 +519,12 @@ export const journaledRunBootstrapLayer = (
         if (Option.isNone(owner)) {
           return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
         }
-        yield* observeProducedWrite(
+        const termination = yield* observeProducedWrite(
           `terminate:${runId}`,
           "terminate",
           lifecycle.terminateRun(runId, terminalProof.disposition, terminalProof.evidence)
         ).pipe(Effect.ensuring(owner.value.release))
+        yield* publishAcceptedHistory(termination.runId, termination.position)
         const shouldAttemptRetirement = yield* Ref.modify(startupRetirementAttempts, (attempted) => {
           /* v8 ignore next -- @preserve lifecycle.terminateRun accepts one terminal append per Run; a second finish for the same Run is rejected before this guard. */
           if (attempted.has(runId)) return [false, attempted] as const
@@ -519,6 +603,11 @@ export const journaledRunBootstrapLayer = (
                 }
                 yield* lifecycle.readRunForRecovery(runId, target)
                 const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
+                const acceptedAt = initial.records.at(lastRecordOffset)?.position
+                /* v8 ignore next -- @preserve Successful readRunForRecovery and validation require a non-empty history beginning. */
+                if (acceptedAt === undefined) return yield* Effect.die("established Run has no accepted record")
+                yield* publishAcceptedHistory(runId, acceptedAt)
+                yield* Deferred.succeed(established, JournaledRunEstablished.make({ acceptedAt, runId, target }))
                 const opportunity = opportunityFor(initial)
                 const activationProgram = program(opportunity)
                 return yield* finish(
@@ -732,12 +821,21 @@ export const journaledRunBootstrapLayer = (
         setTaskWorkCapacity: (input) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.apply(input))
       }
 
-      return JournaledRunBootstrap.of({
+      const bootstrap = JournaledRunBootstrap.of({
         activate,
         activateActiveWorkAuthorityRefresh,
         readRunReactivationControl,
         registerAcceptedRunReactivationObservers,
         operatorControl
       })
+      const observation = JournaledRunObservationSource.of({
+        acceptedHistory,
+        awaitEstablished: Deferred.await(established),
+        current: processRuntimeCapabilities.resources.runtimeObservation
+      })
+      return Context.empty().pipe(
+        Context.add(JournaledRunBootstrap, bootstrap),
+        Context.add(JournaledRunObservationSource, observation)
+      )
     })
   )

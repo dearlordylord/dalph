@@ -2,7 +2,7 @@
 import nodeProcess from "node:process"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect"
+import { Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Redacted, Schema } from "effect"
 import { expect } from "vitest"
 import {
   ApplicationExitDiagnostic,
@@ -39,7 +39,10 @@ const codexAppServerLayer = (config?: Parameters<typeof rawCodexAppServerLayer>[
   )
 
 const QualificationEnvironmentCapture = Schema.Struct({
+  arguments: Schema.optionalKey(Schema.Array(Schema.String)),
   codexHome: Schema.optionalKey(Schema.String),
+  openAiApiKey: Schema.optionalKey(Schema.String),
+  providerCredential: Schema.optionalKey(Schema.String),
   providerKey: Schema.optionalKey(Schema.String)
 })
 
@@ -52,7 +55,10 @@ if (process.env.DALPH_QUALIFICATION_ENV_CAPTURE !== undefined) {
   fs.writeFileSync(
     process.env.DALPH_QUALIFICATION_ENV_CAPTURE,
     JSON.stringify({
+      arguments: process.argv.slice(2),
       codexHome: process.env.CODEX_HOME,
+      openAiApiKey: process.env.OPENAI_API_KEY,
+      providerCredential: process.env.DALPH_CODEX_PROVIDER_CREDENTIAL,
       providerKey: process.env.DALPH_QUALIFICATION_PROVIDER_KEY
     })
   )
@@ -336,6 +342,7 @@ it.effect("forwards isolated qualification environment only at the child launch 
           JSON.parse(yield* fileSystem.readFileString(capture))
         )
         expect(captured).toEqual({
+          arguments: ["app-server"],
           codexHome: "/isolated/qualification-codex-home",
           providerKey: "fixture-only-provider-key"
         })
@@ -346,6 +353,64 @@ it.effect("forwards isolated qualification environment only at the child launch 
         yield* app.close
       }).pipe(Effect.provide(appLayer), Effect.provide(NodeServices.layer))
       expect(result).toBeUndefined()
+    }).pipe(Effect.provide(NodeServices.layer))
+  )
+)
+
+it.effect("selects the configured provider while keeping its credential outside the durable launch command", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem
+      const path = yield* Path.Path
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-issue-293-provider-boundary-" })
+      const executable = path.join(root, "fixture-codex")
+      const capture = path.join(root, "provider-environment.json")
+      const credential = "provider-credential-that-must-not-enter-the-command"
+      yield* fileSystem.writeFileString(executable, fakeServer)
+      yield* fileSystem.chmod(executable, 0o755)
+
+      const storeLayer = memoryCodexAttemptStoreLayer()
+      const appLayer = codexAppServerNodeLayer(
+        {
+          executable,
+          environment: { DALPH_QUALIFICATION_ENV_CAPTURE: capture },
+          modelProvider: "openai",
+          providerCredential: Redacted.make(credential)
+        },
+        isolatedCodexProcessNativeService
+      ).pipe(Layer.provide(storeLayer))
+      yield* Effect.gen(function* () {
+        const app = yield* CodexAppServer
+        const store = yield* CodexAttemptStore
+        const launch = yield* store.readServerLaunch()
+        expect(Option.isSome(launch)).toBe(true)
+        if (Option.isNone(launch)) return
+        expect(launch.value.command).toEqual([
+          executable,
+          "app-server",
+          "-c",
+          'model_provider="openai"',
+          "-c",
+          'model_providers.openai.env_key="DALPH_CODEX_PROVIDER_CREDENTIAL"'
+        ])
+        expect(JSON.stringify(launch.value)).not.toContain(credential)
+
+        const captured = yield* Schema.decodeUnknownEffect(QualificationEnvironmentCapture)(
+          JSON.parse(yield* fileSystem.readFileString(capture))
+        )
+        expect(captured).toEqual({
+          arguments: [
+            "app-server",
+            "-c",
+            'model_provider="openai"',
+            "-c",
+            'model_providers.openai.env_key="DALPH_CODEX_PROVIDER_CREDENTIAL"'
+          ],
+          openAiApiKey: credential,
+          providerCredential: credential
+        })
+        yield* app.close
+      }).pipe(Effect.provide(Layer.merge(storeLayer, appLayer)))
     }).pipe(Effect.provide(NodeServices.layer))
   )
 )

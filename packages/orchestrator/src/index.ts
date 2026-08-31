@@ -219,7 +219,8 @@ export {
   GithubIssueNodeId,
   GithubLabelName,
   GithubLabelNodeId,
-  GithubRepositoryNodeId
+  GithubRepositoryNodeId,
+  githubGraphqlClientLayer
 } from "./authorities/task-tracker/github/graphql-client.js"
 export {
   githubTrackerGraphReaderLayer,
@@ -428,6 +429,7 @@ export {
 export * from "./workflow/protocols/task-attempt-planning/journal-evidence.js"
 export {
   deterministicTaskClaimAcquisitionPlannerLayer,
+  taskClaimAcquisitionPlannerLayer,
   TaskClaimAcquisitionPlanner,
   taskClaimAcquisitionPlannerConfigLayer
 } from "./workflow/protocols/task-claim-acquisition/plan.js"
@@ -597,6 +599,11 @@ export {
   freshWorkflowRunId
 } from "./coordination/run/fresh-run-identity.js"
 export {
+  ProductionRunSelection,
+  ProductionRunSelectionConflict,
+  selectProductionRun
+} from "./coordination/run/production-run-selection.js"
+export {
   JournaledRunBootstrap,
   type JournaledRunBootstrapError,
   type InitialControlPolicySource,
@@ -649,6 +656,9 @@ export {
 } from "./coordination/run/pause-progress-observation.js"
 export { runControlledWorkflow } from "./coordination/run/controlled-workflow.js"
 export {
+  JournaledRunEstablished,
+  JournaledRunObservationSource,
+  type JournaledRunObservationSourceService,
   journaledRunBootstrapLayer,
   type JournaledRuntimeLayerInput
 } from "./coordination/run/journaled-run-bootstrap.js"

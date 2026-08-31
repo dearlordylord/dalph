@@ -66,6 +66,7 @@ describe("production repository host configuration", () => {
     ["non-canonical candidate root", { integratorCandidateWorktreeRoot: "/srv/dalph/../candidates" }],
     ["non-positive interval", { activationInterval: "0 seconds" }],
     ["edge-whitespace executable", { codexExecutable: " /usr/local/bin/codex" }],
+    ["unsafe provider identifier", { codexProvider: 'openai" --dangerous' }],
     ["overlapping worktree roots", { integratorCandidateWorktreeRoot: "/srv/dalph/planned-attempts/integrator" }],
     ["worktree and state overlap", { codexStateDirectory: "/srv/dalph/planned-attempts/state" }],
     ["private state overlap", { integratorPrivateStore: "/var/lib/dalph/evidence/integrator.json" }]

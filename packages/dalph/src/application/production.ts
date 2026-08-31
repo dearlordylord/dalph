@@ -1,6 +1,7 @@
 import { NodeServices } from "@effect/platform-node"
 import { type IntegrationTarget, PlannedAttemptExecutor, type RunId } from "@dalph/contracts"
 import {
+  type JournaledRunObservationSource,
   AllocatedWorkflowRunId,
   JournaledRunBootstrap,
   type JournaledRuntimeLayerInput,
@@ -86,6 +87,8 @@ export interface ProductionRunReactivationOptions {
 
 /** Optional production boundaries that advance one accepted result through delivery and finality. */
 export interface ProductionWorkflowRuntimeBoundaries {
+  /** Already-acquired repository owner shared with host discovery and SQLite. */
+  readonly coordinatorOwnership?: CoordinatorOwnership["Service"]
   /** Optional journal implementation for process-boundary acceptance tests. */
   readonly journalStoreLayer?: Layer.Layer<
     JournalStore | RunLifecycleJournal,
@@ -162,7 +165,7 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
  * implementation through the ordinary Effect Layer environment.
  */
 type ProductionWorkflowLayer<TrackerError, TrackerRequirements> = Layer.Layer<
-  ApplicationExitRequestBoundary | ApplicationExitShell | JournaledRunBootstrap,
+  ApplicationExitRequestBoundary | ApplicationExitShell | JournaledRunBootstrap | JournaledRunObservationSource,
   | TrackerError
   | JournalStoreError
   | Layer.Error<typeof productionJournalStoreLayer>
@@ -187,7 +190,10 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
 ): ProductionWorkflowLayer<TrackerError, TrackerRequirements> => {
   const { acceptedResultEvidenceStore, completionTask, integrationFinality, integrator, targetPromotion } =
     runtimeBoundaries
-  const ownershipLayer = productionCoordinatorOwnershipLayer(target)
+  const ownershipLayer =
+    runtimeBoundaries.coordinatorOwnership === undefined
+      ? productionCoordinatorOwnershipLayer(target)
+      : Layer.succeed(CoordinatorOwnership, runtimeBoundaries.coordinatorOwnership)
   const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(trackerMutationAdapterLayer).pipe(
     Layer.provide(ownershipLayer)
   )

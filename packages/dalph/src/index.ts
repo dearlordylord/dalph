@@ -15,6 +15,13 @@ export {
 } from "./application/codex-attempt-store.js"
 export { codexAppServerNodeLayer, type CodexAppServerLayerConfig } from "./application/codex-app-server.js"
 export {
+  type ProductionHostObservation,
+  type ProductionRepositoryHostAdapters,
+  type ProductionRepositoryHostGraph,
+  productionRepositoryHostGraph,
+  withProductionRepositoryHost
+} from "./application/production-host.js"
+export {
   CodexIntegratorConfiguration,
   IntegratorCandidateWorktreeRoot,
   IntegratorPrivateStoreLocator

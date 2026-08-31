@@ -60,6 +60,11 @@ const NonEmptyExecutable = Schema.NonEmptyString.check(
     value.trim() === value ? undefined : "Codex executable must not contain edge whitespace"
   )
 )
+const CodexProviderName = Schema.NonEmptyString.check(
+  Schema.makeFilter((value) =>
+    /^[A-Za-z0-9_-]+$/.test(value) ? undefined : "Codex provider must be a safe configuration identifier"
+  )
+)
 
 const pathContains = (parent: string, child: string): boolean =>
   parent === child || child.startsWith(`${parent}${nodePath.sep}`)
@@ -138,7 +143,7 @@ export const ProductionRepositoryHostConfiguration = Schema.Struct({
   codexExecutable: NonEmptyExecutable,
   codexClientName: Schema.NonEmptyString,
   codexClientVersion: Schema.NonEmptyString,
-  codexProvider: Schema.NonEmptyString,
+  codexProvider: CodexProviderName,
   githubToken: Schema.RedactedFromValue(Schema.NonEmptyString, { label: "GitHubToken", disallowEncode: true }),
   codexProviderCredential: Schema.RedactedFromValue(Schema.NonEmptyString, {
     label: "CodexProviderCredential",

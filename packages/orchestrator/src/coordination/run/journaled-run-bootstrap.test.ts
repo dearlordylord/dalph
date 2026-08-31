@@ -16,6 +16,7 @@ import { it } from "@effect/vitest"
 import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node"
 import { Context, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Ref, Scope, Stream } from "effect"
 import { JournalDatabaseLocator, JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
+import { TraceCursor } from "../../presentation/trace-reader.js"
 import { sqliteJournalTestLayer } from "../../workflow-journal/adapters/sqlite-store.js"
 import { expect } from "vitest"
 import { TestClock } from "effect/testing"
@@ -91,7 +92,7 @@ import { makeRunFinalityEvidence, runTerminationDispositionOf } from "../frontie
 import { AllocatedWorkflowRunId, freshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import { JournaledRunBootstrap, type AcceptedRunReactivationObservers } from "./run.js"
-import { journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
+import { JournaledRunObservationSource, journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import {
   type ApplicationExitShellService,
@@ -362,8 +363,13 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
     sharedApplicationExit,
     maintenanceObservation
   ).pipe(Layer.provide(dependencies))
-  const bootstrap = Context.get(yield* Layer.build(application), JournaledRunBootstrap)
-  return { ...bootstrap, applicationExitRequestBoundary: sharedApplicationExit.requestBoundary }
+  const context = yield* Layer.build(application)
+  const bootstrap = Context.get(context, JournaledRunBootstrap)
+  return {
+    ...bootstrap,
+    applicationExitRequestBoundary: sharedApplicationExit.requestBoundary,
+    observationSource: Context.get(context, JournaledRunObservationSource)
+  }
 })
 
 const appendExecutorHistory = (
@@ -1113,6 +1119,51 @@ it.effect("establishes an absent Run before activating its journal-backed runtim
         hasRawJournal: false
       })
       expect((yield* storage.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("accepted history is current-first and advances only after an acknowledged append", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-accepted-history")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const allowAppend = yield* Deferred.make<void>()
+      const appended = yield* Deferred.make<void>()
+      const finish = yield* Deferred.make<void>()
+      const operation = makeTrackerGraphObservationOperation(OperationId.make("accepted-history-read"), target)
+      const active = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+
+      const activation = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.gen(function* () {
+            const journal = yield* Journal
+            yield* Deferred.await(allowAppend)
+            yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+            yield* Deferred.succeed(appended, undefined)
+            yield* Deferred.await(finish)
+            return finalityProof(active)
+          })
+        )
+        .pipe(Effect.forkChild)
+
+      yield* bootstrap.observationSource.awaitEstablished
+      const attachment = yield* bootstrap.observationSource.acceptedHistory.attach
+      expect(attachment.current).toEqual(TraceCursor.make({ position: JournalPosition.make(1), runId }))
+      const next = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+      yield* Deferred.succeed(allowAppend, undefined)
+      yield* Deferred.await(appended)
+      expect(Option.getOrThrow(yield* Fiber.join(next))).toEqual(
+        TraceCursor.make({ position: JournalPosition.make(2), runId })
+      )
+      yield* Deferred.succeed(finish, undefined)
+      expect(yield* Fiber.join(activation)).toEqual(active)
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
