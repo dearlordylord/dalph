@@ -70,6 +70,7 @@ import {
 import { targetPromotionRequestIdForCandidate } from "../../workflow/protocols/target-promotion/events.js"
 import type { TargetPromotionRuntimeInput } from "../../workflow/protocols/target-promotion/runtime.js"
 import {
+  currentAcceptedPlannedAttemptExecutorLifecycleFor,
   latestPlannedAttemptExecutorEvidence,
   latestAcceptedPlannedAttemptExecutorEvidence,
   latestPlannedAttemptExecutorProjectionIssue,
@@ -2734,7 +2735,7 @@ const activeRefreshGraphReadSelectionFor = (
       (plannedAttempt, index, candidates) =>
         plannedAttempt.runId === runState.runId &&
         activeWorkAuthorityRefreshSubjectsContain(opportunity.subjects, plannedAttempt) &&
-        latestPlannedAttemptExecutorEvidence(records, plannedAttempt)?.report._tag === "ExecutorWorkExecuting" &&
+        currentAcceptedPlannedAttemptExecutorLifecycleFor(records, plannedAttempt)._tag === "Executing" &&
         candidates.findIndex((candidate) => plannedTaskAttemptEquivalence(candidate, plannedAttempt)) === index
     )
     .toSorted((left, right) => left.runId.localeCompare(right.runId) || left.attemptId.localeCompare(right.attemptId))

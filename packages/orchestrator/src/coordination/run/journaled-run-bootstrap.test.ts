@@ -433,7 +433,8 @@ const appendExecutorHistory = (
   journal: JournalStore["Service"],
   runId: RunId,
   plannedAttempt: PlannedTaskAttempt,
-  reportTag: "Running" | "SafelySuspended" | "Terminal"
+  reportTag: "Running" | "SafelySuspended" | "Terminal",
+  acceptInitialReport = true
 ) =>
   Effect.gen(function* () {
     const plan = makeTaskAttemptPlanOperation({
@@ -477,6 +478,7 @@ const appendExecutorHistory = (
         version: workflowJournalEventVersion
       })
     )
+    if (!acceptInitialReport) return
     const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
     yield* journal.append(
       runId,
@@ -539,6 +541,49 @@ const captureTestAttempt = (runId: RunId, suffix: string, taskSuffix: string) =>
     taskRevision: TaskRevision.make(`bootstrap-capture-revision-${suffix}`),
     worktree: WorktreeLocator.make(`/worktrees/bootstrap-capture-${suffix}`)
   })
+
+it.effect("captures Executing work only after its lifecycle report is accepted", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-active-refresh-accepted-report")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      yield* storage.beginRun(runId, target, initialPolicy)
+
+      const plannedAttempt = captureTestAttempt(runId, "response-before-report", "response-before-report")
+      yield* appendExecutorHistory(storage, runId, plannedAttempt, "Running", false)
+      const responseOnly = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+      if (responseOnly._tag !== "ValidWorkflowJournalHistory") {
+        return yield* Effect.die("an executor response awaiting lifecycle acceptance must be a valid crash prefix")
+      }
+      expect([...activeWorkAuthorityRefreshSubjectsForRunState(responseOnly.runState)]).toEqual([])
+
+      const report = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+      })
+      yield* storage.append(
+        runId,
+        plannedAttemptExecutorWorkReportedRecordKey(
+          plannedAttempt.attemptId,
+          PlannedAttemptExecutorReportOrdinal.make(1)
+        ),
+        PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+          report,
+          version: workflowJournalEventVersion
+        })
+      )
+      const accepted = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+      if (accepted._tag !== "ValidWorkflowJournalHistory") {
+        return yield* Effect.die("accepted Executing lifecycle fixture must preserve valid history")
+      }
+      expect([...activeWorkAuthorityRefreshSubjectsForRunState(accepted.runState)]).toEqual([
+        { attemptId: plannedAttempt.attemptId, runId }
+      ])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
 
 it.effect("captures only unfinished Running responsibilities at the active refresh boundary", () =>
   Effect.scoped(

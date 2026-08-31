@@ -347,11 +347,15 @@ export const latestPlannedAttemptExecutorEvidence = (
 }
 
 /**
- * Current exact lifecycle authority for one attempt correlation. `Ambiguous`
- * includes a missing responsibility, missing exact report, or a later
- * non-exact projection; none may be treated as proof that work settled.
+ * Current accepted lifecycle authority for one attempt correlation.
+ *
+ * A command response or passive projection may reconcile a boundary or await
+ * lifecycle acceptance, but it cannot make an attempt an active-refresh
+ * subject or prove that the attempt settled. `Ambiguous` therefore includes a
+ * missing responsibility, an exact report still awaiting acceptance, and a
+ * later non-exact projection.
  */
-type CurrentPlannedAttemptExecutorLifecycle =
+type CurrentAcceptedPlannedAttemptExecutorLifecycle =
   | { readonly _tag: "Executing"; readonly plannedAttempt: PlannedTaskAttempt }
   | {
       readonly _tag: "Settled"
@@ -360,10 +364,10 @@ type CurrentPlannedAttemptExecutorLifecycle =
     }
   | { readonly _tag: "Ambiguous" }
 
-export const currentPlannedAttemptExecutorLifecycleFor = (
+export const currentAcceptedPlannedAttemptExecutorLifecycleFor = (
   records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
   correlation: PlannedAttemptExecutorCorrelation
-): CurrentPlannedAttemptExecutorLifecycle => {
+): CurrentAcceptedPlannedAttemptExecutorLifecycle => {
   const responsibility = records.findLast(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
@@ -371,7 +375,7 @@ export const currentPlannedAttemptExecutorLifecycleFor = (
       event.plannedAttempt.attemptId === correlation.attemptId
   )?.event
   if (responsibility?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return { _tag: "Ambiguous" }
-  const evidence = latestPlannedAttemptExecutorEvidence(records, responsibility.plannedAttempt)
+  const evidence = latestAcceptedPlannedAttemptExecutorEvidence(records, responsibility.plannedAttempt)
   if (evidence === undefined) return { _tag: "Ambiguous" }
   return evidence.report._tag === "ExecutorWorkExecuting"
     ? { _tag: "Executing", plannedAttempt: responsibility.plannedAttempt }

@@ -616,6 +616,31 @@ const recoveredReadLease: DeliveryActionExecutionLease = {
   withPlannedAttemptProtocol: () => Effect.die("ordinary read recovery does not use the executor protocol")
 }
 
+it.effect("does not start G1 from an Executing command response before its lifecycle report is accepted", () =>
+  Effect.gen(function* () {
+    const opportunity = activeWorkAuthorityRefreshForOwner(
+      "Timer",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+    )
+    const responseOnlyPrefix = buildPrefix("Healthy").filter(({ position }) => position <= JournalPosition.make(7))
+    const beforeAcceptance = yield* projectionFor(responseOnlyPrefix, opportunity)
+    expect(
+      beforeAcceptance.frontier.transitions.filter(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
+    ).toEqual([])
+
+    const acceptedPrefix = buildPrefix("Healthy").filter(({ position }) => position <= JournalPosition.make(8))
+    const afterAcceptance = yield* projectionFor(acceptedPrefix, opportunity)
+    expect(
+      afterAcceptance.frontier.transitions.filter(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
+    ).toMatchObject([
+      {
+        operation: { cause: { _tag: "ExecutingWorkAuthorityCheck" } },
+        plannedAttempt: { attemptId: plannedAttempt.attemptId, runId }
+      }
+    ])
+  })
+)
+
 it.effect("active-work refresh recovers ordinary authority reads without a private refresh protocol", () =>
   Effect.gen(function* () {
     const operations = healthyAuthorityOperations()

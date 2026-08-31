@@ -513,7 +513,7 @@ it.effect("keeps a blocked trailing marker ahead of a post-idle hint until it is
                   yield* Deferred.await(releaseFinalization)
                 })
               : Effect.void,
-          onTrailingOrdinaryRecorded: () => Deferred.succeed(trailingRecorded, undefined),
+          onTrailingActivationRecorded: () => Deferred.succeed(trailingRecorded, undefined),
           // The worker observes Idle before taking its next queue value. Wait
           // for the blocked producer's marker, then send the second hint in
           // that exact pre-take interval.

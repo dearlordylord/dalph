@@ -67,7 +67,7 @@ export interface RunReactivationOwnerOptions<E, R = never, EInstall = E> {
   /** Optional process-local activation-finalization observation for deterministic lifecycle tests. */
   readonly onActivationFinalizationStart?: (kind: "Ordinary" | "ActiveWorkAuthorityRefresh") => Effect.Effect<void>
   /** Optional process-local trailing-obligation observation for deterministic lifecycle tests. */
-  readonly onTrailingOrdinaryRecorded?: (generation: number) => Effect.Effect<void>
+  readonly onTrailingActivationRecorded?: (generation: number) => Effect.Effect<void>
   /** Optional process-local idle-handoff observation for deterministic lifecycle tests. */
   readonly onActivationHandoffIdle?: () => Effect.Effect<void>
 }
@@ -248,8 +248,8 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
           const obligation: TrailingActivationObligation = { _tag: "PendingTrailingActivation", generation, kind }
           yield* Ref.set(trailingActivationObligation, Option.some(obligation))
           yield* Queue.offer(messages, { _tag: "TrailingActivation", generation })
-          if (options.onTrailingOrdinaryRecorded !== undefined) {
-            yield* options.onTrailingOrdinaryRecorded(generation)
+          if (options.onTrailingActivationRecorded !== undefined) {
+            yield* options.onTrailingActivationRecorded(generation)
           }
         })
 
@@ -286,7 +286,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       const offerHint = Effect.fn("RunReactivationOwner.hint")(function* (hint: RunReactivationHint) {
         // Capture the phase before waiting for the gate. If finalization wins
         // the permit while this producer waits, the generation mismatch keeps
-        // the hint in the one trailing ordinary activation.
+        // the hint in the one trailing activation.
         const arrivalPhase = yield* Ref.get(activationPhase)
         yield* commandGate.withPermit(offerHintInsideGate(hint, arrivalPhase))
       })

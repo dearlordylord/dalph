@@ -32,6 +32,9 @@ import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identi
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorStateObservationOrdinal,
@@ -777,14 +780,14 @@ it.effect("reopens ordinary delivery only from exact settled executor lifecycle 
         plannedAttempt: activeVerticalAttempt,
         version: workflowJournalEventVersion
       })
-      const reportRecord = (report: PlannedAttemptExecutorReport): JournalRecord => ({
-        event: PlannedAttemptExecutorWorkReportedEvent.make({
-          ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-          report,
-          version: workflowJournalEventVersion
-        }),
-        key: JournalRecordKey.make(`lifecycle-${report._tag}`),
-        position: JournalPosition.make(2),
+      const reportRecord = (
+        report: PlannedAttemptExecutorReport,
+        position = JournalPosition.make(2),
+        ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
+      ): JournalRecord => ({
+        event: PlannedAttemptExecutorWorkReportedEvent.make({ ordinal, report, version: workflowJournalEventVersion }),
+        key: JournalRecordKey.make(`lifecycle-${report._tag}-${ordinal}`),
+        position,
         runId
       })
       const responsibilityRecord: JournalRecord = {
@@ -794,9 +797,15 @@ it.effect("reopens ordinary delivery only from exact settled executor lifecycle 
         runId
       }
       const executing = reportRecord(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
-      const safe = reportRecord(PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }))
+      const safe = reportRecord(
+        PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }),
+        JournalPosition.make(4),
+        PlannedAttemptExecutorReportOrdinal.make(2)
+      )
       const terminal = reportRecord(
-        PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Completed" } })
+        PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({ correlation, result: { _tag: "Completed" } }),
+        JournalPosition.make(5),
+        PlannedAttemptExecutorReportOrdinal.make(2)
       )
       const laterNonExact: JournalRecord = {
         event: PlannedAttemptExecutorStateObservedEvent.make({
@@ -807,18 +816,79 @@ it.effect("reopens ordinary delivery only from exact settled executor lifecycle 
           version: workflowJournalEventVersion
         }),
         key: JournalRecordKey.make("lifecycle-later-non-exact"),
+        position: JournalPosition.make(5),
+        runId
+      }
+      const unacceptedSafe: JournalRecord = {
+        event: PlannedAttemptExecutorStateObservedEvent.make({
+          observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+            report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+          }),
+          occurrenceClassification: "NonActionOccurrence",
+          ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+          plannedAttempt: activeVerticalAttempt,
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("lifecycle-unaccepted-safe"),
         position: JournalPosition.make(3),
+        runId
+      }
+      const terminalCommandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+      const terminalCommandIntent: JournalRecord = {
+        event: PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Suspend",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: terminalCommandOrdinal,
+          plannedAttempt: activeVerticalAttempt,
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("lifecycle-terminal-command"),
+        position: JournalPosition.make(3),
+        runId
+      }
+      const unacceptedTerminal: JournalRecord = {
+        event: PlannedAttemptExecutorCommandResponseObservedEvent.make({
+          commandOrdinal: terminalCommandOrdinal,
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt: activeVerticalAttempt,
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+            correlation,
+            result: { _tag: "Completed" }
+          }),
+          version: workflowJournalEventVersion
+        }),
+        key: JournalRecordKey.make("lifecycle-unaccepted-terminal"),
+        position: JournalPosition.make(4),
         runId
       }
       const cases = [
         { expectedExecutions: 0, name: "missing responsibility", records: [] },
         { expectedExecutions: 0, name: "exact Executing", records: [responsibilityRecord, executing] },
-        { expectedExecutions: 1, name: "exact Safe", records: [responsibilityRecord, safe] },
-        { expectedExecutions: 1, name: "exact Terminal", records: [responsibilityRecord, terminal] },
+        {
+          expectedExecutions: 0,
+          name: "exact Safe observation awaiting lifecycle acceptance",
+          records: [responsibilityRecord, executing, unacceptedSafe]
+        },
+        {
+          expectedExecutions: 0,
+          name: "exact Terminal command response awaiting lifecycle acceptance",
+          records: [responsibilityRecord, executing, terminalCommandIntent, unacceptedTerminal]
+        },
+        {
+          expectedExecutions: 1,
+          name: "accepted Safe after its exact observation",
+          records: [responsibilityRecord, executing, unacceptedSafe, safe]
+        },
+        {
+          expectedExecutions: 1,
+          name: "accepted Terminal after its exact command response",
+          records: [responsibilityRecord, executing, terminalCommandIntent, unacceptedTerminal, terminal]
+        },
         {
           expectedExecutions: 0,
           name: "later non-exact projection",
-          records: [responsibilityRecord, safe, laterNonExact]
+          records: [responsibilityRecord, executing, unacceptedSafe, safe, laterNonExact]
         }
       ] as const
 

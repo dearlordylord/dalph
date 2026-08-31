@@ -28,7 +28,7 @@ import {
   PlannedAttemptExecutorWorkReportedEvent
 } from "./events.js"
 import {
-  currentPlannedAttemptExecutorLifecycleFor,
+  currentAcceptedPlannedAttemptExecutorLifecycleFor,
   latestAcceptedPlannedAttemptExecutorEvidence,
   latestPlannedAttemptExecutorEvidence,
   plannedAttemptExecutorEvidence,
@@ -179,7 +179,7 @@ it.each([
     { event: accepted, position: JournalPosition.make(2) }
   ]
 
-  expect(currentPlannedAttemptExecutorLifecycleFor(records, report.correlation)._tag).toBe(expected)
+  expect(currentAcceptedPlannedAttemptExecutorLifecycleFor(records, report.correlation)._tag).toBe(expected)
 })
 
 it("keeps missing or invalidated exact lifecycle authority ambiguous", () => {
@@ -201,9 +201,9 @@ it("keeps missing or invalidated exact lifecycle authority ambiguous", () => {
     version: workflowJournalEventVersion
   })
 
-  expect(currentPlannedAttemptExecutorLifecycleFor([], correlation)).toEqual({ _tag: "Ambiguous" })
+  expect(currentAcceptedPlannedAttemptExecutorLifecycleFor([], correlation)).toEqual({ _tag: "Ambiguous" })
   expect(
-    currentPlannedAttemptExecutorLifecycleFor(
+    currentAcceptedPlannedAttemptExecutorLifecycleFor(
       [
         { event: responsibility, position: JournalPosition.make(1) },
         { event: executing, position: JournalPosition.make(2) },
@@ -243,6 +243,21 @@ it("does not fall back to an older accepted report when a distinct exact report 
     source: { _tag: "StateProjection" }
   })
   expect(latestAcceptedPlannedAttemptExecutorEvidence(records, plannedAttempt)).toBeUndefined()
+  expect(
+    currentAcceptedPlannedAttemptExecutorLifecycleFor(
+      [
+        {
+          event: PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          }),
+          position: JournalPosition.make(1)
+        },
+        ...records.map(({ event, position }) => ({ event, position: JournalPosition.make(Number(position) + 1) }))
+      ],
+      correlation
+    )
+  ).toEqual({ _tag: "Ambiguous" })
 })
 
 it("retains accepted authority after an unchanged exact passive replay", () => {

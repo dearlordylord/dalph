@@ -24,7 +24,7 @@ import { RunFinalityDecision } from "../frontier/frontier.js"
 import { InRunJournal, type InRunJournalService, type JournalRecord } from "../../workflow-journal/store.js"
 import type { RunActivationOpportunity } from "./run-activation-opportunity.js"
 import { pendingActiveRefreshG2OperationFor } from "./recovery-activation.js"
-import { currentPlannedAttemptExecutorLifecycleFor } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import { currentAcceptedPlannedAttemptExecutorLifecycleFor } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 
 type EstablishedTrackerGraph = Extract<
   DeliveryRuntimeQuiescence["current"]["trackerGraph"],
@@ -228,7 +228,7 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
         currentGraph.observation.cause._tag !== "ExecutingWorkAuthorityCheck"
       ) {
         const everyActiveSubjectSettled = [...opportunity.subjects].every(
-          (subject) => currentPlannedAttemptExecutorLifecycleFor(journalRecords, subject)._tag === "Settled"
+          (subject) => currentAcceptedPlannedAttemptExecutorLifecycleFor(journalRecords, subject)._tag === "Settled"
         )
         if (everyActiveSubjectSettled) {
           return proofOf(target, yield* runDeliveryRuntimePhase(evaluations))

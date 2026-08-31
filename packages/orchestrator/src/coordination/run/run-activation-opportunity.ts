@@ -1,6 +1,6 @@
 import { AttemptId, RunId } from "@dalph/contracts"
 import { Chunk, Schema } from "effect"
-import { latestPlannedAttemptExecutorEvidence } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import { currentAcceptedPlannedAttemptExecutorLifecycleFor } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 
 /** The two process-local triggers that can request a refresh of Running work. */
@@ -77,12 +77,13 @@ const makeActiveWorkAuthorityRefreshSubjects = (
 export const activeWorkAuthorityRefreshSubjectsFor = makeActiveWorkAuthorityRefreshSubjects
 
 /**
- * Selects every exact unfinished attempt whose latest executor evidence in a
- * validated journal prefix is `Running`. Responsibility reconstruction has
- * already removed historical and superseded plans; the evidence fold removes
- * safely suspended, terminal, and invalidated reports. The caller supplies
- * the prefix read at the activation boundary, so later publications cannot
- * enter this immutable subject set.
+ * Selects every exact unfinished attempt whose current accepted lifecycle
+ * report in a validated journal prefix is `ExecutorWorkExecuting`.
+ * Responsibility reconstruction has already removed historical and
+ * superseded plans; an exact response or projection still awaiting lifecycle
+ * acceptance grants no refresh authority. The caller supplies the prefix read
+ * at the activation boundary, so later publications cannot enter this
+ * immutable subject set.
  */
 export const activeWorkAuthorityRefreshSubjectsForRunState = (
   runState: Pick<ReconstructedRunState, "runId" | "responsibility" | "workflowHistory">
@@ -92,8 +93,8 @@ export const activeWorkAuthorityRefreshSubjectsForRunState = (
       if (entry._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
       const { plannedAttempt } = entry
       if (plannedAttempt.runId !== runState.runId) return []
-      return latestPlannedAttemptExecutorEvidence(runState.workflowHistory.records, plannedAttempt)?.report._tag ===
-        "ExecutorWorkExecuting"
+      return currentAcceptedPlannedAttemptExecutorLifecycleFor(runState.workflowHistory.records, plannedAttempt)
+        ._tag === "Executing"
         ? [{ runId: plannedAttempt.runId, attemptId: plannedAttempt.attemptId }]
         : []
     })
