@@ -208,9 +208,9 @@ const makeSharedServicesLayer = <ECodex, EGithub, ETrace>(
 }
 
 /**
- * Complete production repository graph. Optional adapters replace only the
- * network/process edge for qualification; the mutation capability topology,
- * one shared Codex service, and Run chronology remain unchanged.
+ * Complete production repository graph. Optional adapters replace only named
+ * network, persistence, or process edges for qualification; the mutation
+ * capability topology, one shared Codex service, and Run chronology remain unchanged.
  */
 export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, ETrace = never>(
   adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
@@ -219,7 +219,9 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
     const ownership = productionCoordinatorOwnershipLayer(
       GitCommonDirectoryTarget.make(configuration.commonDirectory)
     ).pipe(Layer.provide(NodeServices.layer))
-    const journal = journalStoreCapabilities(sqliteJournalStoreLayer({ filename: configuration.journalDatabase }))
+    const defaultJournalLayer = sqliteJournalStoreLayer({ filename: configuration.journalDatabase })
+    const journalStoreLayer = adapters.journalStore?.(configuration, defaultJournalLayer) ?? defaultJournalLayer
+    const journal = journalStoreCapabilities(journalStoreLayer)
     return journal.pipe(Layer.provideMerge(ownership))
   },
   run: (
@@ -228,6 +230,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
     onFailure: (failure: unknown) => Effect.Effect<void>
   ) =>
     Layer.unwrap(
+      // eslint-disable-next-line complexity -- One production graph resolves each optional qualification boundary while preserving one scoped service topology.
       Effect.gen(function* () {
         const ownership = yield* CoordinatorOwnership
         const journal = yield* JournalStore
