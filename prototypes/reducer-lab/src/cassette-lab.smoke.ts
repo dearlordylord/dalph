@@ -146,7 +146,12 @@ const makeLargeProductionTrace = () => Effect.runPromise(
     let predecessorOperationIds: ReadonlyArray<OperationId> = []
     for (let index = 0; index < 59; index += 1) {
       const operationId = OperationId.make(`large-navigation-read-${index}`)
-      const operation = makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        operationId,
+        target,
+        predecessorOperationIds
+      )
       const intent = taskTrackerReadIntent(operation)
       const observation = taskTrackerFactsObservedEvent(
         operationId,
