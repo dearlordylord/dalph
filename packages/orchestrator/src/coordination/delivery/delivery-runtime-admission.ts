@@ -142,10 +142,11 @@ const reserveReusableTaskPosition = (
 ): readonly [TaskPositionReservation, AdmissionState] => {
   const existing = current.positions.get(requirement.taskId)
   if (existing !== undefined) {
-    // An uncorrelated fresh action may continue only the temporary position
-    // created by that fresh task pipeline. A position already bound to an
-    // exact attempt is retained authority for that attempt, not a task-id
-    // permit that replacement work may reuse.
+    // The pure frontier admits at most one fresh pipeline per tracker task and
+    // suppresses fresh same-task work while an exact responsibility exists.
+    // Its next pre-attempt step may reuse that task's temporary position. A
+    // position bound to an exact attempt is instead authority for that
+    // AttemptId/RunId, never a task-id permit for replacement work.
     if (retainAs === undefined) {
       return unchangedTaskReservation(existing._tag === "PendingRuntimePosition", current)
     }

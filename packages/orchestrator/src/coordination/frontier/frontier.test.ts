@@ -106,6 +106,32 @@ it("orders owned work by earliest outstanding journal position before task ident
   expect(frontier.transitions.map(runnableTransitionTaskId)).toEqual([taskA, taskB, taskA])
 })
 
+it("keeps a retained task out of fresh eligibility while independent work remains eligible", () => {
+  const retainedB = executionResponsibilityFor(taskB, "retained-B1")
+  const frontier = deriveRunnableFrontier({
+    freshEligibleTasks: [freshTask(taskC), freshTask(taskB)],
+    responsibility: WorkflowResponsibilityState.make({ entries: [retainedB] }),
+    responsibilityFacts: [
+      {
+        _tag: "PlannedAttemptExecutorFreshFacts",
+        disposition: {
+          _tag: "Ready",
+          acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(1) }
+        },
+        responsibility: retainedB
+      }
+    ]
+  })
+
+  expect(frontier.transitions.map(runnableTransitionTaskId)).toEqual([taskB, taskC])
+  expect(frontier.transitions).not.toContainEqual(
+    RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+      taskId: taskB,
+      taskRevision: TaskRevision.make(`revision:${taskB}`)
+    })
+  )
+})
+
 it("begins only once and observes already-begun executor work thereafter", () => {
   const responsibility = executionResponsibilityFor(taskA)
   const state = WorkflowResponsibilityState.make({ entries: [responsibility] })

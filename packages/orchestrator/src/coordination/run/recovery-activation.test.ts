@@ -3239,6 +3239,82 @@ it("keeps an exact continuation from crossing a non-ancestor target-lineage resu
   expect(decision).toEqual({})
 })
 
+it("projects Alice's exact Continue choice and current facts as Resume for the retained attempt", () => {
+  const ready = PlannedWorktreeReady.make({
+    baseSha: coverageAttempt.baseSha,
+    branch: coverageAttempt.branch,
+    headSha: coverageAttempt.baseSha,
+    worktree: coverageAttempt.worktree
+  })
+  const records = continuationRecords(coverageClaimEvent, ready, true)
+  const worktreeOperationId = OperationId.make("recovery-activation-coverage-worktree")
+  const integrationTarget = IntegrationTarget.make({
+    ref: IntegrationTargetRef.make("refs/heads/main"),
+    repository: GitRepositoryLocator.make("/repositories/recovery-activation-continue.git")
+  })
+  const lineageOperation = makeTargetLineageObservationOperation({
+    integrationTarget,
+    operationId: OperationId.make("recovery-activation-continue-lineage"),
+    plannedAttempt: coverageAttempt,
+    predecessorOperationIds: [worktreeOperationId]
+  })
+  const lineageIntent = coverageRecord(
+    Number(records.at(-1)?.position ?? 0) + 1,
+    GitReadIntentRecordedEvent.make({
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      operation: lineageOperation,
+      version: workflowJournalEventVersion
+    })
+  )
+  const lineageObservation = coverageRecord(
+    Number(lineageIntent.position) + 1,
+    TargetLineageObservedEvent.make({
+      observation: TargetLineageObservation.make({
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: coverageAttempt.baseSha,
+        targetHeadSha: coverageAttempt.baseSha
+      }),
+      occurrenceClassification: "NonActionOccurrence",
+      operationId: lineageOperation.operationId,
+      plannedAttempt: coverageAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const currentGraph = records.find(
+    (record) =>
+      record.event._tag === "TaskTrackerFactsObserved" &&
+      record.event.operationId === coverageGraphOperation.operationId
+  )
+  if (currentGraph?.event._tag !== "TaskTrackerFactsObserved") {
+    return expect.fail("expected Alice's exact post-Continue graph observation")
+  }
+
+  const decision = continuationDecisionFor(
+    coverageContinuationTransition,
+    [...records, lineageIntent, lineageObservation],
+    { event: currentGraph.event, position: currentGraph.position },
+    Option.none(),
+    Option.some(integrationTarget)
+  )
+
+  expect(decision.transition).toEqual(
+    RunnableFrontierTransition.ResumePlannedAttemptExecutorWorkAfterCurrentFacts({
+      acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(5) },
+      plannedAttempt: coverageAttempt,
+      witness: {
+        activeTaskContinuationRead: {
+          graphObservationOperationId: coverageGraphOperation.operationId,
+          taskClaimObservationOperationId: coverageClaimOperation.operationId,
+          taskWorkSpecificationObservationOperationId: coverageSpecificationOperation.operationId
+        },
+        targetLineageObservationOperationId: lineageOperation.operationId,
+        worktreeObservationOperationId: worktreeOperationId
+      }
+    })
+  )
+})
+
 it("does not seed a continuation graph read from a foreign immutable Run target", () => {
   const foreignTarget = FixtureTarget.make("recovery-activation-foreign-target")
   const foreignGraphOperation = makeTrackerGraphObservationOperation(

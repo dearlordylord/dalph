@@ -40,7 +40,6 @@ import {
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
-  makeTrackerGraphObservationOperation,
   makeTargetLineageObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   TaskClaimReleaseAuthority
@@ -940,19 +939,10 @@ it.effect("admits independent D while recovered A and C perform read-only restar
       })
     const attemptA = attemptFor("A", "a")
     const attemptC = attemptFor("C", "c")
-    const readFor = (attempt: PlannedTaskAttempt, suffix: string) =>
-      RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
-        operation: makeTrackerGraphObservationOperation(
-          { _tag: "WorkflowEstablishment" },
-          OperationId.make(`read-only-restart-${suffix}-graph`),
-          target,
-          [],
-          [attempt.taskId]
-        ),
-        plannedAttempt: attempt
-      })
-    const readA = readFor(attemptA, "a")
-    const readC = readFor(attemptC, "c")
+    const readFor = (attempt: PlannedTaskAttempt) =>
+      RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt: attempt })
+    const readA = readFor(attemptA)
+    const readC = readFor(attemptC)
     const taskD = {
       id: TaskId.make("D"),
       lifecycle: TaskLifecycle.cases.Open.make({}),
@@ -988,6 +978,10 @@ it.effect("admits independent D while recovered A and C perform read-only restar
     expect([proposalA.admission.taskWorkPosition, proposalC.admission.taskWorkPosition]).toEqual([
       { _tag: "NoTaskWorkPosition" },
       { _tag: "NoTaskWorkPosition" }
+    ])
+    expect([proposalA.route, proposalC.route]).toEqual([
+      { _tag: "IdentityFreeWorkflowRoute", transition: readA },
+      { _tag: "IdentityFreeWorkflowRoute", transition: readC }
     ])
     expect(proposalD.admission.taskWorkPosition).toEqual({
       _tag: "TaskWorkPositionRequired",

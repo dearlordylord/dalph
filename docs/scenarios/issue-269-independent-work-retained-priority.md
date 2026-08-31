@@ -41,8 +41,10 @@ task-work position is free.
 
 ### Ordered boundary calls and result
 
-1. Dalph starts A1's and C1's exact passive executor projection reads. Both may
-   remain in flight.
+1. Dalph starts A1's and C1's exact passive executor reconciliation reads. Both
+   may remain in flight. These operations call only the executor's projection
+   boundary; `Begin`, `Resume`, tracker mutation, and Git do not apply because
+   each operation is reconciling already-issued exact executor work.
 2. While those reads remain in flight, Dalph reserves the free task-work
    position for D's ordinary fresh pipeline and starts D's tracker boundary
    call.
@@ -65,8 +67,14 @@ rules apply. Neither crash creates or persists an admission queue.
 - `admits independent D while recovered A and C perform read-only restart
   obligations` in
   `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`
-  holds both exact executor reads open and proves D's boundary action starts
-  with capacity one.
+  holds both exact executor reconciliation proposals open, proves they require
+  no task-work position, and proves D's boundary action starts with capacity
+  one.
+- `observes safe suspension only after exact suspend intent and releases only
+  that attempt` in
+  `packages/orchestrator/src/coordination/delivery/delivery-proposal-routes.test.ts`
+  crosses the concrete passive executor projection boundary and makes
+  `Begin`, `Resume`, and another suspension request fail the test if called.
 
 ## Exact B1 selected for Continue precedes D and replacement B2
 
@@ -93,9 +101,12 @@ snapshot is the trigger that lets admission proceed.
    before fresh D or any fresh B proposal.
 2. Dalph binds the released position to B1's exact attempt correlation and
    sends B1's Resume command through the existing executor protocol.
-3. D waits because capacity is full. Replacement B2 also waits: an
-   uncorrelated fresh step may reuse only the temporary position created by
-   its own fresh pipeline, never B1's exact accepted or runtime-bound position.
+3. D waits because capacity is full. Replacement B2 also waits. Before any
+   attempt exists, the pure frontier admits only one fresh pipeline for a
+   tracker task, and that pipeline's next step may reuse the task's temporary
+   position. Once B1 exists, the frontier suppresses fresh B work and admission
+   independently refuses to treat B1's exact accepted or runtime-bound
+   position as a task-ID permit.
 4. A later release may admit D through its own evidence. It cannot transfer
    B1's authority to B2.
 
@@ -111,6 +122,15 @@ position correlation derive the same decision again.
 
 ### Acceptance-test mapping
 
+- `projects Alice's exact Continue choice and current facts as Resume for the
+  retained attempt` in
+  `packages/orchestrator/src/coordination/run/recovery-activation.test.ts`
+  starts from the accepted exact choice plus tracker, claim, worktree, and
+  lineage facts and projects Resume with B1's exact `RunId` and `AttemptId`.
+- `preserves existing A ahead of fresh C without consulting live positions` in
+  `packages/orchestrator/src/coordination/delivery/delivery-proposal.test.ts`
+  proves responsibility-derived work precedes fresh work before runtime
+  capacity is consulted.
 - `gives retained B1 the released position before D and rejects uncorrelated B
   replacement work` in
   `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`
@@ -123,5 +143,16 @@ position correlation derive the same decision again.
   B1's exact correlation.
 - `reconciles existing, pending, and integration-backed admission positions`
   in the same file proves an uncorrelated fresh step may still reuse its own
-  temporary pending pipeline position, while exact-bound reuse requires the
+  task's temporary pre-attempt position, while exact-bound reuse requires the
   matching correlation.
+- `keeps a retained task out of fresh eligibility while independent work
+  remains eligible` in
+  `packages/orchestrator/src/coordination/frontier/frontier.test.ts` proves the
+  production frontier cannot send a fresh same-task pipeline to admission while
+  exact B1 remains a responsibility.
+- `reopens Continue and performs fresh reads before admitting the same attempt`,
+  `records both task fingerprints when Alice continues the exact attempt`, and
+  `coalesces exact Continue redelivery and rejects request identity reuse` in
+  `packages/dalph/test/cassettes/scenario.test.ts` prove the maintained
+  changed-work chronology: one causal exact choice, bounded fresh authority
+  reads, one immutable attempt, and no duplicate choice on redelivery.
