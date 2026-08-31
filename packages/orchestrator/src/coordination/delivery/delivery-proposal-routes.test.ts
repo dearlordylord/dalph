@@ -3622,7 +3622,7 @@ describe("delivery proposal route matrix", () => {
     const claimPlanOperationId =
       options?.foreignPlanWitness === "Claim" ? foreignPlanOperationId : attemptPlanOperationId
     const graphOperation = makeTrackerGraphObservationOperation(
-      { _tag: "WorkflowEstablishment" },
+      { _tag: "AttemptContinuation" },
       OperationId.make("continuation-current-graph"),
       trackerReadTarget,
       [graphPlanOperationId],
@@ -3850,7 +3850,7 @@ describe("delivery proposal route matrix", () => {
     const supersededBy = options?.supersededBy
     if (supersededBy === "Graph") {
       const operation = makeTrackerGraphObservationOperation(
-        { _tag: "WorkflowEstablishment" },
+        { _tag: "AttemptContinuation" },
         OperationId.make("continuation-later-graph"),
         trackerReadTarget,
         [attemptPlanOperationId],
@@ -3980,7 +3980,7 @@ describe("delivery proposal route matrix", () => {
       const operation =
         family === "Graph"
           ? makeTrackerGraphObservationOperation(
-              { _tag: "WorkflowEstablishment" },
+              { _tag: "AttemptContinuation" },
               OperationId.make(`continuation-refresh-${refresh.toLowerCase()}`),
               trackerReadTarget,
               [attemptPlanOperationId],
@@ -4024,7 +4024,7 @@ describe("delivery proposal route matrix", () => {
     if (options?.foreignTrackerRead === true) {
       const foreignTaskId = TaskId.make("foreign-continuation-task")
       const operation = makeTrackerGraphObservationOperation(
-        { _tag: "WorkflowEstablishment" },
+        { _tag: "AttemptContinuation" },
         OperationId.make("continuation-foreign-graph"),
         trackerReadTarget,
         [attemptPlanOperationId],
@@ -4043,7 +4043,7 @@ describe("delivery proposal route matrix", () => {
       const family = options.foreignPlanLaterRead
       if (family === "Graph") {
         const operation = makeTrackerGraphObservationOperation(
-          { _tag: "WorkflowEstablishment" },
+          { _tag: "AttemptContinuation" },
           OperationId.make("continuation-foreign-plan-later-graph"),
           trackerReadTarget,
           [foreignPlanOperationId],

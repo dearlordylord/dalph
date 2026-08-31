@@ -58,6 +58,13 @@ export const continuationTrackerReadHasExactPlanPredecessor = (
   operation: ContinuationTrackerReadOperation,
   plannedAttempt: PlannedTaskAttempt
 ): boolean => {
+  if (
+    operation._tag === "ReadTrackerGraph" &&
+    operation.cause._tag !== "AttemptContinuation" &&
+    operation.cause._tag !== "ExecutingWorkAuthorityCheck"
+  ) {
+    return false
+  }
   const plans = recordedTaskAttemptPlans(records)
   const namedPlans = plans.filter(({ operationId }) => operation.predecessorOperationIds.includes(operationId))
   if (operation._tag === "ReadTrackerGraph" && operation.cause._tag === "ExecutingWorkAuthorityCheck") {

@@ -631,7 +631,7 @@ export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
  * Provisional recorded format version. Version 14 records active-work
  * authority refreshes through the ordinary tracker and Git read vocabulary.
  * Recorded cassettes remain fail-closed at the current version; this change
- * does not claim a migration path for version 11.
+ * does not claim a migration path for the unreleased version 13 draft.
  */
 const currentRecordedCassetteVersion = 14
 export const recordedCassetteVersion = currentRecordedCassetteVersion

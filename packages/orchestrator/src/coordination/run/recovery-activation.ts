@@ -2443,16 +2443,7 @@ const exactContinuationTrackerReadIntentFor = (
       operation._tag === family &&
       operation.operationId === operationId &&
       record.key === intentRecordKey(operationId) &&
-      (operation._tag === "ReadTrackerGraph"
-        ? (() => {
-            const exactPlan = recordedTaskAttemptPlanFor(records, plannedAttempt)
-            return (
-              exactPlan !== undefined &&
-              operation.predecessorOperationIds.includes(exactPlan.operationId) &&
-              operation.readShape.explicitlyCoveredTaskIds.includes(plannedAttempt.taskId)
-            )
-          })()
-        : continuationTrackerReadHasExactPlanPredecessor(records, operation, plannedAttempt))
+      continuationTrackerReadHasExactPlanPredecessor(records, operation, plannedAttempt)
     )
   })
   if (intent?.event._tag !== "TaskTrackerReadIntentRecorded") return undefined

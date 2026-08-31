@@ -36,6 +36,7 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { OperationId } from "../../workflow/identity.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
+import type { TrackerGraphReadCause } from "../../workflow/registry/operation.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
@@ -166,7 +167,10 @@ import {
 import type { PlannedAttemptExecutorDisposition } from "../frontier/fresh-facts.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { graphKeepsTaskEligible } from "../../workflow/protocols/planned-attempt-continuation/authorization-graph.js"
-import { latestContinuationTrackerReadStatusAfter } from "../../workflow/protocols/planned-attempt-continuation/tracker-read-freshness.js"
+import {
+  continuationTrackerReadHasExactPlanPredecessor,
+  latestContinuationTrackerReadStatusAfter
+} from "../../workflow/protocols/planned-attempt-continuation/tracker-read-freshness.js"
 
 const coverageRunId = RunId.make("recovery-activation-coverage-run")
 const coverageTarget = FixtureTarget.make("recovery-activation-coverage-target")
@@ -258,7 +262,7 @@ const coveragePlanRecords = (): ReadonlyArray<JournalRecord> => [
 ]
 
 const coverageGraphOperation = makeTrackerGraphObservationOperation(
-  { _tag: "WorkflowEstablishment" },
+  { _tag: "AttemptContinuation" },
   OperationId.make("recovery-activation-coverage-graph"),
   coverageTarget,
   [coveragePlanOperation.operationId],
@@ -3116,7 +3120,7 @@ it("refreshes pending graph and specification reads after the accepted Safe boun
   })
   const base = continuationRecords(coverageClaimEvent, ready)
   const pendingGraph = makeTrackerGraphObservationOperation(
-    { _tag: "WorkflowEstablishment" },
+    { _tag: "AttemptContinuation" },
     OperationId.make("recovery-activation-after-safe-pending-graph"),
     coverageTarget,
     [coveragePlanOperation.operationId],
@@ -3898,7 +3902,7 @@ it("ignores same-target foreign-plan tracker facts and schedules an exact replac
       family === "Graph"
         ? (() => {
             const operation = makeTrackerGraphObservationOperation(
-              { _tag: "WorkflowEstablishment" },
+              { _tag: "AttemptContinuation" },
               operationIdFor(family),
               coverageTarget,
               [foreignPlanOperation.operationId],
@@ -4312,6 +4316,36 @@ it("replays G1 only when its exact run target subjects predecessors and missing 
     [...coveragePlanRecords(), intent, observed]
   ]) {
     expect(pendingActiveRefreshGraphReadFor(records, coverageRunId, coverageTarget, [coverageAttempt])).toBeUndefined()
+  }
+})
+
+it("accepts only continuation and executing-authority graph causes as exact continuation evidence", () => {
+  const records = coveragePlanRecords()
+  const graphFor = (cause: typeof TrackerGraphReadCause.Type) => {
+    const causalGraphOperationId =
+      cause._tag === "PostQuiescenceReconfirmation" ? cause.quiescentGraphOperationId : undefined
+    return makeTrackerGraphObservationOperation(
+      cause,
+      OperationId.make(`continuation-cause-${cause._tag}`),
+      coverageTarget,
+      [coveragePlanOperation.operationId, ...(causalGraphOperationId === undefined ? [] : [causalGraphOperationId])],
+      [coverageAttempt.taskId]
+    )
+  }
+
+  for (const cause of [{ _tag: "AttemptContinuation" }, { _tag: "ExecutingWorkAuthorityCheck" }] as const) {
+    expect(continuationTrackerReadHasExactPlanPredecessor(records, graphFor(cause), coverageAttempt)).toBe(true)
+  }
+  for (const cause of [
+    { _tag: "WorkflowEstablishment" },
+    { _tag: "AttemptRestartAuthorityCheck" },
+    {
+      _tag: "PostQuiescenceReconfirmation",
+      quiescentGraphOperationId: OperationId.make("foreign-post-quiescence-graph")
+    },
+    { _tag: "TaskControlMembershipCheck" }
+  ] as const) {
+    expect(continuationTrackerReadHasExactPlanPredecessor(records, graphFor(cause), coverageAttempt)).toBe(false)
   }
 })
 
