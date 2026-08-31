@@ -1,15 +1,20 @@
 /* eslint-disable import/no-nodejs-modules, max-lines -- Host composition and its chronological acceptance seam stay together. */
-import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node"
+import { NodeCrypto, NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { RunId, TaskId } from "@dalph/contracts"
+import { PlannedAttemptExecutor, RunId, TaskId } from "@dalph/contracts"
 import { DatabaseSync } from "node:sqlite"
 import { readFileSync } from "node:fs"
+import nodeProcess from "node:process"
 import { fileURLToPath } from "node:url"
 import {
   ActiveTaskClaim,
   ClaimOwner,
   ClaimToken,
-  type RunLifecycleJournal,
+  EvidenceStore,
+  GitCommand,
+  Integrator,
+  IntegratorGit,
+  RunLifecycleJournal,
   CoordinatorOwnership,
   GithubGraphqlClient,
   GithubIssueTarget,
@@ -29,15 +34,17 @@ import {
   RunReactivationOwner,
   TaskWorkCapacity,
   TraceCursor,
-  WorkflowTrace,
   currentSignalOf,
   memoryJournalStoreLayer,
   ProductionRunSelectionConflict,
   sqliteJournalStoreLayer,
   StartupRecoveryBlocked,
+  TrackerGraphReader,
+  TrackerMutation,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect"
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
+import { Context, Deferred, Effect, Fiber, FileSystem, Layer, Path, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import {
   type ProductionRepositoryHostGraph,
@@ -49,6 +56,11 @@ import { ProductionRepositoryHostConfigurationError } from "./production-configu
 import { CodexAppServer } from "./codex-app-server.js"
 import { CodexServerIncarnation } from "./codex-attempt-store.js"
 import { completedRunFinalityFixture } from "../../../orchestrator/test/run-finality.js"
+import {
+  type RestartFixtureEvent,
+  type RestartFixtureInput,
+  RestartFixtureEvent as RestartFixtureEventSchema
+} from "../../bin/production-restart-host-fixture-contract.js"
 
 const validRawConfiguration = () => ({
   target: { _tag: "GithubIssue", issueNumber: 293, owner: "dearlordylord", repository: "dalph" },
@@ -335,182 +347,310 @@ it.effect("cold production host records one beginning before the first GitHub de
   )
 )
 
-const restartHostRecoveryScenario = () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem
-      const path = yield* Path.Path
-      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-restart-" })
-      const repository = path.join(root, "repository")
-      const evidence = path.join(root, "evidence")
-      const codexState = path.join(root, "codex-state")
-      yield* fileSystem.makeDirectory(repository, { recursive: true })
-      yield* fileSystem.makeDirectory(evidence, { recursive: true })
-      yield* fileSystem.makeDirectory(codexState, { recursive: true })
-      yield* fileSystem.chmod(codexState, 0o700)
+const restartFixture = new URL("../../dist/bin/production-restart-host-fixture.js", import.meta.url).pathname
+const dalphPackageDirectory = new URL("../../", import.meta.url).pathname
 
-      const input = {
-        ...validRawConfiguration(),
-        repository,
-        commonDirectory: repository,
-        journalDatabase: path.join(root, "journal.sqlite"),
-        evidenceStoreRoot: evidence,
-        plannedAttemptWorktreeRoot: path.join(root, "planned-attempts"),
-        codexStateDirectory: codexState,
-        integratorCandidateWorktreeRoot: path.join(root, "integrator-candidates"),
-        integratorPrivateStore: path.join(root, "integrator-private.json")
-      }
-      const target = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(input.target)
-      const acquisition = {
-        operationId: OperationId.make("production-restart-claim-acquisition"),
-        owner: ClaimOwner.make("dalph:production-restart"),
-        taskId: TaskId.make("production-restart-task"),
-        token: ClaimToken.make("production-restart-token")
-      }
-      const acquisitionOperation = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
-      const seededRunId = RunId.make("production-restart-run")
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const journalContext = yield* Layer.build(
-            sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
-          )
-          const journal = Context.get(journalContext, JournalStore)
-          yield* journal.beginRun(
-            seededRunId,
-            target,
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
-          )
-          yield* journal.append(
-            seededRunId,
-            intentRecordKey(acquisition.operationId),
-            TaskClaimAcquisitionIntendedEvent.make({
-              operation: acquisitionOperation,
-              version: workflowJournalEventVersion
-            })
-          )
-          yield* journal.append(
-            seededRunId,
-            outcomeRecordKey(acquisition.operationId),
-            TaskClaimAcquiredEvent.make({
-              claim: ActiveTaskClaim.make(acquisition),
-              version: workflowJournalEventVersion
-            })
-          )
-        })
-      )
-      const traceItems = yield* Ref.make<ReadonlyArray<string>>([])
-      const selectedOperations = yield* Ref.make<ReadonlyArray<unknown>>([])
-      const secondHostProviderRead = yield* Deferred.make<void>()
-      const firstHostProviderRead = yield* Deferred.make<void>()
-      const providerCallCount = yield* Ref.make(0)
-      const appAcquisitionCount = yield* Ref.make(0)
-      const githubLayerAcquisitionCount = yield* Ref.make(0)
-      const githubClient = GithubGraphqlClient.of({
-        execute: () =>
-          Effect.gen(function* () {
-            const count = yield* Ref.updateAndGet(providerCallCount, (current) => current + 1)
-            const trace = yield* Ref.get(traceItems)
-            yield* Ref.update(traceItems, (current) => [...current, `provider-${count}:${trace.length}`])
-            if (count === 1) {
-              yield* Deferred.succeed(firstHostProviderRead, undefined)
-            } else {
-              yield* Deferred.succeed(secondHostProviderRead, undefined)
-            }
-            return yield* Effect.never
+const readRestartFixtureEvents = (handle: ChildProcessSpawner.ChildProcessHandle) =>
+  handle.stdout.pipe(
+    Stream.decodeText(),
+    Stream.splitLines,
+    Stream.filter((line) => line.length > 0),
+    Stream.mapEffect((line) => Schema.decodeUnknownEffect(Schema.fromJsonString(RestartFixtureEventSchema))(line)),
+    Stream.runCollect
+  )
+
+const restartFixtureCommand = (input: RestartFixtureInput) =>
+  ChildProcess.make(
+    nodeProcess.execPath,
+    [restartFixture, input.journalDatabase, input.root, input.label, String(input.taskWorkCapacity)],
+    { cwd: dalphPackageDirectory }
+  )
+
+const runRestartFixture = (input: RestartFixtureInput) =>
+  Effect.gen(function* () {
+    const childProcesses = yield* ChildProcessSpawner.ChildProcessSpawner
+    const handle = yield* childProcesses.spawn(restartFixtureCommand(input))
+    const eventsFiber = yield* readRestartFixtureEvents(handle).pipe(Effect.forkScoped)
+    const exitCode = yield* handle.exitCode
+    const events = yield* Fiber.join(eventsFiber)
+    expect(exitCode).toBe(0)
+    expect(events.some(({ _tag }) => _tag === "RestartFixtureFailed")).toBe(false)
+    return Array.from(events)
+  })
+
+const eventsWithTag = <Tag extends RestartFixtureEvent["_tag"]>(
+  events: ReadonlyArray<RestartFixtureEvent>,
+  tag: Tag
+): ReadonlyArray<Extract<RestartFixtureEvent, { readonly _tag: Tag }>> =>
+  events.filter((event): event is Extract<RestartFixtureEvent, { readonly _tag: Tag }> => event._tag === tag)
+
+const restartHostProcesses = Effect.scoped(
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem
+    const path = yield* Path.Path
+    const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-production-restart-" })
+    const repository = path.join(root, "repository")
+    const evidence = path.join(root, "evidence")
+    const codexState = path.join(root, "codex-state")
+    yield* fileSystem.makeDirectory(repository, { recursive: true })
+    yield* fileSystem.makeDirectory(evidence, { recursive: true })
+    yield* fileSystem.makeDirectory(codexState, { recursive: true })
+    yield* fileSystem.chmod(codexState, 0o700)
+
+    const input = {
+      journalDatabase: path.join(root, "journal.sqlite"),
+      label: "first-host-process",
+      root,
+      taskWorkCapacity: 2
+    } satisfies RestartFixtureInput
+    const target = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(validRawConfiguration().target)
+    const acquisition = {
+      operationId: OperationId.make("production-restart-claim-acquisition"),
+      owner: ClaimOwner.make("dalph:production-restart"),
+      taskId: TaskId.make("production-restart-task"),
+      token: ClaimToken.make("production-restart-token")
+    }
+    const acquisitionOperation = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
+    const seededRunId = RunId.make("production-restart-run")
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const journalContext = yield* Layer.build(
+          sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
+        )
+        const journal = Context.get(journalContext, JournalStore)
+        yield* journal.beginRun(
+          seededRunId,
+          target,
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+        )
+        yield* journal.append(
+          seededRunId,
+          intentRecordKey(acquisition.operationId),
+          TaskClaimAcquisitionIntendedEvent.make({
+            operation: acquisitionOperation,
+            version: workflowJournalEventVersion
           })
+        )
+        yield* journal.append(
+          seededRunId,
+          outcomeRecordKey(acquisition.operationId),
+          TaskClaimAcquiredEvent.make({
+            claim: ActiveTaskClaim.make(acquisition),
+            version: workflowJournalEventVersion
+          })
+        )
       })
-      const app = CodexAppServer.of({
-        incarnation: CodexServerIncarnation.make("production-restart-test-incarnation"),
-        startThread: () => Effect.die("restart fixture must not start a task thread"),
-        readThread: () => Effect.die("restart fixture must not read a task thread"),
-        resumeThread: () => Effect.die("restart fixture must not resume a task thread"),
-        startTurn: () => Effect.die("restart fixture must not start a task turn"),
-        interruptTurn: () => Effect.die("restart fixture must not interrupt a task turn"),
-        listBackgroundTerminals: () => Effect.die("restart fixture must not inspect terminals"),
-        terminateBackgroundTerminal: () => Effect.die("restart fixture must not terminate a terminal"),
-        close: Effect.void
+    )
+    const first = yield* runRestartFixture(input)
+    const second = yield* runRestartFixture({ ...input, label: "second-host-process", taskWorkCapacity: 7 })
+    const recordsContext = yield* Layer.build(
+      sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
+    )
+    const records = yield* Context.get(recordsContext, JournalStore).read(seededRunId)
+    return { first, input, records, second, seededRunId }
+  }).pipe(Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeServices.layer, NodeCrypto.layer)))
+)
+
+it.effect("unfinished SQLite restart selects the same Run and skips replacement initial policy", () =>
+  restartHostProcesses.pipe(
+    Effect.map(({ first, records, second, seededRunId }) => {
+      const firstCompleted = eventsWithTag(first, "HostCompleted")[0]
+      const secondCompleted = eventsWithTag(second, "HostCompleted")[0]
+      expect(firstCompleted).toMatchObject({
+        label: "first-host-process",
+        runId: seededRunId,
+        selectionTag: "Recovered"
       })
-      const adapters = {
-        codexAppServer: () =>
-          Layer.effect(
-            CodexAppServer,
-            Ref.updateAndGet(appAcquisitionCount, (count) => count + 1).pipe(Effect.as(app))
-          ),
-        githubClient: () =>
-          Layer.effect(
-            GithubGraphqlClient,
-            Ref.updateAndGet(githubLayerAcquisitionCount, (count) => count + 1).pipe(Effect.as(githubClient))
-          ),
-        workflowTrace: () =>
-          Layer.succeed(
-            WorkflowTrace,
-            WorkflowTrace.of({
-              emit: (item) =>
-                Ref.update(traceItems, (current) => [...current, item._tag]).pipe(
-                  Effect.andThen(
-                    item._tag === "OperationSelected"
-                      ? Ref.update(selectedOperations, (current) => [...current, item.operation])
-                      : Effect.void
-                  )
-                )
-            })
-          )
-      }
-
-      const firstSelection = yield* withProductionRepositoryHost(
-        input,
-        productionRepositoryHostGraph(adapters),
-        (observation) => Deferred.await(firstHostProviderRead).pipe(Effect.as(observation.selection))
-      )
-      const secondSelection = yield* withProductionRepositoryHost(
-        { ...input, taskWorkCapacity: 7 },
-        productionRepositoryHostGraph(adapters),
-        (observation) => Deferred.await(secondHostProviderRead).pipe(Effect.as(observation.selection))
-      )
-
-      expect(firstSelection).toEqual({ _tag: "Recovered", runId: seededRunId })
-      expect(secondSelection).toEqual({ _tag: "Recovered", runId: seededRunId })
-      expect(yield* Ref.get(providerCallCount)).toBeGreaterThanOrEqual(2)
-      expect(yield* Ref.get(appAcquisitionCount)).toBe(2)
-      expect(yield* Ref.get(githubLayerAcquisitionCount)).toBe(2)
-      expect(yield* Ref.get(traceItems)).toEqual([
-        "OperationSelected",
-        "provider-1:1",
-        "OperationSelected",
-        "provider-2:3"
-      ])
-      const operations = yield* Ref.get(selectedOperations)
-      expect(operations).toHaveLength(2)
-      expect(operations[1]).toMatchObject({ _tag: "ReadTrackerGraph" })
-      const recordsContext = yield* Layer.build(
-        sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
-      )
-      const records = yield* Context.get(recordsContext, JournalStore).read(firstSelection.runId)
-      expect(records.map(({ event }) => event._tag)).toEqual(
-        expect.arrayContaining(["TaskClaimAcquisitionIntended", "TaskClaimAcquired"])
-      )
-      const responsibility = records.find(({ event }) => event._tag === "TaskClaimAcquired")
-      const authorityRead = records.find(({ event }) => event._tag === "TaskTrackerReadIntentRecorded")
-      expect(responsibility).toBeDefined()
-      expect(authorityRead).toBeDefined()
-      expect(Number(responsibility?.position)).toBeLessThan(Number(authorityRead?.position))
+      expect(secondCompleted).toMatchObject({
+        label: "second-host-process",
+        runId: seededRunId,
+        selectionTag: "Recovered"
+      })
+      const started = [...eventsWithTag(first, "RestartChildStarted"), ...eventsWithTag(second, "RestartChildStarted")]
+      expect(started).toHaveLength(2)
+      expect(started[0]?.pid).not.toBe(started[1]?.pid)
       const beginnings = records.filter(({ event }) => event._tag === "WorkflowRunBegan")
       expect(beginnings).toHaveLength(1)
       expect(beginnings[0]?.event).toMatchObject({
         _tag: "WorkflowRunBegan",
         initialControlPolicy: { taskExecutionCapacity: 2 }
       })
-    }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
+    })
   )
+)
 
-it.effect(
-  "unfinished SQLite restart selects the same Run and skips replacement initial policy",
-  restartHostRecoveryScenario
+it.effect("restarted production host reconstructs the task claim and policy before its first GitHub graph read", () =>
+  restartHostProcesses.pipe(
+    Effect.map(({ first, records, second }) => {
+      const trackerReadOperationIds = records.flatMap(({ event }) =>
+        event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
+          ? [String(event.operation.operationId)]
+          : []
+      )
+      expect(trackerReadOperationIds).toHaveLength(2)
+      for (const [processIndex, events] of [first, second].entries()) {
+        const reconstructed = eventsWithTag(events, "RecoveryReconstructed")[0]
+        const selected = eventsWithTag(events, "OperationSelected")[0]
+        const githubRead = eventsWithTag(events, "GithubReadStarted")[0]
+        const reconstructionIndex = events.findIndex(({ _tag }) => _tag === "RecoveryReconstructed")
+        const selectedIndex = events.findIndex(({ _tag }) => _tag === "OperationSelected")
+        const githubReadIndex = events.findIndex(({ _tag }) => _tag === "GithubReadStarted")
+        expect(events.map(({ _tag }) => _tag)).toEqual([
+          "RestartChildStarted",
+          "RecoveryReconstructed",
+          "OperationSelected",
+          "GithubReadStarted",
+          "HostCompleted"
+        ])
+        expect(reconstructed).toMatchObject({
+          acceptedPosition: processIndex === 0 ? 3 : 4,
+          initialPolicyTaskWorkCapacity: 2,
+          responsibilities: ["TaskClaimAcquired"]
+        })
+        expect(selected).toMatchObject({ operationTag: "ReadTrackerGraph", targetIssueNumber: 293 })
+        expect(selected?.operationId).toBe(trackerReadOperationIds[processIndex])
+        expect(githubRead).toMatchObject({ _tag: "GithubReadStarted" })
+        expect(reconstructionIndex).toBeGreaterThanOrEqual(0)
+        expect(reconstructionIndex).toBeLessThan(selectedIndex)
+        expect(selectedIndex).toBeLessThan(githubReadIndex)
+      }
+    })
+  )
 )
-it.effect(
-  "restarted production host reconstructs responsibilities before current authority reads and mutations",
-  restartHostRecoveryScenario
-)
+
+interface UnsafeDiscoveryBoundaryCalls {
+  readonly githubGraphqlRequests: number
+  readonly githubTrackerReads: number
+  readonly githubTrackerMutations: number
+  readonly gitCommandCalls: number
+  readonly executorCalls: number
+  readonly integratorOperations: number
+  readonly integratorGitReads: number
+  readonly evidenceWrites: number
+  readonly journalMutations: number
+  readonly runGraphsBuilt: number
+}
+
+const noUnsafeDiscoveryBoundaryCalls: UnsafeDiscoveryBoundaryCalls = {
+  githubGraphqlRequests: 0,
+  githubTrackerReads: 0,
+  githubTrackerMutations: 0,
+  gitCommandCalls: 0,
+  executorCalls: 0,
+  integratorOperations: 0,
+  integratorGitReads: 0,
+  evidenceWrites: 0,
+  journalMutations: 0,
+  runGraphsBuilt: 0
+}
+
+const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) => {
+  const productionGraph = productionRepositoryHostGraph()
+  const count = (boundary: keyof UnsafeDiscoveryBoundaryCalls) =>
+    Ref.update(calls, (current) => ({ ...current, [boundary]: current[boundary] + 1 }))
+  const githubClient = GithubGraphqlClient.of({
+    execute: () => count("githubGraphqlRequests").pipe(Effect.andThen(Effect.die("unsafe discovery called GitHub")))
+  })
+  const trackerReader = TrackerGraphReader.of({
+    read: () => count("githubTrackerReads").pipe(Effect.andThen(Effect.die("unsafe discovery read the GitHub graph"))),
+    readTaskWorkSpecification: () =>
+      count("githubTrackerReads").pipe(Effect.andThen(Effect.die("unsafe discovery read GitHub task work")))
+  })
+  const trackerMutation = TrackerMutation.of({
+    acquireTaskClaim: () =>
+      count("githubTrackerMutations").pipe(Effect.andThen(Effect.die("unsafe discovery acquired a GitHub claim"))),
+    readTaskClaim: () =>
+      count("githubTrackerMutations").pipe(Effect.andThen(Effect.die("unsafe discovery read a GitHub claim"))),
+    releaseTaskClaim: () =>
+      count("githubTrackerMutations").pipe(Effect.andThen(Effect.die("unsafe discovery released a GitHub claim")))
+  })
+  const gitCommand = GitCommand.of({
+    run: () => count("gitCommandCalls").pipe(Effect.andThen(Effect.die("unsafe discovery ran Git"))),
+    runInWorktree: () => count("gitCommandCalls").pipe(Effect.andThen(Effect.die("unsafe discovery ran Git"))),
+    runBytesInWorktree: () => count("gitCommandCalls").pipe(Effect.andThen(Effect.die("unsafe discovery ran Git")))
+  })
+  const executor = PlannedAttemptExecutor.of({
+    observe: () => count("executorCalls").pipe(Effect.andThen(Effect.die("unsafe discovery observed Codex"))),
+    begin: () => count("executorCalls").pipe(Effect.andThen(Effect.die("unsafe discovery began Codex work"))),
+    requestSuspension: () =>
+      count("executorCalls").pipe(Effect.andThen(Effect.die("unsafe discovery suspended Codex work"))),
+    resume: () => count("executorCalls").pipe(Effect.andThen(Effect.die("unsafe discovery resumed Codex work")))
+  })
+  const integrator = Integrator.of({
+    prepare: () => count("integratorOperations").pipe(Effect.andThen(Effect.die("unsafe discovery called Integrator")))
+  })
+  const integratorGit = IntegratorGit.of({
+    readCandidate: () =>
+      count("integratorGitReads").pipe(Effect.andThen(Effect.die("unsafe discovery read Integrator Git facts")))
+  })
+  const evidence = EvidenceStore.of({
+    put: () => count("evidenceWrites").pipe(Effect.andThen(Effect.die("unsafe discovery wrote evidence"))),
+    read: () => count("evidenceWrites").pipe(Effect.andThen(Effect.die("unsafe discovery read evidence")))
+  })
+  return {
+    foundation: (configuration: ProductionRepositoryHostConfiguration) =>
+      Layer.unwrap(
+        Effect.gen(function* () {
+          const foundation = yield* Layer.build(productionGraph.foundation(configuration))
+          const journal = Context.get(foundation, JournalStore)
+          const lifecycle = Context.get(foundation, RunLifecycleJournal)
+          const countJournalMutation = <A, E>(effect: Effect.Effect<A, E>) =>
+            Ref.update(calls, (current) => ({ ...current, journalMutations: current.journalMutations + 1 })).pipe(
+              Effect.andThen(effect)
+            )
+          const wrappedJournal = JournalStore.of({
+            ...journal,
+            append: (runId, key, event) => countJournalMutation(journal.append(runId, key, event)),
+            beginRun: (runId, target, initialControlPolicy) =>
+              countJournalMutation(journal.beginRun(runId, target, initialControlPolicy)),
+            terminateRun: (runId, disposition, evidence) =>
+              countJournalMutation(journal.terminateRun(runId, disposition, evidence)),
+            retireTerminalRun: (runId) => countJournalMutation(journal.retireTerminalRun(runId))
+          })
+          const wrappedLifecycle = RunLifecycleJournal.of({
+            ...lifecycle,
+            beginRun: wrappedJournal.beginRun,
+            terminateRun: wrappedJournal.terminateRun,
+            retireTerminalRun: wrappedJournal.retireTerminalRun
+          })
+          return Layer.succeedContext(
+            Context.add(Context.add(foundation, JournalStore, wrappedJournal), RunLifecycleJournal, wrappedLifecycle)
+          )
+        })
+      ),
+    run: (_configuration: ProductionRepositoryHostConfiguration, selection: ProductionRunSelection) =>
+      Layer.effectContext(
+        Effect.gen(function* () {
+          yield* Ref.update(calls, (current) => ({ ...current, runGraphsBuilt: current.runGraphsBuilt + 1 }))
+          return Context.empty().pipe(
+            Context.add(GithubGraphqlClient, githubClient),
+            Context.add(TrackerGraphReader, trackerReader),
+            Context.add(TrackerMutation, trackerMutation),
+            Context.add(GitCommand, gitCommand),
+            Context.add(PlannedAttemptExecutor, executor),
+            Context.add(Integrator, integrator),
+            Context.add(IntegratorGit, integratorGit),
+            Context.add(EvidenceStore, evidence),
+            Context.add(
+              JournaledRunObservationSource,
+              JournaledRunObservationSource.of({
+                acceptedHistory: currentSignalOf(
+                  TraceCursor.make({ position: JournalPosition.make(1), runId: selection.runId })
+                ),
+                awaitEstablished: Effect.die("unsafe discovery must not build a Run graph"),
+                current: currentSignalOf({ _tag: "NotReady" as const })
+              })
+            ),
+            Context.add(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))
+          )
+        })
+      )
+  }
+}
+
+const assertNoUnsafeDiscoveryBoundaryCalls = (calls: UnsafeDiscoveryBoundaryCalls) => {
+  expect(calls).toEqual(noUnsafeDiscoveryBoundaryCalls)
+}
 
 it.effect("terminal Run is not reactivated", () =>
   Effect.scoped(
@@ -581,7 +721,7 @@ it.effect("terminal Run is not reactivated", () =>
 )
 
 it.effect(
-  "two unfinished Runs fail before GitHub, Git, executor, or Integrator mutation and name both identities",
+  "two unfinished Runs fail before GitHub requests, Git commands, Codex executor calls, or Integrator operations and name both identities",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -604,15 +744,9 @@ it.effect(
             }
           })
         )
-        const failure = yield* withProductionRepositoryHost(
-          input,
-          productionRepositoryHostGraph({
-            codexAppServer: () =>
-              Layer.effect(CodexAppServer, Effect.die("conflicting history must stop before Codex")),
-            githubClient: () =>
-              Layer.effect(GithubGraphqlClient, Effect.die("conflicting history must stop before GitHub"))
-          }),
-          () => Effect.die("conflicting history must not expose a host observation")
+        const calls = yield* Ref.make(noUnsafeDiscoveryBoundaryCalls)
+        const failure = yield* withProductionRepositoryHost(input, makeUnsafeDiscoveryGraph(calls), () =>
+          Effect.die("conflicting history must not expose a host observation")
         ).pipe(Effect.flip)
 
         expect(failure).toBeInstanceOf(ProductionRunSelectionConflict)
@@ -622,86 +756,94 @@ it.effect(
             expect.objectContaining({ runId: secondRunId })
           ])
         })
+        assertNoUnsafeDiscoveryBoundaryCalls(yield* Ref.get(calls))
       }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
     )
 )
 
-it.effect("mismatched unfinished history fails before provider mutation", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const input = yield* makeTemporaryProductionInput
-      const requestedTarget = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(input.target)
-      const recordedTarget = yield* Schema.decodeUnknownEffect(GithubIssueTarget)({ ...input.target, issueNumber: 292 })
-      const runId = RunId.make("production-mismatched-run")
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const context = yield* Layer.build(
-            sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
-          )
-          yield* Context.get(context, JournalStore).beginRun(
-            runId,
-            recordedTarget,
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
-          )
+it.effect(
+  "mismatched unfinished history fails before GitHub requests, Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const input = yield* makeTemporaryProductionInput
+        const requestedTarget = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(input.target)
+        const recordedTarget = yield* Schema.decodeUnknownEffect(GithubIssueTarget)({
+          ...input.target,
+          issueNumber: 292
         })
-      )
-      const failure = yield* withProductionRepositoryHost(
-        input,
-        productionRepositoryHostGraph({
-          codexAppServer: () => Layer.effect(CodexAppServer, Effect.die("mismatched history must stop before Codex")),
-          githubClient: () =>
-            Layer.effect(GithubGraphqlClient, Effect.die("mismatched history must stop before GitHub"))
-        }),
-        () => Effect.die("mismatched history must not expose a host observation")
-      ).pipe(Effect.flip)
+        const runId = RunId.make("production-mismatched-run")
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(
+              sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
+            )
+            yield* Context.get(context, JournalStore).beginRun(
+              runId,
+              recordedTarget,
+              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+            )
+          })
+        )
+        const calls = yield* Ref.make(noUnsafeDiscoveryBoundaryCalls)
+        const failure = yield* withProductionRepositoryHost(input, makeUnsafeDiscoveryGraph(calls), () =>
+          Effect.die("mismatched history must not expose a host observation")
+        ).pipe(Effect.flip)
 
-      expect(failure).toBeInstanceOf(ProductionRunSelectionConflict)
-      expect(failure).toMatchObject({ requestedTarget, conflicts: [{ runId, target: recordedTarget }] })
-    }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
-  )
+        expect(failure).toBeInstanceOf(ProductionRunSelectionConflict)
+        expect(failure).toMatchObject({ requestedTarget, conflicts: [{ runId, target: recordedTarget }] })
+        assertNoUnsafeDiscoveryBoundaryCalls(yield* Ref.get(calls))
+      }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
+    )
 )
 
-it.effect("malformed history fails before provider mutation", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const input = yield* makeTemporaryProductionInput
-      const target = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(input.target)
-      const runId = RunId.make("production-malformed-run")
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const context = yield* Layer.build(
-            sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
-          )
-          yield* Context.get(context, JournalStore).beginRun(
-            runId,
-            target,
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
-          )
+it.effect(
+  "malformed history fails before GitHub requests, Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const input = yield* makeTemporaryProductionInput
+        const target = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(input.target)
+        const runId = RunId.make("production-malformed-run")
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(
+              sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
+            )
+            yield* Context.get(context, JournalStore).beginRun(
+              runId,
+              target,
+              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
+            )
+          })
+        )
+        yield* Effect.sync(() => {
+          const database = new DatabaseSync(input.journalDatabase)
+          database.prepare("UPDATE journal_records SET position = 99 WHERE run_id = ? AND position = 1").run(runId)
+          database.close()
         })
-      )
-      yield* Effect.sync(() => {
-        const database = new DatabaseSync(input.journalDatabase)
-        database.prepare("UPDATE journal_records SET position = 99 WHERE run_id = ? AND position = 1").run(runId)
-        database.close()
-      })
-      const failure = yield* withProductionRepositoryHost(
-        input,
-        productionRepositoryHostGraph({
-          codexAppServer: () => Layer.effect(CodexAppServer, Effect.die("malformed history must stop before Codex")),
-          githubClient: () => Layer.effect(GithubGraphqlClient, Effect.die("malformed history must stop before GitHub"))
-        }),
-        () => Effect.die("malformed history must not expose a host observation")
-      ).pipe(Effect.flip)
+        const calls = yield* Ref.make(noUnsafeDiscoveryBoundaryCalls)
+        const failure = yield* withProductionRepositoryHost(input, makeUnsafeDiscoveryGraph(calls), () =>
+          Effect.die("malformed history must not expose a host observation")
+        ).pipe(Effect.flip)
 
-      expect(failure).toBeInstanceOf(StartupRecoveryBlocked)
-      expect(failure).toMatchObject({ issues: [expect.objectContaining({ runId })] })
-    }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
-  )
+        expect(failure).toBeInstanceOf(StartupRecoveryBlocked)
+        const blocked = failure as StartupRecoveryBlocked
+        expect(blocked.issues).toHaveLength(1)
+        expect(blocked.issues[0]).toMatchObject({
+          _tag: "JournalSemanticIssue",
+          detail: "expected canonical position 1, found 99; WorkflowRunBegan must be the first record",
+          partition: "Hot",
+          runId
+        })
+        assertNoUnsafeDiscoveryBoundaryCalls(yield* Ref.get(calls))
+      }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
+    )
 )
 
 const productionHostSource = readFileSync(fileURLToPath(new URL("./production-host.ts", import.meta.url)), "utf8")
 
-it("production host installs exactly one owner for every mutation capability and no controlled capability", () => {
+it("production host installs one coordinator-owned GitHub, Git, executor, Integrator, and Journal write boundary", () => {
   expect(productionHostSource).not.toMatch(/controlled/i)
   for (const construction of [
     "productionCoordinatorOwnershipLayer(",
