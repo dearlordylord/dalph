@@ -21,10 +21,13 @@ import { DeliveryProposalId, trackerGraphReadProposalOf } from "./delivery-propo
 import type { TaskWorkPositionRequirement } from "./delivery-action-proposal.js"
 import { makeDeliveryRuntimeAdmissionController as makeAdmissionControllerWithLifecycle } from "./delivery-runtime-admission.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { TaskLifecycle } from "../../authorities/task-tracker/task.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import { OperationId } from "../../workflow/identity.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import { deliveryProposalsOf } from "./delivery-proposal-derivation.js"
+import { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import {
   PlannedAttemptProtocolController,
   plannedAttemptProtocolControllerLayer
@@ -98,6 +101,41 @@ it.effect("executor start reserves an exact planned-attempt position", () =>
       }
       expect((yield* admission.tryReserve(start))._tag).toBe("Admitted")
       expect((yield* admission.snapshot).positions.get(taskId)).toMatchObject({ correlation })
+    })
+  )
+)
+
+it.effect("does not let uncorrelated replacement work reuse the exact retained attempt position", () =>
+  withProtocolController(
+    Effect.gen(function* () {
+      const admission = yield* makeDeliveryRuntimeAdmissionController(
+        { capacity: TaskWorkCapacity.make(2), held: [{ correlation, taskId }] },
+        yield* makeIntegrationTargetResourceController()
+      )
+      const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+        taskId,
+        taskRevision: TaskRevision.make("replacement-F2")
+      })
+      const step = FreshWorkflowStep.AcquireTaskClaim({
+        predecessorOperationId: OperationId.make("replacement-current-graph"),
+        task: { id: taskId, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }
+      })
+      const replacement = deliveryProposalsOf({
+        acceptedOperationIds: new Set(),
+        fresh: [{ step, transition }],
+        runId,
+        transitions: [transition]
+      }).ticketDelivery[0]
+      if (replacement === undefined) return yield* Effect.die("fresh replacement proposal was not derived")
+
+      expect(yield* admission.tryReserve(replacement)).toEqual({
+        _tag: "Deferred",
+        reason: "TaskWorkPositionUnavailable"
+      })
+      expect((yield* admission.snapshot).positions.get(taskId)).toEqual({
+        _tag: "AcceptedAttemptPosition",
+        correlation
+      })
     })
   )
 )
@@ -329,13 +367,13 @@ it.effect("reconciles existing, pending, and integration-backed admission positi
       expect((yield* admission.tryReserve(mismatchingExisting))._tag).toBe("Deferred")
       expect(
         (yield* admission.tryReserve(
-          proposalFor("reuse-existing-without-binding", {
+          proposalFor("reject-existing-without-exact-binding", {
             _tag: "TaskWorkPositionRequired",
             mode: "ReserveOrReuse",
             taskId
           })
         ))._tag
-      ).toBe("Admitted")
+      ).toBe("Deferred")
       const reused = yield* admission.tryReserve(
         correlatedProposalFor(
           "reuse-existing-with-matching-binding",

@@ -142,7 +142,13 @@ const reserveReusableTaskPosition = (
 ): readonly [TaskPositionReservation, AdmissionState] => {
   const existing = current.positions.get(requirement.taskId)
   if (existing !== undefined) {
-    if (retainAs === undefined) return unchangedTaskReservation(true, current)
+    // An uncorrelated fresh action may continue only the temporary position
+    // created by that fresh task pipeline. A position already bound to an
+    // exact attempt is retained authority for that attempt, not a task-id
+    // permit that replacement work may reuse.
+    if (retainAs === undefined) {
+      return unchangedTaskReservation(existing._tag === "PendingRuntimePosition", current)
+    }
     if (existing._tag !== "PendingRuntimePosition") {
       return unchangedTaskReservation(sameCorrelation(existing.correlation, retainAs), current)
     }
