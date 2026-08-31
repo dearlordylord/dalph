@@ -3558,6 +3558,98 @@ it("fails closed for a valid no-begin prefix with a paired pending Git read", ()
   )
 })
 
+effectIt.effect("restart replays worktree before a premature lineage intent and lineage only after worktree observation", () =>
+  Effect.gen(function* () {
+    const worktreeOperation = makeTaskWorktreeObservationOperation({
+      operationId: OperationId.make("recovery-activation-restart-pending-worktree"),
+      plannedAttempt: coverageAttempt,
+      predecessorOperationIds: [
+        coveragePlanOperation.operationId,
+        coverageGraphOperation.operationId,
+        coverageSpecificationOperation.operationId,
+        coverageClaimOperation.operationId
+      ]
+    })
+    const lineageOperation = makeTargetLineageObservationOperation({
+      integrationTarget: IntegrationTarget.make({
+        ref: IntegrationTargetRef.make("refs/heads/main"),
+        repository: GitRepositoryLocator.make("/repositories/recovery-activation.git")
+      }),
+      operationId: OperationId.make("recovery-activation-restart-pending-lineage"),
+      plannedAttempt: coverageAttempt,
+      predecessorOperationIds: [worktreeOperation.operationId]
+    })
+    const intentFor = (operation: typeof worktreeOperation | typeof lineageOperation) =>
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation,
+        version: workflowJournalEventVersion
+      })
+    const prefix = coverageRecordsWithBeginning([
+      ...coveragePlanRecords(),
+      coverageRecord(5, taskTrackerReadIntent(coverageGraphOperation)),
+      coverageRecord(6, coverageGraphEvent),
+      coverageRecord(7, taskTrackerReadIntent(coverageSpecificationOperation)),
+      coverageRecord(8, coverageSpecificationEvent),
+      coverageRecord(9, taskTrackerReadIntent(coverageClaimOperation)),
+      coverageRecord(10, coverageClaimEvent),
+      coverageRecord(11, intentFor(worktreeOperation))
+    ])
+    const worktreeObserved = coverageRecord(
+      13,
+      PlannedAttemptWorktreeObservedEvent.make({
+        observation: PlannedWorktreeReady.make({
+          baseSha: coverageAttempt.baseSha,
+          branch: coverageAttempt.branch,
+          headSha: coverageAttempt.baseSha,
+          worktree: coverageAttempt.worktree
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: worktreeOperation.operationId,
+        version: workflowJournalEventVersion
+      })
+    )
+    const projectionFor = (records: ReadonlyArray<JournalRecord>) =>
+      Effect.gen(function* () {
+        const reconstructed = {
+          ...coverageRunState(records, [coverageResponsibilityAfterBeginning]),
+          graphKnowledge: { taskTrackerFacts: [coverageGraphEvent.observation] }
+        }
+        const journal = Object.assign(
+          InRunJournal.of({
+            append: () => Effect.die("restart projection must not append"),
+            read: () => Effect.succeed(records)
+          }),
+          { state: { get: Effect.succeed({ reconstructed }) } }
+        )
+        const resources = yield* makeIntegrationTargetResourceController()
+        const recovery = yield* makeRunRecoveryProjection(coverageRunId, lineageOperation.integrationTarget, resources).pipe(
+          Effect.provideService(InRunJournal, journal)
+        )
+        return (yield* recovery.readDeliveryProjection).frontier.transitions.filter(
+          (transition) =>
+            transition._tag === "ObservePlannedAttemptContinuationWorktree" ||
+            transition._tag === "ObservePlannedAttemptContinuationTargetLineage"
+        )
+      })
+
+    const premature = yield* projectionFor([...prefix, coverageRecord(13, intentFor(lineageOperation))])
+    expect(premature).toMatchObject([
+      { _tag: "ObservePlannedAttemptContinuationWorktree", operation: { operationId: worktreeOperation.operationId } }
+    ])
+
+    const afterWorktree = yield* projectionFor([
+      ...prefix,
+      worktreeObserved,
+      coverageRecord(14, intentFor(lineageOperation))
+    ])
+    expect(afterWorktree).toMatchObject([
+      { _tag: "ObservePlannedAttemptContinuationTargetLineage", operation: { operationId: lineageOperation.operationId } }
+    ])
+  })
+)
+
 it("scopes recovery responsibility to the immutable Run target", () => {
   const foreignTarget = FixtureTarget.make("recovery-activation-responsibility-foreign-target")
   const foreignGraphOperation = makeTrackerGraphObservationOperation(

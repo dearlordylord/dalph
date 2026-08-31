@@ -3450,6 +3450,13 @@ const continuationGitReadIntentHasExactCausalOwner = (
 ): boolean => {
   const operation = event.operation
   if (operation._tag === "ReadTargetLineage") {
+    const lineageIntent = records.findLast(
+      ({ event: candidate }) =>
+        candidate._tag === "GitReadIntentRecorded" &&
+        candidate.operation._tag === "ReadTargetLineage" &&
+        candidate.operation.operationId === operation.operationId
+    )
+    if (lineageIntent === undefined) return false
     return operation.predecessorOperationIds.some((operationId) => {
       const worktreeIntent = records.findLast(
         ({ event: candidate }) =>
@@ -3458,8 +3465,17 @@ const continuationGitReadIntentHasExactCausalOwner = (
           candidate.operation.operationId === operationId &&
           plannedTaskAttemptEquivalence(candidate.operation.plannedAttempt, operation.plannedAttempt)
       )
+      const worktreeObservation = records.findLast(
+        ({ event: candidate, position }) =>
+          candidate._tag === "PlannedAttemptWorktreeObserved" &&
+          candidate.operationId === operationId &&
+          worktreeIntent !== undefined &&
+          position > worktreeIntent.position &&
+          position < lineageIntent.position
+      )
       return (
         worktreeIntent?.event._tag === "GitReadIntentRecorded" &&
+        worktreeObservation?.event._tag === "PlannedAttemptWorktreeObserved" &&
         continuationGitReadIntentHasExactCausalOwner(records, worktreeIntent.event)
       )
     })
