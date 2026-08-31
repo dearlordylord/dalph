@@ -40,6 +40,11 @@ import {
   evaluationForPhase,
   type DeliveryRuntimePhase as DeliveryRuntimePhaseType
 } from "./delivery-runtime-phase.js"
+import {
+  exactPreparedTaskWorkAdmissionIsStalled,
+  taskWorkAdmissionStalledRuntimeQuiescenceOf,
+  type TaskWorkAdmissionStalledRuntimeQuiescence
+} from "./task-work-admission-stalled-runtime-quiescence.js"
 
 export { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
 export * from "./delivery-runtime-phase.js"
@@ -82,6 +87,7 @@ type EstablishedRuntimeSnapshot = Omit<DeliveryRuntimeSnapshot, "trackerGraph"> 
 
 /** The exact descriptive state observed after no executable or admitted action remains. */
 export type DeliveryRuntimeQuiescence =
+  | TaskWorkAdmissionStalledRuntimeQuiescence
   | {
       readonly _tag: "PassiveRuntimeQuiescence"
       readonly acceptedAt: DeliveryRuntimeEvaluation["acceptedAt"]
@@ -387,11 +393,22 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             ({ admission: { taskWorkPosition } }) =>
               taskWorkPosition._tag === "TaskWorkPositionRequired" && taskWorkPosition.mode === "ReserveOrReuse"
           )
+        const ordinaryTaskWorkAdmissionStalled =
+          phase._tag === "OrdinaryDeliveryRuntimePhase" &&
+          exactPreparedTaskWorkAdmissionIsStalled(current, proposedActions)
         if (
           live.size !== 0 ||
-          (!activeRefreshG2Pending && !everyProposalAwaitsChangedAcceptedFacts && !postG2RetainedCapacityBlocks)
+          (!activeRefreshG2Pending &&
+            !everyProposalAwaitsChangedAcceptedFacts &&
+            !postG2RetainedCapacityBlocks &&
+            !ordinaryTaskWorkAdmissionStalled)
         ) {
           return Option.none<DeliveryRuntimeQuiescence>()
+        }
+        if (ordinaryTaskWorkAdmissionStalled) {
+          return Option.some<DeliveryRuntimeQuiescence>(
+            taskWorkAdmissionStalledRuntimeQuiescenceOf(current, proposedActions)
+          )
         }
         const empty: EmptyProposalFrontier = { ...proposedActions, proposals: [] }
         if (current.quiescence._tag === "QuiescencePassive") {
