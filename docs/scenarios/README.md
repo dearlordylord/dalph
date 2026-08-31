@@ -79,14 +79,14 @@ separately and are not current implementation authority.
 | `issue-71-qualify-real-github-graph-membership-claims.md` | 71 |
 | `issue-88-crash-after-target-promotion.md` | 88 |
 
-**Accepted implementation corrections awaiting integration** — these files
-are current behavior authority for an acknowledged acceptance gap. They do not
-claim that the correction is already shipped.
+**Accepted implementation corrections on `integrate/issues-264-268`** — these
+files describe corrections composed on the integration branch. This table does
+not claim that either correction is on `master` or shipped.
 
 | File | Owning issue | Status |
 |---|---:|---|
-| `issue-265-passive-executor-observation-through-restart.md` | 265 | Accepted specification; implementation candidate under review before integration |
-| `issue-266-active-work-authority-refresh.md` | 266 | Accepted correction; implementation and integration pending |
+| `issue-265-passive-executor-observation-through-restart.md` | 265 | Complete and integrated through `acdf5a715`; issue closed |
+| `issue-266-active-work-authority-refresh.md` | 266 | Integrated candidate through `7ffd22699`; final gates and issue closure pending |
 
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state

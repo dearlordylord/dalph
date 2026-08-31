@@ -14,8 +14,9 @@ review. It changes no Dalph runtime behavior.
   model-based tests, and one final `pnpm check:quint` run. Repeated unchanged
   `ExecutorWorkExecuting` observations create no additional executor command,
   accepted report, proposal identity, report ordinal, or command-budget entry.
-- Issue #265 is integrated on `integrate/issues-264-268` through commit
-  `acdf5a715`. It attaches one process-local passive lifecycle owner, publishes
+- Issue #265 is complete, integrated on `integrate/issues-264-268` through
+  commit `acdf5a715`, and closed. It attaches one process-local passive
+  lifecycle owner, publishes
   a later Safe or Terminal change through the ordinary serialized report
   protocol, reconstructs the owner from durable history after same-host
   restart, and fails closed on unresolved non-exact evidence. Independent
@@ -24,13 +25,12 @@ review. It changes no Dalph runtime behavior.
   39 skipped, 35 MBT tests passed, and 100% changed production and maintained-
   evaluation coverage. The final `pnpm check:quint` gate also passed, including
   deterministic, sampled, exhaustive, temporal, and negative-control checks.
-- The reviewed #266 runtime candidate is on its task branch through
-  `cad300af8`, atop the ordinary-read implementation `a802db641` and its
-  subsequent causality, recovery, lifecycle, and acceptance repairs. The
-  evidence/documentation follow-up is the commit containing this plan and
-  therefore cannot self-reference its own SHA; replace this note with the exact
-  integrated SHA after composition. #266 remains under final review and is not
-  yet declared complete or closed.
+- The reviewed #266 runtime candidate is integrated on
+  `integrate/issues-264-268` through the non-self-referential prior integration
+  commit `7ffd22699`. It includes the ordinary-read implementation and its
+  subsequent causality, recovery, lifecycle, runtime-coalescing, and acceptance
+  repairs. Final gates and issue closure remain pending; this plan does not
+  claim that #266 is complete, on `master`, or shipped.
 - The candidate removes the private active-refresh Git-read history and routes
   graph, focused tracker, worktree, and lineage reads through the ordinary
   journal-first owners. Production matrices now cover sources, coalescing,
@@ -102,8 +102,9 @@ Scenario-to-test mapping:
 
 ### 2. Review and integrate #265: passive lifecycle observation through restart
 
-Status: completed on `integrate/issues-264-268` at `acdf5a715`; issue closure
-evidence recorded after clean independent review and full verification.
+Status: completed on `integrate/issues-264-268` at `acdf5a715`; issue closed
+after clean independent review, recorded closure evidence, and full
+verification.
 
 The accepted chronological scenario is
 `docs/scenarios/issue-265-passive-executor-observation-through-restart.md`.
@@ -252,9 +253,9 @@ does not predeclare that result.
 
 ### 4. Implement #267 and #269 independently
 
-Both are blocked by #266 and may be developed in separate worktrees against
-the same pinned master commit. Integrate them only after both focused reviews
-are clean.
+Both are blocked by #266 and may be developed in separate worktrees only after
+#266 closes, from the same exact integrated #266 commit. Integrate them only
+after both focused reviews are clean.
 
 For #267, keep synchronization inside the maintained cassette. Map the
 scenario to tests proving reverse-arriving same-shape reads correlate by exact
@@ -327,9 +328,9 @@ Resolve only demonstrated semantic conflicts. Run focused combined tests,
 - Fixing #266's read protocol before #267/#268 delays the capstone, but avoids
   making every downstream cassette and CLI consumer depend on two freshness
   histories.
-- Keeping #264 closed at its accepted boundary leaves later observation
-  scheduling temporarily absent until #265, but preserves ticket ownership and
-  keeps #265 independently testable.
+- Keeping #264 closed at its accepted boundary left later observation
+  scheduling to #265 instead of expanding #264. #265 is now complete; the
+  separate ownership kept its verification measurable.
 - Reusing ordinary reads may remove active-refresh-specific failure labels from
   the Journal. The triggering opportunity remains process-local context; the
   durable record should describe the actual tracker or Git read and its typed
