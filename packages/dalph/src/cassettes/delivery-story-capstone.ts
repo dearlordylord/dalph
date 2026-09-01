@@ -46,18 +46,29 @@ const graphRead = (value: ReturnType<typeof graph>) => [
   { _tag: "TrackerGraphReadReturned" as const, graph: value }
 ]
 
+const specificationSelection = (taskId: TaskIdText) => ({
+  _tag: "DalphSelects" as const,
+  operation: { _tag: "ReadTaskWorkSpecification" as const, taskId }
+})
+
+const specificationResult = (taskId: TaskIdText, changed = false) => ({
+  _tag: "TaskWorkSpecificationReadReturned" as const,
+  ...(changed && taskId === "B" ? changedBSpecification : specification(taskId))
+})
+
 const specificationRead = (taskId: TaskIdText, changed = false) => [
-  { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskWorkSpecification" as const, taskId } },
-  {
-    _tag: "TaskWorkSpecificationReadReturned" as const,
-    ...(changed && taskId === "B" ? changedBSpecification : specification(taskId))
-  }
+  specificationSelection(taskId),
+  specificationResult(taskId, changed)
 ]
 
-const claimRead = (taskId: TaskIdText) => [
-  { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
-  { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
-]
+const claimSelection = (taskId: TaskIdText) => ({
+  _tag: "DalphSelects" as const,
+  operation: { _tag: "ReadTaskClaim" as const, taskId }
+})
+
+const claimResult = (taskId: TaskIdText) => ({ _tag: "TaskClaimCurrentReadReturned" as const, taskId })
+
+const claimRead = (taskId: TaskIdText) => [claimSelection(taskId), claimResult(taskId)]
 
 const worktreeRead = ({ attemptId, taskId }: (typeof attempts)[keyof typeof attempts]) => ({
   _tag: "DalphSelects" as const,
@@ -69,15 +80,35 @@ const lineageRead = ({ attemptId, taskId }: (typeof attempts)[keyof typeof attem
   operation: { _tag: "ReadTargetLineage" as const, attemptId, taskId }
 })
 
+const concurrentNode = (
+  role: string,
+  predecessorRoles: ReadonlyArray<string>,
+  interaction: Readonly<Record<string, unknown>>
+) => ({ interaction, predecessorRoles, role })
+
+const authorityLane = (attempt: (typeof attempts)[keyof typeof attempts]) => {
+  const { taskId } = attempt
+  return [
+    concurrentNode(`S_${taskId}`, [], specificationSelection(taskId)),
+    concurrentNode(`T_${taskId}`, [`S_${taskId}`], specificationResult(taskId)),
+    concurrentNode(`Q_${taskId}`, [`T_${taskId}`], claimSelection(taskId)),
+    concurrentNode(`R_${taskId}`, [`Q_${taskId}`], claimResult(taskId)),
+    concurrentNode(`W_${taskId}`, [`R_${taskId}`], worktreeRead(attempt)),
+    concurrentNode(`L_${taskId}`, [`W_${taskId}`], lineageRead(attempt))
+  ]
+}
+
+const changedBSpecificationLane = () => [
+  concurrentNode("S_B", [], specificationSelection("B")),
+  concurrentNode("T_B", ["S_B"], specificationResult("B", true))
+]
+
 const acquireClaim = (taskId: TaskIdText) => ({
   _tag: "DalphSelects" as const,
   operation: { _tag: "AcquireTaskClaim" as const, taskId }
 })
 
-const plan = (
-  { attemptId, taskId }: (typeof attempts)[keyof typeof attempts],
-  occurrenceRole: string
-) => ({
+const plan = ({ attemptId, taskId }: (typeof attempts)[keyof typeof attempts], occurrenceRole: string) => ({
   _tag: "DalphSelects" as const,
   causalAnchor: { occurrenceRole },
   operation: { _tag: "RecordTaskAttemptPlan" as const, attemptId, taskId }
@@ -138,27 +169,51 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     acquireClaim("A"),
     acquireClaim("B"),
     acquireClaim("C"),
+    ...graphRead(graphG0),
     acquireClaim("D"),
+    ...graphRead(graphG0),
     acquireClaim("E"),
-    ...Array.from({ length: 5 }, () => graphRead(graphG0)).flat(),
-    ...taskIds.flatMap((taskId) => specificationRead(taskId)),
+    ...graphRead(graphG0),
+    ...specificationRead("A"),
+    ...graphRead(graphG0),
+    ...specificationRead("B"),
+    ...graphRead(graphG0),
+    ...specificationRead("C"),
     plan(attempts.a, "plan-A-F1"),
+    ...specificationRead("D"),
     plan(attempts.b, "plan-B-F1"),
+    ...specificationRead("E"),
     plan(attempts.c, "plan-C-F1"),
-    plan(attempts.d, "plan-D-F1"),
-    plan(attempts.e, "plan-E-F1"),
     prepareWorktree(attempts.a),
-    prepareWorktree(attempts.b),
-    prepareWorktree(attempts.c),
-    prepareWorktree(attempts.d),
-    prepareWorktree(attempts.e),
-    executorReport(attempts.a, "Begin", "Executing"),
-    executorReport(attempts.b, "Begin", "Executing"),
-    executorReport(attempts.c, "Begin", "Executing"),
     {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      _tag: "ConcurrentInteractionGroup",
+      members: [
+        {
+          interaction: {
+            _tag: "DalphSelects",
+            operation: { _tag: "RecordTaskAttemptPlan", attemptId: attempts.d.attemptId, taskId: attempts.d.taskId }
+          },
+          predecessorRoles: [],
+          role: "P_D"
+        },
+        {
+          interaction: {
+            _tag: "DalphSelects",
+            operation: { _tag: "RecordTaskAttemptPlan", attemptId: attempts.e.attemptId, taskId: attempts.e.taskId }
+          },
+          predecessorRoles: [],
+          role: "P_E"
+        },
+        { interaction: prepareWorktree(attempts.b), predecessorRoles: [], role: "W_B" },
+        { interaction: prepareWorktree(attempts.c), predecessorRoles: [], role: "W_C" },
+        { interaction: executorReport(attempts.a, "Begin", "Executing"), predecessorRoles: [], role: "X_A" },
+        { interaction: prepareWorktree(attempts.d), predecessorRoles: ["P_D"], role: "W_D" },
+        { interaction: prepareWorktree(attempts.e), predecessorRoles: ["P_E"], role: "W_E" },
+        { interaction: executorReport(attempts.b, "Begin", "Executing"), predecessorRoles: ["W_B"], role: "X_B" },
+        { interaction: executorReport(attempts.c, "Begin", "Executing"), predecessorRoles: ["W_C"], role: "X_C" }
+      ]
     },
+    { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActive", reason: "RunnableTransition" } },
     {
       _tag: "CassetteOffersRunReactivationHints",
       hints: ["TrackerNotification", "Timer", "TrackerNotification", "Timer"]
@@ -170,31 +225,9 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     },
     { _tag: "TrackerGraphReadReturned", graph: graphG1 },
     {
-      _tag: "ConcurrentTrackerReadBatch",
-      members: [
-        {
-          causal: { occurrenceRole: "B-edit-A-F1", predecessorRoles: ["plan-A-F1", "B-edit-active-G1"] },
-          operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" },
-          result: { _tag: "TaskWorkSpecificationReadReturned", ...specification("A") }
-        },
-        {
-          causal: { occurrenceRole: "B-edit-B-F2", predecessorRoles: ["plan-B-F1", "B-edit-active-G1"] },
-          operation: { _tag: "ReadTaskWorkSpecification", taskId: "B" },
-          result: { _tag: "TaskWorkSpecificationReadReturned", ...changedBSpecification }
-        },
-        {
-          causal: { occurrenceRole: "B-edit-C-F1", predecessorRoles: ["plan-C-F1", "B-edit-active-G1"] },
-          operation: { _tag: "ReadTaskWorkSpecification", taskId: "C" },
-          result: { _tag: "TaskWorkSpecificationReadReturned", ...specification("C") }
-        }
-      ]
+      _tag: "ConcurrentInteractionGroup",
+      members: [...authorityLane(attempts.a), ...changedBSpecificationLane(), ...authorityLane(attempts.c)]
     },
-    ...claimRead("A"),
-    worktreeRead(attempts.a),
-    lineageRead(attempts.a),
-    ...claimRead("C"),
-    worktreeRead(attempts.c),
-    lineageRead(attempts.c),
     executorReport(attempts.b, "Suspend", "Executing"),
     {
       _tag: "PlannedAttemptExecutorPassiveLifecycleChanged",
@@ -210,31 +243,17 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     { _tag: "SetTaskExecutionCapacity", capacity: 2 },
     { _tag: "CoordinatorProcessDies" },
     ...graphRead(graphG1),
-    ...specificationRead("A"),
-    ...specificationRead("C"),
-    ...specificationRead("D"),
-    ...claimRead("A"),
-    ...claimRead("C"),
-    ...claimRead("D"),
-    worktreeRead(attempts.a),
-    worktreeRead(attempts.c),
-    worktreeRead(attempts.d),
-    lineageRead(attempts.a),
-    lineageRead(attempts.c),
-    lineageRead(attempts.d),
+    executorProjection(attempts.a),
+    executorProjection(attempts.c),
+    executorProjection(attempts.d),
+    ...graphRead(graphG1),
     {
-      _tag: "CassetteOffersRunReactivationHints",
-      hints: ["TrackerNotification", "Timer"]
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
     },
+    { _tag: "CassetteOffersRunReactivationHints", hints: ["TrackerNotification", "Timer"] },
     ...graphRead(graphG2),
-    ...specificationRead("A"),
-    ...specificationRead("D"),
-    ...claimRead("A"),
-    ...claimRead("D"),
-    worktreeRead(attempts.a),
-    worktreeRead(attempts.d),
-    lineageRead(attempts.a),
-    lineageRead(attempts.d),
+    { _tag: "ConcurrentInteractionGroup", members: [...authorityLane(attempts.a), ...authorityLane(attempts.d)] },
     executorReport(attempts.c, "Suspend", "Safe"),
     {
       _tag: "OperatorContinuesAttempt",
@@ -269,7 +288,9 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
       protocol: null,
       taskWork: {
         absences: [],
-        results: [{ _tag: "PlannedWorkForTaskAccepted", commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", taskId: "A" }]
+        results: [
+          { _tag: "PlannedWorkForTaskAccepted", commit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", taskId: "A" }
+        ]
       }
     }
   ]
