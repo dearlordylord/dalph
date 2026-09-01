@@ -16,6 +16,8 @@ import {
   EvidenceStore,
   ApplicationExitShell,
   makeApplicationExitShell,
+  GitCommand,
+  type GitCommandService,
   journaledRunBootstrapLayer,
   journaledWorkflowInterpreterLayer,
   ApplicationExitRequestBoundary,
@@ -57,7 +59,7 @@ import {
   defaultJournalMaintenanceObservation
 } from "@dalph/orchestrator"
 import type { FileSystem } from "effect"
-import { Crypto, Duration, Effect, Layer, Schema } from "effect"
+import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect"
 
 const finitePositiveDuration = Schema.DurationFromString.check(
   Schema.makeFilter((duration) =>
@@ -105,12 +107,41 @@ export interface ProductionWorkflowRuntimeBoundaries {
   readonly integrator?: IntegratorService
   /** Optional qualification observation after the real Run recovery projection is built. */
   readonly onReconstructed?: (input: ProductionRunReconstructionObservation) => Effect.Effect<void>
+  /** Side-effect-only observation of the actual workflow Git command service. */
+  readonly workflowGitCommandObserver?: ProductionWorkflowGitCommandObserver
 }
+
+/** Names the concrete Git command method crossed by workflow worktree and lineage protocols. */
+export type ProductionWorkflowGitCommand = "run" | "runInWorktree" | "runBytesInWorktree"
+
+/** Qualification-only tap over the production workflow Git service; it cannot replace that service. */
+export type ProductionWorkflowGitCommandObserver = (operation: ProductionWorkflowGitCommand) => Effect.Effect<void>
 
 /** Services assembled from one validated journal prefix for qualification. */
 export interface ProductionRunReconstructionObservation {
   readonly recovery: RunRecoveryProjection["Service"]
   readonly taskWorkCapacity: TaskWorkCapacityControl["Service"]
+}
+
+const observedWorkflowGitCommand = (service: GitCommandService, observe: ProductionWorkflowGitCommandObserver) =>
+  GitCommand.of({
+    ...service,
+    run: (...args) => observe("run").pipe(Effect.andThen(service.run(...args))),
+    runInWorktree: (...args) => observe("runInWorktree").pipe(Effect.andThen(service.runInWorktree(...args))),
+    runBytesInWorktree: (...args) =>
+      observe("runBytesInWorktree").pipe(Effect.andThen(service.runBytesInWorktree(...args)))
+  })
+
+const observedWorkflowGitCommandLayer = (observe: ProductionWorkflowGitCommandObserver | undefined) => {
+  const layer = nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer))
+  if (observe === undefined) return layer
+  return Layer.fromBuildMemo((memoMap, scope) =>
+    Layer.buildWithMemoMap(layer, memoMap, scope).pipe(
+      Effect.map((context) =>
+        Context.add(context, GitCommand, observedWorkflowGitCommand(Context.get(context, GitCommand), observe))
+      )
+    )
+  )
 }
 
 const defaultProductionRunReactivationCooldownSeconds = 5
@@ -211,18 +242,19 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     runtimeBoundaries.coordinatorOwnership === undefined
       ? productionCoordinatorOwnershipLayer(target)
       : Layer.succeed(CoordinatorOwnership, runtimeBoundaries.coordinatorOwnership)
+  const workflowGitCommandLayer = observedWorkflowGitCommandLayer(runtimeBoundaries.workflowGitCommandObserver)
   const trackerMutationLayer = coordinatorOwnedTrackerMutationLayer(trackerMutationAdapterLayer).pipe(
     Layer.provide(ownershipLayer)
   )
   const gitWorktreeLayer = coordinatorOwnedGitWorktreeLayer(
-    nodeGitWorktreeLayer(target).pipe(Layer.provide(nodeGitCommandLayer), Layer.provide(NodeServices.layer))
+    nodeGitWorktreeLayer(target).pipe(Layer.provide(workflowGitCommandLayer), Layer.provide(NodeServices.layer))
   ).pipe(Layer.provide(ownershipLayer))
   const gitTargetLineageLayer = nodeGitTargetLineageLayer.pipe(
-    Layer.provide(nodeGitCommandLayer),
+    Layer.provide(workflowGitCommandLayer),
     Layer.provide(NodeServices.layer)
   )
   const gitIntegratorCandidateLayer = nodeGitIntegratorCandidateLayer.pipe(
-    Layer.provide(nodeGitCommandLayer),
+    Layer.provide(workflowGitCommandLayer),
     Layer.provide(NodeServices.layer)
   )
   const candidateAuthorityLayer = Layer.succeed(
@@ -230,7 +262,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     IntegratorCandidateProviderAuthority.of(integratorCandidateProviderAuthority)
   )
   const cleanupBoundaryLayer = gitDispositionCleanupBoundaryLayer(target, candidateAuthorityLayer).pipe(
-    Layer.provide(nodeGitCommandLayer),
+    Layer.provide(workflowGitCommandLayer),
     Layer.provide(NodeServices.layer)
   )
   const journalLayer = (runtimeBoundaries.journalStoreLayer ?? productionJournalStoreLayer).pipe(

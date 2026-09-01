@@ -47,6 +47,7 @@ import {
 import {
   productionRunReactivationLayer,
   productionWorkflowInterpreterLayer,
+  type ProductionWorkflowGitCommandObserver,
   type ProductionRunReconstructionObservation
 } from "./production.js"
 
@@ -75,6 +76,7 @@ export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, R
 }
 
 /** Low-level process substitution used by hermetic host qualification. */
+// eslint-disable-next-line functional/no-mixed-types -- The qualification seam groups edge factories with a non-authoritative workflow Git observation tap.
 export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = never, ETrace = never> {
   /** Optional journal layer wrapper for qualification. The supplied default remains SQLite-backed. */
   readonly journalStore?: (
@@ -97,6 +99,8 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly evidenceStore?: (configuration: ProductionRepositoryHostConfiguration) => Layer.Layer<EvidenceStore>
   /** Optional observation after the real in-Run recovery projection is assembled. */
   readonly onReconstructed?: (input: ProductionRunReconstructionObservation) => Effect.Effect<void>
+  /** Optional observation of concrete Git methods used by the workflow protocols. */
+  readonly workflowGitCommandObserver?: ProductionWorkflowGitCommandObserver
   readonly codexAppServer?: (
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<CodexAppServer, ECodex>
@@ -263,7 +267,10 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             integrationFinality: completionClaim,
             integrator,
             journalStoreLayer: journalLayer,
-            ...(adapters.onReconstructed === undefined ? {} : { onReconstructed: adapters.onReconstructed })
+            ...(adapters.onReconstructed === undefined ? {} : { onReconstructed: adapters.onReconstructed }),
+            ...(adapters.workflowGitCommandObserver === undefined
+              ? {}
+              : { workflowGitCommandObserver: adapters.workflowGitCommandObserver })
           }
         ).pipe(
           Layer.provide(Layer.succeed(TrackerGraphReader, trackerReader)),

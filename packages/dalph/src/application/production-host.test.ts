@@ -582,6 +582,7 @@ it.effect("restarted production host reconstructs the active claim before its fi
 interface UnsafeDiscoveryBoundaryCalls {
   readonly githubGraphqlRequests: number
   readonly gitCommandCalls: number
+  readonly workflowGitCommandCalls: number
   readonly executorCalls: number
   readonly integratorOperations: number
   readonly evidenceWrites: number
@@ -592,6 +593,7 @@ interface UnsafeDiscoveryBoundaryCalls {
 const noUnsafeDiscoveryBoundaryCalls: UnsafeDiscoveryBoundaryCalls = {
   githubGraphqlRequests: 0,
   gitCommandCalls: 0,
+  workflowGitCommandCalls: 0,
   executorCalls: 0,
   integratorOperations: 0,
   evidenceWrites: 0,
@@ -679,7 +681,11 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
           )
         })
       ),
-    evidenceStore: () => Layer.effect(EvidenceStore, count("boundaryAcquisitions").pipe(Effect.as(evidence)))
+    evidenceStore: () => Layer.effect(EvidenceStore, count("boundaryAcquisitions").pipe(Effect.as(evidence))),
+    workflowGitCommandObserver: (operation) =>
+      count("workflowGitCommandCalls").pipe(
+        Effect.andThen(Effect.die(`unsafe discovery crossed workflow Git ${operation}`))
+      )
   })
   const graph = {
     ...productionGraph,
@@ -702,6 +708,7 @@ const assertNoProviderOrJournalStateChanges = (calls: UnsafeDiscoveryBoundaryCal
   expect({
     githubGraphqlRequests: calls.githubGraphqlRequests,
     gitCommandCalls: calls.gitCommandCalls,
+    workflowGitCommandCalls: calls.workflowGitCommandCalls,
     executorCalls: calls.executorCalls,
     integratorOperations: calls.integratorOperations,
     evidenceWrites: calls.evidenceWrites,
@@ -709,6 +716,7 @@ const assertNoProviderOrJournalStateChanges = (calls: UnsafeDiscoveryBoundaryCal
   }).toEqual({
     githubGraphqlRequests: noUnsafeDiscoveryBoundaryCalls.githubGraphqlRequests,
     gitCommandCalls: noUnsafeDiscoveryBoundaryCalls.gitCommandCalls,
+    workflowGitCommandCalls: noUnsafeDiscoveryBoundaryCalls.workflowGitCommandCalls,
     executorCalls: noUnsafeDiscoveryBoundaryCalls.executorCalls,
     integratorOperations: noUnsafeDiscoveryBoundaryCalls.integratorOperations,
     evidenceWrites: noUnsafeDiscoveryBoundaryCalls.evidenceWrites,
@@ -787,7 +795,7 @@ it.effect("terminal Run is not reactivated", () =>
 )
 
 it.effect(
-  "two unfinished Runs fail before GitHub requests, Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations and name both identities",
+  "two unfinished Runs fail before GitHub GraphQL requests, workflow Git commands, executor/Integrator Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations and name both identities",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -828,7 +836,7 @@ it.effect(
 )
 
 it.effect(
-  "mismatched unfinished history fails before GitHub requests, Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations",
+  "mismatched unfinished history fails before GitHub GraphQL requests, workflow Git commands, executor/Integrator Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -864,7 +872,7 @@ it.effect(
 )
 
 it.effect(
-  "malformed history fails before GitHub requests, Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations",
+  "malformed history fails before GitHub GraphQL requests, workflow Git commands, executor/Integrator Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
