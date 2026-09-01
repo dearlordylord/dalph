@@ -21,7 +21,6 @@ import {
   type ApplicationExitPreFinalizationResult as ApplicationExitPreFinalizationResultType,
   type ApplicationExitResult as ApplicationExitResultType,
   type ApplicationProcessEndDecision,
-  decideApplicationPreFinalizationProcessEnd,
   decideApplicationProcessEnd
 } from "./lifecycle-decision.js"
 import {
@@ -60,6 +59,29 @@ export interface ApplicationProcessLifecycleService {
   readonly requestEnd: (decision: ApplicationProcessEndDecision) => Effect.Effect<void>
 }
 
+/**
+ * Host-owned finalization signal. It is intentionally not a process-end port:
+ * the host uses it to close its Run/foundation scopes after a report lease is
+ * acknowledged, while the ordinary application shell retains the real process
+ * lifecycle capability.
+ */
+export interface ApplicationExitHostFinalizationRequest {
+  readonly request: Effect.Effect<void>
+}
+
+const applicationExitResultReportLeaseBrand: unique symbol = Symbol("ApplicationExitResultReportLease")
+
+/**
+ * The host-facing report lease binds acknowledgement to one exact lifecycle
+ * result. Its private brand prevents callers from acknowledging a different
+ * result; repeated acknowledgement joins the same idempotent lease.
+ */
+export interface ApplicationExitResultReportLease<TResult> {
+  readonly [applicationExitResultReportLeaseBrand]: typeof applicationExitResultReportLeaseBrand
+  readonly result: TResult
+  readonly acknowledge: Effect.Effect<void>
+}
+
 export type ApplicationExitTraceEvent =
   | { readonly _tag: "ExitRequested" }
   | { readonly _tag: "AdmissionCutoffClosed" }
@@ -73,6 +95,8 @@ export type ApplicationExitTraceEvent =
   | { readonly _tag: "ExitResultReported"; readonly result: ApplicationExitResultType }
   /** The host-facing drain result precedes scope/resource finalization. */
   | { readonly _tag: "ExitDrainResultReported"; readonly result: ApplicationExitPreFinalizationResultType }
+  /** The host caller confirmed visible reporting before scope finalization. */
+  | { readonly _tag: "ExitDrainReportAcknowledged"; readonly result: ApplicationExitPreFinalizationResultType }
   | { readonly _tag: "ProcessEndRequested"; readonly decision: ApplicationProcessEndDecision }
 
 export interface ApplicationExitTraceService {
@@ -85,18 +109,22 @@ export interface ApplicationExitTraceService {
  * only the result whose success includes coordinator-lock release.
  */
 // eslint-disable-next-line functional/no-mixed-types -- A shell policy intentionally groups one mode flag with its typed result and process adapters.
-interface ApplicationExitResultPolicy<TResult> {
+interface ApplicationExitResultPolicy<TResult, TBoundaryResult = TResult> {
   readonly releaseCoordinatorLock: boolean
   readonly fromDiagnostics: (diagnostics: ReadonlyArray<ApplicationExitDiagnostic>) => TResult
   readonly timedOut: (diagnostics: ReadonlyArray<ApplicationExitDiagnostic>) => TResult
   readonly report: (trace: ApplicationExitTraceService, result: TResult) => Effect.Effect<void>
-  readonly processEndDecision: (result: TResult) => ApplicationProcessEndDecision
-}
-
-/** Composition hook for the process-wide application Exit shell. */
-export interface ApplicationExitShellOptions {
-  /** Runs after a requester has observed the typed lifecycle result. */
-  readonly onExitResultObserved?: Effect.Effect<void>
+  readonly makeBoundaryResult: (result: TResult, acknowledge: Effect.Effect<void>) => TBoundaryResult
+  readonly acknowledgeReport: (
+    trace: ApplicationExitTraceService,
+    result: TResult,
+    hostFinalizationRequest: ApplicationExitHostFinalizationRequest | undefined
+  ) => Effect.Effect<void>
+  readonly processEnd?: (
+    trace: ApplicationExitTraceService,
+    processLifecycle: ApplicationProcessLifecycleService,
+    result: TResult
+  ) => Effect.Effect<void>
 }
 
 const emitSafeExecutorCorrelations = (
@@ -116,7 +144,9 @@ export interface ApplicationExitRequestBoundaryService<TResult = ApplicationExit
 /** Transport-neutral boundary called by a future Operator or supervisor adapter. */
 export class ApplicationExitRequestBoundary extends Context.Service<
   ApplicationExitRequestBoundary,
-  ApplicationExitRequestBoundaryService<ApplicationExitResultType | ApplicationExitPreFinalizationResultType>
+  ApplicationExitRequestBoundaryService<
+    ApplicationExitResultType | ApplicationExitResultReportLease<ApplicationExitPreFinalizationResultType>
+  >
 >()("@dalph/ApplicationExitRequestBoundary") {}
 
 const applicationExitDrainLimit = applicationExitDrainDuration
@@ -162,38 +192,62 @@ const ordinaryApplicationExitResultPolicy: ApplicationExitResultPolicy<Applicati
   fromDiagnostics: applicationExitDrainResult,
   timedOut: (diagnostics) => ApplicationExitResult.cases.TimedOut.make({ diagnostics, requestedStatus: 1 }),
   report: (trace, result) => trace.emit({ _tag: "ExitResultReported", result }),
-  processEndDecision: decideApplicationProcessEnd
+  makeBoundaryResult: (result) => result,
+  acknowledgeReport: () => Effect.void,
+  processEnd: (trace, processLifecycle, result) => {
+    const decision = decideApplicationProcessEnd(result)
+    return trace
+      .emit({ _tag: "ProcessEndRequested", decision })
+      .pipe(Effect.andThen(processLifecycle.requestEnd(decision)))
+  }
 }
 
-const preFinalizationApplicationExitResultPolicy: ApplicationExitResultPolicy<ApplicationExitPreFinalizationResultType> =
-  {
-    releaseCoordinatorLock: false,
-    fromDiagnostics: applicationExitPreFinalizationDrainResult,
-    timedOut: (diagnostics) =>
-      ApplicationExitPreFinalizationResult.cases.DrainTimedOut.make({ diagnostics, requestedStatus: 1 }),
-    report: (trace, result) => trace.emit({ _tag: "ExitDrainResultReported", result }),
-    processEndDecision: decideApplicationPreFinalizationProcessEnd
-  }
+const makeApplicationExitResultReportLease = <TResult>(result: TResult, acknowledge: Effect.Effect<void>) =>
+  ({
+    [applicationExitResultReportLeaseBrand]: applicationExitResultReportLeaseBrand,
+    result,
+    acknowledge
+  }) satisfies ApplicationExitResultReportLease<TResult>
+
+const preFinalizationApplicationExitResultPolicy: ApplicationExitResultPolicy<
+  ApplicationExitPreFinalizationResultType,
+  ApplicationExitResultReportLease<ApplicationExitPreFinalizationResultType>
+> = {
+  releaseCoordinatorLock: false,
+  fromDiagnostics: applicationExitPreFinalizationDrainResult,
+  timedOut: (diagnostics) =>
+    ApplicationExitPreFinalizationResult.cases.DrainTimedOut.make({ diagnostics, requestedStatus: 1 }),
+  report: (trace, result) => trace.emit({ _tag: "ExitDrainResultReported", result }),
+  makeBoundaryResult: makeApplicationExitResultReportLease,
+  acknowledgeReport: (trace, result, hostFinalizationRequest) =>
+    hostFinalizationRequest === undefined
+      ? Effect.die("host Exit report acknowledgement has no host finalization request")
+      : trace
+          .emit({ _tag: "ExitDrainReportAcknowledged", result })
+          .pipe(Effect.andThen(hostFinalizationRequest.request))
+}
 
 /**
  * Starts one monotonic five-second drain at the first request. Later requests
  * await its exact result and cannot restart either work or clock.
  */
 const makeApplicationExitRequestBoundaryWithPolicy = Effect.fn("ApplicationExitRequestBoundary.make")(function* <
-  TResult
+  TResult,
+  TBoundaryResult = TResult
 >(
   lifecycle: ApplicationExitLifecycleService<TResult>,
   drain: ApplicationExitBoundaryDrain,
-  processLifecycle: ApplicationProcessLifecycleService,
+  processLifecycle: ApplicationProcessLifecycleService | undefined,
   trace: ApplicationExitTraceService = { emit: () => Effect.void },
   beginExecutorDrainHandoff: Effect.Effect<void> = Effect.void,
   readSettledQuickDrainDiagnostics: Effect.Effect<
     ReadonlyMap<ApplicationExitQuickDrainFamily, ReadonlyArray<ApplicationExitDiagnostic>>
   > = Effect.succeed(new Map()),
-  onExitResultObserved: Effect.Effect<void> = Effect.void,
-  policy: ApplicationExitResultPolicy<TResult>
+  hostFinalizationRequest: ApplicationExitHostFinalizationRequest | undefined,
+  policy: ApplicationExitResultPolicy<TResult, TBoundaryResult>
 ) {
   const scope = yield* Effect.scope
+  const reportAcknowledged = yield* Deferred.make<void>()
   const recordedDiagnostics = yield* Ref.make<
     ReadonlyMap<ApplicationExitQuickDrainFamily, ReadonlyArray<ApplicationExitDiagnostic>>
   >(new Map())
@@ -250,9 +304,9 @@ const makeApplicationExitRequestBoundaryWithPolicy = Effect.fn("ApplicationExitR
       const result = Option.isSome(withinLimit) ? withinLimit.value : policy.timedOut(yield* currentDiagnostics)
       yield* policy.report(trace, result)
       yield* lifecycle.completeExit(result)
-      const decision = policy.processEndDecision(result)
-      yield* trace.emit({ _tag: "ProcessEndRequested", decision })
-      yield* processLifecycle.requestEnd(decision)
+      if (processLifecycle !== undefined && policy.processEnd !== undefined) {
+        yield* policy.processEnd(trace, processLifecycle, result)
+      }
       yield* lifecycle.completeExitDriver
     }).pipe(Effect.ensuring(lifecycle.completeExitDriver))
 
@@ -266,16 +320,19 @@ const makeApplicationExitRequestBoundaryWithPolicy = Effect.fn("ApplicationExitR
         yield* driver(request.cutoffAt).pipe(Effect.forkIn(scope))
       }
       const completed = yield* restore(Deferred.await(request.result))
-      yield* onExitResultObserved
-      // Once the typed lifecycle result is available, do not let host-scope
-      // interruption cut off the requester's final observation. Cancellation
-      // before this point still has the ordinary non-graceful semantics.
       yield* Effect.uninterruptible(lifecycle.awaitExitDriverFinished)
-      return completed
+      const acknowledge = Effect.uninterruptible(
+        Deferred.succeed(reportAcknowledged, undefined).pipe(
+          Effect.flatMap((first) =>
+            first ? policy.acknowledgeReport(trace, completed, hostFinalizationRequest) : Effect.void
+          )
+        )
+      )
+      return policy.makeBoundaryResult(completed, acknowledge)
     })
   )
 
-  return { requestExit } satisfies ApplicationExitRequestBoundaryService<TResult>
+  return { requestExit } satisfies ApplicationExitRequestBoundaryService<TBoundaryResult>
 })
 
 /** Builds the ordinary application Exit boundary whose success includes lock release. */
@@ -287,8 +344,7 @@ export const makeApplicationExitRequestBoundary = (
   beginExecutorDrainHandoff: Effect.Effect<void> = Effect.void,
   readSettledQuickDrainDiagnostics: Effect.Effect<
     ReadonlyMap<ApplicationExitQuickDrainFamily, ReadonlyArray<ApplicationExitDiagnostic>>
-  > = Effect.succeed(new Map()),
-  onExitResultObserved: Effect.Effect<void> = Effect.void
+  > = Effect.succeed(new Map())
 ) =>
   makeApplicationExitRequestBoundaryWithPolicy(
     lifecycle,
@@ -297,7 +353,7 @@ export const makeApplicationExitRequestBoundary = (
     trace,
     beginExecutorDrainHandoff,
     readSettledQuickDrainDiagnostics,
-    onExitResultObserved,
+    undefined,
     ordinaryApplicationExitResultPolicy
   )
 
@@ -351,19 +407,24 @@ export interface ApplicationExitShellService<TResult = ApplicationExitResultType
 /** Application-scoped Exit capability shared by every Run bootstrap and executor resource. */
 export class ApplicationExitShell extends Context.Service<
   ApplicationExitShell,
-  ApplicationExitShellService<ApplicationExitResultType | ApplicationExitPreFinalizationResultType>
+  ApplicationExitShellService<
+    ApplicationExitResultType | ApplicationExitResultReportLease<ApplicationExitPreFinalizationResultType>
+  >
 >()("@dalph/ApplicationExitShell") {}
 
 /**
- * Owns the one process-wide Exit lifecycle, driver, process port, drain registry,
- * and exact coordinator-lock release independently of any Run bootstrap.
+ * Owns the one process-wide Exit lifecycle, driver, optional process port,
+ * drain registry, and exact coordinator-lock release independently of any Run bootstrap.
  */
-const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make")(function* <TResult>(
+const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make")(function* <
+  TResult,
+  TBoundaryResult = TResult
+>(
   ownership: CoordinatorOwnershipCapability,
-  processLifecycle: ApplicationProcessLifecycleService,
+  processLifecycle: ApplicationProcessLifecycleService | undefined,
   trace: ApplicationExitTraceService = { emit: () => Effect.void },
-  options: ApplicationExitShellOptions = {},
-  policy: ApplicationExitResultPolicy<TResult>
+  hostFinalizationRequest: ApplicationExitHostFinalizationRequest | undefined,
+  policy: ApplicationExitResultPolicy<TResult, TBoundaryResult>
 ) {
   const scope = yield* Effect.scope
   const lifecycle = yield* makeApplicationExitLifecycle<TResult>()
@@ -553,7 +614,7 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
         return byFamily
       })
     ),
-    options.onExitResultObserved ?? Effect.void,
+    hostFinalizationRequest,
     policy
   )
   return {
@@ -615,21 +676,20 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
         )
       }),
     requestBoundary
-  } satisfies ApplicationExitShellService<TResult>
+  } satisfies ApplicationExitShellService<TBoundaryResult>
 })
 
 /** Builds the ordinary application shell whose success includes lock release. */
 export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.makeOrdinary")(function* (
   ownership: CoordinatorOwnershipCapability,
   processLifecycle: ApplicationProcessLifecycleService,
-  trace: ApplicationExitTraceService = { emit: () => Effect.void },
-  options: ApplicationExitShellOptions = {}
+  trace: ApplicationExitTraceService = { emit: () => Effect.void }
 ) {
   return yield* makeApplicationExitShellWithPolicy(
     ownership,
     processLifecycle,
     trace,
-    options,
+    undefined,
     ordinaryApplicationExitResultPolicy
   )
 })
@@ -641,15 +701,14 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.makeOrdi
  */
 export const makeApplicationExitPreFinalizationShell = Effect.fn("ApplicationExitShell.makePreFinalization")(function* (
   ownership: CoordinatorOwnershipCapability,
-  processLifecycle: ApplicationProcessLifecycleService,
-  trace: ApplicationExitTraceService = { emit: () => Effect.void },
-  options: ApplicationExitShellOptions = {}
+  hostFinalizationRequest: ApplicationExitHostFinalizationRequest,
+  trace: ApplicationExitTraceService = { emit: () => Effect.void }
 ) {
   return yield* makeApplicationExitShellWithPolicy(
     ownership,
-    processLifecycle,
+    undefined,
     trace,
-    options,
+    hostFinalizationRequest,
     preFinalizationApplicationExitResultPolicy
   )
 })

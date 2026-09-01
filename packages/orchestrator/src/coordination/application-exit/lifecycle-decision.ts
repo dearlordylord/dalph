@@ -336,14 +336,6 @@ export const decideApplicationProcessEnd = (result: ApplicationExitResult): Appl
     TimedOut: () => ApplicationProcessEndDecision.RequestForcedTermination({ status: forcedProcessStatus })
   })
 
-/** A host may request graceful process ending only after its bounded drain is ready. */
-export const decideApplicationPreFinalizationProcessEnd = (
-  result: ApplicationExitPreFinalizationResult
-): ApplicationProcessEndDecision =>
-  result._tag === "ReadyForFinalization"
-    ? ApplicationProcessEndDecision.RequestGracefulTermination({ status: successfulProcessStatus })
-    : ApplicationProcessEndDecision.RequestForcedTermination({ status: forcedProcessStatus })
-
 /** Startup always constructs fresh serving state; it accepts no prior Exit mode or result. */
 export const freshApplicationExitState = (): {
   readonly cutoffClosed: false

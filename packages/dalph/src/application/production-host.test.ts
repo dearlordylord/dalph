@@ -7,6 +7,7 @@ import nodeProcess from "node:process"
 import {
   ApplicationExitShell,
   type ApplicationExitPreFinalizationResult,
+  type ApplicationExitResultReportLease,
   type ApplicationExitShellService,
   ClaimOwner,
   ClaimToken,
@@ -729,7 +730,9 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
       configuration: ProductionRepositoryHostConfiguration,
       selection: ProductionRunSelection,
       onFailure: (failure: unknown) => Effect.Effect<void>,
-      applicationExit: ApplicationExitShellService<ApplicationExitPreFinalizationResult>
+      applicationExit: ApplicationExitShellService<
+        ApplicationExitResultReportLease<ApplicationExitPreFinalizationResult>
+      >
     ) =>
       Layer.unwrap(
         Effect.gen(function* () {
@@ -1048,7 +1051,9 @@ it.effect(
           configuration: ProductionRepositoryHostConfiguration,
           selection: ProductionRunSelection,
           onFailure: (failure: unknown) => Effect.Effect<void>,
-          applicationExit: ApplicationExitShellService<ApplicationExitPreFinalizationResult>
+          applicationExit: ApplicationExitShellService<
+            ApplicationExitResultReportLease<ApplicationExitPreFinalizationResult>
+          >
         ) => productionGraph.run(configuration, selection, onFailure, applicationExit)
         const graph = { foundation, run }
         const firstReady = yield* Deferred.make<void>()

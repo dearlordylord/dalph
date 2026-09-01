@@ -28,7 +28,10 @@ import { makeTaskClaimReleaseOperation, TaskClaimReleaseAuthority } from "../../
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import {
   ApplicationExitDrainFailure,
+  type ApplicationExitHostFinalizationRequest,
+  type ApplicationProcessLifecycleService,
   ApplicationExitRequestBoundary,
+  type ApplicationExitResultReportLease,
   type ApplicationExitDrain,
   type ApplicationExitTraceEvent,
   makeApplicationExitRequestBoundary,
@@ -147,10 +150,20 @@ it.effect("exits successfully within five seconds after flushing writes and rele
 it.effect("reports host drain readiness before scope finalization without claiming ordinary success", () =>
   Effect.scoped(
     Effect.gen(function* () {
+      expectTypeOf<ApplicationExitHostFinalizationRequest>().not.toMatchTypeOf<ApplicationProcessLifecycleService>()
+      expectTypeOf<ApplicationProcessLifecycleService>().not.toMatchTypeOf<ApplicationExitHostFinalizationRequest>()
+      expectTypeOf<
+        ApplicationExitResultReportLease<ApplicationExitPreFinalizationResultType>
+      >().not.toMatchTypeOf<ApplicationExitPreFinalizationResultType>()
+      expectTypeOf<
+        ApplicationExitResultReportLease<ApplicationExitPreFinalizationResultType>
+      >().not.toMatchTypeOf<ApplicationExitResultType>()
       expectTypeOf<
         Extract<ApplicationExitPreFinalizationResultType, { readonly _tag: "ReadyForFinalization" }>
       >().not.toMatchTypeOf<Extract<ApplicationExitResultType, { readonly _tag: "Succeeded" }>>()
       const releaseCount = yield* Ref.make(0)
+      const finalizationRequestCount = yield* Ref.make(0)
+      const finalizationRequested = yield* Deferred.make<void>()
       const trace = yield* Ref.make<ReadonlyArray<ApplicationExitTraceEvent>>([])
       const ownership = CoordinatorOwnership.of({
         release: Ref.update(releaseCount, (count) => count + 1),
@@ -158,11 +171,16 @@ it.effect("reports host drain readiness before scope finalization without claimi
       })
       const shell = yield* makeApplicationExitPreFinalizationShell(
         ownership,
-        { requestEnd: () => Effect.void },
+        {
+          request: Ref.update(finalizationRequestCount, (count) => count + 1).pipe(
+            Effect.andThen(Deferred.succeed(finalizationRequested, undefined))
+          )
+        },
         { emit: (event) => Ref.update(trace, (current) => [...current, event]) }
       )
 
-      const result = yield* shell.requestBoundary.requestExit
+      const report = yield* shell.requestBoundary.requestExit
+      const result = report.result
       expect(result).toEqual(
         ApplicationExitPreFinalizationResult.cases.ReadyForFinalization.make({ requestedStatus: 0 })
       )
@@ -176,7 +194,20 @@ it.effect("reports host drain readiness before scope finalization without claimi
       expect(yield* Ref.get(trace).pipe(Effect.map((events) => events.map(({ _tag }) => _tag)))).toContain(
         "ExitDrainResultReported"
       )
+      expect(yield* Ref.get(trace).pipe(Effect.map((events) => events.map(({ _tag }) => _tag)))).not.toContain(
+        "ProcessEndRequested"
+      )
+      expect(yield* Deferred.isDone(finalizationRequested)).toBe(false)
 
+      yield* report.acknowledge
+      expect(yield* Deferred.isDone(finalizationRequested)).toBe(true)
+      const traceAfterAcknowledgement = yield* Ref.get(trace)
+      expect(traceAfterAcknowledgement.map(({ _tag }) => _tag)).toContain("ExitDrainReportAcknowledged")
+      expect(yield* Ref.get(finalizationRequestCount)).toBe(1)
+      // A repeated acknowledgement joins the same report lease and does not
+      // issue another host-finalization request.
+      yield* report.acknowledge
+      expect(yield* Ref.get(finalizationRequestCount)).toBe(1)
       yield* ownership.release
       expect(yield* Ref.get(releaseCount)).toBe(1)
     })
