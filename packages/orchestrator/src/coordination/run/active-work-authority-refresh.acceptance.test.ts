@@ -29,6 +29,7 @@ import type { DeliveryProjectionEvidence } from "../frontier/delivery-projection
 import {
   continuationDecisionFor,
   deriveJournalResponsibilityFacts,
+  frontierForActivationOpportunity,
   makeRunRecoveryProjection
 } from "./recovery-activation.js"
 import {
@@ -542,19 +543,22 @@ const appendActiveLineageObservation = (
 const projectionFor = (
   records: ReadonlyArray<JournalRecord>,
   opportunity: Parameters<typeof continuationDecisionFor>[5],
-  configuredIntegrationTarget?: IntegrationTarget
+  configuredIntegrationTarget?: IntegrationTarget,
+  activationBoundary?: JournalPosition
 ) =>
   Effect.gen(function* () {
     // The first journal read is the activation boundary. The recovery pass
     // then sees the provider facts appended after that boundary, matching the
     // production journal-first sequence instead of treating the completed
     // fixture as its own baseline.
-    const runningBoundary = records.findLast(
-      ({ event }) =>
-        (event._tag === "PlannedAttemptExecutorWorkReported" ||
-          event._tag === "PlannedAttemptExecutorCommandResponseObserved") &&
-        event.report._tag === "ExecutorWorkExecuting"
-    )?.position
+    const runningBoundary =
+      activationBoundary ??
+      records.findLast(
+        ({ event }) =>
+          (event._tag === "PlannedAttemptExecutorWorkReported" ||
+            event._tag === "PlannedAttemptExecutorCommandResponseObserved") &&
+          event.report._tag === "ExecutorWorkExecuting"
+      )?.position
     const initialRecords =
       runningBoundary === undefined ? records : records.filter(({ position }) => position <= runningBoundary)
     let readCount = 0
@@ -1152,6 +1156,211 @@ it.effect("retains the active boundary while a pending G2 intent awaits replay",
     expect(
       projection.frontier.transitions.filter(({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph")
     ).toEqual([])
+  })
+)
+
+it.effect("keeps an exact reconciled subject behind G2 after later Safe or Terminal", () =>
+  Effect.gen(function* () {
+    const baseline = JournalPosition.make(27)
+    const suspendOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+    const recordsBeforeReconciliation = [
+      ...buildTwoRunningPrefix(),
+      record(
+        28,
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Suspend",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: suspendOrdinal,
+          plannedAttempt: secondPlannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+    ]
+    const recordsThroughExecuting = [
+      ...recordsBeforeReconciliation,
+      record(
+        29,
+        PlannedAttemptExecutorCommandResponseObservedEvent.make({
+          commandOrdinal: suspendOrdinal,
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt: secondPlannedAttempt,
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+            correlation: { attemptId: secondPlannedAttempt.attemptId, runId }
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+    ]
+    const continuation = RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+      operation: makeTrackerGraphObservationOperation(
+        { _tag: "AttemptContinuation" },
+        OperationId.make("active-work-refresh-B-after-lifecycle-change"),
+        target,
+        [],
+        [secondPlannedAttempt.taskId]
+      ),
+      plannedAttempt: secondPlannedAttempt
+    })
+    const foreignAttempt = PlannedTaskAttempt.make({
+      ...secondPlannedAttempt,
+      attemptId: AttemptId.make("active-work-refresh-attempt-B-foreign")
+    })
+    const foreignContinuation = RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+      operation: makeTrackerGraphObservationOperation(
+        { _tag: "AttemptContinuation" },
+        OperationId.make("active-work-refresh-B-foreign-after-lifecycle-change"),
+        target,
+        [],
+        [foreignAttempt.taskId]
+      ),
+      plannedAttempt: foreignAttempt
+    })
+    const reconcileClaim = RunnableFrontierTransition.ReconcileTaskClaim({
+      operationId: OperationId.make("active-work-refresh-B-reconcile-claim-after-lifecycle-change"),
+      taskId: secondPlannedAttempt.taskId
+    })
+    const frontier = { explanations: [], transitions: [continuation, reconcileClaim, foreignContinuation] }
+    const opportunity = activeWorkAuthorityRefreshForOwner(
+      "TrackerNotification",
+      activeWorkAuthorityRefreshSubjectsFor([
+        { runId, attemptId: plannedAttempt.attemptId },
+        { runId, attemptId: secondPlannedAttempt.attemptId }
+      ])
+    )
+
+    const beforeReconciliation = yield* projectionFor(
+      recordsBeforeReconciliation,
+      opportunity,
+      integrationTarget,
+      baseline
+    )
+    expect(beforeReconciliation.activeRefreshBoundary).toBeUndefined()
+    expect(
+      frontierForActivationOpportunity(
+        frontier,
+        recordsBeforeReconciliation,
+        Option.some(baseline),
+        opportunity,
+        beforeReconciliation.activeRefreshBoundary
+      ).transitions
+    ).toEqual([continuation, reconcileClaim, foreignContinuation])
+
+    const opportunityWithoutB = activeWorkAuthorityRefreshForOwner(
+      "TrackerNotification",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: plannedAttempt.attemptId }])
+    )
+    const foreignOpportunity = activeWorkAuthorityRefreshForOwner(
+      "TrackerNotification",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: foreignAttempt.attemptId }])
+    )
+    expect(
+      (yield* projectionFor(recordsThroughExecuting, opportunityWithoutB, integrationTarget, baseline))
+        .activeRefreshBoundary
+    ).toBeUndefined()
+    expect(
+      (yield* projectionFor(recordsThroughExecuting, foreignOpportunity, integrationTarget, baseline))
+        .activeRefreshBoundary
+    ).toBeUndefined()
+
+    const throughExecuting = yield* projectionFor(recordsThroughExecuting, opportunity, integrationTarget, baseline)
+    expect(throughExecuting.activeRefreshBoundary).toEqual({
+      _tag: "ActiveRefreshRuntimeBoundary",
+      runId,
+      reconciledAttempts: [{ runId, attemptId: secondPlannedAttempt.attemptId }]
+    })
+    expect(
+      frontierForActivationOpportunity(
+        frontier,
+        recordsThroughExecuting,
+        Option.some(baseline),
+        opportunity,
+        throughExecuting.activeRefreshBoundary
+      ).transitions
+    ).toEqual([foreignContinuation])
+
+    const lifecycleCases = [
+      {
+        name: "Safe",
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+          correlation: { attemptId: secondPlannedAttempt.attemptId, runId }
+        })
+      },
+      {
+        name: "Terminal",
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+          correlation: { attemptId: secondPlannedAttempt.attemptId, runId },
+          result: { _tag: "Completed" }
+        })
+      }
+    ] as const
+
+    for (const lifecycleCase of lifecycleCases) {
+      const records = [
+        ...recordsThroughExecuting,
+        record(
+          30,
+          PlannedAttemptExecutorStateObservedEvent.make({
+            observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+              report: lifecycleCase.report
+            }),
+            occurrenceClassification: "NonActionOccurrence",
+            ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+            plannedAttempt: secondPlannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        ),
+        record(
+          31,
+          PlannedAttemptExecutorWorkReportedEvent.make({
+            ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+            report: lifecycleCase.report,
+            version: workflowJournalEventVersion
+          })
+        )
+      ]
+      const projection = yield* projectionFor(records, opportunity, integrationTarget, baseline)
+      const reduction = reduceWorkflowJournalHistory(runId, records)
+      if (reduction._tag !== "ValidWorkflowJournalHistory") {
+        return expect.fail(`${lifecycleCase.name} chronology must reduce`)
+      }
+      // The reducer keeps the immutable responsibility ledger entry for both
+      // lifecycle outcomes; its fresh disposition, not entry deletion, says
+      // whether executor work remains live.
+      expect(
+        reduction.runState.responsibility.entries.some(
+          (entry) =>
+            entry._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+            entry.plannedAttempt.attemptId === secondPlannedAttempt.attemptId
+        ),
+        lifecycleCase.name
+      ).toBe(true)
+      expect(projection.activeRefreshBoundary, lifecycleCase.name).toEqual({
+        _tag: "ActiveRefreshRuntimeBoundary",
+        runId,
+        reconciledAttempts: [{ runId, attemptId: secondPlannedAttempt.attemptId }]
+      })
+      expect(
+        frontierForActivationOpportunity(
+          frontier,
+          records,
+          Option.some(baseline),
+          opportunity,
+          projection.activeRefreshBoundary
+        ).transitions,
+        lifecycleCase.name
+      ).toEqual([foreignContinuation])
+      expect(
+        frontierForActivationOpportunity(
+          frontier,
+          records,
+          Option.some(baseline),
+          RunActivationOpportunity.OrdinaryRunEntry(),
+          projection.activeRefreshBoundary
+        ).transitions,
+        lifecycleCase.name
+      ).toEqual([continuation, reconcileClaim, foreignContinuation])
+    }
   })
 )
 
