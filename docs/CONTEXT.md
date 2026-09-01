@@ -68,11 +68,13 @@ _Avoid_: Process disappearance, coordinator death, cancellation, Run termination
 
 **Production-host-scoped Exit result**:
 The exact `ApplicationExitResult` that Alice's production host receives after
-the Exit admission cutoff and bounded drain. The host reports the result and
-returns from its use callback; only then does host scope finalization close
-process-local resources and release coordinator ownership. A host-scoped
-`Succeeded` therefore describes the completed bounded drain, not an already
-released coordinator lock, and this mode has no process-end capability or event.
+the Exit admission cutoff and bounded drain. The bounded drain closes its
+registered process-local quick-drain resources (for example, Codex) before the
+exact result. The host reports the result and returns from its use callback;
+only then does host scope finalization close remaining scoped resources and
+release coordinator ownership. A host-scoped `Succeeded` therefore describes
+the completed bounded drain, not an already released coordinator lock, and
+this mode has no process-end capability or event.
 _Avoid_: Report lease, acknowledgement actor, process-end request, Run journal fact
 
 **Exit admission cutoff**:

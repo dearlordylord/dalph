@@ -18,9 +18,11 @@ The tables use these short names for the accepted chronological scenarios:
 - **Death** — Dalph dies before the requested Exit has a successful result.
 - **Timeout** — the original drain reaches five seconds.
 - **Failure** — a quick drain operation fails conclusively.
-- **Host scoped** — Alice's configured production repository host receives the
-  exact lifecycle result, returns from its reporting callback, and only then
-  closes its scope and releases coordinator ownership.
+- **Host scoped** — Alice's configured production repository host's bounded drain
+  closes its registered process-local quick-drain resources (for example,
+  Codex), then exposes the exact lifecycle result. The host returns from its
+  reporting callback, and only then closes remaining scoped resources and
+  releases coordinator ownership.
 - **Restart** — startup after success and ambiguous interruption is identical.
 - **Races** — Exit races with Pause, Unpause, termination, or another Exit.
 - **Several Runs** — startup rejects several unfinished Runs before activation.

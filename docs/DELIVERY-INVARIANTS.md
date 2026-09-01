@@ -607,10 +607,10 @@ acknowledged exact intent and with no local owner able to send a successor.
 The #297 production-host-scoped path is a distinct result/finalization
 phenomenon: it exposes the same exact `ApplicationExitResult` after admission
 closes and the bounded drain completes, before the host scope finalizers close
-resources and release coordinator ownership. Its `Succeeded` does not claim
-that lock release has already occurred, and host mode has no process-end
-capability or `ProcessEndRequested` event. In both modes Exit never starts an
-executor `begin` or `resume` request, fresh reconciliation, stabilization,
+remaining scoped resources and release coordinator ownership. Its `Succeeded`
+does not claim that lock release has already occurred, and host mode has no
+process-end capability or `ProcessEndRequested` event. In both modes Exit never
+starts an executor `begin` or `resume` request, fresh reconciliation, stabilization,
 durable-resource cleanup, attempt replacement, or Run termination.
 → `applicationExit` states ordinary release-before-success and host
 result-before-scope-finalization with explicit mode/provenance; production host
