@@ -31,8 +31,10 @@ const authoredTrackerGraphReadResultArbitrary = fc.oneof(
 )
 
 const concurrentInteractionNodeSeedArbitrary = fc.record({
-  executor: fc.boolean(),
+  body: fc.string({ maxLength: 48 }),
+  interactionKind: fc.integer({ max: 3, min: 0 }),
   predecessorMask: fc.integer({ max: 63, min: 0 }),
+  title: fc.string({ minLength: 1, maxLength: 24 }),
   topologicalPriority: fc.integer()
 })
 
@@ -43,26 +45,40 @@ const concurrentInteractionGroupCaseArbitrary = (minLength: number) =>
       .sort((left, right) => left.topologicalPriority - right.topologicalPriority || left.index - right.index)
       .map(({ index }) => index)
     const roleFor = (index: number) => `role-${index}`
-    const members = seeds.map(({ executor, predecessorMask }, index) => {
+    const members = seeds.map(({ body, interactionKind, predecessorMask, title }, index) => {
       const topologicalIndex = indexesInTopologicalOrder.indexOf(index)
       const predecessorRoles = indexesInTopologicalOrder
         .slice(0, topologicalIndex)
         .filter((_, predecessorIndex) => (predecessorMask & (1 << predecessorIndex)) !== 0)
         .map(roleFor)
-      const interaction = executor
-        ? {
-            _tag: "PlannedAttemptExecutorWorkReported" as const,
-            report: { _tag: "ExecutorWorkExecuting" as const, attemptId: `attempt:executor:${index}` },
-            request: "Begin" as const
-          }
-        : {
-            _tag: "DalphSelects" as const,
-            operation: {
-              _tag: "ReconcileTaskWorktree" as const,
-              attemptId: `attempt:selection:${index}`,
-              taskId: `task:selection:${index}`
+      const interaction = (() => {
+        switch (interactionKind) {
+          case 0:
+            return {
+              _tag: "DalphSelects" as const,
+              operation: {
+                _tag: "ReconcileTaskWorktree" as const,
+                attemptId: `attempt:selection:${index}`,
+                taskId: `task:selection:${index}`
+              }
             }
-          }
+          case 1:
+            return {
+              _tag: "PlannedAttemptExecutorWorkReported" as const,
+              report: { _tag: "ExecutorWorkExecuting" as const, attemptId: `attempt:executor:${index}` },
+              request: "Begin" as const
+            }
+          case 2:
+            return {
+              _tag: "TaskWorkSpecificationReadReturned" as const,
+              body,
+              taskId: `task:specification:${index}`,
+              title
+            }
+          default:
+            return { _tag: "TaskClaimCurrentReadReturned" as const, taskId: `task:claim:${index}` }
+        }
+      })()
       return { interaction, predecessorRoles, role: roleFor(index) }
     })
     return {
@@ -254,7 +270,7 @@ it("roundtrips arbitrary authored tracker graph outcomes through the story-item 
   )
 })
 
-it("roundtrips valid causal concurrent interaction groups through the story-item boundary", () => {
+it("roundtrips every closed causal group member and predecessor graph through the story-item boundary", () => {
   const singleton = {
     _tag: "ConcurrentInteractionGroup" as const,
     members: [
