@@ -64,6 +64,7 @@ import {
   Schema,
   Stream
 } from "effect"
+import { TestClock } from "effect/testing"
 import { expect, expectTypeOf } from "vitest"
 import {
   type ProductionRepositoryHostAdapters,
@@ -146,6 +147,14 @@ it("production host adapter surface cannot replace workflow mutation capabilitie
     "journalStore" | "gitCommand" | "plannedAttemptExecutor" | "integrator" | "evidenceStore"
   >
   expectTypeOf<CapabilityReplacementKey>().toEqualTypeOf<never>()
+})
+
+it("production host graph exposes only the precise non-retryable throttle callback", () => {
+  const graph = productionRepositoryHostGraph()
+  type ActivationFailure = Parameters<typeof graph.run>[2] extends (failure: infer Failure) => Effect.Effect<void>
+    ? Failure
+    : never
+  expectTypeOf<ActivationFailure>().toEqualTypeOf<TaskTrackerMutationThrottled>()
 })
 
 it.effect(
@@ -345,17 +354,27 @@ it.effect("next host invocation recovers the same Run and authority-reads before
         operation: "CreateClaimLabel",
         timingEvidence: null
       })
+      const firstMutationReturned = yield* Deferred.make<void>()
       const githubClient = githubGraphqlTestClient(
         Effect.fn("ProductionThrottleRecovery.github.execute")(function* (request) {
           yield* Ref.update(requests, (current) => [...current, request._tag])
           if (request._tag === "FindClaimLabel") {
             return { body: { data: { node: { id: request.repositoryNodeId, label: null } } } }
           }
-          if (request._tag === "CreateClaimLabel") return yield* throttle
+          if (request._tag === "CreateClaimLabel") {
+            yield* Deferred.succeed(firstMutationReturned, undefined)
+            return yield* throttle
+          }
           return yield* Effect.die(`unexpected GitHub request ${request._tag}`)
         })
       )
       const appClosed = yield* Ref.make(0)
+      const applicationExitRequests = yield* Ref.make(0)
+      const applicationProcessEnds = yield* Ref.make(0)
+      const applicationExitTrace = yield* Ref.make<ReadonlyArray<string>>([])
+      const workflowCleanupCalls = yield* Ref.make<ReadonlyArray<string>>([])
+      const timerStates = yield* Ref.make<ReadonlyArray<"Started" | "Stopped">>([])
+      const activationFinalizations = yield* Ref.make<ReadonlyArray<string>>([])
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-throttle-recovery-incarnation"),
         startThread: () => Effect.die("throttle recovery must not start a Codex thread"),
@@ -367,18 +386,49 @@ it.effect("next host invocation recovers the same Run and authority-reads before
         terminateBackgroundTerminal: () => Effect.die("throttle recovery must not terminate a terminal"),
         close: Ref.update(appClosed, (count) => count + 1)
       })
-      const adapters = {
+      const adapters: ProductionRepositoryHostAdapters = {
         codexAppServer: () =>
           Layer.effect(CodexAppServer, Effect.addFinalizer(() => app.close.pipe(Effect.orDie)).pipe(Effect.as(app))),
-        githubClient: () => Layer.succeed(GithubGraphqlClient, githubClient)
+        githubClient: () => Layer.succeed(GithubGraphqlClient, githubClient),
+        applicationExitRequestObserver: () => Ref.update(applicationExitRequests, (count) => count + 1),
+        applicationProcessEndObserver: () => Ref.update(applicationProcessEnds, (count) => count + 1),
+        applicationExitTraceObserver: (event) =>
+          Ref.update(applicationExitTrace, (current) => [...current, event._tag]),
+        workflowCleanupObserver: (boundary) => Ref.update(workflowCleanupCalls, (current) => [...current, boundary]),
+        onTimerStateChange: (state) => Ref.update(timerStates, (current) => [...current, state]),
+        onActivationFinalizationStart: (kind) => Ref.update(activationFinalizations, (current) => [...current, kind])
       }
       const graph = productionRepositoryHostGraph(adapters)
-      const observeSelection = (observation: { readonly selection: ProductionRunSelection }) =>
-        Ref.update(selections, (current) => [...current, observation.selection]).pipe(Effect.andThen(Effect.never))
-      const first = yield* withProductionRepositoryHost(input, graph, observeSelection).pipe(
-        Effect.exit,
-        Effect.timeoutOption(Duration.seconds(2))
-      )
+      const callbackEntered = yield* Deferred.make<void>()
+      const releaseCallbackTeardown = yield* Deferred.make<void>()
+      const firstObserveSelection = (observation: { readonly selection: ProductionRunSelection }) =>
+        Ref.update(selections, (current) => [...current, observation.selection]).pipe(
+          Effect.andThen(Deferred.succeed(callbackEntered, undefined)),
+          // This models a callback finalizer that cannot be interrupted until
+          // its process-local resource has released. The owner must stop
+          // before this teardown begins or a short cooldown can admit retry.
+          Effect.andThen(
+            Effect.acquireUseRelease(
+              Effect.void,
+              () => Effect.never,
+              () => Effect.uninterruptible(Deferred.await(releaseCallbackTeardown))
+            )
+          )
+        )
+      const firstFiber = yield* withProductionRepositoryHost(
+        { ...input, activationInterval: "1 millis", failureCooldown: "1 millis" },
+        graph,
+        firstObserveSelection
+      ).pipe(Effect.exit, Effect.forkScoped)
+      yield* Deferred.await(callbackEntered)
+      yield* Deferred.await(firstMutationReturned)
+      // The callback teardown remains blocked while every owner-local timer
+      // can fire. A non-retryable throttle must leave exactly one activation.
+      yield* TestClock.adjust("100 millis")
+      yield* Effect.yieldNow
+      expect(yield* Ref.get(requests)).toEqual(["FindClaimLabel", "CreateClaimLabel"])
+      yield* Deferred.succeed(releaseCallbackTeardown, undefined)
+      const first = yield* Fiber.join(firstFiber)
       const recordsAfterFirst = yield* Effect.scoped(
         Effect.gen(function* () {
           const journalContext = yield* Layer.build(
@@ -387,10 +437,9 @@ it.effect("next host invocation recovers the same Run and authority-reads before
           return yield* Context.get(journalContext, JournalStore).read(runId)
         })
       )
-      const second = yield* withProductionRepositoryHost(input, graph, observeSelection).pipe(
-        Effect.exit,
-        Effect.timeoutOption(Duration.seconds(2))
-      )
+      const second = yield* withProductionRepositoryHost(input, graph, (observation) =>
+        Ref.update(selections, (current) => [...current, observation.selection]).pipe(Effect.andThen(Effect.never))
+      ).pipe(Effect.exit)
       const recordsAfterSecond = yield* Effect.scoped(
         Effect.gen(function* () {
           const journalContext = yield* Layer.build(
@@ -400,26 +449,20 @@ it.effect("next host invocation recovers the same Run and authority-reads before
         })
       )
 
-      expect(Option.isSome(first)).toBe(true)
-      expect(Option.isSome(second)).toBe(true)
-      if (Option.isSome(first)) {
-        expect(Exit.isFailure(first.value)).toBe(true)
-        if (Exit.isFailure(first.value)) {
-          const failure = Cause.squash(first.value.cause)
-          expect(failure).toBeInstanceOf(TaskTrackerMutationThrottled)
-          expect(failure).toMatchObject({
-            detail: throttle.detail,
-            operation: "AcquireTaskClaim",
-            operationId: acquisitionOperation.acquisition.operationId,
-            retry: null
-          })
-        }
+      expect(Exit.isFailure(first)).toBe(true)
+      expect(Exit.isFailure(second)).toBe(true)
+      if (Exit.isFailure(first)) {
+        const failure = Cause.squash(first.cause)
+        expect(failure).toBeInstanceOf(TaskTrackerMutationThrottled)
+        expect(failure).toMatchObject({
+          detail: throttle.detail,
+          operation: "AcquireTaskClaim",
+          operationId: acquisitionOperation.acquisition.operationId,
+          retry: null
+        })
       }
-      if (Option.isSome(second)) {
-        expect(Exit.isFailure(second.value)).toBe(true)
-        if (Exit.isFailure(second.value)) {
-          expect(Cause.squash(second.value.cause)).toBeInstanceOf(TaskTrackerMutationThrottled)
-        }
+      if (Exit.isFailure(second)) {
+        expect(Cause.squash(second.cause)).toBeInstanceOf(TaskTrackerMutationThrottled)
       }
       expect(yield* Ref.get(selections)).toEqual([
         { _tag: "Recovered", runId },
@@ -431,6 +474,12 @@ it.effect("next host invocation recovers the same Run and authority-reads before
         "FindClaimLabel",
         "CreateClaimLabel"
       ])
+      expect(yield* Ref.get(applicationExitRequests)).toBe(0)
+      expect(yield* Ref.get(applicationProcessEnds)).toBe(0)
+      expect(yield* Ref.get(applicationExitTrace)).toEqual([])
+      expect(yield* Ref.get(workflowCleanupCalls)).toEqual([])
+      expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped", "Started", "Stopped"])
+      expect(yield* Ref.get(activationFinalizations)).toEqual(["Ordinary", "Ordinary"])
       expect(recordsAfterFirst.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
       expect(recordsAfterSecond.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
       expect(yield* Ref.get(appClosed)).toBe(2)

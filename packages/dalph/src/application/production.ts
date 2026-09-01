@@ -2,6 +2,8 @@ import { NodeServices } from "@effect/platform-node"
 import { type IntegrationTarget, PlannedAttemptExecutor, type RunId } from "@dalph/contracts"
 import {
   type JournaledRunObservationSource,
+  type ApplicationExitTraceEvent,
+  type ApplicationProcessEndDecision,
   AllocatedWorkflowRunId,
   JournaledRunBootstrap,
   type JournaledRuntimeLayerInput,
@@ -14,6 +16,8 @@ import {
   type GitCommonDirectoryTarget,
   type JournalStoreError,
   EvidenceStore,
+  BranchCleanupBoundary,
+  IntegratorCandidateCleanupBoundary,
   ApplicationExitShell,
   makeApplicationExitShell,
   GitCommand,
@@ -55,6 +59,8 @@ import {
   type TrackerTarget,
   type RunRecoveryProjection,
   type TaskWorkCapacityControl,
+  WorktreeCleanupBoundary,
+  TaskTrackerMutationThrottled,
   WorkflowRunAlreadyTerminated,
   defaultJournalMaintenanceObservation
 } from "@dalph/orchestrator"
@@ -83,11 +89,34 @@ export interface ProductionRunReactivationOptions {
   readonly failureCooldown?: ProductionRunReactivationInterval
   /** Optional process-local timer lifecycle observation for diagnostics. */
   readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
+  /** Optional process-local activation-finalization observation for diagnostics. */
+  readonly onActivationFinalizationStart?: (kind: "Ordinary" | "ActiveWorkAuthorityRefresh") => Effect.Effect<void>
   /** Optional host-owned current-first tracker notification adapter; values remain hints. */
   readonly trackerNotificationSource?: CurrentSignal<unknown>
   /** Required boundary for typed tracker/Git/journal failures; no activation failure is swallowed. */
   readonly onFailure: (failure: unknown) => Effect.Effect<void>
 }
+
+/** Concrete cleanup boundary call used by host qualification observers. */
+export type ProductionWorkflowCleanupBoundary =
+  | "worktree.observe"
+  | "worktree.remove"
+  | "branch.observe"
+  | "branch.remove"
+  | "candidate.observe"
+  | "candidate.remove"
+
+/** Side-effect-only observation of the real disposition cleanup services. */
+export type ProductionWorkflowCleanupObserver = (boundary: ProductionWorkflowCleanupBoundary) => Effect.Effect<void>
+
+/** Side-effect-only observation of a direct application Exit request. */
+export type ProductionApplicationExitRequestObserver = () => Effect.Effect<void>
+
+/** Side-effect-only observation of the process-end boundary called by Exit. */
+export type ProductionApplicationProcessEndObserver = (decision: ApplicationProcessEndDecision) => Effect.Effect<void>
+
+/** Side-effect-only observation of lifecycle trace events emitted by Exit. */
+export type ProductionApplicationExitTraceObserver = (event: ApplicationExitTraceEvent) => Effect.Effect<void>
 
 /** Optional production boundaries that advance one accepted result through delivery and finality. */
 // eslint-disable-next-line functional/no-mixed-types -- Production qualification groups typed service values and one typed reconstruction observation callback.
@@ -109,6 +138,14 @@ export interface ProductionWorkflowRuntimeBoundaries {
   readonly onReconstructed?: (input: ProductionRunReconstructionObservation) => Effect.Effect<void>
   /** Side-effect-only observation of the actual workflow Git command service. */
   readonly workflowGitCommandObserver?: ProductionWorkflowGitCommandObserver
+  /** Optional direct observation of the application Exit request boundary. */
+  readonly applicationExitRequestObserver?: ProductionApplicationExitRequestObserver
+  /** Optional direct observation of the process lifecycle end boundary. */
+  readonly applicationProcessEndObserver?: ProductionApplicationProcessEndObserver
+  /** Optional direct observation of application Exit lifecycle events. */
+  readonly applicationExitTraceObserver?: ProductionApplicationExitTraceObserver
+  /** Optional direct observation of disposition cleanup boundary calls. */
+  readonly workflowCleanupObserver?: ProductionWorkflowCleanupObserver
 }
 
 /** Names the concrete Git command method crossed by workflow worktree and lineage protocols. */
@@ -144,12 +181,73 @@ const observedWorkflowGitCommandLayer = (observe: ProductionWorkflowGitCommandOb
   )
 }
 
+const observedWorktreeCleanup = (
+  service: WorktreeCleanupBoundary["Service"],
+  observe: ProductionWorkflowCleanupObserver
+) =>
+  WorktreeCleanupBoundary.of({
+    ...service,
+    observe: (...args) => observe("worktree.observe").pipe(Effect.andThen(service.observe(...args))),
+    remove: (...args) => observe("worktree.remove").pipe(Effect.andThen(service.remove(...args)))
+  })
+
+const observedBranchCleanup = (service: BranchCleanupBoundary["Service"], observe: ProductionWorkflowCleanupObserver) =>
+  BranchCleanupBoundary.of({
+    ...service,
+    observe: (...args) => observe("branch.observe").pipe(Effect.andThen(service.observe(...args))),
+    remove: (...args) => observe("branch.remove").pipe(Effect.andThen(service.remove(...args)))
+  })
+
+const observedCandidateCleanup = (
+  service: IntegratorCandidateCleanupBoundary["Service"],
+  observe: ProductionWorkflowCleanupObserver
+) =>
+  IntegratorCandidateCleanupBoundary.of({
+    ...service,
+    observe: (...args) => observe("candidate.observe").pipe(Effect.andThen(service.observe(...args))),
+    remove: (...args) => observe("candidate.remove").pipe(Effect.andThen(service.remove(...args)))
+  })
+
+const observedWorkflowCleanupLayer = <E, R>(
+  layer: Layer.Layer<WorktreeCleanupBoundary | BranchCleanupBoundary | IntegratorCandidateCleanupBoundary, E, R>,
+  observe: ProductionWorkflowCleanupObserver | undefined
+) => {
+  if (observe === undefined) return layer
+  return Layer.fromBuildMemo((memoMap, scope) =>
+    Layer.buildWithMemoMap(layer, memoMap, scope).pipe(
+      Effect.map((context) =>
+        Context.add(
+          Context.add(
+            Context.add(
+              context,
+              WorktreeCleanupBoundary,
+              observedWorktreeCleanup(Context.get(context, WorktreeCleanupBoundary), observe)
+            ),
+            BranchCleanupBoundary,
+            observedBranchCleanup(Context.get(context, BranchCleanupBoundary), observe)
+          ),
+          IntegratorCandidateCleanupBoundary,
+          observedCandidateCleanup(Context.get(context, IntegratorCandidateCleanupBoundary), observe)
+        )
+      )
+    )
+  )
+}
+
 const defaultProductionRunReactivationCooldownSeconds = 5
 const defaultProductionRunReactivationCooldown = ProductionRunReactivationInterval.make(
   Duration.seconds(defaultProductionRunReactivationCooldownSeconds)
 )
 
 const isWorkflowRunAlreadyTerminated = (failure: unknown): boolean => failure instanceof WorkflowRunAlreadyTerminated
+
+/**
+ * A provider-throttled task mutation is the one activation failure that must
+ * stop this process-local owner. Other tracker, Git, Journal, and executor
+ * failures remain ordinary #218 cooldown observations.
+ */
+const isNonRetryableProductionActivationFailure = (failure: unknown): failure is TaskTrackerMutationThrottled =>
+  failure instanceof TaskTrackerMutationThrottled
 
 /**
  * Supported production composition for one exact Run. It acquires one scoped
@@ -191,9 +289,13 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
         })
       }),
     isTerminationFailure: isWorkflowRunAlreadyTerminated,
+    isNonRetryableFailure: isNonRetryableProductionActivationFailure,
     onFailure: options.onFailure,
     readControl,
     runId,
+    ...(options.onActivationFinalizationStart === undefined
+      ? {}
+      : { onActivationFinalizationStart: options.onActivationFinalizationStart }),
     ...(options.onTimerStateChange === undefined ? {} : { onTimerStateChange: options.onTimerStateChange }),
     ...(options.trackerNotificationSource === undefined
       ? {}
@@ -261,10 +363,10 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     IntegratorCandidateProviderAuthority,
     IntegratorCandidateProviderAuthority.of(integratorCandidateProviderAuthority)
   )
-  const cleanupBoundaryLayer = gitDispositionCleanupBoundaryLayer(target, candidateAuthorityLayer).pipe(
-    Layer.provide(workflowGitCommandLayer),
-    Layer.provide(NodeServices.layer)
-  )
+  const cleanupBoundaryLayer = observedWorkflowCleanupLayer(
+    gitDispositionCleanupBoundaryLayer(target, candidateAuthorityLayer),
+    runtimeBoundaries.workflowCleanupObserver
+  ).pipe(Layer.provide(workflowGitCommandLayer), Layer.provide(NodeServices.layer))
   const journalLayer = (runtimeBoundaries.journalStoreLayer ?? productionJournalStoreLayer).pipe(
     Layer.provide(ownershipLayer)
   )
@@ -281,7 +383,24 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     ApplicationExitShell,
     Effect.gen(function* () {
       const ownership = yield* CoordinatorOwnership
-      return yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void })
+      const processLifecycle = {
+        requestEnd: (decision: ApplicationProcessEndDecision) =>
+          runtimeBoundaries.applicationProcessEndObserver?.(decision) ?? Effect.void
+      }
+      const trace =
+        runtimeBoundaries.applicationExitTraceObserver === undefined
+          ? undefined
+          : { emit: runtimeBoundaries.applicationExitTraceObserver }
+      const applicationExit = yield* makeApplicationExitShell(ownership, processLifecycle, trace)
+      const requestBoundary =
+        runtimeBoundaries.applicationExitRequestObserver === undefined
+          ? applicationExit.requestBoundary
+          : {
+              requestExit: runtimeBoundaries
+                .applicationExitRequestObserver()
+                .pipe(Effect.andThen(applicationExit.requestBoundary.requestExit))
+            }
+      return { ...applicationExit, requestBoundary }
     })
   )
   const executorWithApplicationExit = executorWithAcceptedEvidence.pipe(Layer.provideMerge(applicationExitLayer))

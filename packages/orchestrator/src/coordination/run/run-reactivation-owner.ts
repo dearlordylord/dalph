@@ -55,6 +55,12 @@ export interface RunReactivationOwnerOptions<E, R = never, EInstall = E> {
   readonly onFailure: (failure: E | EInstall) => Effect.Effect<void>
   /** Terminates the owner for a typed activation failure caused by durable Run closure. */
   readonly isTerminationFailure: (failure: E) => boolean
+  /**
+   * Identifies a typed activation failure that must stop this process-local
+   * owner instead of entering the ordinary cooldown path. The caller owns the
+   * failure taxonomy; recoverable tracker/Git failures remain cooldown hints.
+   */
+  readonly isNonRetryableFailure?: (failure: E) => boolean
   /** Optional host-owned current-first adapter for tracker notifications; values remain hints. */
   readonly trackerNotificationSource?: CurrentSignal<unknown>
   /** Installs the Journal callbacks before the worker can consume its startup hint. */
@@ -348,8 +354,8 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       const processHint = (hint?: RunReactivationHint) =>
         processHintAttempt(hint).pipe(
           Effect.catchTag("Activate", ({ failure }) =>
-            options.isTerminationFailure(failure)
-              ? options.onFailure(failure).pipe(Effect.andThen(requestStop()))
+            options.isTerminationFailure(failure) || options.isNonRetryableFailure?.(failure) === true
+              ? requestStop().pipe(Effect.andThen(options.onFailure(failure)))
               : observeFailure(failure)
           )
         )

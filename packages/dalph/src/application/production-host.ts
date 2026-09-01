@@ -19,6 +19,7 @@ import {
   JournaledRunObservationSource,
   JournalStore,
   RunLifecycleJournal,
+  TaskTrackerMutationThrottled,
   TrackerGraphReader,
   TrackerMutation,
   WorkflowTrace,
@@ -49,6 +50,10 @@ import {
 import {
   productionRunReactivationLayer,
   productionWorkflowInterpreterLayer,
+  type ProductionApplicationExitRequestObserver,
+  type ProductionApplicationExitTraceObserver,
+  type ProductionApplicationProcessEndObserver,
+  type ProductionWorkflowCleanupObserver,
   type ProductionWorkflowGitCommandObserver,
   type ProductionRunReconstructionObservation
 } from "./production.js"
@@ -110,6 +115,18 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly onReconstructed?: (input: ProductionRunReconstructionObservation) => Effect.Effect<void>
   /** Optional observation of concrete Git methods used by the workflow protocols. */
   readonly workflowGitCommandObserver?: ProductionWorkflowGitCommandObserver
+  /** Optional direct observation of ApplicationExitRequestBoundary.requestExit. */
+  readonly applicationExitRequestObserver?: ProductionApplicationExitRequestObserver
+  /** Optional direct observation of ApplicationProcessLifecycle.requestEnd. */
+  readonly applicationProcessEndObserver?: ProductionApplicationProcessEndObserver
+  /** Optional direct observation of graceful application lifecycle results/events. */
+  readonly applicationExitTraceObserver?: ProductionApplicationExitTraceObserver
+  /** Optional direct observation of workflow disposition cleanup calls. */
+  readonly workflowCleanupObserver?: ProductionWorkflowCleanupObserver
+  /** Optional observation of the process-local timer lifecycle. */
+  readonly onTimerStateChange?: (state: "Started" | "Stopped") => Effect.Effect<void>
+  /** Optional observation of each admitted activation finalization. */
+  readonly onActivationFinalizationStart?: (kind: "Ordinary" | "ActiveWorkAuthorityRefresh") => Effect.Effect<void>
   readonly codexAppServer?: (
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<CodexAppServer, ECodex>
@@ -278,7 +295,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
   run: (
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
-    onFailure: (failure: unknown) => Effect.Effect<void>
+    onFailure: (failure: TaskTrackerMutationThrottled) => Effect.Effect<void>
   ) =>
     Layer.unwrap(
       // eslint-disable-next-line complexity -- One production graph resolves optional edge adapters and observation while preserving one scoped service topology.
@@ -379,7 +396,19 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             integrationFinality: completionClaim,
             integrator,
             journalStoreLayer: journalLayer,
+            ...(adapters.applicationExitRequestObserver === undefined
+              ? {}
+              : { applicationExitRequestObserver: adapters.applicationExitRequestObserver }),
+            ...(adapters.applicationProcessEndObserver === undefined
+              ? {}
+              : { applicationProcessEndObserver: adapters.applicationProcessEndObserver }),
+            ...(adapters.applicationExitTraceObserver === undefined
+              ? {}
+              : { applicationExitTraceObserver: adapters.applicationExitTraceObserver }),
             ...(adapters.onReconstructed === undefined ? {} : { onReconstructed: adapters.onReconstructed }),
+            ...(adapters.workflowCleanupObserver === undefined
+              ? {}
+              : { workflowCleanupObserver: adapters.workflowCleanupObserver }),
             ...(adapters.workflowGitCommandObserver === undefined
               ? {}
               : { workflowGitCommandObserver: adapters.workflowGitCommandObserver })
@@ -398,7 +427,13 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           {
             activationInterval: configuration.activationInterval,
             failureCooldown: configuration.failureCooldown,
-            onFailure
+            ...(adapters.onActivationFinalizationStart === undefined
+              ? {}
+              : { onActivationFinalizationStart: adapters.onActivationFinalizationStart }),
+            ...(adapters.onTimerStateChange === undefined ? {} : { onTimerStateChange: adapters.onTimerStateChange }),
+            // The owner observes every activation failure, but only the
+            // provider-neutral mutation throttle is fatal at this host seam.
+            onFailure: (failure) => (failure instanceof TaskTrackerMutationThrottled ? onFailure(failure) : Effect.void)
           }
         ).pipe(
           Layer.provide(planningLayer),
