@@ -1,5 +1,18 @@
 /* eslint-disable import/no-nodejs-modules -- This test also guards the deleted process-revision seam. */
-import { RunId } from "@dalph/contracts"
+import {
+  AttemptId,
+  GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
+} from "@dalph/contracts"
 import { it } from "@effect/vitest"
 import { Deferred, Effect, Fiber, Queue, Semaphore, Stream, SubscriptionRef } from "effect"
 import { readFileSync } from "node:fs"
@@ -9,17 +22,26 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { OperationId } from "../../workflow/identity.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import {
+  makeTaskClaimObservationOperation,
+  makeTaskWorktreeObservationOperation,
+  makeTargetLineageObservationOperation
+} from "../../workflow/registry/operation.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
-import { trackerGraphReadProposalOf, type DeliveryActionProposal } from "./delivery-proposal.js"
+import { deliveryProposalsOf, trackerGraphReadProposalOf, type DeliveryActionProposal } from "./delivery-proposal.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import {
   currentSignalFromCurrentFirstStream,
+  deliveryProposalFrontierOf,
+  DeliveryRuntimeAssembly,
   type DeliveryRelationInputBundle,
   TrackerGraphState
 } from "./relations.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
+import { delivery } from "./delivery.js"
 
 const policy = RunControlPolicy.make({
   revision: initialRunPolicyRevision,
@@ -28,6 +50,63 @@ const policy = RunControlPolicy.make({
 const runId = RunId.make("coherent-runtime-evaluation")
 const target = FixtureTarget.make("coherent-runtime-evaluation-target")
 const proposal = trackerGraphReadProposalOf({ acceptedAt: null, purpose: "EstablishCurrentGraph", runId, target })
+
+const samePositionAttempt = (task: "A" | "C") =>
+  PlannedTaskAttempt.make({
+    attemptId: AttemptId.make(`same-position-attempt-${task}`),
+    baseSha: GitCommitSha.make(task === "A" ? "a".repeat(40) : "c".repeat(40)),
+    branch: TaskBranchRef.make(`refs/heads/dalph/same-position-${task}`),
+    executor: TaskExecutorLocator.make("executor:same-position-evaluation"),
+    runId,
+    taskId: TaskId.make(task),
+    taskRevision: TaskRevision.make(`same-position-revision-${task}`),
+    worktree: WorktreeLocator.make(`/worktrees/same-position-${task}`)
+  })
+
+const samePositionA = samePositionAttempt("A")
+const samePositionC = samePositionAttempt("C")
+const samePositionClaimOperation = makeTaskClaimObservationOperation(
+  OperationId.make("same-position-C-claim"),
+  target,
+  samePositionC.taskId
+)
+const samePositionWorktreeOperation = makeTaskWorktreeObservationOperation({
+  operationId: OperationId.make("same-position-A-worktree"),
+  plannedAttempt: samePositionA,
+  predecessorOperationIds: []
+})
+const samePositionLineageOperation = makeTargetLineageObservationOperation({
+  integrationTarget: IntegrationTarget.make({
+    ref: IntegrationTargetRef.make("refs/heads/main"),
+    repository: GitRepositoryLocator.make("/repositories/same-position.git")
+  }),
+  operationId: OperationId.make("same-position-A-lineage"),
+  plannedAttempt: samePositionA,
+  predecessorOperationIds: [samePositionWorktreeOperation.operationId]
+})
+const samePositionClaimTransition = RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({
+  operation: samePositionClaimOperation,
+  plannedAttempt: samePositionC
+})
+const samePositionWorktreeTransition = RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
+  operation: samePositionWorktreeOperation,
+  plannedAttempt: samePositionA
+})
+const samePositionLineageTransition = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+  operation: samePositionLineageOperation,
+  plannedAttempt: samePositionA
+})
+
+const samePositionProposals = (
+  aTransition: typeof samePositionWorktreeTransition | typeof samePositionLineageTransition
+): ReadonlyArray<DeliveryActionProposal> =>
+  deliveryProposalsOf({
+    acceptedOperationIds: new Set(),
+    fresh: [],
+    pendingReadOperationIds: new Set([aTransition.operation.operationId, samePositionClaimOperation.operationId]),
+    runId,
+    transitions: [aTransition, samePositionClaimTransition]
+  }).ticketDelivery
 
 const bundle = (graph: DeliveryRelationInputBundle["publication"]["graph"]): DeliveryRelationInputBundle => ({
   actionInputs: {
@@ -160,6 +239,84 @@ it.effect("emits every accepted stable publication after repeated current planni
           proposalIds: index === 1 ? [reflectionProposal.id] : []
         }))
       )
+    })
+  )
+)
+
+it.effect("emits one coherent same-position planning successor before a later accepted sentinel", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const position80 = JournalPosition.make(80)
+      const position81 = JournalPosition.make(81)
+      const initialBundle = bundle(TrackerGraphState.cases.GraphNotEstablished.make({}))
+      const at = (acceptedAt: JournalPosition): DeliveryRelationInputBundle => ({
+        ...initialBundle,
+        actionInputs: {
+          ...initialBundle.actionInputs,
+          runtimeFacts: { ...initialBundle.actionInputs.runtimeFacts, acceptedAt, runId }
+        }
+      })
+      const coherent = yield* SubscriptionRef.make(at(position80))
+      const worktree = samePositionProposals(samePositionWorktreeTransition)
+      const lineage = samePositionProposals(samePositionLineageTransition)
+      const worktreeFrontier = deliveryProposalFrontierOf([worktree])
+      const lineageFrontier = deliveryProposalFrontierOf([lineage])
+      const planning = yield* SubscriptionRef.make(worktreeFrontier)
+      const publicationGate = yield* Semaphore.make(1)
+      const completedSamples = yield* Queue.unbounded<void>()
+      const layer = makeDeliveryRelationsLayer({
+        coherent: currentSignalFromCurrentFirstStream(SubscriptionRef.changes(coherent)),
+        publicationConsistency: {
+          withStablePublication: (effect) =>
+            publicationGate.withPermit(effect).pipe(Effect.tap(() => Queue.offer(completedSamples, undefined)))
+        }
+      })
+      const { assembly, consequences } = yield* Effect.all({
+        assembly: DeliveryRuntimeAssembly,
+        consequences: delivery
+      }).pipe(Effect.provide(layer))
+      const planningSignal = {
+        ...currentSignalFromCurrentFirstStream(SubscriptionRef.changes(planning)),
+        getWithinStablePublication: SubscriptionRef.get(planning)
+      }
+      const evaluations = assembly.of({ delivery: consequences, proposedActions: planningSignal })
+      const observed = yield* Queue.unbounded<Effect.Success<typeof evaluations.get>>()
+      const collected = yield* evaluations.changes.pipe(
+        Stream.tap((evaluation) => Queue.offer(observed, evaluation)),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild
+      )
+
+      yield* Queue.take(observed)
+      yield* Queue.take(completedSamples)
+      yield* publicationGate.withPermit(SubscriptionRef.set(planning, lineageFrontier))
+      yield* Queue.take(observed)
+      yield* Queue.take(completedSamples)
+      yield* publicationGate.withPermit(
+        SubscriptionRef.set(planning, deliveryProposalFrontierOf([lineage.map((proposal) => ({ ...proposal }))]))
+      )
+      // The duplicate invalidation has completed its coherent sample before
+      // the sentinel can advance. A missing structural dedupe would therefore
+      // make that duplicate, rather than position 81, the third observation.
+      yield* Queue.take(completedSamples)
+      yield* publicationGate.withPermit(SubscriptionRef.set(coherent, at(position81)))
+      yield* Queue.take(observed)
+
+      const actual = Array.from(yield* Fiber.join(collected))
+      expect(
+        actual.map(({ acceptedAt, proposedActions }) => ({
+          acceptedAt,
+          proposalIds:
+            proposedActions._tag === "DeliveryProposalsAvailable"
+              ? proposedActions.proposals.map(({ id }) => id)
+              : proposedActions.conflicts.map(({ id }) => id)
+        }))
+      ).toEqual([
+        { acceptedAt: position80, proposalIds: worktree.map(({ id }) => id) },
+        { acceptedAt: position80, proposalIds: lineage.map(({ id }) => id) },
+        { acceptedAt: position81, proposalIds: lineage.map(({ id }) => id) }
+      ])
     })
   )
 )
