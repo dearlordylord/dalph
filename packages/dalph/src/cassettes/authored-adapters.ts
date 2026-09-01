@@ -64,14 +64,16 @@ export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
       }),
       readTaskWorkSpecification: Effect.fn("AuthoredCassette.TrackerGraphReader.readTaskWorkSpecification")(
         function* (_target, taskId) {
-          const item = yield* cursor.consumeTaskWorkSpecification.pipe(
-            Effect.mapError((failure) =>
-              trackerReadFailure(
-                `${failure._tag} at story position ${failure.storyPosition}`,
-                TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({})
+          const item = yield* cursor
+            .consumeTaskWorkSpecificationFor(taskId)
+            .pipe(
+              Effect.mapError((failure) =>
+                trackerReadFailure(
+                  `${failure._tag} at story position ${failure.storyPosition}`,
+                  TrackerAdapterReadFailureReason.cases.BoundaryDecode.make({})
+                )
               )
             )
-          )
           if (item.taskId !== taskId) {
             return yield* trackerReadFailure(
               `authored cassette returned task-work specification ${item.taskId} for ${taskId}`
@@ -354,7 +356,7 @@ export const controlledExecutorLayer = (
   const executor = PlannedAttemptExecutor.of({
     observe: (correlation) =>
       Effect.gen(function* () {
-        const projection = yield* cursor.consumeExecutorProjection
+        const projection = yield* cursor.consumeExecutorProjectionFor(correlation.attemptId)
         if (Option.isNone(projection)) {
           const unresolved = yield* Ref.get(unresolvedLostResponses)
           if (unresolved.has(plannedAttemptExecutorCorrelationKey(correlation))) {
@@ -399,19 +401,7 @@ export const controlledExecutorLayer = (
       PlannedAttemptExecutorLifecycleObservation.of({
         attach: (correlation) =>
           Effect.gen(function* () {
-            const item = yield* cursor.currentStoryItem
-            const current =
-              item?._tag === "PlannedAttemptExecutorProjectionReturned" &&
-              item.report.attemptId === correlation.attemptId
-                ? yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
-                : yield* Ref.get(reports).pipe(
-                    Effect.map((current) => current.get(plannedAttemptExecutorCorrelationKey(correlation))),
-                    Effect.map((report) =>
-                      report === undefined
-                        ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
-                        : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
-                    )
-                  )
+            const current = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
             const changes = cursor.passiveExecutorLifecycleChangesFor(correlation.attemptId).pipe(
               Stream.mapEffect((item) =>
                 Effect.gen(function* () {

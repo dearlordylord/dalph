@@ -1312,26 +1312,13 @@ type CoordinatorFinalityDecision =
       readonly reason: "RunnableTransition" | "TrackerTargetUnsettled" | "UnsettledResponsibility"
     }
 
-const coordinatorFinalityMatches = (
-  expected: (typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type)["decision"],
-  actual: CoordinatorFinalityDecision
-): boolean => {
-  if (expected._tag !== actual._tag) return false
-  /* v8 ignore start -- @preserve Authored activation boundaries separate incomplete returns that must remain active; terminal runs have no following activation boundary. */
-  if (expected._tag === "RunMayTerminate") return true
-  /* v8 ignore stop -- @preserve */
-  return actual._tag === "RunMustRemainActive" && expected.reason === actual.reason
-}
-
-const settleCoordinatorActivationReturn = <E>(cursor: StoryCursor, exit: Exit.Exit<CoordinatorFinalityDecision, E>) =>
+export const settleCoordinatorActivationReturn = <E>(
+  cursor: StoryCursor,
+  exit: Exit.Exit<CoordinatorFinalityDecision, E>
+) =>
   Effect.gen(function* () {
     if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
-    const expected = yield* cursor.consumeCoordinatorActivationReturned
-    if (!coordinatorFinalityMatches(expected.decision, exit.value)) {
-      return yield* Effect.die(
-        `authored coordinator activation expected ${JSON.stringify(expected.decision)}, received ${JSON.stringify(exit.value)}`
-      )
-    }
+    yield* cursor.consumeCoordinatorActivationReturnedFor(exit.value)
   })
 
 /** The authored death control is a typed defect, never a production failure. */
