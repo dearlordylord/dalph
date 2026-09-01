@@ -163,8 +163,9 @@ export const AuthoredPlannedAttemptExecutorReport = Schema.TaggedUnion({
 export type AuthoredPlannedAttemptExecutorReport = typeof AuthoredPlannedAttemptExecutorReport.Type
 
 /**
- * One causally unordered cassette interaction accepted by the V1 concurrent
- * group. The union is deliberately narrower than the top-level story language.
+ * One cursor-visible cassette interaction accepted by the V1 concurrent
+ * group. The closed union is deliberately narrower than the top-level story
+ * language.
  */
 export const AuthoredConcurrentInteractionMember = Schema.TaggedUnion({
   DalphSelects: {
@@ -178,6 +179,25 @@ export const AuthoredConcurrentInteractionMember = Schema.TaggedUnion({
   }
 })
 export type AuthoredConcurrentInteractionMember = typeof AuthoredConcurrentInteractionMember.Type
+
+/**
+ * Unique cassette-only name of one interaction occurrence inside one
+ * concurrent interaction group. It is neither a claim key nor a production
+ * identity.
+ */
+const AuthoredConcurrentInteractionRole = Schema.NonEmptyString.pipe(Schema.brand("AuthoredConcurrentInteractionRole"))
+type AuthoredConcurrentInteractionRole = typeof AuthoredConcurrentInteractionRole.Type
+
+/**
+ * One authored graph node around the closed concurrent-interaction language.
+ * Its predecessor roles describe only the edges inside its containing group.
+ */
+export const AuthoredConcurrentInteractionNode = Schema.Struct({
+  interaction: AuthoredConcurrentInteractionMember,
+  predecessorRoles: Schema.Array(AuthoredConcurrentInteractionRole).check(Schema.isUnique()),
+  role: AuthoredConcurrentInteractionRole
+})
+export type AuthoredConcurrentInteractionNode = typeof AuthoredConcurrentInteractionNode.Type
 
 /**
  * Exact incoming call identity used to claim one concurrent interaction.
@@ -195,20 +215,55 @@ export const authoredConcurrentInteractionClaimKey = (
     : { _tag: "PlannedAttemptExecutorWorkReported", attemptId: member.report.attemptId, request: member.request }
 
 const concurrentInteractionClaimKeysAreUnique = Schema.makeFilter(
-  (members: ReadonlyArray<AuthoredConcurrentInteractionMember>) => {
-    const keys = members.map(authoredConcurrentInteractionClaimKey)
+  (members: ReadonlyArray<AuthoredConcurrentInteractionNode>) => {
+    const keys = members.map(({ interaction }) => authoredConcurrentInteractionClaimKey(interaction))
     return keys.some((key, index) => keys.slice(0, index).some((prior) => Equal.equals(prior, key)))
       ? "each concurrent interaction claim key must be unique"
       : undefined
   }
 )
 
+const concurrentInteractionGraphHasCycle = (members: ReadonlyArray<AuthoredConcurrentInteractionNode>): boolean => {
+  let consumedRoles: ReadonlyArray<AuthoredConcurrentInteractionRole> = []
+  while (consumedRoles.length < members.length) {
+    const enabled = members.find(
+      ({ predecessorRoles, role }) =>
+        !consumedRoles.includes(role) &&
+        predecessorRoles.every((predecessorRole) => consumedRoles.includes(predecessorRole))
+    )
+    if (enabled === undefined) return true
+    consumedRoles = [...consumedRoles, enabled.role]
+  }
+  return false
+}
+
+const concurrentInteractionGraphIsValid = Schema.makeFilter(
+  (members: ReadonlyArray<AuthoredConcurrentInteractionNode>) => {
+    const roles = members.map(({ role }) => role)
+    if (new Set(roles).size !== roles.length) return "each concurrent interaction role must be unique"
+    const roleSet = new Set(roles)
+    for (const member of members) {
+      const role = member.role
+      if (member.predecessorRoles.some((predecessorRole) => predecessorRole === member.role)) {
+        return `concurrent interaction role ${role} cannot name itself as a predecessor`
+      }
+      const missing = member.predecessorRoles.find((predecessorRole) => !roleSet.has(predecessorRole))
+      if (missing !== undefined) return `concurrent interaction predecessor ${missing} is not a member of the group`
+    }
+    return concurrentInteractionGraphHasCycle(members)
+      ? "concurrent interaction predecessor roles must form an acyclic graph"
+      : undefined
+  }
+)
+
 /**
- * The finite non-empty set of cassette interactions whose arrival order is
- * intentionally not authored. It owns no production concurrency authority.
+ * The finite non-empty graph of cassette interactions whose predecessor
+ * edges are authored while all other arrival order remains unconstrained.
+ * It owns no production concurrency authority.
  */
-const AuthoredConcurrentInteractionMembers = Schema.NonEmptyArray(AuthoredConcurrentInteractionMember).check(
-  concurrentInteractionClaimKeysAreUnique
+const AuthoredConcurrentInteractionMembers = Schema.NonEmptyArray(AuthoredConcurrentInteractionNode).check(
+  concurrentInteractionClaimKeysAreUnique,
+  concurrentInteractionGraphIsValid
 )
 
 /** Specialist-facing results of one task's planned work; attempt identity is deliberately absent. */
@@ -833,7 +888,7 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   },
   /** One bounded tracker-read phase whose causally named members may complete in either order. */
   ConcurrentTrackerReadBatch: { members: Schema.NonEmptyArray(AuthoredConcurrentTrackerRead) },
-  /** One bounded closed set of causally unordered controlled interactions. */
+  /** One bounded closed graph of causally constrained controlled interactions. */
   ConcurrentInteractionGroup: { members: AuthoredConcurrentInteractionMembers },
   DalphSelects: {
     causal: Schema.optionalKey(AuthoredCausalSelection),
