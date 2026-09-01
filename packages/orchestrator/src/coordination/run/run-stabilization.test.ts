@@ -55,6 +55,7 @@ import {
   DeliverySemanticTrace,
   type DeliveryActionExecutorService
 } from "../delivery/delivery-action-executor.js"
+import { DeliveryAcceptedFactPublication } from "../delivery/delivery-accepted-fact-publication.js"
 import { deliveryProposalsOf } from "../delivery/delivery-proposal.js"
 import { FreshWorkflowStep } from "../delivery/fresh-workflow-step.js"
 import { frontierOf } from "../delivery/ticket-delivery-projection.js"
@@ -193,6 +194,16 @@ const supportWithoutResources = Layer.mergeAll(
   }),
   plannedAttemptProtocolControllerLayer,
   Layer.succeed(
+    DeliveryAcceptedFactPublication,
+    DeliveryAcceptedFactPublication.of({
+      awaitCurrent: Effect.succeed({
+        _tag: "DeliveryAcceptedPublicationBoundary",
+        acceptedThrough: JournalPosition.make(1),
+        runId
+      })
+    })
+  ),
+  Layer.succeed(
     InRunJournal,
     InRunJournal.of({
       append: () => Effect.die("stabilization tests do not append directly through the Run journal"),
@@ -216,6 +227,16 @@ const supportWithoutAllocator = Layer.mergeAll(
     worktreeRoot: WorktreeLocator.make("/stabilization")
   }),
   plannedAttemptProtocolControllerLayer,
+  Layer.succeed(
+    DeliveryAcceptedFactPublication,
+    DeliveryAcceptedFactPublication.of({
+      awaitCurrent: Effect.succeed({
+        _tag: "DeliveryAcceptedPublicationBoundary",
+        acceptedThrough: JournalPosition.make(1),
+        runId
+      })
+    })
+  ),
   Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
 )
 const supportWithResourcesWithoutAllocator = Layer.merge(
@@ -331,7 +352,7 @@ it.effect("starts no tracker stabilization read after the application Exit cutof
       const reads = yield* Ref.make(0)
       yield* lifecycle.requestExit
 
-      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(supportWithoutResources),
         Effect.provide(resources),
         Effect.provideService(
@@ -403,7 +424,7 @@ it.effect("returns RunMustRemainActive without G2 when task-work admission is st
       })
       const reads = yield* Ref.make(0)
 
-      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -452,7 +473,7 @@ it.effect("records a stabilization read admitted before Exit but starts no phase
             })
           )
       })
-      const running = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const running = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(supportWithoutResources),
         Effect.provide(resources),
         Effect.provideService(
@@ -516,7 +537,7 @@ it.effect("requests accepted G2 only after G1 becomes quiescent", () =>
             Effect.as(g1.observation.snapshot)
           )
       })
-      const running = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const running = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(support),
         Effect.provideService(DeliveryActionExecutor, DeliveryActionExecutor.of(executor)),
         Effect.provide(interpreter),
@@ -596,6 +617,7 @@ it.effect("active-work refresh and post-quiescence finality perform cause-ordere
       yield* observingInterpreter.readTrackerGraph(g1Operation)
       const proof = yield* runStabilizedDelivery(
         target,
+        runId,
         signalOf(state),
         activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId }]))
       ).pipe(
@@ -687,6 +709,7 @@ it.effect("keeps a new active-refresh G2 nonterminal when its accepted publicati
 
           const proof = yield* runStabilizedDelivery(
             target,
+            runId,
             signalOf(state),
             activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId }]))
           ).pipe(
@@ -785,7 +808,7 @@ it.effect("replays an intent-only G2 after a crash without allocating a second i
         "Timer",
         activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: activeVerticalAttempt.attemptId }])
       )
-      const firstAttempt = yield* runStabilizedDelivery(target, signalOf(state), opportunity).pipe(
+      const firstAttempt = yield* runStabilizedDelivery(target, runId, signalOf(state), opportunity).pipe(
         Effect.provide(supportWithResourcesWithoutAllocator),
         Effect.provideService(InRunJournal, journal),
         Effect.provideService(OperationIdAllocator, allocator),
@@ -821,7 +844,7 @@ it.effect("replays an intent-only G2 after a crash without allocating a second i
         )
       ).toBe(false)
 
-      yield* runStabilizedDelivery(target, signalOf(state), opportunity).pipe(
+      yield* runStabilizedDelivery(target, runId, signalOf(state), opportunity).pipe(
         Effect.provide(supportWithResourcesWithoutAllocator),
         Effect.provideService(InRunJournal, journal),
         Effect.provideService(OperationIdAllocator, allocator),
@@ -993,6 +1016,7 @@ it.effect("reopens ordinary delivery only from exact settled executor lifecycle 
 
         yield* runStabilizedDelivery(
           target,
+          runId,
           signalOf(state),
           activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([correlation]))
         ).pipe(
@@ -1153,7 +1177,7 @@ it.effect("holds an actual independent fresh route until G2 after direct safe or
             event._tag === "ProposalAdmitted" ? Ref.update(admitted, (ids) => [...ids, event.proposalId]) : Effect.void
         })
 
-        const proof = yield* runStabilizedDelivery(target, signalOf(state), opportunity).pipe(
+        const proof = yield* runStabilizedDelivery(target, runId, signalOf(state), opportunity).pipe(
           Effect.provide(support),
           Effect.provideService(DeliveryActionExecutor, DeliveryActionExecutor.of(executor)),
           Effect.provideService(DeliverySemanticTrace, trace),
@@ -1240,6 +1264,7 @@ it.effect("runs independent work revealed by G2 while the active subject remains
       })
       const proof = yield* runStabilizedDelivery(
         target,
+        runId,
         signalOf(state),
         activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId }]))
       ).pipe(
@@ -1315,7 +1340,7 @@ it.effect("runs work published after G2 before phase two subscribes", () =>
           )
       }
 
-      yield* runStabilizedDelivery(target, signal).pipe(
+      yield* runStabilizedDelivery(target, runId, signal).pipe(
         Effect.provide(support),
         Effect.provideService(DeliveryActionExecutor, DeliveryActionExecutor.of(executor)),
         Effect.provide(interpreter)
@@ -1379,7 +1404,7 @@ it.effect("retains accepted integration ownership through G2 and releases it onc
           })
       })
 
-      yield* runStabilizedDelivery(target, signal).pipe(
+      yield* runStabilizedDelivery(target, runId, signal).pipe(
         Effect.provide(supportWithoutResources),
         Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
         Effect.provideService(
@@ -1421,7 +1446,7 @@ it.effect("returns without terminating after equal G2 leaves the Run incomplete"
           )
         }
       })
-      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -1462,7 +1487,7 @@ it.effect("does not request G2 while the Run is paused", () =>
         quiescence: { _tag: "QuiescencePassive" as const, reason: "RunPaused" as const }
       }
       const reads = yield* Ref.make(0)
-      const proof = yield* runStabilizedDelivery(target, currentSignalOf(paused)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, currentSignalOf(paused)).pipe(
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -1501,6 +1526,7 @@ it.effect("does not request G2 when a cancelled passive Run has no accepted G1",
       const reads = yield* Ref.make(0)
       const proof = yield* runStabilizedDelivery(
         target,
+        runId,
         currentSignalOf({
           ...current,
           acceptedAt: null,
@@ -1558,7 +1584,7 @@ it.effect("performs a fresh graph read before classifying a paused cancelled Run
         }
       })
 
-      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -1595,7 +1621,7 @@ it.effect("classifies an applied cancellation only after a fresh non-success gra
         }
       })
 
-      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -1638,7 +1664,7 @@ it.effect("keeps Completed precedence when every task succeeded after cancellati
         }
       })
 
-      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -1687,7 +1713,7 @@ it.effect("classifies conclusive tracker dependency impossibility as Blocked", (
         }
       })
 
-      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,

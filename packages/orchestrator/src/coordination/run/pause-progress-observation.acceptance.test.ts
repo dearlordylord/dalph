@@ -33,7 +33,10 @@ import { TaskWorkCapacity } from "../admission/capacity.js"
 import { DeliveryActionExecutor } from "../delivery/delivery-action-executor.js"
 import { DeliveryAcceptedFactPublication } from "../delivery/delivery-accepted-fact-publication.js"
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
-import { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runtime-observation.js"
+import {
+  DeliveryRuntimeObservationObserver,
+  DeliveryRuntimeObservationPublication
+} from "../delivery/delivery-runtime-observation.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import { DeliveryRelationPublicationObserver } from "../delivery/delivery-publication-observer.js"
 import { makeDeliveryRelationsLayer } from "../delivery/in-memory-relations.js"
@@ -461,7 +464,8 @@ const buildBootstrap = Effect.fn("PauseProgressAcceptance.buildBootstrap")(funct
   graph: TaskDagSnapshot,
   storage: JournalStore["Service"],
   calls: Ref.Ref<BoundaryCalls>,
-  reconcileTaskWorktree?: WorkflowInterpreter["Service"]["reconcileTaskWorktree"]
+  reconcileTaskWorktree?: WorkflowInterpreter["Service"]["reconcileTaskWorktree"],
+  runtimeObservationObserver?: (typeof DeliveryRuntimeObservationObserver)["Service"]
 ) {
   const capabilities = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, storage)))
   const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
@@ -476,6 +480,10 @@ const buildBootstrap = Effect.fn("PauseProgressAcceptance.buildBootstrap")(funct
         Layer.succeed(JournalStore, storage),
         Layer.succeed(RunLifecycleJournal, Context.get(capabilities, RunLifecycleJournal)),
         Layer.succeed(CoordinatorOwnership, ownership),
+        Layer.succeed(
+          DeliveryRuntimeObservationObserver,
+          runtimeObservationObserver ?? DeliveryRuntimeObservationObserver.of({ observe: () => Effect.void })
+        ),
         Layer.mock(PlannedAttemptExecutorLifecycleObservation, {})
       )
     )
@@ -516,7 +524,7 @@ const startRelationRuntime = Effect.fn("PauseProgressAcceptance.startRelationRun
   },
   runtimeAccepted?: ReadonlyArray<{ readonly acceptedAt: JournalPosition; readonly observed: Deferred.Deferred<void> }>,
   beforeRuntime?: Effect.Effect<void, never, Journal>,
-  livePublication: Effect.Effect<void> = Effect.void
+  livePublication: Effect.Effect<JournalPosition> = Effect.succeed(JournalPosition.make(1))
 ) {
   return yield* bootstrap
     .activate(
@@ -562,15 +570,25 @@ const startRelationRuntime = Effect.fn("PauseProgressAcceptance.startRelationRun
                 Effect.provideService(
                   TaskClaimAcquisitionPlanner,
                   TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("unexpected claim planning") })
-                ),
-                Effect.provideService(
-                  DeliveryAcceptedFactPublication,
-                  DeliveryAcceptedFactPublication.of({ awaitCurrent: livePublication })
                 )
               )
             : executor
         yield* Deferred.succeed(entered, undefined)
-        yield* runDeliveryRuntime(relation).pipe(Effect.provideService(DeliveryActionExecutor, actionExecutor))
+        yield* runDeliveryRuntime(runId, relation).pipe(
+          Effect.provideService(DeliveryActionExecutor, actionExecutor),
+          Effect.provideService(
+            DeliveryAcceptedFactPublication,
+            DeliveryAcceptedFactPublication.of({
+              awaitCurrent: livePublication.pipe(
+                Effect.map((acceptedThrough) => ({
+                  _tag: "DeliveryAcceptedPublicationBoundary",
+                  acceptedThrough,
+                  runId
+                }))
+              )
+            })
+          )
+        )
         yield* Deferred.await(keepActivationOpen)
         return {
           acceptedAt: JournalPosition.make(1),
@@ -592,7 +610,23 @@ it.effect("shows Alice the exact Suspend changing from proposed to live before i
       const graph = snapshot("pause-public-live-owner", null)
       const calls = yield* Ref.make(noBoundaryCalls)
       const memory = Context.get(yield* Layer.build(memoryJournalStoreLayer), JournalStore)
-      const bootstrap = yield* buildBootstrap(runId, graph, countingStore(memory, calls), calls)
+      const initialRuntimePublished = yield* Deferred.make<void>()
+      const allowAdmission = yield* Deferred.make<void>()
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        graph,
+        countingStore(memory, calls),
+        calls,
+        undefined,
+        DeliveryRuntimeObservationObserver.of({
+          observe: ({ liveOwners }) =>
+            liveOwners.length === 0
+              ? Deferred.succeed(initialRuntimePublished, undefined).pipe(
+                  Effect.andThen(Deferred.await(allowAdmission))
+                )
+              : Effect.void
+        })
+      )
       const acceptedAt = JournalPosition.make(20)
       const proposal = suspensionProposal(runId, TaskId.make("A"), acceptedAt)
       const facts = executorFacts(
@@ -648,10 +682,19 @@ it.effect("shows Alice the exact Suspend changing from proposed to live before i
         direction: "Pause",
         subject: { _tag: "Task", runId, taskId: TaskId.make("A") }
       })
+      const proposedObserved = yield* Deferred.make<void>()
       const observed = yield* bootstrap.operatorControl
         .observePause({ _tag: "Task", runId, taskId: TaskId.make("A") })
-        .pipe(Stream.take(2), Stream.runCollect, Effect.forkChild)
+        .pipe(
+          Stream.tap(() => Deferred.succeed(proposedObserved, undefined)),
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkChild
+        )
       yield* Deferred.succeed(allowRuntime, undefined)
+      yield* Deferred.await(initialRuntimePublished)
+      yield* Deferred.await(proposedObserved)
+      yield* Deferred.succeed(allowAdmission, undefined)
       yield* Effect.raceFirst(
         Deferred.await(runtimeEntered),
         Fiber.join(activation).pipe(Effect.andThen(Effect.die("activation ended before delivery runtime")))
@@ -1248,7 +1291,7 @@ it.effect("Alice disconnects while Run R reaches its existing planned-worktree s
         }).pipe(Effect.orDie),
         relation
           .publish(bundle({ acceptedAt: JournalPosition.make(72), evidence: [], graph, paused: "Run" }))
-          .pipe(Effect.andThen(Deferred.succeed(outcomePublished, undefined)))
+          .pipe(Effect.andThen(Deferred.succeed(outcomePublished, undefined)), Effect.as(JournalPosition.make(72)))
       )
       yield* Deferred.await(entered)
       yield* relation.publish(
@@ -1564,6 +1607,7 @@ it.effect("ends Alice's old subscription on coordinator death, then restarts G2 
               resources.integrationTargets
             )
             const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
+            const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))
             const observeReady = yield* resources.runtimeObservation.changes.pipe(
               Stream.filter(({ _tag }) => _tag === "Ready"),
               Stream.take(1),
@@ -1571,8 +1615,9 @@ it.effect("ends Alice's old subscription on coordinator death, then restarts G2 
               Effect.andThen(Deferred.succeed(runtimeReady, undefined)),
               Effect.forkChild
             )
-            const runtime = yield* runDeliveryRuntime(relation).pipe(
+            const runtime = yield* runDeliveryRuntime(runId, relation).pipe(
               Effect.provideService(DeliveryActionExecutor, DeliveryActionExecutor.of({ execute: () => Effect.never })),
+              Effect.provideService(DeliveryAcceptedFactPublication, acceptedFactPublication),
               Effect.forkChild
             )
             yield* Deferred.await(runtimeReady)

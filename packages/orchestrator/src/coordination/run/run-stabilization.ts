@@ -1,3 +1,4 @@
+import type { RunId } from "@dalph/contracts"
 import { Effect, Option, Stream } from "effect"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import {
@@ -117,6 +118,7 @@ const proofOf = (target: TrackerTarget, quiescence: DeliveryRuntimeQuiescence): 
  */
 const proofOfAcceptedActiveRefreshG2 = <E>(
   target: TrackerTarget,
+  expectedRunId: RunId,
   evaluations: DeliveryRuntimeInput<E>,
   accepted: DeliveryRuntimeEvaluation,
   subjects: ReadonlyArray<ActiveRefreshPreG2Subject>
@@ -129,7 +131,11 @@ const proofOfAcceptedActiveRefreshG2 = <E>(
     if (accepted.proposedActions._tag === "DeliveryProposalOwnershipConflict") {
       return unsettledProof(accepted.acceptedAt)
     }
-    const phaseTwo = yield* runDeliveryRuntimePhase(evaluations, DeliveryRuntimePhase.ActiveRefreshPostG2(subjects))
+    const phaseTwo = yield* runDeliveryRuntimePhase(
+      expectedRunId,
+      evaluations,
+      DeliveryRuntimePhase.ActiveRefreshPostG2(subjects)
+    )
     return proofOf(target, phaseTwo)
   })
 
@@ -199,6 +205,7 @@ const distinctOperationIds = <OperationId>(operationIds: ReadonlyArray<Operation
  */
 export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function* <E>(
   target: TrackerTarget,
+  expectedRunId: RunId,
   evaluations: DeliveryRuntimeInput<E>,
   opportunity: RunActivationOpportunity = { _tag: "OrdinaryRunEntry" }
 ) {
@@ -208,7 +215,7 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
         opportunity._tag === "ActiveWorkAuthorityRefresh"
           ? DeliveryRuntimePhase.ActiveRefreshPreG2([...opportunity.subjects])
           : DeliveryRuntimePhase.Ordinary
-      const firstQuiescence = yield* runDeliveryRuntimePhase(evaluations, firstPhase)
+      const firstQuiescence = yield* runDeliveryRuntimePhase(expectedRunId, evaluations, firstPhase)
       if (shouldReturnInitialProof(firstQuiescence)) {
         return proofOf(target, firstQuiescence)
       }
@@ -221,9 +228,9 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
 
       const journal = yield* InRunJournal
       const currentGraphOperationId = currentGraph.observation.operationId
-      const runId = firstQuiescence.current.runId
+      const reconstructedRunId = firstQuiescence.current.runId
       let journalRecords: ReadonlyArray<JournalRecord> = []
-      if (runId !== undefined) journalRecords = yield* journal.read(runId)
+      if (reconstructedRunId !== undefined) journalRecords = yield* journal.read(reconstructedRunId)
       if (
         opportunity._tag === "ActiveWorkAuthorityRefresh" &&
         currentGraph.observation.cause._tag !== "ExecutingWorkAuthorityCheck"
@@ -232,7 +239,7 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
           (subject) => currentAcceptedPlannedAttemptExecutorLifecycleFor(journalRecords, subject)._tag === "Settled"
         )
         if (everyActiveSubjectSettled) {
-          return proofOf(target, yield* runDeliveryRuntimePhase(evaluations))
+          return proofOf(target, yield* runDeliveryRuntimePhase(expectedRunId, evaluations))
         }
         return proofOf(target, firstQuiescence)
       }
@@ -241,8 +248,8 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
       const owner = yield* applicationExitAdmission.acquireForwardOwner("InterruptibleBoundary").pipe(Effect.option)
       if (Option.isNone(owner)) return proofOf(target, firstQuiescence)
       const pendingOperation =
-        opportunity._tag === "ActiveWorkAuthorityRefresh" && runId !== undefined
-          ? pendingActiveRefreshG2OperationFor(journalRecords, runId, target, {
+        opportunity._tag === "ActiveWorkAuthorityRefresh" && reconstructedRunId !== undefined
+          ? pendingActiveRefreshG2OperationFor(journalRecords, reconstructedRunId, target, {
               operationId: currentGraphOperationId,
               recordedAt: currentGraph.observation.recordedAt
             })
@@ -252,7 +259,7 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
         (yield* Effect.gen(function* () {
           const allocator = yield* OperationIdAllocator
           const operationId = yield* allocator.allocate()
-          const journaledPredecessors = yield* journaledPredecessorOperationIds(journal, runId, target)
+          const journaledPredecessors = yield* journaledPredecessorOperationIds(journal, reconstructedRunId, target)
           const predecessorOperationIds = distinctOperationIds([...journaledPredecessors, currentGraphOperationId])
           return makeTrackerGraphObservationOperation(
             { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: currentGraphOperationId },
@@ -273,9 +280,11 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
         }
       }
       if (opportunity._tag === "ActiveWorkAuthorityRefresh") {
-        return yield* proofOfAcceptedActiveRefreshG2(target, evaluations, accepted, [...opportunity.subjects])
+        return yield* proofOfAcceptedActiveRefreshG2(target, expectedRunId, evaluations, accepted, [
+          ...opportunity.subjects
+        ])
       }
-      return proofOf(target, yield* runDeliveryRuntimePhase(evaluations))
+      return proofOf(target, yield* runDeliveryRuntimePhase(expectedRunId, evaluations))
     })
   ).pipe(
     Effect.ensuring(Effect.flatMap(DeliveryRuntimeResources, ({ integrationTargets }) => integrationTargets.releaseAll))

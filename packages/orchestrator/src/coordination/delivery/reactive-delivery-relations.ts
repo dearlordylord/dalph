@@ -367,12 +367,14 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
           return true
         })
       )
-      if (!awaiting) return
-      yield* Deferred.await(completed).pipe(
-        Effect.onInterrupt(() =>
-          Ref.update(publicationWaiters, (waiters) => waiters.filter((waiter) => waiter.completed !== completed))
+      if (awaiting) {
+        yield* Deferred.await(completed).pipe(
+          Effect.onInterrupt(() =>
+            Ref.update(publicationWaiters, (waiters) => waiters.filter((waiter) => waiter.completed !== completed))
+          )
         )
-      )
+      }
+      return { _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough: targetPosition, runId }
     })
   })
   return Layer.merge(
