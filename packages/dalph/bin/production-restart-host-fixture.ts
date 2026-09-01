@@ -3,23 +3,22 @@
 import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node"
 import {
   GithubGraphqlClient,
-  JournaledRunObservationSource,
-  JournalStore,
+  TaskClaimCheckSelected,
   WorkflowTrace,
-  workflowOperationId,
-  type WorkflowOperation
+  type GithubGraphqlRequest
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Layer, Result, Schema } from "effect"
+import { Deferred, Effect, Layer, Ref, Result, Schema } from "effect"
 import nodeProcess from "node:process"
 import { join } from "node:path"
 import { productionRepositoryHostGraph, withProductionRepositoryHost } from "../src/application/production-host.js"
+import type { ProductionRunReconstructionObservation } from "../src/application/production.js"
 import { CodexAppServer as CodexAppServerService } from "../src/application/codex-app-server.js"
 import { CodexServerIncarnation } from "../src/application/codex-attempt-store.js"
 import {
   GithubReadStarted,
   HostCompleted,
-  OperationSelected,
   RecoveryReconstructed,
+  RestartChildProcessId,
   RestartChildStarted,
   RestartFixtureFailed,
   RestartFixtureInput
@@ -27,13 +26,16 @@ import {
 import type { RestartFixtureEvent } from "./production-restart-host-fixture-contract.js"
 
 const plannedAttemptBaseShaLength = 40
-const missingIssueNumber = -1
-const missingPolicyTaskWorkCapacity = -1
+const expectedRecoveredPolicyRevision = 2
+const expectedRecoveredTaskWorkCapacity = 7
+
+type RecoveryEvent = Extract<RestartFixtureEvent, { readonly _tag: "RecoveryReconstructed" }>
+type TaskClaimCheckEvent = Extract<RestartFixtureEvent, { readonly _tag: "TaskClaimCheckSelected" }>
 
 const validRawConfiguration = (input: RestartFixtureInput) => {
   const repository = join(input.root, "repository")
   return {
-    target: { _tag: "GithubIssue", issueNumber: 293, owner: "dearlordylord", repository: "dalph" },
+    target: input.target,
     repository,
     commonDirectory: repository,
     integrationRef: "refs/heads/master",
@@ -63,63 +65,68 @@ const writeEvent = (event: RestartFixtureEvent): Effect.Effect<void> =>
     nodeProcess.stdout.write(`${JSON.stringify(event)}\n`)
   })
 
-const operationIdentity = workflowOperationId
+const requireRecovery = (reconstruction: Ref.Ref<RecoveryEvent | undefined>) =>
+  Effect.gen(function* () {
+    const recovered = yield* Ref.get(reconstruction)
+    if (recovered === undefined) {
+      return yield* Effect.die("GitHub read entered before production recovery reconstruction")
+    }
+    return recovered
+  })
 
-const operationTargetIssueNumber = (operation: WorkflowOperation) => {
-  if (!("target" in operation) || typeof operation.target === "string") return missingIssueNumber
-  return Number(operation.target.issueNumber)
-}
-
-const productionGraphWithRecoveryEvidence = (
-  adapters: Parameters<typeof productionRepositoryHostGraph>[0],
+const requireSelectedTaskClaim = (
+  selectedOperation: Ref.Ref<TaskClaimCheckEvent | undefined>,
   input: RestartFixtureInput
-) => {
-  const productionGraph = productionRepositoryHostGraph(adapters)
-  return {
-    foundation: productionGraph.foundation,
-    run: (
-      configuration: Parameters<typeof productionGraph.run>[0],
-      selection: Parameters<typeof productionGraph.run>[1],
-      onFailure: (failure: unknown) => Effect.Effect<void>
-    ) =>
-      Layer.unwrap(
-        Effect.gen(function* () {
-          const context = yield* Layer.build(productionGraph.run(configuration, selection, onFailure))
-          const source = Context.get(context, JournaledRunObservationSource)
-          const journal = yield* JournalStore
-          const instrumentedSource = JournaledRunObservationSource.of({
-            ...source,
-            awaitEstablished: source.awaitEstablished.pipe(
-              Effect.tap(({ acceptedAt, runId }) =>
-                journal.read(runId).pipe(
-                  Effect.flatMap((records) => {
-                    const beginning = records.find(({ event }) => event._tag === "WorkflowRunBegan")
-                    const initialPolicyTaskWorkCapacity =
-                      beginning?.event._tag === "WorkflowRunBegan"
-                        ? Number(beginning.event.initialControlPolicy.taskExecutionCapacity)
-                        : missingPolicyTaskWorkCapacity
-                    return writeEvent(
-                      RecoveryReconstructed.make({
-                        acceptedPosition: Number(acceptedAt),
-                        initialPolicyTaskWorkCapacity,
-                        label: input.label,
-                        responsibilities: records
-                          .filter(({ event }) => event._tag === "TaskClaimAcquired")
-                          .map(() => "TaskClaimAcquired"),
-                        runId
-                      })
-                    )
-                  }),
-                  Effect.orDie
-                )
-              )
-            )
-          })
-          return Layer.succeedContext(Context.add(context, JournaledRunObservationSource, instrumentedSource))
-        })
-      )
-  }
+) =>
+  Effect.gen(function* () {
+    const selected = yield* Ref.get(selectedOperation)
+    if (selected === undefined) {
+      return yield* Effect.die("GitHub read entered before the exact owning task-claim transition was selected")
+    }
+    if (selected.operationId !== input.responsibilityOperationId || selected.taskId !== input.taskId) {
+      return yield* Effect.die("GitHub read entered before the exact owning task-claim transition was selected")
+    }
+    return selected
+  })
+
+const requireClaimLabelRead = (request: GithubGraphqlRequest) =>
+  request._tag === "FindClaimLabel"
+    ? Effect.void
+    : Effect.die(`GitHub read entered with unexpected request ${request._tag}`)
+
+const hasExpectedRecoveredState = (recovered: RecoveryEvent, input: RestartFixtureInput) => {
+  const responsibility = recovered.responsibilities[0]
+  const taskResponsibility = responsibility?._tag === "TaskClaimResponsibility" ? responsibility : undefined
+  return [
+    recovered.policy.revision === expectedRecoveredPolicyRevision,
+    recovered.policy.taskExecutionCapacity === expectedRecoveredTaskWorkCapacity,
+    recovered.responsibilities.length === 1,
+    responsibility !== undefined,
+    taskResponsibility !== undefined,
+    taskResponsibility?.taskId === input.taskId
+  ].every(Boolean)
 }
+
+const makeGithubClient = (
+  input: RestartFixtureInput,
+  reconstruction: Ref.Ref<RecoveryEvent | undefined>,
+  selectedOperation: Ref.Ref<TaskClaimCheckEvent | undefined>,
+  githubReadStarted: Deferred.Deferred<void>
+) =>
+  GithubGraphqlClient.of({
+    execute: (request) =>
+      Effect.gen(function* () {
+        const recovered = yield* requireRecovery(reconstruction)
+        const selected = yield* requireSelectedTaskClaim(selectedOperation, input)
+        yield* requireClaimLabelRead(request)
+        if (!hasExpectedRecoveredState(recovered, input)) {
+          return yield* Effect.die("GitHub read entered without the expected recovered policy and responsibility")
+        }
+        yield* writeEvent(GithubReadStarted.make({ operationId: selected.operationId, target: input.target }))
+        yield* Deferred.succeed(githubReadStarted, undefined)
+        return yield* Effect.never
+      })
+  })
 
 const fakeCodexAppServer = CodexAppServerService.of({
   incarnation: CodexServerIncarnation.make("production-restart-child-incarnation"),
@@ -128,69 +135,70 @@ const fakeCodexAppServer = CodexAppServerService.of({
   resumeThread: () => Effect.die("restart fixture must not resume a Codex thread"),
   startTurn: () => Effect.die("restart fixture must not start a Codex turn"),
   interruptTurn: () => Effect.die("restart fixture must not interrupt a Codex turn"),
-  listBackgroundTerminals: () => Effect.die("restart fixture must not inspect terminals"),
+  listBackgroundTerminals: () => Effect.die("restart fixture must not inspect a background terminal"),
   terminateBackgroundTerminal: () => Effect.die("restart fixture must not terminate a background terminal"),
   close: Effect.void
 })
 
 const runFixture = Effect.scoped(
   Effect.gen(function* () {
-    const decoded = Schema.decodeUnknownResult(RestartFixtureInput)({
-      journalDatabase: nodeProcess.argv[2],
-      label: nodeProcess.argv[4],
-      root: nodeProcess.argv[3],
-      taskWorkCapacity: Number(nodeProcess.argv[5])
-    })
+    const decoded = Schema.decodeUnknownResult(Schema.fromJsonString(RestartFixtureInput))(nodeProcess.argv[2])
     if (Result.isFailure(decoded)) {
       return yield* Effect.die(String(decoded.failure))
     }
     const input = decoded.success
-    yield* writeEvent(RestartChildStarted.make({ label: input.label, pid: nodeProcess.pid }))
-    const bootstrapReleased = yield* Deferred.make<void>()
-    const operationSelected = yield* Deferred.make<void>()
+    yield* writeEvent(
+      RestartChildStarted.make({ label: input.label, pid: RestartChildProcessId.make(nodeProcess.pid) })
+    )
+
+    // These Refs record actual production-boundary observations. They do not
+    // release or sequence the protocol; an early provider entry fails below.
+    const reconstruction = yield* Ref.make<RecoveryEvent | undefined>(undefined)
+    const selectedOperation = yield* Ref.make<TaskClaimCheckEvent | undefined>(undefined)
+    // This latch only keeps the host scope alive after the provider is entered.
     const githubReadStarted = yield* Deferred.make<void>()
-    const githubClient = GithubGraphqlClient.of({
-      execute: () =>
-        Deferred.await(bootstrapReleased).pipe(
-          Effect.andThen(Deferred.await(operationSelected)),
-          Effect.andThen(writeEvent(GithubReadStarted.make({ label: input.label }))),
-          Effect.andThen(Deferred.succeed(githubReadStarted, undefined)),
-          Effect.andThen(Effect.never)
-        )
-    })
+
+    const onReconstructed = ({ recovery, taskWorkCapacity }: ProductionRunReconstructionObservation) =>
+      Effect.gen(function* () {
+        const projection = yield* recovery.readDeliveryProjection
+        if (projection.evidence._tag !== "AvailableDeliveryProjectionEvidence") {
+          return yield* Effect.die("restart fixture recovery projection is unavailable")
+        }
+        if (projection.evidence.acceptedAt === null) {
+          return yield* Effect.die("restart fixture recovery projection has no accepted position")
+        }
+        const policy = yield* taskWorkCapacity.read(input.runId)
+        const event = RecoveryReconstructed.make({
+          acceptedPosition: projection.evidence.acceptedAt,
+          label: input.label,
+          policy,
+          responsibilities: projection.evidence.facts.map(({ responsibility }) => responsibility),
+          runId: input.runId
+        })
+        yield* Ref.set(reconstruction, event)
+        yield* writeEvent(event)
+      }).pipe(Effect.orDie)
+
+    const githubClient = makeGithubClient(input, reconstruction, selectedOperation, githubReadStarted)
     const workflowTrace = WorkflowTrace.of({
-      emit: (item) =>
-        item._tag === "OperationSelected"
-          ? Deferred.await(bootstrapReleased).pipe(
-              Effect.andThen(
-                writeEvent(
-                  OperationSelected.make({
-                    operationId: String(operationIdentity(item.operation)),
-                    operationTag: item.operation._tag,
-                    targetIssueNumber: operationTargetIssueNumber(item.operation)
-                  })
-                )
-              ),
-              Effect.andThen(Deferred.succeed(operationSelected, undefined))
-            )
-          : Effect.void
+      emit: (item) => {
+        if (item._tag !== "TaskClaimCheckSelected") return Effect.void
+        const event = TaskClaimCheckSelected.make({ operationId: item.operationId, taskId: item.taskId })
+        return Ref.set(selectedOperation, event).pipe(Effect.andThen(writeEvent(event)))
+      }
     })
     const adapters = {
       codexAppServer: () => Layer.succeed(CodexAppServerService, fakeCodexAppServer),
       githubClient: () => Layer.succeed(GithubGraphqlClient, githubClient),
-      workflowTrace: () => Layer.succeed(WorkflowTrace, workflowTrace)
+      workflowTrace: () => Layer.succeed(WorkflowTrace, workflowTrace),
+      onReconstructed
     }
     const selection = yield* withProductionRepositoryHost(
       validRawConfiguration(input),
-      productionGraphWithRecoveryEvidence(adapters, input),
-      (observation) =>
-        Effect.gen(function* () {
-          yield* Deferred.succeed(bootstrapReleased, undefined)
-          yield* Deferred.await(githubReadStarted)
-          return observation.selection
-        })
+      productionRepositoryHostGraph(adapters),
+      (observation) => Deferred.await(githubReadStarted).pipe(Effect.as(observation.selection))
     )
-    yield* writeEvent(HostCompleted.make({ label: input.label, runId: selection.runId, selectionTag: selection._tag }))
+    yield* writeEvent(HostCompleted.make({ label: input.label, selection }))
   })
 ).pipe(Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeCrypto.layer)))
 

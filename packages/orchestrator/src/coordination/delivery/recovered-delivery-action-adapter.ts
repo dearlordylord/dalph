@@ -1,6 +1,6 @@
 import type { RunId } from "@dalph/contracts"
 import { Effect, Match, Option } from "effect"
-import { OperationSelected } from "../../presentation/tracker-workflow-trace.js"
+import { OperationSelected, TaskClaimCheckSelected } from "../../presentation/tracker-workflow-trace.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { makeTaskClaimReleaseOperation } from "../../workflow/registry/operation.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
@@ -39,7 +39,11 @@ type BoundaryExecutionLease = Pick<DeliveryActionExecutionLease, "forwardBoundar
 /** Executes the protocol carried by each accepted transition without consulting planning policy. */
 const executeAcceptedRecovery = (runId: RunId, transition: AcceptedRecoveryTransition, lease: BoundaryExecutionLease) =>
   Match.valueTags(transition, {
-    CheckTaskClaim: ({ operationId }) => recoverTaskClaimOperation(runId, operationId, lease),
+    CheckTaskClaim: ({ operationId, taskId }) =>
+      WorkflowTrace.pipe(
+        Effect.flatMap((trace) => trace.emit(TaskClaimCheckSelected.make({ operationId, taskId }))),
+        Effect.andThen(recoverTaskClaimOperation(runId, operationId, lease))
+      ),
     ReconcileTaskClaim: ({ operationId }) => recoverTaskClaimOperation(runId, operationId, lease),
     ReconcileTaskClaimRelease: ({ operationId }) => recoverTaskClaimReleaseOperation(runId, operationId, lease),
     ReconcileTaskWorktree: ({ operationId }) => recoverTaskWorktreeOperation(runId, operationId, lease)

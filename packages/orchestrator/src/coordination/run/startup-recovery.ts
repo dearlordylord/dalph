@@ -166,6 +166,7 @@ export const inspectStartupRecovery = Effect.fn("StartupRecovery.inspect")(funct
   return reductions.find((reduction) => reduction._tag === "ValidWorkflowJournalHistory" && reduction.runId === runId)
 })
 
+// eslint-disable-next-line functional/no-mixed-types -- Run activation carries typed services and one qualification observation callback.
 interface RunActivationContextInput {
   readonly runId: RunId
   readonly integrationTarget: IntegrationTarget | undefined
@@ -175,6 +176,11 @@ interface RunActivationContextInput {
   readonly acceptedResultEvidenceStore: EvidenceStoreService | undefined
   readonly cleanupActivation: boolean
   readonly opportunity: RunActivationOpportunity
+  /** Qualification-only observation of the services reconstructed for this Run. */
+  readonly onReconstructed?: (input: {
+    readonly recovery: RunRecoveryProjection["Service"]
+    readonly taskWorkCapacity: TaskWorkCapacityControl["Service"]
+  }) => Effect.Effect<void>
 }
 
 const noCleanupActivation = (): DispositionCleanupActivationService => ({
@@ -196,6 +202,7 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
   completionTask,
   integrationFinality,
   integrationTarget,
+  onReconstructed,
   opportunity,
   runId,
   targetPromotion
@@ -236,6 +243,9 @@ const makeRunActivationContext = Effect.fn("RunActivation.makeContext")(function
     completionTask !== undefined,
     opportunity
   )
+  if (onReconstructed !== undefined) {
+    yield* onReconstructed({ recovery, taskWorkCapacity: taskWorkCapacityControl })
+  }
   // Ordinary activation reconstructs cleanup authority from the exact Run
   // journal before the caller receives its workflow context.  No caller-made
   // resource candidate is admitted at this boundary; the composed cleanup
@@ -294,7 +304,8 @@ export const validatedRunActivationLayer = (
   > = preservingDispositionCleanupBoundaryLayer,
   acceptedResultEvidenceStore?: EvidenceStoreService,
   cleanupActivation = true,
-  opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
+  opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry(),
+  onReconstructed?: RunActivationContextInput["onReconstructed"]
 ) =>
   Layer.effectContext(
     makeRunActivationContext({
@@ -305,6 +316,7 @@ export const validatedRunActivationLayer = (
       completionTask,
       acceptedResultEvidenceStore,
       cleanupActivation,
-      opportunity
+      opportunity,
+      ...(onReconstructed === undefined ? {} : { onReconstructed })
     })
   ).pipe(Layer.provide(cleanupBoundaryLayer))

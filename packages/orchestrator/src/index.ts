@@ -945,6 +945,7 @@ export type {
 } from "./workflow/registry/operation.js"
 export {
   OperationSelected,
+  TaskClaimCheckSelected,
   TaskClaimAcquiredTrace,
   TaskClaimAcquisitionIntended,
   TrackerExecutionAdmitted,

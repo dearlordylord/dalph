@@ -51,6 +51,8 @@ import {
   type InitialControlPolicySource,
   type CurrentSignal,
   type TrackerTarget,
+  type RunRecoveryProjection,
+  type TaskWorkCapacityControl,
   WorkflowRunAlreadyTerminated,
   defaultJournalMaintenanceObservation
 } from "@dalph/orchestrator"
@@ -86,6 +88,7 @@ export interface ProductionRunReactivationOptions {
 }
 
 /** Optional production boundaries that advance one accepted result through delivery and finality. */
+// eslint-disable-next-line functional/no-mixed-types -- Production qualification groups typed service values and one typed reconstruction observation callback.
 export interface ProductionWorkflowRuntimeBoundaries {
   /** Already-acquired repository owner shared with host discovery and SQLite. */
   readonly coordinatorOwnership?: CoordinatorOwnership["Service"]
@@ -100,6 +103,14 @@ export interface ProductionWorkflowRuntimeBoundaries {
   readonly completionTask?: CompletionTaskBoundaryService
   readonly acceptedResultEvidenceStore?: EvidenceStoreService
   readonly integrator?: IntegratorService
+  /** Optional qualification observation after the real Run recovery projection is built. */
+  readonly onReconstructed?: (input: ProductionRunReconstructionObservation) => Effect.Effect<void>
+}
+
+/** Services assembled from one validated journal prefix for qualification. */
+export interface ProductionRunReconstructionObservation {
+  readonly recovery: RunRecoveryProjection["Service"]
+  readonly taskWorkCapacity: TaskWorkCapacityControl["Service"]
 }
 
 const defaultProductionRunReactivationCooldownSeconds = 5
@@ -188,8 +199,14 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   integratorCandidateProviderAuthority: IntegratorCandidateProviderAuthorityService,
   runtimeBoundaries: ProductionWorkflowRuntimeBoundaries = {}
 ): ProductionWorkflowLayer<TrackerError, TrackerRequirements> => {
-  const { acceptedResultEvidenceStore, completionTask, integrationFinality, integrator, targetPromotion } =
-    runtimeBoundaries
+  const {
+    acceptedResultEvidenceStore,
+    completionTask,
+    integrationFinality,
+    integrator,
+    onReconstructed,
+    targetPromotion
+  } = runtimeBoundaries
   const ownershipLayer =
     runtimeBoundaries.coordinatorOwnership === undefined
       ? productionCoordinatorOwnershipLayer(target)
@@ -267,7 +284,8 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
           cleanupBoundaryLayer,
           acceptedResultEvidenceStore,
           true,
-          opportunity
+          opportunity,
+          onReconstructed
         ).pipe(
           Layer.provide(integratorLayer),
           Layer.provide(interpreterLayer),
