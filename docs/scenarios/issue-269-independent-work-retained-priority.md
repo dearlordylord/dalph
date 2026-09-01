@@ -345,3 +345,69 @@ may clear when accepted facts change. The two outcomes are not interchangeable.
   re-admission or successor permission` and `admits an independently proposed
   suspension after one unchanged passive observation` remain the local
   one-proposal and independent-successor controls.
+
+## Accepted graph progress cannot strand the next task-specification reads
+
+### Governing behavior
+
+[Issue #193's persistent live-request scenario](issue-193-run-reactive-delivery-actions.md#one-persistent-github-claim-proposal-starts-one-live-request)
+requires the ordinary accepted publication to remove a settled owner before an
+independent successor starts. [Issue #194's G2 handoff](issue-194-stabilize-each-run.md#g2-is-requested-only-after-g1-is-quiescent-and-reveals-b)
+requires work from an accepted later graph publication to reach the runtime
+even when that publication precedes the runtime phase's subscription. This
+scenario preserves both rules and refines only their shared in-process
+relation-to-runtime handoff: it adds no action, retry, authority read, or
+durable fact.
+
+### Starting situation and trigger
+
+No person triggers this relation handoff. Dalph has established tracker graph
+G0 for independent open tasks A through E and has recorded each task's claim.
+The ordinary runtime has one local owner for each post-claim graph read. Those
+reads settle in causal order while the Journal accepts their intents and
+results. The executor, Git, and the tracker perform no additional mutation at
+this boundary: the concrete trigger is acceptance of a post-claim graph-read
+result that changes the Journal position and therefore the delivery planning
+publication.
+
+### Ordered relation and runtime handoff
+
+1. The reactive delivery relation publishes the accepted Journal facts, the
+   established G0 projection, and the action requirements derived from that
+   same publication.
+2. While holding the existing publication-consistency boundary, the runtime
+   adapter reads the current established-graph consequences and the current
+   planned-action frontier. The planning read returns its current value even
+   when no later planning change occurs; it does not wait for a future
+   publication merely because this is a fresh subscription.
+3. If another post-claim result is accepted while that ordered adapter is
+   working, its publication remains queued behind the first one. After the
+   first evaluation is emitted, the adapter emits the later coherent
+   evaluation rather than starving the queue.
+4. Once all five post-claim reads are accepted, the later evaluation contains
+   the five exact `ReadTaskWorkSpecification` proposals. The runtime removes
+   the settled graph-read owner and may select A's specification read first.
+
+The operator sees delivery continue from G0 into task-specification reads.
+Dalph must not leave a settled post-claim graph owner waiting forever, combine
+the graph from one publication with planned actions from another, discard the
+later accepted publication, or make action completion perform a second
+authoritative relation read to conceal a blocked planning signal.
+
+There is no separate crash or retry rule at this projection boundary. A process
+death discards the in-memory subscription, and the normal restart activation
+opens a fresh current-first subscription from durable Journal facts.
+
+### Acceptance-test mapping
+
+- `emits every accepted stable publication after repeated current planning
+  samples` in
+  `packages/orchestrator/src/coordination/delivery/delivery-evaluation-consistency.test.ts`
+  advances a production-shaped coherent signal through the previously blocked
+  Journal position and one later publication, then proves that graph and
+  action planning stay paired and arrive in order without queue starvation.
+- `emits the exact DS01 through DS13 delivery checkpoint table` in
+  `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`
+  supplies the vertical five-task chronology: all post-claim graph reads
+  settle, A through E reach their specification reads, and the story continues
+  through the remaining delivery checkpoints.

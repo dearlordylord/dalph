@@ -931,25 +931,16 @@ it.effect("changes the proposal frontier when its accepted fact signal changes",
           Stream.runCollect,
           Effect.forkChild
         )
-        const stableCollected = yield* proposals.changesWithinStablePublication.pipe(
-          Stream.take(2),
-          Stream.runCollect,
-          Effect.forkChild
-        )
         yield* Deferred.await(firstObserved)
         yield* SubscriptionRef.set(acceptedFacts, acceptedContributions)
-        return {
-          frontiers: Array.from(yield* Fiber.join(collected)),
-          stableFrontiers: Array.from(yield* Fiber.join(stableCollected))
-        }
+        return Array.from(yield* Fiber.join(collected))
       }).pipe(Effect.provide(layer))
 
       const expected = [
         { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
         { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [proposal] }
       ]
-      expect(observed.frontiers).toEqual(expected)
-      expect(observed.stableFrontiers).toEqual(expected)
+      expect(observed).toEqual(expected)
     })
   )
 )

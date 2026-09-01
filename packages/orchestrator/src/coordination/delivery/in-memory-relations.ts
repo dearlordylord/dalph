@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Stream } from "effect"
+import { Effect, Layer, Stream } from "effect"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { RunControlPolicy } from "../../control/policy.js"
 import {
@@ -278,12 +278,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
           consequences.changes.pipe(Stream.map(() => undefined)),
           planningInputs.changes.pipe(Stream.map(() => undefined))
         ).pipe(Stream.mapEffect(() => get))
-        const changesWithinStablePublication = zipCurrentSignals(consequences, planningInputs).changes
-        return {
-          ...currentSignalFromCurrentFirstStream(changes),
-          changesWithinStablePublication,
-          getWithinStablePublication
-        }
+        return { ...currentSignalFromCurrentFirstStream(changes), getWithinStablePublication }
       }
     })
   )
@@ -336,11 +331,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
             )
           )
         const sampleEvaluation = (facts: DeliveryRuntimeFacts) =>
-          makeEvaluation(
-            facts,
-            current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow)),
-            proposedActions.changesWithinStablePublication.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
-          )
+          makeEvaluation(facts, current.get, proposedActions.getWithinStablePublication)
         const evaluations = currentSignalFromCurrentFirstStream(
           facts.changes.pipe(
             Stream.mapEffect((facts) => input.publicationConsistency.withStablePublication(sampleEvaluation(facts)))
