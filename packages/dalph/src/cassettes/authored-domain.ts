@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- One closed schema keeps every authored boundary tag and chronology invariant reviewable together. */
-import { Effect, Match, Schema } from "effect"
+import { Effect, Equal, Match, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -161,6 +161,55 @@ export const AuthoredPlannedAttemptExecutorReport = Schema.TaggedUnion({
   }
 })
 export type AuthoredPlannedAttemptExecutorReport = typeof AuthoredPlannedAttemptExecutorReport.Type
+
+/**
+ * One causally unordered cassette interaction accepted by the V1 concurrent
+ * group. The union is deliberately narrower than the top-level story language.
+ */
+export const AuthoredConcurrentInteractionMember = Schema.TaggedUnion({
+  DalphSelects: {
+    causal: Schema.optionalKey(Schema.Never),
+    causalAnchor: Schema.optionalKey(Schema.Never),
+    operation: AuthoredCassetteDecision
+  },
+  PlannedAttemptExecutorWorkReported: {
+    report: AuthoredPlannedAttemptExecutorReport.cases.ExecutorWorkExecuting,
+    request: Schema.Literal("Begin")
+  }
+})
+export type AuthoredConcurrentInteractionMember = typeof AuthoredConcurrentInteractionMember.Type
+
+/**
+ * Exact incoming call identity used to claim one concurrent interaction.
+ * Controlled executor output is intentionally absent from the executor key.
+ */
+export type AuthoredConcurrentInteractionClaimKey =
+  | { readonly _tag: "DalphSelects"; readonly operation: AuthoredCassetteDecision }
+  | { readonly _tag: "PlannedAttemptExecutorWorkReported"; readonly attemptId: AttemptId; readonly request: "Begin" }
+
+export const authoredConcurrentInteractionClaimKey = (
+  member: AuthoredConcurrentInteractionMember
+): AuthoredConcurrentInteractionClaimKey =>
+  member._tag === "DalphSelects"
+    ? { _tag: "DalphSelects", operation: member.operation }
+    : { _tag: "PlannedAttemptExecutorWorkReported", attemptId: member.report.attemptId, request: member.request }
+
+const concurrentInteractionClaimKeysAreUnique = Schema.makeFilter(
+  (members: ReadonlyArray<AuthoredConcurrentInteractionMember>) => {
+    const keys = members.map(authoredConcurrentInteractionClaimKey)
+    return keys.some((key, index) => keys.slice(0, index).some((prior) => Equal.equals(prior, key)))
+      ? "each concurrent interaction claim key must be unique"
+      : undefined
+  }
+)
+
+/**
+ * The finite non-empty set of cassette interactions whose arrival order is
+ * intentionally not authored. It owns no production concurrency authority.
+ */
+const AuthoredConcurrentInteractionMembers = Schema.NonEmptyArray(AuthoredConcurrentInteractionMember).check(
+  concurrentInteractionClaimKeysAreUnique
+)
 
 /** Specialist-facing results of one task's planned work; attempt identity is deliberately absent. */
 export const AuthoredTaskWorkResult = Schema.TaggedUnion({
@@ -784,6 +833,8 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   },
   /** One bounded tracker-read phase whose causally named members may complete in either order. */
   ConcurrentTrackerReadBatch: { members: Schema.NonEmptyArray(AuthoredConcurrentTrackerRead) },
+  /** One bounded closed set of causally unordered controlled interactions. */
+  ConcurrentInteractionGroup: { members: AuthoredConcurrentInteractionMembers },
   DalphSelects: {
     causal: Schema.optionalKey(AuthoredCausalSelection),
     causalAnchor: Schema.optionalKey(AuthoredCausalAnchor),
@@ -963,6 +1014,7 @@ const defineStoryItemOwners = <
 ): Registrations => registrations
 
 export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
+  CassetteConcurrency: ["ConcurrentInteractionGroup"],
   CassetteControl: [
     "CassetteOffersRunReactivationHints",
     "CassettePublishesCurrentTrackerNotification",

@@ -1,4 +1,5 @@
 import { AttemptId, TaskId } from "@dalph/contracts"
+import { Schema } from "effect"
 import { IntegratorCandidateText, IntegratorNotPreparedDetail } from "@dalph/orchestrator"
 import { describe, expect, it } from "vitest"
 import { AuthoredCassetteStoryItem } from "../../src/cassettes/authored-domain.js"
@@ -74,6 +75,25 @@ describe("authored delivery landmarks", () => {
 
     expect(renderAuthoredStoryItemLyric(item)).toBe(
       "The task tracker classifies the exact completion request for task B as NotApplied."
+    )
+  })
+
+  it("renders one completed concurrent interaction group without inventing member order", () => {
+    const group = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)({
+      _tag: "ConcurrentInteractionGroup",
+      members: [
+        { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:B:1", taskId: "B" } },
+        {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
+          request: "Begin"
+        }
+      ]
+    })
+
+    expect(renderAuthoredStoryItemLandmark(group)).toBeNull()
+    expect(renderAuthoredStoryItemLyric(group)).toBe(
+      "The cassette accepts 2 causally unordered controlled interactions before advancing once."
     )
   })
 

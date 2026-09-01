@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- One cursor atomically owns every authored story interaction and optional boundary probe. */
-import { Deferred, Effect, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
+import { Deferred, Effect, Equal, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import type { AttemptId, GitCommitSha, GitRepositoryLocator, TaskId } from "@dalph/contracts"
 import {
   IntegratorSessionCorrelation,
@@ -10,11 +10,14 @@ import {
 import {
   type AuthoredCassetteDecision as CassetteDecision,
   type AuthoredCausalSelection,
+  type AuthoredConcurrentInteractionClaimKey,
+  type AuthoredConcurrentInteractionMember,
   type AuthoredConcurrentTrackerRead,
   type AuthoredConcurrentTrackerReadResult,
   AuthoredCassetteStoryItem,
   type AuthoredCassetteStoryItem as StoryItem,
-  AuthoredTrackerGraphReadResult
+  AuthoredTrackerGraphReadResult,
+  authoredConcurrentInteractionClaimKey
 } from "./authored-domain.js"
 import {
   AuthoredAttemptChoiceItem,
@@ -90,6 +93,131 @@ type GitRequestCorrelation = { readonly candidateCommit: GitCommitSha; readonly 
 type PromotionGitStoryItem =
   | typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadFailed.Type
   | typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadReturned.Type
+
+interface ConcurrentInteractionGroupState {
+  readonly consumed: ReadonlyArray<boolean>
+  readonly index: number
+}
+
+type ConcurrentInteractionIncomingClaimKey =
+  | AuthoredConcurrentInteractionClaimKey
+  | {
+      readonly _tag: "PlannedAttemptExecutorWorkReported"
+      readonly attemptId: AttemptId
+      readonly request: AuthoredExecutorRequest
+    }
+type ConcurrentSelectionMember = Extract<AuthoredConcurrentInteractionMember, { readonly _tag: "DalphSelects" }>
+type ConcurrentExecutorMember = Extract<
+  AuthoredConcurrentInteractionMember,
+  { readonly _tag: "PlannedAttemptExecutorWorkReported" }
+>
+
+type ConcurrentInteractionClaimDecision =
+  | {
+      readonly _tag: "Claimed"
+      readonly completed: boolean
+      readonly index: number
+      readonly item: typeof AuthoredCassetteStoryItem.cases.ConcurrentInteractionGroup.Type
+      readonly member: AuthoredConcurrentInteractionMember
+      readonly nextState: ConcurrentInteractionGroupState | undefined
+    }
+  | { readonly _tag: "Failure"; readonly detail: string; readonly index: number }
+  | { readonly _tag: "None" }
+
+type ConcurrentInteractionMemberMatch =
+  | { readonly _tag: "Ambiguous" }
+  | { readonly _tag: "Match"; readonly index: number; readonly member: AuthoredConcurrentInteractionMember }
+  | { readonly _tag: "Missing" }
+
+type ConcurrentInteractionPreparedState =
+  | { readonly _tag: "Failure"; readonly detail: string; readonly index: number }
+  | {
+      readonly _tag: "Ready"
+      readonly index: number
+      readonly item: typeof AuthoredCassetteStoryItem.cases.ConcurrentInteractionGroup.Type
+      readonly state: ConcurrentInteractionGroupState
+    }
+
+const concurrentInteractionMemberMatch = (
+  members: ReadonlyArray<AuthoredConcurrentInteractionMember>,
+  claimKey: ConcurrentInteractionIncomingClaimKey
+): ConcurrentInteractionMemberMatch => {
+  let match: Extract<ConcurrentInteractionMemberMatch, { readonly _tag: "Match" }> | undefined
+  for (const [index, member] of members.entries()) {
+    if (!Equal.equals(authoredConcurrentInteractionClaimKey(member), claimKey)) continue
+    if (match !== undefined) return { _tag: "Ambiguous" }
+    match = { _tag: "Match", index, member }
+  }
+  return match ?? { _tag: "Missing" }
+}
+
+const prepareConcurrentInteractionState = (
+  item: StoryItem | undefined,
+  index: number,
+  prior: ConcurrentInteractionGroupState | undefined
+): ConcurrentInteractionPreparedState | { readonly _tag: "None" } => {
+  if (item?._tag !== "ConcurrentInteractionGroup") {
+    return prior === undefined
+      ? { _tag: "None" }
+      : {
+          _tag: "Failure",
+          detail: `concurrent interaction group at story position ${prior.index} has not completed`,
+          index
+        }
+  }
+  if (prior !== undefined && prior.index !== index) {
+    return {
+      _tag: "Failure",
+      detail: `concurrent interaction group at story position ${prior.index} contradicts current position`,
+      index
+    }
+  }
+  const state: ConcurrentInteractionGroupState = prior ?? { consumed: item.members.map(() => false), index }
+  return state.consumed.length === item.members.length
+    ? { _tag: "Ready", index, item, state }
+    : { _tag: "Failure", detail: "the concurrent group claim state has an invalid member count", index }
+}
+
+/** Pure matcher decision for one cassette-local concurrent-group claim. */
+const decideConcurrentInteractionClaim = (
+  item: StoryItem | undefined,
+  index: number,
+  prior: ConcurrentInteractionGroupState | undefined,
+  claimKey: ConcurrentInteractionIncomingClaimKey
+): ConcurrentInteractionClaimDecision => {
+  const prepared = prepareConcurrentInteractionState(item, index, prior)
+  if (prepared._tag !== "Ready") return prepared
+  const match = concurrentInteractionMemberMatch(prepared.item.members, claimKey)
+  if (match._tag !== "Match") {
+    return {
+      _tag: "Failure",
+      detail:
+        match._tag === "Missing"
+          ? "the interaction is not a member of the current concurrent group"
+          : "the interaction matches more than one member of the current concurrent group",
+      index
+    }
+  }
+  const consumedAtMatch = prepared.state.consumed[match.index]
+  if (consumedAtMatch === undefined) {
+    return { _tag: "Failure", detail: "the matched concurrent group claim state is absent", index }
+  }
+  if (consumedAtMatch) {
+    return { _tag: "Failure", detail: "the concurrent group member was already consumed", index }
+  }
+  const consumed = prepared.state.consumed.map((value, candidateIndex) =>
+    candidateIndex === match.index ? true : value
+  )
+  const completed = consumed.every(Boolean)
+  return {
+    _tag: "Claimed",
+    completed,
+    index,
+    item: prepared.item,
+    member: match.member,
+    nextState: completed ? undefined : { consumed, index }
+  }
+}
 
 const gitRequestMatches = (
   request: GitRequestCorrelation,
@@ -497,6 +625,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   )
   const position = yield* SubscriptionRef.make(0)
   const transition = yield* Semaphore.make(1)
+  const concurrentInteractionGroupState = yield* Ref.make<ConcurrentInteractionGroupState | undefined>(undefined)
   interface ConcurrentTrackerReadMemberState {
     readonly context?: AuthoredOperationCausalContext
     readonly member: AuthoredConcurrentTrackerRead
@@ -642,6 +771,66 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
 
   const concurrentBatchFailure = (detail: string, storyPosition: number) =>
     new AuthoredConcurrentReadBatchFailure({ detail, storyPosition })
+
+  const concurrentInteractionFailure = (detail: string, storyPosition: number) =>
+    new AuthoredCassetteInteractionMismatch({ actual: detail, expected: "ConcurrentInteractionGroup", storyPosition })
+
+  const claimConcurrentInteraction = Effect.fn("AuthoredCassette.claimConcurrentInteraction")(function* (
+    claimKey: ConcurrentInteractionIncomingClaimKey
+  ) {
+    const result = yield* transition.withPermits(1)(
+      Effect.gen(function* () {
+        const index = yield* SubscriptionRef.get(position)
+        const item = story[index]
+        const prior = yield* Ref.get(concurrentInteractionGroupState)
+        const decision = decideConcurrentInteractionClaim(item, index, prior, claimKey)
+        if (decision._tag !== "Claimed") return decision
+        yield* Ref.set(concurrentInteractionGroupState, decision.nextState)
+        if (decision.completed) yield* SubscriptionRef.set(position, decision.index + 1)
+        return decision
+      })
+    )
+    if (result._tag === "Failure") return yield* concurrentInteractionFailure(result.detail, result.index)
+    if (result._tag === "None") return Option.none<AuthoredConcurrentInteractionMember>()
+    if (result.completed) {
+      yield* options.onOccurrence?.({ item: result.item, storyPosition: result.index + 1 }) ?? Effect.void
+      yield* announceTerminalAssertions
+    }
+    return Option.some(result.member)
+  })
+
+  const claimConcurrentSelection = Effect.fn("AuthoredCassette.claimConcurrentSelection")(function* (
+    operation: CassetteDecision
+  ): Effect.fn.Return<Option.Option<ConcurrentSelectionMember>, AuthoredCassetteInteractionMismatch> {
+    const claimed = yield* claimConcurrentInteraction({ _tag: "DalphSelects", operation })
+    if (Option.isNone(claimed)) return Option.none<ConcurrentSelectionMember>()
+    if (claimed.value._tag !== "DalphSelects") {
+      return yield* concurrentInteractionFailure(
+        "a selection claim resolved to an executor member",
+        yield* SubscriptionRef.get(position)
+      )
+    }
+    return Option.some(claimed.value)
+  })
+
+  const claimConcurrentExecutorReport = Effect.fn("AuthoredCassette.claimConcurrentExecutorReport")(function* (
+    request: AuthoredExecutorRequest,
+    attemptId: AttemptId
+  ): Effect.fn.Return<Option.Option<ConcurrentExecutorMember>, AuthoredCassetteInteractionMismatch> {
+    const claimed = yield* claimConcurrentInteraction({
+      _tag: "PlannedAttemptExecutorWorkReported",
+      attemptId,
+      request
+    })
+    if (Option.isNone(claimed)) return Option.none<ConcurrentExecutorMember>()
+    if (request !== "Begin" || claimed.value._tag !== "PlannedAttemptExecutorWorkReported") {
+      return yield* concurrentInteractionFailure(
+        "an executor claim resolved to an incompatible group member",
+        yield* SubscriptionRef.get(position)
+      )
+    }
+    return Option.some(claimed.value)
+  })
 
   const currentConcurrentTrackerReadBatch = Effect.fn("AuthoredCassette.currentConcurrentTrackerReadBatch")(
     function* () {
@@ -1026,8 +1215,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return true
   })
-  const consumeDalphSelectionForLoop: StoryCursor["consumeDalphSelectionFor"] = Effect.fn(
-    "AuthoredCassette.consumeDalphSelectionForLoop"
+  const consumeDalphSelectionOutsideConcurrentGroup: StoryCursor["consumeDalphSelectionFor"] = Effect.fn(
+    "AuthoredCassette.consumeDalphSelectionOutsideConcurrentGroup"
   )(function* (operation, context) {
     if (exactCausalStory) {
       const concurrent = yield* consumeConcurrentTrackerReadSelection(operation, context)
@@ -1053,6 +1242,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       actual: JSON.stringify(operation),
       expected: mismatchExpectedTag(claimed.item),
       storyPosition: claimed.index
+    })
+  })
+  const consumeDalphSelectionForLoop: StoryCursor["consumeDalphSelectionFor"] = Effect.fn(
+    "AuthoredCassette.consumeDalphSelectionForLoop"
+  )(function* (operation, context) {
+    const grouped = yield* claimConcurrentSelection(operation)
+    return yield* Option.match(grouped, {
+      onNone: () => consumeDalphSelectionOutsideConcurrentGroup(operation, context),
+      onSome: Effect.succeed
     })
   })
   const consumeDalphSelectionFor: StoryCursor["consumeDalphSelectionFor"] = Effect.fn(
@@ -1251,8 +1449,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return ownershipOrAdvance !== "Unowned"
   })
-  const consumeExecutorReportForLoop: StoryCursor["consumeExecutorReportFor"] = Effect.fn(
-    "AuthoredCassette.consumeExecutorReportFor"
+  const consumeExecutorReportOutsideConcurrentGroup: StoryCursor["consumeExecutorReportFor"] = Effect.fn(
+    "AuthoredCassette.consumeExecutorReportOutsideConcurrentGroup"
   )(function* (request, attemptId) {
     const claimed = yield* claimNext((item) => authoredExecutorReportMatches(item, request, attemptId))
     if (claimed._tag === "Claimed") {
@@ -1275,6 +1473,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       actual: `${request}/${attemptId}`,
       expected: claimed.item?._tag ?? "EndOfStory",
       storyPosition: claimed.index
+    })
+  })
+  const consumeExecutorReportForLoop: StoryCursor["consumeExecutorReportFor"] = Effect.fn(
+    "AuthoredCassette.consumeExecutorReportFor"
+  )(function* (request, attemptId) {
+    const grouped = yield* claimConcurrentExecutorReport(request, attemptId)
+    return yield* Option.match(grouped, {
+      onNone: () => consumeExecutorReportOutsideConcurrentGroup(request, attemptId),
+      onSome: Effect.succeed
     })
   })
   const consumeExecutorReportFor: StoryCursor["consumeExecutorReportFor"] = Effect.fn(

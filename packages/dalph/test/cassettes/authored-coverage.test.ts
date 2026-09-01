@@ -15,6 +15,7 @@ import {
   TrackerMutation
 } from "@dalph/orchestrator"
 import {
+  assertExactlyOneAuthoredCassetteStoryItemOwner,
   AuthoredCassetteStoryItem,
   maintainedAuthoredCassetteCatalog,
   runAuthoredScenarioCassette
@@ -29,6 +30,14 @@ const decodeStoryItem = (input: unknown): AuthoredCassetteStoryItem =>
 
 const decodeDalphSelection = (input: unknown): typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type =>
   Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.DalphSelects)(input)
+
+it.effect("registers the concurrent interaction group with exactly one cursor owner", () =>
+  Effect.gen(function* () {
+    expect(yield* assertExactlyOneAuthoredCassetteStoryItemOwner("ConcurrentInteractionGroup")).toBe(
+      "CassetteConcurrency"
+    )
+  })
+)
 
 const completionRequest = Schema.decodeUnknownSync(CompletionTaskRequest)({
   claim: {
