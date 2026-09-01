@@ -518,6 +518,7 @@ type ProductionRefreshHarnessOptions = {
   readonly git?: "Ready" | "LostWorktree" | "LineageRewrite" | "Unreadable"
   readonly includeIndependentTask?: boolean
   readonly crash?: ProductionRefreshCrash
+  readonly characterizeSpecificationClaimOverlap?: "Restart" | "ActiveRefresh"
 }
 
 type ProductionRefreshCrash =
@@ -556,8 +557,8 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const target = FixtureTarget.make("production-refresh-healthy-target")
       const runId = RunId.make("production-refresh-healthy-run")
       const taskId = TaskId.make("A")
-      const independentTaskId = TaskId.make("B")
-      const thirdTaskId = TaskId.make("C")
+      const independentTaskId = TaskId.make(options.characterizeSpecificationClaimOverlap === undefined ? "B" : "C")
+      const thirdTaskId = TaskId.make(options.characterizeSpecificationClaimOverlap === undefined ? "C" : "D")
       const blockerTaskId = TaskId.make("D")
       const constrainedTaskId = changedTask === "B" ? independentTaskId : taskId
       const specification = makeTaskWorkSpecification({ body: "Complete A.", taskId, title: "Complete A" })
@@ -960,6 +961,57 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 version: workflowJournalEventVersion
               })
             )
+            if (
+              options.characterizeSpecificationClaimOverlap === "Restart" ||
+              (options.characterizeSpecificationClaimOverlap === "ActiveRefresh" &&
+                peerAttempt.taskId === independentTaskId)
+            ) {
+              const suspendOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+              const settledReport =
+                options.characterizeSpecificationClaimOverlap === "ActiveRefresh"
+                  ? PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                      correlation: plannedAttemptExecutorCorrelation(peerAttempt),
+                      result: { _tag: "Completed" }
+                    })
+                  : PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+                      correlation: plannedAttemptExecutorCorrelation(peerAttempt)
+                    })
+              yield* journal.append(
+                runId,
+                plannedAttemptExecutorCommandIntendedRecordKey(peerAttempt.attemptId, suspendOrdinal),
+                PlannedAttemptExecutorCommandIntendedEvent.make({
+                  command: "Suspend",
+                  initiatedBy: { _tag: "DalphCoordinator" },
+                  occurrenceClassification: "InitiatedAction",
+                  ordinal: suspendOrdinal,
+                  plannedAttempt: peerAttempt,
+                  version: workflowJournalEventVersion
+                })
+              )
+              yield* journal.append(
+                runId,
+                plannedAttemptExecutorCommandResponseObservedRecordKey(peerAttempt.attemptId, suspendOrdinal),
+                PlannedAttemptExecutorCommandResponseObservedEvent.make({
+                  commandOrdinal: suspendOrdinal,
+                  occurrenceClassification: "NonActionOccurrence",
+                  plannedAttempt: peerAttempt,
+                  report: settledReport,
+                  version: workflowJournalEventVersion
+                })
+              )
+              yield* journal.append(
+                runId,
+                plannedAttemptExecutorWorkReportedRecordKey(
+                  peerAttempt.attemptId,
+                  PlannedAttemptExecutorReportOrdinal.make(2)
+                ),
+                PlannedAttemptExecutorWorkReportedEvent.make({
+                  ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+                  report: settledReport,
+                  version: workflowJournalEventVersion
+                })
+              )
+            }
           })
           if (threeExecuting) {
             yield* seedExecutingPeer(independentAttempt, independentAcquisition, independentSpecification)
@@ -1048,7 +1100,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const activeSelectionOperationKeys = yield* Ref.make<ReadonlyArray<string>>([])
       const executorCalls = yield* Ref.make<ReadonlyArray<ProductionExecutorCall>>([])
       const executorEntries = yield* Ref.make<ReadonlyArray<ProductionExecutorCall>>([])
-      const suspendedTasks = yield* Ref.make<ReadonlySet<TaskId>>(new Set())
+      const suspendedTasks = yield* Ref.make<ReadonlySet<TaskId>>(
+        options.characterizeSpecificationClaimOverlap === "Restart" ? new Set(graphTaskIds) : new Set()
+      )
       const activationKinds = yield* Ref.make<ReadonlyArray<"OrdinaryRunEntry" | "ActiveWorkAuthorityRefresh">>([])
       const activeSources = yield* Ref.make<ReadonlyArray<"TrackerNotification" | "Timer">>([])
       const activeActivationCount = yield* Ref.make(0)
@@ -1067,6 +1121,11 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const latestJournalPosition = yield* Ref.make<JournalRecord["position"] | undefined>(undefined)
       const failpoint = yield* Ref.make<ProductionRefreshFailpoint | undefined>(undefined)
       const failpointConsumed = yield* Ref.make(false)
+      const blockedSpecificationTasks = yield* Ref.make<ReadonlySet<TaskId>>(new Set())
+      const blockedSpecificationsStarted = yield* Deferred.make<void>()
+      const releaseBlockedSpecifications = yield* Deferred.make<void>()
+      const leadingClaimReached = yield* Deferred.make<void>()
+      const leadingClaimReachedBeforeBlockedSpecificationsReleased = yield* Ref.make(false)
       const activeReadStarted = yield* Deferred.make<void>()
       const releaseActiveRead = yield* Deferred.make<void>()
       const firstActiveSettled = yield* Deferred.make<void>()
@@ -1119,20 +1178,32 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   Effect.andThen(Effect.succeed(ActiveTaskClaim.make(requested)))
                 ),
               readTaskClaim: (selectedTaskId) =>
-                Ref.update(trackerCalls, (calls) => [...calls, "claim" as const]).pipe(
-                  Effect.andThen(
-                    selectedTaskId === constrainedTaskId && claimMode === "Unreadable"
-                      ? Effect.fail(new TaskClaimReadFailure({ detail: "claim unreadable", taskId: selectedTaskId }))
-                      : selectedTaskId === constrainedTaskId
-                        ? Effect.succeed(claimObservation)
-                        : selectedTaskId === taskId
-                          ? Effect.succeed(claim)
-                          : Effect.map(
-                              Ref.get(acquiredClaims),
-                              (current) => current.get(selectedTaskId) ?? UnclaimedTask.make({ taskId: selectedTaskId })
-                            )
-                  )
-                ),
+                Effect.gen(function* () {
+                  yield* Ref.update(trackerCalls, (calls) => [...calls, "claim" as const])
+                  const characterizedPhase =
+                    options.characterizeSpecificationClaimOverlap === "Restart" ? "Startup" : "Active"
+                  if (
+                    options.characterizeSpecificationClaimOverlap !== undefined &&
+                    selectedTaskId === taskId &&
+                    (yield* Ref.get(phase)) === characterizedPhase
+                  ) {
+                    yield* Ref.set(
+                      leadingClaimReachedBeforeBlockedSpecificationsReleased,
+                      !(yield* Deferred.isDone(releaseBlockedSpecifications))
+                    )
+                    yield* Deferred.succeed(leadingClaimReached, undefined)
+                  }
+                  return yield* selectedTaskId === constrainedTaskId && claimMode === "Unreadable"
+                    ? Effect.fail(new TaskClaimReadFailure({ detail: "claim unreadable", taskId: selectedTaskId }))
+                    : selectedTaskId === constrainedTaskId
+                      ? Effect.succeed(claimObservation)
+                      : selectedTaskId === taskId
+                        ? Effect.succeed(claim)
+                        : Effect.map(
+                            Ref.get(acquiredClaims),
+                            (current) => current.get(selectedTaskId) ?? UnclaimedTask.make({ taskId: selectedTaskId })
+                          )
+                }),
               releaseTaskClaim: () => Effect.void
             })
             const trackerGraphReader = TrackerGraphReader.of({
@@ -1160,6 +1231,23 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 Effect.gen(function* () {
                   yield* Ref.update(trackerCalls, (calls) => [...calls, "specification" as const])
                   const selectedSpecificationMode = yield* Ref.get(currentSpecificationMode)
+                  const characterizedPhase =
+                    options.characterizeSpecificationClaimOverlap === "Restart" ? "Startup" : "Active"
+                  if (
+                    options.characterizeSpecificationClaimOverlap !== undefined &&
+                    selectedTaskId !== taskId &&
+                    (yield* Ref.get(phase)) === characterizedPhase
+                  ) {
+                    const blocked = yield* Ref.updateAndGet(
+                      blockedSpecificationTasks,
+                      (current) => new Set([...current, selectedTaskId])
+                    )
+                    const expectedBlockedTaskCount = options.characterizeSpecificationClaimOverlap === "Restart" ? 2 : 1
+                    if (blocked.size === expectedBlockedTaskCount) {
+                      yield* Deferred.succeed(blockedSpecificationsStarted, undefined)
+                    }
+                    yield* Deferred.await(releaseBlockedSpecifications)
+                  }
                   if (
                     coalesce &&
                     options.editDuringActiveRead === true &&
@@ -1209,9 +1297,16 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   yield* Ref.update(executorCalls, (calls) => [...calls, call])
                   const suspended = (yield* Ref.get(suspendedTasks)).has(projectedTaskId)
                   return PlannedAttemptExecutorProjection.cases.Exact.make({
-                    report: suspended
-                      ? PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
-                      : PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+                    report:
+                      options.characterizeSpecificationClaimOverlap === "ActiveRefresh" &&
+                      projectedTaskId === independentTaskId
+                        ? PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                            correlation,
+                            result: { _tag: "Completed" }
+                          })
+                        : suspended
+                          ? PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+                          : PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
                   })
                 }),
               requestSuspension: (requested) =>
@@ -1376,8 +1471,18 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                             ? Deferred.succeed(acceptedActivation, undefined)
                             : Effect.void
                       ),
-                      Effect.andThen(
-                        Effect.succeed(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+                      Effect.flatMap((count) =>
+                        options.characterizeSpecificationClaimOverlap === "Restart" && count === 1
+                          ? applicationBootstrap.activate(
+                              target,
+                              initialControlPolicySource,
+                              allocatedRunId,
+                              program,
+                              activationOpportunity
+                            )
+                          : Effect.succeed(
+                              RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+                            )
                       )
                     )
                   : Effect.gen(function* () {
@@ -1489,7 +1594,11 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               const owner = yield* RunReactivationOwner
               yield* Effect.yieldNow
               yield* Deferred.await(startupActivation)
-              if (source === "AcceptedFactPublication") {
+              if (options.characterizeSpecificationClaimOverlap === "Restart") {
+                yield* Deferred.await(blockedSpecificationsStarted)
+                yield* Deferred.await(leadingClaimReached)
+                yield* Deferred.succeed(releaseBlockedSpecifications, undefined)
+              } else if (source === "AcceptedFactPublication") {
                 const observers = yield* Ref.get(registeredObservers)
                 if (observers === undefined) return yield* Effect.die("production owner did not register its observers")
                 yield* observers.acceptedFactPublication()
@@ -1519,6 +1628,11 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 } else {
                   yield* owner.hint(RunReactivationHint.TrackerNotification())
                 }
+                if (options.characterizeSpecificationClaimOverlap === "ActiveRefresh") {
+                  yield* Deferred.await(blockedSpecificationsStarted)
+                  yield* Deferred.await(leadingClaimReached)
+                  yield* Deferred.succeed(releaseBlockedSpecifications, undefined)
+                }
                 yield* Deferred.await(activeActivation)
                 yield* Deferred.await(firstActiveSettled)
                 if (options.laterSpecificationChange === true || options.repeatAfterUncertainty === true) {
@@ -1546,7 +1660,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             )
             return {
               activeActivation:
-                source === "AcceptedFactPublication" || source === "OperatorWake"
+                source === "AcceptedFactPublication" ||
+                source === "OperatorWake" ||
+                options.characterizeSpecificationClaimOverlap === "Restart"
                   ? undefined
                   : yield* Deferred.await(activeActivation),
               activeDecision: yield* Ref.get(activeDecision)
@@ -1564,7 +1680,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const journalRecords = yield* readJournal()
       return {
         activeActivation:
-          source === "AcceptedFactPublication" || source === "OperatorWake"
+          source === "AcceptedFactPublication" ||
+          source === "OperatorWake" ||
+          options.characterizeSpecificationClaimOverlap === "Restart"
             ? undefined
             : (secondProcess?.activeActivation ?? firstProcess.activeActivation),
         activeDecision: secondProcess?.activeDecision ?? firstProcess.activeDecision,
@@ -1575,6 +1693,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         activeSources: yield* Ref.get(activeSources),
         activeActivationCount: yield* Ref.get(activeActivationCount),
         beforeSecondOpportunity: yield* Ref.get(beforeSecondOpportunity),
+        blockedSpecificationTasks: [...(yield* Ref.get(blockedSpecificationTasks))].toSorted(),
         maximumActiveConcurrent: yield* Ref.get(maximumActiveConcurrent),
         executorCalls: yield* Ref.get(executorCalls),
         executorEntries: yield* Ref.get(executorEntries),
@@ -1583,7 +1702,10 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         graphTaskIds: snapshot.taskIds(),
         journalRecords,
         taskWorkSnapshots: yield* Ref.get(taskWorkSnapshots),
-        trackerCalls: yield* Ref.get(trackerCalls)
+        trackerCalls: yield* Ref.get(trackerCalls),
+        leadingClaimReachedBeforeBlockedSpecificationsReleased: yield* Ref.get(
+          leadingClaimReachedBeforeBlockedSpecificationsReleased
+        )
       }
     }).pipe(
       Effect.provide(nodePathAndFileSystemLayer),
@@ -1591,6 +1713,33 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       Effect.provide(NodeServices.layer)
     )
   )
+
+it.effect(
+  "allows one restart authority lane to reach claim while independent specification reads remain in flight",
+  () =>
+    Effect.gen(function* () {
+      const result = yield* runProductionRefreshHarness({
+        characterizeSpecificationClaimOverlap: "Restart",
+        report: "SafelySuspended",
+        threeExecuting: true
+      })
+      expect(result.leadingClaimReachedBeforeBlockedSpecificationsReleased).toBe(true)
+      expect(result.blockedSpecificationTasks).toEqual([TaskId.make("C"), TaskId.make("D")])
+    })
+)
+
+it.effect(
+  "allows one active-refresh authority lane to reach claim while independent specification reads remain in flight",
+  () =>
+    Effect.gen(function* () {
+      const result = yield* runProductionRefreshHarness({
+        characterizeSpecificationClaimOverlap: "ActiveRefresh",
+        threeExecuting: true
+      })
+      expect(result.leadingClaimReachedBeforeBlockedSpecificationsReleased).toBe(true)
+      expect(result.blockedSpecificationTasks).toEqual([TaskId.make("D")])
+    })
+)
 
 const expectOneSuspensionAfterObservation = (
   records: ReadonlyArray<JournalRecord>,
