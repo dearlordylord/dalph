@@ -437,14 +437,20 @@ successor start. [The accepted graph-progress scenario above](#accepted-graph-pr
 requires every coherent accepted publication to reach the runtime without a
 second relation read. This scenario preserves both rules and refines the exact
 ordering between them: the runtime may settle the predecessor only after it
-has consumed the accepted publication through which the action returned.
+has consumed the accepted publication named by the proof it obtains after the
+executor action returns its ordinary result.
 
 [D33 No silent drop and D34 Quiescence is not
 completion](../DELIVERY-INVARIANTS.md#progress) prohibit losing successor work
-or claiming quiescence while its predecessor still owns a live action. The
-formal `everyBegunSettles` law remains unchanged because the activation-local
-publication handoff is below that model's abstraction. This refinement adds no
-Journal record, authority read, retry, persisted queue, or scheduling priority.
+or claiming quiescence while its predecessor still owns a live action. At the
+formal abstraction, [`deliveryCore.qnt`'s exact `everyBegunSettles` temporal
+law](../../research/verification-bakeoff/quint/deliveryCore.qnt#L622) requires
+every begun action eventually to settle. That model deliberately excludes the
+activation-local handoff from an executor's ordinary result, through the
+runtime's accepted-publication boundary call, to its process-local completion
+queue; the runtime tests below govern that finer ordering. This refinement adds
+no Journal record, authority read, retry, persisted queue, or scheduling
+priority.
 
 ### Starting situation and trigger
 
@@ -454,11 +460,14 @@ task-work-specification read. The runtime still holds the intent-era evaluation
 at Journal position 22; that evaluation does not yet contain A's specification
 proposal.
 
-The existing action protocol calls the tracker, records its result, and the
-Journal accepts the relation facts through position 23. The existing accepted-
-fact publication boundary waits until delivery planning publishes one coherent
-position-23 evaluation containing A's exact specification proposal. The action
-then returns. Its completion and that evaluation travel through independent
+The existing executor action calls the tracker, records its result, and returns
+its ordinary result to the runtime while the Journal accepts the relation facts
+through position 23. Before enqueueing an action completion, the runtime calls
+the existing accepted-fact publication boundary. That boundary waits until
+delivery planning publishes one coherent position-23 evaluation containing A's
+exact specification proposal, then returns `{ runId, acceptedThrough }`. The
+runtime pairs that proof with the ordinary action result and enqueues the
+completion. That completion and the evaluation travel through independent
 in-process queue offers, so the completion may be taken first even though the
 relation has already published position 23.
 
@@ -468,10 +477,12 @@ two process-local notifications that follow its ordinary Journal publication.
 
 ### Ordered runtime handoff and result
 
-1. The action returns one activation-local proof naming the exact Run and
-   Journal position 23 as the accepted prefix through which delivery planning
-   has published. The runtime's completion already names the exact predecessor
-   proposal; the descriptive relation does not copy or validate that identity.
+1. The executor action returns its ordinary result. The runtime then calls the
+   accepted-publication boundary, which returns an activation-local proof naming
+   the exact Run and Journal position 23 after delivery planning publishes that
+   prefix. The runtime pairs the proof with the result before it enqueues the
+   completion. That completion already names the exact predecessor proposal;
+   the descriptive relation does not copy or validate that identity.
 2. If the runtime takes the completion before it takes the position-23
    evaluation, it retains the exact live owner and the child-completion
    acknowledgement. It does not settle the owner, release its reservation,
