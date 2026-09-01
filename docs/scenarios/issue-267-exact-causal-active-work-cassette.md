@@ -4,9 +4,11 @@ Owning issue: [#267](https://github.com/dearlordylord/dalph/issues/267)
 
 Status: issue #267 was closed after composition on `integrate/issues-264-268`
 through exact commit `a1b81c4fbcd189d62b480d6e637c62278ca7b829`. The
-maintained proof remains a required handoff gate. It is not currently green:
-the post-Safe G2 handoff defect must be repaired before this implementation can
-be handed off. The cassette-owned proof exposed one missing composition of
+maintained proof remains a required handoff gate. The reviewed post-Safe G2
+boundary repair now makes the unchanged maintained
+proof green. A focused run passed 1/1; its observed 533 ms test duration is
+execution evidence, not an acceptance bound or timing invariant. The
+cassette-owned proof exposed one missing composition of
 already-accepted #265/#266 behavior:
 when Suspend returns the unchanged Executing projection, the ordinary passive
 owner must remain attached to that exact attempt. The repair adds no provider
@@ -88,9 +90,9 @@ Acceptance tests:
 - `delivery-proposal-routes.test.ts` — “after Suspend returns Executing
   observes exact Safe and releases only that attempt”
 - `authored-active-work-causal-sync.test.ts` — “coalesces notification and
-  timer hints then retains B1 until its exact safe report”; this required
-  composed proof remains handoff-blocking until the post-Safe G2 defect is
-  repaired
+  timer hints then retains B1 until its exact safe report”; the unchanged
+  required composed proof is green with the reviewed post-Safe G2 boundary
+  repair
 
 ## A reactivation-owner interaction failure exits as the same defect
 
@@ -194,13 +196,14 @@ scenario; the #265, #266, and #267 scenarios continue to govern its behavior.
 | A terminal assertion or authored process death ends one reactivation-owner generation with its exact successful outcome | `authored-runner-policy.test.ts`, individual terminal and process-death tests |
 | At both initial and post-wake selection cuts, ready owner defect wins over process death, and ready process death wins over terminal; death is consumed only when selected | `authored-runner-policy.test.ts`, all-ready and death-plus-terminal initial-cut tests; owner-defect-with-terminal-wake and process-death-with-terminal-wake post-wake tests |
 | A malformed post-death boundary completes the owner failure signal and exits through `Die` with the same `TraceOutputError`, never typed `Fail` | `authored-runner-policy.test.ts`, individual same-defect test; `authored-active-work-causal-sync.test.ts`, malformed-interaction test |
-| Current notification wins Startup, later hints coalesce into one trailing refresh, real G1/F1/F2 run, B1 releases only after exact Safe, and the post-Safe G2 handoff completes | `authored-active-work-causal-sync.test.ts`, maintained composed cassette test; required and handoff-blocking until the post-Safe G2 defect is repaired |
+| Current notification wins Startup, later hints coalesce into one trailing refresh, real G1/F1/F2 run, B1 releases only after exact Safe, and the post-Safe G2 handoff completes | `authored-active-work-causal-sync.test.ts`, unchanged maintained composed cassette test, green with the reviewed G2 boundary repair |
 
 Historical closure evidence for commit
 `a1b81c4fbcd189d62b480d6e637c62278ca7b829` included 194/194 combined
 #267/#269 focused tests, 2,726 repository tests, 35 model-based tests, all 92
 maintained cassettes, 100% changed executable coverage, and the gitleaks scan.
-That historical result does not make the current maintained composed row
-green. Current handoff requires the owner-outcome policy and malformed
-interaction proofs above and a green maintained coalescing cassette after the
-post-Safe G2 defect is repaired.
+That historical result alone did not make the maintained composed row green.
+The current reviewed candidate adds the owner-outcome and malformed-interaction
+proofs above and passes the unchanged maintained coalescing cassette 1/1. The
+observed 533 ms focused test duration records that run only; correctness does
+not depend on that duration.
