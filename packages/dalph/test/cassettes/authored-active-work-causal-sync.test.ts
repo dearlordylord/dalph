@@ -373,9 +373,15 @@ it.effect("keeps requested executor projections ordered even in a causal tracker
     yield* cursor.consumeDalphSelectionFor(readGraph, causalContext("operation:causal-only", []))
     const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
 
-    expect((yield* observeThroughControlledExecutor(cursor, runId, foreign, reports))._tag).toBe(
-      "CorrelationContradiction"
-    )
+    expect(yield* observeThroughControlledExecutor(cursor, runId, foreign, reports)).toMatchObject({
+      _tag: "NoReport",
+      correlation: foreign
+    })
+    expect(yield* cursor.storyPosition).toBe(1)
+    expect(yield* observeThroughControlledExecutor(cursor, runId, b, reports)).toMatchObject({
+      _tag: "Exact",
+      report: { _tag: "ExecutorWorkSafelySuspended", correlation: b }
+    })
     expect(yield* cursor.storyPosition).toBe(2)
   })
 )
