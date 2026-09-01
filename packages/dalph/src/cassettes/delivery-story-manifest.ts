@@ -75,14 +75,19 @@ const capstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
 
 const topologyTest = capstoneTest("consumes a staggered graph while restart-added X waits for recovered capacity")
 const restartTest = capstoneTest("preserves the double-diamond middle positions across coordinator restart")
-
-const spine = (
-  beatId: DeliveryStoryBeatId,
-  ...acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
-): DeliveryStoryBeatManifestEntry => ({
-  beatId,
-  coverage: { _tag: "DemonstratedBySpine", acceptanceTests, cassetteKeys: ["authored:deliveryInvariantStory"] }
-})
+const checkpointTest = capstoneTest("emits the exact DS01 through DS13 delivery checkpoint table")
+const identityTest = capstoneTest("retains exact Run attempt claim and resource identities across DS01 through DS13")
+const bChoiceTest = capstoneTest("records B's F1-to-F2 choice and one same-attempt Continue and Resume")
+const capacityTest = capstoneTest("observes reduced capacity revision two before the authored restart cut")
+const cSafeTest = capstoneTest("records exactly one C2 Safe ordinal before Continue B")
+const reconstructedRestartTest = capstoneTest(
+  "runs reconstructed ordinary activation through strict exact projections before returning unsettled responsibility"
+)
+const authorityGroupTest = capstoneTest(
+  "preserves the post-hint A D authority group without weakening the thirteen-beat story"
+)
+const admissionPriorityTest = capstoneTest("admits retained B ahead of unstarted E after A releases its position")
+const autonomousCapstoneKey = ["authored:autonomousExecutorDeliveryCapstone"] as const
 
 const slice = (
   beatId: DeliveryStoryBeatId,
@@ -103,7 +108,7 @@ const missing = (beatId: DeliveryStoryBeatId, reason: string): DeliveryStoryBeat
 
 /**
  * Machine-readable coverage for the prose story. The long spine proves the
- * double-diamond graph/restart path; one maintained story proves one narrower beat;
+ * double-diamond graph/restart path; one maintained story proves the narrower early beats;
  * unsupported combined behavior remains explicit instead of fabricated.
  */
 export const deliveryStoryManifest = {
@@ -111,43 +116,19 @@ export const deliveryStoryManifest = {
   cassetteAcceptanceTests: [topologyTest, restartTest],
   sourceDocument: "docs/DELIVERY-STORY.md" as const,
   beats: [
-    missing(
-      "DS-01",
-      "The maintained double diamond starts with only A eligible; the prose beat requires five independent eligible tasks."
-    ),
-    missing("DS-02", "No maintained run admits A, B, and C together yet."),
-    missing(
-      "DS-03",
-      "No maintained cassette represents Alice editing B and then observes the exact G0-to-G1 tracker revision change."
-    ),
-    missing(
-      "DS-04",
-      "No named acceptance test proves B's changed graph/specification rereads, safe-suspension request, and retained position together."
-    ),
-    missing(
-      "DS-05",
-      "The current changed-attempt choice supports Continue or Stop, not the prose beat's three choices including Restart."
-    ),
-    missing(
-      "DS-06",
-      "No maintained run admits D after B's changed-instruction suspension releases one of three held positions."
-    ),
-    missing(
-      "DS-07",
-      "No maintained catalog cassette lowers capacity from three to two while A, C, and D all remain held."
-    ),
-    spine("DS-08", restartTest),
-    missing("DS-09", "The maintained double diamond recovers held B and C, not held A, C, and D plus retained B."),
-    missing("DS-10", "No maintained run closes C without success and then asks its exact executor to suspend."),
-    missing("DS-11", "No maintained run releases closed C's position while retaining its reversible lifecycle wait."),
-    missing(
-      "DS-12",
-      "No maintained run applies Continue to retained B while two other tasks consume all current capacity."
-    ),
-    missing(
-      "DS-13",
-      "No maintained run releases A's position after its accepted result and then admits already-owned B."
-    ),
+    slice("DS-01", autonomousCapstoneKey, checkpointTest, identityTest),
+    slice("DS-02", autonomousCapstoneKey, checkpointTest, identityTest, bChoiceTest),
+    slice("DS-03", autonomousCapstoneKey, checkpointTest, bChoiceTest, authorityGroupTest),
+    slice("DS-04", autonomousCapstoneKey, checkpointTest, authorityGroupTest),
+    slice("DS-05", autonomousCapstoneKey, checkpointTest, bChoiceTest, authorityGroupTest),
+    slice("DS-06", autonomousCapstoneKey, checkpointTest, admissionPriorityTest),
+    slice("DS-07", autonomousCapstoneKey, checkpointTest, capacityTest),
+    slice("DS-08", autonomousCapstoneKey, checkpointTest, capacityTest, reconstructedRestartTest),
+    slice("DS-09", autonomousCapstoneKey, checkpointTest, reconstructedRestartTest),
+    slice("DS-10", autonomousCapstoneKey, checkpointTest, authorityGroupTest),
+    slice("DS-11", autonomousCapstoneKey, checkpointTest, cSafeTest),
+    slice("DS-12", autonomousCapstoneKey, checkpointTest, cSafeTest, bChoiceTest),
+    slice("DS-13", autonomousCapstoneKey, checkpointTest, admissionPriorityTest, bChoiceTest),
     slice(
       "DS-14",
       ["authored:acceptedResultRestartsIntoIntegration"],
