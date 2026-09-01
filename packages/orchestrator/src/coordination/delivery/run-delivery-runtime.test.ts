@@ -3327,7 +3327,15 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
       conflicts: [{ id: blockedD.id, order: blockedD.order, owners: ["TrackerGraph", "TicketDelivery"] }]
     }
   } satisfies DeliveryRuntimeEvaluation
-  const relation = yield* dynamicEvaluationSignal(initial)
+  const relationSource = yield* dynamicEvaluationSignal(initial)
+  const relationPublicationCount = yield* Ref.make(0)
+  const relation = {
+    ...relationSource,
+    publish: (evaluation: DeliveryRuntimeEvaluation) =>
+      relationSource
+        .publish(evaluation)
+        .pipe(Effect.andThen(Ref.update(relationPublicationCount, (count) => count + 1)))
+  }
   const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
   const journal = InRunJournal.of({
     append: (recordRunId, key, event) =>
@@ -3350,7 +3358,7 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
     readonly position: unknown
   }>()
   const journalCountAtPublication = yield* Deferred.make<number>()
-  const publicationCalls = yield* Ref.make(0)
+  const relationPublicationCountBeforeQuiescence = yield* Deferred.make<number>()
   const integrationTargets = yield* makeIntegrationTargetResourceController()
   const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
   const resources = {
@@ -3402,17 +3410,25 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
   const trace = DeliverySemanticTrace.of({
     emit: (event) =>
       event._tag === "ProposalDeferred" && blockedIds.has(event.proposalId)
-        ? Ref.updateAndGet(deferred, (current) =>
-            current.includes(event.proposalId) ? current : [...current, event.proposalId]
-          ).pipe(
-            Effect.flatMap((current) => (current.length === blocked.length ? relation.publish(poison) : Effect.void))
+        ? Ref.modify(deferred, (current) => {
+            if (current.includes(event.proposalId)) return [false, current] as const
+            const next = [...current, event.proposalId]
+            return [next.length === blocked.length, next] as const
+          }).pipe(
+            Effect.flatMap((publishCausalPoison) =>
+              publishCausalPoison
+                ? relation.publish(poison).pipe(
+                    Effect.andThen(Ref.get(relationPublicationCount)),
+                    Effect.flatMap((count) => Deferred.succeed(relationPublicationCountBeforeQuiescence, count))
+                  )
+                : Effect.void
+            )
           )
         : Effect.void
   })
   const publication = DeliveryAcceptedFactPublication.of({
     awaitCurrent: Effect.gen(function* () {
       yield* Deferred.succeed(journalCountAtPublication, (yield* Ref.get(records)).length)
-      yield* Ref.update(publicationCalls, (count) => count + 1)
       yield* relation.publish(accepted)
       return { _tag: "DeliveryAcceptedPublicationBoundary" as const, acceptedThrough, runId }
     })
@@ -3434,7 +3450,8 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
     expectedCorrelations: [a, b, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt)),
     finalJournalTags: (yield* Ref.get(records)).map(({ event }) => event._tag),
     journalCountAtPublication: yield* Deferred.await(journalCountAtPublication),
-    publicationCalls: yield* Ref.get(publicationCalls),
+    relationPublicationCountBeforeQuiescence: yield* Deferred.await(relationPublicationCountBeforeQuiescence),
+    finalRelationPublicationCount: yield* Ref.get(relationPublicationCount),
     result
   }
 })
@@ -3473,7 +3490,8 @@ it.effect("does not journal or publish the process-local admission snapshot", ()
         "PlannedAttemptExecutorWorkReported"
       ])
       expect(scenario.journalCountAtPublication).toBe(scenario.finalJournalTags.length)
-      expect(scenario.publicationCalls).toBe(1)
+      expect(scenario.relationPublicationCountBeforeQuiescence).toBe(2)
+      expect(scenario.finalRelationPublicationCount).toBe(scenario.relationPublicationCountBeforeQuiescence)
       expect(scenario.acceptedTaskWork.held.map(({ correlation }) => correlation)).toEqual(
         scenario.expectedCorrelations.slice(0, 2)
       )

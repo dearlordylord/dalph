@@ -342,6 +342,12 @@ it.effect("restart reconstructs three unfinished task positions without an admis
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
     )
     const current = yield* control.read(runId)
+    const exactReconstructedPositions = [
+      { attemptId: AttemptId.make("restart-capacity-A"), runId, taskId: TaskId.make("A") },
+      { attemptId: AttemptId.make("restart-capacity-B"), runId, taskId: TaskId.make("B") },
+      { attemptId: AttemptId.make("restart-capacity-C"), runId, taskId: TaskId.make("C") }
+    ]
+    expect(recovery.reconstructedPlannedAttemptPositions).toEqual(exactReconstructedPositions)
     const controller = yield* makeDeliveryRuntimeAdmissionController(
       {
         capacity: current.taskExecutionCapacity,
@@ -355,11 +361,12 @@ it.effect("restart reconstructs three unfinished task positions without an admis
     )
 
     expect(current).toEqual({ revision: 2, taskExecutionCapacity: 3 })
-    expect([...(yield* controller.snapshot).positions.keys()]).toEqual([
-      TaskId.make("A"),
-      TaskId.make("B"),
-      TaskId.make("C")
-    ])
+    expect([...(yield* controller.snapshot).positions]).toEqual(
+      exactReconstructedPositions.map(({ attemptId, runId, taskId }) => [
+        taskId,
+        { _tag: "AcceptedAttemptPosition", correlation: { attemptId, runId } }
+      ])
+    )
   }).pipe(
     Effect.provide(taskWorkCapacityControlLayer),
     Effect.provide(memoryJournalTestLayer),
