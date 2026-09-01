@@ -122,8 +122,11 @@ no Resume intent or contact and that a Resume winner excludes the choice.
 `specs/applicationExit_proof.qnt` applies the exception to the canonical Exit
 model's two-owner, two-attempt, five-tick, result, death, and restart product.
 Four acyclic graphs retain its admission, owner-intent, executor-evidence, and
-lifecycle-result decisions. The canonical model remains the only executable
-behavior source and
+lifecycle-result decisions. The lifecycle-result graph keeps the exact
+`ApplicationExitResult` in both modes: ordinary success follows coordinator
+release, while a production host reports the result before its enclosing scope
+finalizes and releases the coordinator. The canonical model remains the only
+executable behavior source and
 `packages/dalph/test/conformance/application-exit.mbt.test.ts` remains the
 production seam. Each projection has collected positive and negative tests,
 sampled witnesses, and complete TLC enumeration without a depth token.

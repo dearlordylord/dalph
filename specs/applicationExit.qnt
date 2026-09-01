@@ -171,7 +171,7 @@ module applicationExit {
 
   pure def noUsefulQuickWorkRemains(s: State): bool = and {
     usefulQuickWorkDrained(s),
-    not(s.coordinatorLockHeld),
+    or { s.mode == ProductionHostScoped, not(s.coordinatorLockHeld) },
   }
 
   pure def successDrainBoundaryReached(s: State): bool = and {
@@ -560,10 +560,9 @@ module applicationExit {
   action reportSuccess: bool = all {
     state.phase == Draining,
     state.tick < 5,
-    successDrainBoundaryReached(state),
     or {
-      state.mode == ProductionHostScoped,
-      not(state.coordinatorLockHeld),
+      and { state.mode == Ordinary, successBoundaryReached(state) },
+      and { state.mode == ProductionHostScoped, successDrainBoundaryReached(state) },
     },
     state' = {
       ...state,
@@ -583,11 +582,7 @@ module applicationExit {
     state.phase == Draining,
     state.tick < 5,
     state.failureDiagnosticRetained,
-    usefulQuickWorkDrained(state),
-    or {
-      state.mode == ProductionHostScoped,
-      not(state.coordinatorLockHeld),
-    },
+    noUsefulQuickWorkRemains(state),
     state' = {
       ...state,
       phase: if (state.mode == ProductionHostScoped) HostResultReported else FailureReported,

@@ -20,6 +20,7 @@ import {
   BranchCleanupBoundary,
   IntegratorCandidateCleanupBoundary,
   ApplicationExitShell,
+  type ProductionHostApplicationExitShellService,
   makeApplicationExitShell,
   GitCommand,
   type GitCommandService,
@@ -131,7 +132,7 @@ export type ProductionApplicationExitTraceObserver = (event: ApplicationExitTrac
  * paired with observer fields that the workflow would silently ignore.
  */
 export type ProductionWorkflowApplicationExitBoundary =
-  | { readonly _tag: "SuppliedHostShell"; readonly shell: ApplicationExitShell["Service"] }
+  | { readonly _tag: "SuppliedHostShell"; readonly shell: ProductionHostApplicationExitShellService }
   | {
       readonly _tag: "ConstructOrdinaryShell"
       readonly requestObserver?: ProductionApplicationExitRequestObserver

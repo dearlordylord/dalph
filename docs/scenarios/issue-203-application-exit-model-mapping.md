@@ -60,8 +60,10 @@ new owner.
 | Outside call | `recoverableAmbiguityRequiresAcknowledgedExactIntent`, `knownBoundaryObservationRequiresItsAcknowledgedIntent` | `unacknowledgedAmbiguityIsDetectedTest`, `unacknowledgedKnownObservationIsDetectedTest` |
 | Executor | `exactSafeOrTerminalEvidenceControlsPositionRelease`, `fastSuspensionRequiresAcknowledgedCommandIntent` | `foreignExecutorReleaseIsDetectedTest`, `unsafePositionReleaseIsDetectedTest`, `fastCallWithoutIntentIsDetectedTest` |
 | Idle, Outside call, Executor, Atomic | `successfulExitRequiresRecoverableBoundary` | `unsafeSuccessIsDetectedTest` |
-| Idle, Outside call, Executor, Atomic | `ordinarySuccessReleasesCoordinatorBeforeResult` | `unsafeSuccessIsDetectedTest` and `idleExitClosesCutoffBeforeSuccessTest` |
-| Host scoped | `hostResultBeforeScopeFinalization`, `hostScopeFinalizationReleasesCoordinator`, `hostResultProvenanceIsExplicit` | `hostScopeFinalizationBeforeResultIsDetectedTest` |
+| Idle, Outside call, Executor, Atomic | `ordinarySuccessReleasesCoordinatorBeforeResult` | `unsafeSuccessIsDetectedTest`, `idleExitClosesCutoffBeforeSuccessTest`, and proof `ordinarySuccessWithoutCoordinatorReleaseIsDetectedTest` |
+| Host scoped | `hostResultBeforeScopeFinalization` | `hostResultBeforeScopeFinalizationIsDetectedTest` |
+| Host scoped | `hostScopeFinalizationReleasesCoordinator` | `hostScopeFinalizationReleaseIsDetectedTest` |
+| Host scoped | `hostResultProvenanceIsExplicit` | `hostResultProvenanceIsDetectedTest` |
 | Failure | `conclusiveFailureWaitsForUsefulQuickWork` | `earlyConclusiveFailureIsDetectedTest` |
 | Atomic, Timeout | `fifthTickAtomicallyForcesTimedOutTermination` | `timeoutBeforeFifthTickIsDetectedTest`, `fifthTickWithoutForceIsDetectedTest` |
 | Failure, Timeout | `failureAndTimeoutRequestNonzeroForcedTermination` | `zeroStatusFailureIsDetectedTest`, `fifthTickWithoutForceIsDetectedTest` |
@@ -131,8 +133,12 @@ not reported as exhaustively enumerated: its resettable restart plus independent
 owner, executor, resource, and timer products exceed the repository gate
 budget. As permitted by ADR 0010, `applicationExit_proof.qnt` retains four
 acyclic projections—admission, owner intent, executor evidence, and lifecycle
-result. Each projection has positive tests, independent negative controls,
-sampled witnesses, and a complete TLC traversal with no depth token.
+result. The lifecycle-result projection exhaustively traverses both its ordinary
+release-before-result path and its host exact-result-before-scope-finalization
+path. Each projection has positive tests, independent negative controls,
+sampled witnesses, and a complete TLC traversal with no depth token. The four
+result-boundary negative controls are intentionally separate: one illegal
+transition targets each newly governed invariant.
 
 This proof split does not authorize the #204 shared cutoff/drain runtime. It
 only constrains the typed decisions that runtime must consume.

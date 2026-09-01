@@ -35,7 +35,9 @@ const SpecProjection = Schema.Struct({
     tick: ITFBigInt,
     cutoffCount: ITFBigInt,
     requestCount: ITFBigInt,
+    mode: Schema.Unknown,
     result: Schema.Unknown,
+    resultProvenance: Schema.Unknown,
     requestedStatus: Schema.Unknown,
     ownerA: Schema.Unknown,
     ownerB: Schema.Unknown,
@@ -47,6 +49,7 @@ const SpecProjection = Schema.Struct({
     reservationHeld: Schema.Boolean,
     fiberOpen: Schema.Boolean,
     coordinatorLockHeld: Schema.Boolean,
+    hostScopeFinalized: Schema.Boolean,
     failureDiagnosticRetained: Schema.Boolean,
     ownerAAmbiguous: Schema.Boolean,
     ownerBAmbiguous: Schema.Boolean,
@@ -80,6 +83,8 @@ const SpecProjection = Schema.Struct({
       manufacturedWorkflowOutcomes: ITFBigInt,
       gracefulTerminationRequested: Schema.Boolean,
       forcedTerminationRequested: Schema.Boolean,
+      hostResultReported: Schema.Boolean,
+      hostScopeFinalized: Schema.Boolean,
       unexpectedDeathObserved: Schema.Boolean,
       restarted: Schema.Boolean,
       restartClearedLifecycle: Schema.Boolean
@@ -90,12 +95,17 @@ const SpecProjection = Schema.Struct({
 type LifecyclePhase =
   | "Draining"
   | "FailureReported"
+  | "HostResultReported"
+  | "HostScopeFinalized"
   | "ProcessGoneFailure"
   | "ProcessGoneGraceful"
   | "ProcessGoneTimeout"
   | "ProcessGoneUnexpected"
   | "Serving"
   | "SuccessReported"
+
+type ExitMode = "Ordinary" | "ProductionHostScoped"
+type ExitResultProvenance = "NoExitProvenance" | "OrdinaryResult" | "ProductionHostResult"
 
 type ExecutorAttempt =
   | "AttemptNotStarted"
@@ -208,6 +218,8 @@ const applicationExitActions = {
   reportAttemptBTerminal: {},
   reportFailure: {},
   reportSuccess: {},
+  selectHostScopedMode: {},
+  finalizeHostScope: {},
   restartApplication: {},
   startAttemptA: {},
   startAttemptB: {},
@@ -221,7 +233,9 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
   let tick: number
   let cutoffCount: number
   let requestCount: number
+  let mode: ExitMode
   let result: "Failed" | "NoExitResult" | "Succeeded" | "TimedOut"
+  let resultProvenance: ExitResultProvenance
   let requestedStatus: "NoRequestedStatus" | "NonzeroStatus" | "ZeroStatus"
   let ownerA: ForwardOwnerAdmissionType
   let ownerB: ForwardOwnerAdmissionType
@@ -233,6 +247,10 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
   let reservationHeld: boolean
   let fiberOpen: boolean
   let coordinatorLockHeld: boolean
+  let hostScopeFinalized: boolean
+  let hostResultReported: boolean
+  let hostResultObserved: boolean
+  let hostScopeFinalizationObserved: boolean
   let failureDiagnosticRetained: boolean
   let ownerAAmbiguous: boolean
   let ownerBAmbiguous: boolean
@@ -260,7 +278,9 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
     tick = 0
     cutoffCount = 0
     requestCount = 0
+    mode = "Ordinary"
     result = "NoExitResult"
+    resultProvenance = "NoExitProvenance"
     requestedStatus = "NoRequestedStatus"
     ownerA = ForwardOwnerAdmission.NoForwardOwner()
     ownerB = ForwardOwnerAdmission.NoForwardOwner()
@@ -272,6 +292,10 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
     reservationHeld = false
     fiberOpen = false
     coordinatorLockHeld = true
+    hostScopeFinalized = false
+    hostResultReported = false
+    hostResultObserved = false
+    hostScopeFinalizationObserved = false
     failureDiagnosticRetained = false
     ownerAAmbiguous = false
     ownerBAmbiguous = false
@@ -337,6 +361,29 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
     tick: ApplicationExitDrainTick.make(tick)
   })
 
+  const attemptIsSafeForSuccess = (attempt: ExecutorAttempt): boolean =>
+    attempt === "AttemptNotStarted" || attempt === "AttemptSafelySuspended" || attempt === "AttemptTerminal"
+
+  const successDrainBoundaryReached = (): boolean =>
+    !failureDiagnosticRetained &&
+    ownerA._tag === "NoForwardOwner" &&
+    ownerB._tag === "NoForwardOwner" &&
+    attemptIsSafeForSuccess(attemptA) &&
+    attemptIsSafeForSuccess(attemptB) &&
+    write !== "ProducedWritePending" &&
+    write !== "ProducedWriteFailed" &&
+    !reservationHeld &&
+    !fiberOpen
+
+  const usefulQuickWorkDrained = (): boolean =>
+    !ownerIsRegistered(ownerA) &&
+    !ownerIsRegistered(ownerB) &&
+    !["AttemptExecuting", "SuspensionIntentRecorded", "FastSuspensionCalled"].includes(attemptA) &&
+    !["AttemptExecuting", "SuspensionIntentRecorded", "FastSuspensionCalled"].includes(attemptB) &&
+    write !== "ProducedWritePending" &&
+    !reservationHeld &&
+    !fiberOpen
+
   const clearProcessLocalStateAfterDeath = () => {
     ownerA = ForwardOwnerAdmission.NoForwardOwner()
     ownerB = ForwardOwnerAdmission.NoForwardOwner()
@@ -399,6 +446,7 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
         cutoffCount = 1
         requestCount = 1
         result = "NoExitResult"
+        resultProvenance = "NoExitProvenance"
         requestedStatus = "NoRequestedStatus"
         ownerA = closedOwnerA
         ownerB = closedOwnerB
@@ -533,18 +581,32 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
     reportSuccess: () =>
       Effect.sync(() => {
         const decision = decideApplicationExitDrain(drainSnapshot())
-        if (decision._tag === "ReportSucceeded") {
-          phase = "SuccessReported"
+        const canReport =
+          mode === "ProductionHostScoped"
+            ? successDrainBoundaryReached() && tick < 5
+            : decision._tag === "ReportSucceeded"
+        if (canReport) {
+          phase = mode === "ProductionHostScoped" ? "HostResultReported" : "SuccessReported"
           result = "Succeeded"
+          resultProvenance = mode === "ProductionHostScoped" ? "ProductionHostResult" : "OrdinaryResult"
+          hostResultReported = mode === "ProductionHostScoped"
+          hostResultObserved = mode === "ProductionHostScoped"
           requestedStatus = "ZeroStatus"
         }
       }),
     reportFailure: () =>
       Effect.sync(() => {
         const decision = decideApplicationExitDrain(drainSnapshot())
-        if (decision._tag === "ReportFailed") {
-          phase = "FailureReported"
+        const canReport =
+          mode === "ProductionHostScoped"
+            ? failureDiagnosticRetained && usefulQuickWorkDrained() && tick < 5
+            : decision._tag === "ReportFailed"
+        if (canReport) {
+          phase = mode === "ProductionHostScoped" ? "HostResultReported" : "FailureReported"
           result = "Failed"
+          resultProvenance = mode === "ProductionHostScoped" ? "ProductionHostResult" : "OrdinaryResult"
+          hostResultReported = mode === "ProductionHostScoped"
+          hostResultObserved = mode === "ProductionHostScoped"
           requestedStatus = "NonzeroStatus"
         }
       }),
@@ -556,11 +618,14 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
         )
         if (decision._tag === "AdvanceToTick") tick = decision.tick
         if (decision._tag === "ForceTimedOut") {
-          phase = "ProcessGoneTimeout"
+          phase = mode === "ProductionHostScoped" ? "HostResultReported" : "ProcessGoneTimeout"
           tick = decision.tick
           result = "TimedOut"
+          resultProvenance = mode === "ProductionHostScoped" ? "ProductionHostResult" : "OrdinaryResult"
           requestedStatus = "NonzeroStatus"
-          forcedTerminationRequested = true
+          hostResultReported = mode === "ProductionHostScoped"
+          hostResultObserved = mode === "ProductionHostScoped"
+          forcedTerminationRequested = mode === "Ordinary"
         }
       }),
     stopAfterSuccess: () =>
@@ -585,10 +650,31 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
           forcedTerminationRequested = true
         }
       }),
+    selectHostScopedMode: () =>
+      Effect.sync(() => {
+        mode = "ProductionHostScoped"
+      }),
+    finalizeHostScope: () =>
+      Effect.sync(() => {
+        if (
+          mode === "ProductionHostScoped" &&
+          phase === "HostResultReported" &&
+          result !== "NoExitResult" &&
+          resultProvenance === "ProductionHostResult" &&
+          hostResultReported &&
+          !hostScopeFinalized
+        ) {
+          phase = "HostScopeFinalized"
+          coordinatorLockHeld = false
+          hostScopeFinalized = true
+          hostScopeFinalizationObserved = true
+        }
+      }),
     unexpectedDeath: () =>
       Effect.sync(() => {
         phase = "ProcessGoneUnexpected"
         result = "NoExitResult"
+        resultProvenance = "NoExitProvenance"
         requestedStatus = "NoRequestedStatus"
         clearProcessLocalStateAfterDeath()
         unexpectedDeathObserved = true
@@ -600,7 +686,9 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
         tick = fresh.tick
         cutoffCount = 0
         requestCount = 0
+        mode = "Ordinary"
         result = "NoExitResult"
+        resultProvenance = "NoExitProvenance"
         requestedStatus = "NoRequestedStatus"
         ownerA = ForwardOwnerAdmission.NoForwardOwner()
         ownerB = ForwardOwnerAdmission.NoForwardOwner()
@@ -612,6 +700,7 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
         reservationHeld = false
         fiberOpen = false
         coordinatorLockHeld = true
+        hostScopeFinalized = false
         failureDiagnosticRetained = false
         ownerAAmbiguous = false
         ownerBAmbiguous = false
@@ -627,7 +716,9 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
           tick,
           cutoffCount,
           requestCount,
+          mode,
           result,
+          resultProvenance,
           requestedStatus,
           ownerA: ownerKey(ownerA),
           ownerB: ownerKey(ownerB),
@@ -639,6 +730,7 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
           reservationHeld,
           fiberOpen,
           coordinatorLockHeld,
+          hostScopeFinalized,
           failureDiagnosticRetained,
           ownerAAmbiguous,
           ownerBAmbiguous,
@@ -660,6 +752,8 @@ const applicationExitDriver = defineDriver(applicationExitActions, () => {
             manufacturedWorkflowOutcomes: 0,
             gracefulTerminationRequested,
             forcedTerminationRequested,
+            hostResultReported: hostResultObserved,
+            hostScopeFinalized: hostScopeFinalizationObserved,
             unexpectedDeathObserved,
             restarted,
             restartClearedLifecycle
@@ -688,7 +782,9 @@ quintIt(
             tick: Number(state.tick),
             cutoffCount: Number(state.cutoffCount),
             requestCount: Number(state.requestCount),
+            mode: variantTag(state.mode),
             result: variantTag(state.result),
+            resultProvenance: variantTag(state.resultProvenance),
             requestedStatus: variantTag(state.requestedStatus),
             ownerA: normalizedOwner(state.ownerA),
             ownerB: normalizedOwner(state.ownerB),

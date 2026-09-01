@@ -4,9 +4,9 @@ import {
   ApplicationExitDiagnostic,
   ApplicationExitDrainFailure,
   ApplicationExiting,
-  type ApplicationExitShellService,
   ApplicationExitResult,
   type ApplicationExitResult as ApplicationExitResultType,
+  type ProductionHostApplicationExitShellService,
   CoordinatorOwnership,
   InitialControlPolicy,
   JournalPosition,
@@ -58,9 +58,7 @@ const scopedCoordinatorOwnershipLayer = (ownership: CoordinatorOwnership["Servic
 
 const makeHostGraph = (
   foundation: Layer.Layer<CoordinatorOwnership | JournalStore | RunLifecycleJournal>,
-  onRun: (
-    applicationExit: ApplicationExitShellService<ApplicationExitResultType>
-  ) => Effect.Effect<void, never, Scope.Scope>
+  onRun: (applicationExit: ProductionHostApplicationExitShellService) => Effect.Effect<void, never, Scope.Scope>
 ) =>
   ({
     foundation: () => foundation,
@@ -120,7 +118,7 @@ it.effect("graceful host Exit reports the lifecycle result, then releases the co
       ),
       memoryJournalStoreLayer
     )
-    const shell = yield* Ref.make<ApplicationExitShellService<ApplicationExitResultType> | undefined>(undefined)
+    const shell = yield* Ref.make<ProductionHostApplicationExitShellService | undefined>(undefined)
     const observedResult = yield* Ref.make<ApplicationExitResultType | undefined>(undefined)
     const graph = makeHostGraph(foundation, (applicationExit) =>
       Ref.set(shell, applicationExit).pipe(

@@ -438,17 +438,26 @@ module applicationExitExecutorProof {
 }
 
 module applicationExitResultProof {
+  // The proof projection keeps the lifecycle result exact while making the
+  // production-host scope boundary explicit. Ordinary callers release the
+  // coordinator before exposing success; the host callback exposes the same
+  // result while its enclosing scope still owns the coordinator, then closes
+  // that scope in a distinct transition.
+  type Mode = Ordinary | ProductionHostScoped
   type Phase =
     | Serving
     | Draining
     | SuccessReported
     | FailureReported
+    | HostResultReported
+    | HostScopeFinalized
     | ProcessGoneGraceful
     | ProcessGoneFailure
     | ProcessGoneTimeout
     | ProcessGoneUnexpected
     | RestartedServing
   type Result = NoResult | Succeeded | Failed | TimedOut
+  type ResultProvenance = NoProvenance | OrdinaryResult | ProductionHostResult
   type Status = NoStatus | ZeroStatus | NonzeroStatus
   type Attempt = SafeAttempt | BusyAttempt | FailedAttempt
   type Write = NoWrite | PendingWrite | AcknowledgedWrite | FailedWrite
@@ -456,13 +465,18 @@ module applicationExitResultProof {
   type State = {
     phase: Phase,
     tick: int,
+    mode: Mode,
     result: Result,
+    resultProvenance: ResultProvenance,
     status: Status,
     ownerHeld: bool,
+    coordinatorLockHeld: bool,
     attempt: Attempt,
     write: Write,
     resourcesHeld: bool,
     failureDiagnosticRetained: bool,
+    hostResultReported: bool,
+    hostScopeFinalized: bool,
     gracefulTerminationRequested: bool,
     forcedTerminationRequested: bool,
     unexpectedDeathObserved: bool,
@@ -481,13 +495,24 @@ module applicationExitResultProof {
     s.resourcesHeld,
   }
 
-  pure def successBoundaryReached(s: State): bool = and {
+  // This is the drain-complete boundary. It intentionally excludes the
+  // ordinary coordinator release, because host callers report before scope
+  // finalization while ordinary callers use the complete boundary below.
+  pure def successDrainBoundaryReached(s: State): bool = and {
     not(s.ownerHeld),
     s.attempt == SafeAttempt,
     s.write != PendingWrite,
     s.write != FailedWrite,
     not(s.resourcesHeld),
     not(s.failureDiagnosticRetained),
+  }
+
+  // Ordinary success is visible only after its process-local coordinator lock
+  // is released. Keep this helper exercised by the ordinary report action and
+  // the useful-work positive path below.
+  pure def successBoundaryReached(s: State): bool = and {
+    successDrainBoundaryReached(s),
+    not(s.coordinatorLockHeld),
   }
 
   val successfulExitRequiresRecoverableBoundary: bool =
@@ -510,13 +535,26 @@ module applicationExitResultProof {
       not(state.resourcesHeld),
     }
 
+  // Ordinary timeout is process termination; host timeout is the exact typed
+  // result returned before host scope finalization and never requests force.
   val fifthTickAtomicallyForcesTimedOutTermination: bool = and {
-    state.tick != 5 or and {
-      state.phase == ProcessGoneTimeout,
-      state.result == TimedOut,
-      state.status == NonzeroStatus,
-      state.forcedTerminationRequested,
-    },
+    state.tick != 5 or if (state.mode == Ordinary)
+      and {
+        state.phase == ProcessGoneTimeout,
+        state.result == TimedOut,
+        state.resultProvenance == OrdinaryResult,
+        state.status == NonzeroStatus,
+        state.forcedTerminationRequested,
+      }
+    else
+      and {
+        state.phase == HostResultReported or state.phase == HostScopeFinalized,
+        state.result == TimedOut,
+        state.resultProvenance == ProductionHostResult,
+        state.status == NonzeroStatus,
+        state.hostResultReported,
+        not(state.forcedTerminationRequested),
+      },
     state.phase != ProcessGoneTimeout or state.tick == 5,
   }
 
@@ -536,6 +574,7 @@ module applicationExitResultProof {
   val successReportsBeforeGracefulProcessEnd: bool =
     state.phase != ProcessGoneGraceful or and {
       state.result == Succeeded,
+      state.resultProvenance == OrdinaryResult,
       state.status == ZeroStatus,
       state.gracefulTerminationRequested,
     }
@@ -543,6 +582,7 @@ module applicationExitResultProof {
   val unexpectedDeathNeverReportsGracefulSuccess: bool =
     state.phase != ProcessGoneUnexpected or and {
       state.result == NoResult,
+      state.resultProvenance == NoProvenance,
       state.status == NoStatus,
       state.unexpectedDeathObserved,
     }
@@ -552,17 +592,42 @@ module applicationExitResultProof {
       state.phase == RestartedServing,
       state.restartClearedLifecycle,
       state.tick == 0,
+      state.mode == Ordinary,
       state.result == NoResult,
+      state.resultProvenance == NoProvenance,
       state.status == NoStatus,
       not(state.ownerHeld),
+      state.coordinatorLockHeld,
       state.attempt == SafeAttempt,
       state.write == NoWrite,
       not(state.resourcesHeld),
       not(state.failureDiagnosticRetained),
+      not(state.hostResultReported),
+      not(state.hostScopeFinalized),
     }
 
   val applicationLifecycleNeverEntersWorkflowHistory: bool = state.workflowExitRecords == 0
   val exitNeverDisposesDurableWorkflowResources: bool = state.durableResourcesPreserved
+
+  // These four properties are deliberately independent so each negative
+  // control below measures one boundary claim rather than a conjunction.
+  val ordinarySuccessReleasesCoordinatorBeforeResult: bool =
+    state.mode != Ordinary or state.result != Succeeded or and {
+      not(state.coordinatorLockHeld),
+      state.resultProvenance == OrdinaryResult,
+    }
+
+  val hostResultBeforeScopeFinalization: bool =
+    state.mode != ProductionHostScoped or not(state.hostScopeFinalized) or and {
+      state.result != NoResult,
+      state.hostResultReported,
+    }
+
+  val hostScopeFinalizationReleasesCoordinator: bool =
+    state.mode != ProductionHostScoped or not(state.hostScopeFinalized) or not(state.coordinatorLockHeld)
+
+  val hostResultProvenanceIsExplicit: bool =
+    state.mode != ProductionHostScoped or state.result == NoResult or state.resultProvenance == ProductionHostResult
 
   val resultProofTypeOk: bool = and {
     state.tick >= 0,
@@ -575,6 +640,11 @@ module applicationExitResultProof {
   val drainingReached: bool = state.phase == Draining
   val successReportedReached: bool = state.phase == SuccessReported
   val failureReportedReached: bool = state.phase == FailureReported
+  val hostResultReportedReached: bool = state.phase == HostResultReported
+  val hostScopeFinalizedReached: bool = state.phase == HostScopeFinalized
+  val productionHostScopedReached: bool = state.mode == ProductionHostScoped
+  val ordinaryResultProvenanceReached: bool = state.resultProvenance == OrdinaryResult
+  val hostResultProvenanceReached: bool = state.resultProvenance == ProductionHostResult
   val gracefulProcessGoneReached: bool = state.phase == ProcessGoneGraceful
   val failedProcessGoneReached: bool = state.phase == ProcessGoneFailure
   val timedOutProcessGoneReached: bool = state.phase == ProcessGoneTimeout
@@ -589,13 +659,18 @@ module applicationExitResultProof {
     state' = {
       phase: Serving,
       tick: 0,
+      mode: Ordinary,
       result: NoResult,
+      resultProvenance: NoProvenance,
       status: NoStatus,
       ownerHeld: false,
+      coordinatorLockHeld: true,
       attempt: SafeAttempt,
       write: NoWrite,
       resourcesHeld: true,
       failureDiagnosticRetained: false,
+      hostResultReported: false,
+      hostScopeFinalized: false,
       gracefulTerminationRequested: false,
       forcedTerminationRequested: false,
       unexpectedDeathObserved: false,
@@ -604,6 +679,14 @@ module applicationExitResultProof {
       workflowExitRecords: 0,
       durableResourcesPreserved: true,
     },
+  }
+
+  // The host policy is selected before the first Exit request by production
+  // host composition; it is not an alternate result type.
+  action selectHostScopedMode: bool = all {
+    state.phase == Serving,
+    state.mode == Ordinary,
+    state' = { ...state, mode: ProductionHostScoped },
   }
 
   action holdOwner: bool = all {
@@ -632,7 +715,16 @@ module applicationExitResultProof {
 
   action acceptExit: bool = all {
     state.phase == Serving,
-    state' = { ...state, phase: Draining },
+    state' = {
+      ...state,
+      phase: Draining,
+      tick: 0,
+      result: NoResult,
+      resultProvenance: NoProvenance,
+      status: NoStatus,
+      hostResultReported: false,
+      hostScopeFinalized: false,
+    },
   }
 
   action releaseOwner: bool = all {
@@ -671,11 +763,28 @@ module applicationExitResultProof {
     state' = { ...state, resourcesHeld: false },
   }
 
+  action releaseCoordinatorLock: bool = all {
+    state.phase == Draining,
+    state.mode == Ordinary,
+    state.coordinatorLockHeld,
+    state' = { ...state, coordinatorLockHeld: false },
+  }
+
   action reportSuccess: bool = all {
     state.phase == Draining,
     state.tick < 5,
-    successBoundaryReached(state),
-    state' = { ...state, phase: SuccessReported, result: Succeeded, status: ZeroStatus },
+    or {
+      and { state.mode == Ordinary, successBoundaryReached(state) },
+      and { state.mode == ProductionHostScoped, successDrainBoundaryReached(state) },
+    },
+    state' = {
+      ...state,
+      phase: if (state.mode == Ordinary) SuccessReported else HostResultReported,
+      result: Succeeded,
+      resultProvenance: if (state.mode == Ordinary) OrdinaryResult else ProductionHostResult,
+      status: ZeroStatus,
+      hostResultReported: state.mode == ProductionHostScoped,
+    },
   }
 
   action reportFailure: bool = all {
@@ -683,30 +792,39 @@ module applicationExitResultProof {
     state.tick < 5,
     state.failureDiagnosticRetained,
     not(usefulQuickWorkRemains(state)),
-    state' = { ...state, phase: FailureReported, result: Failed, status: NonzeroStatus },
+    or { state.mode == ProductionHostScoped, not(state.coordinatorLockHeld) },
+    state' = {
+      ...state,
+      phase: if (state.mode == Ordinary) FailureReported else HostResultReported,
+      result: Failed,
+      resultProvenance: if (state.mode == Ordinary) OrdinaryResult else ProductionHostResult,
+      status: NonzeroStatus,
+      hostResultReported: state.mode == ProductionHostScoped,
+    },
   }
 
   action advanceTick: bool = all {
     state.phase == Draining,
-    state.tick < 4,
-    state' = { ...state, tick: state.tick + 1 },
-  }
-
-  action fifthTickForcesTimeout: bool = all {
-    state.phase == Draining,
-    state.tick == 4,
-    state' = {
-      ...state,
-      phase: ProcessGoneTimeout,
-      tick: 5,
-      result: TimedOut,
-      status: NonzeroStatus,
-      forcedTerminationRequested: true,
-    },
+    state.tick < 5,
+    if (state.tick == 4)
+      state' = {
+        ...state,
+        phase: if (state.mode == Ordinary) ProcessGoneTimeout else HostResultReported,
+        tick: 5,
+        result: TimedOut,
+        resultProvenance: if (state.mode == Ordinary) OrdinaryResult else ProductionHostResult,
+        status: NonzeroStatus,
+        forcedTerminationRequested: state.mode == Ordinary,
+        hostResultReported: state.mode == ProductionHostScoped,
+      }
+    else
+      state' = { ...state, tick: state.tick + 1 },
   }
 
   action stopAfterSuccess: bool = all {
     state.phase == SuccessReported,
+    state.mode == Ordinary,
+    state.result == Succeeded,
     state' = {
       ...state,
       phase: ProcessGoneGraceful,
@@ -716,10 +834,28 @@ module applicationExitResultProof {
 
   action forceAfterFailure: bool = all {
     state.phase == FailureReported,
+    state.mode == Ordinary,
+    state.result == Failed,
     state' = {
       ...state,
       phase: ProcessGoneFailure,
       forcedTerminationRequested: true,
+    },
+  }
+
+  // Host scope finalization is not process-end. It releases the coordinator
+  // only after the exact result has crossed the host reporting boundary.
+  action finalizeHostScope: bool = all {
+    state.mode == ProductionHostScoped,
+    state.phase == HostResultReported,
+    state.result != NoResult,
+    state.hostResultReported,
+    not(state.hostScopeFinalized),
+    state' = {
+      ...state,
+      phase: HostScopeFinalized,
+      coordinatorLockHeld: false,
+      hostScopeFinalized: true,
     },
   }
 
@@ -729,11 +865,15 @@ module applicationExitResultProof {
       ...state,
       phase: ProcessGoneUnexpected,
       result: NoResult,
+      resultProvenance: NoProvenance,
       status: NoStatus,
       ownerHeld: false,
+      coordinatorLockHeld: false,
       attempt: SafeAttempt,
       write: NoWrite,
       resourcesHeld: false,
+      hostResultReported: false,
+      hostScopeFinalized: false,
       unexpectedDeathObserved: true,
     },
   }
@@ -744,25 +884,32 @@ module applicationExitResultProof {
       state.phase == ProcessGoneFailure,
       state.phase == ProcessGoneTimeout,
       state.phase == ProcessGoneUnexpected,
+      state.phase == HostScopeFinalized,
     },
     not(state.restarted),
     state' = {
       ...state,
       phase: RestartedServing,
       tick: 0,
+      mode: Ordinary,
       result: NoResult,
+      resultProvenance: NoProvenance,
       status: NoStatus,
       ownerHeld: false,
+      coordinatorLockHeld: true,
       attempt: SafeAttempt,
       write: NoWrite,
       resourcesHeld: false,
       failureDiagnosticRetained: false,
+      hostResultReported: false,
+      hostScopeFinalized: false,
       restarted: true,
       restartClearedLifecycle: true,
     },
   }
 
   action step: bool = any {
+    selectHostScopedMode,
     holdOwner,
     startAttempt,
     produceWrite,
@@ -774,12 +921,13 @@ module applicationExitResultProof {
     acknowledgeWrite,
     failWrite,
     releaseResources,
+    releaseCoordinatorLock,
     reportSuccess,
     reportFailure,
     advanceTick,
-    fifthTickForcesTimeout,
     stopAfterSuccess,
     forceAfterFailure,
+    finalizeHostScope,
     unexpectedDeath,
     restartApplication,
   }

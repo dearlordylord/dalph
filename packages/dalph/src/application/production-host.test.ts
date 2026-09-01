@@ -6,8 +6,7 @@ import { DatabaseSync } from "node:sqlite"
 import nodeProcess from "node:process"
 import {
   ApplicationExitShell,
-  type ApplicationExitResult,
-  type ApplicationExitShellService,
+  type ProductionHostApplicationExitShellService,
   ClaimOwner,
   ClaimToken,
   RunLifecycleJournal,
@@ -77,7 +76,10 @@ import {
   productionRepositoryHostGraph,
   withProductionRepositoryHost
 } from "./production-host.js"
-import { isNonRetryableProductionActivationFailure } from "./production.js"
+import {
+  isNonRetryableProductionActivationFailure,
+  type ProductionWorkflowApplicationExitBoundary
+} from "./production.js"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { ProductionRepositoryHostConfigurationError } from "./production-configuration.js"
 import { CodexAppServer } from "./codex-app-server.js"
@@ -155,6 +157,16 @@ it("production host adapter surface cannot replace workflow mutation capabilitie
   expectTypeOf<CapabilityReplacementKey>().toEqualTypeOf<never>()
   type HostProcessEndObserverKey = Extract<keyof ProductionRepositoryHostAdapters, "applicationProcessEndObserver">
   expectTypeOf<HostProcessEndObserverKey>().toEqualTypeOf<never>()
+})
+
+it("ordinary Exit shells cannot inhabit the production-host shell boundary", () => {
+  type SuppliedHostShell = Extract<
+    ProductionWorkflowApplicationExitBoundary,
+    { readonly _tag: "SuppliedHostShell" }
+  >["shell"]
+
+  expectTypeOf<ApplicationExitShell["Service"]>().not.toMatchTypeOf<ProductionHostApplicationExitShellService>()
+  expectTypeOf<SuppliedHostShell>().toEqualTypeOf<ProductionHostApplicationExitShellService>()
 })
 
 it("production host graph exposes only the precise non-retryable throttle callback", () => {
@@ -1164,7 +1176,7 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
       configuration: ProductionRepositoryHostConfiguration,
       selection: ProductionRunSelection,
       onFailure: (failure: unknown) => Effect.Effect<void>,
-      applicationExit: ApplicationExitShellService<ApplicationExitResult>
+      applicationExit: ProductionHostApplicationExitShellService
     ) =>
       Layer.unwrap(
         Effect.gen(function* () {
@@ -1483,7 +1495,7 @@ it.effect(
           configuration: ProductionRepositoryHostConfiguration,
           selection: ProductionRunSelection,
           onFailure: (failure: unknown) => Effect.Effect<void>,
-          applicationExit: ApplicationExitShellService<ApplicationExitResult>
+          applicationExit: ProductionHostApplicationExitShellService
         ) => productionGraph.run(configuration, selection, onFailure, applicationExit)
         const graph = { foundation, makeApplicationExit: productionGraph.makeApplicationExit, run }
         const firstReady = yield* Deferred.make<void>()

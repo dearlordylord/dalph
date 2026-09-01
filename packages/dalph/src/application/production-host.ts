@@ -5,8 +5,7 @@ import {
   type GithubGraphqlClient,
   type RunReactivationOwner,
   type ApplicationExitRequestBoundaryService,
-  type ApplicationExitShellService,
-  type ApplicationExitResult,
+  type ProductionHostApplicationExitShellService,
   ApplicationExitShell,
   CompletionClaimBoundary,
   CompletionTaskBoundary,
@@ -38,6 +37,7 @@ import {
   taskClaimAcquisitionPlannerLayer,
   type ProductionRunSelection,
   type TraceCursor,
+  asApplicationExitShellService,
   makeProductionHostApplicationExitShell,
   selectProductionRun
 } from "@dalph/orchestrator"
@@ -69,7 +69,7 @@ export interface ProductionHostObservation {
   readonly current: CurrentSignal<DeliveryRuntimeObservationState>
   readonly selection: ProductionRunSelection
   /** Exact lifecycle result reported before this host scope finalizes resources and ownership. */
-  readonly applicationExitRequestBoundary: ApplicationExitRequestBoundaryService<ApplicationExitResult>
+  readonly applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
 }
 
 type ProductionHostFoundation = CoordinatorOwnership | JournalStore | RunLifecycleJournal
@@ -118,16 +118,12 @@ export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, R
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<ProductionHostFoundation, EFoundation, RFoundation>
   /** Builds the one host-scoped shell before the Run graph; no fallback shell is permitted. */
-  readonly makeApplicationExit: () => Effect.Effect<
-    ApplicationExitShellService<ApplicationExitResult>,
-    never,
-    Scope.Scope
-  >
+  readonly makeApplicationExit: () => Effect.Effect<ProductionHostApplicationExitShellService, never, Scope.Scope>
   readonly run: (
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
     onFailure: (failure: EActivation) => Effect.Effect<void>,
-    applicationExit: ApplicationExitShellService<ApplicationExitResult>
+    applicationExit: ProductionHostApplicationExitShellService
   ) => Layer.Layer<JournaledRunObservationSource | RunReactivationOwner, ERun, ProductionHostFoundation | RRun>
 }
 
@@ -351,7 +347,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
     onFailure: (failure: TaskTrackerMutationThrottled) => Effect.Effect<void>,
-    applicationExit: ApplicationExitShellService<ApplicationExitResult>
+    applicationExit: ProductionHostApplicationExitShellService
   ) =>
     Layer.unwrap(
       // eslint-disable-next-line complexity -- One production graph resolves optional edge adapters and observation while preserving one scoped service topology.
@@ -383,7 +379,9 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const appLayer: Layer.Layer<
           CodexAppServer,
           ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>
-        > = appLayerWithoutApplicationExit.pipe(Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)))
+        > = appLayerWithoutApplicationExit.pipe(
+          Layer.provide(Layer.succeed(ApplicationExitShell, asApplicationExitShellService(applicationExit)))
+        )
         const gitCommandLayer = observedGitCommandLayer(
           nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer)),
           adapters.boundaryObserver

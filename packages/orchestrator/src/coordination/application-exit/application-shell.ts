@@ -98,14 +98,14 @@ const emitSafeExecutorCorrelations = (
     : trace.emit({ _tag: "ExecutingExecutorWorkReachedSafeBoundary", correlations: [first, ...remaining] })
 }
 
-export interface ApplicationExitRequestBoundaryService<TResult = ApplicationExitResultType> {
-  readonly requestExit: Effect.Effect<TResult>
+export interface ApplicationExitRequestBoundaryService {
+  readonly requestExit: Effect.Effect<ApplicationExitResultType>
 }
 
 /** Transport-neutral boundary called by a future Operator or supervisor adapter. */
 export class ApplicationExitRequestBoundary extends Context.Service<
   ApplicationExitRequestBoundary,
-  ApplicationExitRequestBoundaryService<ApplicationExitResultType>
+  ApplicationExitRequestBoundaryService
 >()("@dalph/ApplicationExitRequestBoundary") {}
 
 const applicationExitDrainLimit = applicationExitDrainDuration
@@ -139,7 +139,7 @@ const applicationExitDrainResult = (
  * await its exact result and cannot restart either work or clock.
  */
 const makeApplicationExitRequestBoundaryWithPolicy = Effect.fn("ApplicationExitRequestBoundary.make")(function* (
-  lifecycle: ApplicationExitLifecycleService<ApplicationExitResultType>,
+  lifecycle: ApplicationExitLifecycleService,
   drain: ApplicationExitDrainOperations,
   policy: ApplicationExitShellPolicy,
   trace: ApplicationExitTraceService = { emit: () => Effect.void },
@@ -236,12 +236,12 @@ const makeApplicationExitRequestBoundaryWithPolicy = Effect.fn("ApplicationExitR
     })
   )
 
-  return { requestExit } satisfies ApplicationExitRequestBoundaryService<ApplicationExitResultType>
+  return { requestExit } satisfies ApplicationExitRequestBoundaryService
 })
 
 /** Builds the ordinary application Exit boundary whose success includes lock release. */
 export const makeApplicationExitRequestBoundary = (
-  lifecycle: ApplicationExitLifecycleService<ApplicationExitResultType>,
+  lifecycle: ApplicationExitLifecycleService,
   drain: ApplicationExitDrain,
   processLifecycle: ApplicationProcessLifecycleService,
   trace: ApplicationExitTraceService = { emit: () => Effect.void },
@@ -295,7 +295,7 @@ interface ApplicationExitExecutorDrainRegistry {
 }
 
 /** Application-owned runtime capabilities shared by every Run bootstrap in this process. */
-export interface ApplicationExitShellService<TResult = ApplicationExitResultType> {
+export interface ApplicationExitShellService {
   readonly admission: ApplicationExitAdmissionService
   readonly awaitExitRequested: Effect.Effect<void>
   /** Every admitted executor drain has settled, including registrations that raced the cutoff. */
@@ -304,14 +304,29 @@ export interface ApplicationExitShellService<TResult = ApplicationExitResultType
   readonly registerProcessLocalDrain: (
     drain: ApplicationExitProcessLocalDrain
   ) => Effect.Effect<void, never, Scope.Scope>
-  readonly requestBoundary: ApplicationExitRequestBoundaryService<TResult>
+  readonly requestBoundary: ApplicationExitRequestBoundaryService
 }
 
 /** Application-scoped Exit capability shared by every Run bootstrap and executor resource. */
-export class ApplicationExitShell extends Context.Service<
-  ApplicationExitShell,
-  ApplicationExitShellService<ApplicationExitResultType>
->()("@dalph/ApplicationExitShell") {}
+export class ApplicationExitShell extends Context.Service<ApplicationExitShell, ApplicationExitShellService>()(
+  "@dalph/ApplicationExitShell"
+) {}
+
+const productionHostApplicationExitShellBrand: unique symbol = Symbol("ProductionHostApplicationExitShell")
+
+/**
+ * Nominal host-owned Exit shell. Only the production-host factory can attach
+ * this brand; an ordinary process-exit shell is therefore not a valid host
+ * boundary even though both expose the exact ApplicationExitResult service.
+ */
+export interface ProductionHostApplicationExitShellService extends ApplicationExitShellService {
+  readonly [productionHostApplicationExitShellBrand]: typeof productionHostApplicationExitShellBrand
+}
+
+/** Projects the branded host shell to the common service without copying it or changing its identity. */
+export const asApplicationExitShellService = (
+  shell: ProductionHostApplicationExitShellService
+): ApplicationExitShellService => shell
 
 /**
  * Owns the one process-wide Exit lifecycle, mode-specific process port,
@@ -323,7 +338,7 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
   options: ApplicationExitShellConstructionOptions = {}
 ) {
   const scope = yield* Effect.scope
-  const lifecycle = yield* makeApplicationExitLifecycle<ApplicationExitResultType>()
+  const lifecycle = yield* makeApplicationExitLifecycle()
   const executorDrains = yield* Ref.make<ApplicationExitExecutorDrainRegistry>({
     nextId: 0,
     phase: "Serving",
@@ -570,7 +585,7 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
         )
       }),
     requestBoundary
-  } satisfies ApplicationExitShellService<ApplicationExitResultType>
+  } satisfies ApplicationExitShellService
 })
 
 /** Builds the ordinary application shell whose success includes lock release. */
@@ -597,6 +612,10 @@ export const makeProductionHostApplicationExitShell = Effect.fn("ApplicationExit
     trace: ApplicationExitTraceService = { emit: () => Effect.void },
     options: ApplicationExitShellConstructionOptions = {}
   ) {
-    return yield* makeApplicationExitShellWithPolicy({ _tag: "ProductionHostScoped" }, trace, options)
+    const shell = yield* makeApplicationExitShellWithPolicy({ _tag: "ProductionHostScoped" }, trace, options)
+    return {
+      ...shell,
+      [productionHostApplicationExitShellBrand]: productionHostApplicationExitShellBrand
+    } satisfies ProductionHostApplicationExitShellService
   }
 )

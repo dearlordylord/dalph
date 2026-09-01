@@ -294,6 +294,59 @@ module applicationExitResultProofNegativeTest {
     state' = { ...state, tick: 6 },
   }
 
+  // Each result-boundary mutant below changes one fact while preserving the
+  // other result invariants. They are separate controls so a surviving or
+  // killed property cannot be attributed to a conjunction of claims.
+  action ordinarySuccessWithoutCoordinatorRelease: bool = all {
+    state.phase == Draining,
+    state.mode == Ordinary,
+    not(state.ownerHeld),
+    state.attempt == SafeAttempt,
+    state.write != PendingWrite,
+    state.write != FailedWrite,
+    not(state.resourcesHeld),
+    not(state.failureDiagnosticRetained),
+    state' = {
+      ...state,
+      phase: SuccessReported,
+      result: Succeeded,
+      resultProvenance: OrdinaryResult,
+      status: ZeroStatus,
+    },
+  }
+
+  action hostScopeFinalizationBeforeResult: bool = all {
+    state.phase == Draining,
+    state.mode == ProductionHostScoped,
+    state' = {
+      ...state,
+      phase: HostScopeFinalized,
+      result: NoResult,
+      resultProvenance: NoProvenance,
+      coordinatorLockHeld: false,
+      hostResultReported: false,
+      hostScopeFinalized: true,
+    },
+  }
+
+  action hostScopeFinalizationRetainsCoordinator: bool = all {
+    state.phase == HostResultReported,
+    state.mode == ProductionHostScoped,
+    state.result != NoResult,
+    state.hostResultReported,
+    not(state.hostScopeFinalized),
+    state' = { ...state, phase: HostScopeFinalized, hostScopeFinalized: true },
+  }
+
+  action hostResultUsesOrdinaryProvenance: bool = all {
+    state.phase == HostResultReported,
+    state.mode == ProductionHostScoped,
+    state.result != NoResult,
+    state.hostResultReported,
+    state.resultProvenance == ProductionHostResult,
+    state' = { ...state, resultProvenance: OrdinaryResult },
+  }
+
   run unsafeSuccessIsDetectedTest = {
     init.then(startAttempt).then(acceptExit).then(reportUnsafeSuccess)
       .expect(not(successfulExitRequiresRecoverableBoundary))
@@ -320,7 +373,7 @@ module applicationExitResultProofNegativeTest {
   }
 
   run failureZeroStatusIsDetectedTest = {
-    init.then(recordFailureDiagnostic).then(acceptExit).then(releaseResources).then(reportFailure)
+    init.then(recordFailureDiagnostic).then(acceptExit).then(releaseResources).then(releaseCoordinatorLock).then(reportFailure)
       .then(forceFailureWithZeroStatus)
       .expect(not(failureAndTimeoutRequestNonzeroForcedTermination))
   }
@@ -348,6 +401,29 @@ module applicationExitResultProofNegativeTest {
   run durableResourceDisposalIsDetectedTest = {
     init.then(disposeDurableResource)
       .expect(not(exitNeverDisposesDurableWorkflowResources))
+  }
+
+  run ordinarySuccessWithoutCoordinatorReleaseIsDetectedTest = {
+    init.then(acceptExit).then(releaseResources).then(ordinarySuccessWithoutCoordinatorRelease)
+      .expect(not(ordinarySuccessReleasesCoordinatorBeforeResult))
+  }
+
+  run hostResultBeforeScopeFinalizationIsDetectedTest = {
+    init.then(selectHostScopedMode).then(acceptExit).then(releaseResources)
+      .then(hostScopeFinalizationBeforeResult)
+      .expect(not(hostResultBeforeScopeFinalization))
+  }
+
+  run hostScopeFinalizationReleaseIsDetectedTest = {
+    init.then(selectHostScopedMode).then(acceptExit).then(releaseResources).then(reportSuccess)
+      .then(hostScopeFinalizationRetainsCoordinator)
+      .expect(not(hostScopeFinalizationReleasesCoordinator))
+  }
+
+  run hostResultProvenanceIsDetectedTest = {
+    init.then(selectHostScopedMode).then(acceptExit).then(releaseResources).then(reportSuccess)
+      .then(hostResultUsesOrdinaryProvenance)
+      .expect(not(hostResultProvenanceIsExplicit))
   }
 
   run sixthTickIsDetectedTest = {

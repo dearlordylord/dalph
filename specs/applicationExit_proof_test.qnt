@@ -139,8 +139,16 @@ module applicationExitResultProofTest {
     init
       .then(acceptExit)
       .then(releaseResources)
+      .then(releaseCoordinatorLock)
       .then(reportSuccess)
-      .expect(successfulExitRequiresRecoverableBoundary)
+      .expect(and {
+        state.mode == Ordinary,
+        state.result == Succeeded,
+        state.resultProvenance == OrdinaryResult,
+        not(state.coordinatorLockHeld),
+        successfulExitRequiresRecoverableBoundary,
+        ordinarySuccessReleasesCoordinatorBeforeResult,
+      })
       .then(stopAfterSuccess)
       .expect(successReportsBeforeGracefulProcessEnd)
       .then(restartApplication)
@@ -158,8 +166,14 @@ module applicationExitResultProofTest {
       .then(settleAttemptSafely)
       .then(acknowledgeWrite)
       .then(releaseResources)
+      .then(releaseCoordinatorLock)
       .then(reportSuccess)
-      .expect(successfulExitRequiresRecoverableBoundary)
+      .expect(and {
+        state.result == Succeeded,
+        state.resultProvenance == OrdinaryResult,
+        ordinarySuccessReleasesCoordinatorBeforeResult,
+        successfulExitRequiresRecoverableBoundary,
+      })
   }
 
   run failureWaitsForQuickWorkThenForcesNonzeroTest = {
@@ -169,10 +183,111 @@ module applicationExitResultProofTest {
       .then(failAttempt)
       .expect(usefulQuickWorkRemains(state))
       .then(releaseResources)
+      .then(releaseCoordinatorLock)
       .then(reportFailure)
       .expect(conclusiveFailureWaitsForUsefulQuickWork)
       .then(forceAfterFailure)
       .expect(failureAndTimeoutRequestNonzeroForcedTermination)
+  }
+
+  run hostScopedSuccessReportsExactResultBeforeScopeFinalizationTest = {
+    init
+      .then(selectHostScopedMode)
+      .then(acceptExit)
+      .then(releaseResources)
+      .then(reportSuccess)
+      .expect(and {
+        state.mode == ProductionHostScoped,
+        state.phase == HostResultReported,
+        state.result == Succeeded,
+        state.resultProvenance == ProductionHostResult,
+        state.hostResultReported,
+        not(state.hostScopeFinalized),
+        state.coordinatorLockHeld,
+        successfulExitRequiresRecoverableBoundary,
+        hostResultBeforeScopeFinalization,
+        hostResultProvenanceIsExplicit,
+      })
+      .then(finalizeHostScope)
+      .expect(and {
+        state.phase == HostScopeFinalized,
+        state.hostScopeFinalized,
+        not(state.coordinatorLockHeld),
+        hostResultBeforeScopeFinalization,
+        hostScopeFinalizationReleasesCoordinator,
+      })
+  }
+
+  run hostScopedFailureReportsExactResultBeforeScopeFinalizationTest = {
+    init
+      .then(selectHostScopedMode)
+      .then(recordFailureDiagnostic)
+      .then(acceptExit)
+      .then(releaseResources)
+      .then(reportFailure)
+      .expect(and {
+        state.phase == HostResultReported,
+        state.result == Failed,
+        state.resultProvenance == ProductionHostResult,
+        state.hostResultReported,
+        state.coordinatorLockHeld,
+        hostResultBeforeScopeFinalization,
+        hostResultProvenanceIsExplicit,
+      })
+      .then(finalizeHostScope)
+      .expect(and {
+        state.hostScopeFinalized,
+        not(state.coordinatorLockHeld),
+        hostScopeFinalizationReleasesCoordinator,
+      })
+  }
+
+  run hostScopedTimeoutReportsExactResultBeforeScopeFinalizationTest = {
+    init
+      .then(selectHostScopedMode)
+      .then(acceptExit)
+      .then(advanceTick)
+      .then(advanceTick)
+      .then(advanceTick)
+      .then(advanceTick)
+      .then(advanceTick)
+      .expect(and {
+        state.phase == HostResultReported,
+        state.result == TimedOut,
+        state.resultProvenance == ProductionHostResult,
+        state.hostResultReported,
+        not(state.hostScopeFinalized),
+        state.coordinatorLockHeld,
+        fifthTickAtomicallyForcesTimedOutTermination,
+        hostResultBeforeScopeFinalization,
+      })
+      .then(finalizeHostScope)
+      .expect(and {
+        state.phase == HostScopeFinalized,
+        not(state.coordinatorLockHeld),
+        hostScopeFinalizationReleasesCoordinator,
+      })
+  }
+
+  run hostScopedRestartClearsModeResultAndTimerTest = {
+    init
+      .then(selectHostScopedMode)
+      .then(acceptExit)
+      .then(releaseResources)
+      .then(reportSuccess)
+      .then(finalizeHostScope)
+      .then(restartApplication)
+      .expect(and {
+        state.phase == RestartedServing,
+        state.mode == Ordinary,
+        state.result == NoResult,
+        state.resultProvenance == NoProvenance,
+        state.tick == 0,
+        state.coordinatorLockHeld,
+        not(state.hostResultReported),
+        not(state.hostScopeFinalized),
+        restartRestoresNoApplicationLifecycleState,
+      })
   }
 
   run fifthTickAtomicallyForcesTimedOutTerminationTest = {
@@ -184,7 +299,7 @@ module applicationExitResultProofTest {
       .then(advanceTick)
       .then(advanceTick)
       .expect(fourthTickReached)
-      .then(fifthTickForcesTimeout)
+      .then(advanceTick)
       .expect(and {
         fifthTickAtomicallyForcesTimedOutTermination,
         failureAndTimeoutRequestNonzeroForcedTermination,
