@@ -147,6 +147,51 @@ it.effect("exits successfully within five seconds after flushing writes and rele
   )
 )
 
+/**
+ * Scenario mapping: the ordinary process-end adapter enters its boundary but
+ * does not return. Cancelling the requester must not manufacture a completed
+ * Exit result; releasing that adapter still lets the scoped driver settle.
+ */
+it.effect("cancels an ordinary Exit requester while process ending is blocked", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const processEndEntered = yield* Deferred.make<void>()
+      const releaseProcessEnd = yield* Deferred.make<void>()
+      const processEndFinished = yield* Deferred.make<void>()
+      const processEnds = yield* Ref.make<ReadonlyArray<ApplicationProcessEndDecision>>([])
+      const lifecycle = yield* makeApplicationExitLifecycle()
+      const boundary = yield* makeApplicationExitRequestBoundary(
+        lifecycle,
+        successfulDrain(() => Effect.void),
+        {
+          requestEnd: (decision) =>
+            Deferred.succeed(processEndEntered, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseProcessEnd)),
+              Effect.andThen(Ref.update(processEnds, (current) => [...current, decision])),
+              Effect.andThen(Deferred.succeed(processEndFinished, undefined))
+            )
+        }
+      )
+
+      const requesting = yield* boundary.requestExit.pipe(Effect.forkChild)
+      yield* Deferred.await(processEndEntered)
+      expect(requesting.pollUnsafe()).toBeUndefined()
+
+      yield* Fiber.interrupt(requesting)
+      const interrupted = requesting.pollUnsafe()
+      expect(interrupted).toBeDefined()
+      if (interrupted === undefined) return yield* Effect.die("cancelled Exit requester did not settle")
+      expect(Exit.isFailure(interrupted)).toBe(true)
+      expect(yield* Ref.get(processEnds)).toEqual([])
+
+      yield* Deferred.succeed(releaseProcessEnd, undefined)
+      yield* Deferred.await(processEndFinished)
+      yield* lifecycle.awaitExitDriverFinished
+      expect(yield* Ref.get(processEnds)).toHaveLength(1)
+    })
+  )
+)
+
 it.effect("reports host drain readiness before scope finalization without claiming ordinary success", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -320,7 +320,11 @@ const makeApplicationExitRequestBoundaryWithPolicy = Effect.fn("ApplicationExitR
         yield* driver(request.cutoffAt).pipe(Effect.forkIn(scope))
       }
       const completed = yield* restore(Deferred.await(request.result))
-      yield* Effect.uninterruptible(lifecycle.awaitExitDriverFinished)
+      // The drain driver remains scoped and completes its settlement protocol
+      // even if this requester is cancelled while an ordinary process-end
+      // adapter is blocked. Host mode has no process-end adapter here; its
+      // explicit report lease still preserves finalization ordering.
+      yield* restore(lifecycle.awaitExitDriverFinished)
       const acknowledge = Effect.uninterruptible(
         Deferred.succeed(reportAcknowledged, undefined).pipe(
           Effect.flatMap((first) =>
