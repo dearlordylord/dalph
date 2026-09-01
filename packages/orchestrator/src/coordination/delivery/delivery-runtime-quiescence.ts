@@ -3,6 +3,7 @@ import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
   DeliveryProposalFrontier,
   DeliveryQuiescenceDisposition,
+  DeliveryTaskWorkAdmissionBasis,
   DeliveryRuntimeEvaluation,
   DeliveryRuntimeSnapshot,
   TrackerGraphState
@@ -19,10 +20,10 @@ type EstablishedRuntimeSnapshot = Omit<DeliveryRuntimeSnapshot, "trackerGraph"> 
 }
 
 /**
- * Exact task attempts outside this activation hold every position while exact
- * prepared attempts still require one. No local owner can free capacity, so
- * the enclosing sole activation owner must regain control without mistaking
- * the Run for final.
+ * Exact unfinished attempts hold every position while exact prepared attempts
+ * still require one. A position bound by this activation can lead its
+ * descriptive relation projection; after every local owner settles, the sole
+ * activation owner must regain control without mistaking the Run for final.
  */
 interface TaskWorkAdmissionStalledRuntimeQuiescence {
   readonly _tag: "TaskWorkAdmissionStalledRuntimeQuiescence"
@@ -36,10 +37,11 @@ interface TaskWorkAdmissionStalledRuntimeQuiescence {
 /** Classifies only exact prepared attempts that cannot reuse any currently held position. */
 export const classifyTaskWorkAdmissionStalledRuntimeQuiescence = (
   current: DeliveryRuntimeEvaluation,
+  taskWork: DeliveryTaskWorkAdmissionBasis,
   proposedActions: AvailableProposalFrontier
 ): Option.Option<TaskWorkAdmissionStalledRuntimeQuiescence> => {
   const stalled =
-    current.taskWork.held.length >= Number(current.taskWork.capacity) &&
+    taskWork.held.length >= Number(taskWork.capacity) &&
     proposedActions.proposals.length > 0 &&
     proposedActions.proposals.every(({ admission }) => {
       if (
@@ -50,7 +52,7 @@ export const classifyTaskWorkAdmissionStalledRuntimeQuiescence = (
         return false
       }
       const requested = admission.plannedAttemptProtocol.correlation
-      return !current.taskWork.held.some(
+      return !taskWork.held.some(
         ({ correlation: held }) => held.runId === requested.runId && held.attemptId === requested.attemptId
       )
     })
@@ -61,7 +63,7 @@ export const classifyTaskWorkAdmissionStalledRuntimeQuiescence = (
         current: current.current,
         disposition: current.quiescence,
         proposedActions,
-        taskWork: current.taskWork
+        taskWork
       })
     : Option.none()
 }

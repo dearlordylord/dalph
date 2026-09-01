@@ -32,6 +32,29 @@ interface AdmissionState {
   readonly positions: ReadonlyMap<TaskId, TaskWorkPosition>
 }
 
+const DeliveryRuntimeAdmissionSnapshotTypeId: unique symbol = Symbol.for("@dalph/DeliveryRuntimeAdmissionSnapshot")
+
+/**
+ * One isolated process-local admission view. Its private brand prevents a
+ * descriptive relation basis from being passed back as controller state; its
+ * copied readonly map cannot mutate the controller that produced it.
+ */
+interface DeliveryRuntimeAdmissionSnapshot {
+  readonly [DeliveryRuntimeAdmissionSnapshotTypeId]: typeof DeliveryRuntimeAdmissionSnapshotTypeId
+  readonly capacity: DeliveryTaskWorkAdmissionBasis["capacity"]
+  readonly positions: ReadonlyMap<TaskId, TaskWorkPosition>
+}
+
+/** Projects only exact accepted or runtime-bound positions for a quiescence decision. */
+export const deliveryTaskWorkAdmissionBasisOf = (
+  snapshot: DeliveryRuntimeAdmissionSnapshot
+): DeliveryTaskWorkAdmissionBasis => ({
+  capacity: snapshot.capacity,
+  held: [...snapshot.positions].flatMap(([taskId, position]) =>
+    position._tag === "PendingRuntimePosition" ? [] : [{ correlation: position.correlation, taskId }]
+  )
+})
+
 const DeliveryAdmissionReservationTypeId: unique symbol = Symbol.for("@dalph/DeliveryAdmissionReservation")
 
 type DeliveryForwardOwnerLease = AtomicForwardOwnerLease | InterruptibleForwardOwnerLease
@@ -68,7 +91,7 @@ export interface DeliveryRuntimeAdmissionController {
     reservation: DeliveryAdmissionReservation,
     retainTaskPositionAfterIntent: boolean
   ) => Effect.Effect<void>
-  readonly snapshot: Effect.Effect<AdmissionState>
+  readonly snapshot: Effect.Effect<DeliveryRuntimeAdmissionSnapshot>
   readonly synchronize: (basis: DeliveryTaskWorkAdmissionBasis) => Effect.Effect<void>
   readonly tryReserve: (
     proposal: DeliveryActionProposal
@@ -396,7 +419,13 @@ export const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntime
       }),
     complete,
     rollback,
-    snapshot: Ref.get(state),
+    snapshot: Ref.get(state).pipe(
+      Effect.map((current) => ({
+        [DeliveryRuntimeAdmissionSnapshotTypeId]: DeliveryRuntimeAdmissionSnapshotTypeId,
+        capacity: current.capacity,
+        positions: new Map(current.positions)
+      }))
+    ),
     synchronize,
     tryReserve
   }

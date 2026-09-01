@@ -250,6 +250,179 @@ and must not duplicate an executor command.
   remains the governing #266 evidence that the trailing activation performs
   G1 through the ordinary journal-first tracker read protocol.
 
+## An accepted C position closes capacity before the relation lists it
+
+### Governing behavior
+
+The [full-capacity handoff above](#full-capacity-yields-to-one-queued-active-refresh-without-losing-d-or-e)
+requires the ordinary runtime to preserve exact blocked D1 and E1 when no
+local action can free a position. [D12 Position
+discipline](../DELIVERY-INVARIANTS.md#admission-and-capacity) requires admission
+to respect every position currently held by unfinished exact work, while [D29
+Authority separation](../DELIVERY-INVARIANTS.md#process-and-durability) keeps
+derived positions process-local and out of workflow history. At the formal
+abstraction, `deliveryCore.qnt`'s `positionDiscipline` and `admissionRule` laws
+require positions to follow outstanding work and prevent admission past
+capacity. That model does not represent the short in-process interval in which
+the runtime's admission controller has bound a newly accepted exact position
+but the descriptive relation still lists the earlier held-position prefix.
+
+This scenario refines only quiescence during that interval. It does not make
+the admission controller a durable or outside authority, replace the delivery
+relation, add a second capacity counter, or let process-local state authorize
+an executor command. It requires the ordinary runtime to take one typed
+snapshot of the admission state it already owns before deciding whether its
+own denied proposals can make progress.
+
+### Starting situation and trigger
+
+No person directly triggers this handoff. One ordinary activation has capacity
+three. Its current delivery-relation evaluation lists exact executing attempts
+A1 and B1 as holding two positions. Exact prepared attempts C1, D1, and E1 each
+have a `Begin` proposal that requires `ReserveOrReuse`; none has previously
+received `Begin`.
+
+The same activation reserves the one free position for C1. Immediately before
+entering C1's exact planned-attempt protocol, it binds that reservation to
+C1's exact `(RunId, AttemptId)`. The exact journal-first and executor chronology
+is ordered below. Once the protocol accepts C1's executing response, the local
+exact binding remains after C1's action settles. The latest descriptive
+relation evaluation available to this runtime still lists only A1 and B1 in
+`taskWork.held`. Because the admission controller already has A1, B1, and bound
+C1 at capacity three, it denies D1 and E1 with
+`TaskWorkPositionUnavailable`.
+
+The activation also obtains the exact executor projections required for A1,
+B1, and C1. Each returns the already-accepted `ExecutorWorkExecuting` report,
+installs its process-local passive attachment, and settles its delivery-action
+owner. The concrete trigger for the decision below is settlement of the final
+one of those owners: no live action remains, D1 and E1 are still denied, and no
+outside event queued inside this runtime can free a position.
+
+Git, the tracker, claims, refs, and worktrees do not change at this handoff.
+No additional executor call applies because D1 and E1 were denied before their
+action boundary, while A1, B1, and C1 have received their one exact projection
+call and C1 has also received its one `Begin`.
+
+### Ordered runtime handoff and result
+
+1. While holding the runtime's existing selection boundary, Dalph reserves the
+   third position and binds it to C1's exact `(RunId, AttemptId)` before it
+   enters the planned-attempt protocol.
+2. The protocol first records
+   `PlannedAttemptExecutorWorkResponsibilityBegan`, then records C1's exact
+   `PlannedAttemptExecutorCommandIntended(Begin)` intent. The intent exists
+   before Dalph crosses the executor boundary.
+3. Dalph calls the executor boundary once for that exact C1 `Begin`. The
+   executor returns C1's exact `ExecutorWorkExecuting` response; the response
+   by itself is not yet accepted workflow evidence.
+4. The protocol records the exact response as
+   `PlannedAttemptExecutorCommandResponseObserved` and accepts its distinct
+   lifecycle transition as `PlannedAttemptExecutorWorkReported`. The runtime's
+   accepted-publication boundary then proves that the relation has published
+   through that accepted Journal prefix before it enqueues C1's completion.
+5. The runtime applies that completion once and settles C1's delivery-action
+   owner only after its latest evaluation has consumed the accepted prefix. If
+   the completion wins the queue first, the publication-through barrier keeps
+   the exact owner until the matching `EvaluationChanged` is applied. A1, B1,
+   and C1 each retain their process-local passive attachment after their exact
+   projection returns, so settling the last of those three owners leaves no live
+   action. C1's bound admission position remains because
+   `ExecutorWorkExecuting` is unfinished; D1 and E1 remain denied.
+6. Still within the runtime's existing selection boundary, Dalph reads one
+   typed snapshot from its admission controller. That snapshot contains the
+   accepted exact A1 and B1 positions plus C1's exact bound runtime position;
+   it is the state that just denied D1 and E1.
+7. Dalph reconciles the snapshot with the current descriptive evaluation for
+   this quiescence decision. The effective task-work basis has capacity three
+   and the exact A1, B1, and C1 correlations. The earlier relation value remains
+   unchanged and no admission-derived fact is written to the Journal or any
+   other store.
+8. The ordinary runtime classifies the remaining exact D1 and E1
+   `ReserveOrReuse` proposals as
+   `TaskWorkAdmissionStalledRuntimeQuiescence`. The result reports the exact
+   effective A1/B1/C1 correlations and preserves D1 and E1 as its non-empty
+   proposal frontier.
+9. Stabilization returns `RunMustRemainActive` with reason
+   `RunnableTransition` without issuing G2. The sole reactivation owner may
+   then process its already-queued notification or timer as the later
+   activation described by the full-capacity scenario.
+
+The operator can observe the activation return while the Run remains active.
+Dalph must not claim that one position is free merely because the descriptive
+relation has not yet listed C1, invent a live delivery-action owner for C1,
+persist or publish the admission snapshot as workflow authority, admit or call
+D1/E1, drop D1/E1 to fabricate an empty frontier, or report only A1/B1 as the
+positions that caused the stall.
+
+If Dalph dies after binding C1's position but before recording C1's durable
+responsibility and `Begin` intent, the process-local position disappears and
+restart may admit the same prepared C1 again through the ordinary exact
+protocol. If it dies after the intent but before recording and accepting the
+executing response, restart reconciles C1 with the executor before another
+command; it does not restore the admission snapshot. If Dalph dies after the
+response and lifecycle transition are accepted but before C1's owner settles
+or before this quiescence result, restart reconstructs C1's unfinished exact
+responsibility from Journal history and current executor evidence, then derives
+its position again with A1 and B1. If Dalph dies after returning, the later sole
+activation performs the same ordinary reconstruction. In every case D1 and E1
+remain prepared but unbegun, and retry must not duplicate a journaled C1
+`Begin` intent.
+
+The typed admission snapshot is an internal process-local value, but that
+TypeScript boundary alone does not prove that no adapter persisted it.
+Acceptance therefore requires all three observable boundaries below: the
+relation's `taskWork.held` remains at A1/B1 while the result reports A1/B1/C1,
+the Journal gains no record while snapshot reconciliation and quiescence return
+run, and a new process with a new admission controller reconstructs C1 only
+from its durable exact responsibility and accepted executor lifecycle history.
+No serialized snapshot or admission-state variant may be supplied to restart.
+
+### Acceptance-test mapping
+
+- Add `binds C before its journal-first Begin and returns admission-stalled
+  from the effective admission snapshot` in
+  `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`.
+  The direct test must begin with only A1/B1 in the relation basis, admit and
+  bind C1, record its responsibility and exact `Begin` intent before the one
+  executor call, record and accept the exact executing response before owner
+  settlement, leave the relation basis unchanged, and settle all three passive
+  observations. It must assert one C1 `Begin`, one exact A1/B1/C1 projection,
+  no D/E call, exact A/B/C correlations in the typed result, and a D/E-only
+  frontier. It must use explicit Effect synchronization rather than time or
+  scheduler order.
+- Add `does not journal or publish the process-local admission snapshot` to the
+  same direct runtime suite. Starting after C1's accepted-publication boundary
+  returns and before the final owner settles, it must record the exact Journal
+  length and relation-publication history, settle the final owner, and assert
+  that neither boundary changes while the runtime reads the snapshot and returns
+  `TaskWorkAdmissionStalledRuntimeQuiescence`. The unchanged relation must still
+  list A1/B1 while the typed result reports A1/B1/C1. Asserting only that an
+  admission-snapshot type is absent from a public union is supporting structure,
+  not sufficient acceptance evidence.
+- Add `restart reconstructs three unfinished task positions without an
+  admission snapshot` in
+  `packages/orchestrator/src/control/task-work-capacity.test.ts`. It must discard
+  the original admission controller, construct a fresh recovery/controller
+  layer from the Journal, and assert exact A1/B1/C1 positions derived from
+  `PlannedAttemptExecutorWorkResponsibilityBegan` plus the accepted lifecycle
+  history that contains no Safe or Terminal release. Its exact accepted event
+  list must contain no quiescence or admission-snapshot record.
+- `reconciles existing, pending, and integration-backed admission positions`
+  in `packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.test.ts`
+  remains supporting evidence that synchronization preserves a locally bound
+  exact position rather than replacing it with a stale accepted position.
+- `returns admission-stalled quiescence with the blocked proposals when exact
+  attempts hold all ordinary capacity` in
+  `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`
+  remains supporting evidence for the typed D/E-only result once all three
+  exact positions are already present in the relation basis.
+- `emits the exact DS01 through DS13 delivery checkpoint table` in
+  `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`
+  is the required vertical acceptance test: at this exact handoff it must
+  consume `CoordinatorActivationReturned(RunMustRemainActive,
+  RunnableTransition)` before the later G1 read begins.
+
 ## Unchanged passive attachment does not hide the full-capacity handoff
 
 ### Starting situation and trigger
