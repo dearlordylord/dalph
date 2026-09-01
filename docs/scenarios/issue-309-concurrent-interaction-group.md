@@ -565,8 +565,9 @@ specification, claim, worktree, or target lineage. Only after every healthy
 subject's remaining lineage transition settles does the constrained subject's
 one Suspend appear.
 
-The staged, uncommitted +260-line change on branch
-`probe/issue-309-suspend-causality`, based on `c305b3543`, touches only
+The committed and pushed +260-line characterization change is commit
+`5578b8daa8778e98a14f9a61e93dd2cf393d69ce` on
+`origin/probe/issue-309-suspend-causality`, based on `c305b3543`, and touches only
 `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`.
 Its exact test `settles A then C lineage before exposing exactly one constrained
 B F2 suspension` starts healthy A, changed B/F2, and healthy C. B drops out
@@ -574,10 +575,10 @@ before claim and Git reads; A and C both reach lineage. After A settles while C
 remains the sole lineage transition, the frontier contains zero B Suspend.
 After C settles, it contains exactly one Suspend B. The new focused test was
 1/1 green, the full acceptance file 13/13 green, and the relevant production
-pair 2/2 green; oxlint, ESLint, dprint, and diff checks were green. The hook was
-blocked only by the unchanged known capstone dprint baseline. This is staged,
-uncommitted characterization evidence, not accepted or committed regression
-evidence.
+pair 2/2 green; oxlint, ESLint, dprint, and diff checks were green. At the time
+of the characterization, the hook was blocked only by the unchanged known
+capstone dprint baseline. This is committed characterization evidence, not
+accepted #309 implementation evidence or a passing #268 capstone.
 
 ### Executing restart is one strict projection-and-return prefix
 
@@ -661,7 +662,7 @@ the reverse is equally permitted by the authored graph.
 The twelfth claim publishes one completed group occurrence and advances once.
 The next strict item is exact C2
 `PlannedAttemptExecutorWorkReported(request Suspend, output
-ExecutorWorkExecuting)`. The staged three-attempt probe above establishes the
+ExecutorWorkExecuting)`. The committed three-attempt probe above establishes the
 role-generic production rule: a constrained active-refresh subject's Suspend
 is suppressed while any healthy subject retains an authority transition and is
 exposed exactly once only after the last healthy lineage settles. Applied to
@@ -1062,7 +1063,7 @@ is complete, and the required reviews are clean.
 | With A/C or later A/D claim reads both selected and in flight, deterministic tables release each pair in both orders; each exact result claims only its own R once, never cross-delivers, and its group advances only after both exact chains complete | `packages/dalph/test/cassettes/scenario.test.ts` — `correlates both completion orders of in-flight current-claim results with their exact group roles` |
 | Ordinary strict current returns move to the truthful post-result point; strict explicit `TaskClaimReadReturned` and `TaskClaimReadFailed` retain no-preliminary-read semantics; all strict and residual callers migrate to exact task-aware cursor operations | `packages/dalph/test/cassettes/scenario.test.ts` — `consumes a strict current-claim return only after its exact controlled result`; `preserves exact-task explicit and unreadable strict claim-read cassette semantics`; `packages/dalph/test/cassettes/cassette-residuals.test.ts` — migrate task-claim residual cases |
 | The active cut is exactly two six-node unchanged-task chains plus B's two-node specification lane, fourteen nodes and eleven edges; 84,084 canonical fingerprints are unique and every schedule consumes before strict B Suspend | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `partitions all 84084 active-refresh orders by three canonical lane positions`; `consumes every active-refresh specification-to-lineage order before B Suspend` |
-| Production suppresses B Suspend while either healthy A/C authority lane remains, then exposes exactly one constrained B1 Suspend after both settle | Staged, uncommitted characterization on `probe/issue-309-suspend-causality`, `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts` — `settles A then C lineage before exposing exactly one constrained B F2 suspension`; planned cassette assertion remains `consumes every active-refresh specification-to-lineage order before B Suspend` |
+| Production suppresses B Suspend while either healthy A/C authority lane remains, then exposes exactly one constrained B1 Suspend after both settle | Committed and pushed characterization `5578b8daa8778e98a14f9a61e93dd2cf393d69ce` on `origin/probe/issue-309-suspend-causality`, `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts` — `settles A then C lineage before exposing exactly one constrained B F2 suspension`; planned cassette assertion remains `consumes every active-refresh specification-to-lineage order before B Suspend` |
 | The later post-hint cut is exactly two independent six-node A/D chains, twelve nodes and ten edges; all 924 canonical fingerprints are unique and execute before strict C Suspend | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `partitions and consumes all 924 post-hint A D authority orders before C Suspend` |
 | Dropping one required edge makes the expected-edge/early-successor property fail, while generated duplicate roles and dangling predecessors fail schema decoding for the fourteen- and twelve-node fixtures | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.property.test.ts` — `fails each active fixture property when one required edge is dropped`; `packages/dalph/test/cassettes/authored-domain.property.test.ts` — `rejects generated duplicate roles and invalid predecessor references` |
 | T-before-S, Q-before-T, R-before-Q, W-before-R, and L-before-W each fail typed without mutation and succeed after retry in the initial A/C and later A/D lanes; foreign/duplicate exact TaskId and strict AttemptId claims do the same | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `rejects and retries every predecessor edge in both active-refresh groups`; `retries W before R and L before W in each active lane`; `rejects foreign and duplicate exact result identities without mutation` |
@@ -1074,7 +1075,7 @@ is complete, and the required reviews are clean.
 | The accepted nine-node group still executes 22,680 schedules, and `ConcurrentTrackerReadBatch` still pairs reverse-completing reads and drains only its unchanged true-batch uses | Existing `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `consumes the nine-node delivery cut in all 22680 causal orders before advancing once`; existing `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `selects F1 then F2 and pairs reverse-completing reads with their exact initiating operations`; `drains repeatedly forked exact read operations without resetting the story position` |
 | The later A/D production overlap stays executable independently of cassette matching | Committed probe `c305b3543`, command `pnpm vitest run packages/dalph/src/application/production-reactivation.test.ts -t "allows one (restart|active-refresh) authority lane"`; exact active-refresh test `allows one active-refresh authority lane to reach claim while independent specification reads remain in flight` is green within the recorded 2/2 run |
 | After the strict restart graph/projection prefix, exact `CoordinatorActivationReturned(RunMustRemainActive(UnsettledResponsibility))` settles before TrackerNotification or Timer hints; wrong, duplicate, early, failed, or interrupted returns do not fabricate settlement | `packages/dalph/test/cassettes/authored-reactivation-return.test.ts` — `keeps restart hints unavailable before the production finality result`; `settles the reconstructed restart return once before delayed interruption and later hints` |
-| The role-generic production rule suppresses constrained C Suspend while either healthy A/D authority lane remains and exposes it exactly once after both settle | Staged, uncommitted `settles A then C lineage before exposing exactly one constrained B F2 suspension` proves the three-role rule with B as constrained subject; planned `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `consumes every post-hint A D order before C Suspend` applies the same rule to exact #268 roles |
+| The role-generic production rule suppresses constrained C Suspend while either healthy A/D authority lane remains and exposes it exactly once after both settle | Committed and pushed characterization `5578b8daa8778e98a14f9a61e93dd2cf393d69ce` on `origin/probe/issue-309-suspend-causality` — `settles A then C lineage before exposing exactly one constrained B F2 suspension` proves the three-role rule with B as constrained subject; planned `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `consumes every post-hint A D order before C Suspend` applies the same rule to exact #268 roles |
 | Capacity revision two must settle before process death, including the committed-but-unacknowledged counterexample; this remains a #268 blocker | Pending #268 `packages/dalph/test/cassettes/cassette-residuals.test.ts` — `distinguishes pre-commit interruption from a committed lost capacity response using only the reduced policy` |
 | Exact accepted and published C2 Safe ordinal two must settle before Continue B, including committed ambiguity without another Suspend; this remains a #268 blocker | Pending #268 `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `preserves named C2 Safe failure families and reconciles a committed lost response without retry` |
 | After the nine-node prerequisite is composed, #268 uses the fourteen-node initial group then strict B Suspend, the strict executing-restart graph/projection/graph/return prefix with no authority group, and the later twelve-node A/D group then strict C Suspend; DS01–DS13 remain unchanged | Pending `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — unchanged `emits the exact DS01 through DS13 delivery checkpoint table`; revise the pending restart assertion to prove zero authority selections; add `admits both characterized active-refresh overlaps without weakening downstream checkpoints` |
