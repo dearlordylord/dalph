@@ -999,38 +999,56 @@ causes a duplicate A1 action. It must not repair either handoff by polling,
 rereading an authority merely to create a wake-up, persisting a relation
 revision, or inventing another current-value or ordering authority.
 
-### Crash and restart cuts
+### Orderly assembly replacement and inherited process recovery
 
-If the process dies after the coherent position-80 lineage evaluation is made
-observable but before the runtime consumes it, the process-local evaluation,
-subscription, owner, pending completion, and acknowledgement disappear. A
-fresh activation's Run establishment reconstructs the durable position-80
-Journal facts. The ordinary delivery relation derives the descriptive delivery
-consequences from those facts, and delivery planning derives A1's current
-lineage action with C1 retained and D1/E1 still position-blocked. Only then does
-the newly constructed runtime evaluation assembly sample those delivery
-consequences, that planned-action frontier, and the reconstructed runtime facts
-under the existing gate and expose their coherent current value. Runtime
-evaluation assembly neither opens the Journal nor derives the lineage action.
-Restart does not restore a saved evaluation revision or repeat a provider call
-merely to wake the runtime.
+No person triggers the component replacement or process losses below. The
+direct event is an orderly replacement of one runtime-evaluation-assembly
+scope, not a process crash. Scope 1 has exposed the coherent position-80
+worktree evaluation and then closes normally. The controlled authoritative
+`CurrentSignal`s for delivery consequences, the planned-action frontier, and
+runtime facts outlive that scope. While no assembly consumer exists, current
+planning advances to A1's position-80 lineage read. Scope 2 constructs a new
+runtime evaluation assembly and current-first subscription over those current
+signals. Its first value must immediately be the coherent position-80 lineage
+evaluation with C1 retained and D1/E1 position-blocked. It must not carry an
+assembly revision from Scope 1, call Git, or require a provider wake-up merely
+to expose the current value.
 
-After the runtime consumes the lineage evaluation, admitting
-`ReadTargetLineage` crosses the existing intent-first Git read protocol. A
-process loss before its exact `GitReadIntentRecorded` event loses only local
-admission. A fresh activation repeats the same ownership sequence: Run
-establishment reconstructs the durable facts, the ordinary delivery relation
-and delivery planning rederive the exact lineage action, and a new runtime
-evaluation assembly exposes it for admission. A loss after that intent but
-before an accepted `TargetLineageObserved` result, including loss after Git
-returned but before observation, reconstructs the same exact Git operation and
-reconciles it through the ordinary Git read path. It does not infer a result,
-invent a different operation, or use a saved runtime revision. Once the exact
-lineage observation is accepted, fresh Run establishment and ordinary delivery
-reconstruction derive its successor; runtime evaluation assembly only exposes
-that derived current value. This crash reread belongs to the existing
-intent-first Git recovery protocol; it is not a poll or a reread used to repair
-the same-position publication handoff.
+This orderly replacement proves only runtime-evaluation-assembly attachment
+and current-first exposure. It does not simulate process loss, construct or
+transfer a runtime action owner, admit the lineage action, or exercise a Git
+provider boundary.
+
+Whole-process death after the position-80 lineage evaluation is exposed but
+before a runtime consumes it adds no durable event to the inherited Journal
+prefix. Whole-process death after the runtime admits A1's lineage read but
+before the exact `GitReadIntentRecorded` append has that same durable prefix.
+In either cut, all process-local evaluation, subscription, owner, and admission
+state is lost. Fresh Run establishment and production recovery must reconstruct
+the durable prefix before ordinary delivery planning can derive the current
+lineage action again. That full-process behavior is inherited from [#265's
+same-host Run and exact-attempt reconstruction](issue-265-passive-executor-observation-through-restart.md#a-later-dalph-process-reattaches-to-the-exact-codex-attempt)
+and [#266's ordinary active-work authority
+recovery](issue-266-active-work-authority-refresh.md#alice-changes-b-while-a1-b1-and-c1-execute-autonomously);
+the orderly Scope-1/Scope-2 test below does not prove either crash cut.
+
+The remaining cuts belong to the existing intent-first target-lineage read
+protocol. After the exact intent is accepted but before Git is called, restart
+reuses that operation identity and performs the read. If Git returns before the
+`TargetLineageObserved` append is accepted, restart repeats the read with that
+same identity rather than inferring a result. Once the exact observation is
+accepted, ordinary recovery projects its successor without another lineage
+read solely to wake evaluation assembly. These rules are inherited from #139
+and #266; the same-position trigger change neither adds nor changes their
+Journal, provider, or retry boundaries.
+
+Neither #269 production commit changes Run establishment, durable persistence,
+or a provider boundary, so this repair adds no separate full-process crash
+protocol or test. Literal operating-system death around an uninterruptible
+Journal append remains an optional future generic Journal/host qualification,
+not a prerequisite for the component-lifetime same-position evaluation repair.
+The downstream #268 vertical cassette remains pending composition; its later
+restart is not direct evidence for either pre-consumption crash cut.
 
 ### Acceptance-test mapping
 
@@ -1053,67 +1071,56 @@ the same-position publication handoff.
   remove or acknowledge the owner. After release, it proves one settlement,
   one acknowledgement, one lineage admission, retained C1, exact held
   correlations A1/B1/C1 at capacity three, and no D1/E1 executor call.
-- Add `reconstructs same-position lineage through six cumulative production
-  restart generations` in
-  `packages/orchestrator/src/coordination/run/same-position-lineage-restart.acceptance.test.ts`.
-  Its package-private child fixture lives at
-  `packages/orchestrator/bin/same-position-lineage-restart-fixture.ts`; a
-  bin-local input/JSONL contract may accompany it, but neither file is exported
-  from the package or registered as a package executable. This one cumulative
-  production restart table directly executes all five literal process-loss
-  cuts and the final convergence generation:
-
-  | Generation | Fresh child, production activation, and exact cut | Cumulative accepted SQLite Journal facts and provider calls |
-  | --- | --- | --- |
-  | G1 | Production Run recovery, the ordinary delivery relation, delivery planning, and runtime evaluation assembly expose A1's lineage proposal with C1 retained and D1/E1 position-blocked. The child emits `runtime-current-attached` only after the runtime's attach/current boundary is gated and before its consumer receives that evaluation. The parent observes that marker and sends `SIGKILL`. | No lineage intent or observation; zero lineage-provider calls. |
-  | G2 | A fresh child opens the same SQLite Journal, constructs a fresh production activation, rederives the same lineage proposal, and admits it. A child-local `JournalStore` append decorator emits `lineage-intent-append-blocked` and blocks before delegating the exact `GitReadIntentRecorded` append. The parent observes the marker and sends `SIGKILL`; reopening SQLite must prove that unaccepted event is absent. | No lineage intent or observation; zero lineage-provider calls. |
-  | G3 | A fresh child reconstructs the durable position-80 prefix and rederives the same lineage operation. Its exact intent append is accepted once, and the runtime owner reaches `MaterializedDeliveryAction` with `IntentRecorded`. At the controlled provider Effect's first instruction, before the provider performs its external authority call or increments that call's counter, the child emits `lineage-provider-gated` with that owner state and blocks. The parent observes the marker and sends `SIGKILL`. | One exact lineage intent, no observation, and zero lineage-provider calls. |
-  | G4 | A fresh child reconstructs the accepted intent and reconciles the same `OperationId`. The provider performs the external lineage call and returns the exact result. Before delegating the corresponding `TargetLineageObserved` append, the child-local decorator emits `lineage-outcome-append-blocked` and blocks. The parent observes the marker and sends `SIGKILL`; reopening SQLite must prove that unaccepted event is absent. | One exact lineage intent, no observation, and one lineage-provider call. |
-  | G5 | A fresh child again reconstructs and reconciles the same operation. The provider performs the external lineage call again, and the production SQLite Journal accepts the one exact `TargetLineageObserved` event. Only after that durable append returns does the child emit `lineage-outcome-accepted` and block; the parent observes the marker and sends `SIGKILL`. | One exact lineage intent, one exact lineage observation, and two lineage-provider calls. |
-  | G6 | A fresh child opens the same SQLite Journal and reconstructs the accepted successor through production recovery, relation, planning, assembly, and runtime. It derives no A1 lineage-read proposal, makes no further lineage-provider call, converges normally, and then closes its runtime observation and finalizes its process-local resources and leases. | One exact lineage intent, one exact lineage observation, and two lineage-provider calls. |
-
-  Every child independently opens and acquires the writer for the same
-  production SQLite Journal, then allocates fresh Run recovery, the canonical
-  production reactive delivery-relation Layer (currently
-  `makeReactiveDeliveryRelationsLayer`), runtime evaluation assembly
-  subscription, runtime resources and observations, lifecycle controller,
-  integration-resource controller, planned-attempt protocol controller, and
-  Effect scope. Before reconstruction starts, each successor child proves its
-  newly constructed runtime observation is `NotReady` and its process-local
-  resource and lease snapshots are empty. A killed child's finalizers do not
-  run, so the table does not claim that the dead child publishes `Closed` or
-  drains process-local snapshots. Instead, it proves the exact live cut marker,
-  process exit by `SIGKILL`, the accepted SQLite prefix, successful writer
-  acquisition by the successor child, and fresh initial process-local state.
-  G6 alone converges normally and must publish `Closed` and finish with empty
-  resource and lease snapshots.
-
-  Only the durable SQLite Journal crosses child-process boundaries. The parent
-  controller retains the controlled provider response schedule, fault schedule,
-  JSONL boundary evidence, and cumulative call counters; it is not an IPC
-  Journal and owns no workflow position, event codec, or append decision. The
-  child-local append decorator either blocks before delegating one named append
-  or reports after the delegate accepted it. It therefore adds no event codec,
-  idempotence rule, position allocation, persistence, or second Journal
-  authority. Production Run recovery, reactive delivery relations, planning,
-  runtime evaluation assembly, runtime admission, journaled Git action
-  protocol, lifecycle, integration-resource, and planned-attempt protocol
-  compositions remain real.
-
-  Every killed generation ends through the parent's `SIGKILL`, never a typed
-  Journal, Git, runtime, or lifecycle failure and never an orderly finalizer
-  substituted for process death. The test may call `deliveryProposalsOf` to
-  compute the expected proposal identity for assertions, but it must not feed
-  that computed value into runtime as an authority substitute. Across all six
-  children, proposal and Journal evidence correlate one exact `OperationId`;
-  cumulative provider-call counts are `0, 0, 0, 1, 2, 2`; the durable intent
-  count becomes one in G3 and remains one; and the durable observation count
-  remains zero until G5, then remains one. No runtime revision, owner,
-  completion, admission marker, relation value, planned frontier, controller,
-  subscription, or resource lease crosses a generation.
+- Add `a replacement runtime assembly immediately exposes the current
+  same-position lineage successor` in
+  `packages/orchestrator/src/coordination/delivery/delivery-evaluation-consistency.test.ts`.
+  Scope 1 observes the position-80 worktree evaluation and closes normally.
+  The controlled authoritative current signals survive; with no assembly
+  consumer, current planning advances to the position-80 lineage proposal.
+  Scope 2 constructs a new assembly and current-first subscription and must
+  immediately expose A1 lineage with C1 retained and D1/E1 blocked. This is a
+  component-lifetime test of attachment and current-first exposure only. It
+  proves no assembly revision, Git call, or provider wake-up crosses the scope
+  boundary; it makes no runtime-owner, action-admission, or process-crash claim.
+- Whole-process reconstruction before evaluation consumption and after
+  admission but before intent is inherited rather than newly mapped here.
+  `restart reprojects the exact executing attempt once then reattaches without
+  Begin` in `packages/dalph/test/scenarios/production.test.ts` is #265's direct
+  same-host evidence that a new process rebuilds the exact executing
+  responsibility from durable history. `active-work refresh recovers ordinary
+  authority reads without a private refresh protocol` in
+  `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`
+  is #266's direct table for the ordinary read protocol once durable intent or
+  response evidence exists. Neither test directly exercises the two
+  no-new-event cuts above, and #269 does not claim that the orderly assembly
+  replacement test fills that gap.
+- `active-work refresh recovers ordinary authority reads without a private
+  refresh protocol` in
+  `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`
+  directly tables target-lineage `intent-before-call` and
+  `response-before-observation` cuts. It proves that the accepted intent is
+  reused, the exact operation identity is preserved, and only the missing
+  observation is retried. `retains the ready worktree while retrying a failed
+  target-lineage read with the same identity` in
+  `packages/orchestrator/src/workflow-journal/journaled-worktree-observation.test.ts`
+  is the focused #139 evidence for that same Git-read rule.
+- `projects Alice's exact Continue choice and current facts as Resume for the
+  retained attempt` in
+  `packages/orchestrator/src/coordination/run/recovery-activation.test.ts`
+  proves that an accepted exact target-lineage observation projects the
+  successor with the same operation evidence. `continues after Git proves the
+  target advanced from the planned Base` in
+  `packages/orchestrator/src/workflow/protocols/git-reconciliation/decision.test.ts`
+  supplies #139's compatible-lineage decision. Together with the accepted
+  observation row in `active-work refresh recovers ordinary authority reads
+  without a private refresh protocol`, these own accepted-observation recovery;
+  this is existing #139/#266 behavior, not same-position trigger behavior added
+  by #269.
 - Downstream #268 blocking edge: `emits the exact DS01 through DS13 delivery
   checkpoint table` in
   `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`
   remains pending. Once the predecessor repair is composed, that vertical
   cassette must continue from A1's position-80 worktree read into its lineage
-  read and through the remaining thirteen-beat story.
+  read and through the remaining thirteen-beat story. Its later restart cannot
+  substitute for the direct Scope-1/Scope-2 same-position assembly test or for
+  a pre-consumption whole-process crash test.
