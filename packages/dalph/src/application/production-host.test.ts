@@ -1,16 +1,12 @@
 /* eslint-disable import/no-nodejs-modules, max-lines -- Host composition and its chronological acceptance seam stay together. */
 import { NodeCrypto, NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { PlannedAttemptExecutor, RunId } from "@dalph/contracts"
+import { RunId } from "@dalph/contracts"
 import { DatabaseSync } from "node:sqlite"
 import nodeProcess from "node:process"
 import {
   ClaimOwner,
   ClaimToken,
-  EvidenceStore,
-  GitCommand,
-  Integrator,
-  IntegratorCandidateProviderAuthority,
   RunLifecycleJournal,
   CoordinatorOwnership,
   CoordinatorLockHeld,
@@ -47,7 +43,6 @@ import {
   TaskWorkCapacityChangedEvent,
   taskWorkCapacityPolicyRecordKey,
   TrackerRevision,
-  unavailableIntegratorCandidateProviderAuthority,
   workflowJournalEventVersion,
   githubTaskIdFor
 } from "@dalph/orchestrator"
@@ -684,11 +679,7 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
           terminateRun: wrappedJournal.terminateRun,
           retireTerminalRun: wrappedJournal.retireTerminalRun
         })
-        return Context.add(
-          Context.add(context, JournalStore, wrappedJournal),
-          RunLifecycleJournal,
-          wrappedLifecycle
-        )
+        return Context.add(Context.add(context, JournalStore, wrappedJournal), RunLifecycleJournal, wrappedLifecycle)
       })
     ).pipe(Layer.provide(productionGraph.foundation(configuration)))
   const graph = {
@@ -699,10 +690,12 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
       selection: ProductionRunSelection,
       onFailure: (failure: unknown) => Effect.Effect<void>
     ) =>
-      Layer.unwrap(Effect.gen(function* () {
-        yield* count("boundaryAcquisitions")
-        return productionGraph.run(configuration, selection, onFailure)
-      }))
+      Layer.unwrap(
+        Effect.gen(function* () {
+          yield* count("boundaryAcquisitions")
+          return productionGraph.run(configuration, selection, onFailure)
+        })
+      )
   }
   return graph
 }
