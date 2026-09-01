@@ -710,8 +710,6 @@ export interface DeliveryRuntimeAssemblyService {
   readonly of: <E>(input: {
     readonly delivery: CurrentSignal<DeliveryConsequences, E>
     readonly proposedActions: CurrentSignal<DeliveryProposalFrontier, E | DeliveryRelationSourceError> & {
-      /** Ungated current-first planning stream used only while this assembly holds the shared publication gate. */
-      readonly changesWithinStablePublication: Stream.Stream<DeliveryProposalFrontier, E | DeliveryRelationSourceError>
       /** Ungated planning read used only while this assembly holds the shared publication gate. */
       readonly getWithinStablePublication: Effect.Effect<DeliveryProposalFrontier, E | DeliveryRelationSourceError>
     }

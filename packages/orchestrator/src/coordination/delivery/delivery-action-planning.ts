@@ -27,16 +27,11 @@ export interface CoherentDeliveryActionPlanningInputSignal<E> extends CurrentSig
   readonly [DeliveryConsequences, DeliveryActionPlanningInput],
   E
 > {
-  readonly changesWithinStablePublication: Stream.Stream<
-    readonly [DeliveryConsequences, DeliveryActionPlanningInput],
-    E
-  >
   readonly getWithinStablePublication: Effect.Effect<readonly [DeliveryConsequences, DeliveryActionPlanningInput], E>
 }
 
 /** A planned frontier with an ungated read reserved for the existing gated runtime adapter. */
 export interface DeliveryActionPlanningSignal<E> extends CurrentSignal<DeliveryProposalFrontier, E> {
-  readonly changesWithinStablePublication: Stream.Stream<DeliveryProposalFrontier, E>
   readonly getWithinStablePublication: Effect.Effect<DeliveryProposalFrontier, E>
 }
 
@@ -85,10 +80,6 @@ export const deliveryActionPlanning = Effect.fn("Delivery.actionPlanning")(funct
   return {
     ...currentSignalFromCurrentFirstStream(
       frontier.changes.pipe(Stream.changesWith((left, right) => frontierKey(left) === frontierKey(right)))
-    ),
-    changesWithinStablePublication: coherent.changesWithinStablePublication.pipe(
-      Stream.map(([delivery, input]) => frontierOf(delivery, input)),
-      Stream.changesWith((left, right) => frontierKey(left) === frontierKey(right))
     ),
     getWithinStablePublication: coherent.getWithinStablePublication.pipe(
       Effect.map(([delivery, input]) => frontierOf(delivery, input))
