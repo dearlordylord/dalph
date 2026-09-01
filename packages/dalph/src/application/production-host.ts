@@ -98,6 +98,11 @@ export type ProductionRepositoryHostBoundaryObserver = (
   boundary: ProductionRepositoryHostBoundary
 ) => Effect.Effect<void>
 
+/** Qualification-only observation of the workflow's host-owned Exit shell. */
+type ProductionRepositoryHostApplicationExitObserver = (
+  applicationExit: ApplicationExitShellService
+) => Effect.Effect<void>
+
 /**
  * Builds the live repository owner and Journal before selection, then builds
  * the one exact Run graph from those same scoped service instances.
@@ -110,7 +115,7 @@ export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, R
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
     onFailure: (failure: EActivation) => Effect.Effect<void>,
-    applicationExit?: ApplicationExitShellService
+    applicationExit: ApplicationExitShellService
   ) => Layer.Layer<JournaledRunObservationSource | RunReactivationOwner, ERun, ProductionHostFoundation | RRun>
 }
 
@@ -123,6 +128,8 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly onReconstructed?: (input: ProductionRunReconstructionObservation) => Effect.Effect<void>
   /** Optional observation of every typed tracker/Git/journal reactivation failure. */
   readonly onActivationFailure?: (failure: unknown) => Effect.Effect<void>
+  /** Optional observation of the same host Exit shell at workflow acquisition. */
+  readonly workflowApplicationExitObserver?: ProductionRepositoryHostApplicationExitObserver
   /** Optional observation of concrete Git methods used by the workflow protocols. */
   readonly workflowGitCommandObserver?: ProductionWorkflowGitCommandObserver
   /** Optional direct observation of ApplicationExitRequestBoundary.requestExit. */
@@ -283,11 +290,15 @@ const observedIntegratorLayer = <E, R>(
  * decision and bounded drain; scope finalization owns the final lock release.
  */
 const makeHostApplicationExitShell = Effect.fn("ProductionRepositoryHost.makeApplicationExitShell")(function* (
-  ownership: CoordinatorOwnership["Service"]
+  ownership: CoordinatorOwnership["Service"],
+  processLifecycle: Parameters<typeof makeApplicationExitShell>[1],
+  onExitResultObserved: Effect.Effect<void>
 ) {
   const shell = yield* makeApplicationExitShell(
-    { ...ownership, release: Effect.void },
-    { requestEnd: () => Effect.void }
+    ownership,
+    processLifecycle,
+    { emit: () => Effect.void },
+    { coordinatorLockRelease: "HostScopeFinalization", onExitResultObserved }
   )
   return shell
 })
@@ -321,7 +332,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
     onFailure: (failure: TaskTrackerMutationThrottled) => Effect.Effect<void>,
-    applicationExit?: ApplicationExitShellService
+    applicationExit: ApplicationExitShellService
   ) =>
     Layer.unwrap(
       // eslint-disable-next-line complexity -- One production graph resolves optional edge adapters and observation while preserving one scoped service topology.
@@ -329,6 +340,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const ownership = yield* CoordinatorOwnership
         const journal = yield* JournalStore
         const lifecycle = yield* RunLifecycleJournal
+        const workflowApplicationExitObserver = adapters.workflowApplicationExitObserver
         /* v8 ignore start -- @preserve Hermetic host tests replace the live GitHub boundary; this assignment retains the production-only provider default. */
         const githubClientLayer = adapters.githubClient?.(configuration) ?? defaultGithubClientLayer(configuration)
         /* v8 ignore stop */
@@ -344,19 +356,15 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const attemptStoreLayer = nodeCodexAttemptStoreLayer({
           stateDirectory: configuration.codexStateDirectory
         }).pipe(Layer.provide(NodeServices.layer))
-        /* v8 ignore start -- @preserve Hermetic host tests replace the process boundary; this assignment retains the production Codex app-server default. */
         const appLayerWithoutApplicationExit: Layer.Layer<
           CodexAppServer,
-          ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>
+          ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>,
+          ApplicationExitShell
         > = adapters.codexAppServer?.(configuration) ?? defaultCodexAppServerLayer(configuration, attemptStoreLayer)
         const appLayer: Layer.Layer<
           CodexAppServer,
           ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>
-        > =
-          applicationExit === undefined
-            ? appLayerWithoutApplicationExit
-            : appLayerWithoutApplicationExit.pipe(Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)))
-        /* v8 ignore stop */
+        > = appLayerWithoutApplicationExit.pipe(Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)))
         const gitCommandLayer = observedGitCommandLayer(
           nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer)),
           adapters.boundaryObserver
@@ -438,7 +446,10 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             ...(adapters.applicationExitTraceObserver === undefined
               ? {}
               : { applicationExitTraceObserver: adapters.applicationExitTraceObserver }),
-            ...(applicationExit === undefined ? {} : { applicationExit }),
+            applicationExit,
+            ...(workflowApplicationExitObserver === undefined
+              ? {}
+              : { onApplicationExitShell: workflowApplicationExitObserver }),
             ...(adapters.onReconstructed === undefined ? {} : { onReconstructed: adapters.onReconstructed }),
             ...(adapters.workflowCleanupObserver === undefined
               ? {}
@@ -493,7 +504,21 @@ export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFounda
       const configuration = yield* decodeProductionRepositoryHostConfiguration(input)
       const foundation = yield* Layer.build(graph.foundation(configuration))
       const selection = yield* selectProductionRun(configuration.target).pipe(Effect.provide(foundation))
-      const applicationExit = yield* makeHostApplicationExitShell(Context.get(foundation, CoordinatorOwnership))
+      const hostStopRequested = yield* Deferred.make<void>()
+      const hostResultObserved = yield* Deferred.make<void>()
+      const applicationExit = yield* makeHostApplicationExitShell(
+        Context.get(foundation, CoordinatorOwnership),
+        {
+          requestEnd: () =>
+            Effect.yieldNow.pipe(
+              Effect.andThen(Deferred.succeed(hostStopRequested, undefined)),
+              Effect.asVoid,
+              Effect.forkDetach,
+              Effect.asVoid
+            )
+        },
+        Deferred.succeed(hostResultObserved, undefined).pipe(Effect.asVoid)
+      )
       const activationFailure = yield* Deferred.make<never, EActivation>()
       const run = yield* Layer.build(
         graph.run(
@@ -505,17 +530,27 @@ export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFounda
       ).pipe(Effect.provide(foundation))
       const source = Context.get(run, JournaledRunObservationSource)
       yield* Effect.raceFirst(source.awaitEstablished, Deferred.await(activationFailure))
+      const observation = {
+        acceptedHistory: source.acceptedHistory,
+        current: source.current,
+        selection,
+        applicationExitRequestBoundary: applicationExit.requestBoundary
+      } satisfies ProductionHostObservation
       // A typed activation failure can arrive after the Run has been
       // established. Keep the host effect attached to that failure so the
       // outer scope closes ordinary process-local resources without turning
-      // the failure into Run finality, Exit, or a host retry.
+      // the failure into Run finality, Exit, or a host retry. A supervisor
+      // Exit request follows the same serving race after its result is
+      // observed, then closes the Run and foundation scopes.
       return yield* Effect.raceFirst(
-        use({
-          acceptedHistory: source.acceptedHistory,
-          current: source.current,
-          selection,
-          applicationExitRequestBoundary: applicationExit.requestBoundary
-        }),
+        Effect.raceFirst(
+          use(observation),
+          Deferred.await(hostStopRequested).pipe(
+            Effect.andThen(Deferred.await(hostResultObserved)),
+            Effect.andThen(Effect.yieldNow),
+            Effect.andThen(Effect.interrupt)
+          )
+        ),
         Deferred.await(activationFailure)
       )
     })
