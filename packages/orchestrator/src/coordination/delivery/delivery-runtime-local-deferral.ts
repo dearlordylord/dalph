@@ -2,13 +2,14 @@ import { Data, Option } from "effect"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { DeliveryActionResult } from "./delivery-action-executor.js"
 import type { DeliveryActionProposal } from "./delivery-action-proposal.js"
+import type { LiveDeliveryActionKey } from "./live-delivery-action-key.js"
 
 /** Why one exact proposal must not be admitted again within this runtime activation. */
 export type DeliveryRuntimeLocalDeferral = Data.TaggedEnum<{
   /** A boundary could not proceed from the currently accepted Journal facts. */
   AwaitChangedAcceptedFacts: { readonly acceptedAt: JournalPosition | null }
-  /** An unchanged exact executor read installed the process-local passive owner. */
-  PassiveOwnerAttached: Record<never, never>
+  /** An unchanged executor read installed the passive owner for this stable live action. */
+  PassiveOwnerAttached: { readonly liveActionKey: LiveDeliveryActionKey }
 }>
 
 export const DeliveryRuntimeLocalDeferral = Data.taggedEnum<DeliveryRuntimeLocalDeferral>()
@@ -32,12 +33,13 @@ const isExactExecutingObserveAttachment = (result: DeliveryActionResult, proposa
 export const deliveryRuntimeLocalDeferralAfter = (
   result: DeliveryActionResult,
   proposal: DeliveryActionProposal,
-  acceptedAt: JournalPosition | null
+  acceptedAt: JournalPosition | null,
+  liveActionKey: LiveDeliveryActionKey
 ): Option.Option<DeliveryRuntimeLocalDeferral> =>
   result._tag === "ActionDeferred"
     ? Option.some(DeliveryRuntimeLocalDeferral.AwaitChangedAcceptedFacts({ acceptedAt }))
     : isExactExecutingObserveAttachment(result, proposal)
-      ? Option.some(DeliveryRuntimeLocalDeferral.PassiveOwnerAttached())
+      ? Option.some(DeliveryRuntimeLocalDeferral.PassiveOwnerAttached({ liveActionKey }))
       : result._tag === "ExecutorReportPublished" && result.acceptedFacts === "UnchangedPassiveObservation"
         ? Option.some(DeliveryRuntimeLocalDeferral.AwaitChangedAcceptedFacts({ acceptedAt }))
         : Option.none()

@@ -282,9 +282,16 @@ evidence that A1, B1, or C1 needs another projection read.
    already has its passive owner attached. Unlike an action deferred while it
    waits for changed accepted facts, an unrelated accepted ordinal does not
    erase that marker while the exact proposal remains present. If current task
-   grouping facts causally refresh the proposal identity while the projection
-   read is still settling, the marker follows the current `Observe` proposal
-   for the same exact run and attempt; Dalph removes the settled old owner.
+   grouping facts causally refresh the proposal identity either while the
+   projection read is still settling or after its publication-through
+   completion has installed the marker, the marker follows the current
+   `Observe` proposal for the same exact run and attempt. Dalph removes the
+   settled old owner, and a still-live independent read keeps the activation
+   open long enough to consume that later relation evaluation. A changed-facts
+   deferral remains bound to its exact proposal identity and accepted Journal
+   position; it does not follow a refreshed route. A passive marker is dropped
+   when the refreshed frontier has no available proposal for that same live
+   action, including an ownership-conflict frontier.
 3. Admission excludes the three locally attached `Observe` proposals from the
    remaining frontier. With only exact blocked D1 and E1 left, the ordinary
    runtime returns `TaskWorkAdmissionStalledRuntimeQuiescence`, preserving D1,
@@ -326,6 +333,13 @@ may clear when accepted facts change. The two outcomes are not interchangeable.
   inherits the attachment without a second boundary call or settled old owner,
   and proves disappearance prunes the marker so a later exact proposal is not
   hidden.
+- `keeps three publication-through passive attachments across a
+  post-completion route refresh` in the same file stages A1, B1, and C1
+  completions until their accepted publication is applied, waits until all
+  three passive markers replace their settled owners, then refreshes all three
+  proposal identities while an independent read remains live. It proves one
+  executor call per `Observe`, no D1/E1 call, and an exact D1/E1-only
+  `TaskWorkAdmissionStalledRuntimeQuiescence` result.
 - `waits for changed accepted facts after unchanged reconciliation instead of
   retaining an attachment` in the same file proves that a non-attaching
   unchanged `Reconcile` remains excluded at the same accepted Journal position
