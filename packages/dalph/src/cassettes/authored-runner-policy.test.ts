@@ -1,8 +1,130 @@
-import { Exit } from "effect"
+import { it as effectIt } from "@effect/vitest"
+import { Cause, Deferred, Effect, Exit, Queue } from "effect"
 import { expect, it } from "vitest"
 import { RunId } from "@dalph/contracts"
 import { AuthoredCassetteInteractionMismatch } from "./authored-cursor.js"
-import { authoredInteractionMismatchFrom, pauseObservationResultOf } from "./authored-runner.js"
+import {
+  authoredInteractionMismatchFrom,
+  awaitReactivationOwnerProcessOutcome,
+  pauseObservationResultOf
+} from "./authored-runner.js"
+
+effectIt.effect("ends one reactivation-owner generation at terminal assertions", () =>
+  Effect.gen(function* () {
+    const terminal = yield* Deferred.make<void>()
+    const processDeaths = yield* Queue.unbounded<void>()
+    const failure = yield* Deferred.make<unknown>()
+    yield* Deferred.succeed(terminal, undefined)
+
+    expect(yield* awaitReactivationOwnerProcessOutcome(Deferred.await(terminal), processDeaths, failure)).toBe(
+      "TerminalAssertions"
+    )
+  })
+)
+
+effectIt.effect("ends one reactivation-owner generation at an authored process death", () =>
+  Effect.gen(function* () {
+    const terminal = yield* Deferred.make<void>()
+    const processDeaths = yield* Queue.unbounded<void>()
+    const failure = yield* Deferred.make<unknown>()
+    yield* Queue.offer(processDeaths, undefined)
+
+    expect(yield* awaitReactivationOwnerProcessOutcome(Deferred.await(terminal), processDeaths, failure)).toBe(
+      "CoordinatorProcessDied"
+    )
+  })
+)
+
+effectIt.effect("propagates one reactivation-owner failure as the same defect", () =>
+  Effect.gen(function* () {
+    const terminal = yield* Deferred.make<void>()
+    const processDeaths = yield* Queue.unbounded<void>()
+    const failure = yield* Deferred.make<unknown>()
+    const sentinel = { _tag: "ReactivationOwnerFailureSentinel" }
+    yield* Deferred.succeed(failure, sentinel)
+
+    const exit = yield* awaitReactivationOwnerProcessOutcome(Deferred.await(terminal), processDeaths, failure).pipe(
+      Effect.exit
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      expect(exit.cause.reasons).toHaveLength(1)
+      expect(exit.cause.reasons.every(Cause.isDieReason)).toBe(true)
+      const defects = exit.cause.reasons.flatMap((reason) => (Cause.isDieReason(reason) ? [reason.defect] : []))
+      expect(defects).toEqual([sentinel])
+    }
+  })
+)
+
+effectIt.effect("prefers an owner defect when all reactivation-owner outcomes are already ready", () =>
+  Effect.gen(function* () {
+    const terminal = yield* Deferred.make<void>()
+    const processDeaths = yield* Queue.unbounded<void>()
+    const failure = yield* Deferred.make<unknown>()
+    const sentinel = { _tag: "SimultaneousReactivationOwnerFailureSentinel" }
+    yield* Deferred.succeed(terminal, undefined)
+    yield* Queue.offer(processDeaths, undefined)
+    yield* Deferred.succeed(failure, sentinel)
+
+    const exit = yield* awaitReactivationOwnerProcessOutcome(Deferred.await(terminal), processDeaths, failure).pipe(
+      Effect.exit
+    )
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      expect(exit.cause.reasons).toHaveLength(1)
+      expect(exit.cause.reasons.every(Cause.isDieReason)).toBe(true)
+      const defects = exit.cause.reasons.flatMap((reason) => (Cause.isDieReason(reason) ? [reason.defect] : []))
+      expect(defects).toEqual([sentinel])
+    }
+    expect(yield* Queue.size(processDeaths)).toBe(1)
+  })
+)
+
+effectIt.effect("prefers authored process death when death and terminal assertions are already ready", () =>
+  Effect.gen(function* () {
+    const terminal = yield* Deferred.make<void>()
+    const processDeaths = yield* Queue.unbounded<void>()
+    const failure = yield* Deferred.make<unknown>()
+    yield* Deferred.succeed(terminal, undefined)
+    yield* Queue.offer(processDeaths, undefined)
+
+    expect(yield* awaitReactivationOwnerProcessOutcome(Deferred.await(terminal), processDeaths, failure)).toBe(
+      "CoordinatorProcessDied"
+    )
+    expect(yield* Queue.size(processDeaths)).toBe(0)
+  })
+)
+
+effectIt.effect("prefers an owner defect that becomes ready with the terminal wake", () =>
+  Effect.gen(function* () {
+    const processDeaths = yield* Queue.unbounded<void>()
+    const failure = yield* Deferred.make<unknown>()
+    const sentinel = { _tag: "PostWakeReactivationOwnerFailureSentinel" }
+    const terminalWake = Deferred.succeed(failure, sentinel).pipe(Effect.asVoid)
+
+    const exit = yield* awaitReactivationOwnerProcessOutcome(terminalWake, processDeaths, failure).pipe(Effect.exit)
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      expect(exit.cause.reasons).toHaveLength(1)
+      expect(exit.cause.reasons.every(Cause.isDieReason)).toBe(true)
+      const defects = exit.cause.reasons.flatMap((reason) => (Cause.isDieReason(reason) ? [reason.defect] : []))
+      expect(defects).toEqual([sentinel])
+    }
+  })
+)
+
+effectIt.effect("prefers authored process death that becomes ready with the terminal wake", () =>
+  Effect.gen(function* () {
+    const processDeaths = yield* Queue.unbounded<void>()
+    const failure = yield* Deferred.make<unknown>()
+    const terminalWake = Queue.offer(processDeaths, undefined).pipe(Effect.asVoid)
+
+    expect(yield* awaitReactivationOwnerProcessOutcome(terminalWake, processDeaths, failure)).toBe(
+      "CoordinatorProcessDied"
+    )
+    expect(yield* Queue.size(processDeaths)).toBe(0)
+  })
+)
 
 it("extracts only the authored interaction mismatch from an Effect exit", () => {
   const mismatch = new AuthoredCassetteInteractionMismatch({ actual: "actual", expected: "expected", storyPosition: 1 })

@@ -132,7 +132,7 @@ const AuthoredConcurrentTrackerRead = Schema.Union([
       AuthoredConcurrentTrackerReadResult.cases.TrackerGraphReadFailed,
       AuthoredConcurrentTrackerReadResult.cases.TrackerGraphReadReturned
     ])
-  })?.[0]
+  })
 ]).check(
   Schema.makeFilter((member) =>
     member.operation._tag === "ReadTaskWorkSpecification" && member.result._tag === "TaskWorkSpecificationReadReturned"
@@ -1098,9 +1098,7 @@ const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCasse
 const reactivationInputsHaveExplicitProcessLifecycle = Schema.makeFilter(
   (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
     const hasHints = cassette.story.some((item) => item._tag === "CassetteOffersRunReactivationHints")
-    const hasCurrentFirst = cassette.story.some(
-      (item) => item._tag === "CassettePublishesCurrentTrackerNotification"
-    )
+    const hasCurrentFirst = cassette.story.some((item) => item._tag === "CassettePublishesCurrentTrackerNotification")
     const mode = cassette.processLifecycle?._tag
     if (!hasHints && !hasCurrentFirst) {
       return mode === undefined ? undefined : "an authored process lifecycle requires a reactivation-owner input"
