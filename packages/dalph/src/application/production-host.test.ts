@@ -125,7 +125,7 @@ const ownershipLayer = Layer.succeed(
 it("production host adapter surface cannot replace workflow mutation capabilities", () => {
   type CapabilityReplacementKey = Extract<
     keyof ProductionRepositoryHostAdapters,
-    "journalStore" | "gitCommand" | "plannedAttemptExecutor" | "integrator"
+    "journalStore" | "gitCommand" | "plannedAttemptExecutor" | "integrator" | "evidenceStore"
   >
   expectTypeOf<CapabilityReplacementKey>().toEqualTypeOf<never>()
 })
@@ -627,6 +627,12 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
       case "journal.sqlite.open":
         // Discovery may open the real SQLite journal before rejecting unsafe history.
         return count("boundaryAcquisitions")
+      case "evidence.acquire":
+        // Unsafe discovery must fail before the Run graph builds its real evidence store.
+        return count("boundaryAcquisitions")
+      case "evidence.put":
+        // Count only a real production EvidenceStore.put boundary, never layer acquisition.
+        return boundaryFailure("evidenceWrites")
       case "git.acquire":
       case "git.run":
       case "git.runInWorktree":
@@ -1039,12 +1045,19 @@ it.effect(
           events.filter((observed) => observed === event).length
         // Only the network/process edges are replaceable in this fixture. The default graph owns every
         // workflow mutation capability, and the observer wraps those real services instead of installing fakes.
-        for (const capability of ["journalStore", "gitCommand", "plannedAttemptExecutor", "integrator"]) {
+        for (const capability of [
+          "journalStore",
+          "gitCommand",
+          "plannedAttemptExecutor",
+          "integrator",
+          "evidenceStore"
+        ]) {
           expect(capability in adapters).toBe(false)
         }
         for (const event of [
           "coordinator.acquire",
           "journal.sqlite.open",
+          "evidence.acquire",
           "git.acquire",
           "executor.acquire",
           "integrator.acquire",
@@ -1078,6 +1091,8 @@ it.effect(
           "journal.append",
           "journal.retireTerminalRun",
           "journal.terminateRun",
+          "evidence.acquire",
+          "evidence.put",
           "git.acquire",
           "git.run",
           "git.runInWorktree",
@@ -1121,6 +1136,7 @@ it.effect(
         expect(count("journal.sqlite.open", finalTrace)).toBe(2)
         for (const event of [
           "coordinator.acquire",
+          "evidence.acquire",
           "git.acquire",
           "executor.acquire",
           "integrator.acquire",

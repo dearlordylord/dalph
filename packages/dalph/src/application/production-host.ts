@@ -9,6 +9,7 @@ import {
   type CurrentSignal,
   type DeliveryRuntimeObservationState,
   EvidenceStore,
+  type EvidenceStoreService,
   GitCommonDirectoryTarget,
   GitCommand,
   type GitCommandService,
@@ -65,6 +66,8 @@ type ProductionHostFoundation = CoordinatorOwnership | JournalStore | RunLifecyc
 export type ProductionRepositoryHostBoundary =
   | "coordinator.acquire"
   | "journal.sqlite.open"
+  | "evidence.acquire"
+  | "evidence.put"
   | "git.acquire"
   | "git.run"
   | "git.runInWorktree"
@@ -163,6 +166,27 @@ const observedGitCommandLayer = <E, R>(
       Effect.flatMap((context) =>
         observe("git.acquire").pipe(
           Effect.as(Context.add(context, GitCommand, observedGitCommand(Context.get(context, GitCommand), observe)))
+        )
+      )
+    )
+  )
+}
+
+const observedEvidenceStore = (service: EvidenceStoreService, observe: ProductionRepositoryHostBoundaryObserver) =>
+  EvidenceStore.of({ ...service, put: (bytes) => observe("evidence.put").pipe(Effect.andThen(service.put(bytes))) })
+
+const observedEvidenceStoreLayer = <E, R>(
+  layer: Layer.Layer<EvidenceStore, E, R>,
+  observe: ProductionRepositoryHostBoundaryObserver | undefined
+) => {
+  if (observe === undefined) return layer
+  return Layer.fromBuildMemo((memoMap, scope) =>
+    Layer.buildWithMemoMap(layer, memoMap, scope).pipe(
+      Effect.flatMap((context) =>
+        observe("evidence.acquire").pipe(
+          Effect.as(
+            Context.add(context, EvidenceStore, observedEvidenceStore(Context.get(context, EvidenceStore), observe))
+          )
         )
       )
     )
@@ -270,8 +294,9 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           "github.authority.acquire",
           adapters.boundaryObserver
         )
-        const evidenceLayer = nodeEvidenceStoreLayer(configuration.evidenceStoreRoot).pipe(
-          Layer.provide(NodeServices.layer)
+        const evidenceLayer = observedEvidenceStoreLayer(
+          nodeEvidenceStoreLayer(configuration.evidenceStoreRoot).pipe(Layer.provide(NodeServices.layer)),
+          adapters.boundaryObserver
         )
         const attemptStoreLayer = nodeCodexAttemptStoreLayer({
           stateDirectory: configuration.codexStateDirectory
