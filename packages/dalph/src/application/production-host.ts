@@ -302,7 +302,7 @@ const makeHostApplicationExitShell = Effect.fn("ProductionRepositoryHost.makeApp
     emit: (event: Parameters<ProductionApplicationExitTraceObserver>[0]) =>
       options.traceObserver?.(event) ?? Effect.void
   }
-  const shell = yield* makeProductionHostApplicationExitShell(
+  const shell: ProductionHostApplicationExitShellService = yield* makeProductionHostApplicationExitShell(
     { emit: trace.emit },
     options.requestObserver === undefined ? {} : { onRequest: options.requestObserver }
   )
