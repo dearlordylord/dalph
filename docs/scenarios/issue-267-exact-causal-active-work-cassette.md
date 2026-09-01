@@ -181,6 +181,9 @@ it lets dry-run, test, and production interpret the same workflow algebra with
 their selected executor. The production wrapper still selects the live
 executor and cleanup. Therefore this entry point introduces no new operational
 scenario; the #265, #266, and #267 scenarios continue to govern its behavior.
+The pending capstone-only settlement and restart cuts are owned by the
+dedicated [#268 scenario](issue-268-delivery-story-capstone.md), not by this
+closed #267 scenario.
 
 ## Scenario-to-test mapping
 

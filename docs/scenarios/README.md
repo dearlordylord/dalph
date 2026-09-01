@@ -90,6 +90,14 @@ table does not claim that the corrections are on `master` or shipped.
 | `issue-269-independent-work-retained-priority.md` | 269 | Complete and composed through `a1b81c4fb`; issue closed |
 | `issue-267-exact-causal-active-work-cassette.md` | 267 | Complete and composed through `a1b81c4fb`; issue closed |
 
+**Proposed capstone refinement** — this file is scenario-gated and does not
+authorize implementation until its banner's owner-acceptance and blocking-edge
+requirements are satisfied.
+
+| File | Owning issue | Status |
+|---|---:|---|
+| `issue-268-delivery-story-capstone.md` | 268 | Proposed; owner acceptance and pending #309 causal-language amendment required |
+
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state
 which behavior is no longer accepted. They must not authorize implementation
