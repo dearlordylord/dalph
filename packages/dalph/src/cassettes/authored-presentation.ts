@@ -437,8 +437,13 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         "The tracker notification source publishes its current value when the restarted Run reactivation owner attaches.",
       CassetteReleasesHeldTaskWorkSpecificationRead: (item) =>
         `The cassette releases task ${item.taskId}'s held specification read.`,
-      ConcurrentInteractionGroup: (item) =>
-        `The cassette accepts ${item.members.length} causally unordered controlled interactions before advancing once.`,
+      ConcurrentInteractionGroup: (item) => {
+        const roles = item.members.map(({ role }) => role).join(", ")
+        const edges = item.members.flatMap(({ predecessorRoles, role }) =>
+          predecessorRoles.map((predecessorRole) => `${predecessorRole} -> ${role}`)
+        )
+        return `The cassette accepts causal interaction group {${roles}}; authored direct predecessor edges: ${edges.length === 0 ? "none" : edges.join(", ")}. Only these direct edges are authored; missing direct edges may still be transitively ordered. It advances once after every role is consumed.`
+      },
       ConcurrentTrackerReadBatch: (item) =>
         `The cassette accepts ${item.members.length} causally named tracker reads in either completion order.`,
       DalphSelects: (item) => `Dalph selects ${item.operation._tag}.`,

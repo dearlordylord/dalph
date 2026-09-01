@@ -19,21 +19,57 @@ const aBeginExecuting = {
   report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
   request: "Begin"
 } as const
+const concurrentNode = (role: string, predecessorRoles: ReadonlyArray<string>, interaction: unknown) => ({
+  interaction,
+  predecessorRoles,
+  role
+})
 const concurrentGroup = (members: ReadonlyArray<unknown>) => ({ _tag: "ConcurrentInteractionGroup", members })
 
-it("accepts only noncausal selections and Begin Executing reports in a concurrent interaction group", () => {
+it("accepts exact roles and predecessor roles in a causal concurrent interaction group", () => {
   expect(() =>
     Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(
-      concurrentGroup([bWorktreeSelection, cWorktreeSelection, aBeginExecuting])
+      concurrentGroup([
+        concurrentNode("W_B", [], bWorktreeSelection),
+        concurrentNode("W_C", [], cWorktreeSelection),
+        concurrentNode("X_A", [], aBeginExecuting),
+        concurrentNode("X_B", ["W_B"], {
+          ...aBeginExecuting,
+          report: { ...aBeginExecuting.report, attemptId: "attempt:B:1" }
+        })
+      ])
     )
   ).not.toThrow()
 })
 
-it("rejects empty duplicate and ambiguous concurrent interaction groups", () => {
+it("rejects invalid roles keys edges and member tags in a causal concurrent interaction group", () => {
   const invalidGroups = [
     concurrentGroup([]),
-    concurrentGroup([bWorktreeSelection, bWorktreeSelection]),
-    concurrentGroup([aBeginExecuting, { ...aBeginExecuting, report: { ...aBeginExecuting.report } }])
+    concurrentGroup([concurrentNode("", [], bWorktreeSelection)]),
+    concurrentGroup([concurrentNode("W_B", [], bWorktreeSelection), concurrentNode("W_B", [], cWorktreeSelection)]),
+    concurrentGroup([
+      concurrentNode("W_B", [], bWorktreeSelection),
+      concurrentNode("W_B_again", [], bWorktreeSelection)
+    ]),
+    concurrentGroup([
+      concurrentNode("X_A", [], aBeginExecuting),
+      concurrentNode("X_A_again", [], { ...aBeginExecuting, report: { ...aBeginExecuting.report } })
+    ]),
+    concurrentGroup([
+      concurrentNode("root", [], cWorktreeSelection),
+      concurrentNode("W_B", ["root", "root"], bWorktreeSelection)
+    ]),
+    concurrentGroup([concurrentNode("W_B", ["missing"], bWorktreeSelection)]),
+    concurrentGroup([concurrentNode("W_B", ["W_B"], bWorktreeSelection)]),
+    concurrentGroup([
+      concurrentNode("W_B", ["X_B"], bWorktreeSelection),
+      concurrentNode("X_B", ["W_B"], aBeginExecuting)
+    ]),
+    concurrentGroup([
+      concurrentNode("W_B", ["X_A"], bWorktreeSelection),
+      concurrentNode("X_B", ["W_B"], cWorktreeSelection),
+      concurrentNode("X_A", ["X_B"], aBeginExecuting)
+    ])
   ]
 
   for (const group of invalidGroups) {
@@ -49,12 +85,25 @@ it("rejects valid terminal lifecycle control and result items as concurrent inte
     {
       _tag: "IntegratorResultReturned",
       result: { _tag: "PreparedCandidate", candidateText: "candidate:closed-language-control" }
-    }
+    },
+    {
+      _tag: "ConcurrentTrackerReadBatch",
+      members: [
+        {
+          causal: { occurrenceRole: "read-A", predecessorRoles: [] },
+          operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" },
+          result: { _tag: "TaskWorkSpecificationReadReturned", body: "Body", taskId: "A", title: "Title" }
+        }
+      ]
+    },
+    concurrentGroup([concurrentNode("nested", [], bWorktreeSelection)])
   ]
 
   for (const item of closedLanguageExclusions) {
     expect(() => Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(item)).not.toThrow()
-    expect(() => Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(concurrentGroup([item]))).toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(concurrentGroup([concurrentNode("closed", [], item)]))
+    ).toThrow()
   }
 })
 
@@ -64,12 +113,13 @@ it("rejects causal selections and non-Begin-Executing reports inside a concurren
     { ...bWorktreeSelection, causalAnchor: { occurrenceRole: "B-worktree" } },
     { ...aBeginExecuting, request: "Resume" },
     { ...aBeginExecuting, report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:0" } },
-    { _tag: "CoordinatorProcessDies" },
-    { _tag: "ConcurrentInteractionGroup", members: [bWorktreeSelection] }
+    { _tag: "CoordinatorProcessDies" }
   ]
 
   for (const member of invalidMembers) {
-    expect(() => Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(concurrentGroup([member]))).toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(concurrentGroup([concurrentNode("invalid", [], member)]))
+    ).toThrow()
   }
 })
 
@@ -131,11 +181,11 @@ it("rejects an authored Begin response that skips Executing", () => {
   expect(() =>
     Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(
       concurrentGroup([
-        {
+        concurrentNode("X_A", [], {
           _tag: "PlannedAttemptExecutorWorkReported",
           report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:A:0", result: { _tag: "Completed" } },
           request: "Begin"
-        }
+        })
       ])
     )
   ).toThrow()

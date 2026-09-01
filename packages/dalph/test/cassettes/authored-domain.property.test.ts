@@ -30,44 +30,57 @@ const authoredTrackerGraphReadResultArbitrary = fc.oneof(
     }))
 )
 
-const concurrentInteractionMemberArbitrary = fc.oneof(
-  fc
-    .record({
-      attemptSuffix: fc.string({ minLength: 1, maxLength: 12 }),
-      taskSuffix: fc.string({ minLength: 1, maxLength: 12 })
+const concurrentInteractionNodeSeedArbitrary = fc.record({
+  executor: fc.boolean(),
+  predecessorMask: fc.integer({ max: 63, min: 0 }),
+  topologicalPriority: fc.integer()
+})
+
+const concurrentInteractionGroupCaseArbitrary = (minLength: number) =>
+  fc.array(concurrentInteractionNodeSeedArbitrary, { maxLength: 6, minLength }).map((seeds) => {
+    const indexesInTopologicalOrder = seeds
+      .map(({ topologicalPriority }, index) => ({ index, topologicalPriority }))
+      .sort((left, right) => left.topologicalPriority - right.topologicalPriority || left.index - right.index)
+      .map(({ index }) => index)
+    const roleFor = (index: number) => `role-${index}`
+    const members = seeds.map(({ executor, predecessorMask }, index) => {
+      const topologicalIndex = indexesInTopologicalOrder.indexOf(index)
+      const predecessorRoles = indexesInTopologicalOrder
+        .slice(0, topologicalIndex)
+        .filter((_, predecessorIndex) => (predecessorMask & (1 << predecessorIndex)) !== 0)
+        .map(roleFor)
+      const interaction = executor
+        ? {
+            _tag: "PlannedAttemptExecutorWorkReported" as const,
+            report: { _tag: "ExecutorWorkExecuting" as const, attemptId: `attempt:executor:${index}` },
+            request: "Begin" as const
+          }
+        : {
+            _tag: "DalphSelects" as const,
+            operation: {
+              _tag: "ReconcileTaskWorktree" as const,
+              attemptId: `attempt:selection:${index}`,
+              taskId: `task:selection:${index}`
+            }
+          }
+      return { interaction, predecessorRoles, role: roleFor(index) }
     })
-    .map(({ attemptSuffix, taskSuffix }) => ({
-      _tag: "DalphSelects" as const,
-      operation: {
-        _tag: "ReconcileTaskWorktree" as const,
-        attemptId: `attempt:selection:${attemptSuffix}`,
-        taskId: `task:selection:${taskSuffix}`
-      }
-    })),
-  fc
-    .string({ minLength: 1, maxLength: 12 })
-    .map((attemptSuffix) => ({
-      _tag: "PlannedAttemptExecutorWorkReported" as const,
-      report: { _tag: "ExecutorWorkExecuting" as const, attemptId: `attempt:executor:${attemptSuffix}` },
-      request: "Begin" as const
-    }))
-)
-
-type GeneratedConcurrentInteractionMember =
-  typeof concurrentInteractionMemberArbitrary extends fc.Arbitrary<infer Member> ? Member : never
-
-const concurrentInteractionMemberClaimKey = (member: GeneratedConcurrentInteractionMember) =>
-  member._tag === "DalphSelects"
-    ? `DalphSelects:${member.operation._tag}:${member.operation.attemptId}:${member.operation.taskId}`
-    : `PlannedAttemptExecutorWorkReported:${member.request}:${member.report.attemptId}`
-
-const concurrentInteractionGroupArbitrary = fc
-  .uniqueArray(concurrentInteractionMemberArbitrary, {
-    maxLength: 6,
-    minLength: 1,
-    selector: concurrentInteractionMemberClaimKey
+    return {
+      encoded: { _tag: "ConcurrentInteractionGroup" as const, members },
+      legalTopologicalOrder: indexesInTopologicalOrder.map(roleFor)
+    }
   })
-  .map((members) => ({ _tag: "ConcurrentInteractionGroup" as const, members }))
+
+const concurrentInteractionGroupArbitrary = concurrentInteractionGroupCaseArbitrary(1)
+const duplicatePredecessorGroupArbitrary = concurrentInteractionGroupCaseArbitrary(2).map(({ encoded }) => {
+  const predecessorRole = encoded.members[0]?.role ?? "missing-generated-predecessor"
+  return {
+    ...encoded,
+    members: encoded.members.map((member, index) =>
+      index === 1 ? { ...member, predecessorRoles: [predecessorRole, predecessorRole] } : member
+    )
+  }
+})
 
 const exactPauseWaitingArbitrary = fc
   .record({
@@ -241,14 +254,18 @@ it("roundtrips arbitrary authored tracker graph outcomes through the story-item 
   )
 })
 
-it("roundtrips valid concurrent interaction groups through the story-item boundary", () => {
+it("roundtrips valid causal concurrent interaction groups through the story-item boundary", () => {
   const singleton = {
     _tag: "ConcurrentInteractionGroup" as const,
     members: [
       {
-        _tag: "PlannedAttemptExecutorWorkReported" as const,
-        report: { _tag: "ExecutorWorkExecuting" as const, attemptId: "attempt:executor:singleton" },
-        request: "Begin" as const
+        interaction: {
+          _tag: "PlannedAttemptExecutorWorkReported" as const,
+          report: { _tag: "ExecutorWorkExecuting" as const, attemptId: "attempt:executor:singleton" },
+          request: "Begin" as const
+        },
+        predecessorRoles: [],
+        role: "singleton"
       }
     ]
   }
@@ -257,12 +274,25 @@ it("roundtrips valid concurrent interaction groups through the story-item bounda
   ).toEqual(singleton)
 
   fc.assert(
-    fc.property(concurrentInteractionGroupArbitrary, (encoded) => {
-      expect(
-        Schema.encodeUnknownSync(AuthoredCassetteStoryItem)(
-          Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(encoded)
-        )
-      ).toEqual(encoded)
+    fc.property(concurrentInteractionGroupArbitrary, ({ encoded, legalTopologicalOrder }) => {
+      const decoded = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(encoded)
+      expect(Schema.encodeUnknownSync(AuthoredCassetteStoryItem)(decoded)).toEqual(encoded)
+      if (decoded._tag !== "ConcurrentInteractionGroup") return expect.fail("decoded the wrong story-item tag")
+      const topologicalPosition = new Map(legalTopologicalOrder.map((role, index) => [role, index]))
+      for (const { predecessorRoles, role } of decoded.members) {
+        for (const predecessorRole of predecessorRoles) {
+          expect(topologicalPosition.get(predecessorRole)).toBeLessThan(topologicalPosition.get(role) ?? -1)
+        }
+      }
+    }),
+    { numRuns: 100 }
+  )
+})
+
+it("rejects generated duplicate predecessor roles in a causal concurrent interaction group", () => {
+  fc.assert(
+    fc.property(duplicatePredecessorGroupArbitrary, (encoded) => {
+      expect(() => Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(encoded)).toThrow()
     }),
     { numRuns: 100 }
   )

@@ -2,11 +2,13 @@
 
 Owning issue: [#309](https://github.com/dearlordylord/dalph/issues/309)
 
-Status: proposed scenario refinement pending independent review and
-implementation. The earlier five-root implementation and its 120-permutation
-evidence are superseded because they omitted four causal predecessor
-relationships in the #268 chronology. This scenario does not claim the
-nine-node behavior or the downstream #268 capstone green.
+Status: refined scenario accepted by the repository owner on 2026-09-01 after
+the owner replied `ok` to the exact acceptance request. An uncommitted
+implementation candidate exists, and the concluding independent Standards and
+Spec implementation re-reviews are clean. Commit and push remain pending. The
+earlier five-root implementation and its 120-permutation evidence are
+superseded because they omitted four causal predecessor relationships in the
+#268 chronology. The downstream #268 capstone remains unclaimed and pending.
 
 This change affects only the controlled authored-cassette harness. It does not
 change production workflow semantics, provider requests, delivery scheduling,
@@ -86,10 +88,11 @@ one bounded nine-member group containing these exact authored roles:
 | `X_B` | B1 `Begin` receives `ExecutorWorkExecuting` for B1 | `W_B` |
 | `X_C` | C1 `Begin` receives `ExecutorWorkExecuting` for C1 | `W_C` |
 
-Thus the group has exactly four edges: `P_D` to `W_D`, `P_E` to `W_E`,
-`W_B` to `X_B`, and `W_C` to `X_C`. Every other pair is unordered. In
-particular, `X_A` is independent of all four two-node lanes, and completing
-one lane does not authorize or delay another.
+Thus the group has exactly four direct predecessor edges: `P_D` to `W_D`,
+`P_E` to `W_E`, `W_B` to `X_B`, and `W_C` to `X_C`. No other direct edge is
+authored; in this exact one-edge-per-lane graph, every other pair is
+incomparable. In particular, `X_A` is independent of all four two-node lanes,
+and completing one lane does not authorize or delay another.
 
 Each selection retains its complete existing `DalphSelects` operation,
 including the operation tag and exact branded task and attempt identities.
@@ -145,6 +148,14 @@ ninth claim empties the outstanding-role set. The cursor then emits exactly
 one completed-group occurrence through its existing `onOccurrence`
 observation and advances the top-level position exactly once. Only then may
 the strict `CoordinatorActivationReturned` item be consumed.
+
+Completion commit and occurrence publication remain inside the existing
+one-permit cursor transition and are uninterruptible as one local boundary.
+A strict successor that arrives while publication is blocked waits on that
+same permit, and interruption cannot leave an advanced group without its
+occurrence. The controlled `onOccurrence` callback therefore must not invoke
+another consuming operation on the same cursor while group completion is
+being published; doing so would re-enter the permit it already observes.
 
 The five initially enabled roots (`P_D`, `P_E`, `W_B`, `W_C`, and `X_A`) may
 reach the cursor simultaneously. After their four predecessors have been
@@ -292,6 +303,14 @@ have no accepted matching, validation, or authority semantics. The chosen
 closed nine-node group captures every and only interaction needed by the #268
 cut, with explicit roles and predecessors.
 
+Holding the existing transition permit through completed-group publication
+delays a pending interruption until the controlled observation callback
+finishes and rules out consuming-callback re-entry. That narrow cost is
+accepted because releasing the permit or restoring interruptibility earlier
+would let the strict successor overtake the group occurrence or let
+interruption lose it. The callback remains cassette-local observation work;
+this does not add another production authority or general callback queue.
+
 Exhaustively checking 22,680 schedules costs more than the superseded 120-order
 test. That finite cost is accepted because enumeration proves the entire exact
 partial order without scheduler sampling or timing. The construct remains
@@ -301,21 +320,24 @@ scenario.
 
 ## Scenario-to-test mapping
 
-All names below are planned acceptance tests. They are not claimed green until
-the refined issue #309 implementation is independently reviewed and executed.
+These direct acceptance tests define the implementation evidence. Their
+results become accepted implementation evidence only after implementation
+review; the downstream #268 composition remains separate and pending.
 
 | Chronological result | Planned direct proof |
 |---|---|
 | The closed selection/Begin member union decodes with one exact role and explicit predecessor roles | `packages/dalph/test/cassettes/authored-domain.test.ts` — `accepts exact roles and predecessor roles in a causal concurrent interaction group` |
 | Empty groups; invalid or duplicate roles; duplicate keys; repeated predecessor roles within one member; dangling, self, or cyclic predecessor references; causal selection fields; invalid member tags; and invalid Begin responses fail decoding | `packages/dalph/test/cassettes/authored-domain.test.ts` — `rejects invalid roles keys edges and member tags in a causal concurrent interaction group`; existing `rejects an authored Begin response that skips Executing`, extended with the nested case |
-| The exact nine-node #268 cut consumes in all 22,680 topological orders, preserves all four edges and no others, emits once after the ninth member, advances once, and then admits the activation return | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `consumes the nine-node delivery cut in all 22680 causal orders before advancing once` |
+| The exact nine-node #268 cut consumes in all 22,680 topological orders, preserves all four edges and no others, emits once after the ninth member, advances once, and then admits the activation return | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — collision-free canonical partition proof plus the five deterministic first-root shards under `consumes the nine-node delivery cut in all 22680 causal orders before advancing once` |
 | For each of the four edges, presenting the successor early fails typed without mutation; consuming its predecessor and retrying that exact successor on the same cursor succeeds once, while another retry fails typed | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `retries each exact successor once after its predecessor follows an early typed failure` |
+| X_A, X_B, and X_C return their exact controlled `ExecutorWorkExecuting` payloads and attempt identities after their own predecessor constraints are satisfied | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `returns each exact controlled executor report from its authored group node` |
 | Representative foreign, duplicate, and premature activation-return claims fail typed without advancing an incomplete group | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `rejects foreign duplicate and downstream claims without advancing an incomplete group` |
 | The five enabled roots may claim simultaneously, and the four enabled successors may claim simultaneously after their predecessors, while one permit produces one final occurrence | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `serializes simultaneous roots and successors and emits once after the causal join` |
+| A blocked completed-group occurrence cannot be overtaken by the strict activation return, and interrupting the ninth claimant cannot lose the group occurrence | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `publishes the completed group before admitting the strict successor even when interrupted` |
 | Missing members leave the group current with no occurrence and no cassette-owned timeout | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `keeps an incomplete causal group current without inventing timeout semantics` |
 | A replacement cursor starts with all nine roles outstanding after an earlier scope consumed a proper subset | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `recreates all causal group roles after its cursor scope is replaced` |
 | Encoding and decoding preserve unique roles, unique predecessor lists, predecessor edges, exact claim keys, and controlled outputs; generated repeated predecessor roles fail decoding | `packages/dalph/test/cassettes/authored-domain.property.test.ts` — `roundtrips valid causal concurrent interaction groups through the story-item boundary`; `rejects generated duplicate predecessor roles in a causal concurrent interaction group` |
-| Presentation renders all roles and four edges without inventing claim order; the tag has exactly one cursor owner and exhaustive matches handle it | `packages/dalph/test/cassettes/authored-presentation.test.ts` — `renders one causal interaction group without inventing claim order`; `packages/dalph/test/cassettes/authored-coverage.test.ts` — `registers the concurrent interaction group with exactly one cursor owner`; exhaustive compilation in `packages/dalph/src/cassettes/authored-presentation.ts` |
+| Presentation renders all nine roles and exactly four direct edges, states that absent direct edges may still be transitively ordered, and invents no direct edge or claim order; the tag has exactly one cursor owner and exhaustive matches handle it | `packages/dalph/test/cassettes/authored-presentation.test.ts` — `renders one causal interaction group without inventing claim order`; `packages/dalph/test/cassettes/authored-coverage.test.ts` — `registers the concurrent interaction group with exactly one cursor owner`; exhaustive compilation in `packages/dalph/src/cassettes/authored-presentation.ts` |
 | `ConcurrentTrackerReadBatch` still pairs each exact owner with its result and drains its surrounding position only after both pairs | Existing `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `selects F1 then F2 and pairs reverse-completing reads with their exact initiating operations`; `drains repeatedly forked exact read operations without resetting the story position` |
 | The maintained production story replaces the exact nine strict interactions with this group, keeps the activation return as the following strict join, and still proves DS01–DS13 | Pending #268 composition in `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `emits the exact DS01 through DS13 delivery checkpoint table` |
 

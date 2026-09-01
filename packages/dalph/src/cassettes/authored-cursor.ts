@@ -12,6 +12,7 @@ import {
   type AuthoredCausalSelection,
   type AuthoredConcurrentInteractionClaimKey,
   type AuthoredConcurrentInteractionMember,
+  type AuthoredConcurrentInteractionNode,
   type AuthoredConcurrentTrackerRead,
   type AuthoredConcurrentTrackerReadResult,
   AuthoredCassetteStoryItem,
@@ -95,7 +96,7 @@ type PromotionGitStoryItem =
   | typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadReturned.Type
 
 interface ConcurrentInteractionGroupState {
-  readonly consumed: ReadonlyArray<boolean>
+  readonly consumedRoles: ReadonlySet<AuthoredConcurrentInteractionNode["role"]>
   readonly index: number
 }
 
@@ -126,7 +127,7 @@ type ConcurrentInteractionClaimDecision =
 
 type ConcurrentInteractionMemberMatch =
   | { readonly _tag: "Ambiguous" }
-  | { readonly _tag: "Match"; readonly index: number; readonly member: AuthoredConcurrentInteractionMember }
+  | { readonly _tag: "Match"; readonly node: AuthoredConcurrentInteractionNode }
   | { readonly _tag: "Missing" }
 
 type ConcurrentInteractionPreparedState =
@@ -139,14 +140,14 @@ type ConcurrentInteractionPreparedState =
     }
 
 const concurrentInteractionMemberMatch = (
-  members: ReadonlyArray<AuthoredConcurrentInteractionMember>,
+  members: ReadonlyArray<AuthoredConcurrentInteractionNode>,
   claimKey: ConcurrentInteractionIncomingClaimKey
 ): ConcurrentInteractionMemberMatch => {
   let match: Extract<ConcurrentInteractionMemberMatch, { readonly _tag: "Match" }> | undefined
-  for (const [index, member] of members.entries()) {
-    if (!Equal.equals(authoredConcurrentInteractionClaimKey(member), claimKey)) continue
+  for (const node of members) {
+    if (!Equal.equals(authoredConcurrentInteractionClaimKey(node.interaction), claimKey)) continue
     if (match !== undefined) return { _tag: "Ambiguous" }
-    match = { _tag: "Match", index, member }
+    match = { _tag: "Match", node }
   }
   return match ?? { _tag: "Missing" }
 }
@@ -172,10 +173,8 @@ const prepareConcurrentInteractionState = (
       index
     }
   }
-  const state: ConcurrentInteractionGroupState = prior ?? { consumed: item.members.map(() => false), index }
-  return state.consumed.length === item.members.length
-    ? { _tag: "Ready", index, item, state }
-    : { _tag: "Failure", detail: "the concurrent group claim state has an invalid member count", index }
+  const state: ConcurrentInteractionGroupState = prior ?? { consumedRoles: new Set(), index }
+  return { _tag: "Ready", index, item, state }
 }
 
 /** Pure matcher decision for one cassette-local concurrent-group claim. */
@@ -198,24 +197,29 @@ const decideConcurrentInteractionClaim = (
       index
     }
   }
-  const consumedAtMatch = prepared.state.consumed[match.index]
-  if (consumedAtMatch === undefined) {
-    return { _tag: "Failure", detail: "the matched concurrent group claim state is absent", index }
-  }
-  if (consumedAtMatch) {
+  const role = match.node.role
+  if (prepared.state.consumedRoles.has(role)) {
     return { _tag: "Failure", detail: "the concurrent group member was already consumed", index }
   }
-  const consumed = prepared.state.consumed.map((value, candidateIndex) =>
-    candidateIndex === match.index ? true : value
+  const incompletePredecessor = match.node.predecessorRoles.find(
+    (predecessorRole) => !prepared.state.consumedRoles.has(predecessorRole)
   )
-  const completed = consumed.every(Boolean)
+  if (incompletePredecessor !== undefined) {
+    return {
+      _tag: "Failure",
+      detail: `concurrent interaction role ${role} requires predecessor ${incompletePredecessor}`,
+      index
+    }
+  }
+  const consumedRoles = new Set(prepared.state.consumedRoles).add(role)
+  const completed = consumedRoles.size === prepared.item.members.length
   return {
     _tag: "Claimed",
     completed,
     index,
     item: prepared.item,
-    member: match.member,
-    nextState: completed ? undefined : { consumed, index }
+    member: match.node.interaction,
+    nextState: completed ? undefined : { consumedRoles, index }
   }
 }
 
@@ -785,17 +789,23 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         const prior = yield* Ref.get(concurrentInteractionGroupState)
         const decision = decideConcurrentInteractionClaim(item, index, prior, claimKey)
         if (decision._tag !== "Claimed") return decision
-        yield* Ref.set(concurrentInteractionGroupState, decision.nextState)
-        if (decision.completed) yield* SubscriptionRef.set(position, decision.index + 1)
-        return decision
+        return yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            yield* Ref.set(concurrentInteractionGroupState, decision.nextState)
+            if (decision.completed) {
+              yield* SubscriptionRef.set(position, decision.index + 1)
+              // Completion publication is part of the same cursor transition:
+              // this callback must not invoke another consuming cursor operation.
+              yield* options.onOccurrence?.({ item: decision.item, storyPosition: decision.index + 1 }) ?? Effect.void
+              yield* announceTerminalAssertions
+            }
+            return decision
+          })
+        )
       })
     )
     if (result._tag === "Failure") return yield* concurrentInteractionFailure(result.detail, result.index)
     if (result._tag === "None") return Option.none<AuthoredConcurrentInteractionMember>()
-    if (result.completed) {
-      yield* options.onOccurrence?.({ item: result.item, storyPosition: result.index + 1 }) ?? Effect.void
-      yield* announceTerminalAssertions
-    }
     return Option.some(result.member)
   })
 
@@ -1092,31 +1102,35 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
 
   function claimNext<A extends StoryItem>(
     predicate: (item: StoryItem | undefined) => item is A,
-    bypassControlBoundary = false
+    claimOptions: { readonly bypassControlBoundary?: boolean; readonly throughTransition?: boolean } = {}
   ): Effect.Effect<ClaimedStoryItem<A>> {
     return Effect.gen(function* () {
       // The coordinator-death probe runs from a durable journal append. It
       // must be able to inspect the next crash boundary while a
       // before-admission control gate is still awaiting completion; otherwise
       // the append that proves the control read deadlocks behind its own gate.
-      if (!bypassControlBoundary && (yield* awaitControlBoundary())) return yield* claimNext(predicate)
-      const claimed = yield* SubscriptionRef.modify(position, (index): readonly [ClaimedStoryItem<A>, number] => {
+      if (claimOptions.bypassControlBoundary !== true && (yield* awaitControlBoundary())) {
+        return yield* claimNext(predicate, claimOptions)
+      }
+      const claim = SubscriptionRef.modify(position, (index): readonly [ClaimedStoryItem<A>, number] => {
         const item = story[index]
         return predicate(item)
           ? [{ _tag: "Claimed" as const, index, item }, index + 1]
           : [{ _tag: "Mismatch" as const, index, item }, index]
       })
+      const claimEffect = claimOptions.throughTransition === true ? transition.withPermits(1)(claim) : claim
+      const claimed = yield* claimEffect
       if (claimed._tag === "Claimed") {
         yield* options.onOccurrence?.({ item: claimed.item, storyPosition: claimed.index + 1 }) ?? Effect.void
       }
       yield* announceTerminalAssertions
-      const advanced = bypassControlBoundary ? false : yield* awaitBarrierAdvance(claimed)
-      return advanced ? yield* claimNext(predicate) : claimed
+      const advanced = claimOptions.bypassControlBoundary === true ? false : yield* awaitBarrierAdvance(claimed)
+      return advanced ? yield* claimNext(predicate, claimOptions) : claimed
     })
   }
-  const consume = (tag: StoryItem["_tag"]) =>
+  const consume = (tag: StoryItem["_tag"], options?: { readonly throughTransition: boolean }) =>
     Effect.gen(function* () {
-      const claimed = yield* claimNext((item): item is StoryItem => item?._tag === tag)
+      const claimed = yield* claimNext((item): item is StoryItem => item?._tag === tag, options)
       if (claimed._tag === "Mismatch") {
         return yield* new AuthoredCassetteInteractionMismatch({
           actual: tag,
@@ -1266,7 +1280,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         })
     )
   )
-  const consumeCoordinatorActivationReturned = consume("CoordinatorActivationReturned").pipe(
+  const consumeCoordinatorActivationReturned = consume("CoordinatorActivationReturned", {
+    throughTransition: true
+  }).pipe(
     Effect.flatMap((item) =>
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned)(item).pipe(Effect.orDie)
     )
@@ -1948,7 +1964,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type =>
         item?._tag === "CoordinatorProcessDies",
-      bypassControlBoundary
+      { bypassControlBoundary }
     )
     if (claimed._tag === "Mismatch") return
     yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorProcessDies)(claimed.item).pipe(
