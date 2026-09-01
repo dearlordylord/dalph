@@ -1,5 +1,4 @@
 import type { AttemptId, RunId, TaskId } from "@dalph/contracts"
-import { Schema } from "effect"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { DeliveryActionProposal, DeliveryProposalId } from "./delivery-action-proposal.js"
@@ -8,17 +7,11 @@ import {
   deliveryRuntimeLocalDeferralAppliesAt,
   type DeliveryRuntimeLocalDeferral
 } from "./delivery-runtime-local-deferral.js"
+import { makeLiveDeliveryActionKey, type LiveDeliveryActionKey } from "./live-delivery-action-key.js"
 
-/**
- * Process-local identity of an action that must not overlap itself. A recovered
- * observation keeps this identity when a newer causal predecessor changes its
- * proposal identity while the earlier boundary call is still owned.
- */
-export const LiveDeliveryActionKey = Schema.NonEmptyString.pipe(Schema.brand("LiveDeliveryActionKey"))
-export type LiveDeliveryActionKey = typeof LiveDeliveryActionKey.Type
+export { LiveDeliveryActionKey } from "./live-delivery-action-key.js"
 
-const liveActionKey = (parts: ReadonlyArray<string | number>): LiveDeliveryActionKey =>
-  LiveDeliveryActionKey.make(JSON.stringify(parts))
+const liveActionKey = makeLiveDeliveryActionKey
 
 type RecoveredTransition = Extract<
   DeliveryActionProposal["order"],

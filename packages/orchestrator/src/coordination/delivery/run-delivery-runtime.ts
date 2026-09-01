@@ -27,7 +27,12 @@ import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 import * as RuntimeObservation from "./delivery-runtime-observation.js"
 import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { installInterruptibleDeliveryChild } from "./delivery-child-handoff.js"
-import { liveActionIsPresent, proposalIsPresent, proposalsForLiveAction } from "./live-delivery-action.js"
+import {
+  liveActionIsPresent,
+  liveActionKeyOf,
+  proposalIsPresent,
+  proposalsForLiveAction
+} from "./live-delivery-action.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import {
   DeliveryRuntimePhase,
@@ -45,6 +50,7 @@ import {
   deliveryRuntimeLocalDeferralAppliesAt,
   type DeliveryRuntimeLocalDeferral
 } from "./delivery-runtime-local-deferral.js"
+import { reconcileDeliveryRuntimeLocalDeferrals } from "./delivery-runtime-local-deferral-reconciliation.js"
 import {
   DeliveryAcceptedFactPublication,
   type DeliveryAcceptedPublicationBoundary
@@ -287,16 +293,12 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               return
             }
             yield* Ref.set(latest, Option.some(phaseEvaluation))
-            yield* Ref.update(
-              localDeferrals,
-              (current) =>
-                new Map(
-                  [...current].filter(
-                    ([proposalId, localDeferral]) =>
-                      deliveryRuntimeLocalDeferralAppliesAt(localDeferral, phaseEvaluation.acceptedAt) &&
-                      proposalIsPresent(phaseEvaluation.proposedActions, proposalId)
-                  )
-                )
+            yield* Ref.update(localDeferrals, (current) =>
+              reconcileDeliveryRuntimeLocalDeferrals(
+                current,
+                phaseEvaluation.proposedActions,
+                phaseEvaluation.acceptedAt
+              )
             )
             yield* admission.synchronize(phaseEvaluation.taskWork)
             yield* admissionLoop.pruneSettledOwners(phaseEvaluation.proposedActions)
@@ -360,7 +362,12 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               const current = Option.getOrThrow(yield* Ref.get(latest))
               yield* Ref.set(latest, Option.some(current))
               yield* admission.synchronize(current.taskWork)
-              const localDeferral = deliveryRuntimeLocalDeferralAfter(actionResult, owner.proposal, current.acceptedAt)
+              const localDeferral = deliveryRuntimeLocalDeferralAfter(
+                actionResult,
+                owner.proposal,
+                current.acceptedAt,
+                liveActionKeyOf(owner.proposal)
+              )
               if (Option.isSome(localDeferral)) {
                 const proposalIds =
                   localDeferral.value._tag === "PassiveOwnerAttached"

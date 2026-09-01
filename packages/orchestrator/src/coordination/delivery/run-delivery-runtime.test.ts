@@ -3564,6 +3564,192 @@ it.effect(
     )
 )
 
+it.effect("keeps three publication-through passive attachments across a post-completion route refresh", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const [a, b, c, d, e] = ["refresh-A", "refresh-B", "refresh-C", "refresh-D", "refresh-E"].map(
+        preparedAttemptFixture
+      )
+      if (a === undefined || b === undefined || c === undefined || d === undefined || e === undefined) {
+        return yield* Effect.die("five post-completion refresh fixtures must be present")
+      }
+      const acceptedProgress = {
+        _tag: "ExecutorReportAccepted" as const,
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(1)
+      }
+      const observeFor = (fixture: typeof a, task: Task) => {
+        const transition = RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+          acceptedProgress,
+          plannedAttempt: fixture.attempt
+        })
+        return deliveryProposalsOf({
+          acceptedOperationIds: new Set(),
+          fresh: [
+            {
+              step: FreshWorkflowStep.ObservePlannedAttemptExecutorWork({
+                acceptedProgress,
+                plannedAttempt: fixture.attempt,
+                specification: fixture.fresh.step.specification,
+                task
+              }),
+              transition
+            }
+          ],
+          runId,
+          transitions: [transition]
+        }).ticketDelivery[0]
+      }
+      const fixtures = [a, b, c] as const
+      const observed = fixtures.map((fixture) => observeFor(fixture, fixture.task))
+      const refreshed = fixtures.map((fixture, index) =>
+        observeFor(fixture, { ...fixture.task, parentTaskId: TaskId.make(`post-completion-refresh-parent-${index}`) })
+      )
+      if ([...observed, ...refreshed].some((candidate) => candidate === undefined)) {
+        return yield* Effect.die("all post-completion Observe routes must be derivable")
+      }
+      const exactObserved = observed as ReadonlyArray<DeliveryActionProposal>
+      const exactRefreshed = refreshed as ReadonlyArray<DeliveryActionProposal>
+      for (const [index, initialObserve] of exactObserved.entries()) {
+        const refreshedObserve = exactRefreshed[index]
+        if (refreshedObserve === undefined) return yield* Effect.die("each Observe must have a refreshed route")
+        expect(refreshedObserve.id).not.toBe(initialObserve.id)
+        expect(liveActionKeyOf(refreshedObserve)).toBe(liveActionKeyOf(initialObserve))
+      }
+      const blocked = preparedBeginProposalsOf([d, e])
+      const keeper = trackerGraphReadProposalOf({
+        acceptedAt: JournalPosition.make(60),
+        purpose: "EstablishCurrentGraph",
+        runId,
+        target
+      })
+      const beforePublication = JournalPosition.make(60)
+      const acceptedThrough = JournalPosition.make(61)
+      const refreshedAt = JournalPosition.make(62)
+      const keeperRemovedAt = JournalPosition.make(63)
+      const base = yield* baseEvaluation
+      const initial = {
+        ...withProposals({ ...base, acceptedAt: beforePublication }, [...exactObserved, keeper, ...blocked], 3),
+        current: { ...base.current, runId },
+        taskWork: {
+          capacity: TaskWorkCapacity.make(3),
+          held: fixtures.map(({ attempt }) => ({
+            taskId: attempt.taskId,
+            correlation: plannedAttemptExecutorCorrelation(attempt)
+          }))
+        }
+      } satisfies DeliveryRuntimeEvaluation
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const keeperStarted = yield* Deferred.make<void>()
+      const finishKeeper = yield* Deferred.make<void>()
+      const completionPending = yield* Queue.unbounded<DeliveryProposalId>()
+      const calls = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const observedById = new Map(exactObserved.map((proposal, index) => [proposal.id, fixtures[index]] as const))
+      const refreshedIds = new Set(exactRefreshed.map(({ id }) => id))
+      const blockedIds = new Set(blocked.map(({ id }) => id))
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal: action }) =>
+          Effect.gen(function* () {
+            yield* Ref.update(calls, (current) => [...current, action.id])
+            if (action.id === keeper.id) {
+              yield* Deferred.succeed(keeperStarted, undefined)
+              yield* Deferred.await(finishKeeper)
+              return { _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult
+            }
+            if (refreshedIds.has(action.id)) {
+              return yield* Effect.die("a post-completion passive marker must cover its refreshed Observe")
+            }
+            if (blockedIds.has(action.id)) return yield* Effect.die("blocked D or E must not execute")
+            const fixture = observedById.get(action.id)
+            if (fixture === undefined) return yield* Effect.die("post-completion refresh admitted an unknown action")
+            return {
+              _tag: "ExecutorReportPublished",
+              acceptedFacts: "UnchangedPassiveObservation",
+              plannedAttempt: fixture.attempt,
+              proposalId: action.id,
+              report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                correlation: plannedAttemptExecutorCorrelation(fixture.attempt)
+              })
+            } satisfies DeliveryActionResult
+          })
+      })
+      const allMarkersInstalled = yield* Deferred.make<void>()
+      const refreshApplied = yield* Deferred.make<void>()
+      const observer = DeliveryRuntimeObservationObserver.of({
+        observe: ({ evaluation, liveOwners }) => {
+          const liveIds = new Set(liveOwners.map(({ proposal }) => proposal.id))
+          if (evaluation.acceptedAt === acceptedThrough && liveIds.size === 1 && liveIds.has(keeper.id)) {
+            return Deferred.succeed(allMarkersInstalled, undefined)
+          }
+          return evaluation.acceptedAt === refreshedAt && liveIds.has(keeper.id)
+            ? Deferred.succeed(refreshApplied, undefined)
+            : Effect.void
+        }
+      })
+      const publication = DeliveryAcceptedFactPublication.of({
+        awaitCurrent: Effect.succeed({ _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId })
+      })
+      const integrationTargets = yield* makeIntegrationTargetResourceController()
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets).pipe(
+        Effect.provideService(DeliveryRuntimeObservationObserver, observer)
+      )
+      const runtime = yield* runDeliveryRuntimeQuiescence(relation, publication).pipe(
+        Effect.provide(plannerLayer),
+        Effect.provide(deterministicOperationIdAllocatorLayer("runtime-post-completion-passive-refresh")),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(
+          DeliverySemanticTrace,
+          DeliverySemanticTrace.of({
+            emit: (event) =>
+              event._tag === "ActionCompletionPublicationPending" && observedById.has(event.proposalId)
+                ? Queue.offer(completionPending, event.proposalId)
+                : Effect.void
+          })
+        ),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(keeperStarted)
+      const pendingIds = new Set<DeliveryProposalId>()
+      while (pendingIds.size < exactObserved.length) pendingIds.add(yield* Queue.take(completionPending))
+      expect(pendingIds).toEqual(new Set(exactObserved.map(({ id }) => id)))
+      expect(runtime.pollUnsafe()).toBeUndefined()
+
+      yield* relation.publish({ ...initial, acceptedAt: acceptedThrough })
+      yield* Deferred.await(allMarkersInstalled)
+      yield* relation.publish({
+        ...initial,
+        acceptedAt: refreshedAt,
+        proposedActions: {
+          _tag: "DeliveryProposalsAvailable",
+          isolatedIssues: [],
+          proposals: [...exactRefreshed, keeper, ...blocked]
+        }
+      })
+      yield* Deferred.await(refreshApplied)
+      yield* relation.publish({
+        ...initial,
+        acceptedAt: keeperRemovedAt,
+        proposedActions: {
+          _tag: "DeliveryProposalsAvailable",
+          isolatedIssues: [],
+          proposals: [...exactRefreshed, ...blocked]
+        }
+      })
+      yield* Deferred.succeed(finishKeeper, undefined)
+
+      const result = yield* Fiber.join(runtime)
+      const exactCalls = yield* Ref.get(calls)
+      expect(exactCalls).toHaveLength(exactObserved.length + 1)
+      for (const { id } of exactObserved) expect(exactCalls.filter((called) => called === id)).toHaveLength(1)
+      expect(exactCalls.filter((called) => called === keeper.id)).toHaveLength(1)
+      expect(result._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+      expect(result.proposedActions.proposals).toEqual(blocked)
+    })
+  )
+)
+
 it.effect("moves a passive-attachment marker across an in-flight route refresh and removes it on disappearance", () =>
   Effect.scoped(
     Effect.gen(function* () {
