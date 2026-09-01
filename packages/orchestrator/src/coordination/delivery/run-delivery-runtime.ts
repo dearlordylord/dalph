@@ -302,6 +302,117 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         )
       })
 
+      const validatePublishedCompletion = Effect.fn("DeliveryRuntime.validatePublishedCompletion")(function* (
+        completion: Completion,
+        published: PublishedDeliveryActionResult
+      ) {
+        if (
+          expectedRunId !== published.publicationThrough.runId ||
+          completion.proposalId !== published.result.proposalId
+        ) {
+          return yield* new DeliveryActionCompletionPublicationMismatch({
+            expectedProposalId: completion.proposalId,
+            expectedRunId,
+            publicationRunId: published.publicationThrough.runId,
+            resultProposalId: published.result.proposalId
+          })
+        }
+      })
+
+      const successfulCompletionMustRemainPending = (
+        current: DeliveryRuntimeEvaluation,
+        completion: Completion,
+        published: PublishedDeliveryActionResult,
+        localDeferral: Option.Option<DeliveryRuntimeLocalDeferral>
+      ): boolean =>
+        current.acceptedAt === null ||
+        current.acceptedAt < published.publicationThrough.acceptedThrough ||
+        (Option.isNone(localDeferral) && proposalIsPresent(current.proposedActions, completion.proposalId))
+
+      const retainPendingCompletion = Effect.fn("DeliveryRuntime.retainPendingCompletion")(function* (
+        completion: Completion,
+        published: PublishedDeliveryActionResult
+      ) {
+        const pending = yield* Ref.get(pendingCompletions)
+        yield* Ref.set(pendingCompletions, new Map(pending).set(completion.proposalId, completion))
+        if (!pending.has(completion.proposalId)) {
+          yield* emit({
+            _tag: "ActionCompletionPublicationPending",
+            acceptedThrough: published.publicationThrough.acceptedThrough,
+            proposalId: completion.proposalId
+          })
+        }
+      })
+
+      const removePendingCompletion = (proposalId: DeliveryProposalId) =>
+        Ref.update(
+          pendingCompletions,
+          (pending) => new Map([...pending].filter(([pendingProposalId]) => pendingProposalId !== proposalId))
+        )
+
+      const removeOwnerInsideGate = (proposalId: DeliveryProposalId) =>
+        Ref.update(
+          owners,
+          (current) => new Map([...current].filter(([ownerProposalId]) => ownerProposalId !== proposalId))
+        ).pipe(Effect.andThen(publishRuntimeObservationInsideGate()))
+
+      const proposalIdsForLocalDeferral = (
+        current: DeliveryRuntimeEvaluation,
+        owner: LiveOwner,
+        proposalId: DeliveryProposalId,
+        localDeferral: DeliveryRuntimeLocalDeferral
+      ): ReadonlyArray<DeliveryProposalId> => {
+        if (localDeferral._tag === "PassiveOwnerAttached") {
+          return proposalsForLiveAction(current.proposedActions, owner.proposal).map(({ id }) => id)
+        }
+        return proposalIsPresent(current.proposedActions, proposalId) ? [proposalId] : []
+      }
+
+      const installLocalDeferral = Effect.fn("DeliveryRuntime.installLocalDeferral")(function* (
+        current: DeliveryRuntimeEvaluation,
+        owner: LiveOwner,
+        proposalId: DeliveryProposalId,
+        localDeferral: DeliveryRuntimeLocalDeferral
+      ) {
+        const proposalIds = proposalIdsForLocalDeferral(current, owner, proposalId, localDeferral)
+        if (proposalIds.length === 0) return
+        yield* Ref.update(
+          localDeferrals,
+          (deferred) => new Map([...deferred, ...proposalIds.map((id) => [id, localDeferral] as const)])
+        )
+      })
+
+      const settleCompletionInsideGate = Effect.fn("DeliveryRuntime.settleCompletionInsideGate")(function* (
+        completion: Completion,
+        owner: LiveOwner,
+        localDeferral: Option.Option<DeliveryRuntimeLocalDeferral>
+      ) {
+        const intentRecorded = yield* owner.intentRecorded
+        if (Exit.isFailure(completion.exit)) {
+          yield* admission.rollback(owner.reservation, intentRecorded)
+          yield* owner.settle
+          yield* publishRuntimeObservationInsideGate()
+          yield* removeOwnerInsideGate(completion.proposalId)
+          return
+        }
+
+        const actionResult = completion.exit.value.result
+        yield* admission.complete(owner.reservation)
+        yield* emit({ _tag: "ActionOutcome", result: actionResult })
+        yield* owner.settle
+        yield* publishRuntimeObservationInsideGate()
+        // Sample the accepted signal before deciding whether this owner coalesces with the next proposal.
+        const current = Option.getOrThrow(yield* Ref.get(latest))
+        yield* Ref.set(latest, Option.some(current))
+        yield* admission.synchronize(current.taskWork)
+        if (Option.isSome(localDeferral)) {
+          yield* installLocalDeferral(current, owner, completion.proposalId, localDeferral.value)
+          yield* removeOwnerInsideGate(completion.proposalId)
+        } else if (!liveActionIsPresent(current.proposedActions, owner.proposal)) {
+          yield* removeOwnerInsideGate(completion.proposalId)
+        }
+      })
+
       const applyCompletion = Effect.fn("DeliveryRuntime.applyCompletion")(function* (completion: Completion) {
         const applied = yield* selectionGate.withPermit(
           Effect.gen(function* () {
@@ -312,90 +423,16 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               : Option.none<DeliveryRuntimeLocalDeferral>()
             if (Exit.isSuccess(completion.exit)) {
               const published = completion.exit.value
-              if (
-                expectedRunId !== published.publicationThrough.runId ||
-                completion.proposalId !== published.result.proposalId
-              ) {
-                return yield* new DeliveryActionCompletionPublicationMismatch({
-                  expectedProposalId: completion.proposalId,
-                  expectedRunId,
-                  publicationRunId: published.publicationThrough.runId,
-                  resultProposalId: published.result.proposalId
-                })
-              }
-              if (
-                current.acceptedAt === null ||
-                current.acceptedAt < published.publicationThrough.acceptedThrough ||
-                (Option.isNone(localDeferral) && proposalIsPresent(current.proposedActions, completion.proposalId))
-              ) {
-                const pending = yield* Ref.get(pendingCompletions)
-                yield* Ref.set(pendingCompletions, new Map(pending).set(completion.proposalId, completion))
-                if (!pending.has(completion.proposalId)) {
-                  yield* emit({
-                    _tag: "ActionCompletionPublicationPending",
-                    acceptedThrough: published.publicationThrough.acceptedThrough,
-                    proposalId: completion.proposalId
-                  })
-                }
+              yield* validatePublishedCompletion(completion, published)
+              if (successfulCompletionMustRemainPending(current, completion, published, localDeferral)) {
+                yield* retainPendingCompletion(completion, published)
                 return Option.none<
                   Exit.Exit<DeliveryActionResult, DeliveryActionExecutionError | PlannedTaskAttemptError>
                 >()
               }
             }
-            yield* Ref.update(
-              pendingCompletions,
-              (pending) => new Map([...pending].filter(([proposalId]) => proposalId !== completion.proposalId))
-            )
-            const intentRecorded = yield* owner.intentRecorded
-            if (Exit.isFailure(completion.exit)) {
-              yield* admission.rollback(owner.reservation, intentRecorded)
-              yield* owner.settle
-              yield* publishRuntimeObservationInsideGate()
-              yield* Ref.update(
-                owners,
-                (current) => new Map([...current].filter(([id]) => id !== completion.proposalId))
-              )
-              yield* publishRuntimeObservationInsideGate()
-            } else {
-              const actionResult = completion.exit.value.result
-              yield* admission.complete(owner.reservation)
-              yield* emit({ _tag: "ActionOutcome", result: actionResult })
-              yield* owner.settle
-              yield* publishRuntimeObservationInsideGate()
-              // Sample the accepted signal before deciding whether this owner coalesces with the next proposal.
-              const current = Option.getOrThrow(yield* Ref.get(latest))
-              yield* Ref.set(latest, Option.some(current))
-              yield* admission.synchronize(current.taskWork)
-              if (Option.isSome(localDeferral)) {
-                const proposalIds =
-                  localDeferral.value._tag === "PassiveOwnerAttached"
-                    ? proposalsForLiveAction(current.proposedActions, owner.proposal).map(({ id }) => id)
-                    : proposalIsPresent(current.proposedActions, completion.proposalId)
-                      ? [completion.proposalId]
-                      : []
-                if (proposalIds.length > 0) {
-                  yield* Ref.update(
-                    localDeferrals,
-                    (deferred) =>
-                      new Map([
-                        ...deferred,
-                        ...proposalIds.map((proposalId) => [proposalId, localDeferral.value] as const)
-                      ])
-                  )
-                }
-                yield* Ref.update(
-                  owners,
-                  (owners) => new Map([...owners].filter(([id]) => id !== completion.proposalId))
-                )
-                yield* publishRuntimeObservationInsideGate()
-              } else if (!liveActionIsPresent(current.proposedActions, owner.proposal)) {
-                yield* Ref.update(
-                  owners,
-                  (owners) => new Map([...owners].filter(([id]) => id !== completion.proposalId))
-                )
-                yield* publishRuntimeObservationInsideGate()
-              }
-            }
+            yield* removePendingCompletion(completion.proposalId)
+            yield* settleCompletionInsideGate(completion, owner, localDeferral)
             return Option.some(Exit.map(completion.exit, ({ result }) => result))
           })
         )
