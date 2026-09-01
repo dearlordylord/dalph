@@ -151,7 +151,7 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly onActivationFinalizationStart?: (kind: "Ordinary" | "ActiveWorkAuthorityRefresh") => Effect.Effect<void>
   readonly codexAppServer?: (
     configuration: ProductionRepositoryHostConfiguration
-  ) => Layer.Layer<CodexAppServer, ECodex>
+  ) => Layer.Layer<CodexAppServer, ECodex, ApplicationExitShell>
   readonly githubClient?: (
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<GithubGraphqlClient, EGithub>

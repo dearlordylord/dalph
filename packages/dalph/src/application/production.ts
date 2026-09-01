@@ -143,6 +143,8 @@ export interface ProductionWorkflowRuntimeBoundaries {
   readonly integrator?: IntegratorService
   /** Optional qualification observation after the real Run recovery projection is built. */
   readonly onReconstructed?: (input: ProductionRunReconstructionObservation) => Effect.Effect<void>
+  /** Qualification-only observation of the one host-owned Exit shell at workflow acquisition. */
+  readonly onApplicationExitShell?: (applicationExit: ApplicationExitShell["Service"]) => Effect.Effect<void>
   /** Side-effect-only observation of the actual workflow Git command service. */
   readonly workflowGitCommandObserver?: ProductionWorkflowGitCommandObserver
   /** Optional direct observation of the application Exit request boundary. */
@@ -433,6 +435,9 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       const executor = yield* PlannedAttemptExecutor
       const trace = yield* WorkflowTrace
       const applicationExit = yield* ApplicationExitShell
+      if (runtimeBoundaries.onApplicationExitShell !== undefined) {
+        yield* runtimeBoundaries.onApplicationExitShell(applicationExit)
+      }
       const runtimeLayer = ({ opportunity, runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const interpreterLayer = journaledWorkflowInterpreterLayer(
           activeRunId,
