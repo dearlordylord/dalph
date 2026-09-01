@@ -204,16 +204,41 @@ person's command do not change at this handoff.
 3. Stabilization reports `RunMustRemainActive` immediately. It does not issue a
    post-quiescence G2 tracker read because the non-empty retained frontier is
    already proof that this Run is not final.
-4. The same sole reactivation owner completes that activation, coalesces the
-   queued notification and timer, and starts exactly one trailing active-work
-   refresh. That activation performs the ordinary journal-first tracker read
-   and accepts G1; it never overlaps the first activation.
+4. The delivery and stabilization inner scopes complete. A1 through E1 are
+   task-work subjects, so this cut acquires no integration-target lease.
+   Stabilization nevertheless completes its one process-local
+   `integrationTargets.releaseAll` call; that operation clears its controller
+   once and is not a claim that one release occurs for each lease. The delivery
+   program then completes its relation finalizer before it returns control to
+   bootstrap.
+5. The bootstrap's `closeControlAdmission` boundary rejects new runtime-control
+   admission. No lifecycle publication or control operation is intentionally in
+   flight in this controlled cut, so closing observes and drains zero legitimate
+   admitted control leases. Any nonzero lease is the suspected leaked
+   activation lease, not teardown work to preserve. The process-lived passive
+   executor observer holds no admitted control lease while it waits, and the
+   queued refresh is a later activation rather than a lease of the activation
+   now closing.
+6. After control admission has closed and drained, the scoped bootstrap exit
+   completes the remaining activation runtime Layer finalizer. Bootstrap does
+   not still own a relation finalizer at this point; that inner finalizer joined
+   before the delivery program returned.
+7. Teardown itself initiates no tracker, Git, executor, G2, or Journal-append
+   boundary call in this controlled cut. This does not forbid an already
+   admitted publication in another cut from finishing its ordinary Journal
+   append before control admission drains. After bootstrap returns the exact
+   `RunMustRemainActive(RunnableTransition)` result, the same sole reactivation
+   owner completes its activation handoff, coalesces the queued notification
+   and timer, and admits exactly one trailing active-work refresh. That later
+   activation performs the ordinary journal-first tracker read and accepts G1;
+   it never overlaps the first activation.
 
 The operator sees the Run remain active and later react to G1. Dalph must not
 erase D1 or E1 to fabricate an empty frontier, mark the Run terminal, issue a
-G2 read before yielding, start a concurrent activation, create a second
-scheduler or read authority, change configured capacity, or send D1/E1 an
-executor command without a position.
+G2 read before yielding, keep bootstrap teardown waiting on a passive observer
+or queued activation, start a concurrent activation, create a second scheduler
+or read authority, change configured capacity, or send D1/E1 an executor
+command without a position.
 
 If Dalph dies before returning the descriptive result, process-local ownership
 disappears and ordinary journal-first restart reconstructs the same held and
@@ -242,13 +267,44 @@ and must not duplicate an executor command.
   proves step 3 and the preserved non-empty frontier.
 - `runs one queued active refresh after admission-stalled delivery yields`
   in `packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts`
-  proves step 4's single trailing activation and maximum concurrent activation
+  proves step 7's single trailing activation and maximum concurrent activation
   count one.
+- `returns admission-stalled finality through production bootstrap
+  teardown` in
+  `packages/orchestrator/src/coordination/run/admission-stalled-bootstrap-teardown.acceptance.test.ts`
+  is the green characterization for steps 3–6 and bootstrap's part of step 7.
+  Its Deferred boundaries prove
+  delivery/stabilization inner-scope completion and the one empty-controller
+  `integrationTargets.releaseAll`. Immediately before the program returns to
+  bootstrap, the application-exit snapshot contains the one outer activation
+  owner and zero prepared or registered delivery forward owners. The relation
+  finalizer has already completed inside the delivery program. Bootstrap then
+  closes and drains control admission, joins the remaining activation runtime
+  Layer finalizer, and returns the exact
+  `RunMustRemainActive(RunnableTransition)` decision from bootstrap. The
+  fixture must prove that no lifecycle publication or control operation is
+  intentionally in flight at the cut; any nonzero lease fails as the suspected
+  activation leak. It must also prove that teardown initiates zero tracker,
+  Git, executor, G2, or Journal append. It does not construct a second
+  process-lived owner inside bootstrap's activation scope.
 - `active-work refresh recovers ordinary authority reads without a private
   refresh protocol` in
   `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`
   remains the governing #266 evidence that the trailing activation performs
   G1 through the ordinary journal-first tracker read protocol.
+- `emits the exact DS01 through DS13 delivery checkpoint table` in
+  `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`
+  remains the pending downstream #268 proof that the focused bootstrap result,
+  the sole owner's queued handoff, and the later ordinary G1 compose in one
+  vertical run.
+
+The split is causal rather than a weakened substitute for composition. The
+focused bootstrap test owns the last delivery observation through bootstrap
+return, where a teardown leak would occur. The existing owner test starts from
+the exact `RunnableTransition` return and owns the non-overlapping queued
+handoff. Neither test waits on a process-lived owner while trying to diagnose
+the other's scoped finalizers. The downstream cassette remains the one place
+that must prove both independently bounded protocols meet in production.
 
 ## An accepted C position closes capacity before the relation lists it
 
@@ -350,16 +406,51 @@ installed.
    effective A1/B1/C1 correlations and preserves D1 and E1 as its non-empty
    proposal frontier.
 9. Stabilization returns `RunMustRemainActive` with reason
-   `RunnableTransition` without issuing G2. The sole reactivation owner may
-   then process its already-queued notification or timer as the later
-   activation described by the full-capacity scenario.
+   `RunnableTransition` without issuing G2.
+10. The delivery and stabilization inner scopes complete. C1's admitted action
+    and D1/E1's denied proposals acquire no integration-target lease.
+    Stabilization still completes its one process-local
+    `integrationTargets.releaseAll` call against that empty controller; it does
+    not issue a per-lease release or turn integration-resource cleanup into
+    workflow evidence. The delivery program then completes its relation
+    finalizer before it returns control to bootstrap.
+11. The bootstrap's `closeControlAdmission` boundary rejects new
+    runtime-control admission. At this controlled cut, no lifecycle publication
+    or control operation is intentionally in flight after the quiescence proof,
+    so closing observes and drains zero legitimate admitted control leases. Any
+    nonzero lease is the suspected leaked activation lease, not an accepted
+    reason to extend teardown. The process-lived
+    `PassivePlannedAttemptObserver` holds no admitted control lease between
+    publications, and the reactivation owner's queued notification or timer is
+    a later activation rather than a lease of this one.
+12. After control admission has closed and drained, the scoped bootstrap exit
+    completes the remaining activation runtime Layer finalizer. The relation
+    finalizer is no longer pending: it completed inside the delivery program
+    before step 11 began.
+13. Teardown itself initiates no tracker, Git, executor, G2, or Journal-append
+    boundary call in this controlled cut. An already-admitted lifecycle
+    publication in another cut may legitimately finish its ordinary Journal
+    append while control admission drains; this zero-call rule does not cancel
+    or contradict that publication.
+14. After the remaining activation Layer finalizer completes, bootstrap returns
+    the exact `RunMustRemainActive(RunnableTransition)` result to the sole
+    reactivation owner.
+15. Only after that return does the owner complete its activation handoff and
+    admit exactly one coalesced queued refresh. The later activation does not
+    overlap this one and may then perform the full-capacity scenario's one
+    ordinary journal-first G1 read.
 
 The operator can observe the activation return while the Run remains active.
 Dalph must not claim that one position is free merely because the descriptive
 relation has not yet listed C1, invent a live delivery-action owner for C1,
 persist or publish the admission snapshot as workflow authority, admit or call
 D1/E1, drop D1/E1 to fabricate an empty frontier, or report only A1/B1 as the
-positions that caused the stall.
+positions that caused the stall. It must not keep activation teardown open for
+a passive executor observer or queued refresh, invent an integration-target
+lease for C1/D1/E1, call `integrationTargets.releaseAll` more than once,
+initiate another outside boundary while returning the proof, cancel an
+already-admitted publication in another cut, or let the queued refresh overlap
+the activation that produced that proof.
 
 If Dalph dies after binding C1's position but before recording C1's durable
 responsibility and `Begin` intent, the process-local position disappears and
@@ -374,6 +465,20 @@ its position again with A1 and B1. If Dalph dies after returning, the later sole
 activation performs the same ordinary reconstruction. In every case D1 and E1
 remain prepared but unbegun, and retry must not duplicate a journaled C1
 `Begin` intent.
+
+There is also a concrete crash cut after stabilization has derived the
+`RunnableTransition` proof but before bootstrap returns it. The proof,
+activation scopes, runtime-control admission state, process-local integration
+controller, passive attachments, and queued hints all disappear with that
+process. No `CoordinatorActivationReturned` occurrence is invented. A new
+process
+reconstructs C1 as unfinished and D1/E1 as prepared but unbegun only from the
+durable Journal chronology and the exact current executor facts required by
+their existing protocols. It does not restore the old admission snapshot,
+lease state, passive attachment, queued hint, or partially completed owner
+handoff. Current tracker or Git evidence, when required later, is obtained
+through the ordinary named boundaries rather than inferred from the lost
+process.
 
 The typed admission snapshot is an internal process-local value, but that
 TypeScript boundary alone does not prove that no adapter persisted it.
@@ -411,16 +516,45 @@ No serialized snapshot or admission-state variant may be supplied to restart.
   result reports A1/B1/C1. Asserting only that an admission-snapshot type is
   absent from a public union is supporting structure, not sufficient
   acceptance evidence.
-- Add `restart reconstructs three unfinished task positions without an
+- `restart reconstructs three unfinished task positions without an
   admission snapshot` in
-  `packages/orchestrator/src/control/task-work-capacity.test.ts`. It must discard
-  the original admission controller, construct a fresh recovery/controller
-  layer from the Journal, and assert exact A1/B1/C1 positions derived from
+  `packages/orchestrator/src/control/task-work-capacity.test.ts` discards the
+  original admission controller, constructs a fresh recovery/controller layer
+  from the Journal, and asserts exact A1/B1/C1 positions derived from
   `PlannedAttemptExecutorWorkResponsibilityBegan` plus the accepted lifecycle
   history that contains no Safe or Terminal release. Both recovery and the
   fresh controller must report each exact `(RunId, AttemptId)` correlation;
   task identity alone is not sufficient reconstruction evidence. Its exact
-  accepted event list must contain no quiescence or admission-snapshot record.
+  accepted event list contains no quiescence or admission-snapshot record. This
+  focused test does not establish D1/E1 as prepared but unbegun, loss of a
+  queued hint or passive attachment, or the post-proof/pre-bootstrap-return
+  crash cut.
+- `returns admission-stalled finality through production bootstrap
+  teardown` in
+  `packages/orchestrator/src/coordination/run/admission-stalled-bootstrap-teardown.acceptance.test.ts`.
+  This focused characterization is green without a bootstrap behavior repair.
+  Its explicit Deferred boundaries prove this exact
+  order: the ordinary runtime returns the D1/E1-only admission stall and
+  stabilization derives `RunnableTransition`; the delivery/stabilization inner
+  scopes complete; the empty integration-target controller receives exactly
+  one `releaseAll`; and immediately before bootstrap closes control admission,
+  the application-exit snapshot contains only the outer activation owner, with
+  zero prepared or registered delivery forward owners. The relation finalizer
+  has already completed inside the delivery program at this cut. Bootstrap then
+  closes and drains control admission and joins the remaining activation runtime
+  Layer finalizer before it returns. Counters must first prove
+  that no lifecycle publication or control operation is intentionally in
+  flight at the causal cut and fail on any nonzero control lease as the
+  suspected activation leak.
+  They must then prove teardown itself initiates zero tracker, Git, executor,
+  G2, or Journal-append calls, no integration-target acquisition for C1/D1/E1,
+  and no D1/E1 executor call before returning exact
+  `RunMustRemainActive(RunnableTransition)`.
+- `runs one queued active refresh after admission-stalled delivery yields` in
+  `packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts`
+  takes that exact `RunnableTransition` result at the next public boundary and
+  proves the sole owner completes its handoff, admits exactly one queued active
+  refresh, and never overlaps activations.
 - `reconciles existing, pending, and integration-backed admission positions`
   in `packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.test.ts`
   remains supporting evidence that synchronization preserves a locally bound
@@ -433,11 +567,17 @@ No serialized snapshot or admission-state variant may be supplied to restart.
 - `emits the exact DS01 through DS13 delivery checkpoint table` in
   `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`
   is the only mapping for the complete A1/B1/C1 observer sequence and the
-  required vertical acceptance test. It remains pending until this predecessor
-  range is composed into downstream #268; it is not claimed green here. At
-  this exact handoff it must consume
+  required vertical composition of bootstrap teardown, sole-owner handoff, and
+  later G1. It remains pending until this predecessor range is composed into
+  downstream #268; it is not claimed green here. At this exact handoff it must
+  consume
   `CoordinatorActivationReturned(RunMustRemainActive, RunnableTransition)`
-  before the later G1 read begins.
+  before the later G1 read begins. It also remains the pending evidence for the
+  post-proof/pre-bootstrap-return crash cut: restart must reconstruct C1 as
+  unfinished and D1/E1 as prepared but unbegun without restoring an admission
+  snapshot, lease, queued hint, passive attachment, or partial owner handoff. A
+  future dedicated restart composition may discharge that obligation instead;
+  no predecessor test above is claimed to do so.
 
 ## Unchanged passive attachment does not hide the full-capacity handoff
 
