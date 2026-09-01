@@ -233,9 +233,9 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
       _tag: "PlannedAttemptExecutorPassiveLifecycleChanged",
       report: { _tag: "ExecutorWorkSafelySuspended", attemptId: attempts.b.attemptId }
     },
+    ...graphRead(graphG1),
     executorReport(attempts.d, "Begin", "Executing"),
     executorProjection(attempts.d),
-    ...graphRead(graphG1),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
