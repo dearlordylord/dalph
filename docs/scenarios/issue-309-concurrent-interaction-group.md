@@ -10,17 +10,21 @@ re-reviews. The earlier five-root implementation and its 120-permutation
 evidence are superseded because they omitted four causal predecessor
 relationships in the #268 chronology.
 
-The amendment headed **Proposed amendment pending owner acceptance: compose
-independent specification-to-lineage authority lanes** is proposed
-on 2026-09-01. It is pending repository-owner acceptance and implementation;
-nothing in this file
-retroactively claims that amendment was accepted with the nine-node behavior.
-The current uncommitted #268 worktree candidate has composed the accepted
-nine-node group but remains red at exact cassette position 51 because its
-preceding specification batch and next eight strict items impose false
-cross-task barriers and order. The committed
-capstone source on this #309 branch still has its pre-composition strict layout;
-this proposal does not claim otherwise.
+The amendment headed **Accepted amendment: compose independent specification-
+to-lineage authority lanes** was accepted by the repository owner on 2026-09-01
+after the owner replied `accepted` to the exact acceptance request. Its canonical
+domain, runtime, and exhaustive evidence commits are `bd6fbc57e`, `caf5e9710`,
+and `49bacf465`; they are integrated on this branch as `ea8253fd3`, `c303dbc98`,
+and `ffd167a3f`. The direct amendment evidence is green at 89/89 tests across
+the six domain, bounded-group, property, reactivation-return, and presentation
+files, plus 9/9 targeted integration tests across the scenario, residual,
+active-work, and coverage files. The three package builds, workspace typecheck,
+and Effect diagnostics are green, with 666/666 files checked and zero Effect
+diagnostics. A fixed-point comparison at `0253bda69` preserves the 16 known
+broad-suite reds, including two normal timeouts; the one additional stale
+projection assertion was migrated to the accepted exact-`AttemptId`, no-neighbor-
+consumption result. The downstream #268 composition remains pending and is not
+included on this branch.
 
 This change affects only the controlled authored-cassette harness. It does not
 change production workflow semantics, provider requests, delivery scheduling,
@@ -336,7 +340,7 @@ These direct acceptance tests define the implementation evidence. Their
 results become accepted implementation evidence only after implementation
 review; the downstream #268 composition remains separate and pending.
 
-| Chronological result | Planned direct proof |
+| Chronological result | Direct proof |
 |---|---|
 | The closed selection/Begin member union decodes with one exact role and explicit predecessor roles | `packages/dalph/test/cassettes/authored-domain.test.ts` — `accepts exact roles and predecessor roles in a causal concurrent interaction group` |
 | Empty groups; invalid or duplicate roles; duplicate keys; repeated predecessor roles within one member; dangling, self, or cyclic predecessor references; causal selection fields; invalid member tags; and invalid Begin responses fail decoding | `packages/dalph/test/cassettes/authored-domain.test.ts` — `rejects invalid roles keys edges and member tags in a causal concurrent interaction group`; existing `rejects an authored Begin response that skips Executing`, extended with the nested case |
@@ -358,12 +362,12 @@ presentation semantics. The downstream #268 capstone remains pending and owns
 only the full production composition; it cannot substitute for the direct
 22,680-order evidence.
 
-## Proposed amendment pending owner acceptance: compose independent specification-to-lineage authority lanes
+## Accepted amendment: compose independent specification-to-lineage authority lanes
 
-This section is a proposal, not accepted behavior. Implementation remains
-blocked until the repository owner accepts this exact amendment. The accepted
-nine-node group and its evidence above remain implemented and unchanged while
-this proposal is reviewed.
+This section records accepted behavior and its direct implementation evidence.
+The accepted nine-node group and its evidence above remain implemented and
+unchanged; this amendment adds the authority-lane behavior without rewriting
+that prerequisite.
 
 ### Governing behavior
 
@@ -414,7 +418,7 @@ The downstream composition remains governed by
 [#268](https://github.com/dearlordylord/dalph/issues/268) and its pending
 boundary draft at branch `work/issue-268-delivery-story-capstone`, path
 `docs/scenarios/issue-268-delivery-story-capstone.md`. That file is not yet
-composed on this branch, so this proposal deliberately does not publish a
+composed on this branch, so this amendment deliberately does not publish a
 broken relative link to it. Its headings **Governing behavior and blocking
 edge**, **The capacity revision commits before process death is exposed**, and
 **C Safe commits before Continue B is exposed** remain the reviewable
@@ -432,10 +436,10 @@ proved prefix below before that boundary scenario can be accepted.
 The accepted nine-node #309 behavior above owns the closed group, authored
 role/predecessor graph, exact claim, cursor-permit transition, one completion
 publication, failure/no-mutation, non-arrival, and scope-replacement semantics.
-This proposal preserves all of those rules and adds only the two exact tracker-
+This amendment preserves all of those rules and adds only the two exact tracker-
 result member forms required by the two active-refresh cuts.
 The separately exact projection cursor contract applies only to the strict
-restart prefix. The proposal does not supersede or rewrite the nine-node
+restart prefix. The amendment does not supersede or rewrite the nine-node
 scenario.
 
 The earlier draft began after all focused specification results because the
@@ -508,11 +512,11 @@ leave the false batch barrier in place. The corrected replacement scope is the
 exact top-level span 48–56. The candidate's current failure at exact position
 51 remains evidence of a false cross-lane constraint, not permission to impose
 a different order. The committed pre-composition source on this #309 branch
-has later ordinals; this proposal makes no ordinal claim about that source.
+has later ordinals; this amendment makes no ordinal claim about that source.
 
 ### Exact fourteen-node active-refresh chronology
 
-The proposed replacement for the candidate's top-level positions 48 through 56
+The accepted replacement for the candidate's top-level positions 48 through 56
 is one bounded fourteen-member `ConcurrentInteractionGroup`:
 
 | Role | Existing controlled interaction | Direct predecessor roles |
@@ -551,7 +555,7 @@ After the fourteenth successful claim, the cursor publishes exactly one
 completed group occurrence and advances the top-level story exactly once. The
 next strict item remains B1's existing
 `PlannedAttemptExecutorWorkReported(request Suspend, output
-ExecutorWorkExecuting)` boundary. It is the already proposed join after both
+ExecutorWorkExecuting)` boundary. It is the specified join after both
 unchanged-task tails and B's exact F2 result. B's later passive Safe report,
 position release, D Begin, pre-death D projection, and every later #268 item
 remain unchanged.
@@ -644,7 +648,7 @@ remain #268-owned. No person issues another command.
 
 The active-refresh characterization at `c305b3543` held D's specification read
 on a deterministic `Deferred` and proved that A reaches its exact claim read
-before D's result exists. The proposed later group therefore contains exactly
+before D's result exists. The accepted later group therefore contains exactly
 two independent six-node chains:
 
 - `S_A^h -> T_A^h -> Q_A^h -> R_A^h -> W_A^h -> L_A^h`; and
@@ -673,7 +677,7 @@ separate capacity/death and Safe/Continue blockers.
 
 ### Returned results remain distinct from selections and requested projections
 
-The proposed cassette-only phenomenon is **controlled current task-claim read
+The accepted cassette-only phenomenon is **controlled current task-claim read
 return**: the exact interaction at which the controlled task tracker returns
 the current result for the task named by its existing `readTaskClaim(taskId)`
 boundary. It is distinct from `Q_A` or `Q_C`, where Dalph merely selects the
@@ -822,7 +826,7 @@ rejected when nested in that union. Replacing T or R with another
 `DalphSelects` would erase the exact result boundary that makes the following
 same-task edge truthful.
 
-If this amendment is accepted, the closed member union changes from two to
+The accepted amendment changes the closed member union from two to
 exactly four cases by adding only these two existing result forms:
 
 1. `TaskWorkSpecificationReadReturned`, carrying the existing exact authored
@@ -1047,11 +1051,11 @@ few matcher updates, not production serialization. No production authority,
 Journal fact, derived frontier, resource position, or provider request is
 added or persisted.
 
-### Proposed scenario-to-test mapping
+### Accepted scenario-to-test mapping
 
-The following names are planned evidence only. They do not become accepted
-implementation evidence until the owner accepts this amendment, implementation
-is complete, and the required reviews are clean.
+The following names are the direct implementation evidence for the accepted
+amendment. Rows explicitly assigned to downstream #268 remain pending and are
+not claimed as #309 implementation evidence.
 
 | Chronological result | Planned direct proof |
 |---|---|
@@ -1061,17 +1065,17 @@ is complete, and the required reviews are clean.
 | After Q, a blocked controlled `currentObservation` leaves exact R, occurrence, and position untouched; authority failure or interruption while that Deferred is blocked fabricates no R | `packages/dalph/test/cassettes/scenario.test.ts` — `does not fabricate an exact current-claim return before controlled authority success`, with deterministic result, failure, and pre-result-interruption cases |
 | One `Effect.uninterruptibleMask` restores interruptibility only around the authority read; before-result interruption leaves R outstanding, while post-validation interruption blocked on permit/publication is delayed until exact R publishes once and retry fails duplicate | `packages/dalph/test/cassettes/scenario.test.ts` — `does not fabricate an exact current-claim return when interrupted inside the restored authority read`; `delays interruption after exact validation until the masked current-claim handoff publishes once` |
 | With A/C or later A/D claim reads both selected and in flight, deterministic tables release each pair in both orders; each exact result claims only its own R once, never cross-delivers, and its group advances only after both exact chains complete | `packages/dalph/test/cassettes/scenario.test.ts` — `correlates both completion orders of in-flight current-claim results with their exact group roles` |
-| Ordinary strict current returns move to the truthful post-result point; strict explicit `TaskClaimReadReturned` and `TaskClaimReadFailed` retain no-preliminary-read semantics; all strict and residual callers migrate to exact task-aware cursor operations | `packages/dalph/test/cassettes/scenario.test.ts` — `consumes a strict current-claim return only after its exact controlled result`; `preserves exact-task explicit and unreadable strict claim-read cassette semantics`; `packages/dalph/test/cassettes/cassette-residuals.test.ts` — migrate task-claim residual cases |
+| Ordinary strict current returns move to the truthful post-result point; strict explicit `TaskClaimReadReturned` and `TaskClaimReadFailed` retain no-preliminary-read semantics; all strict and residual callers migrate to exact task-aware cursor operations | `packages/dalph/test/cassettes/scenario.test.ts` — `does not fabricate an exact current-claim return before controlled authority success`; `preserves exact-task explicit and unreadable strict claim-read cassette semantics`; `packages/dalph/test/cassettes/cassette-residuals.test.ts` — `consumes the authored cursor's optional and terminal public probes` |
 | The active cut is exactly two six-node unchanged-task chains plus B's two-node specification lane, fourteen nodes and eleven edges; 84,084 canonical fingerprints are unique and every schedule consumes before strict B Suspend | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `partitions all 84084 active-refresh orders by three canonical lane positions`; `consumes every active-refresh specification-to-lineage order before B Suspend` |
-| Production suppresses B Suspend while either healthy A/C authority lane remains, then exposes exactly one constrained B1 Suspend after both settle | Committed and pushed characterization `5578b8daa8778e98a14f9a61e93dd2cf393d69ce` on `origin/probe/issue-309-suspend-causality`, `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts` — `settles A then C lineage before exposing exactly one constrained B F2 suspension`; planned cassette assertion remains `consumes every active-refresh specification-to-lineage order before B Suspend` |
+| Production suppresses B Suspend while either healthy A/C authority lane remains, then exposes exactly one constrained B1 Suspend after both settle | Committed and pushed characterization `5578b8daa8778e98a14f9a61e93dd2cf393d69ce` on `origin/probe/issue-309-suspend-causality`, `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts` — `settles A then C lineage before exposing exactly one constrained B F2 suspension`; direct cassette assertion `consumes every active-refresh specification-to-lineage order before B Suspend` |
 | The later post-hint cut is exactly two independent six-node A/D chains, twelve nodes and ten edges; all 924 canonical fingerprints are unique and execute before strict C Suspend | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `partitions and consumes all 924 post-hint A D authority orders before C Suspend` |
-| Dropping one required edge makes the expected-edge/early-successor property fail, while generated duplicate roles and dangling predecessors fail schema decoding for the fourteen- and twelve-node fixtures | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.property.test.ts` — `fails each active fixture property when one required edge is dropped`; `packages/dalph/test/cassettes/authored-domain.property.test.ts` — `rejects generated duplicate roles and invalid predecessor references` |
-| T-before-S, Q-before-T, R-before-Q, W-before-R, and L-before-W each fail typed without mutation and succeed after retry in the initial A/C and later A/D lanes; foreign/duplicate exact TaskId and strict AttemptId claims do the same | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `rejects and retries every predecessor edge in both active-refresh groups`; `retries W before R and L before W in each active lane`; `rejects foreign and duplicate exact result identities without mutation` |
+| Dropping one required edge makes the expected-edge/early-successor property fail, while generated duplicate roles and dangling predecessors fail schema decoding for the fourteen- and twelve-node fixtures | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.property.test.ts` — the generated `detects every missing direct edge and the newly early successor` cases for both active cuts; the generated duplicate-role and invalid-predecessor cases for both fixtures |
+| T-before-S, Q-before-T, R-before-Q, W-before-R, and L-before-W each fail typed without mutation and succeed after retry in the initial A/C and later A/D lanes; foreign/duplicate exact TaskId and strict AttemptId claims do the same | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `rejects and retries every predecessor edge in both active-refresh groups`; `rejects foreign and duplicate exact result identities without mutation` |
 | Startup graph then strict P_A, P_C, P_D then next graph then UnsettledResponsibility is the exact restart; blocking A blocks the suffix, with exactly three Executing projections, no Begin/Resume/Suspend, and zero S/T/Q/R/W/L selections | Committed probe `bb40c4c8c`, `packages/dalph/test/scenarios/production.test.ts` — `completes the startup graph read then serially reattaches A C and D before the next graph read`; direct #268 composition assertion records the exact return and zero authority selections |
-| `consumeExecutorProjectionFor(attemptId)` atomically claims only the current strict projection; foreign, early, and duplicate exact AttemptIds fail without consuming a neighbor | `packages/dalph/test/cassettes/scenario.test.ts` — `matches the strict A C D restart projection chain by exact AttemptId without command calls`; migrate strict projection and residual cursor callers |
-| Simultaneously enabled S/Q and later cross-lane members consume once through the existing cursor permit; each active group's final member publishes once and advances once before its proved strict successor | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `serializes simultaneously enabled result lanes and publishes each bounded join once` |
+| `consumeExecutorProjectionFor(attemptId)` atomically claims only the current strict projection; foreign, early, and duplicate exact AttemptIds fail without consuming a neighbor | `packages/dalph/test/cassettes/scenario.test.ts` — `matches the strict A C D restart projection chain by exact AttemptId without command calls`; `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `keeps requested executor projections ordered even in a causal tracker story` |
+| Simultaneously enabled S/Q and later cross-lane members consume once through the existing cursor permit; each active group's final member publishes once and advances once before its proved strict successor | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `serializes simultaneously enabled authority lanes and publishes each bounded join once` |
 | Foreign, duplicate, premature B Suspend, premature restart hint, or premature C Suspend claims fail typed without mutation; non-arrival adds no timeout; scope replacement restores every group role and strict position | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `rejects foreign duplicate and downstream claims for both active cuts`; `keeps incomplete active cuts current without timeout`; `recreates every authority role after cursor scope replacement`; strict projection/return scope cases in `packages/dalph/test/cassettes/scenario.test.ts` |
-| Presentation renders the initial eleven and later ten direct edges, distinguishes same-lane transitive truth, presents every cross-lane pair as incomparable, and keeps exactly one cursor owner with exhaustive matches | `packages/dalph/test/cassettes/authored-presentation.test.ts` — `renders both active-refresh authority cuts without invented task order`; `packages/dalph/test/cassettes/authored-coverage.test.ts` — preserve `registers the concurrent interaction group with exactly one cursor owner`; exhaustive compilation in `authored-cursor.ts` and `authored-presentation.ts` |
+| Presentation renders the initial eleven and later ten direct edges, distinguishes same-lane transitive truth, presents every cross-lane pair as incomparable, and keeps exactly one cursor owner with exhaustive matches | Generic rendering proof `packages/dalph/test/cassettes/authored-presentation.test.ts` — `renders one causal interaction group without inventing claim order`, composed with the exact active-cut edge and order proofs in `authored-concurrent-interaction-group.test.ts`; `packages/dalph/test/cassettes/authored-coverage.test.ts` — `registers the concurrent interaction group with exactly one cursor owner`; exhaustive compilation in `authored-cursor.ts` and `authored-presentation.ts` |
 | The accepted nine-node group still executes 22,680 schedules, and `ConcurrentTrackerReadBatch` still pairs reverse-completing reads and drains only its unchanged true-batch uses | Existing `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `consumes the nine-node delivery cut in all 22680 causal orders before advancing once`; existing `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `selects F1 then F2 and pairs reverse-completing reads with their exact initiating operations`; `drains repeatedly forked exact read operations without resetting the story position` |
 | The later A/D production overlap stays executable independently of cassette matching | Committed probe `c305b3543`, command `pnpm vitest run packages/dalph/src/application/production-reactivation.test.ts -t "allows one (restart|active-refresh) authority lane"`; exact active-refresh test `allows one active-refresh authority lane to reach claim while independent specification reads remain in flight` is green within the recorded 2/2 run |
 | After the strict restart graph/projection prefix, exact `CoordinatorActivationReturned(RunMustRemainActive(UnsettledResponsibility))` settles before TrackerNotification or Timer hints; wrong, duplicate, early, failed, or interrupted returns do not fabricate settlement | `packages/dalph/test/cassettes/authored-reactivation-return.test.ts` — `keeps restart hints unavailable before the production finality result`; `settles the reconstructed restart return once before delayed interruption and later hints` |
@@ -1080,11 +1084,10 @@ is complete, and the required reviews are clean.
 | Exact accepted and published C2 Safe ordinal two must settle before Continue B, including committed ambiguity without another Suspend; this remains a #268 blocker | Pending #268 `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `preserves named C2 Safe failure families and reconciles a committed lost response without retry` |
 | After the nine-node prerequisite is composed, #268 uses the fourteen-node initial group then strict B Suspend, the strict executing-restart graph/projection/graph/return prefix with no authority group, and the later twelve-node A/D group then strict C Suspend; DS01–DS13 remain unchanged | Pending `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — unchanged `emits the exact DS01 through DS13 delivery checkpoint table`; revise the pending restart assertion to prove zero authority selections; add `admits both characterized active-refresh overlaps without weakening downstream checkpoints` |
 
-The proposed direct #309 tests own only the new member schema, exact
+The accepted direct #309 tests own only the new member schema, exact
 specification/claim/projection correlation, truthful claim-adapter sequencing,
 lane graphs, matcher, failure/no-mutation, permit, scope, and presentation
 behavior.
 The unchanged downstream #268 test remains the sole full production-composition
-proof. At proposal time the current uncommitted #268 worktree candidate is
-still red at exact position 51; this amendment does not claim that #268 or the
-proposed #309 tests pass.
+proof. That composition remains pending; this amendment does not claim that
+#268 passes and deliberately includes no #268 source or test composition.
