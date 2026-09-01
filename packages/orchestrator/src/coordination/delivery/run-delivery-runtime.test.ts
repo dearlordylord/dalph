@@ -132,6 +132,8 @@ import {
   preparedBeginProposalsOf as derivePreparedBeginProposals
 } from "../../../test/support/prepared-begin-proposal.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
+import { deliveryRuntimeLocalDeferralAfter, DeliveryRuntimeLocalDeferral } from "./delivery-runtime-local-deferral.js"
+import { reconcileDeliveryRuntimeLocalDeferrals } from "./delivery-runtime-local-deferral-reconciliation.js"
 
 const deliveryRuntimeResourceCapabilitiesOf = Effect.fn("RunDeliveryRuntimeTest.makeCapabilities")(function* (
   integrationTargets: Parameters<typeof makeCapabilitiesWithAdmission>[0]
@@ -3563,6 +3565,97 @@ it.effect(
       })
     )
 )
+
+const freshExecutingObservePair = (name: string) => {
+  const fixture = preparedAttemptFixture(name)
+  const acceptedProgress = {
+    _tag: "ExecutorReportAccepted" as const,
+    ordinal: PlannedAttemptExecutorReportOrdinal.make(1)
+  }
+  const transition = RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+    acceptedProgress,
+    plannedAttempt: fixture.attempt
+  })
+  const observeFor = (task: Task) =>
+    deliveryProposalsOf({
+      acceptedOperationIds: new Set(),
+      fresh: [
+        {
+          step: FreshWorkflowStep.ObservePlannedAttemptExecutorWork({
+            acceptedProgress,
+            plannedAttempt: fixture.attempt,
+            specification: fixture.fresh.step.specification,
+            task
+          }),
+          transition
+        }
+      ],
+      runId,
+      transitions: [transition]
+    }).ticketDelivery[0]
+  const proposal = Option.getOrThrow(Option.fromUndefinedOr(observeFor(fixture.task)))
+  const refreshed = Option.getOrThrow(
+    Option.fromUndefinedOr(observeFor({ ...fixture.task, parentTaskId: TaskId.make(`${name}-refreshed-parent`) }))
+  )
+  return { fixture, proposal, refreshed }
+}
+
+it("derives a passive-attachment marker live-action key from its proposal", () => {
+  const { fixture, proposal } = freshExecutingObservePair("derived-passive-marker-key")
+  const deferral = Option.getOrThrow(
+    deliveryRuntimeLocalDeferralAfter(
+      {
+        _tag: "ExecutorReportPublished",
+        acceptedFacts: "UnchangedPassiveObservation",
+        plannedAttempt: fixture.attempt,
+        proposalId: proposal.id,
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+          correlation: plannedAttemptExecutorCorrelation(fixture.attempt)
+        })
+      },
+      proposal,
+      JournalPosition.make(59)
+    )
+  )
+
+  expect(deferral).toEqual(
+    DeliveryRuntimeLocalDeferral.PassiveOwnerAttached({ liveActionKey: liveActionKeyOf(proposal) })
+  )
+})
+
+it("does not transfer an accepted-facts deferral to a refreshed live-action proposal", () => {
+  const { proposal, refreshed } = freshExecutingObservePair("exact-changed-facts-deferral")
+  const acceptedAt = JournalPosition.make(59)
+  expect(proposal.id).not.toBe(refreshed.id)
+  expect(liveActionKeyOf(proposal)).toBe(liveActionKeyOf(refreshed))
+  const deferral = DeliveryRuntimeLocalDeferral.AwaitChangedAcceptedFacts({ acceptedAt })
+
+  const reconciled = reconcileDeliveryRuntimeLocalDeferrals(
+    new Map([[proposal.id, deferral]]),
+    { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [refreshed] },
+    acceptedAt
+  )
+
+  expect(reconciled).toEqual(new Map())
+})
+
+it("drops a passive marker when the refreshed live action is ownership-conflicted", () => {
+  const { proposal, refreshed } = freshExecutingObservePair("conflicted-passive-marker")
+  expect(proposal.id).not.toBe(refreshed.id)
+  expect(liveActionKeyOf(proposal)).toBe(liveActionKeyOf(refreshed))
+  const deferral = DeliveryRuntimeLocalDeferral.PassiveOwnerAttached({ liveActionKey: liveActionKeyOf(proposal) })
+
+  const reconciled = reconcileDeliveryRuntimeLocalDeferrals(
+    new Map([[proposal.id, deferral]]),
+    {
+      _tag: "DeliveryProposalOwnershipConflict",
+      conflicts: [{ id: refreshed.id, order: refreshed.order, owners: ["TrackerGraph", "TicketDelivery"] }]
+    },
+    JournalPosition.make(59)
+  )
+
+  expect(reconciled).toEqual(new Map())
+})
 
 it.effect("keeps three publication-through passive attachments across a post-completion route refresh", () =>
   Effect.scoped(

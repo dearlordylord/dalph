@@ -27,12 +27,7 @@ import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 import * as RuntimeObservation from "./delivery-runtime-observation.js"
 import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import { installInterruptibleDeliveryChild } from "./delivery-child-handoff.js"
-import {
-  liveActionIsPresent,
-  liveActionKeyOf,
-  proposalIsPresent,
-  proposalsForLiveAction
-} from "./live-delivery-action.js"
+import { liveActionIsPresent, proposalIsPresent, proposalsForLiveAction } from "./live-delivery-action.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import {
   DeliveryRuntimePhase,
@@ -362,12 +357,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               const current = Option.getOrThrow(yield* Ref.get(latest))
               yield* Ref.set(latest, Option.some(current))
               yield* admission.synchronize(current.taskWork)
-              const localDeferral = deliveryRuntimeLocalDeferralAfter(
-                actionResult,
-                owner.proposal,
-                current.acceptedAt,
-                liveActionKeyOf(owner.proposal)
-              )
+              const localDeferral = deliveryRuntimeLocalDeferralAfter(actionResult, owner.proposal, current.acceptedAt)
               if (Option.isSome(localDeferral)) {
                 const proposalIds =
                   localDeferral.value._tag === "PassiveOwnerAttached"

@@ -340,6 +340,16 @@ may clear when accepted facts change. The two outcomes are not interchangeable.
   proposal identities while an independent read remains live. It proves one
   executor call per `Observe`, no D1/E1 call, and an exact D1/E1-only
   `TaskWorkAdmissionStalledRuntimeQuiescence` result.
+- `derives a passive-attachment marker live-action key from its proposal` in
+  the same file proves the classifier cannot pair an action result and proposal
+  with a separately supplied, mismatched stable key.
+- `does not transfer an accepted-facts deferral to a refreshed live-action
+  proposal` in the same file proves the changed-facts marker remains bound to
+  its old exact proposal ID even when the replacement has the same stable live
+  action key and the accepted Journal position is unchanged.
+- `drops a passive marker when the refreshed live action is
+  ownership-conflicted` in the same file proves a conflict cannot inherit or
+  preserve the activation-local passive attachment marker.
 - `waits for changed accepted facts after unchanged reconciliation instead of
   retaining an attachment` in the same file proves that a non-attaching
   unchanged `Reconcile` remains excluded at the same accepted Journal position

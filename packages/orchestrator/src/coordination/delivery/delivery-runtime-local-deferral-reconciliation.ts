@@ -4,7 +4,8 @@ import {
   deliveryRuntimeLocalDeferralAppliesAt,
   type DeliveryRuntimeLocalDeferral
 } from "./delivery-runtime-local-deferral.js"
-import { liveActionKeyOf, proposalIsPresent } from "./live-delivery-action.js"
+import { proposalIsPresent } from "./live-delivery-action.js"
+import { liveActionKeyOf } from "./live-delivery-action-key.js"
 import type { DeliveryProposalFrontier } from "./relations.js"
 
 /**
