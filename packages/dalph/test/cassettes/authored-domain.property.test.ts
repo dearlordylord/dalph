@@ -30,6 +30,45 @@ const authoredTrackerGraphReadResultArbitrary = fc.oneof(
     }))
 )
 
+const concurrentInteractionMemberArbitrary = fc.oneof(
+  fc
+    .record({
+      attemptSuffix: fc.string({ minLength: 1, maxLength: 12 }),
+      taskSuffix: fc.string({ minLength: 1, maxLength: 12 })
+    })
+    .map(({ attemptSuffix, taskSuffix }) => ({
+      _tag: "DalphSelects" as const,
+      operation: {
+        _tag: "ReconcileTaskWorktree" as const,
+        attemptId: `attempt:selection:${attemptSuffix}`,
+        taskId: `task:selection:${taskSuffix}`
+      }
+    })),
+  fc
+    .string({ minLength: 1, maxLength: 12 })
+    .map((attemptSuffix) => ({
+      _tag: "PlannedAttemptExecutorWorkReported" as const,
+      report: { _tag: "ExecutorWorkExecuting" as const, attemptId: `attempt:executor:${attemptSuffix}` },
+      request: "Begin" as const
+    }))
+)
+
+type GeneratedConcurrentInteractionMember =
+  typeof concurrentInteractionMemberArbitrary extends fc.Arbitrary<infer Member> ? Member : never
+
+const concurrentInteractionMemberClaimKey = (member: GeneratedConcurrentInteractionMember) =>
+  member._tag === "DalphSelects"
+    ? `DalphSelects:${member.operation._tag}:${member.operation.attemptId}:${member.operation.taskId}`
+    : `PlannedAttemptExecutorWorkReported:${member.request}:${member.report.attemptId}`
+
+const concurrentInteractionGroupArbitrary = fc
+  .uniqueArray(concurrentInteractionMemberArbitrary, {
+    maxLength: 6,
+    minLength: 1,
+    selector: concurrentInteractionMemberClaimKey
+  })
+  .map((members) => ({ _tag: "ConcurrentInteractionGroup" as const, members }))
+
 const exactPauseWaitingArbitrary = fc
   .record({
     beganAt: fc.integer({ min: 1, max: 100 }),
@@ -192,6 +231,33 @@ const exactWorkflowOperationPauseWaitingArbitrary = fc.string({ minLength: 1, ma
 it("roundtrips arbitrary authored tracker graph outcomes through the story-item boundary", () => {
   fc.assert(
     fc.property(authoredTrackerGraphReadResultArbitrary, (encoded) => {
+      expect(
+        Schema.encodeUnknownSync(AuthoredCassetteStoryItem)(
+          Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(encoded)
+        )
+      ).toEqual(encoded)
+    }),
+    { numRuns: 100 }
+  )
+})
+
+it("roundtrips valid concurrent interaction groups through the story-item boundary", () => {
+  const singleton = {
+    _tag: "ConcurrentInteractionGroup" as const,
+    members: [
+      {
+        _tag: "PlannedAttemptExecutorWorkReported" as const,
+        report: { _tag: "ExecutorWorkExecuting" as const, attemptId: "attempt:executor:singleton" },
+        request: "Begin" as const
+      }
+    ]
+  }
+  expect(
+    Schema.encodeUnknownSync(AuthoredCassetteStoryItem)(Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(singleton))
+  ).toEqual(singleton)
+
+  fc.assert(
+    fc.property(concurrentInteractionGroupArbitrary, (encoded) => {
       expect(
         Schema.encodeUnknownSync(AuthoredCassetteStoryItem)(
           Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(encoded)
