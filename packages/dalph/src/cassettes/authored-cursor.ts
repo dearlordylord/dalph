@@ -23,10 +23,10 @@ import {
 import {
   AuthoredAttemptChoiceItem,
   AuthoredPlannedAttemptExecutorOutcomeItem,
-  AuthoredTaskClaimReadItem,
+  AuthoredTaskClaimReadOverrideItem,
   isAuthoredPlannedAttemptExecutorOutcomeItem,
   isAuthoredAttemptChoiceItem,
-  isTaskClaimReadItem,
+  isTaskClaimReadOverrideItem,
   type AuthoredAttemptChoiceItem as AttemptChoiceItem
 } from "./authored-cursor-items.js"
 
@@ -87,6 +87,8 @@ type OuterIntegratorGitStoryItem =
   | typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationFailed.Type
   | typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationReturned.Type
 type AuthoredExecutorRequest = "Begin" | "Resume" | "Suspend"
+type CoordinatorActivationDecision =
+  (typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type)["decision"]
 type ActiveExecutorReportRequest = { readonly attemptId: AttemptId; readonly request: AuthoredExecutorRequest }
 type ExecutorRequestPublicationHold =
   typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.Type
@@ -111,6 +113,14 @@ type ConcurrentSelectionMember = Extract<AuthoredConcurrentInteractionMember, { 
 type ConcurrentExecutorMember = Extract<
   AuthoredConcurrentInteractionMember,
   { readonly _tag: "PlannedAttemptExecutorWorkReported" }
+>
+type ConcurrentTaskClaimReadMember = Extract<
+  AuthoredConcurrentInteractionMember,
+  { readonly _tag: "TaskClaimCurrentReadReturned" }
+>
+type ConcurrentTaskWorkSpecificationMember = Extract<
+  AuthoredConcurrentInteractionMember,
+  { readonly _tag: "TaskWorkSpecificationReadReturned" }
 >
 
 type ConcurrentInteractionClaimDecision =
@@ -352,6 +362,10 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type,
     CursorFailure
   >
+  /** Settle only the exact production finality decision currently authored at the activation boundary. */
+  readonly consumeCoordinatorActivationReturnedFor: (
+    decision: CoordinatorActivationDecision
+  ) => Effect.Effect<typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type, CursorFailure>
   readonly consumeCompletionClaimDeletionApplied: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.CompletionClaimDeletionApplied.Type,
     CursorFailure
@@ -461,7 +475,10 @@ export interface StoryCursor {
     request: "Begin" | "Resume" | "Suspend",
     attemptId: AttemptId
   ) => Effect.Effect<void>
-  readonly consumeExecutorProjection: Effect.Effect<
+  /** Consume a strict executor projection only for the exact attempt requested by the passive boundary. */
+  readonly consumeExecutorProjectionFor: (
+    attemptId: AttemptId
+  ) => Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type>
   >
   /** Consume an executor lifecycle change only for its exact attached attempt owner. */
@@ -576,12 +593,16 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.Type,
     ExactCausalCursorFailure
   >
-  readonly consumeTaskClaimRead: Effect.Effect<
-    Option.Option<
-      | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadFailed.Type
-      | typeof AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.Type
-      | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadReturned.Type
-    >
+  /** Dispatch a strict authored explicit or unreadable result only for the exact requested task. */
+  readonly consumeTaskClaimReadOverrideFor: (
+    taskId: TaskId
+  ) => Effect.Effect<Option.Option<AuthoredTaskClaimReadOverrideItem>, CursorFailure>
+  /** Consume a truthful current-result boundary only for the exact requested task. */
+  readonly consumeTaskClaimReadFor: (
+    taskId: TaskId
+  ) => Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.Type>,
+    CursorFailure
   >
   readonly consumeTaskClaimAcquisitionConflictReturned: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.TaskClaimAcquisitionConflictReturned.Type>
@@ -841,6 +862,36 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     }
     return Option.some(claimed.value)
   })
+
+  const claimConcurrentTaskClaimRead = Effect.fn("AuthoredCassette.claimConcurrentTaskClaimRead")(function* (
+    taskId: TaskId
+  ): Effect.fn.Return<Option.Option<ConcurrentTaskClaimReadMember>, AuthoredCassetteInteractionMismatch> {
+    const claimed = yield* claimConcurrentInteraction({ _tag: "TaskClaimCurrentReadReturned", taskId })
+    if (Option.isNone(claimed)) return Option.none<ConcurrentTaskClaimReadMember>()
+    if (claimed.value._tag !== "TaskClaimCurrentReadReturned") {
+      return yield* concurrentInteractionFailure(
+        "a current task-claim result resolved to an incompatible group member",
+        yield* SubscriptionRef.get(position)
+      )
+    }
+    return Option.some(claimed.value)
+  })
+
+  const claimConcurrentTaskWorkSpecification = Effect.fn("AuthoredCassette.claimConcurrentTaskWorkSpecification")(
+    function* (
+      taskId: TaskId
+    ): Effect.fn.Return<Option.Option<ConcurrentTaskWorkSpecificationMember>, AuthoredCassetteInteractionMismatch> {
+      const claimed = yield* claimConcurrentInteraction({ _tag: "TaskWorkSpecificationReadReturned", taskId })
+      if (Option.isNone(claimed)) return Option.none<ConcurrentTaskWorkSpecificationMember>()
+      if (claimed.value._tag !== "TaskWorkSpecificationReadReturned") {
+        return yield* concurrentInteractionFailure(
+          "a task-work specification result resolved to an incompatible group member",
+          yield* SubscriptionRef.get(position)
+        )
+      }
+      return Option.some(claimed.value)
+    }
+  )
 
   const currentConcurrentTrackerReadBatch = Effect.fn("AuthoredCassette.currentConcurrentTrackerReadBatch")(
     function* () {
@@ -1128,6 +1179,29 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       return advanced ? yield* claimNext(predicate, claimOptions) : claimed
     })
   }
+  function claimNextPublishedThroughTransition<A extends StoryItem>(
+    predicate: (item: StoryItem | undefined) => item is A
+  ): Effect.Effect<ClaimedStoryItem<A>> {
+    return Effect.gen(function* () {
+      if (yield* awaitControlBoundary()) return yield* claimNextPublishedThroughTransition(predicate)
+      const claimed = yield* transition.withPermits(1)(
+        Effect.uninterruptible(
+          Effect.gen(function* () {
+            const index = yield* SubscriptionRef.get(position)
+            const item = story[index]
+            if (!predicate(item)) return { _tag: "Mismatch" as const, index, item }
+            yield* SubscriptionRef.set(position, index + 1)
+            yield* options.onOccurrence?.({ item, storyPosition: index + 1 }) ?? Effect.void
+            yield* announceTerminalAssertions
+            return { _tag: "Claimed" as const, index, item }
+          })
+        )
+      )
+      if (claimed._tag === "Mismatch") yield* announceTerminalAssertions
+      const advanced = yield* awaitBarrierAdvance(claimed)
+      return advanced ? yield* claimNextPublishedThroughTransition(predicate) : claimed
+    })
+  }
   const consume = (tag: StoryItem["_tag"], options?: { readonly throughTransition: boolean }) =>
     Effect.gen(function* () {
       const claimed = yield* claimNext((item): item is StoryItem => item?._tag === tag, options)
@@ -1287,6 +1361,27 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned)(item).pipe(Effect.orDie)
     )
   )
+  const consumeCoordinatorActivationReturnedFor: StoryCursor["consumeCoordinatorActivationReturnedFor"] = Effect.fn(
+    "AuthoredCassette.consumeCoordinatorActivationReturnedFor"
+  )(function* (decision) {
+    const claimed = yield* claimNextPublishedThroughTransition(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type =>
+        item?._tag === "CoordinatorActivationReturned" &&
+        item.decision._tag === decision._tag &&
+        (item.decision._tag === "RunMayTerminate" ||
+          (decision._tag === "RunMustRemainActive" && item.decision.reason === decision.reason))
+    )
+    if (claimed._tag === "Mismatch") {
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: `CoordinatorActivationReturned(${JSON.stringify(decision)})`,
+        expected: mismatchExpectedTag(claimed.item),
+        storyPosition: claimed.index
+      })
+    }
+    return yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned)(
+      claimed.item
+    ).pipe(Effect.orDie)
+  })
   const consumeAdmittedContinuationExecutorIntentHold = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.DalphHoldsAdmittedContinuationBeforeExecutorIntent.Type =>
@@ -1404,7 +1499,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeRunReactivationHints = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.CassetteOffersRunReactivationHints.Type =>
-        item?._tag === "CassetteOffersRunReactivationHints"
+        item?._tag === "CassetteOffersRunReactivationHints",
+      { throughTransition: true }
     )
     return claimed._tag === "Mismatch" ? Option.none() : Option.some(claimed.item)
   })
@@ -1520,18 +1616,20 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       const index = current.findIndex((active) => active.request === request && active.attemptId === attemptId)
       return index < 0 ? current : [...current.slice(0, index), ...current.slice(index + 1)]
     })
-  const consumeExecutorProjection = Effect.gen(function* () {
-    const claimed = yield* claimNext(
-      (item): item is typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type =>
-        item?._tag === "PlannedAttemptExecutorProjectionReturned"
-    )
-    if (claimed._tag === "Mismatch") return Option.none()
-    return Option.some(
-      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned)(
-        claimed.item
-      ).pipe(Effect.orDie)
-    )
-  })
+  const consumeExecutorProjectionFor: StoryCursor["consumeExecutorProjectionFor"] = (attemptId) =>
+    Effect.gen(function* () {
+      const claimed = yield* claimNext(
+        (item): item is typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type =>
+          item?._tag === "PlannedAttemptExecutorProjectionReturned" && item.report.attemptId === attemptId,
+        { throughTransition: true }
+      )
+      if (claimed._tag === "Mismatch") return Option.none()
+      return Option.some(
+        yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned)(
+          claimed.item
+        ).pipe(Effect.orDie)
+      )
+    })
   const consumePassiveExecutorLifecycleChangeFor: StoryCursor["consumePassiveExecutorLifecycleChangeFor"] = (
     attemptId
   ) =>
@@ -1990,6 +2088,12 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeTaskWorkSpecificationFor: StoryCursor["consumeTaskWorkSpecificationFor"] = Effect.fn(
     "AuthoredCassette.consumeTaskWorkSpecificationFor"
   )(function* (taskId, context) {
+    const grouped = yield* claimConcurrentTaskWorkSpecification(taskId)
+    if (Option.isSome(grouped)) {
+      return yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned)(
+        grouped.value
+      ).pipe(Effect.orDie)
+    }
     const concurrent = yield* consumeConcurrentTrackerReadResult(
       context,
       (member) => member.operation._tag === "ReadTaskWorkSpecification" && member.operation.taskId === taskId
@@ -1999,20 +2103,92 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         concurrent.value
       ).pipe(Effect.orDie)
     }
-    const result = yield* consumeTaskWorkSpecification
-    if (result.taskId !== taskId) {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned.Type =>
+        item?._tag === "TaskWorkSpecificationReadReturned" && item.taskId === taskId,
+      { throughTransition: true }
+    )
+    if (claimed._tag === "Mismatch") {
       return yield* new AuthoredCassetteInteractionMismatch({
         actual: `TaskWorkSpecificationReadReturned(${taskId})`,
-        expected: `TaskWorkSpecificationReadReturned(${result.taskId})`,
-        storyPosition: yield* SubscriptionRef.get(position)
+        expected:
+          claimed.item?._tag === "TaskWorkSpecificationReadReturned"
+            ? `TaskWorkSpecificationReadReturned(${claimed.item.taskId})`
+            : mismatchExpectedTag(claimed.item),
+        storyPosition: claimed.index
       })
     }
-    return result
+    return yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.TaskWorkSpecificationReadReturned)(
+      claimed.item
+    ).pipe(Effect.orDie)
   })
-  const consumeTaskClaimRead = Effect.gen(function* () {
-    const claimed = yield* claimNext(isTaskClaimReadItem)
-    if (claimed._tag === "Mismatch") return Option.none()
-    return Option.some(yield* Schema.decodeUnknownEffect(AuthoredTaskClaimReadItem)(claimed.item).pipe(Effect.orDie))
+  const taskClaimReadOverrideTaskId = (item: AuthoredTaskClaimReadOverrideItem): TaskId =>
+    item._tag === "TaskClaimReadFailed" ? item.taskId : item.observation.taskId
+  const taskClaimMismatch = (actual: string, expected: string, storyPosition: number) =>
+    new AuthoredCassetteInteractionMismatch({ actual, expected, storyPosition })
+  const consumeTaskClaimReadOverrideFor: StoryCursor["consumeTaskClaimReadOverrideFor"] = Effect.fn(
+    "AuthoredCassette.consumeTaskClaimReadOverrideFor"
+  )(function* (taskId) {
+    const claimed = yield* claimNext(
+      (item): item is AuthoredTaskClaimReadOverrideItem =>
+        isTaskClaimReadOverrideItem(item) && taskClaimReadOverrideTaskId(item) === taskId,
+      { throughTransition: true }
+    )
+    if (claimed._tag === "Claimed") {
+      return Option.some(
+        yield* Schema.decodeUnknownEffect(AuthoredTaskClaimReadOverrideItem)(claimed.item).pipe(Effect.orDie)
+      )
+    }
+    if (isTaskClaimReadOverrideItem(claimed.item)) {
+      return yield* taskClaimMismatch(
+        `task claim override for ${taskId}`,
+        `task claim override for ${taskClaimReadOverrideTaskId(claimed.item)}`,
+        claimed.index
+      )
+    }
+    return Option.none()
+  })
+  const previousTaskClaimReadMatches = (taskId: TaskId, index: number): boolean => {
+    const previous = story[index - 1]
+    if (previous?._tag === "TaskClaimCurrentReadReturned") return previous.taskId === taskId
+    return (
+      previous?._tag === "ConcurrentInteractionGroup" &&
+      previous.members.some(
+        ({ interaction }) => interaction._tag === "TaskClaimCurrentReadReturned" && interaction.taskId === taskId
+      )
+    )
+  }
+  const consumeTaskClaimReadFor: StoryCursor["consumeTaskClaimReadFor"] = Effect.fn(
+    "AuthoredCassette.consumeTaskClaimReadFor"
+  )(function* (taskId) {
+    const grouped = yield* claimConcurrentTaskClaimRead(taskId)
+    if (Option.isSome(grouped)) {
+      return Option.some(
+        yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned)(
+          grouped.value
+        ).pipe(Effect.orDie)
+      )
+    }
+    const claimed = yield* claimNextPublishedThroughTransition(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.Type =>
+        item?._tag === "TaskClaimCurrentReadReturned" && item.taskId === taskId
+    )
+    if (claimed._tag === "Claimed") return Option.some(claimed.item)
+    if (claimed.item?._tag === "TaskClaimCurrentReadReturned") {
+      return yield* taskClaimMismatch(
+        `TaskClaimCurrentReadReturned(${taskId})`,
+        `TaskClaimCurrentReadReturned(${claimed.item.taskId})`,
+        claimed.index
+      )
+    }
+    if (previousTaskClaimReadMatches(taskId, claimed.index)) {
+      return yield* taskClaimMismatch(
+        `duplicate TaskClaimCurrentReadReturned(${taskId})`,
+        mismatchExpectedTag(claimed.item),
+        claimed.index
+      )
+    }
+    return Option.none()
   })
   const consumeTaskClaimAcquisitionConflictReturned = Effect.gen(function* () {
     const claimed = yield* claimNext(
@@ -2172,6 +2348,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeTaskWorkSpecificationReadBoundaryRelease,
     awaitTaskWorkSpecificationReadBoundary,
     consumeCoordinatorActivationReturned,
+    consumeCoordinatorActivationReturnedFor,
     consumeCompletionClaimDeletionApplied,
     consumeCompletionClaimReadReturned,
     consumeCompletionClaimReplacementApplied,
@@ -2197,7 +2374,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeDalphSelectionFor,
     beginExecutorReportRequest,
     endExecutorReportRequest,
-    consumeExecutorProjection,
+    consumeExecutorProjectionFor,
     consumePassiveExecutorLifecycleChangeFor,
     passiveExecutorLifecycleChangesFor,
     consumeExecutorRequestPublicationHold,
@@ -2212,7 +2389,8 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeTargetPromotionCompareAndSet,
     consumeTargetPromotionGitRead,
     consumeRunCoordinator,
-    consumeTaskClaimRead,
+    consumeTaskClaimReadFor,
+    consumeTaskClaimReadOverrideFor,
     consumeTaskClaimAcquisitionConflictReturned,
     consumeTaskClaimAcquisitionRejected,
     consumeTaskClaimReleaseResponseLost,
