@@ -895,3 +895,195 @@ activation; it does not convert missing publication into permission to settle.
   remains pending on composition. It will prove that this local ordering lets
   the five accepted post-claim results expose A through E's specification reads
   in the complete delivery story.
+
+## A same-position planning successor reaches the runtime exactly once
+
+### Governing behavior
+
+[The accepted graph-progress scenario](#accepted-graph-progress-cannot-strand-the-next-task-specification-reads)
+requires every coherent accepted publication to reach the runtime without
+mixing its graph and action-planning components. [The accepted
+publication-through scenario](#an-action-owner-remains-live-until-its-accepted-successor-frontier-reaches-the-runtime)
+requires the predecessor owner to remain live until its accepted successor
+frontier reaches that runtime. This scenario preserves both rules and refines
+the case where action planning advances while the accepted Journal position and
+the other runtime facts do not change. It adds no Journal event, provider call,
+poll, durable relation revision, or second planning authority.
+
+[D33 No silent drop and D34 Quiescence is not
+completion](../DELIVERY-INVARIANTS.md#progress) prohibit losing the planning
+successor or treating the predecessor's completion as permission to stop. The
+formal [`deliveryCore.qnt` `everyBegunSettles`
+law](../../research/verification-bakeoff/quint/deliveryCore.qnt#L622) constrains
+the no-silent-drop outcome but does not model this process-local
+same-position evaluation-to-runtime handoff. The direct tests below own that
+finer chronology.
+
+### Shared accepted facts and capacity
+
+No person triggers either in-process handoff below. Dalph is configured with
+three task-work positions. The exact correlations `(RunId R, AttemptId A1)`,
+`(R, B1)`, and `(R, C1)` hold all three positions. D1 and E1 remain exact
+`ReserveOrReuse` proposals without positions, have no accepted `Begin` intent,
+and have received no executor command. A task ID by itself is not evidence that
+one of those positions is held or available.
+
+Dalph has accepted A1's exact worktree-read intent and result through Journal
+position 80. One coherent evaluation at position 80 contains A1's
+`ObservePlannedAttemptContinuationWorktree` proposal and C1's
+`ObservePlannedAttemptContinuationClaim` proposal. Using the same accepted
+position-80 facts, delivery planning can advance A1's next exact action to
+`ReadTargetLineage` while C1's claim observation remains present. That planning
+advancement appends no Journal event and calls neither the tracker, Git,
+executor, nor another provider. The Journal position, task-work basis, pause
+and cancellation facts, and every other runtime fact remain unchanged.
+
+### Signal-only same-position publication characterization
+
+This first cut characterizes evaluation publication only. It has no live
+delivery-action owner and therefore makes no claim about completion settlement
+or acknowledgement.
+
+1. The runtime evaluation assembly has made the coherent position-80
+   evaluation with A1's worktree proposal and C1's claim proposal observable.
+2. Action planning advances to A1's lineage read. While holding the existing
+   publication-consistency gate, the runtime evaluation assembly samples the
+   current delivery consequences, the current planned-action frontier, and the
+   current runtime facts, then makes exactly one coherent position-80 successor
+   observable. Its frontier contains A1's exact `ReadTargetLineage`, still
+   contains C1's exact claim observation, and retains D1/E1 as position-blocked
+   work. Delivery planning owns the planned-action advancement; runtime
+   evaluation assembly owns the coherent sampling and exposure of the assembled
+   evaluation. The descriptive relation supplies current values; it does not
+   independently trigger runtime evaluation exposure. No particular
+   stream-combination operator is prescribed.
+3. Any evaluation-defining component advancing must cause that coherent
+   current evaluation to be exposed under the existing gate. The runtime
+   facts component is not a privileged or sole change trigger.
+4. A later coherent position-81 sentinel is made observable once. It cannot
+   substitute for, overwrite, or retroactively imply delivery of the missing
+   position-80 successor.
+
+### Live-owner completion handoff
+
+The runtime acceptance cut starts separately. The runtime has consumed the
+stale position-80 worktree evaluation and still owns A1's exact live worktree
+action. That action has returned its ordinary result. The runtime has obtained
+the accepted-publication proof associated with the same accepted worktree
+result, and the completion can reach runtime event handling before the runtime
+consumes the newly assembled position-80 lineage evaluation.
+
+1. The test offers A1's completion first and holds the exact position-80
+   lineage evaluation behind an explicit synchronization boundary. Equal
+   Journal position alone is insufficient evidence that the successor was
+   consumed: the stale position-80 worktree evaluation must not settle A1.
+2. The runtime retains A1's exact owner and the pending completion. It neither
+   acknowledges that completion, reports quiescence, nor admits the lineage
+   action from facts it has not consumed.
+3. The test releases the coherent position-80 lineage evaluation containing
+   A1's exact `ReadTargetLineage` and C1's unchanged claim observation. The
+   runtime consumes that evaluation before it applies A1's completion.
+4. The runtime then settles A1's worktree owner exactly once, acknowledges its
+   completion exactly once, and admits A1's lineage read exactly once. C1
+   remains in the frontier. Because A1/B1/C1 still hold the configured capacity
+   of three, D1/E1 receive no executor call.
+5. A later position-81 sentinel is consumed once; it does not cause another A1
+   lineage action or erase C1, D1, or E1.
+
+The operator sees A1 continue from its accepted worktree observation into the
+target-lineage read. Dalph must not leave the runtime on the stale position-80
+worktree frontier, settle or acknowledge A1 from that stale evaluation, drop
+C1, admit D1/E1 without a position, combine runtime facts from one sampling cut
+with planned actions from another, or expose a duplicate evaluation that
+causes a duplicate A1 action. It must not repair either handoff by polling,
+rereading an authority merely to create a wake-up, persisting a relation
+revision, or inventing another current-value or ordering authority.
+
+### Crash and restart cuts
+
+If the process dies after the coherent position-80 lineage evaluation is made
+observable but before the runtime consumes it, the process-local evaluation,
+subscription, owner, pending completion, and acknowledgement disappear. A
+fresh activation's Run establishment reconstructs the durable position-80
+Journal facts. The ordinary delivery relation derives the descriptive delivery
+consequences from those facts, and delivery planning derives A1's current
+lineage action with C1 retained and D1/E1 still position-blocked. Only then does
+the newly constructed runtime evaluation assembly sample those delivery
+consequences, that planned-action frontier, and the reconstructed runtime facts
+under the existing gate and expose their coherent current value. Runtime
+evaluation assembly neither opens the Journal nor derives the lineage action.
+Restart does not restore a saved evaluation revision or repeat a provider call
+merely to wake the runtime.
+
+After the runtime consumes the lineage evaluation, admitting
+`ReadTargetLineage` crosses the existing intent-first Git read protocol. A
+process loss before its exact `GitReadIntentRecorded` event loses only local
+admission. A fresh activation repeats the same ownership sequence: Run
+establishment reconstructs the durable facts, the ordinary delivery relation
+and delivery planning rederive the exact lineage action, and a new runtime
+evaluation assembly exposes it for admission. A loss after that intent but
+before an accepted `TargetLineageObserved` result, including loss after Git
+returned but before observation, reconstructs the same exact Git operation and
+reconciles it through the ordinary Git read path. It does not infer a result,
+invent a different operation, or use a saved runtime revision. Once the exact
+lineage observation is accepted, fresh Run establishment and ordinary delivery
+reconstruction derive its successor; runtime evaluation assembly only exposes
+that derived current value. This crash reread belongs to the existing
+intent-first Git recovery protocol; it is not a poll or a reread used to repair
+the same-position publication handoff.
+
+### Acceptance-test mapping
+
+- `emits one coherent same-position planning successor before a later accepted
+  sentinel` in
+  `packages/orchestrator/src/coordination/delivery/delivery-evaluation-consistency.test.ts`
+  is the signal-only characterization. It drives position-80 worktree,
+  position-80 lineage with otherwise unchanged runtime facts, and position-81
+  sentinel. It proves all three coherent evaluations arrive once and in order
+  without a timeout, poll, reread, or persisted revision; it does not claim to
+  settle a runtime owner or prove durable restart reconstruction. Its inputs
+  are separately reconstructed relation, planning, and runtime-fact values, so
+  it owns only process-local assembly coherence.
+- Add `keeps a same-position worktree completion pending until its lineage
+  successor reaches the runtime` in
+  `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`.
+  The direct runtime test starts with exact live A1 worktree ownership and an
+  action completion, offers completion before releasing the position-80
+  lineage evaluation, and proves the stale equal-position evaluation cannot
+  remove or acknowledge the owner. After release, it proves one settlement,
+  one acknowledgement, one lineage admission, retained C1, exact held
+  correlations A1/B1/C1 at capacity three, and no D1/E1 executor call.
+- Add `reconstructs same-position lineage across process loss before
+  consumption, before Git intent, and after acceptance` in
+  `packages/orchestrator/src/coordination/run/same-position-lineage-restart.acceptance.test.ts`.
+  The first row uses a `Deferred` after the first runtime evaluation assembly
+  exposes coherent position-80 lineage and terminates that activation before
+  the runtime consumes it. A separate production restart must use fresh Run
+  establishment to reconstruct the shared durable prefix, the ordinary
+  relation and planning functions to rederive A1 lineage with retained C1 and
+  blocked D1/E1, and a newly constructed runtime evaluation assembly to expose
+  that coherent value. The second row uses `Deferred` control at the Journal
+  append boundary to prove the runtime admitted the live lineage action while
+  its exact `GitReadIntentRecorded` append remains unaccepted, then terminates
+  that activation. It proves the durable Journal contains no lineage intent and
+  requires the same fresh production reconstruction and one re-admission. The
+  third row restarts after the exact `TargetLineageObserved` result is durable
+  and proves production reconstruction derives its successor without another
+  lineage read. Every row proves that no runtime revision, owner, completion,
+  admission marker, relation value, or planned frontier crosses the process
+  boundary; none relies on timeout or scheduler order.
+- `active-work refresh recovers ordinary authority reads without a private
+  refresh protocol` in
+  `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`
+  already tables the lineage read's two existing crash cuts: loss after its
+  exact intent but before the Git call, and loss after the Git response but
+  before its accepted observation. Both recover the same operation identity
+  through the ordinary intent-first protocol, without private refresh state.
+  It supports those two middle cuts only; it does not replace the planned
+  production restart-composition table above.
+- Downstream #268 blocking edge: `emits the exact DS01 through DS13 delivery
+  checkpoint table` in
+  `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`
+  remains pending. Once the predecessor repair is composed, that vertical
+  cassette must continue from A1's position-80 worktree read into its lineage
+  read and through the remaining thirteen-beat story.
