@@ -19,6 +19,13 @@ const aBeginExecuting = {
   report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
   request: "Begin"
 } as const
+const aSpecificationReturned = {
+  _tag: "TaskWorkSpecificationReadReturned",
+  body: "A body",
+  taskId: "A",
+  title: "A title"
+} as const
+const aCurrentClaimReturned = { _tag: "TaskClaimCurrentReadReturned", taskId: "A" } as const
 const concurrentNode = (role: string, predecessorRoles: ReadonlyArray<string>, interaction: unknown) => ({
   interaction,
   predecessorRoles,
@@ -26,13 +33,15 @@ const concurrentNode = (role: string, predecessorRoles: ReadonlyArray<string>, i
 })
 const concurrentGroup = (members: ReadonlyArray<unknown>) => ({ _tag: "ConcurrentInteractionGroup", members })
 
-it("accepts exact roles and predecessor roles in a causal concurrent interaction group", () => {
+it("accepts the four exact interaction forms in a causal concurrent group", () => {
   expect(() =>
     Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(
       concurrentGroup([
         concurrentNode("W_B", [], bWorktreeSelection),
         concurrentNode("W_C", [], cWorktreeSelection),
         concurrentNode("X_A", [], aBeginExecuting),
+        concurrentNode("T_A", ["W_C"], aSpecificationReturned),
+        concurrentNode("R_A", ["T_A"], aCurrentClaimReturned),
         concurrentNode("X_B", ["W_B"], {
           ...aBeginExecuting,
           report: { ...aBeginExecuting.report, attemptId: "attempt:B:1" }
@@ -77,6 +86,50 @@ it("rejects invalid roles keys edges and member tags in a causal concurrent inte
   }
 })
 
+it("rejects ambiguous specification and claim keys and every unsupported grouped interaction", () => {
+  const duplicateKeyGroups = [
+    concurrentGroup([
+      concurrentNode("T_A_1", [], aSpecificationReturned),
+      concurrentNode("T_A_2", [], { ...aSpecificationReturned, body: "Different body", title: "Different title" })
+    ]),
+    concurrentGroup([
+      concurrentNode("R_A_1", [], aCurrentClaimReturned),
+      concurrentNode("R_A_2", [], { ...aCurrentClaimReturned })
+    ])
+  ]
+  for (const group of duplicateKeyGroups) {
+    expect(() => Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(group)).toThrow(
+      /each concurrent interaction claim key must be unique/u
+    )
+  }
+
+  const unsupportedMembers = [
+    { _tag: "TaskClaimReadReturned", observation: { _tag: "UnclaimedTask", taskId: "A" } },
+    { _tag: "TaskClaimReadFailed", reason: "Unreadable", taskId: "A" },
+    {
+      _tag: "PlannedAttemptExecutorProjectionReturned",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" }
+    },
+    {
+      _tag: "ConcurrentTrackerReadBatch",
+      members: [
+        {
+          causal: { occurrenceRole: "read-A", predecessorRoles: [] },
+          operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" },
+          result: aSpecificationReturned
+        }
+      ]
+    },
+    concurrentGroup([concurrentNode("nested", [], bWorktreeSelection)])
+  ]
+  for (const member of unsupportedMembers) {
+    expect(() => Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(member)).not.toThrow()
+    expect(() =>
+      Schema.decodeUnknownSync(AuthoredCassetteStoryItem)(concurrentGroup([concurrentNode("unsupported", [], member)]))
+    ).toThrow()
+  }
+})
+
 it("rejects valid terminal lifecycle control and result items as concurrent interaction members", () => {
   const closedLanguageExclusions = [
     { _tag: "ExpectedBehavior", orchestration: null, protocol: null, taskWork: { absences: [], results: [] } },
@@ -85,18 +138,7 @@ it("rejects valid terminal lifecycle control and result items as concurrent inte
     {
       _tag: "IntegratorResultReturned",
       result: { _tag: "PreparedCandidate", candidateText: "candidate:closed-language-control" }
-    },
-    {
-      _tag: "ConcurrentTrackerReadBatch",
-      members: [
-        {
-          causal: { occurrenceRole: "read-A", predecessorRoles: [] },
-          operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" },
-          result: { _tag: "TaskWorkSpecificationReadReturned", body: "Body", taskId: "A", title: "Title" }
-        }
-      ]
-    },
-    concurrentGroup([concurrentNode("nested", [], bWorktreeSelection)])
+    }
   ]
 
   for (const item of closedLanguageExclusions) {
