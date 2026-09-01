@@ -42,6 +42,7 @@ import {
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
   makeTargetLineageObservationOperation,
+  makeTaskWorktreeObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
@@ -1382,7 +1383,11 @@ it.effect("runs a stopped-attempt claim read after the distinct continuation-cla
     const executor = DeliveryActionExecutor.of({
       execute: (action) =>
         action.proposal.id === continuation.id
-          ? Effect.succeed({ _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult)
+          ? relation
+              .publish(withProposals(initial, [stopped, marker], 2))
+              .pipe(
+                Effect.as({ _tag: "ActionCompleted", proposalId: action.proposal.id } satisfies DeliveryActionResult)
+              )
           : (action.proposal.id === stopped.id
               ? Deferred.succeed(stoppedStarted, undefined)
               : Deferred.succeed(markerStarted, undefined)
@@ -1408,7 +1413,6 @@ it.effect("runs a stopped-attempt claim read after the distinct continuation-cla
       Effect.forkChild
     )
     yield* Deferred.await(continuationSettled)
-    yield* relation.publish(withProposals(initial, [stopped, marker], 2))
     yield* Deferred.await(markerStarted)
     expect(yield* Deferred.isDone(stoppedStarted)).toBe(true)
 
@@ -1583,6 +1587,7 @@ it.effect("starts one live action while its proposal remains present", () =>
     const relation = yield* dynamicEvaluationSignal(initial)
     const started = yield* Deferred.make<void>()
     const finish = yield* Deferred.make<void>()
+    const pending = yield* Deferred.make<void>()
     const settled = yield* Deferred.make<void>()
     const starts = yield* Ref.make(0)
     const executor = DeliveryActionExecutor.of({
@@ -1600,24 +1605,24 @@ it.effect("starts one live action while its proposal remains present", () =>
         DeliverySemanticTrace,
         DeliverySemanticTrace.of({
           emit: (event) =>
-            event._tag === "ActionOutcome" && event.result.proposalId === persistent.id
-              ? Deferred.succeed(settled, undefined)
-              : Effect.void
+            event._tag === "ActionCompletionPublicationPending" && event.proposalId === persistent.id
+              ? Deferred.succeed(pending, undefined)
+              : event._tag === "ActionOutcome" && event.result.proposalId === persistent.id
+                ? Deferred.succeed(settled, undefined)
+                : Effect.void
         })
       ),
       Effect.forkChild
     )
     yield* Deferred.await(started)
     yield* relation.publish(initial)
-    yield* Effect.yieldNow
-    expect(yield* Ref.get(starts)).toBe(1)
     yield* Deferred.succeed(finish, undefined)
-    yield* Deferred.await(settled)
+    yield* Deferred.await(pending)
     yield* relation.publish(initial)
-    yield* Effect.yieldNow
-    expect(yield* Ref.get(starts)).toBe(1)
     yield* relation.publish(withProposals(initial, []))
+    yield* Deferred.await(settled)
     const quiescence = yield* Fiber.join(runtime)
+    expect(yield* Ref.get(starts)).toBe(1)
     expect(quiescence.proposedActions).toEqual(withProposals(initial, []).proposedActions)
     expect(quiescence.disposition).toEqual({ _tag: "QuiescencePassive", reason: "RunPaused" })
   }).pipe(Effect.scoped)
@@ -1634,6 +1639,8 @@ it.effect("settles one unchanged passive observation owner without re-admission 
     const initial = withProposals(yield* baseEvaluation, [observe], 1)
     const relation = yield* dynamicEvaluationSignal(initial)
     const starts = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+    const applied = yield* Deferred.make<void>()
+    const pending = yield* Deferred.make<void>()
     const executor = DeliveryActionExecutor.of({
       execute: (action) =>
         Ref.update(starts, (ids) => [...ids, action.proposal.id]).pipe(
@@ -1650,11 +1657,30 @@ it.effect("settles one unchanged passive observation owner without re-admission 
         )
     })
 
-    const quiescence = yield* runDeliveryRuntimeQuiescence(relation).pipe(
+    const runtime = yield* runDeliveryRuntimeQuiescence(relation).pipe(
       Effect.provide(identityLayers),
-      Effect.provideService(DeliveryActionExecutor, executor)
+      Effect.provideService(DeliveryActionExecutor, executor),
+      Effect.provideService(
+        DeliverySemanticTrace,
+        DeliverySemanticTrace.of({
+          emit: (event) =>
+            event._tag === "ActionCompletionPublicationPending"
+              ? Deferred.succeed(pending, undefined)
+              : event._tag === "ActionOutcome"
+                ? Deferred.succeed(applied, undefined)
+                : Effect.void
+        })
+      ),
+      Effect.forkChild
     )
 
+    expect(
+      yield* Effect.race(
+        Deferred.await(applied).pipe(Effect.as("Applied" as const)),
+        Deferred.await(pending).pipe(Effect.as("Pending" as const))
+      )
+    ).toBe("Applied")
+    const quiescence = yield* Fiber.join(runtime)
     expect(yield* Ref.get(starts)).toEqual([observe.id])
     expect(quiescence.acceptedAt).toBe(initial.acceptedAt)
     expect(quiescence.proposedActions.proposals).toEqual([])
@@ -2036,14 +2062,26 @@ it.effect("returns the exact action failure after rolling back its process-local
     const relation = yield* dynamicEvaluationSignal(initial)
     const actionFailure = new IntegratorBoundaryUnavailable({ boundary: "Integrator" })
     const executor = DeliveryActionExecutor.of({ execute: () => Effect.fail(actionFailure) })
+    const pending = yield* Deferred.make<void>()
 
-    const failure = yield* runDeliveryRuntimeDecision(relation).pipe(
-      Effect.provide(identityLayers),
-      Effect.provideService(DeliveryActionExecutor, executor),
-      Effect.flip
+    const result = yield* Effect.race(
+      runDeliveryRuntimeDecision(relation).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(
+          DeliverySemanticTrace,
+          DeliverySemanticTrace.of({
+            emit: (event) =>
+              event._tag === "ActionCompletionPublicationPending" ? Deferred.succeed(pending, undefined) : Effect.void
+          })
+        ),
+        Effect.flip,
+        Effect.map((failure) => ({ _tag: "Failed" as const, failure }))
+      ),
+      Deferred.await(pending).pipe(Effect.as({ _tag: "Pending" as const }))
     )
 
-    expect(failure).toEqual(actionFailure)
+    expect(result).toEqual({ _tag: "Failed", failure: actionFailure })
   }).pipe(Effect.scoped)
 )
 
@@ -2543,6 +2581,308 @@ it.effect("keeps an action owner until its accepted successor publication reache
       expect(quiescence).toMatchObject({ _tag: "PassiveRuntimeQuiescence", acceptedAt: position24 })
       expect(yield* Ref.get(executions)).toEqual([predecessor.id, specification.id])
       expect(yield* Ref.get(outcomes)).toEqual([predecessor.id, specification.id])
+    })
+  )
+)
+
+it.effect("keeps a same-position worktree completion pending until its lineage successor reaches the runtime", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const position80 = JournalPosition.make(80)
+      const position81 = JournalPosition.make(81)
+      const attemptB = PlannedTaskAttempt.make({
+        ...plannedAttempt,
+        attemptId: AttemptId.make("same-position-runtime-B-attempt"),
+        branch: TaskBranchRef.make("refs/heads/dalph/same-position-runtime-B"),
+        taskId: TaskId.make("same-position-runtime-B"),
+        worktree: WorktreeLocator.make("/runtime-test/same-position-B")
+      })
+      const worktreeOperation = makeTaskWorktreeObservationOperation({
+        operationId: OperationId.make("same-position-runtime-A-worktree"),
+        plannedAttempt,
+        predecessorOperationIds: []
+      })
+      const claimOperation = makeTaskClaimObservationOperation(
+        OperationId.make("same-position-runtime-C-claim"),
+        target,
+        independentPlannedAttempt.taskId
+      )
+      const lineageOperation = makeTargetLineageObservationOperation({
+        integrationTarget: IntegrationTarget.make({
+          repository: GitRepositoryLocator.make("/runtime-test/same-position-lineage.git"),
+          ref: IntegrationTargetRef.make("refs/heads/main")
+        }),
+        operationId: OperationId.make("same-position-runtime-A-lineage"),
+        plannedAttempt,
+        predecessorOperationIds: [worktreeOperation.operationId]
+      })
+      const claimTransition = RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({
+        operation: claimOperation,
+        plannedAttempt: independentPlannedAttempt
+      })
+      const worktreeTransition = RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
+        operation: worktreeOperation,
+        plannedAttempt
+      })
+      const lineageTransition = RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+        operation: lineageOperation,
+        plannedAttempt
+      })
+      const observationProposals = (
+        transition: typeof worktreeTransition | typeof lineageTransition
+      ): ReadonlyArray<DeliveryActionProposal> =>
+        deliveryProposalsOf({
+          acceptedOperationIds: new Set(),
+          fresh: [],
+          pendingReadOperationIds: new Set([transition.operation.operationId, claimOperation.operationId]),
+          runId,
+          transitions: [transition, claimTransition]
+        }).ticketDelivery
+      const worktreeAndClaim = observationProposals(worktreeTransition)
+      const lineageAndClaim = observationProposals(lineageTransition)
+      const worktree = worktreeAndClaim.find(
+        ({ route }) => route._tag === "RecoveredNewActionRoute" && route.action._tag === "ReadTaskWorktree"
+      )
+      const lineage = lineageAndClaim.find(
+        ({ route }) => route._tag === "RecoveredNewActionRoute" && route.action._tag === "ReadTargetLineage"
+      )
+      const claim = worktreeAndClaim.find(
+        ({ route }) => route._tag === "RecoveredNewActionRoute" && route.action._tag === "ReadTaskClaim"
+      )
+      const [blockedD, blockedE] = preparedBeginProposalsOf([
+        preparedAttemptFixture("same-position-D"),
+        preparedAttemptFixture("same-position-E")
+      ])
+      if (
+        worktree === undefined ||
+        lineage === undefined ||
+        claim === undefined ||
+        blockedD === undefined ||
+        blockedE === undefined
+      ) {
+        return yield* Effect.die("the same-position runtime fixture must derive A, C, D, and E proposals")
+      }
+      const held = [plannedAttempt, attemptB, independentPlannedAttempt].map((attempt) => ({
+        correlation: plannedAttemptExecutorCorrelation(attempt),
+        taskId: attempt.taskId
+      }))
+      const evaluation = (
+        acceptedAt: JournalPosition,
+        proposals: ReadonlyArray<DeliveryActionProposal>
+      ): DeliveryRuntimeEvaluation => ({
+        ...withProposals(base, proposals, 3),
+        acceptedAt,
+        current: { ...base.current, runId },
+        taskWork: { capacity: TaskWorkCapacity.make(3), held }
+      })
+      const stale = evaluation(position80, [worktree, claim, blockedD, blockedE])
+      const successor = evaluation(position80, [lineage, claim, blockedD, blockedE])
+      const sentinel = evaluation(position81, [claim, blockedD, blockedE])
+      const relation = yield* dynamicEvaluationSignal(stale)
+      const worktreeStarted = yield* Deferred.make<void>()
+      const finishWorktree = yield* Deferred.make<void>()
+      const lineageStarted = yield* Deferred.make<void>()
+      const finishLineage = yield* Deferred.make<void>()
+      const worktreePending = yield* Deferred.make<void>()
+      const worktreeApplied = yield* Deferred.make<void>()
+      const lineagePending = yield* Deferred.make<void>()
+      const blocked = yield* Ref.make<ReadonlySet<DeliveryProposalId>>(new Set())
+      const calls = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const outcomes = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const publicationPosition = yield* Ref.make(position80)
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal: action }) =>
+          Effect.gen(function* () {
+            yield* Ref.update(calls, (current) => [...current, action.id])
+            if (action.id === worktree.id) {
+              yield* Deferred.succeed(worktreeStarted, undefined)
+              yield* Deferred.await(finishWorktree)
+              return { _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult
+            }
+            if (action.id === lineage.id) {
+              yield* Deferred.succeed(lineageStarted, undefined)
+              yield* Deferred.await(finishLineage)
+              return { _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult
+            }
+            if (action.id === claim.id) {
+              return {
+                _tag: "ActionDeferred",
+                proposalId: action.id,
+                reason: "TrackerGraphReadUnavailable"
+              } satisfies DeliveryActionResult
+            }
+            return yield* Effect.die("capacity-full D/E must not cross the executor boundary")
+          })
+      })
+      const publication = DeliveryAcceptedFactPublication.of({
+        awaitCurrent: Ref.get(publicationPosition).pipe(
+          Effect.map((acceptedThrough) => ({
+            _tag: "DeliveryAcceptedPublicationBoundary" as const,
+            acceptedThrough,
+            runId
+          }))
+        )
+      })
+      const trace = DeliverySemanticTrace.of({
+        emit: (event) => {
+          if (event._tag === "ActionCompletionPublicationPending") {
+            return event.proposalId === worktree.id
+              ? Deferred.succeed(worktreePending, undefined)
+              : event.proposalId === lineage.id
+                ? Deferred.succeed(lineagePending, undefined)
+                : Effect.void
+          }
+          if (event._tag === "ActionOutcome") {
+            return Ref.update(outcomes, (current) => [...current, event.result.proposalId]).pipe(
+              Effect.andThen(
+                event.result.proposalId === worktree.id ? Deferred.succeed(worktreeApplied, undefined) : Effect.void
+              )
+            )
+          }
+          return event._tag === "ProposalDeferred" &&
+            (event.proposalId === blockedD.id || event.proposalId === blockedE.id)
+            ? Ref.update(blocked, (current) => new Set(current).add(event.proposalId))
+            : Effect.void
+        }
+      })
+      const integrationTargets = yield* makeIntegrationTargetResourceController()
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
+      const runtime = yield* runDeliveryRuntimeQuiescence(relation, publication).pipe(
+        Effect.provide(plannerLayer),
+        Effect.provide(deterministicOperationIdAllocatorLayer("runtime-same-position-successor")),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(DeliverySemanticTrace, trace),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(worktreeStarted)
+      yield* Deferred.succeed(finishWorktree, undefined)
+      expect(
+        yield* Effect.race(
+          Deferred.await(worktreePending).pipe(Effect.as("Pending" as const)),
+          Deferred.await(worktreeApplied).pipe(Effect.as("Applied" as const))
+        )
+      ).toBe("Pending")
+      const pendingObservation = yield* capabilities.resources.runtimeObservation.get
+      if (pendingObservation._tag !== "Ready") return yield* Effect.die("the pending owner must be observable")
+      expect(pendingObservation.liveOwners.map(({ proposal }) => proposal.id)).toContain(worktree.id)
+      expect(yield* Ref.get(outcomes)).not.toContain(worktree.id)
+
+      yield* relation.publish(successor)
+      yield* Deferred.await(lineageStarted)
+      yield* Deferred.await(worktreeApplied)
+      yield* Ref.set(publicationPosition, position81)
+      yield* Deferred.succeed(finishLineage, undefined)
+      yield* Deferred.await(lineagePending)
+      yield* relation.publish(sentinel)
+
+      const result = yield* Fiber.join(runtime)
+      expect(result._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+      if (result._tag !== "TaskWorkAdmissionStalledRuntimeQuiescence") {
+        return yield* Effect.die("full exact capacity must preserve D/E as admission-stalled")
+      }
+      expect(result.acceptedAt).toBe(position81)
+      expect(result.taskWork.held.map(({ correlation }) => correlation)).toEqual(
+        held.map(({ correlation }) => correlation)
+      )
+      expect(result.proposedActions.proposals).toEqual([blockedD, blockedE])
+      expect((yield* relation.get).proposedActions).toMatchObject({ proposals: [claim, blockedD, blockedE] })
+      const actionCalls = yield* Ref.get(calls)
+      expect(actionCalls.filter((id) => id === worktree.id)).toHaveLength(1)
+      expect(actionCalls.filter((id) => id === lineage.id)).toHaveLength(1)
+      expect(actionCalls).not.toContain(blockedD.id)
+      expect(actionCalls).not.toContain(blockedE.id)
+      expect([...(yield* Ref.get(blocked))]).toEqual(expect.arrayContaining([blockedD.id, blockedE.id]))
+      expect((yield* Ref.get(outcomes)).filter((id) => id === worktree.id)).toHaveLength(1)
+    })
+  )
+)
+
+it.effect("keeps a completion pending when newer accepted facts still retain its exact predecessor", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const predecessor = proposal(0, TaskId.make("newer-facts-retained-predecessor"))
+      const acceptedThrough = JournalPosition.make(50)
+      const newer = JournalPosition.make(51)
+      const retainedBarrier = JournalPosition.make(52)
+      const initial = {
+        ...withProposals(base, [predecessor], 1),
+        acceptedAt: acceptedThrough,
+        current: { ...base.current, runId }
+      } satisfies DeliveryRuntimeEvaluation
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const started = yield* Deferred.make<void>()
+      const finish = yield* Deferred.make<void>()
+      const pending = yield* Deferred.make<void>()
+      const applied = yield* Deferred.make<void>()
+      const retainedBarrierObserved = yield* Deferred.make<void>()
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal: action }) =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(finish)),
+            Effect.as({ _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult)
+          )
+      })
+      const observer = DeliveryRuntimeObservationObserver.of({
+        observe: ({ evaluation }) =>
+          evaluation.acceptedAt === retainedBarrier ? Deferred.succeed(retainedBarrierObserved, undefined) : Effect.void
+      })
+      const trace = DeliverySemanticTrace.of({
+        emit: (event) =>
+          event._tag === "ActionCompletionPublicationPending"
+            ? Deferred.succeed(pending, undefined)
+            : event._tag === "ActionOutcome"
+              ? Deferred.succeed(applied, undefined)
+              : Effect.void
+      })
+      const integrationTargets = yield* makeIntegrationTargetResourceController()
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets).pipe(
+        Effect.provideService(DeliveryRuntimeObservationObserver, observer)
+      )
+      const runtime = yield* runDeliveryRuntimeQuiescence(
+        relation,
+        DeliveryAcceptedFactPublication.of({
+          awaitCurrent: Effect.succeed({ _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId })
+        })
+      ).pipe(
+        Effect.provide(plannerLayer),
+        Effect.provide(deterministicOperationIdAllocatorLayer("runtime-newer-retained-predecessor")),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(DeliverySemanticTrace, trace),
+        Effect.forkChild
+      )
+
+      yield* Deferred.await(started)
+      yield* Deferred.succeed(finish, undefined)
+      expect(
+        yield* Effect.race(
+          Deferred.await(pending).pipe(Effect.as("Pending" as const)),
+          Deferred.await(applied).pipe(Effect.as("Applied" as const))
+        )
+      ).toBe("Pending")
+      yield* relation.publish({ ...initial, acceptedAt: newer })
+      yield* relation.publish({ ...initial, acceptedAt: retainedBarrier })
+      // Reaching the second retained evaluation proves the first evaluation's
+      // post-application completion flush has returned without settling A.
+      yield* Deferred.await(retainedBarrierObserved)
+      expect(yield* Deferred.isDone(applied)).toBe(false)
+
+      yield* relation.publish({
+        ...initial,
+        acceptedAt: retainedBarrier,
+        proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }
+      })
+      expect(yield* Fiber.join(runtime)).toMatchObject({
+        _tag: "PassiveRuntimeQuiescence",
+        acceptedAt: retainedBarrier
+      })
+      expect(yield* Deferred.isDone(applied)).toBe(true)
     })
   )
 )
