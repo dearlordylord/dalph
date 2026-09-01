@@ -431,6 +431,13 @@ export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFounda
       ).pipe(Effect.provide(foundation))
       const source = Context.get(run, JournaledRunObservationSource)
       yield* Effect.raceFirst(source.awaitEstablished, Deferred.await(activationFailure))
-      return yield* use({ acceptedHistory: source.acceptedHistory, current: source.current, selection })
+      // A typed activation failure can arrive after the Run has been
+      // established. Keep the host effect attached to that failure so the
+      // outer scope closes ordinary process-local resources without turning
+      // the failure into Run finality, Exit, or a host retry.
+      return yield* Effect.raceFirst(
+        use({ acceptedHistory: source.acceptedHistory, current: source.current, selection }),
+        Deferred.await(activationFailure)
+      )
     })
   )
