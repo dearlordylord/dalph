@@ -94,16 +94,16 @@ it.effect("emits every accepted stable publication after repeated current planni
     Effect.gen(function* () {
       const projected = projectTrackerSnapshot({ revision: "accepted-repeated-G0", tasks: [] })
       if (projected._tag === "Invalid") return yield* Effect.die("fixture graph must be valid")
-      const established = TrackerGraphState.cases.GraphEstablished.make({
-        observation: makeTestJournaledTrackerGraphObservation({
-          operationId: OperationId.make("accepted-repeated-G0-read"),
-          recordedAt: JournalPosition.make(1),
-          snapshot: projected.snapshot
-        })
-      })
       const reflectionProposal: DeliveryActionProposal = { ...proposal, owner: "DeliveryReflection" }
       const acceptedOrdinals = [20, 23, 33].map((ordinal) => JournalPosition.make(ordinal))
       const publications = acceptedOrdinals.map((acceptedAt, index): DeliveryRelationInputBundle => {
+        const established = TrackerGraphState.cases.GraphEstablished.make({
+          observation: makeTestJournaledTrackerGraphObservation({
+            operationId: OperationId.make(`accepted-repeated-G0-read-${acceptedAt}`),
+            recordedAt: acceptedAt,
+            snapshot: projected.snapshot
+          })
+        })
         const current = bundle(established)
         return {
           ...current,
@@ -138,13 +138,28 @@ it.effect("emits every accepted stable publication after repeated current planni
       }
       const actual = Array.from(yield* Fiber.join(collected))
 
-      expect(actual.map(({ acceptedAt }) => acceptedAt)).toEqual(acceptedOrdinals)
-      expect(actual.map(({ current }) => current.trackerGraph)).toEqual(publications.map(() => established))
       expect(
-        actual.map(({ proposedActions }) =>
-          proposedActions._tag === "DeliveryProposalsAvailable" ? proposedActions.proposals.map(({ id }) => id) : []
-        )
-      ).toEqual([[], [reflectionProposal.id], []])
+        actual.map(({ acceptedAt, current, proposedActions }) => ({
+          acceptedAt,
+          graphOperationId:
+            current.trackerGraph._tag === "GraphEstablished"
+              ? current.trackerGraph.observation.operationId
+              : current.trackerGraph._tag,
+          graphRecordedAt:
+            current.trackerGraph._tag === "GraphEstablished"
+              ? current.trackerGraph.observation.recordedAt
+              : current.trackerGraph._tag,
+          proposalIds:
+            proposedActions._tag === "DeliveryProposalsAvailable" ? proposedActions.proposals.map(({ id }) => id) : []
+        }))
+      ).toEqual(
+        acceptedOrdinals.map((acceptedAt, index) => ({
+          acceptedAt,
+          graphOperationId: OperationId.make(`accepted-repeated-G0-read-${acceptedAt}`),
+          graphRecordedAt: acceptedAt,
+          proposalIds: index === 1 ? [reflectionProposal.id] : []
+        }))
+      )
     })
   )
 )

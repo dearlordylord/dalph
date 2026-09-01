@@ -363,12 +363,12 @@ durable fact.
 
 No person triggers this relation handoff. Dalph has established tracker graph
 G0 for independent open tasks A through E and has recorded each task's claim.
-The ordinary runtime has one local owner for each post-claim graph read. Those
-reads settle in causal order while the Journal accepts their intents and
-results. The executor, Git, and the tracker perform no additional mutation at
-this boundary: the concrete trigger is acceptance of a post-claim graph-read
-result that changes the Journal position and therefore the delivery planning
-publication.
+As capacity permits, the ordinary runtime creates and holds one exact local
+owner for each admitted post-claim graph read. Those reads settle in causal
+order while the Journal accepts their intents and results. The executor, Git,
+and the tracker perform no additional mutation at this boundary: the concrete
+trigger is acceptance of a post-claim graph-read result that changes the
+Journal position and therefore the delivery planning publication.
 
 ### Ordered relation and runtime handoff
 
