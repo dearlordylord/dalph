@@ -2,12 +2,14 @@
 
 Owning issue: [#309](https://github.com/dearlordylord/dalph/issues/309)
 
-Status: scenario-first required behavior for open issue #309. Implementation
-and acceptance evidence are pending independent review of this chronology.
+Status: the generic closed-group schema and cursor implementation is committed
+and reviewed at `df62210f`. The expanded five-member chronology and its direct
+evidence are pending final handoff; the downstream #268 composition is not yet
+claimed green.
 
 This change affects the controlled authored-cassette harness. It does not
 change production workflow semantics, provider requests, delivery scheduling,
-or Journal history. This issue #309 scenario accepts that the three exact
+or Journal history. This issue #309 scenario accepts that the five exact
 interactions below have no cross-interaction ordering edge once each one's own
 prerequisites complete. It lets one strict cassette describe that fact without
 choosing an arbitrary scheduler order.
@@ -17,20 +19,21 @@ choosing an arbitrary scheduler order.
 The [three-register rule](../OPERATIONAL-SCENARIOS.md#three-registers-of-the-same-behavior)
 requires a cassette to record the production chronology rather than replace
 it with a new scheduling rule. This issue #309 operational scenario owns the
-rule that there is no cross-interaction edge among the exact B1 selection, C1
-selection, and A1 Begin response after each interaction's own prerequisites
-are complete.
+rule that there is no cross-interaction edge among the exact D1 plan selection,
+E1 plan selection, B1 worktree selection, C1 worktree selection, and A1 Begin
+response after each interaction's own prerequisites are complete.
 
 The accepted
 [#268 DS01–DS13 capstone](https://github.com/dearlordylord/dalph/issues/268)
 composes [Delivery Story beats 1 and 2](../DELIVERY-STORY.md#the-beats), in
-which A1, B1, and C1 are planned and begun. It is the concrete fixture and
-blocker evidence that needs this unordered cassette representation; it does
-not define the no-edge rule. The
+which A1, B1, and C1 are planned and begun while D1 and E1 become ready for
+their exact plan operations. It is the concrete fixture and blocker evidence
+that needs this unordered cassette representation; it does not define the
+no-edge rule. The
 [#269 exact C1 Begin chronology](issue-269-independent-work-retained-priority.md#an-accepted-c-position-closes-capacity-before-the-relation-lists-it)
 owns C1's intent-before-call and accepted-report order inside that production
 path and the exact predecessor ordering within its members; it does not define
-an order between these three interactions. The cassette implementation merely
+an order between these five interactions. The cassette implementation merely
 enforces this accepted #309 scenario. It does not define, remove, or infer
 production causality from #268 fixture arrival order.
 
@@ -56,46 +59,51 @@ is checking that one maintained production cassette accepts every scheduling
 order that the production fibers are already allowed to produce.
 
 The cassette story is strict before and after one bounded group. Every causal
-predecessor for these three interactions has already been consumed. In
-particular, the current Run and the immutable A1, B1, and C1 planned attempts
-already exist. Each interaction may be admitted independently after its own
-causal prerequisites complete; no common instant at which all three fibers are
-admitted or ready is required. The first controlled boundary call may therefore
-be A1's executor call before the B1 or C1 child action is admitted, which is the
-concrete #268 blocker this group must accept. No dependency, proposal-order,
-resource-conflict, or authored causal edge orders the following interactions
-relative to one another:
+predecessor for these five interactions has already been consumed. In
+particular, the current Run and immutable A1, B1, and C1 planned attempts
+already exist, while the exact D1 and E1 identities and task specifications
+needed by their plan operations are ready. Each interaction may be admitted
+independently after its own causal prerequisites complete; no common instant at
+which all five fibers are admitted or ready is required. The first controlled
+boundary call may therefore be A1's executor call before either plan or the B1
+or C1 child action is admitted, which is the concrete #268 blocker this group
+must accept. No dependency, proposal-order, resource-conflict, or authored
+causal edge orders the following interactions relative to one another:
 
-1. Dalph selects `ReconcileTaskWorktree` for exact task B and attempt B1.
-2. Dalph selects `ReconcileTaskWorktree` for exact task C and attempt C1.
-3. Dalph's exact A1 `Begin` request receives the controlled
+1. Dalph selects `RecordTaskAttemptPlan` for exact task D and attempt D1.
+2. Dalph selects `RecordTaskAttemptPlan` for exact task E and attempt E1.
+3. Dalph selects `ReconcileTaskWorktree` for exact task B and attempt B1.
+4. Dalph selects `ReconcileTaskWorktree` for exact task C and attempt C1.
+5. Dalph's exact A1 `Begin` request receives the controlled
    `ExecutorWorkExecuting` report.
 
 The authored executor member retains the existing cassette shape: request
 `Begin`, exact branded A1 `AttemptId`, and report
 `ExecutorWorkExecuting`. The controlled adapter supplies the current Run
 correlation as it does today; the cassette does not add or infer another Run
-identity. Each worktree member retains the complete existing `DalphSelects`
-operation, including exact branded `TaskId` and `AttemptId`.
+identity. Each plan and worktree member retains the complete existing
+noncausal `DalphSelects` operation, including its operation tag and exact
+branded `TaskId` and `AttemptId`; that complete operation is its claim key.
 
-The B1 and C1 members prove only that the ordinary workflow selected those
-operations at its real trace seam; they do not prove that Git was called or
-returned a worktree result. The A1 member is the existing controlled executor
-response item; its later Journal acceptance remains owned by the ordinary
-executor protocol. Completing the group proves only that all three exact
-cassette interactions were consumed.
+The D1/E1 plan and B1/C1 worktree members prove only that the ordinary workflow
+selected those operations at its real trace seam; they do not prove that a
+Journal or Git boundary completed. The A1 member is the existing controlled
+executor response item; its later Journal acceptance remains owned by the
+ordinary executor protocol. Completing the group proves only that all five
+exact cassette interactions were consumed.
 
 The next strict story item is Dalph's selection of
 `ReconcileTaskWorktree` for exact task D and attempt D1. D is not a member of
-the group.
+the group in that worktree-reconciliation role; the earlier D1 plan selection
+is the distinct group member.
 
 ## Any member order consumes one group
 
-The production fibers may reach the B1 selection, C1 selection, and A1 report
-in any of their six sequential permutations. They may also reach the cursor
-simultaneously. The controlled tracker/Git/executor Layers continue to invoke
-the existing exact cursor operations; production code does not call a special
-concurrent-story API.
+The production fibers may reach the D1 plan, E1 plan, B1 worktree selection,
+C1 worktree selection, and A1 report in any of their 120 sequential
+permutations. They may also reach the cursor simultaneously. The controlled
+tracker/Git/executor Layers continue to invoke the existing exact cursor
+operations; production code does not call a special concurrent-story API.
 
 The first controlled boundary call that matches a member constructs one
 process-local matcher for the current top-level group and claims that member.
@@ -108,20 +116,21 @@ boundary. Under that permit, the cursor:
 3. marks only that member consumed; and
 4. leaves the top-level story position unchanged while any member remains.
 
-The first two successful member calls therefore return to their production
+The first four successful member calls therefore return to their production
 fibers without presenting a top-level cassette occurrence or advancing the
-strict story. The final successful member claim marks the group complete. The
-cursor then emits exactly one occurrence for the group through its existing
-`onOccurrence` observation and advances the top-level story position exactly
-once. It does not emit three invented top-level occurrences and does not
-expose the scheduler-selected internal claim order as authored meaning.
+strict story. The fifth and final successful member claim marks the group
+complete. The cursor then emits exactly one occurrence for the group through
+its existing `onOccurrence` observation and advances the top-level story
+position exactly once. It does not emit five invented top-level occurrences
+and does not expose the scheduler-selected internal claim order as authored
+meaning.
 
 Only after that one advance may the exact D1
 `ReconcileTaskWorktree` selection consume the next strict item. A D1 call that
 arrives before the group completes is a downstream crossing, not permission to
 skip the missing member or to reorder the story.
 
-When all three production fibers call simultaneously, the existing permit
+When all five production fibers call simultaneously, the existing permit
 serializes only their in-memory matcher transitions. It does not order the
 tracker, Git, executor, Journal, or delivery runtime, and it grants no workflow
 permission. Whichever exact member acquires the permit last completes the same
@@ -129,11 +138,12 @@ authored group.
 
 ### Visible result
 
-The maintainer can run the same production-shaped story for all six member
-orders and for simultaneous calls. Every run consumes B1, C1, and A1 exactly
-once, observes one completed group, advances once, and then consumes strict D1.
-The recording says only that the three interactions all happened before D1;
-it does not claim an order among them.
+The maintainer can run the same production-shaped story for all 120 member
+orders and for simultaneous calls. Every run consumes the D1/E1 plans, B1/C1
+worktree selections, and A1 report exactly once, observes one completed group,
+advances once, and then consumes strict D1 worktree reconciliation. The
+recording says only that the five interactions all happened before that strict
+D1 reconciliation; it does not claim an order among them.
 
 ## Closed member language and exact identity
 
@@ -231,9 +241,9 @@ uses a fixture whose first story item is the group and whose second item is
 strict D1. Scope 1 constructs its cursor, consumes exactly the B1 member, and
 closes normally. Scope 2 then constructs a new cursor from the same authored
 story. Because the group is the first item, Scope 2 naturally starts at that
-group with B1, C1, and A1 all outstanding; it does not inherit Scope 1's
-position, permit, matcher, or consumed-member set and does not need a fabricated
-prefix replay.
+group with the D1 plan, E1 plan, B1 worktree, C1 worktree, and A1 report all
+outstanding; it does not inherit Scope 1's position, permit, matcher, or
+consumed-member set and does not need a fabricated prefix replay.
 
 This orderly scope replacement proves cursor lifetime, not literal process
 death. If the test process is lost, no matcher state is durable and a later
@@ -264,6 +274,12 @@ causal or response-matching semantics. A future need for any of those meanings
 requires a separate accepted phenomenon rather than widening this first
 migration.
 
+The five-member cut increases the direct sequential test from six to 120
+permutations. That bounded factorial cost is deliberate: it proves the exact
+production blocker, including the two plan selections that may reach the
+cursor before the previous three interactions, without turning the cassette
+into a general partial-order language or sampling away a possible order.
+
 ## Scenario-to-test mapping
 
 All names below are planned acceptance tests. They are not claimed green until
@@ -273,17 +289,17 @@ the issue #309 implementation is independently reviewed and executed.
 |---|---|
 | Only noncausal exact `DalphSelects` and exact `Begin`/`ExecutorWorkExecuting` cases decode as members | `packages/dalph/test/cassettes/authored-domain.test.ts` — `accepts only noncausal selections and Begin Executing reports in a concurrent interaction group` |
 | Empty groups, duplicate claim keys, two executor members with the same Begin/AttemptId key, causal or anchored selections, non-Begin or non-Executing reports, nested groups, lifecycle/crash controls, arbitrary other results, and terminal items fail decoding; nested Begin cannot bypass the top-level Begin→Executing invariant | `packages/dalph/test/cassettes/authored-domain.test.ts` — `rejects empty duplicate and ambiguous concurrent interaction groups`; `rejects causal selections and non-Begin-Executing reports inside a concurrent interaction group`; existing `rejects an authored Begin response that skips Executing`, extended with the nested negative case |
-| The B1/C1/A1 group consumes in every one of the six sequential permutations, keeps its top-level position until the final member, emits one `onOccurrence`, advances once, and then admits strict D1 | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `consumes B worktree C worktree and A executing in all six orders before advancing once` |
+| The D1/E1 plan, B1/C1 worktree, and A1 report group consumes in every one of the 120 sequential permutations, keeps its top-level position through the first four members, emits one `onOccurrence` and advances once on the fifth, and then admits strict D1 worktree reconciliation | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `consumes D and E plans B and C worktrees and A executing in all 120 orders before advancing once` |
 | Simultaneous exact calls are serialized by the existing transition permit, consume every member once, and produce one group occurrence only after the final claim | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `serializes simultaneous exact group claims and emits one occurrence after the final claim` |
 | Ambiguous membership fails schema decoding; foreign, duplicate, and downstream claims fail typed without advancing an incomplete group | `packages/dalph/test/cassettes/authored-domain.test.ts` — `rejects empty duplicate and ambiguous concurrent interaction groups`; `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `rejects foreign duplicate and downstream claims without advancing an incomplete group` |
 | A missing member leaves the group current with no occurrence and no cursor-owned timeout decision | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `keeps an incomplete group current without inventing timeout semantics` |
-| In a component fixture whose first item is the group, closing a cursor after one member and constructing a new scoped cursor recreates all three outstanding members; no matcher state or cursor position crosses the component lifetime | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `recreates every group member after its cursor scope is replaced` |
+| In a component fixture whose first item is the group, closing a cursor after one member and constructing a new scoped cursor recreates all five outstanding members; no matcher state or cursor position crosses the component lifetime | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `recreates every group member after its cursor scope is replaced` |
 | Encoding and decoding preserve the closed group, exact claim keys, and controlled outputs | `packages/dalph/test/cassettes/authored-domain.property.test.ts` — `roundtrips valid concurrent interaction groups through the story-item boundary` |
 | Presentation describes one unordered completed group without inventing a member order; the new tag has exactly one harness owner and every exhaustive presentation match handles it | `packages/dalph/test/cassettes/authored-presentation.test.ts` — `renders one completed concurrent interaction group without inventing member order`; `packages/dalph/test/cassettes/authored-coverage.test.ts` — `registers the concurrent interaction group with exactly one cursor owner`; `Match.tagsExhaustive` compilation in `packages/dalph/src/cassettes/authored-presentation.ts` |
 | `ConcurrentTrackerReadBatch` still pairs each exact owner with its separate result and drains one surrounding position after both pairs | Existing `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `selects F1 then F2 and pairs reverse-completing reads with their exact initiating operations`; `drains repeatedly forked exact read operations without resetting the story position` |
-| The maintained production story replaces only the B1/C1/A1 strict fragment with this group and still proves the DS01–DS13 chronology | Pending #268 composition in `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `emits the exact DS01 through DS13 delivery checkpoint table` |
+| The maintained production story replaces only the strict D1/E1 plan, B1/C1 worktree, and A1 Begin/Executing fragment with this group and still proves the DS01–DS13 chronology | Pending #268 composition in `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `emits the exact DS01 through DS13 delivery checkpoint table` |
 
 The direct issue #309 tests own matcher semantics. The downstream #268
 capstone owns only the full production composition; it must not substitute for
-the six-permutation, simultaneous-claim, typed-failure, schema, or presentation
+the 120-permutation, simultaneous-claim, typed-failure, schema, or presentation
 proofs above.
