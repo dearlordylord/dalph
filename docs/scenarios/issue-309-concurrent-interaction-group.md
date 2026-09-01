@@ -2,19 +2,31 @@
 
 Owning issue: [#309](https://github.com/dearlordylord/dalph/issues/309)
 
-Status: refined scenario accepted by the repository owner on 2026-09-01 after
-the owner replied `ok` to the exact acceptance request. An uncommitted
-implementation candidate exists, and the concluding independent Standards and
-Spec implementation re-reviews are clean. Commit and push remain pending. The
-earlier five-root implementation and its 120-permutation evidence are
-superseded because they omitted four causal predecessor relationships in the
-#268 chronology. The downstream #268 capstone remains unclaimed and pending.
+Status: the refined nine-node scenario was accepted by the repository owner on
+2026-09-01 after the owner replied `ok` to the exact acceptance request. Its
+implementation and direct evidence are committed at `e6d98926f`, pushed, and
+clean under the concluding independent Standards and Spec implementation
+re-reviews. The earlier five-root implementation and its 120-permutation
+evidence are superseded because they omitted four causal predecessor
+relationships in the #268 chronology.
+
+The amendment headed **Proposed amendment pending owner acceptance: compose
+independent specification-to-lineage authority lanes** is proposed
+on 2026-09-01. It is pending repository-owner acceptance and implementation;
+nothing in this file
+retroactively claims that amendment was accepted with the nine-node behavior.
+The current uncommitted #268 worktree candidate has composed the accepted
+nine-node group but remains red at exact cassette position 51 because its
+preceding specification batch and next eight strict items impose false
+cross-task barriers and order. The committed
+capstone source on this #309 branch still has its pre-composition strict layout;
+this proposal does not claim otherwise.
 
 This change affects only the controlled authored-cassette harness. It does not
 change production workflow semantics, provider requests, delivery scheduling,
-or Journal history. It lets one maintained cassette preserve four real
-within-group predecessor relationships without imposing an order on the
-remaining production interactions.
+or Journal history. It lets one maintained cassette preserve real bounded
+predecessor relationships without imposing order on independent production
+interactions.
 
 ## Governing behavior
 
@@ -345,3 +357,733 @@ The direct #309 tests own schema, matcher, ordering, concurrency, failure, and
 presentation semantics. The downstream #268 capstone remains pending and owns
 only the full production composition; it cannot substitute for the direct
 22,680-order evidence.
+
+## Proposed amendment pending owner acceptance: compose independent specification-to-lineage authority lanes
+
+This section is a proposal, not accepted behavior. Implementation remains
+blocked until the repository owner accepts this exact amendment. The accepted
+nine-node group and its evidence above remain implemented and unchanged while
+this proposal is reviewed.
+
+### Governing behavior
+
+The accepted
+[#268 capstone](https://github.com/dearlordylord/dalph/issues/268) requires
+Alice's edit to B to flow through one active-work graph refresh, focused
+instruction reads, current tracker and Git facts for the still-healthy
+executing attempts, and then B's safe suspension. The accepted
+[#266 A/B/C chronology](issue-266-active-work-authority-refresh.md#alice-changes-b-while-a1-b1-and-c1-execute-autonomously)
+owns the production decision: after B's F2 result proves B1 constrained, A1
+and C1 each continue through their own current claim, planned-worktree, and
+target-lineage facts, and only B1 receives `Suspend`. This amendment does not
+change that decision or authorize another read.
+
+[D21 Intent before an ambiguity-crossing effect](../DELIVERY-INVARIANTS.md#ambiguity-and-evidence)
+requires the exact tracker-read intent before the owning tracker call and its
+observed result afterward. D23 in that same heading keeps unreadable claim
+evidence distinct from absence, and D24 forbids a selection at one boundary
+from implying that the following result boundary succeeded. The exact inherited
+production executable scenarios are
+[`active-work refresh recovers ordinary authority reads without a private refresh protocol`](../../packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts),
+which tables claim-read intent-before-call and response-before-observation, and
+[`records one exact claim observation and replays it without another provider read`](../../packages/orchestrator/src/workflow-journal/journaled-claim-observation.test.ts),
+which records one intent/result pair and reuses the completed observation.
+
+[D29 Authority separation](../DELIVERY-INVARIANTS.md#process-and-durability)
+continues to keep the cursor role set, permit, and occurrence process-local.
+No Quint law governs controlled cassette playback order. The production
+claim-result constraints remain the inherited `foreignClaimIsNeverChanged` and
+`unreadableClaimCannotAuthorizeReplacement` laws in
+[`taskFactReconciliation.qnt`](../../specs/taskFactReconciliation.qnt), with
+their existing executable scenarios `foreignClaimStopsOnlyATest` and
+`unreadableClaimCannotAuthorizeProgressOrLossTest` in
+[`taskFactReconciliation_test.qnt`](../../specs/taskFactReconciliation_test.qnt).
+Those laws constrain how Dalph uses a returned claim; they do not authorize or
+model this cassette matcher.
+
+The accepted
+[#269 full-capacity handoff](issue-269-independent-work-retained-priority.md#full-capacity-yields-to-one-queued-active-refresh-without-losing-d-or-e)
+owns the preceding activation return, queued hint handoff, and later ordinary
+G1 read. The active-refresh cut starts after that G1 result, before its focused
+specification reads. The executing restart is the strict process-start prefix
+proved below; the second group belongs only to the later post-hint active
+refresh. This amendment adds no activation, hint, capacity, admission, or
+executor scheduling rule.
+
+The downstream composition remains governed by
+[#268](https://github.com/dearlordylord/dalph/issues/268) and its pending
+boundary draft at branch `work/issue-268-delivery-story-capstone`, path
+`docs/scenarios/issue-268-delivery-story-capstone.md`. That file is not yet
+composed on this branch, so this proposal deliberately does not publish a
+broken relative link to it. Its headings **Governing behavior and blocking
+edge**, **The capacity revision commits before process death is exposed**, and
+**C Safe commits before Continue B is exposed** remain the reviewable
+governing locations. The capacity boundary still has a known committed-but-
+unacknowledged revision counterexample: death must remain unavailable in that
+run until the durable capacity result is reconciled in a later run. The Safe
+boundary still requires the exact accepted and published C2 Safe report before
+Continue B; provider return, early interruption, or an ambiguous commit cannot
+authorize Continue. Those counterexamples are open blockers to accepting the
+suffix as sound. This #309 amendment neither closes them nor treats a green
+local matcher test as downstream acceptance. The pending #268 draft's restart
+authority-lane language must also be removed in favor of the strict probe-
+proved prefix below before that boundary scenario can be accepted.
+
+The accepted nine-node #309 behavior above owns the closed group, authored
+role/predecessor graph, exact claim, cursor-permit transition, one completion
+publication, failure/no-mutation, non-arrival, and scope-replacement semantics.
+This proposal preserves all of those rules and adds only the two exact tracker-
+result member forms required by the two active-refresh cuts.
+The separately exact projection cursor contract applies only to the strict
+restart prefix. The proposal does not supersede or rewrite the nine-node
+scenario.
+
+The earlier draft began after all focused specification results because the
+current cassette places them in one `ConcurrentTrackerReadBatch`. A completed
+production probe disproves that barrier. On probe commit `c305b3543`, this exact
+command passed both characterizations:
+
+```text
+pnpm vitest run packages/dalph/src/application/production-reactivation.test.ts -t "allows one (restart|active-refresh) authority lane"
+```
+
+The two passing tests are `allows one restart authority lane to reach claim
+while independent specification reads remain in flight` and `allows one
+active-refresh authority lane to reach claim while independent specification
+reads remain in flight`. The restart characterization uses different lifecycle
+facts and does not govern #268's executing-restart cut: probe `bb40c4c8c` below
+proves that exact cut performs zero specification, claim, worktree, or lineage
+selections. The active-refresh case held D's specification read on a
+deterministic `Deferred` and observed A reach its exact claim read before
+release. It made C terminal, leaving A and D as the exact independent unchanged
+lanes. That active result supports the later post-hint A/D group below. The 2/2
+result remains characterization evidence, not accepted #309 implementation
+evidence or a passing #268 capstone.
+
+`ConcurrentTrackerReadBatch` remains implemented and unchanged for cuts that
+really require all selected reads to drain together. It cannot own either
+active-refresh cut below: its surrounding position advances only after every
+selection/result pair, while the probes prove one task may cross from its own
+specification result to its own claim read before an independent specification
+result exists. This amendment does not widen, nest, or remove that construct.
+
+### The maintainer reaches the active-refresh specification-to-lineage lanes
+
+The affected person is a Dalph maintainer running the accepted #268 production
+workflow algebra through the controlled tracker, Git, executor, Journal, and
+cassette Layers. Alice's earlier tracker edit changed B's instructions from F1
+to F2; Alice does not issue another command at this cut. No target-application
+user triggers an individual boundary call.
+
+The current Run has exact planned attempts A1 `attempt:A:0`, B1
+`attempt:B:1`, and C1 `attempt:C:2`. Their accepted lifecycle reports are
+`ExecutorWorkExecuting`, and their exact claims and planned worktrees still
+exist. The Journal already contains the three plans. In the current
+uncommitted #268 composition candidate, the accepted nine-node group has
+drained, the first activation has returned
+`RunMustRemainActive(RunnableTransition)`, the sole reactivation owner has
+coalesced the notification and timer hints, and its later activation has
+recorded and completed G1 through the ordinary tracker-read protocol.
+
+Those preceding group and activation facts are the accepted #309/#269
+composition prerequisite for this cut, not source already committed on the
+#309 branch. If downstream #268 discards its current composition candidate, it
+must first restore that prerequisite from the accepted behavior above; this
+amendment does not absorb or re-specify it.
+
+G1 says A, B, and C remain open, in the Run, and free of unfinished blockers.
+The concrete trigger is publication of that exact G1 result. The ordinary
+delivery runtime may then select A's, B's, and C's focused specification reads
+on independent Effect fibers. A's own F1 result authorizes its current-claim,
+worktree, and lineage checks without waiting for C's F1 result. C has the same
+independent lane. B's F2 result proves the task-local constraint that will
+select `Suspend(B1)`; B has no claim/worktree/lineage tail in this cut. No one
+task's result establishes another task's result.
+
+After the accepted nine-node composition collapses its earlier cut, the
+current uncommitted #268 candidate places the whole three-task specification
+batch at cassette position 48, then strict `Q_A, R_A, W_A, L_A, Q_C, R_C,
+W_C, L_C` at positions 49 through 56. Replacing only positions 49–56 would
+leave the false batch barrier in place. The corrected replacement scope is the
+exact top-level span 48–56. The candidate's current failure at exact position
+51 remains evidence of a false cross-lane constraint, not permission to impose
+a different order. The committed pre-composition source on this #309 branch
+has later ordinals; this proposal makes no ordinal claim about that source.
+
+### Exact fourteen-node active-refresh chronology
+
+The proposed replacement for the candidate's top-level positions 48 through 56
+is one bounded fourteen-member `ConcurrentInteractionGroup`:
+
+| Role | Existing controlled interaction | Direct predecessor roles |
+|---|---|---|
+| `S_A` | Dalph selects exact noncausal `ReadTaskWorkSpecification(taskId A)` | none |
+| `T_A` | The controlled tracker returns exact A/F1 `TaskWorkSpecificationReadReturned` | `S_A` |
+| `Q_A` | Dalph selects exact noncausal `ReadTaskClaim(taskId A)` | `T_A` |
+| `R_A` | The controlled tracker returns exact `TaskClaimCurrentReadReturned(taskId A)` | `Q_A` |
+| `W_A` | Dalph selects exact noncausal `ReadTaskWorktree(taskId A, attemptId attempt:A:0)` | `R_A` |
+| `L_A` | Dalph selects exact noncausal `ReadTargetLineage(taskId A, attemptId attempt:A:0)` | `W_A` |
+| `S_B` | Dalph selects exact noncausal `ReadTaskWorkSpecification(taskId B)` | none |
+| `T_B` | The controlled tracker returns exact B/F2 `TaskWorkSpecificationReadReturned` | `S_B` |
+| `S_C` | Dalph selects exact noncausal `ReadTaskWorkSpecification(taskId C)` | none |
+| `T_C` | The controlled tracker returns exact C/F1 `TaskWorkSpecificationReadReturned` | `S_C` |
+| `Q_C` | Dalph selects exact noncausal `ReadTaskClaim(taskId C)` | `T_C` |
+| `R_C` | The controlled tracker returns exact `TaskClaimCurrentReadReturned(taskId C)` | `Q_C` |
+| `W_C` | Dalph selects exact noncausal `ReadTaskWorktree(taskId C, attemptId attempt:C:2)` | `R_C` |
+| `L_C` | Dalph selects exact noncausal `ReadTargetLineage(taskId C, attemptId attempt:C:2)` | `W_C` |
+
+The direct edges are exactly the five consecutive edges in
+`S_A -> T_A -> Q_A -> R_A -> W_A -> L_A`, the one edge `S_B -> T_B`, and the
+five consecutive edges in
+`S_C -> T_C -> Q_C -> R_C -> W_C -> L_C`: fourteen nodes and eleven edges.
+There is no cross-lane edge. In particular, Q_A is enabled immediately after
+T_A even while T_C is blocked, which is the concrete overlap proved by the
+production probe. Same-lane transitive order remains true without being
+misreported as extra direct edges.
+
+Enabled members from different lanes may arrive simultaneously at every
+stage. Each incoming call passes through the cursor's existing one-permit
+transition, consumes one exact role, and returns to its production fiber. The
+permit serializes only cassette matcher state; it does not serialize tracker or
+Git calls and grants no production permission.
+
+After the fourteenth successful claim, the cursor publishes exactly one
+completed group occurrence and advances the top-level story exactly once. The
+next strict item remains B1's existing
+`PlannedAttemptExecutorWorkReported(request Suspend, output
+ExecutorWorkExecuting)` boundary. It is the already proposed join after both
+unchanged-task tails and B's exact F2 result. B's later passive Safe report,
+position release, D Begin, pre-death D projection, and every later #268 item
+remain unchanged.
+
+That strict successor now has direct production characterization rather than
+only cassette-position evidence. The current rule in
+`packages/orchestrator/src/coordination/run/recovery-activation.ts` suppresses
+every active-refresh subject's `SuspendPlannedAttemptExecutorWork` while the
+frontier still contains any active authority-read transition: graph,
+specification, claim, worktree, or target lineage. Only after every healthy
+subject's remaining lineage transition settles does the constrained subject's
+one Suspend appear.
+
+The staged, uncommitted +260-line change on branch
+`probe/issue-309-suspend-causality`, based on `c305b3543`, touches only
+`packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts`.
+Its exact test `settles A then C lineage before exposing exactly one constrained
+B F2 suspension` starts healthy A, changed B/F2, and healthy C. B drops out
+before claim and Git reads; A and C both reach lineage. After A settles while C
+remains the sole lineage transition, the frontier contains zero B Suspend.
+After C settles, it contains exactly one Suspend B. The new focused test was
+1/1 green, the full acceptance file 13/13 green, and the relevant production
+pair 2/2 green; oxlint, ESLint, dprint, and diff checks were green. The hook was
+blocked only by the unchanged known capstone dprint baseline. This is staged,
+uncommitted characterization evidence, not accepted or committed regression
+evidence.
+
+### Executing restart is one strict projection-and-return prefix
+
+After D begins, the existing strict story records D's current executor
+projection, reads G1 again, returns the activation, applies capacity two, and
+then declares coordinator process death. No person triggers restart. The new
+process reconstructs exact attempts A1 `attempt:A:0`, C1 `attempt:C:2`, and D1
+`attempt:D:3` from the Journal and current tracker graph and re-establishes each
+passive executor owner. The tracker, executor, Journal, and Git retain their
+existing authority.
+
+Committed production probe `bb40c4c8c`, exact test `completes the startup graph
+read then serially reattaches A C and D before the next graph read` in
+`packages/dalph/test/scenarios/production.test.ts`, proves this exact executing-
+restart chronology:
+
+```text
+startup graph -> P_A -> P_C -> P_D -> next graph
+  -> CoordinatorActivationReturned(RunMustRemainActive(UnsettledResponsibility))
+```
+
+The first tracker graph read completes before any projection. The existing
+process-scoped `PassivePlannedAttemptObserver.attachmentGate` then admits exact
+A, C, and D reattachments one at a time. Blocking A's `lifecycle.attach` keeps
+C, D, the next graph read, and the activation return unavailable. Each P is a
+strict top-level
+`PlannedAttemptExecutorProjectionReturned(ExecutorWorkExecuting)` item for its
+branded AttemptId (`attempt:A:0`, `attempt:C:2`, or `attempt:D:3`). The probe
+observed exactly three projection calls, zero Begin, Resume, or Suspend
+commands, and zero S/T/Q/R/W/L specification, claim, worktree, or lineage
+selections. There is therefore no restart `ConcurrentInteractionGroup`, no
+restart member graph, and no restart group occurrence to publish.
+
+Strict projection matching still replaces the argumentless
+`consumeExecutorProjection` plus `currentStoryItem` peek with cassette-only
+`consumeExecutorProjectionFor(attemptId: AttemptId)`. The controlled executor
+passes the already requested exact AttemptId, and the cursor atomically matches
+only the current strict projection with the same tag and report AttemptId under
+its existing permit. A foreign, early, or duplicate AttemptId fails without
+consuming a neighboring projection. This changes no executor or passive-owner
+production API and does not duplicate the existing attachment gate. The fixed
+A/C/D prefix records this exact #268 fixture; it is not a reusable task-
+priority, FIFO, scheduling, or production-authority rule.
+
+This retains the inherited
+[#265 exact restart reattachment](issue-265-passive-executor-observation-through-restart.md#a-later-dalph-process-reattaches-to-the-exact-codex-attempt):
+the later process reads each exact attempt's current projection without another
+Begin, and unavailable or contradictory evidence cannot manufacture progress.
+After the next exact graph result, issue #268 owns the strict activation return
+with exact `RunMustRemainActive(UnsettledResponsibility)`. Only after that return
+settles may the strict `CassetteOffersRunReactivationHints` item expose
+TrackerNotification and Timer. A missing projection, graph result, or activation
+return leaves its own strict boundary current; restart does not infer it from
+process age or another attempt.
+
+### Later post-hint refresh has two independent authority lanes
+
+After the strict restart return settles, TrackerNotification or Timer may
+trigger the next ordinary active refresh. The current Run still has exact A1
+`attempt:A:0` and D1 `attempt:D:3` executing with their exact claims and planned
+worktrees. The ordinary graph and durable plan facts that precede this cut
+remain #268-owned. No person issues another command.
+
+The active-refresh characterization at `c305b3543` held D's specification read
+on a deterministic `Deferred` and proved that A reaches its exact claim read
+before D's result exists. The proposed later group therefore contains exactly
+two independent six-node chains:
+
+- `S_A^h -> T_A^h -> Q_A^h -> R_A^h -> W_A^h -> L_A^h`; and
+- `S_D^h -> T_D^h -> Q_D^h -> R_D^h -> W_D^h -> L_D^h`.
+
+S selects exact noncausal `ReadTaskWorkSpecification`; T returns that exact
+task's `TaskWorkSpecificationReadReturned`; Q selects exact noncausal
+`ReadTaskClaim`; R returns that exact task's
+`TaskClaimCurrentReadReturned`; W selects `ReadTaskWorktree` for the same exact
+task/attempt; and L selects `ReadTargetLineage` for that task/attempt. The group
+has exactly twelve nodes and ten direct consecutive-chain edges, with no A/D
+cross-lane edge. A's Q is enabled after A's T even while D's T is blocked, and
+the reverse is equally permitted by the authored graph.
+
+The twelfth claim publishes one completed group occurrence and advances once.
+The next strict item is exact C2
+`PlannedAttemptExecutorWorkReported(request Suspend, output
+ExecutorWorkExecuting)`. The staged three-attempt probe above establishes the
+role-generic production rule: a constrained active-refresh subject's Suspend
+is suppressed while any healthy subject retains an authority transition and is
+exposed exactly once only after the last healthy lineage settles. Applied to
+this cut, healthy A and D must both finish their exact chains before constrained
+C2 Suspend becomes available. This is a join, not an A-before-D order or a new
+permission to suspend. The downstream #268 suffix remains pending for its
+separate capacity/death and Safe/Continue blockers.
+
+### Returned results remain distinct from selections and requested projections
+
+The proposed cassette-only phenomenon is **controlled current task-claim read
+return**: the exact interaction at which the controlled task tracker returns
+the current result for the task named by its existing `readTaskClaim(taskId)`
+boundary. It is distinct from `Q_A` or `Q_C`, where Dalph merely selects the
+read. Selection is not evidence that the tracker returned, and the return is
+not another selection.
+
+T is likewise the **controlled task-work specification read return**, distinct
+from S selecting `ReadTaskWorkSpecification`. Its complete authored
+specification is the controlled value returned for that exact TaskId. P is the
+**controlled planned-attempt executor projection return**, distinct from the
+passive observer asking `lifecycle.attach` for one exact AttemptId. The cassette
+does not invent a Dalph selection event for that executor call. These three
+result boundaries describe existing controlled adapter returns, but only T and
+R are group members; none is a Journal fact, production scheduler decision, or
+authority grant.
+
+At the accepted `e6d98926f` baseline, the controlled tracker adapter consumes
+a strict `TaskClaimCurrentReadReturned` item before it calls
+`currentObservation(taskId)`. The cursor therefore advances while the injected
+tracker read may still be blocked or may later fail. Adding that existing item
+to the group without changing the adapter would make R a pre-return control
+token and could publish the group before the tracker result exists. An expert
+would reject that false chronology.
+
+This amendment therefore includes one narrow controlled-adapter sequencing
+and cursor-contract correction for the current-return item:
+
+1. The workflow emits `OperationSelected` for exact `ReadTaskClaim`, and the
+   authored runner consumes exact noncausal Q. The ordinary journaled
+   claim-read protocol then records and acknowledges
+   `TaskTrackerReadIntentRecorded` for that operation before it calls the
+   controlled tracker adapter. Both the exact selection and its durable intent
+   therefore precede the authority effect; neither becomes the result.
+2. The controlled adapter first uses a cassette-private, exact-task atomic
+   dispatch for the existing strict `TaskClaimReadReturned` and
+   `TaskClaimReadFailed` overrides. That dispatch either consumes the one exact
+   strict tag and task identity or returns no override without consuming a
+   current-return item. It does not inspect a current story item and then make
+   a separate claim.
+3. If no strict override exists, the current-return branch is one idiomatic
+   `Effect.uninterruptibleMask`. Its sole `restore(...)` region is the injected
+   authority call `currentObservation(taskId)`. The adapter holds no cursor
+   permit across that restored read. `currentObservation` obtains the
+   controlled adapter's retained authored observation when present or calls the
+   injected tracker's read-only `readTaskClaim(taskId)` boundary when absent.
+   Failure or interruption while that authority call is blocked returns its
+   existing typed failure or interrupted exit with R outstanding, no group
+   occurrence, and no cursor advance.
+4. When the restored authority read succeeds, execution re-enters the mask.
+   The adapter validates that the returned `TaskClaimObservation` names the
+   exact requested task and, still masked, invokes cassette-only
+   `consumeTaskClaimReadFor(taskId: TaskId)`. That operation acquires the
+   existing cursor permit and atomically matches only
+   `{ _tag: "TaskClaimCurrentReadReturned", taskId }`, checks its same-group
+   predecessors, claims that exact R, updates cursor state, advances if this is
+   the final member, publishes completion, and releases the permit. If no
+   current-return item is authored at this boundary, it returns no item and the
+   adapter keeps the baseline current-observation behavior. The linearization
+   point is successful exact-task validation followed immediately, without a
+   restored interruptible gap, by entry into that masked handoff. After it, a
+   pending interruption is delayed until R has been consumed and any group
+   occurrence published exactly once. As the mask exits, the caller may
+   observe the pending interruption instead of receiving the already-obtained
+   observation; a retry then fails typed as a duplicate rather than returning
+   the result a second time.
+
+No tracker call is made while the cursor permit is held, and no public
+diagnostic hook, production API, provider callback, or second observation seam
+is added. A blocked tracker read therefore cannot block an independent cursor
+claim by retaining the permit. Q and the ordinary durable read intent remain
+before the authority effect, while R now truthfully records that the controlled
+result already exists. The mask includes exact-result validation,
+post-validation entry, permit acquisition, state change, position advance, and
+occurrence publication. It restores interruptibility only for the authority
+read. Masking only the state write, or composing a separately uninterruptible
+handoff after an interruptible validation, would leave a gap in which
+interruption could lose a result the adapter already obtained.
+
+The `StoryCursor` contract therefore replaces the argumentless
+`consumeTaskClaimRead` operation with exact cassette-local result operations.
+The current-return operation is exactly
+`consumeTaskClaimReadFor(taskId: TaskId)`. It constructs the tag-plus-branded-
+task claim key internally and never selects the first or next enabled R by
+encoded member order. In particular, `consumeTaskClaimReadFor(C)` cannot claim
+`R_A` when both A and C are enabled, even if A appears first in the authored
+member array. Predecessor validation, duplicate detection, exact claim, state
+update, and publication remain one transition under the already accepted
+permit. There is no peek-then-claim window, second lock, queue, or concurrency
+authority.
+
+The adapter call site passes its requested branded `TaskId` to that exact
+operation only after obtaining and validating a current observation. Existing
+strict explicit-result and failure call sites migrate from the argumentless
+union consumer to the exact-task strict dispatch described above; their
+ordinary cassette results and failure semantics do not change. Cursor
+residual, scope, and direct strict tests likewise pass the exact task identity,
+and no argumentless result consumer remains able to take another task's item.
+These operations belong only to `StoryCursor` and the controlled authored
+tracker Layer. They are not added to `WorkflowInterpreter`, `TrackerMutation`,
+the tracker provider, or any other production authority surface.
+
+This sequencing change must be narrow. Existing strict
+`TaskClaimReadReturned` items deliberately supply an authored observation, and
+existing strict `TaskClaimReadFailed` items deliberately return
+`TaskClaimReadFailure` without first obtaining a successful current
+observation. Moving every task-claim story item after `currentObservation`
+would introduce an extra underlying read, could fail before applying an
+authored observation, and could make the authored unreadable item impossible
+to consume. Those two strict paths retain their current behavior. Ordinary
+strict `TaskClaimCurrentReadReturned` cassettes keep their result value and
+order relative to surrounding strict items, but their cursor occurrence moves
+to the truthful point after the current observation succeeds. Their callers
+also use the exact-task cursor contract, so this correction cannot consume a
+neighboring task's strict current-return item.
+
+There are two controlled-harness trade-offs. First, the read-only current
+observation may succeed and the later R claim may then prove foreign,
+premature, duplicate, or task-contradictory. The adapter returns no observation
+to its caller in that case, changes no tracker record, and leaves the group
+unchanged. Group claim failures remain typed
+`AuthoredCassetteInteractionMismatch` failures. A strict authored task
+contradiction retains the controlled adapter's existing fail-closed defect
+style rather than returning the foreign result. Spending one harmless
+read-only controlled observation before discovering that authored mismatch is
+accepted; fabricating R before a result or widening production authority is
+not.
+
+Second, once exact-task validation succeeds and execution continues into the
+masked handoff,
+interruption responsiveness is deliberately weaker. An interruption that
+arrives while permit acquisition or completion publication is blocked is
+remembered and delivered only after exact R is consumed and published; the
+caller may observe interruption even though cassette state proves R occurred.
+That delayed interruption is accepted because the alternative permits a
+successful authority result to exist without its authored post-result boundary.
+The promise that no R is fabricated applies only to authority failure or
+interruption before exact result validation. It does not apply after the
+linearization point, and retry after that point is a duplicate, not an
+ambiguous second authority observation.
+
+The current two-case closed member union cannot express any returned tracker
+result. Its `DalphSelects` case can express S, Q, W, and L, while its executor
+case can express only a `Begin`/`ExecutorWorkExecuting` response. Top-level
+`TaskWorkSpecificationReadReturned` and `TaskClaimCurrentReadReturned` are
+rejected when nested in that union. Replacing T or R with another
+`DalphSelects` would erase the exact result boundary that makes the following
+same-task edge truthful.
+
+If this amendment is accepted, the closed member union changes from two to
+exactly four cases by adding only these two existing result forms:
+
+1. `TaskWorkSpecificationReadReturned`, carrying the existing exact authored
+   specification. Its claim key is its tag plus branded `TaskId`; body, title,
+   and derived fingerprint remain controlled output rather than matching
+   identity.
+2. `TaskClaimCurrentReadReturned { taskId }`. Its claim key is its tag plus
+   branded `TaskId`. The existing `readTaskClaim(taskId)` boundary exposes no
+   `AttemptId`, `OperationId`, claim owner, claim token, or claim payload, so
+   none is invented.
+
+Two T members for one task or two R members for one task therefore duplicate
+an exact claim key even when their output payloads differ. Schema decoding
+rejects each ambiguity before playback. The different tags keep a task's
+specification and claim results disjoint. Complete S/Q/W/L operations remain
+their existing exact selection keys.
+
+S/Q/W/L remain the group's accepted noncausal `DalphSelects` form. The initial
+active group is already strictly after its exact G1 return and durable plans;
+the later A/D group is already after the strict restart return, reactivation
+hint, and its #268-owned graph/plan prefix. Their local predecessor lists own
+only S-to-T-to-Q-to-R-to-W-to-L. The production
+operation's existing OperationId, journal intent, and predecessor evidence
+remain in the workflow protocol; the cassette group neither deletes nor
+re-authorizes them. Allowing `causal` or `causalAnchor` fields inside the group
+would create a second overlapping predecessor registry and is rejected by the
+closed schema.
+
+The existing `consumeTaskWorkSpecificationFor(taskId, context?)` cursor path is
+extended to claim exact T from this group atomically under the existing permit;
+it does not fall back to an enabled sibling task.
+
+Projection handling is a separate strict-story correction, not a member-union
+widening. It replaces the argumentless `consumeExecutorProjection` plus
+`currentStoryItem` peek with cassette-only
+`consumeExecutorProjectionFor(attemptId: AttemptId)`. That operation atomically
+matches only the current strict
+`{ _tag: "PlannedAttemptExecutorProjectionReturned", report: { attemptId } }`
+under the same cursor permit. The controlled executor's
+`observe` and passive lifecycle `attach` paths pass their already requested
+exact AttemptId. A foreign, early, or duplicate AttemptId fails without taking
+another recovered attempt's projection.
+
+Those cursor operations are test-harness contracts. They do not add a method
+to `TrackerMutation`, `PlannedAttemptExecutorLifecycleObservation`,
+`WorkflowInterpreter`, a provider, or the passive observer. They add no
+production API, lock, queue, ordering rule, or authority. In particular, the
+cassette cursor permit does not replace or widen the passive observer's
+existing process-global attachment gate.
+
+Every other returned or control tag remains outside the group, including
+`TaskClaimReadReturned`, `TaskClaimReadFailed`, tracker-graph results,
+task-specification failures, executor command projections or passive lifecycle
+changes, `PlannedAttemptExecutorProjectionReturned`, lifecycle/crash controls,
+terminal items, `ConcurrentTrackerReadBatch`, and a nested
+`ConcurrentInteractionGroup`. No optional fifth case or generic story-item
+escape hatch is added.
+
+The three result-boundary terms are intentionally absent from `CONTEXT.md`:
+they name bounded controlled-cassette matcher boundaries, not production facts,
+current authorities, workflow events, or user-visible concepts. No ADR is
+warranted. The choice is implementation-specific, cassette-only, and
+reversible; it records no hard-to-reverse production decision.
+
+### Early arrival, retry, non-arrival, and scope replacement
+
+The accepted group's failure/no-mutation rule applies to every new member. If
+`consumeTaskClaimReadFor(A)` attempts `R_A` before `Q_A`, the cursor returns the
+existing typed interaction failure and consumes no role, emits no occurrence,
+and advances no top-level position. On that same cursor, Q_A may then succeed,
+the exact R_A may succeed once, and another exact A call fails typed as a
+duplicate. The same chronology applies independently to every Q/R pair in the
+initial A/C and later A/D groups. Calling the operation with a foreign exact branded `TaskId`
+also fails typed without mutation; it cannot fall through to the first enabled
+A, C, or D result.
+
+The same rule covers each other edge. T before its S, Q before its T, W before
+its R, or L before its W fails typed without mutation and succeeds exactly once
+after the missing predecessor consumes. At the separate strict prefix, P with
+a foreign AttemptId, the same P twice, or P before its exact strict position
+fails without taking another projection. An invalid call in one lane does not
+rewind successful roles in another lane or add a cross-lane dependency.
+Foreign interactions, already-consumed members, B Suspend before the
+fourteen-node initial join, reactivation hints before the strict restart
+return, and C Suspend before the twelve-node later join all fail typed without
+consuming, publishing, or advancing anything.
+
+Absolute non-arrival has no timeout meaning. If any active member never reaches
+its existing boundary, that group stays current, publishes no occurrence, and
+does not admit B Suspend. If one of the three strict restart projections, the
+next graph result, or the strict activation return never arrives, that exact
+strict position remains current and hints stay unavailable. If any later A/D
+member never arrives, the twelve-node group remains current and cannot admit a
+strict C Suspend successor. The amendment adds no timeout, sleep, yield, wait
+policy, poll, retry scheduler, or second concurrency authority. Deterministic
+tests inspect cursor position and occurrence count directly.
+
+The matcher remains process-local to one cursor scope. If Scope 1 consumes any
+proper non-empty subset of either group and closes normally, Scope 2 creates a
+fresh cursor from the same authored story with every role in that group
+outstanding. No consumed role, permit, position, or completion occurrence
+crosses the scope boundary. A fresh cursor also restarts the surrounding strict
+projection and activation-return positions from the authored story. This
+proves cassette component replacement. Production restart remains owned by the
+Journal, tracker, Git, executor, and process-scoped passive observer described
+above.
+
+Completion keeps the already accepted publication trade-off: the final claim
+updates matcher state, advances once, and invokes `onOccurrence` while holding
+the existing uninterruptible one-permit transition. A strict successor that
+arrives while publication is blocked cannot overtake it. The callback remains
+non-reentrant and must not call another consuming operation on the same cursor.
+Holding the permit may delay local interruption through callback completion;
+that bounded cassette-only cost remains preferable to losing or reordering the
+single completion occurrence. The exact current-result handoff deliberately
+extends that same protection to waiting for the permit: once the validated R
+handoff begins, interruption cannot strand the result before its state change
+or publication.
+
+### Maintainer-visible success, block, and failure
+
+On success, the maintainer sees the fourteen initial active roles consume in any order
+allowed by their three lanes, one group occurrence publish, and B Suspend
+become the next exact strict item. After restart, the maintainer sees the
+startup graph, exact strict P_A, P_C, and P_D, the next graph, and the exact
+#268-owned
+`CoordinatorActivationReturned(RunMustRemainActive(UnsettledResponsibility))`.
+Only then do reactivation hints become current. On the later refresh, the
+maintainer sees all twelve A/D roles consume in one of 924 valid orders and one
+group occurrence publish, then sees the one strict constrained C Suspend.
+
+On a block, the current exact projection, group member, join, or activation
+return remains outstanding and its successor is unavailable. Elapsed time,
+another lane's progress, and another task's identity do not repair it. On an
+authored mismatch, the maintainer receives the existing typed cassette failure
+with cursor position and identity unchanged; on an underlying authority
+failure, the existing production failure remains the result and no R is
+fabricated. These are test-maintainer outcomes only. Alice and every target-
+application user see no new command, UI state, provider request, task order, or
+runtime API.
+
+### Exact schedules and rejected alternatives
+
+The active graph has exactly `14! / (6! * 2! * 6!) = 84,084` topological
+orders. Direct evidence constructs the three canonical lane sequences,
+enumerates every disjoint interleaving, proves 84,084 unique fingerprints, and
+executes every one deterministically under the repository's normal test bound.
+This is larger than the earlier 70-order draft but still bounded enough to
+prove the exact active cut without scheduler timing.
+
+The later A/D graph has exactly `12! / (6! * 6!) = 924` topological orders.
+Direct evidence constructs the two canonical lane sequences, enumerates every
+disjoint interleaving, proves 924 unique fingerprints, and executes every order
+deterministically under the normal test bound. Each run consumes all twelve
+roles once, preserves exactly ten direct edges, publishes one occurrence after
+the twelfth member, and does not admit strict C Suspend early.
+
+The schedule/schema evidence includes three maintainer-visible negative
+controls. Deliberately dropping one direct A/D edge must make the expected-edge
+and early-successor property fail. A generated duplicate role and a generated
+dangling/invalid predecessor must each fail schema decoding before playback.
+The same controls apply to the initial fourteen-node fixture. They prove the
+enumerator and schema gates are collected and non-tautological. Sampling is
+rejected because all 924 schedules fit the repository's normal bound.
+
+A different strict reorder is rejected. Putting all of A before C or D repeats
+the observed defect; reversing task order merely reverses false edges; and a
+hand-authored alternation invents others. A flat unordered bag is also rejected
+because it would admit T before S, Q before T, R before Q, W before R, or L
+before W.
+
+A general story DAG or wider returned/control union is rejected because these
+cuts have semantics for only the four closed interaction forms named above.
+Arbitrary tags, nested groups, optional members, and control flow would need
+new matching, validation, failure, authority, and presentation rules. Two
+narrow existing-result cases cost more schema surface than the earlier R-only
+draft, but they are the minimum that can state the production-proved authority
+lanes without erasing result boundaries.
+
+`ConcurrentTrackerReadBatch` is rejected for these cuts. It correctly owns an
+exact selected-read/result batch where every pair must drain, but cannot expose
+one task's T-to-Q transition while another T remains blocked and cannot
+represent claim or Git members. Widening or nesting it
+would conflate two established cassette phenomena and still need cross-
+construct predecessor edges.
+
+Adding an `OperationId`, attempt, or claim payload to R's key is rejected
+because the existing result boundary supplies none of them. The narrower
+tag-plus-task key accepts the trade-off that same-task duplicate results are
+unrepresentable in one group; rejecting that ambiguous authored state is safer
+than fabricating identity.
+
+Keeping the argumentless `consumeTaskClaimRead` is rejected. With A and C
+authority reads both selected and in flight, C may complete before A even when
+R_A appears first in the authored member array. A consumer that claims the next
+enabled current-return can cross-deliver C's completion to R_A, falsely advance
+A's lane, and leave C's real R outstanding. Peeking at the story or enabled
+member before a later exact claim is also rejected because another completion
+can change matcher state between those operations. One atomic tag-plus-branded-
+task claim under the existing permit is the smallest contract that preserves
+truthful reverse completion.
+
+Keeping argumentless `consumeExecutorProjection` is rejected because the exact
+requested AttemptId is already available and the strict story must not
+cross-deliver a neighboring projection. Conversely, putting the projections in
+the concurrent group is rejected by the executing-restart probe: they form the
+observed strict startup prefix A then C then D for this exact authored fixture,
+and blocking A blocks C, D, and the next graph read. This records no reusable
+task-priority or FIFO production rule. Removing the process-global attachment
+gate is also rejected: the amendment records current behavior and has no
+authority to widen executor projection concurrency.
+
+Authoring any S/T/Q/R/W/L group between the executing-restart graph and return
+is rejected because `bb40c4c8c` observes zero such selections. A permissive
+group there would not merely remove false order; it would require interactions
+the production run never performs and block the truthful strict return.
+
+Reusing the existing cursor permit and completion publication is preferable to
+a second queue or scheduler. It preserves one transition owner and the accepted
+non-reentrant callback constraint. The trade-off is local serialization of the
+few matcher updates, not production serialization. No production authority,
+Journal fact, derived frontier, resource position, or provider request is
+added or persisted.
+
+### Proposed scenario-to-test mapping
+
+The following names are planned evidence only. They do not become accepted
+implementation evidence until the owner accepts this amendment, implementation
+is complete, and the required reviews are clean.
+
+| Chronological result | Planned direct proof |
+|---|---|
+| The closed four-case member union decodes exact noncausal selections, Begin/Executing responses, exact specification results, and exact current-claim results; encode/decode preserves every valid member and edge | `packages/dalph/test/cassettes/authored-domain.test.ts` — `accepts the four exact interaction forms in a causal concurrent group`; `packages/dalph/test/cassettes/authored-domain.property.test.ts` — `roundtrips every closed causal group member and predecessor graph through the story-item boundary` |
+| Duplicate tag-plus-TaskId T/R keys even with different outputs, unsupported returned/failure/control tags including executor projections, causal selections, invalid executor members, batches, and nested groups fail decoding | `packages/dalph/test/cassettes/authored-domain.test.ts` — `rejects ambiguous specification and claim keys and every unsupported grouped interaction`; preserve `rejects causal selections and non-Begin-Executing reports inside a concurrent interaction group` |
+| One task's exact T consumes through `consumeTaskWorkSpecificationFor` and enables only its Q while another task's selected specification result is Deferred; foreign, early, and duplicate task results fail without mutation | `packages/dalph/test/cassettes/scenario.test.ts` — `lets A reach claim while an independent grouped specification result remains in flight`; `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `claims exact specification results once without crossing task lanes` |
+| After Q, a blocked controlled `currentObservation` leaves exact R, occurrence, and position untouched; authority failure or interruption while that Deferred is blocked fabricates no R | `packages/dalph/test/cassettes/scenario.test.ts` — `does not fabricate an exact current-claim return before controlled authority success`, with deterministic result, failure, and pre-result-interruption cases |
+| One `Effect.uninterruptibleMask` restores interruptibility only around the authority read; before-result interruption leaves R outstanding, while post-validation interruption blocked on permit/publication is delayed until exact R publishes once and retry fails duplicate | `packages/dalph/test/cassettes/scenario.test.ts` — `does not fabricate an exact current-claim return when interrupted inside the restored authority read`; `delays interruption after exact validation until the masked current-claim handoff publishes once` |
+| With A/C or later A/D claim reads both selected and in flight, deterministic tables release each pair in both orders; each exact result claims only its own R once, never cross-delivers, and its group advances only after both exact chains complete | `packages/dalph/test/cassettes/scenario.test.ts` — `correlates both completion orders of in-flight current-claim results with their exact group roles` |
+| Ordinary strict current returns move to the truthful post-result point; strict explicit `TaskClaimReadReturned` and `TaskClaimReadFailed` retain no-preliminary-read semantics; all strict and residual callers migrate to exact task-aware cursor operations | `packages/dalph/test/cassettes/scenario.test.ts` — `consumes a strict current-claim return only after its exact controlled result`; `preserves exact-task explicit and unreadable strict claim-read cassette semantics`; `packages/dalph/test/cassettes/cassette-residuals.test.ts` — migrate task-claim residual cases |
+| The active cut is exactly two six-node unchanged-task chains plus B's two-node specification lane, fourteen nodes and eleven edges; 84,084 canonical fingerprints are unique and every schedule consumes before strict B Suspend | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `partitions all 84084 active-refresh orders by three canonical lane positions`; `consumes every active-refresh specification-to-lineage order before B Suspend` |
+| Production suppresses B Suspend while either healthy A/C authority lane remains, then exposes exactly one constrained B1 Suspend after both settle | Staged, uncommitted characterization on `probe/issue-309-suspend-causality`, `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts` — `settles A then C lineage before exposing exactly one constrained B F2 suspension`; planned cassette assertion remains `consumes every active-refresh specification-to-lineage order before B Suspend` |
+| The later post-hint cut is exactly two independent six-node A/D chains, twelve nodes and ten edges; all 924 canonical fingerprints are unique and execute before strict C Suspend | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `partitions and consumes all 924 post-hint A D authority orders before C Suspend` |
+| Dropping one required edge makes the expected-edge/early-successor property fail, while generated duplicate roles and dangling predecessors fail schema decoding for the fourteen- and twelve-node fixtures | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.property.test.ts` — `fails each active fixture property when one required edge is dropped`; `packages/dalph/test/cassettes/authored-domain.property.test.ts` — `rejects generated duplicate roles and invalid predecessor references` |
+| T-before-S, Q-before-T, R-before-Q, W-before-R, and L-before-W each fail typed without mutation and succeed after retry in the initial A/C and later A/D lanes; foreign/duplicate exact TaskId and strict AttemptId claims do the same | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `rejects and retries every predecessor edge in both active-refresh groups`; `retries W before R and L before W in each active lane`; `rejects foreign and duplicate exact result identities without mutation` |
+| Startup graph then strict P_A, P_C, P_D then next graph then UnsettledResponsibility is the exact restart; blocking A blocks the suffix, with exactly three Executing projections, no Begin/Resume/Suspend, and zero S/T/Q/R/W/L selections | Committed probe `bb40c4c8c`, `packages/dalph/test/scenarios/production.test.ts` — `completes the startup graph read then serially reattaches A C and D before the next graph read`; direct #268 composition assertion records the exact return and zero authority selections |
+| `consumeExecutorProjectionFor(attemptId)` atomically claims only the current strict projection; foreign, early, and duplicate exact AttemptIds fail without consuming a neighbor | `packages/dalph/test/cassettes/scenario.test.ts` — `matches the strict A C D restart projection chain by exact AttemptId without command calls`; migrate strict projection and residual cursor callers |
+| Simultaneously enabled S/Q and later cross-lane members consume once through the existing cursor permit; each active group's final member publishes once and advances once before its proved strict successor | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `serializes simultaneously enabled result lanes and publishes each bounded join once` |
+| Foreign, duplicate, premature B Suspend, premature restart hint, or premature C Suspend claims fail typed without mutation; non-arrival adds no timeout; scope replacement restores every group role and strict position | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `rejects foreign duplicate and downstream claims for both active cuts`; `keeps incomplete active cuts current without timeout`; `recreates every authority role after cursor scope replacement`; strict projection/return scope cases in `packages/dalph/test/cassettes/scenario.test.ts` |
+| Presentation renders the initial eleven and later ten direct edges, distinguishes same-lane transitive truth, presents every cross-lane pair as incomparable, and keeps exactly one cursor owner with exhaustive matches | `packages/dalph/test/cassettes/authored-presentation.test.ts` — `renders both active-refresh authority cuts without invented task order`; `packages/dalph/test/cassettes/authored-coverage.test.ts` — preserve `registers the concurrent interaction group with exactly one cursor owner`; exhaustive compilation in `authored-cursor.ts` and `authored-presentation.ts` |
+| The accepted nine-node group still executes 22,680 schedules, and `ConcurrentTrackerReadBatch` still pairs reverse-completing reads and drains only its unchanged true-batch uses | Existing `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `consumes the nine-node delivery cut in all 22680 causal orders before advancing once`; existing `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `selects F1 then F2 and pairs reverse-completing reads with their exact initiating operations`; `drains repeatedly forked exact read operations without resetting the story position` |
+| The later A/D production overlap stays executable independently of cassette matching | Committed probe `c305b3543`, command `pnpm vitest run packages/dalph/src/application/production-reactivation.test.ts -t "allows one (restart|active-refresh) authority lane"`; exact active-refresh test `allows one active-refresh authority lane to reach claim while independent specification reads remain in flight` is green within the recorded 2/2 run |
+| After the strict restart graph/projection prefix, exact `CoordinatorActivationReturned(RunMustRemainActive(UnsettledResponsibility))` settles before TrackerNotification or Timer hints; wrong, duplicate, early, failed, or interrupted returns do not fabricate settlement | `packages/dalph/test/cassettes/authored-reactivation-return.test.ts` — `keeps restart hints unavailable before the production finality result`; `settles the reconstructed restart return once before delayed interruption and later hints` |
+| The role-generic production rule suppresses constrained C Suspend while either healthy A/D authority lane remains and exposes it exactly once after both settle | Staged, uncommitted `settles A then C lineage before exposing exactly one constrained B F2 suspension` proves the three-role rule with B as constrained subject; planned `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `consumes every post-hint A D order before C Suspend` applies the same rule to exact #268 roles |
+| Capacity revision two must settle before process death, including the committed-but-unacknowledged counterexample; this remains a #268 blocker | Pending #268 `packages/dalph/test/cassettes/cassette-residuals.test.ts` — `distinguishes pre-commit interruption from a committed lost capacity response using only the reduced policy` |
+| Exact accepted and published C2 Safe ordinal two must settle before Continue B, including committed ambiguity without another Suspend; this remains a #268 blocker | Pending #268 `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `preserves named C2 Safe failure families and reconciles a committed lost response without retry` |
+| After the nine-node prerequisite is composed, #268 uses the fourteen-node initial group then strict B Suspend, the strict executing-restart graph/projection/graph/return prefix with no authority group, and the later twelve-node A/D group then strict C Suspend; DS01–DS13 remain unchanged | Pending `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — unchanged `emits the exact DS01 through DS13 delivery checkpoint table`; revise the pending restart assertion to prove zero authority selections; add `admits both characterized active-refresh overlaps without weakening downstream checkpoints` |
+
+The proposed direct #309 tests own only the new member schema, exact
+specification/claim/projection correlation, truthful claim-adapter sequencing,
+lane graphs, matcher, failure/no-mutation, permit, scope, and presentation
+behavior.
+The unchanged downstream #268 test remains the sole full production-composition
+proof. At proposal time the current uncommitted #268 worktree candidate is
+still red at exact position 51; this amendment does not claim that #268 or the
+proposed #309 tests pass.
