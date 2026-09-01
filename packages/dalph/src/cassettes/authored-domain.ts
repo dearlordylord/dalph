@@ -176,7 +176,11 @@ export const AuthoredConcurrentInteractionMember = Schema.TaggedUnion({
   PlannedAttemptExecutorWorkReported: {
     report: AuthoredPlannedAttemptExecutorReport.cases.ExecutorWorkExecuting,
     request: Schema.Literal("Begin")
-  }
+  },
+  /** Exact current-claim read completion; the claim value remains provider authority rather than cassette identity. */
+  TaskClaimCurrentReadReturned: { taskId: TaskId },
+  /** Exact specification read completion; body and title are controlled output rather than cassette identity. */
+  TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields
 })
 export type AuthoredConcurrentInteractionMember = typeof AuthoredConcurrentInteractionMember.Type
 
@@ -206,13 +210,22 @@ export type AuthoredConcurrentInteractionNode = typeof AuthoredConcurrentInterac
 export type AuthoredConcurrentInteractionClaimKey =
   | { readonly _tag: "DalphSelects"; readonly operation: AuthoredCassetteDecision }
   | { readonly _tag: "PlannedAttemptExecutorWorkReported"; readonly attemptId: AttemptId; readonly request: "Begin" }
+  | { readonly _tag: "TaskClaimCurrentReadReturned"; readonly taskId: TaskId }
+  | { readonly _tag: "TaskWorkSpecificationReadReturned"; readonly taskId: TaskId }
 
 export const authoredConcurrentInteractionClaimKey = (
   member: AuthoredConcurrentInteractionMember
 ): AuthoredConcurrentInteractionClaimKey =>
-  member._tag === "DalphSelects"
-    ? { _tag: "DalphSelects", operation: member.operation }
-    : { _tag: "PlannedAttemptExecutorWorkReported", attemptId: member.report.attemptId, request: member.request }
+  Match.valueTags(member, {
+    DalphSelects: ({ operation }) => ({ _tag: "DalphSelects" as const, operation }),
+    PlannedAttemptExecutorWorkReported: ({ report, request }) => ({
+      _tag: "PlannedAttemptExecutorWorkReported" as const,
+      attemptId: report.attemptId,
+      request
+    }),
+    TaskClaimCurrentReadReturned: ({ taskId }) => ({ _tag: "TaskClaimCurrentReadReturned" as const, taskId }),
+    TaskWorkSpecificationReadReturned: ({ taskId }) => ({ _tag: "TaskWorkSpecificationReadReturned" as const, taskId })
+  })
 
 const concurrentInteractionClaimKeysAreUnique = Schema.makeFilter(
   (members: ReadonlyArray<AuthoredConcurrentInteractionNode>) => {
