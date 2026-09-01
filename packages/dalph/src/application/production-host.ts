@@ -19,7 +19,7 @@ import {
   JournaledRunObservationSource,
   JournalStore,
   RunLifecycleJournal,
-  TaskTrackerMutationThrottled,
+  type TaskTrackerMutationThrottled,
   TrackerGraphReader,
   TrackerMutation,
   WorkflowTrace,
@@ -113,6 +113,8 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly boundaryObserver?: ProductionRepositoryHostBoundaryObserver
   /** Optional observation after the real in-Run recovery projection is assembled. */
   readonly onReconstructed?: (input: ProductionRunReconstructionObservation) => Effect.Effect<void>
+  /** Optional observation of every typed tracker/Git/journal reactivation failure. */
+  readonly onActivationFailure?: (failure: unknown) => Effect.Effect<void>
   /** Optional observation of concrete Git methods used by the workflow protocols. */
   readonly workflowGitCommandObserver?: ProductionWorkflowGitCommandObserver
   /** Optional direct observation of ApplicationExitRequestBoundary.requestExit. */
@@ -431,9 +433,8 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
               ? {}
               : { onActivationFinalizationStart: adapters.onActivationFinalizationStart }),
             ...(adapters.onTimerStateChange === undefined ? {} : { onTimerStateChange: adapters.onTimerStateChange }),
-            // The owner observes every activation failure, but only the
-            // provider-neutral mutation throttle is fatal at this host seam.
-            onFailure: (failure) => (failure instanceof TaskTrackerMutationThrottled ? onFailure(failure) : Effect.void)
+            onFailure: adapters.onActivationFailure ?? (() => Effect.void),
+            onNonRetryableFailure: onFailure
           }
         ).pipe(
           Layer.provide(planningLayer),

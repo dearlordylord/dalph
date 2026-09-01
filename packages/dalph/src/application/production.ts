@@ -93,9 +93,14 @@ export interface ProductionRunReactivationOptions {
   readonly onActivationFinalizationStart?: (kind: "Ordinary" | "ActiveWorkAuthorityRefresh") => Effect.Effect<void>
   /** Optional host-owned current-first tracker notification adapter; values remain hints. */
   readonly trackerNotificationSource?: CurrentSignal<unknown>
-  /** Required boundary for typed tracker/Git/journal failures; no activation failure is swallowed. */
-  readonly onFailure: (failure: unknown) => Effect.Effect<void>
+  /** Required observation of every typed tracker/Git/journal failure; no activation failure is swallowed. */
+  readonly onFailure: ProductionRunReactivationFailureObserver
+  /** Optional separate channel for the exact failure that must escape the host. */
+  readonly onNonRetryableFailure?: (failure: TaskTrackerMutationThrottled) => Effect.Effect<void>
 }
+
+/** Observes every typed failure while the process-local Run owner cools down or stops. */
+export type ProductionRunReactivationFailureObserver = (failure: unknown) => Effect.Effect<void>
 
 /** Concrete cleanup boundary call used by host qualification observers. */
 export type ProductionWorkflowCleanupBoundary =
@@ -243,10 +248,10 @@ const isWorkflowRunAlreadyTerminated = (failure: unknown): boolean => failure in
 
 /**
  * A provider-throttled task mutation is the one activation failure that must
- * stop this process-local owner. Other tracker, Git, Journal, and executor
- * failures remain ordinary #218 cooldown observations.
+ * stop this process-local owner and escape the host. Other tracker, Git,
+ * Journal, and executor failures remain ordinary #218 cooldown observations.
  */
-const isNonRetryableProductionActivationFailure = (failure: unknown): failure is TaskTrackerMutationThrottled =>
+export const isNonRetryableProductionActivationFailure = (failure: unknown): failure is TaskTrackerMutationThrottled =>
   failure instanceof TaskTrackerMutationThrottled
 
 /**
@@ -290,7 +295,16 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
       }),
     isTerminationFailure: isWorkflowRunAlreadyTerminated,
     isNonRetryableFailure: isNonRetryableProductionActivationFailure,
-    onFailure: options.onFailure,
+    onFailure: (failure) =>
+      options
+        .onFailure(failure)
+        .pipe(
+          Effect.andThen(
+            isNonRetryableProductionActivationFailure(failure)
+              ? (options.onNonRetryableFailure?.(failure) ?? Effect.void)
+              : Effect.void
+          )
+        ),
     readControl,
     runId,
     ...(options.onActivationFinalizationStart === undefined

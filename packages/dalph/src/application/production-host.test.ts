@@ -73,12 +73,14 @@ import {
   productionRepositoryHostGraph,
   withProductionRepositoryHost
 } from "./production-host.js"
+import { isNonRetryableProductionActivationFailure } from "./production.js"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { ProductionRepositoryHostConfigurationError } from "./production-configuration.js"
 import { CodexAppServer } from "./codex-app-server.js"
 import { CodexServerIncarnation } from "./codex-attempt-store.js"
 import { completedRunFinalityFixture } from "../../../orchestrator/test/run-finality.js"
 import { GithubGraphqlThrottled } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-client.js"
+import { GithubGraphqlRequestError } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-response.js"
 import { githubGraphqlTestClient } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-client.test-fixture.js"
 import {
   type RestartFixtureEvent,
@@ -155,6 +157,22 @@ it("production host graph exposes only the precise non-retryable throttle callba
     ? Failure
     : never
   expectTypeOf<ActivationFailure>().toEqualTypeOf<TaskTrackerMutationThrottled>()
+})
+
+it("uses one canonical fatal classifier for throttles and recoverable failures", () => {
+  const throttle = new TaskTrackerMutationThrottled({
+    detail: "GitHub primary rate limit rejected the claim mutation",
+    operation: "AcquireTaskClaim",
+    operationId: OperationId.make("production-host-classifier-throttle"),
+    retry: null
+  })
+  const recoverable = new GithubGraphqlRequestError({
+    detail: "GitHub request failed while reading the current claim",
+    operation: "FindClaimLabel"
+  })
+
+  expect(isNonRetryableProductionActivationFailure(throttle)).toBe(true)
+  expect(isNonRetryableProductionActivationFailure(recoverable)).toBe(false)
 })
 
 it.effect(
@@ -355,10 +373,13 @@ it.effect("next host invocation recovers the same Run and authority-reads before
         timingEvidence: null
       })
       const firstMutationReturned = yield* Deferred.make<void>()
+      const firstTimerStopped = yield* Deferred.make<void>()
+      const activations = yield* Ref.make(0)
       const githubClient = githubGraphqlTestClient(
         Effect.fn("ProductionThrottleRecovery.github.execute")(function* (request) {
           yield* Ref.update(requests, (current) => [...current, request._tag])
           if (request._tag === "FindClaimLabel") {
+            yield* Ref.update(activations, (current) => current + 1)
             return { body: { data: { node: { id: request.repositoryNodeId, label: null } } } }
           }
           if (request._tag === "CreateClaimLabel") {
@@ -375,6 +396,7 @@ it.effect("next host invocation recovers the same Run and authority-reads before
       const workflowCleanupCalls = yield* Ref.make<ReadonlyArray<string>>([])
       const timerStates = yield* Ref.make<ReadonlyArray<"Started" | "Stopped">>([])
       const activationFinalizations = yield* Ref.make<ReadonlyArray<string>>([])
+      const activationFailures = yield* Ref.make<ReadonlyArray<string>>([])
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-throttle-recovery-incarnation"),
         startThread: () => Effect.die("throttle recovery must not start a Codex thread"),
@@ -395,11 +417,20 @@ it.effect("next host invocation recovers the same Run and authority-reads before
         applicationExitTraceObserver: (event) =>
           Ref.update(applicationExitTrace, (current) => [...current, event._tag]),
         workflowCleanupObserver: (boundary) => Ref.update(workflowCleanupCalls, (current) => [...current, boundary]),
-        onTimerStateChange: (state) => Ref.update(timerStates, (current) => [...current, state]),
+        onActivationFailure: (failure) =>
+          Ref.update(activationFailures, (current) => [
+            ...current,
+            failure instanceof TaskTrackerMutationThrottled ? failure._tag : "UnexpectedFailure"
+          ]),
+        onTimerStateChange: (state) =>
+          Ref.update(timerStates, (current) => [...current, state]).pipe(
+            Effect.andThen(state === "Stopped" ? Deferred.succeed(firstTimerStopped, undefined) : Effect.void)
+          ),
         onActivationFinalizationStart: (kind) => Ref.update(activationFinalizations, (current) => [...current, kind])
       }
       const graph = productionRepositoryHostGraph(adapters)
       const callbackEntered = yield* Deferred.make<void>()
+      const callbackTeardownStarted = yield* Deferred.make<void>()
       const releaseCallbackTeardown = yield* Deferred.make<void>()
       const firstObserveSelection = (observation: { readonly selection: ProductionRunSelection }) =>
         Ref.update(selections, (current) => [...current, observation.selection]).pipe(
@@ -411,7 +442,10 @@ it.effect("next host invocation recovers the same Run and authority-reads before
             Effect.acquireUseRelease(
               Effect.void,
               () => Effect.never,
-              () => Effect.uninterruptible(Deferred.await(releaseCallbackTeardown))
+              () =>
+                Deferred.succeed(callbackTeardownStarted, undefined).pipe(
+                  Effect.andThen(Effect.uninterruptible(Deferred.await(releaseCallbackTeardown)))
+                )
             )
           )
         )
@@ -422,10 +456,17 @@ it.effect("next host invocation recovers the same Run and authority-reads before
       ).pipe(Effect.exit, Effect.forkScoped)
       yield* Deferred.await(callbackEntered)
       yield* Deferred.await(firstMutationReturned)
+      // Fatal handling stops the owner before host-scope interruption reaches
+      // this callback. Wait for both direct signals before advancing the
+      // frozen clock, so this proves stop-before-teardown rather than merely
+      // observing that the mutation returned a throttle.
+      yield* Deferred.await(firstTimerStopped)
+      yield* Deferred.await(callbackTeardownStarted)
       // The callback teardown remains blocked while every owner-local timer
       // can fire. A non-retryable throttle must leave exactly one activation.
       yield* TestClock.adjust("100 millis")
       yield* Effect.yieldNow
+      expect(yield* Ref.get(activations)).toBe(1)
       expect(yield* Ref.get(requests)).toEqual(["FindClaimLabel", "CreateClaimLabel"])
       yield* Deferred.succeed(releaseCallbackTeardown, undefined)
       const first = yield* Fiber.join(firstFiber)
@@ -478,8 +519,13 @@ it.effect("next host invocation recovers the same Run and authority-reads before
       expect(yield* Ref.get(applicationProcessEnds)).toBe(0)
       expect(yield* Ref.get(applicationExitTrace)).toEqual([])
       expect(yield* Ref.get(workflowCleanupCalls)).toEqual([])
+      expect(yield* Ref.get(activationFailures)).toEqual([
+        "TaskTrackerMutationThrottled",
+        "TaskTrackerMutationThrottled"
+      ])
       expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped", "Started", "Stopped"])
       expect(yield* Ref.get(activationFinalizations)).toEqual(["Ordinary", "Ordinary"])
+      expect(yield* Ref.get(activations)).toBe(2)
       expect(recordsAfterFirst.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
       expect(recordsAfterSecond.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
       expect(yield* Ref.get(appClosed)).toBe(2)
