@@ -9,7 +9,10 @@ const aAttemptId = AttemptId.make("attempt:A:0")
 const bAttemptId = AttemptId.make("attempt:B:1")
 const cAttemptId = AttemptId.make("attempt:C:1")
 const dAttemptId = AttemptId.make("attempt:D:1")
+const eAttemptId = AttemptId.make("attempt:E:1")
 
+const dPlanOperation = { _tag: "RecordTaskAttemptPlan", attemptId: dAttemptId, taskId: TaskId.make("D") } as const
+const ePlanOperation = { _tag: "RecordTaskAttemptPlan", attemptId: eAttemptId, taskId: TaskId.make("E") } as const
 const bWorktreeOperation = { _tag: "ReconcileTaskWorktree", attemptId: bAttemptId, taskId: TaskId.make("B") } as const
 const cWorktreeOperation = { _tag: "ReconcileTaskWorktree", attemptId: cAttemptId, taskId: TaskId.make("C") } as const
 const dWorktreeOperation = { _tag: "ReconcileTaskWorktree", attemptId: dAttemptId, taskId: TaskId.make("D") } as const
@@ -17,6 +20,8 @@ const dWorktreeOperation = { _tag: "ReconcileTaskWorktree", attemptId: dAttemptI
 const concurrentGroup = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)({
   _tag: "ConcurrentInteractionGroup",
   members: [
+    { _tag: "DalphSelects", operation: dPlanOperation },
+    { _tag: "DalphSelects", operation: ePlanOperation },
     { _tag: "DalphSelects", operation: bWorktreeOperation },
     { _tag: "DalphSelects", operation: cWorktreeOperation },
     {
@@ -30,7 +35,8 @@ const concurrentGroup = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)({
 const strictD = AuthoredCassetteStoryItem.cases.DalphSelects.make({ operation: dWorktreeOperation })
 const story = [concurrentGroup, strictD]
 
-type GroupMemberName = "A" | "B" | "C"
+const groupMemberNames = ["PlanD", "PlanE", "B", "C", "A"] as const
+type GroupMemberName = (typeof groupMemberNames)[number]
 
 const consumeMember = (cursor: StoryCursor, member: GroupMemberName) => {
   switch (member) {
@@ -40,35 +46,38 @@ const consumeMember = (cursor: StoryCursor, member: GroupMemberName) => {
       return cursor.consumeDalphSelectionFor(bWorktreeOperation).pipe(Effect.asVoid)
     case "C":
       return cursor.consumeDalphSelectionFor(cWorktreeOperation).pipe(Effect.asVoid)
+    case "PlanD":
+      return cursor.consumeDalphSelectionFor(dPlanOperation).pipe(Effect.asVoid)
+    case "PlanE":
+      return cursor.consumeDalphSelectionFor(ePlanOperation).pipe(Effect.asVoid)
   }
 }
 
-const memberPermutations: ReadonlyArray<readonly [GroupMemberName, GroupMemberName, GroupMemberName]> = [
-  ["A", "B", "C"],
-  ["A", "C", "B"],
-  ["B", "A", "C"],
-  ["B", "C", "A"],
-  ["C", "A", "B"],
-  ["C", "B", "A"]
-]
+const permutationsOf = <Value>(values: ReadonlyArray<Value>): ReadonlyArray<ReadonlyArray<Value>> =>
+  values.length === 0
+    ? [[]]
+    : values.flatMap((value, index) =>
+        permutationsOf([...values.slice(0, index), ...values.slice(index + 1)]).map((rest) => [value, ...rest])
+      )
 
-it.effect("consumes B worktree C worktree and A executing in all six orders before advancing once", () =>
+const memberPermutations = permutationsOf(groupMemberNames)
+
+it.effect("consumes D and E plans B and C worktrees and A executing in all 120 orders before advancing once", () =>
   Effect.gen(function* () {
+    expect(memberPermutations).toHaveLength(120)
     for (const permutation of memberPermutations) {
       const occurrences: Array<{ readonly item: AuthoredCassetteStoryItem; readonly storyPosition: number }> = []
       const cursor = yield* makeStoryCursor(story, {
         onOccurrence: (occurrence) => Effect.sync(() => occurrences.push(occurrence))
       })
 
-      yield* consumeMember(cursor, permutation[0])
-      expect(yield* cursor.storyPosition).toBe(0)
-      expect(occurrences).toEqual([])
-
-      yield* consumeMember(cursor, permutation[1])
-      expect(yield* cursor.storyPosition).toBe(0)
-      expect(occurrences).toEqual([])
-
-      yield* consumeMember(cursor, permutation[2])
+      for (const [index, member] of permutation.entries()) {
+        yield* consumeMember(cursor, member)
+        if (index < groupMemberNames.length - 1) {
+          expect(yield* cursor.storyPosition).toBe(0)
+          expect(occurrences).toEqual([])
+        }
+      }
       expect(yield* cursor.storyPosition).toBe(1)
       expect(occurrences).toEqual([{ item: concurrentGroup, storyPosition: 1 }])
 
@@ -90,6 +99,8 @@ it.effect("serializes simultaneous exact group claims and emits one occurrence a
       const aReady = yield* Deferred.make<void>()
       const bReady = yield* Deferred.make<void>()
       const cReady = yield* Deferred.make<void>()
+      const planDReady = yield* Deferred.make<void>()
+      const planEReady = yield* Deferred.make<void>()
       const claim = (member: GroupMemberName, ready: Deferred.Deferred<void>) =>
         Deferred.succeed(ready, undefined).pipe(
           Effect.andThen(Deferred.await(release)),
@@ -98,18 +109,26 @@ it.effect("serializes simultaneous exact group claims and emits one occurrence a
       const aClaim = yield* claim("A", aReady).pipe(Effect.forkScoped)
       const bClaim = yield* claim("B", bReady).pipe(Effect.forkScoped)
       const cClaim = yield* claim("C", cReady).pipe(Effect.forkScoped)
+      const planDClaim = yield* claim("PlanD", planDReady).pipe(Effect.forkScoped)
+      const planEClaim = yield* claim("PlanE", planEReady).pipe(Effect.forkScoped)
 
-      yield* Effect.all([Deferred.await(aReady), Deferred.await(bReady), Deferred.await(cReady)], {
-        concurrency: "unbounded",
-        discard: true
-      })
+      yield* Effect.all(
+        [
+          Deferred.await(aReady),
+          Deferred.await(bReady),
+          Deferred.await(cReady),
+          Deferred.await(planDReady),
+          Deferred.await(planEReady)
+        ],
+        { concurrency: "unbounded", discard: true }
+      )
       expect(yield* cursor.storyPosition).toBe(0)
       expect(occurrences).toEqual([])
       yield* Deferred.succeed(release, undefined)
-      yield* Effect.all([Fiber.join(aClaim), Fiber.join(bClaim), Fiber.join(cClaim)], {
-        concurrency: "unbounded",
-        discard: true
-      })
+      yield* Effect.all(
+        [Fiber.join(aClaim), Fiber.join(bClaim), Fiber.join(cClaim), Fiber.join(planDClaim), Fiber.join(planEClaim)],
+        { concurrency: "unbounded", discard: true }
+      )
 
       expect(yield* cursor.storyPosition).toBe(1)
       expect(occurrences).toEqual([{ item: concurrentGroup, storyPosition: 1 }])
@@ -186,6 +205,8 @@ it.effect("recreates every group member after its cursor scope is replaced", () 
     yield* Effect.scoped(
       Effect.gen(function* () {
         const replacement = yield* makeStoryCursor(story)
+        yield* replacement.consumeDalphSelectionFor(dPlanOperation)
+        yield* replacement.consumeDalphSelectionFor(ePlanOperation)
         yield* replacement.consumeDalphSelectionFor(bWorktreeOperation)
         yield* replacement.consumeDalphSelectionFor(cWorktreeOperation)
         const report = yield* replacement.consumeExecutorReportFor("Begin", aAttemptId)
