@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Cause, Effect, Exit, Fiber, Option, Ref, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
@@ -88,6 +88,7 @@ import {
   TrackerRevision,
   TrackerMutation,
   TaskWorkCapacity,
+  TaskClaimReadFailure,
   TaskClaimReacquisitionRequestId,
   TaskClaimReacquisitionDirectedEvent,
   TaskClaimReleaseAuthority,
@@ -198,7 +199,7 @@ import {
 } from "../../src/cassettes/authored-runner.js"
 import { controlledExecutorLayer } from "../../src/cassettes/authored-adapters.js"
 import { controlledTrackerAuthorityLayer } from "../../src/cassettes/authored-tracker-authority.js"
-import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
+import { AuthoredCassetteInteractionMismatch, makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
 import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-outcomes.js"
 
 const evidenceDigestHexLength = 64
@@ -462,6 +463,279 @@ it.effect("preserves exact, conflicting, and unclaimed authored acquisition obse
   })
 )
 
+it.effect("does not fabricate an exact current-claim return before controlled authority success", () =>
+  Effect.gen(function* () {
+    const taskId = TaskId.make("truthful-current-claim")
+    const currentReturn = { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
+    const authorityEntered = yield* Deferred.make<void>()
+    const authorityRelease = yield* Deferred.make<void>()
+    const cursor = yield* makeStoryCursor([currentReturn])
+    const base = yield* TrackerMutation.pipe(Effect.provide(controlledTrackerMutationLayerFrom([])))
+    const blocked = TrackerMutation.of({
+      ...base,
+      readTaskClaim: (requestedTaskId) =>
+        Deferred.succeed(authorityEntered, undefined).pipe(
+          Effect.andThen(Deferred.await(authorityRelease)),
+          Effect.andThen(base.readTaskClaim(requestedTaskId))
+        )
+    })
+    const read = yield* Effect.gen(function* () {
+      return yield* (yield* TrackerMutation).readTaskClaim(taskId)
+    }).pipe(Effect.provide(controlledTrackerAuthorityLayer(cursor, blocked)), Effect.forkScoped)
+
+    yield* Deferred.await(authorityEntered)
+    expect(yield* cursor.storyPosition).toBe(0)
+    yield* Deferred.succeed(authorityRelease, undefined)
+    expect(yield* Fiber.join(read)).toEqual(UnclaimedTask.make({ taskId }))
+    expect(yield* cursor.storyPosition).toBe(1)
+
+    const failedCursor = yield* makeStoryCursor([currentReturn])
+    const failedAuthority = TrackerMutation.of({
+      ...base,
+      readTaskClaim: (requestedTaskId) =>
+        Effect.fail(new TaskClaimReadFailure({ detail: "controlled authority unreadable", taskId: requestedTaskId }))
+    })
+    const failed = yield* Effect.gen(function* () {
+      return yield* (yield* TrackerMutation).readTaskClaim(taskId)
+    }).pipe(Effect.provide(controlledTrackerAuthorityLayer(failedCursor, failedAuthority)), Effect.exit)
+    expect(Exit.isFailure(failed)).toBe(true)
+    expect(yield* failedCursor.storyPosition).toBe(0)
+
+    const interruptedCursor = yield* makeStoryCursor([currentReturn])
+    const interruptedEntered = yield* Deferred.make<void>()
+    const interruptedAuthority = TrackerMutation.of({
+      ...base,
+      readTaskClaim: () => Deferred.succeed(interruptedEntered, undefined).pipe(Effect.andThen(Effect.never))
+    })
+    const interruptedRead = yield* Effect.gen(function* () {
+      return yield* (yield* TrackerMutation).readTaskClaim(taskId)
+    }).pipe(Effect.provide(controlledTrackerAuthorityLayer(interruptedCursor, interruptedAuthority)), Effect.forkScoped)
+    yield* Deferred.await(interruptedEntered)
+    yield* Fiber.interrupt(interruptedRead)
+    expect(yield* interruptedCursor.storyPosition).toBe(0)
+  })
+)
+
+it.effect("preserves exact-task explicit and unreadable strict claim-read cassette semantics", () =>
+  Effect.gen(function* () {
+    const taskId = TaskId.make("strict-claim-semantics")
+    const foreignTaskId = TaskId.make("strict-claim-foreign")
+    const explicit = {
+      _tag: "TaskClaimReadReturned" as const,
+      observation: {
+        _tag: "ActiveTaskClaim" as const,
+        operationId: OperationId.make("strict-claim-operation"),
+        owner: ClaimOwner.make("strict-claim-owner"),
+        taskId,
+        token: ClaimToken.make("strict-claim-token")
+      }
+    }
+    const unreadable = { _tag: "TaskClaimReadFailed" as const, reason: "Unreadable" as const, taskId }
+    const baseReads = yield* Ref.make(0)
+    const base = yield* TrackerMutation.pipe(Effect.provide(controlledTrackerMutationLayerFrom([])))
+    const observingBase = TrackerMutation.of({
+      ...base,
+      readTaskClaim: (requestedTaskId) =>
+        Ref.update(baseReads, (count) => count + 1).pipe(Effect.andThen(base.readTaskClaim(requestedTaskId)))
+    })
+    const cursor = yield* makeStoryCursor([explicit, unreadable])
+
+    yield* Effect.gen(function* () {
+      const tracker = yield* TrackerMutation
+      expect(yield* tracker.readTaskClaim(taskId)).toEqual(explicit.observation)
+      expect(yield* tracker.readTaskClaim(taskId).pipe(Effect.flip)).toMatchObject({
+        _tag: "TrackerMutation.TaskClaimReadFailure",
+        detail: unreadable.reason,
+        taskId
+      })
+    }).pipe(Effect.provide(controlledTrackerAuthorityLayer(cursor, observingBase)))
+    expect(yield* Ref.get(baseReads)).toBe(0)
+
+    const foreign = yield* makeStoryCursor([
+      { _tag: "TaskClaimReadReturned", observation: UnclaimedTask.make({ taskId: foreignTaskId }) }
+    ])
+    const foreignExit = yield* Effect.gen(function* () {
+      return yield* (yield* TrackerMutation).readTaskClaim(taskId)
+    }).pipe(Effect.provide(controlledTrackerAuthorityLayer(foreign, observingBase)), Effect.exit)
+    expect(Exit.isFailure(foreignExit)).toBe(true)
+    expect(yield* foreign.storyPosition).toBe(0)
+    expect(yield* Ref.get(baseReads)).toBe(0)
+  })
+)
+
+it.effect("lets A reach claim while an independent grouped specification result remains in flight", () =>
+  Effect.gen(function* () {
+    const taskA = TaskId.make("grouped-spec-A")
+    const taskD = TaskId.make("grouped-spec-D")
+    const specificationA = {
+      _tag: "TaskWorkSpecificationReadReturned" as const,
+      body: "A body",
+      taskId: taskA,
+      title: "A title"
+    }
+    const specificationD = {
+      _tag: "TaskWorkSpecificationReadReturned" as const,
+      body: "D body",
+      taskId: taskD,
+      title: "D title"
+    }
+    const readSpecificationA = { _tag: "ReadTaskWorkSpecification" as const, taskId: taskA }
+    const readSpecificationD = { _tag: "ReadTaskWorkSpecification" as const, taskId: taskD }
+    const readClaimA = { _tag: "ReadTaskClaim" as const, taskId: taskA }
+    const readClaimD = { _tag: "ReadTaskClaim" as const, taskId: taskD }
+    const group = yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.ConcurrentInteractionGroup)({
+      _tag: "ConcurrentInteractionGroup",
+      members: [
+        { interaction: { _tag: "DalphSelects", operation: readSpecificationA }, predecessorRoles: [], role: "S_A" },
+        { interaction: specificationA, predecessorRoles: ["S_A"], role: "T_A" },
+        { interaction: { _tag: "DalphSelects", operation: readClaimA }, predecessorRoles: ["T_A"], role: "Q_A" },
+        { interaction: { _tag: "DalphSelects", operation: readSpecificationD }, predecessorRoles: [], role: "S_D" },
+        { interaction: specificationD, predecessorRoles: ["S_D"], role: "T_D" },
+        { interaction: { _tag: "DalphSelects", operation: readClaimD }, predecessorRoles: ["T_D"], role: "Q_D" }
+      ]
+    })
+    const cursor = yield* makeStoryCursor([group])
+    const releaseD = yield* Deferred.make<void>()
+
+    yield* cursor.consumeDalphSelectionFor(readSpecificationA)
+    yield* cursor.consumeDalphSelectionFor(readSpecificationD)
+    const resultD = yield* Deferred.await(releaseD).pipe(
+      Effect.andThen(cursor.consumeTaskWorkSpecificationFor(taskD)),
+      Effect.forkScoped
+    )
+    expect(yield* cursor.consumeTaskWorkSpecificationFor(taskA)).toMatchObject(specificationA)
+    expect(yield* cursor.consumeDalphSelectionFor(readClaimA)).toMatchObject({ operation: readClaimA })
+    expect(resultD.pollUnsafe()).toBeUndefined()
+    expect(yield* cursor.storyPosition).toBe(0)
+
+    yield* Deferred.succeed(releaseD, undefined)
+    expect(yield* Fiber.join(resultD)).toMatchObject(specificationD)
+    expect(yield* cursor.consumeDalphSelectionFor(readClaimD)).toMatchObject({ operation: readClaimD })
+    expect(yield* cursor.storyPosition).toBe(1)
+  })
+)
+
+it.effect("correlates both completion orders of in-flight current-claim results with their exact group roles", () =>
+  Effect.gen(function* () {
+    const taskA = TaskId.make("grouped-claim-A")
+    const taskC = TaskId.make("grouped-claim-C")
+    const taskD = TaskId.make("grouped-claim-D")
+    const readClaimA = { _tag: "ReadTaskClaim" as const, taskId: taskA }
+    const readClaimC = { _tag: "ReadTaskClaim" as const, taskId: taskC }
+    const independentSelection = { _tag: "ReadTaskWorkSpecification" as const, taskId: taskD }
+    const group = yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.ConcurrentInteractionGroup)({
+      _tag: "ConcurrentInteractionGroup",
+      members: [
+        { interaction: { _tag: "DalphSelects", operation: readClaimA }, predecessorRoles: [], role: "Q_A" },
+        {
+          interaction: { _tag: "TaskClaimCurrentReadReturned", taskId: taskA },
+          predecessorRoles: ["Q_A"],
+          role: "R_A"
+        },
+        { interaction: { _tag: "DalphSelects", operation: readClaimC }, predecessorRoles: [], role: "Q_C" },
+        {
+          interaction: { _tag: "TaskClaimCurrentReadReturned", taskId: taskC },
+          predecessorRoles: ["Q_C"],
+          role: "R_C"
+        },
+        { interaction: { _tag: "DalphSelects", operation: independentSelection }, predecessorRoles: [], role: "S_D" }
+      ]
+    })
+    const base = yield* TrackerMutation.pipe(Effect.provide(controlledTrackerMutationLayerFrom([])))
+
+    for (const first of [taskA, taskC]) {
+      const occurrences = yield* Ref.make(0)
+      const cursor = yield* makeStoryCursor([group], {
+        onOccurrence: ({ item }) =>
+          item._tag === "ConcurrentInteractionGroup" ? Ref.update(occurrences, (count) => count + 1) : Effect.void
+      })
+      yield* cursor.consumeDalphSelectionFor(readClaimA)
+      yield* cursor.consumeDalphSelectionFor(readClaimC)
+      const enteredA = yield* Deferred.make<void>()
+      const enteredC = yield* Deferred.make<void>()
+      const releaseA = yield* Deferred.make<void>()
+      const releaseC = yield* Deferred.make<void>()
+      const authority = TrackerMutation.of({
+        ...base,
+        readTaskClaim: (taskId) => {
+          const entered = taskId === taskA ? enteredA : enteredC
+          const release = taskId === taskA ? releaseA : releaseC
+          return Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(base.readTaskClaim(taskId))
+          )
+        }
+      })
+      yield* Effect.gen(function* () {
+        const tracker = yield* TrackerMutation
+        const resultA = yield* tracker.readTaskClaim(taskA).pipe(Effect.forkScoped)
+        const resultC = yield* tracker.readTaskClaim(taskC).pipe(Effect.forkScoped)
+        yield* Deferred.await(enteredA)
+        yield* Deferred.await(enteredC)
+
+        yield* cursor.consumeDalphSelectionFor(independentSelection)
+        const firstRelease = first === taskA ? releaseA : releaseC
+        const secondRelease = first === taskA ? releaseC : releaseA
+        const firstFiber = first === taskA ? resultA : resultC
+        const secondFiber = first === taskA ? resultC : resultA
+        yield* Deferred.succeed(firstRelease, undefined)
+        expect(yield* Fiber.join(firstFiber)).toEqual(UnclaimedTask.make({ taskId: first }))
+        expect(yield* cursor.storyPosition).toBe(0)
+        yield* Deferred.succeed(secondRelease, undefined)
+        const secondTask = first === taskA ? taskC : taskA
+        expect(yield* Fiber.join(secondFiber)).toEqual(UnclaimedTask.make({ taskId: secondTask }))
+      }).pipe(Effect.provide(controlledTrackerAuthorityLayer(cursor, authority)))
+      expect(yield* cursor.storyPosition).toBe(1)
+      expect(yield* Ref.get(occurrences)).toBe(1)
+    }
+  })
+)
+
+it.effect("delays interruption after exact validation until the masked current-claim handoff publishes once", () =>
+  Effect.gen(function* () {
+    const taskId = TaskId.make("masked-current-claim")
+    const publicationEntered = yield* Deferred.make<void>()
+    const publicationRelease = yield* Deferred.make<void>()
+    const occurrences = yield* Ref.make(0)
+    const cursor = yield* makeStoryCursor([{ _tag: "TaskClaimCurrentReadReturned", taskId }], {
+      onOccurrence: ({ item }) =>
+        item._tag === "TaskClaimCurrentReadReturned"
+          ? Ref.update(occurrences, (count) => count + 1).pipe(
+              Effect.andThen(Deferred.succeed(publicationEntered, undefined)),
+              Effect.andThen(Deferred.await(publicationRelease))
+            )
+          : Effect.void
+    })
+    const base = yield* TrackerMutation.pipe(Effect.provide(controlledTrackerMutationLayerFrom([])))
+    const layer = controlledTrackerAuthorityLayer(cursor, base)
+    const read = yield* Effect.gen(function* () {
+      return yield* (yield* TrackerMutation).readTaskClaim(taskId)
+    }).pipe(Effect.provide(layer), Effect.forkScoped)
+
+    yield* Deferred.await(publicationEntered)
+    const interruption = yield* Fiber.interrupt(read).pipe(Effect.forkScoped)
+    yield* Effect.yieldNow
+    expect(interruption.pollUnsafe()).toBeUndefined()
+    yield* Deferred.succeed(publicationRelease, undefined)
+    yield* Fiber.join(interruption)
+    expect(Exit.isFailure(yield* Fiber.await(read))).toBe(true)
+    expect(yield* cursor.storyPosition).toBe(1)
+    expect(yield* Ref.get(occurrences)).toBe(1)
+
+    const retry = yield* Effect.gen(function* () {
+      return yield* (yield* TrackerMutation).readTaskClaim(taskId)
+    }).pipe(Effect.provide(layer), Effect.exit)
+    expect(Exit.isFailure(retry)).toBe(true)
+    if (Exit.isFailure(retry)) {
+      const defect = retry.cause.reasons.find(Cause.isDieReason)?.defect
+      expect(defect).toBeInstanceOf(AuthoredCassetteInteractionMismatch)
+      expect(defect).toMatchObject({ actual: `duplicate TaskClaimCurrentReadReturned(${taskId})` })
+    }
+    expect(yield* cursor.storyPosition).toBe(1)
+    expect(yield* Ref.get(occurrences)).toBe(1)
+  })
+)
+
 it.effect("fails closed at cursor and executor-projection boundaries", () =>
   Effect.gen(function* () {
     const requestId = TaskClaimReacquisitionRequestId.make("coverage-reacquisition")
@@ -499,7 +773,7 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
         report: { _tag: "ExecutorWorkExecuting", attemptId: AttemptId.make("another-projected-attempt") }
       }
     ])
-    const contradictoryProjection = yield* Effect.gen(function* () {
+    const foreignAttemptProjection = yield* Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
       return yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
     }).pipe(
@@ -513,11 +787,8 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
         )
       )
     )
-    expect(contradictoryProjection).toMatchObject({
-      _tag: "CorrelationContradiction",
-      expected: correlation,
-      observed: { correlation: { attemptId: "another-projected-attempt", runId } }
-    })
+    expect(foreignAttemptProjection).toMatchObject({ _tag: "NoReport", correlation })
+    expect(yield* contradictoryCursor.storyPosition).toBe(0)
 
     const foreignRunId = RunId.make("coverage-executor-projection-foreign-run")
     const foreignRunCursor = yield* makeStoryCursor([
@@ -548,6 +819,42 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
   })
 )
 
+it.effect("matches the strict A C D restart projection chain by exact AttemptId without command calls", () =>
+  Effect.gen(function* () {
+    const attemptA = AttemptId.make("attempt:A:0")
+    const attemptC = AttemptId.make("attempt:C:2")
+    const attemptD = AttemptId.make("attempt:D:3")
+    const cursor = yield* makeStoryCursor(
+      [attemptA, attemptC, attemptD].map((attemptId) => ({
+        _tag: "PlannedAttemptExecutorProjectionReturned" as const,
+        report: { _tag: "ExecutorWorkExecuting" as const, attemptId }
+      }))
+    )
+
+    const foreign = yield* cursor.consumeExecutorProjectionFor(AttemptId.make("attempt:foreign:9"))
+    expect(Option.isNone(foreign)).toBe(true)
+    expect(yield* cursor.storyPosition).toBe(0)
+
+    expect(yield* cursor.consumeExecutorProjectionFor(attemptA)).toMatchObject({
+      _tag: "Some",
+      value: { report: { attemptId: attemptA } }
+    })
+    const duplicateA = yield* cursor.consumeExecutorProjectionFor(attemptA)
+    expect(Option.isNone(duplicateA)).toBe(true)
+    expect(yield* cursor.storyPosition).toBe(1)
+
+    expect(yield* cursor.consumeExecutorProjectionFor(attemptC)).toMatchObject({
+      _tag: "Some",
+      value: { report: { attemptId: attemptC } }
+    })
+    expect(yield* cursor.consumeExecutorProjectionFor(attemptD)).toMatchObject({
+      _tag: "Some",
+      value: { report: { attemptId: attemptD } }
+    })
+    expect(yield* cursor.storyPosition).toBe(3)
+  })
+)
+
 it.effect("holds a delivery claim until the earlier operator control boundary completes", () =>
   Effect.gen(function* () {
     const taskId = TaskId.make("coverage-control-before-admission")
@@ -560,7 +867,7 @@ it.effect("holds a delivery claim until the earlier operator control boundary co
     const cursor = yield* makeStoryCursor([direction, claimRead])
 
     expect(yield* cursor.consumeControlDirection(direction)).toEqual(Option.some(direction))
-    const claimant = yield* cursor.consumeTaskClaimRead.pipe(Effect.forkScoped)
+    const claimant = yield* cursor.consumeTaskClaimReadFor(taskId).pipe(Effect.forkScoped)
     yield* Effect.yieldNow
     expect(claimant.pollUnsafe()).toBeUndefined()
 

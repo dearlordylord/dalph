@@ -20,24 +20,20 @@ export const isAuthoredAttemptChoiceItem = (item: unknown): item is AuthoredAtte
     item._tag === "OperatorRestartsAttempt" ||
     item._tag === "OperatorStopsAttempt")
 
-export type AuthoredTaskClaimReadItem =
+export type AuthoredTaskClaimReadOverrideItem =
   | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadFailed.Type
-  | typeof AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned.Type
   | typeof AuthoredCassetteStoryItem.cases.TaskClaimReadReturned.Type
 
-export const AuthoredTaskClaimReadItem = Schema.Union([
+export const AuthoredTaskClaimReadOverrideItem = Schema.Union([
   AuthoredCassetteStoryItem.cases.TaskClaimReadFailed,
-  AuthoredCassetteStoryItem.cases.TaskClaimCurrentReadReturned,
   AuthoredCassetteStoryItem.cases.TaskClaimReadReturned
 ])
 
-export const isTaskClaimReadItem = (item: unknown): item is AuthoredTaskClaimReadItem =>
+export const isTaskClaimReadOverrideItem = (item: unknown): item is AuthoredTaskClaimReadOverrideItem =>
   typeof item === "object" &&
   item !== null &&
   "_tag" in item &&
-  (item._tag === "TaskClaimReadFailed" ||
-    item._tag === "TaskClaimCurrentReadReturned" ||
-    item._tag === "TaskClaimReadReturned")
+  (item._tag === "TaskClaimReadFailed" || item._tag === "TaskClaimReadReturned")
 
 export type AuthoredPlannedAttemptExecutorOutcomeItem =
   | typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorResponseLost.Type
