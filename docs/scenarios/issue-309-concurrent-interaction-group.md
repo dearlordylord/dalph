@@ -623,11 +623,15 @@ passes the already requested exact AttemptId, and the cursor atomically matches
 only the current strict projection with the same tag and report AttemptId under
 its existing permit. For a foreign, early, or duplicate AttemptId, the cursor
 fails closed by returning `Option.none` without consuming a neighboring
-projection. The controlled optional observer translates that absence to
-`NoReport`; it does not widen the executor's runtime error channel. This changes
-no executor or passive-owner production API and does not duplicate the existing
-attachment gate. The fixed A/C/D prefix records this exact #268 fixture; it is
-not a reusable task-priority, FIFO, scheduling, or production-authority rule.
+projection. The controlled optional observer then uses its existing state: it
+returns `NoReport` when no report is known, returns a previously cached exact
+report when one exists, and fails explicitly when an unresolved required or
+lost response still requires an authored return. A duplicate cursor request is
+still `Option.none`; an observer may answer it from that cache. This preserves
+the executor's existing error channel. It changes no executor or passive-owner
+production API and does not duplicate the existing attachment gate. The fixed
+A/C/D prefix records this exact #268 fixture; it is not a reusable task-
+priority, FIFO, scheduling, or production-authority rule.
 
 This retains the inherited
 [#265 exact restart reattachment](issue-265-passive-executor-observation-through-restart.md#a-later-dalph-process-reattaches-to-the-exact-codex-attempt):
@@ -870,8 +874,10 @@ matches only the current strict
 under the same cursor permit. The controlled executor's
 `observe` and passive lifecycle `attach` paths pass their already requested
 exact AttemptId. A foreign, early, or duplicate AttemptId returns
-`Option.none` at the exact cursor boundary, and the optional executor observer
-returns `NoReport`; neither path takes another recovered attempt's projection.
+`Option.none` at the exact cursor boundary without taking another recovered
+attempt's projection. The optional executor observer then returns `NoReport`, a
+cached exact report, or the existing explicit unresolved-response failure
+according to its report and unresolved-response state.
 
 Those cursor operations are test-harness contracts. They do not add a method
 to `TrackerMutation`, `PlannedAttemptExecutorLifecycleObservation`,
@@ -910,8 +916,10 @@ The same rule covers each other edge. T before its S, Q before its T, W before
 its R, or L before its W fails typed without mutation and succeeds exactly once
 after the missing predecessor consumes. At the separate strict prefix, P with
 a foreign AttemptId, the same P twice, or P before its exact strict position
-returns `Option.none` at the cursor and `NoReport` from the optional observer
-without taking another projection. An invalid call in one lane does not rewind
+returns `Option.none` at the cursor without taking another projection. The
+optional observer's fallback is state-dependent: absent state yields
+`NoReport`, cached state yields that exact report, and unresolved required or
+lost state fails explicitly. An invalid call in one lane does not rewind
 successful roles in another lane or add a cross-lane dependency.
 Foreign interactions, already-consumed members, B Suspend before the
 fourteen-node initial join, reactivation hints before the strict restart
@@ -968,11 +976,12 @@ another lane's progress, and another task's identity do not repair it. On an
 authored group-member or activation-return mismatch, the maintainer receives
 the existing typed cassette failure with cursor position and identity
 unchanged. An optional projection mismatch instead returns `Option.none` at the
-cursor and `NoReport` at the observer, also without advancing. On an underlying
-authority failure, the existing production failure remains the result and no R
-is fabricated. These are test-maintainer outcomes only. Alice and every target-
-application user see no new command, UI state, provider request, task order, or
-runtime API.
+cursor without advancing; the observer resolves that absence from its existing
+state as `NoReport`, a cached exact report, or an explicit unresolved-response
+failure. On an underlying authority failure, the existing production failure
+remains the result and no R is fabricated. These are test-maintainer outcomes
+only. Alice and every target-application user see no new command, UI state,
+provider request, task order, or runtime API.
 
 ### Exact schedules and rejected alternatives
 
@@ -1078,7 +1087,7 @@ not claimed as #309 implementation evidence.
 | Dropping one required edge makes the expected-edge/early-successor property fail, while generated duplicate roles and dangling predecessors fail schema decoding for the fourteen- and twelve-node fixtures | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.property.test.ts` — `detects every missing direct edge and the newly early successor in the initial A B C authority cut`; `detects every missing direct edge and the newly early successor in the later A D authority cut`; `rejects generated duplicate roles in the initial A B C authority cut`; `rejects generated invalid predecessors in the initial A B C authority cut`; `rejects generated duplicate roles in the later A D authority cut`; `rejects generated invalid predecessors in the later A D authority cut` |
 | T-before-S, Q-before-T, R-before-Q, W-before-R, and L-before-W each fail typed without mutation and succeed after retry in the initial A/C and later A/D lanes; foreign and duplicate exact TaskId claims do the same | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `rejects and retries every predecessor edge in both active-refresh groups`; `rejects foreign and duplicate exact result identities without mutation` |
 | Startup graph then strict P_A, P_C, P_D then next graph then UnsettledResponsibility is the exact restart; blocking A blocks the suffix, with exactly three Executing projections, no Begin/Resume/Suspend, and zero S/T/Q/R/W/L selections | Commit `bb40c4c8c`, `packages/dalph/test/scenarios/production.test.ts` — `completes the startup graph read then serially reattaches A C and D before the next graph read` |
-| `consumeExecutorProjectionFor(attemptId)` atomically returns the current exact strict projection; a foreign, early, or duplicate exact AttemptId returns `Option.none`, and the controlled optional observer returns `NoReport`, without consuming a neighbor | `packages/dalph/test/cassettes/scenario.test.ts` — `fails closed at cursor and executor-projection boundaries`; `matches the strict A C D restart projection chain by exact AttemptId without command calls`; `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `keeps requested executor projections ordered even in a causal tracker story` |
+| `consumeExecutorProjectionFor(attemptId)` atomically returns the current exact strict projection; a foreign, early, or duplicate exact AttemptId returns `Option.none` without consuming a neighbor. The controlled optional observer returns `NoReport` for absent state, may return a previously cached exact report, and keeps the existing explicit failure for an unresolved required or lost response. | `packages/dalph/test/cassettes/scenario.test.ts` — `matches the strict A C D restart projection chain by exact AttemptId without command calls` proves foreign and duplicate cursor `Option.none`; `fails closed at cursor and executor-projection boundaries` proves absent-state `NoReport` and the explicit unresolved-return failure; `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `reobserves B1 executing without advancing or manufacturing another report` proves cached exact fallback; `keeps requested executor projections ordered even in a causal tracker story` proves a foreign absent-state `NoReport` does not consume the exact neighbor |
 | Simultaneously enabled S/Q and later cross-lane members consume once through the existing cursor permit; each active group's final member publishes once and advances once before its proved strict successor | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `serializes simultaneously enabled authority lanes and publishes each bounded join once` |
 | Foreign, duplicate, premature B Suspend, premature restart hint, or premature C Suspend claims fail typed without mutation; non-arrival adds no timeout; scope replacement restores every group role and strict position | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `rejects foreign duplicate and downstream claims for both active cuts`; `keeps incomplete active cuts current without timeout`; `recreates every authority role after cursor scope replacement`; `packages/dalph/test/cassettes/authored-reactivation-return.test.ts` — `keeps restart hints unavailable before the production finality result` |
 | Presentation renders the initial eleven and later ten direct edges, distinguishes same-lane transitive truth, presents every cross-lane pair as incomparable, and keeps exactly one cursor owner with exhaustive matches | `packages/dalph/test/cassettes/authored-presentation.test.ts` — `renders one causal interaction group without inventing claim order`; `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `partitions all 84084 active-refresh orders by three canonical lane positions`; `partitions all 924 post-hint A D authority orders by two canonical lane positions`; `packages/dalph/test/cassettes/authored-coverage.test.ts` — `registers the concurrent interaction group with exactly one cursor owner` |
