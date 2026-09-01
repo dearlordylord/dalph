@@ -55,6 +55,14 @@ export const deliveryTaskWorkAdmissionBasisOf = (
   )
 })
 
+/** Exact attempt positions newly bound by this runtime, distinct from positions accepted before it started. */
+export const deliveryRuntimeBoundTaskWorkCorrelationsOf = (
+  snapshot: DeliveryRuntimeAdmissionSnapshot
+): ReadonlyArray<PlannedAttemptExecutorCorrelation> =>
+  [...snapshot.positions.values()].flatMap((position) =>
+    position._tag === "BoundRuntimePosition" ? [position.correlation] : []
+  )
+
 const DeliveryAdmissionReservationTypeId: unique symbol = Symbol.for("@dalph/DeliveryAdmissionReservation")
 
 type DeliveryForwardOwnerLease = AtomicForwardOwnerLease | InterruptibleForwardOwnerLease

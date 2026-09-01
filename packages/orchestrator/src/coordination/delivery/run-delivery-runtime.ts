@@ -17,7 +17,11 @@ import {
 } from "./delivery-action-executor.js"
 import { DeliveryProposalId, type DeliveryActionProposal } from "./delivery-action-proposal.js"
 import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
-import { deliveryTaskWorkAdmissionBasisOf, type DeliveryAdmissionReservation } from "./delivery-runtime-admission.js"
+import {
+  deliveryRuntimeBoundTaskWorkCorrelationsOf,
+  deliveryTaskWorkAdmissionBasisOf,
+  type DeliveryAdmissionReservation
+} from "./delivery-runtime-admission.js"
 import {
   makeDeliveryRuntimeAdmissionLoop,
   DeliveryRuntimeProposalOwnershipConflict
@@ -481,41 +485,47 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             const activeRefreshG2Pending =
               phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
             /**
-             * After G2, an active refresh may deliberately retain a Running
-             * executor position while the relation exposes independent work. If
-             * that position fills the whole configured capacity and no local
-             * action owner remains, waiting for another runtime event cannot free
-             * it: the retained executor responsibility is outside this phase.
+             * After G2, an active refresh may retain an original Running
+             * position or bind a new exact attempt before exposing more
+             * independent work. Once no local action owner remains, only those
+             * two position kinds are outside this phase. An unrelated position
+             * accepted before this runtime may still receive a causal update,
+             * so it cannot prove quiescence.
              * Return an unsettled quiescence while leaving the proposal in the
              * descriptive relation so a later ordinary activation can retry it.
              */
-            const postG2RetainedCapacityBlocks =
+            if (live.size !== 0) return Option.none<DeliveryRuntimeQuiescence>()
+            const admissionSnapshot = yield* admission.snapshot
+            const runtimeBoundCorrelations = deliveryRuntimeBoundTaskWorkCorrelationsOf(admissionSnapshot)
+            const heldPositionIsOutsideThisPhase = ({ correlation }: (typeof current.taskWork.held)[number]) =>
+              current.activeRefreshBoundary?.reconciledAttempts.some(
+                (subject) => subject.runId === correlation.runId && subject.attemptId === correlation.attemptId
+              ) === true ||
+              runtimeBoundCorrelations.some(
+                (bound) => bound.runId === correlation.runId && bound.attemptId === correlation.attemptId
+              )
+            const postG2OutsidePhaseCapacityBlocks =
               phase._tag === "ActiveRefreshPostG2RuntimePhase" &&
               current.activeRefreshBoundary !== undefined &&
               current.taskWork.held.length >= Number(current.taskWork.capacity) &&
-              current.taskWork.held.every(({ correlation }) =>
-                current.activeRefreshBoundary?.reconciledAttempts.some(
-                  (subject) => subject.runId === correlation.runId && subject.attemptId === correlation.attemptId
-                )
-              ) &&
+              current.taskWork.held.every(heldPositionIsOutsideThisPhase) &&
               locallyRunnableProposals.length > 0 &&
               locallyRunnableProposals.every(
                 ({ admission: { taskWorkPosition } }) =>
                   taskWorkPosition._tag === "TaskWorkPositionRequired" && taskWorkPosition.mode === "ReserveOrReuse"
               )
-            if (live.size !== 0) return Option.none<DeliveryRuntimeQuiescence>()
             const ordinaryTaskWorkAdmissionStalled =
               phase._tag === "OrdinaryDeliveryRuntimePhase"
                 ? classifyTaskWorkAdmissionStalledRuntimeQuiescence(
                     current,
-                    deliveryTaskWorkAdmissionBasisOf(yield* admission.snapshot),
+                    deliveryTaskWorkAdmissionBasisOf(admissionSnapshot),
                     locallyRunnableFrontier
                   )
                 : Option.none()
             if (
               !activeRefreshG2Pending &&
               !everyProposalIsLocallyDeferred &&
-              !postG2RetainedCapacityBlocks &&
+              !postG2OutsidePhaseCapacityBlocks &&
               Option.isNone(ordinaryTaskWorkAdmissionStalled)
             ) {
               return Option.none<DeliveryRuntimeQuiescence>()

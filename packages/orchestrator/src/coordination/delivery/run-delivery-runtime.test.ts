@@ -3628,6 +3628,157 @@ it.effect("quiesces after G2 when retained active capacity cannot be freed local
   )
 )
 
+it.effect("returns after D starts when A C and D hold post-G2 capacity and exact E is blocked", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const [a, b, c, d, e] = ["post-g2-A", "post-g2-B", "post-g2-C", "post-g2-D", "post-g2-E"].map(
+        preparedAttemptFixture
+      )
+      if (a === undefined || b === undefined || c === undefined || d === undefined || e === undefined) {
+        return yield* Effect.die("the post-G2 capacity fixture must contain A through E")
+      }
+      const [beginD, blockedE] = preparedBeginProposalsOf([d, e])
+      if (beginD === undefined || blockedE === undefined) {
+        return yield* Effect.die("D and E must each produce one exact Begin proposal")
+      }
+      const acceptedAt = JournalPosition.make(10)
+      const afterDAt = JournalPosition.make(11)
+      const graphProjection = projectTrackerSnapshot({
+        revision: "post-g2-newly-admitted-D",
+        tasks: [a, b, c, d, e].map(({ attempt }) => ({
+          id: attempt.taskId,
+          lifecycle: { _tag: "Open" as const },
+          parentTaskId: null,
+          prerequisiteIds: []
+        }))
+      })
+      if (graphProjection._tag === "Invalid") return yield* Effect.die("the post-G2 D/E graph must be valid")
+      const graph = TrackerGraphState.cases.GraphEstablished.make({
+        observation: makeTestJournaledTrackerGraphObservation({
+          operationId: OperationId.make("post-g2-newly-admitted-D-graph"),
+          recordedAt: acceptedAt,
+          snapshot: graphProjection.snapshot
+        })
+      })
+      const boundary = {
+        _tag: "ActiveRefreshRuntimeBoundary" as const,
+        runId,
+        reconciledAttempts: [a, b, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
+      }
+      const heldAfterBSafe = [a, c].map(({ attempt }) => ({
+        correlation: plannedAttemptExecutorCorrelation(attempt),
+        taskId: attempt.taskId
+      }))
+      const initial = {
+        ...withProposals(
+          {
+            ...base,
+            acceptedAt,
+            current: { ...base.current, runId, trackerGraph: graph },
+            quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+          },
+          [beginD, blockedE],
+          3
+        ),
+        activeRefreshBoundary: boundary,
+        quiescence: { _tag: "TrackerReconfirmationAllowed" as const },
+        taskWork: { capacity: TaskWorkCapacity.make(3), held: heldAfterBSafe }
+      } satisfies DeliveryRuntimeEvaluation
+      const heldAfterD = [a, c, d].map(({ attempt }) => ({
+        correlation: plannedAttemptExecutorCorrelation(attempt),
+        taskId: attempt.taskId
+      }))
+      const afterD = {
+        ...initial,
+        acceptedAt: afterDAt,
+        proposedActions: { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [blockedE] },
+        taskWork: { capacity: TaskWorkCapacity.make(3), held: heldAfterD }
+      } satisfies DeliveryRuntimeEvaluation
+      const poison = {
+        ...afterD,
+        acceptedAt: JournalPosition.make(12),
+        proposedActions: {
+          _tag: "DeliveryProposalOwnershipConflict" as const,
+          conflicts: [{ id: blockedE.id, order: blockedE.order, owners: ["TrackerGraph", "TicketDelivery"] }]
+        }
+      } satisfies DeliveryRuntimeEvaluation
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const causalBoundary = yield* Ref.make({ dProjected: false, eCapacityDenied: false, poisonPublished: false })
+      const publishPoisonAfterCausalBoundary = (update: "DProjected" | "ECapacityDenied") =>
+        Ref.modify(causalBoundary, (current) => {
+          const next = {
+            ...current,
+            dProjected: current.dProjected || update === "DProjected",
+            eCapacityDenied: current.eCapacityDenied || update === "ECapacityDenied"
+          }
+          const publish = next.dProjected && next.eCapacityDenied && !next.poisonPublished
+          return [publish, { ...next, poisonPublished: current.poisonPublished || publish }] as const
+        }).pipe(Effect.flatMap((publish) => (publish ? relation.publish(poison) : Effect.void)))
+      const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const executingD = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: plannedAttemptExecutorCorrelation(d.attempt)
+      })
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal: action }) =>
+          Effect.gen(function* () {
+            if (action.id !== beginD.id) return yield* Effect.die("capacity-blocked E must not execute")
+            yield* Ref.update(executed, (current) => [...current, action.id])
+            yield* relation.publish(afterD)
+            return {
+              _tag: "ExecutorReportPublished",
+              acceptedFacts: "Changed",
+              plannedAttempt: d.attempt,
+              proposalId: action.id,
+              report: executingD
+            } satisfies DeliveryActionResult
+          })
+      })
+      const trace = DeliverySemanticTrace.of({
+        emit: (event) => {
+          if (event._tag === "ActionOutcome" && event.result.proposalId === beginD.id) {
+            return publishPoisonAfterCausalBoundary("DProjected")
+          }
+          return event._tag === "ProposalDeferred" &&
+            event.proposalId === blockedE.id &&
+            event.reason === "TaskWorkPositionUnavailable"
+            ? publishPoisonAfterCausalBoundary("ECapacityDenied")
+            : Effect.void
+        }
+      })
+      const integrationTargets = yield* makeIntegrationTargetResourceController()
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
+      const result = yield* runDeliveryRuntimePhase(
+        runId,
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPostG2(boundary.reconciledAttempts)
+      ).pipe(
+        Effect.provide(plannerLayer),
+        Effect.provide(deterministicOperationIdAllocatorLayer("runtime-post-g2-newly-admitted-D")),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(DeliveryAcceptedFactPublication, defaultAcceptedFactPublication),
+        Effect.provideService(DeliverySemanticTrace, trace)
+      )
+
+      expect(result).toMatchObject({
+        _tag: "TrackerReconfirmationQuiescence",
+        acceptedAt: afterDAt,
+        proposedActions: { _tag: "DeliveryProposalsAvailable", proposals: [] }
+      })
+      expect(yield* Ref.get(executed)).toEqual([beginD.id])
+      expect(yield* Ref.get(causalBoundary)).toEqual({ dProjected: true, eCapacityDenied: true, poisonPublished: true })
+      const observation = yield* capabilities.resources.runtimeObservation.get
+      if (observation._tag !== "Ready") return yield* Effect.die("post-G2 quiescence must publish its exact state")
+      expect(observation.liveOwners).toEqual([])
+      expect(observation.evaluation.taskWork.held.map(({ correlation }) => correlation)).toEqual(
+        heldAfterD.map(({ correlation }) => correlation)
+      )
+    })
+  )
+)
+
 const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmissionSnapshotScenario")(function* () {
   const base = yield* baseEvaluation
   const [a, b, c, d, e] = ["snapshot-A", "snapshot-B", "snapshot-C", "snapshot-D", "snapshot-E"].map(
