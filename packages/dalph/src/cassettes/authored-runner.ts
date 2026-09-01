@@ -97,6 +97,8 @@ import {
   validatedRunActivationLayer,
   preservingDispositionCleanupBoundaryLayer,
   taskWorkCapacityControlLayer,
+  initialRunPolicyRevision,
+  RunPolicyRevision,
   type TaskWorkCapacity,
   TargetLineageObservation,
   TargetPromotionCompareAndSetFailure,
@@ -142,12 +144,15 @@ import {
   AuthoredCassetteInteractionMismatch,
   AuthoredCoordinatorProcessDies,
   makeStoryCursor,
+  type AuthoredSafelySuspendedExecutorReportItem,
   type AuthoredStoryOccurrenceObserved,
   type StoryCursor
 } from "./authored-cursor.js"
 import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
+
+const acceptedSafeReportOrdinal = 2
 
 export interface AuthoredScenarioCassetteRun {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
@@ -1487,9 +1492,43 @@ const runAuthoredScenarioCassetteWith = (request: {
         Option.Option<{ readonly release: Deferred.Deferred<void>; readonly request: TargetPromotionRequest }>
       >(Option.none())
       const initialPauseObservationConsumed = yield* Deferred.make<void>()
+      const acceptedSafeReport = yield* Ref.make<Option.Option<AuthoredSafelySuspendedExecutorReportItem>>(
+        Option.none()
+      )
       const publicationObserver = DeliveryRelationPublicationObserver.of({
         observe: (bundle) =>
           Effect.gen(function* () {
+            const reserved = yield* Ref.get(acceptedSafeReport)
+            const acceptedThrough = bundle.actionInputs.runtimeFacts.acceptedAt
+            if (Option.isSome(reserved) && acceptedThrough !== null) {
+              yield* Effect.uninterruptible(
+                Effect.gen(function* () {
+                  const records = yield* sharedJournal.read(runId).pipe(Effect.orDie)
+                  const acceptedSafeRecords = records.flatMap(({ event, position }) =>
+                    position <= acceptedThrough &&
+                    event._tag === "PlannedAttemptExecutorWorkReported" &&
+                    event.report._tag === "ExecutorWorkSafelySuspended" &&
+                    event.report.correlation.attemptId === reserved.value.report.attemptId
+                      ? [{ event, position }]
+                      : []
+                  )
+                  if (acceptedSafeRecords.length > 0) {
+                    const exact = acceptedSafeRecords.filter(({ event }) => event.ordinal === acceptedSafeReportOrdinal)
+                    if (acceptedSafeRecords.length !== 1 || exact.length !== 1) {
+                      return yield* new AuthoredCassetteInteractionMismatch({
+                        actual: JSON.stringify(
+                          acceptedSafeRecords.map(({ event, position }) => ({ ordinal: event.ordinal, position }))
+                        ),
+                        expected: "one accepted Safe report at ordinal 2",
+                        storyPosition: yield* cursor.storyPosition
+                      })
+                    }
+                    yield* cursor.settleSafelySuspendedExecutorReport(reserved.value)
+                    yield* Ref.set(acceptedSafeReport, Option.none())
+                  }
+                })
+              )
+            }
             const activationOrdinal = yield* Ref.get(activeDeliveryActivation)
             const storyPosition = yield* cursor.storyPosition
             const publication = { activationOrdinal, storyPosition: AuthoredStoryPosition.make(storyPosition), bundle }
@@ -1498,7 +1537,11 @@ const runAuthoredScenarioCassetteWith = (request: {
             yield* Queue.offer(deliveryPublicationSignals, publication)
             // A read-only diagnostic observer defect never changes production cassette execution.
             yield* Effect.exit(Effect.sync(() => options.onDeliveryPublication?.(publication)))
-          })
+          }).pipe(
+            Effect.catchTag("AuthoredCassetteInteractionMismatch", (failure) =>
+              Ref.set(authoredInteractionFailure, failure).pipe(Effect.andThen(Effect.die(failure)))
+            )
+          )
       })
       const runtimeObservationObserver = DeliveryRuntimeObservationObserver.of({
         observe: ({ liveOwners }) =>
@@ -2031,7 +2074,8 @@ const runAuthoredScenarioCassetteWith = (request: {
         applyNextControlDirection,
         survivingExecutorReports,
         unresolvedLostExecutorResponses,
-        prepareExecutorReport
+        prepareExecutorReport,
+        (reserved) => Ref.set(acceptedSafeReport, Option.some(reserved))
       )
       const runtimeLayerFor = (
         activationOrdinal: AuthoredRunActivationOrdinalType,
@@ -2172,12 +2216,39 @@ const runAuthoredScenarioCassetteWith = (request: {
               if (Option.isNone(change)) return
               /* v8 ignore stop */
               const current = yield* bootstrap.operatorControl.readTaskWorkCapacity(runId)
-              yield* bootstrap.operatorControl.setTaskWorkCapacity({
+              const appliedRevision = RunPolicyRevision.make(initialRunPolicyRevision + 1)
+              const expectedPolicy = { revision: appliedRevision, taskExecutionCapacity: change.value.capacity }
+              const currentMatches =
+                current.revision === expectedPolicy.revision &&
+                current.taskExecutionCapacity === expectedPolicy.taskExecutionCapacity
+              if (currentMatches) {
+                yield* cursor.settleCapacityChange(change.value)
+                return
+              }
+              if (current.revision !== initialRunPolicyRevision) {
+                return yield* new AuthoredCassetteInteractionMismatch({
+                  actual: JSON.stringify(current),
+                  expected: JSON.stringify(expectedPolicy),
+                  storyPosition: yield* cursor.storyPosition
+                })
+              }
+              const applied = yield* bootstrap.operatorControl.setTaskWorkCapacity({
                 capacity: change.value.capacity,
                 expectedRevision: current.revision,
                 runId
               })
-            }).pipe(Effect.orDie)
+              if (
+                applied.revision !== expectedPolicy.revision ||
+                applied.taskExecutionCapacity !== expectedPolicy.taskExecutionCapacity
+              ) {
+                return yield* new AuthoredCassetteInteractionMismatch({
+                  actual: JSON.stringify(applied),
+                  expected: JSON.stringify(expectedPolicy),
+                  storyPosition: yield* cursor.storyPosition
+                })
+              }
+              yield* cursor.settleCapacityChange(change.value)
+            })
             const driveRunReactivationHints = Effect.gen(function* () {
               const authored = yield* cursor.consumeRunReactivationHints
               /* v8 ignore next -- @preserve The tag-selected driver consumes only the current hint burst. */

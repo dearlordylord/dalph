@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
-import { Cause, Effect, Exit, Fiber, Option, Ref, Schema, Stream } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import {
   AttemptId,
@@ -37,7 +37,11 @@ import {
   consumeControlledTaskWorkSpecification,
   consumeControlledTrackerGraph
 } from "../../src/cassettes/authored-tracker-read-results.js"
-import { activeWorkF2SafelySuspendsAuthoredCassette, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
+import {
+  activeWorkF2SafelySuspendsAuthoredCassette,
+  maintainedAuthoredCassetteCatalog,
+  runAuthoredScenarioCassette
+} from "../../src/cassettes/index.js"
 
 const taskB = TaskId.make("B")
 const target = FixtureTarget.make("active-work-target")
@@ -77,6 +81,108 @@ const terminal = AuthoredCassetteStoryItem.cases.ExpectedBehavior.make({
   protocol: null,
   taskWork: { absences: [], results: [] }
 })
+
+it.effect("keeps Continue B unavailable before the production C2 Safe publication", () =>
+  Effect.gen(function* () {
+    const capstone = maintainedAuthoredCassetteCatalog.autonomousExecutorDeliveryCapstone
+    const safeIndex = capstone.story.findIndex(
+      (item) =>
+        item._tag === "PlannedAttemptExecutorWorkReported" &&
+        item.request === "Suspend" &&
+        item.report._tag === "ExecutorWorkSafelySuspended" &&
+        item.report.attemptId === "attempt:C:2"
+    )
+    const safe = capstone.story[safeIndex]
+    const continued = capstone.story[safeIndex + 1]
+    if (
+      safe?._tag !== "PlannedAttemptExecutorWorkReported" ||
+      safe.report._tag !== "ExecutorWorkSafelySuspended" ||
+      continued?._tag !== "OperatorContinuesAttempt"
+    ) {
+      return yield* Effect.die("the capstone does not contain the exact C2 Safe/Continue B cut")
+    }
+    const cursor = yield* makeStoryCursor([safe, continued])
+    const providerReturned = yield* Deferred.make<void>()
+    const acceptedPublication = yield* Deferred.make<void>()
+    const production = yield* Effect.gen(function* () {
+      yield* cursor.consumeExecutorReportFor("Suspend", safe.report.attemptId)
+      yield* Deferred.succeed(providerReturned, undefined)
+      yield* Deferred.await(acceptedPublication)
+    }).pipe(Effect.forkChild)
+
+    yield* Deferred.await(providerReturned)
+    const earlyContinue = yield* cursor.consumeAttemptChoice.pipe(Effect.forkChild)
+    yield* Effect.yieldNow
+    const continueUnavailable = earlyContinue.pollUnsafe() === undefined
+    expect(continueUnavailable).toBe(true)
+    expect(yield* cursor.storyPosition).toBe(0)
+    yield* Fiber.interrupt(earlyContinue)
+    yield* Fiber.interrupt(production)
+  })
+)
+
+it.effect("settles exact C2 Safe once before delayed interruption and Continue B", () =>
+  Effect.gen(function* () {
+    const capstone = maintainedAuthoredCassetteCatalog.autonomousExecutorDeliveryCapstone
+    const safeIndex = capstone.story.findIndex(
+      (item) =>
+        item._tag === "PlannedAttemptExecutorWorkReported" &&
+        item.request === "Suspend" &&
+        item.report._tag === "ExecutorWorkSafelySuspended" &&
+        item.report.attemptId === "attempt:C:2"
+    )
+    const safe = capstone.story[safeIndex]
+    const continued = capstone.story[safeIndex + 1]
+    if (
+      safe?._tag !== "PlannedAttemptExecutorWorkReported" ||
+      safe.request !== "Suspend" ||
+      safe.report._tag !== "ExecutorWorkSafelySuspended" ||
+      continued?._tag !== "OperatorContinuesAttempt"
+    ) {
+      return yield* Effect.die("the capstone does not contain the exact C2 Safe/Continue B cut")
+    }
+    const publicationEntered = yield* Deferred.make<void>()
+    const releasePublication = yield* Deferred.make<void>()
+    const occurrenceCount = yield* Ref.make(0)
+    const cursor = yield* makeStoryCursor([safe, continued], {
+      onOccurrence: ({ item }) =>
+        item._tag === "PlannedAttemptExecutorWorkReported"
+          ? Ref.update(occurrenceCount, (count) => count + 1).pipe(
+              Effect.andThen(Deferred.succeed(publicationEntered, undefined)),
+              Effect.andThen(Deferred.await(releasePublication))
+            )
+          : Effect.void
+    })
+    const reserved = yield* cursor.consumeExecutorReportFor("Suspend", safe.report.attemptId)
+    if (
+      reserved._tag !== "PlannedAttemptExecutorWorkReported" ||
+      reserved.request !== "Suspend" ||
+      reserved.report._tag !== "ExecutorWorkSafelySuspended"
+    ) {
+      return yield* Effect.die("the exact C2 Safe item was not reserved")
+    }
+
+    const settlement = yield* cursor.settleSafelySuspendedExecutorReport(reserved).pipe(Effect.forkScoped)
+    yield* Deferred.await(publicationEntered)
+    const interrupted = yield* Fiber.interrupt(settlement).pipe(Effect.forkScoped)
+    const nextChoice = yield* cursor.consumeAttemptChoice.pipe(Effect.forkScoped)
+    yield* Effect.yieldNow
+    const interruptionDelayed = interrupted.pollUnsafe() === undefined
+    const continueUnavailable = nextChoice.pollUnsafe() === undefined
+
+    yield* Deferred.succeed(releasePublication, undefined)
+    yield* Fiber.join(interrupted)
+    expect(Exit.isFailure(yield* Fiber.await(settlement))).toBe(true)
+    expect(yield* Fiber.join(nextChoice)).toEqual(Option.some(continued))
+    expect(yield* Ref.get(occurrenceCount)).toBe(1)
+    expect(yield* cursor.storyPosition).toBe(2)
+    expect(interruptionDelayed).toBe(true)
+    expect(continueUnavailable).toBe(true)
+
+    const duplicate = yield* cursor.settleSafelySuspendedExecutorReport(reserved).pipe(Effect.exit)
+    expect(Exit.isFailure(duplicate)).toBe(true)
+  })
+)
 
 const sameShapeBatch = Schema.decodeUnknownSync(AuthoredCassetteStoryItem.cases.ConcurrentTrackerReadBatch)({
   _tag: "ConcurrentTrackerReadBatch",

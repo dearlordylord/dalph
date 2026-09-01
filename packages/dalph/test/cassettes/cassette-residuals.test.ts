@@ -1,4 +1,5 @@
-import { Cause, Effect, Exit, Fiber, Option, Schema } from "effect"
+import { it as effectIt } from "@effect/vitest"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Schema } from "effect"
 import { NodeCrypto } from "@effect/platform-node"
 import { expect, it } from "vitest"
 import { AttemptId, GitCommitSha, GitRepositoryLocator, TaskId } from "@dalph/contracts"
@@ -34,6 +35,71 @@ const findStoryItemOf = <Tag extends AuthoredCassetteStoryItem["_tag"]>(tag: Tag
   )
 
 const findStoryItem = findStoryItemOf
+
+effectIt.effect("keeps authored process death unavailable before the production capacity result", () =>
+  Effect.gen(function* () {
+    const capacity = findStoryItem("SetTaskExecutionCapacity")
+    const death = findStoryItem("CoordinatorProcessDies")
+    const cursor = yield* makeStoryCursor([capacity, death])
+    const productionStarted = yield* Deferred.make<void>()
+    const productionResult = yield* Deferred.make<void>()
+    const application = yield* Effect.gen(function* () {
+      const reserved = yield* cursor.consumeCapacityChange
+      expect(Option.isSome(reserved)).toBe(true)
+      yield* Deferred.succeed(productionStarted, undefined)
+      yield* Deferred.await(productionResult)
+    }).pipe(Effect.forkChild)
+
+    yield* Deferred.await(productionStarted)
+
+    expect(yield* cursor.storyPosition).toBe(0)
+    expect((yield* cursor.currentStoryItem)?._tag).toBe("SetTaskExecutionCapacity")
+    yield* Fiber.interrupt(application)
+  })
+)
+
+effectIt.effect("settles one production capacity revision before delayed interruption and process death", () =>
+  Effect.gen(function* () {
+    const publicationEntered = yield* Deferred.make<void>()
+    const releasePublication = yield* Deferred.make<void>()
+    const occurrenceCount = yield* Ref.make(0)
+    const capacity = findStoryItem("SetTaskExecutionCapacity")
+    const death = findStoryItem("CoordinatorProcessDies")
+    const cursor = yield* makeStoryCursor([capacity, death], {
+      onOccurrence: ({ item }) =>
+        item._tag === "SetTaskExecutionCapacity"
+          ? Ref.update(occurrenceCount, (count) => count + 1).pipe(
+              Effect.andThen(Deferred.succeed(publicationEntered, undefined)),
+              Effect.andThen(Deferred.await(releasePublication))
+            )
+          : Effect.void
+    })
+    const reserved = yield* cursor.consumeCapacityChange
+    if (Option.isNone(reserved)) return yield* Effect.die("the exact capacity item was not reserved")
+
+    const settlement = yield* cursor.settleCapacityChange(reserved.value).pipe(Effect.forkScoped)
+    yield* Deferred.await(publicationEntered)
+    const interrupted = yield* Fiber.interrupt(settlement).pipe(Effect.forkScoped)
+    const processDeath = yield* cursor.pauseAtCoordinatorProcessDeath.pipe(Effect.exit, Effect.forkScoped)
+    yield* Effect.yieldNow
+    const interruptionDelayed = interrupted.pollUnsafe() === undefined
+    const processDeathUnavailable = processDeath.pollUnsafe() === undefined
+
+    yield* Deferred.succeed(releasePublication, undefined)
+    yield* Fiber.join(interrupted)
+    expect(Exit.isFailure(yield* Fiber.await(settlement))).toBe(true)
+    const deathExit = yield* Fiber.join(processDeath)
+    expect(Exit.isFailure(deathExit)).toBe(true)
+    if (Exit.isFailure(deathExit)) expect(Cause.hasDies(deathExit.cause)).toBe(true)
+    expect(yield* Ref.get(occurrenceCount)).toBe(1)
+    expect(yield* cursor.storyPosition).toBe(2)
+    expect(interruptionDelayed).toBe(true)
+    expect(processDeathUnavailable).toBe(true)
+
+    const duplicate = yield* cursor.settleCapacityChange(reserved.value).pipe(Effect.exit)
+    expect(Exit.isFailure(duplicate)).toBe(true)
+  })
+)
 
 type WorkAuthorizationChronologyItem =
   | { readonly _tag: "CoordinatorProcessDies" }

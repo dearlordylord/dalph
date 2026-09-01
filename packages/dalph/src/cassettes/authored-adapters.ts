@@ -33,7 +33,7 @@ import {
   type AuthoredCassetteDecision as CassetteDecision,
   type AuthoredCassetteStoryItem
 } from "./authored-domain.js"
-import type { StoryCursor } from "./authored-cursor.js"
+import type { AuthoredSafelySuspendedExecutorReportItem, StoryCursor } from "./authored-cursor.js"
 import { trackerReadFailure } from "./authored-tracker-read-results.js"
 
 const evidenceDigestHexLength = 64
@@ -291,6 +291,22 @@ const executorReport = (
   )
 }
 
+const isAcceptedSafelySuspendedExecutorReport = (
+  item: Extract<
+    AuthoredCassetteStoryItem,
+    {
+      readonly _tag:
+        | "PlannedAttemptExecutorPassiveLifecycleChanged"
+        | "PlannedAttemptExecutorProjectionReturned"
+        | "PlannedAttemptExecutorResponseLost"
+        | "PlannedAttemptExecutorWorkReported"
+    }
+  >
+): item is AuthoredSafelySuspendedExecutorReportItem =>
+  item._tag === "PlannedAttemptExecutorWorkReported" &&
+  item.request === "Suspend" &&
+  item.report._tag === "ExecutorWorkSafelySuspended"
+
 export const controlledExecutorLayer = (
   cursor: StoryCursor,
   runId: RunId,
@@ -300,7 +316,9 @@ export const controlledExecutorLayer = (
   ) => Effect.Effect<void>,
   survivingReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
   unresolvedLostResponses: Ref.Ref<ReadonlySet<string>>,
-  prepareReport: (report: PlannedAttemptExecutorReport) => Effect.Effect<PlannedAttemptExecutorReport> = Effect.succeed
+  prepareReport: (report: PlannedAttemptExecutorReport) => Effect.Effect<PlannedAttemptExecutorReport> = Effect.succeed,
+  reserveAcceptedSafeReport: (item: AuthoredSafelySuspendedExecutorReportItem) => Effect.Effect<void> = () =>
+    Effect.void
 ) => {
   const reports = survivingReports
   const consume = Effect.fn("AuthoredCassette.PlannedAttemptExecutor.consume")(function* (
@@ -342,6 +360,7 @@ export const controlledExecutorLayer = (
         reports,
         (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])
       )
+      if (isAcceptedSafelySuspendedExecutorReport(item)) yield* reserveAcceptedSafeReport(item)
       if (item._tag === "PlannedAttemptExecutorResponseLost") {
         yield* Ref.update(unresolvedLostResponses, (current) =>
           new Set(current).add(plannedAttemptExecutorCorrelationKey(correlation))
