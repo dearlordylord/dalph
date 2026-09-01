@@ -69,6 +69,11 @@ export interface ApplicationExitHostFinalizationRequest {
   readonly request: Effect.Effect<void>
 }
 
+/** Construction-time observation for one shell; request observation runs at the real request boundary. */
+export interface ApplicationExitShellConstructionOptions {
+  readonly onRequest?: () => Effect.Effect<void>
+}
+
 const applicationExitResultReportLeaseBrand: unique symbol = Symbol("ApplicationExitResultReportLease")
 
 /**
@@ -244,6 +249,7 @@ const makeApplicationExitRequestBoundaryWithPolicy = Effect.fn("ApplicationExitR
     ReadonlyMap<ApplicationExitQuickDrainFamily, ReadonlyArray<ApplicationExitDiagnostic>>
   > = Effect.succeed(new Map()),
   hostFinalizationRequest: ApplicationExitHostFinalizationRequest | undefined,
+  onRequest: (() => Effect.Effect<void>) | undefined,
   policy: ApplicationExitResultPolicy<TResult, TBoundaryResult>
 ) {
   const scope = yield* Effect.scope
@@ -312,6 +318,7 @@ const makeApplicationExitRequestBoundaryWithPolicy = Effect.fn("ApplicationExitR
 
   const requestExit = Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
+      yield* onRequest === undefined ? Effect.void : onRequest()
       yield* trace.emit({ _tag: "ExitRequested" })
       yield* beginExecutorDrainHandoff
       const request = yield* lifecycle.requestExit
@@ -357,6 +364,7 @@ export const makeApplicationExitRequestBoundary = (
     trace,
     beginExecutorDrainHandoff,
     readSettledQuickDrainDiagnostics,
+    undefined,
     undefined,
     ordinaryApplicationExitResultPolicy
   )
@@ -428,6 +436,7 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
   processLifecycle: ApplicationProcessLifecycleService | undefined,
   trace: ApplicationExitTraceService = { emit: () => Effect.void },
   hostFinalizationRequest: ApplicationExitHostFinalizationRequest | undefined,
+  options: ApplicationExitShellConstructionOptions,
   policy: ApplicationExitResultPolicy<TResult, TBoundaryResult>
 ) {
   const scope = yield* Effect.scope
@@ -619,6 +628,7 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
       })
     ),
     hostFinalizationRequest,
+    options.onRequest,
     policy
   )
   return {
@@ -687,13 +697,15 @@ const makeApplicationExitShellWithPolicy = Effect.fn("ApplicationExitShell.make"
 export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.makeOrdinary")(function* (
   ownership: CoordinatorOwnershipCapability,
   processLifecycle: ApplicationProcessLifecycleService,
-  trace: ApplicationExitTraceService = { emit: () => Effect.void }
+  trace: ApplicationExitTraceService = { emit: () => Effect.void },
+  options: ApplicationExitShellConstructionOptions = {}
 ) {
   return yield* makeApplicationExitShellWithPolicy(
     ownership,
     processLifecycle,
     trace,
     undefined,
+    options,
     ordinaryApplicationExitResultPolicy
   )
 })
@@ -706,13 +718,15 @@ export const makeApplicationExitShell = Effect.fn("ApplicationExitShell.makeOrdi
 export const makeApplicationExitPreFinalizationShell = Effect.fn("ApplicationExitShell.makePreFinalization")(function* (
   ownership: CoordinatorOwnershipCapability,
   hostFinalizationRequest: ApplicationExitHostFinalizationRequest,
-  trace: ApplicationExitTraceService = { emit: () => Effect.void }
+  trace: ApplicationExitTraceService = { emit: () => Effect.void },
+  options: ApplicationExitShellConstructionOptions = {}
 ) {
   return yield* makeApplicationExitShellWithPolicy(
     ownership,
     undefined,
     trace,
     hostFinalizationRequest,
+    options,
     preFinalizationApplicationExitResultPolicy
   )
 })

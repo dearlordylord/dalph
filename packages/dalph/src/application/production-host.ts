@@ -43,7 +43,7 @@ import {
   makeApplicationExitPreFinalizationShell,
   selectProductionRun
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Layer } from "effect"
+import { Context, Deferred, Effect, Layer, type Scope } from "effect"
 import type { CodexAppServer } from "./codex-app-server.js"
 import { codexAppServerNodeLayer, nodeCodexOwnedActivityCensusLayer } from "./codex-app-server.js"
 import { nodeCodexAttemptStoreLayer } from "./codex-attempt-store.js"
@@ -60,7 +60,6 @@ import {
   productionWorkflowInterpreterLayer,
   type ProductionApplicationExitRequestObserver,
   type ProductionApplicationExitTraceObserver,
-  type ProductionApplicationProcessEndObserver,
   type ProductionWorkflowCleanupObserver,
   type ProductionWorkflowGitCommandObserver,
   type ProductionRunReconstructionObservation
@@ -78,6 +77,12 @@ export interface ProductionHostObservation {
 }
 
 type ProductionHostFoundation = CoordinatorOwnership | JournalStore | RunLifecycleJournal
+
+/** Construction-time taps for the one host shell; they cannot replace its authority or identity. */
+interface ProductionRepositoryHostApplicationExitConstructionOptions {
+  readonly requestObserver?: ProductionApplicationExitRequestObserver
+  readonly traceObserver?: ProductionApplicationExitTraceObserver
+}
 
 /** Concrete live boundaries that qualification may observe without replacing. */
 export type ProductionRepositoryHostBoundary =
@@ -116,6 +121,15 @@ export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, R
   readonly foundation: (
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<ProductionHostFoundation, EFoundation, RFoundation>
+  /** Builds the one host shell before the Run graph so its real boundaries can be observed at construction. */
+  readonly makeApplicationExit?: (
+    ownership: CoordinatorOwnership["Service"],
+    hostFinalizationRequest: ApplicationExitHostFinalizationRequest
+  ) => Effect.Effect<
+    ApplicationExitShellService<ApplicationExitResultReportLease<ApplicationExitPreFinalizationResult>>,
+    never,
+    Scope.Scope
+  >
   readonly run: (
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
@@ -139,8 +153,6 @@ export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = neve
   readonly workflowGitCommandObserver?: ProductionWorkflowGitCommandObserver
   /** Optional direct observation of ApplicationExitRequestBoundary.requestExit. */
   readonly applicationExitRequestObserver?: ProductionApplicationExitRequestObserver
-  /** Optional direct observation of ApplicationProcessLifecycle.requestEnd. */
-  readonly applicationProcessEndObserver?: ProductionApplicationProcessEndObserver
   /** Optional direct observation of graceful application lifecycle results/events. */
   readonly applicationExitTraceObserver?: ProductionApplicationExitTraceObserver
   /** Optional direct observation of workflow disposition cleanup calls. */
@@ -296,11 +308,19 @@ const observedIntegratorLayer = <E, R>(
  */
 const makeHostApplicationExitShell = Effect.fn("ProductionRepositoryHost.makeApplicationExitShell")(function* (
   ownership: CoordinatorOwnership["Service"],
-  hostFinalizationRequest: ApplicationExitHostFinalizationRequest
+  hostFinalizationRequest: ApplicationExitHostFinalizationRequest,
+  options: ProductionRepositoryHostApplicationExitConstructionOptions = {}
 ) {
-  const shell = yield* makeApplicationExitPreFinalizationShell(ownership, hostFinalizationRequest, {
-    emit: () => Effect.void
-  })
+  const trace = {
+    emit: (event: Parameters<ProductionApplicationExitTraceObserver>[0]) =>
+      options.traceObserver?.(event) ?? Effect.void
+  }
+  const shell = yield* makeApplicationExitPreFinalizationShell(
+    ownership,
+    hostFinalizationRequest,
+    { emit: trace.emit },
+    options.requestObserver === undefined ? {} : { onRequest: options.requestObserver }
+  )
   return shell
 })
 
@@ -313,6 +333,18 @@ const makeHostApplicationExitShell = Effect.fn("ProductionRepositoryHost.makeApp
 export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, ETrace = never>(
   adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
 ) => ({
+  makeApplicationExit: (
+    ownership: CoordinatorOwnership["Service"],
+    hostFinalizationRequest: ApplicationExitHostFinalizationRequest
+  ) =>
+    makeHostApplicationExitShell(ownership, hostFinalizationRequest, {
+      ...(adapters.applicationExitRequestObserver === undefined
+        ? {}
+        : { requestObserver: adapters.applicationExitRequestObserver }),
+      ...(adapters.applicationExitTraceObserver === undefined
+        ? {}
+        : { traceObserver: adapters.applicationExitTraceObserver })
+    }),
   foundation: (configuration: ProductionRepositoryHostConfiguration) => {
     const ownership = observedLayerBuild(
       productionCoordinatorOwnershipLayer(GitCommonDirectoryTarget.make(configuration.commonDirectory)).pipe(
@@ -438,15 +470,6 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             integrationFinality: completionClaim,
             integrator,
             journalStoreLayer: journalLayer,
-            ...(adapters.applicationExitRequestObserver === undefined
-              ? {}
-              : { applicationExitRequestObserver: adapters.applicationExitRequestObserver }),
-            ...(adapters.applicationProcessEndObserver === undefined
-              ? {}
-              : { applicationProcessEndObserver: adapters.applicationProcessEndObserver }),
-            ...(adapters.applicationExitTraceObserver === undefined
-              ? {}
-              : { applicationExitTraceObserver: adapters.applicationExitTraceObserver }),
             applicationExit,
             ...(workflowApplicationExitObserver === undefined
               ? {}
@@ -506,9 +529,13 @@ export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFounda
       const foundation = yield* Layer.build(graph.foundation(configuration))
       const selection = yield* selectProductionRun(configuration.target).pipe(Effect.provide(foundation))
       const hostFinalizationRequested = yield* Deferred.make<void>()
-      const applicationExit = yield* makeHostApplicationExitShell(Context.get(foundation, CoordinatorOwnership), {
-        request: Deferred.succeed(hostFinalizationRequested, undefined).pipe(Effect.asVoid)
-      })
+      const applicationExit = yield* graph.makeApplicationExit === undefined
+        ? makeHostApplicationExitShell(Context.get(foundation, CoordinatorOwnership), {
+            request: Deferred.succeed(hostFinalizationRequested, undefined).pipe(Effect.asVoid)
+          })
+        : graph.makeApplicationExit(Context.get(foundation, CoordinatorOwnership), {
+            request: Deferred.succeed(hostFinalizationRequested, undefined).pipe(Effect.asVoid)
+          })
       const activationFailure = yield* Deferred.make<never, EActivation>()
       const run = yield* Layer.build(
         graph.run(

@@ -147,11 +147,11 @@ export interface ProductionWorkflowRuntimeBoundaries {
   readonly onApplicationExitShell?: (applicationExit: ApplicationExitShell["Service"]) => Effect.Effect<void>
   /** Side-effect-only observation of the actual workflow Git command service. */
   readonly workflowGitCommandObserver?: ProductionWorkflowGitCommandObserver
-  /** Optional direct observation of the application Exit request boundary. */
+  /** Optional direct observation used only when this layer constructs an ordinary application shell. */
   readonly applicationExitRequestObserver?: ProductionApplicationExitRequestObserver
-  /** Optional direct observation of the process lifecycle end boundary. */
+  /** Optional process-end observation used only when this layer constructs an ordinary application shell. */
   readonly applicationProcessEndObserver?: ProductionApplicationProcessEndObserver
-  /** Optional direct observation of application Exit lifecycle events. */
+  /** Optional lifecycle-event observation used only when this layer constructs an ordinary application shell. */
   readonly applicationExitTraceObserver?: ProductionApplicationExitTraceObserver
   /** Optional direct observation of disposition cleanup boundary calls. */
   readonly workflowCleanupObserver?: ProductionWorkflowCleanupObserver
@@ -423,7 +423,12 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
             return { ...applicationExit, requestBoundary }
           })
         )
-      : Layer.succeed(ApplicationExitShell, runtimeBoundaries.applicationExit)
+      : // A host supplies the already-constructed prefinalization shell. Its
+        // request and trace observers were installed at construction, so retain
+        // this exact object for workflow and Codex instead of decorating it or
+        // introducing a second shell. The ordinary process-end observer above
+        // intentionally has no meaning in this branch.
+        Layer.succeed(ApplicationExitShell, runtimeBoundaries.applicationExit)
   const executorWithApplicationExit = executorWithAcceptedEvidence.pipe(Layer.provideMerge(applicationExitLayer))
   const integratorLayer = integrator === undefined ? Layer.empty : Layer.succeed(Integrator, Integrator.of(integrator))
   const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, executorWithApplicationExit)
