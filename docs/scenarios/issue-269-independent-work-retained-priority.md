@@ -359,6 +359,18 @@ scenario preserves both rules and refines only their shared in-process
 relation-to-runtime handoff: it adds no action, retry, authority read, or
 durable fact.
 
+[D33 No silent drop and D34 Quiescence is not
+completion](../DELIVERY-INVARIANTS.md#progress) require accepted work not to be
+silently dropped and forbid quiescence while an admitted owner remains. At the
+formal abstraction, [`deliveryCore.qnt`'s `everyBegunSettles`
+law](../../research/verification-bakeoff/quint/deliveryCore.qnt) constrains the
+no-silent-drop outcome; that model deliberately does not represent
+in-process graph/planning publication pairing. The executable `runs work
+published after G2 before phase two subscribes` scenario in
+[`run-stabilization.test.ts`](../../packages/orchestrator/src/coordination/run/run-stabilization.test.ts)
+governs the current-first later-publication handoff. The direct consistency
+test below owns exact graph/planning pairing within one stable publication.
+
 ### Starting situation and trigger
 
 No person triggers this relation handoff. Dalph has established tracker graph
@@ -406,8 +418,11 @@ opens a fresh current-first subscription from durable Journal facts.
   advances a production-shaped coherent signal through the previously blocked
   Journal position and one later publication, then proves that graph and
   action planning stay paired and arrive in order without queue starvation.
-- `emits the exact DS01 through DS13 delivery checkpoint table` in
+- Downstream #268 blocking edge: `emits the exact DS01 through DS13 delivery
+  checkpoint table` in
   `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`
-  supplies the vertical five-task chronology: all post-claim graph reads
-  settle, A through E reach their specification reads, and the story continues
-  through the remaining delivery checkpoints.
+  is pending on the #268 composition and is not claimed as passing evidence on
+  this repair branch. Once composed, it supplies the vertical five-task
+  chronology: all post-claim graph reads settle, A through E reach their
+  specification reads, and the story continues through the remaining delivery
+  checkpoints.
