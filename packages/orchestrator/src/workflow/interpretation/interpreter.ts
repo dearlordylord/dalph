@@ -212,6 +212,7 @@ type TaskClaimReleaseResult = typeof TaskClaimReleaseResult.Type
 /** Generic traces stop at the complete-attempt executor boundary. */
 export const TraceItem = Schema.Union([
   TrackerTrace.OperationSelected,
+  TrackerTrace.TaskClaimCheckSelected,
   TrackerTrace.TaskTrackerFactsObservedTrace,
   TrackerTrace.TaskClaimAcquisitionIntended,
   TrackerTrace.TaskClaimAcquiredTrace,

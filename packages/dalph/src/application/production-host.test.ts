@@ -1,23 +1,24 @@
 /* eslint-disable import/no-nodejs-modules, max-lines -- Host composition and its chronological acceptance seam stay together. */
 import { NodeCrypto, NodeFileSystem, NodePath, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { PlannedAttemptExecutor, RunId, TaskId } from "@dalph/contracts"
+import { PlannedAttemptExecutor, RunId } from "@dalph/contracts"
 import { DatabaseSync } from "node:sqlite"
 import { readFileSync } from "node:fs"
 import nodeProcess from "node:process"
 import { fileURLToPath } from "node:url"
 import {
-  ActiveTaskClaim,
   ClaimOwner,
   ClaimToken,
   EvidenceStore,
   GitCommand,
   Integrator,
-  IntegratorGit,
+  IntegratorCandidateProviderAuthority,
   RunLifecycleJournal,
   CoordinatorOwnership,
   GithubGraphqlClient,
+  GithubIssueNodeId,
   GithubIssueTarget,
+  GithubRepositoryNodeId,
   InitialControlPolicy,
   JournalDatabaseLocator,
   JournalPosition,
@@ -26,10 +27,14 @@ import {
   JournalStore,
   intentRecordKey,
   makeTaskClaimAcquisitionOperation,
+  makeCompleteTaskTrackerFactsObserved,
+  makeTrackerGraphObservationOperation,
   OperationId,
   outcomeRecordKey,
-  TaskClaimAcquiredEvent,
+  projectTrackerSnapshot,
   TaskClaimAcquisitionIntendedEvent,
+  taskTrackerFactsObservedEvent,
+  taskTrackerReadIntent,
   type ProductionRunSelection,
   RunReactivationOwner,
   TaskWorkCapacity,
@@ -37,11 +42,15 @@ import {
   currentSignalOf,
   memoryJournalStoreLayer,
   ProductionRunSelectionConflict,
+  RunPolicyRevision,
   sqliteJournalStoreLayer,
   StartupRecoveryBlocked,
-  TrackerGraphReader,
-  TrackerMutation,
-  workflowJournalEventVersion
+  TaskWorkCapacityChangedEvent,
+  taskWorkCapacityPolicyRecordKey,
+  TrackerRevision,
+  unavailableIntegratorCandidateProviderAuthority,
+  workflowJournalEventVersion,
+  githubTaskIdFor
 } from "@dalph/orchestrator"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Context, Deferred, Effect, Fiber, FileSystem, Layer, Path, Ref, Schema, Stream } from "effect"
@@ -58,8 +67,9 @@ import { CodexServerIncarnation } from "./codex-attempt-store.js"
 import { completedRunFinalityFixture } from "../../../orchestrator/test/run-finality.js"
 import {
   type RestartFixtureEvent,
-  type RestartFixtureInput,
-  RestartFixtureEvent as RestartFixtureEventSchema
+  RestartFixtureInput,
+  RestartFixtureEvent as RestartFixtureEventSchema,
+  type RestartFixtureInput as RestartFixtureInputType
 } from "../../bin/production-restart-host-fixture-contract.js"
 
 const validRawConfiguration = () => ({
@@ -359,14 +369,10 @@ const readRestartFixtureEvents = (handle: ChildProcessSpawner.ChildProcessHandle
     Stream.runCollect
   )
 
-const restartFixtureCommand = (input: RestartFixtureInput) =>
-  ChildProcess.make(
-    nodeProcess.execPath,
-    [restartFixture, input.journalDatabase, input.root, input.label, String(input.taskWorkCapacity)],
-    { cwd: dalphPackageDirectory }
-  )
+const restartFixtureCommand = (input: RestartFixtureInputType) =>
+  ChildProcess.make(nodeProcess.execPath, [restartFixture, JSON.stringify(input)], { cwd: dalphPackageDirectory })
 
-const runRestartFixture = (input: RestartFixtureInput) =>
+const runRestartFixture = (input: RestartFixtureInputType) =>
   Effect.gen(function* () {
     const childProcesses = yield* ChildProcessSpawner.ChildProcessSpawner
     const handle = yield* childProcesses.spawn(restartFixtureCommand(input))
@@ -397,21 +403,40 @@ const restartHostProcesses = Effect.scoped(
     yield* fileSystem.makeDirectory(codexState, { recursive: true })
     yield* fileSystem.chmod(codexState, 0o700)
 
-    const input = {
-      journalDatabase: path.join(root, "journal.sqlite"),
-      label: "first-host-process",
-      root,
-      taskWorkCapacity: 2
-    } satisfies RestartFixtureInput
     const target = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(validRawConfiguration().target)
     const acquisition = {
       operationId: OperationId.make("production-restart-claim-acquisition"),
       owner: ClaimOwner.make("dalph:production-restart"),
-      taskId: TaskId.make("production-restart-task"),
+      taskId: githubTaskIdFor(
+        GithubRepositoryNodeId.make("production-restart-repository-node"),
+        GithubIssueNodeId.make("production-restart-issue-node")
+      ),
       token: ClaimToken.make("production-restart-token")
     }
     const acquisitionOperation = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
+    const graphOperation = makeTrackerGraphObservationOperation(
+      OperationId.make("production-restart-graph-read"),
+      target,
+      [],
+      [acquisition.taskId]
+    )
+    const graphProjection = projectTrackerSnapshot({
+      revision: TrackerRevision.make("production-restart-graph"),
+      tasks: [{ id: acquisition.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+    })
+    if (graphProjection._tag === "Invalid") return yield* Effect.die(graphProjection)
+    const graphObservation = makeCompleteTaskTrackerFactsObserved(graphOperation, graphProjection.snapshot)
     const seededRunId = RunId.make("production-restart-run")
+    const input = RestartFixtureInput.make({
+      journalDatabase: JournalDatabaseLocator.make(path.join(root, "journal.sqlite")),
+      label: "first-host-process",
+      root,
+      runId: seededRunId,
+      responsibilityOperationId: acquisition.operationId,
+      target,
+      taskId: acquisition.taskId,
+      taskWorkCapacity: TaskWorkCapacity.make(2)
+    })
     yield* Effect.scoped(
       Effect.gen(function* () {
         const journalContext = yield* Layer.build(
@@ -425,24 +450,40 @@ const restartHostProcesses = Effect.scoped(
         )
         yield* journal.append(
           seededRunId,
+          intentRecordKey(graphOperation.operationId),
+          taskTrackerReadIntent(graphOperation)
+        )
+        yield* journal.append(
+          seededRunId,
+          outcomeRecordKey(graphOperation.operationId),
+          taskTrackerFactsObservedEvent(graphOperation.operationId, graphObservation)
+        )
+        yield* journal.append(
+          seededRunId,
+          taskWorkCapacityPolicyRecordKey(RunPolicyRevision.make(2)),
+          TaskWorkCapacityChangedEvent.make({
+            capacity: TaskWorkCapacity.make(7),
+            initiatedBy: { _tag: "Operator" },
+            occurrenceClassification: "InitiatedAction",
+            previousRevision: RunPolicyRevision.make(1),
+            revision: RunPolicyRevision.make(2),
+            version: workflowJournalEventVersion
+          })
+        )
+        yield* journal.append(
+          seededRunId,
           intentRecordKey(acquisition.operationId),
           TaskClaimAcquisitionIntendedEvent.make({
             operation: acquisitionOperation,
             version: workflowJournalEventVersion
           })
         )
-        yield* journal.append(
-          seededRunId,
-          outcomeRecordKey(acquisition.operationId),
-          TaskClaimAcquiredEvent.make({
-            claim: ActiveTaskClaim.make(acquisition),
-            version: workflowJournalEventVersion
-          })
-        )
       })
     )
     const first = yield* runRestartFixture(input)
-    const second = yield* runRestartFixture({ ...input, label: "second-host-process", taskWorkCapacity: 7 })
+    const second = yield* runRestartFixture(
+      RestartFixtureInput.make({ ...input, label: "second-host-process", taskWorkCapacity: TaskWorkCapacity.make(7) })
+    )
     const recordsContext = yield* Layer.build(
       sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
     )
@@ -458,13 +499,11 @@ it.effect("unfinished SQLite restart selects the same Run and skips replacement 
       const secondCompleted = eventsWithTag(second, "HostCompleted")[0]
       expect(firstCompleted).toMatchObject({
         label: "first-host-process",
-        runId: seededRunId,
-        selectionTag: "Recovered"
+        selection: { _tag: "Recovered", runId: seededRunId }
       })
       expect(secondCompleted).toMatchObject({
         label: "second-host-process",
-        runId: seededRunId,
-        selectionTag: "Recovered"
+        selection: { _tag: "Recovered", runId: seededRunId }
       })
       const started = [...eventsWithTag(first, "RestartChildStarted"), ...eventsWithTag(second, "RestartChildStarted")]
       expect(started).toHaveLength(2)
@@ -475,41 +514,63 @@ it.effect("unfinished SQLite restart selects the same Run and skips replacement 
         _tag: "WorkflowRunBegan",
         initialControlPolicy: { taskExecutionCapacity: 2 }
       })
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          event: expect.objectContaining({ _tag: "TaskWorkCapacityChanged", revision: 2, capacity: 7 })
+        })
+      )
     })
   )
 )
 
-it.effect("restarted production host reconstructs the task claim and policy before its first GitHub graph read", () =>
+it.effect("restarted production host reconstructs the active claim before its first GitHub task-claim read", () =>
   restartHostProcesses.pipe(
-    Effect.map(({ first, records, second }) => {
-      const trackerReadOperationIds = records.flatMap(({ event }) =>
-        event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
-          ? [String(event.operation.operationId)]
-          : []
-      )
-      expect(trackerReadOperationIds).toHaveLength(2)
-      for (const [processIndex, events] of [first, second].entries()) {
+    Effect.map(({ first, input, second }) => {
+      for (const events of [first, second]) {
         const reconstructed = eventsWithTag(events, "RecoveryReconstructed")[0]
-        const selected = eventsWithTag(events, "OperationSelected")[0]
+        const selected = eventsWithTag(events, "TaskClaimCheckSelected")[0]
         const githubRead = eventsWithTag(events, "GithubReadStarted")[0]
         const reconstructionIndex = events.findIndex(({ _tag }) => _tag === "RecoveryReconstructed")
-        const selectedIndex = events.findIndex(({ _tag }) => _tag === "OperationSelected")
+        const selectedIndex = events.findIndex(({ _tag }) => _tag === "TaskClaimCheckSelected")
         const githubReadIndex = events.findIndex(({ _tag }) => _tag === "GithubReadStarted")
         expect(events.map(({ _tag }) => _tag)).toEqual([
           "RestartChildStarted",
           "RecoveryReconstructed",
-          "OperationSelected",
+          "TaskClaimCheckSelected",
           "GithubReadStarted",
           "HostCompleted"
         ])
         expect(reconstructed).toMatchObject({
-          acceptedPosition: processIndex === 0 ? 3 : 4,
-          initialPolicyTaskWorkCapacity: 2,
-          responsibilities: ["TaskClaimAcquired"]
+          acceptedPosition: 5,
+          policy: { revision: 2, taskExecutionCapacity: 7 },
+          responsibilities: [
+            {
+              _tag: "TaskClaimResponsibility",
+              acquisition: {
+                operationId: "production-restart-claim-acquisition",
+                owner: "dalph:production-restart",
+                taskId: input.taskId,
+                token: "production-restart-token"
+              },
+              beganAt: 5,
+              taskId: input.taskId
+            }
+          ],
+          runId: input.runId
         })
-        expect(selected).toMatchObject({ operationTag: "ReadTrackerGraph", targetIssueNumber: 293 })
-        expect(selected?.operationId).toBe(trackerReadOperationIds[processIndex])
-        expect(githubRead).toMatchObject({ _tag: "GithubReadStarted" })
+        expect(selected).toEqual({
+          _tag: "TaskClaimCheckSelected",
+          operationId: input.responsibilityOperationId,
+          taskId: input.taskId
+        })
+        if (selected === undefined) return
+        expect(githubRead).toEqual(
+          expect.objectContaining({
+            _tag: "GithubReadStarted",
+            operationId: selected.operationId,
+            target: input.target
+          })
+        )
         expect(reconstructionIndex).toBeGreaterThanOrEqual(0)
         expect(reconstructionIndex).toBeLessThan(selectedIndex)
         expect(selectedIndex).toBeLessThan(githubReadIndex)
@@ -520,91 +581,74 @@ it.effect("restarted production host reconstructs the task claim and policy befo
 
 interface UnsafeDiscoveryBoundaryCalls {
   readonly githubGraphqlRequests: number
-  readonly githubTrackerReads: number
-  readonly githubTrackerMutations: number
   readonly gitCommandCalls: number
   readonly executorCalls: number
   readonly integratorOperations: number
-  readonly integratorGitReads: number
   readonly evidenceWrites: number
   readonly journalMutations: number
-  readonly runGraphsBuilt: number
+  readonly boundaryAcquisitions: number
 }
 
 const noUnsafeDiscoveryBoundaryCalls: UnsafeDiscoveryBoundaryCalls = {
   githubGraphqlRequests: 0,
-  githubTrackerReads: 0,
-  githubTrackerMutations: 0,
   gitCommandCalls: 0,
   executorCalls: 0,
   integratorOperations: 0,
-  integratorGitReads: 0,
   evidenceWrites: 0,
   journalMutations: 0,
-  runGraphsBuilt: 0
+  boundaryAcquisitions: 0
 }
 
 const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) => {
-  const productionGraph = productionRepositoryHostGraph()
   const count = (boundary: keyof UnsafeDiscoveryBoundaryCalls) =>
     Ref.update(calls, (current) => ({ ...current, [boundary]: current[boundary] + 1 }))
-  const githubClient = GithubGraphqlClient.of({
-    execute: () => count("githubGraphqlRequests").pipe(Effect.andThen(Effect.die("unsafe discovery called GitHub")))
-  })
-  const trackerReader = TrackerGraphReader.of({
-    read: () => count("githubTrackerReads").pipe(Effect.andThen(Effect.die("unsafe discovery read the GitHub graph"))),
-    readTaskWorkSpecification: () =>
-      count("githubTrackerReads").pipe(Effect.andThen(Effect.die("unsafe discovery read GitHub task work")))
-  })
-  const trackerMutation = TrackerMutation.of({
-    acquireTaskClaim: () =>
-      count("githubTrackerMutations").pipe(Effect.andThen(Effect.die("unsafe discovery acquired a GitHub claim"))),
-    readTaskClaim: () =>
-      count("githubTrackerMutations").pipe(Effect.andThen(Effect.die("unsafe discovery read a GitHub claim"))),
-    releaseTaskClaim: () =>
-      count("githubTrackerMutations").pipe(Effect.andThen(Effect.die("unsafe discovery released a GitHub claim")))
-  })
+  const boundaryFailure = (boundary: Exclude<keyof UnsafeDiscoveryBoundaryCalls, "boundaryAcquisitions">) =>
+    count(boundary).pipe(Effect.andThen(Effect.die(`unsafe discovery crossed ${boundary}`)))
+  const githubClient = GithubGraphqlClient.of({ execute: () => boundaryFailure("githubGraphqlRequests") })
   const gitCommand = GitCommand.of({
-    run: () => count("gitCommandCalls").pipe(Effect.andThen(Effect.die("unsafe discovery ran Git"))),
-    runInWorktree: () => count("gitCommandCalls").pipe(Effect.andThen(Effect.die("unsafe discovery ran Git"))),
-    runBytesInWorktree: () => count("gitCommandCalls").pipe(Effect.andThen(Effect.die("unsafe discovery ran Git")))
+    run: () => boundaryFailure("gitCommandCalls"),
+    runInWorktree: () => boundaryFailure("gitCommandCalls"),
+    runBytesInWorktree: () => boundaryFailure("gitCommandCalls")
   })
   const executor = PlannedAttemptExecutor.of({
-    observe: () => count("executorCalls").pipe(Effect.andThen(Effect.die("unsafe discovery observed Codex"))),
-    begin: () => count("executorCalls").pipe(Effect.andThen(Effect.die("unsafe discovery began Codex work"))),
-    requestSuspension: () =>
-      count("executorCalls").pipe(Effect.andThen(Effect.die("unsafe discovery suspended Codex work"))),
-    resume: () => count("executorCalls").pipe(Effect.andThen(Effect.die("unsafe discovery resumed Codex work")))
+    observe: () => boundaryFailure("executorCalls"),
+    begin: () => boundaryFailure("executorCalls"),
+    requestSuspension: () => boundaryFailure("executorCalls"),
+    resume: () => boundaryFailure("executorCalls")
   })
-  const integrator = Integrator.of({
-    prepare: () => count("integratorOperations").pipe(Effect.andThen(Effect.die("unsafe discovery called Integrator")))
-  })
-  const integratorGit = IntegratorGit.of({
-    readCandidate: () =>
-      count("integratorGitReads").pipe(Effect.andThen(Effect.die("unsafe discovery read Integrator Git facts")))
-  })
+  const integrator = Integrator.of({ prepare: () => boundaryFailure("integratorOperations") })
   const evidence = EvidenceStore.of({
-    put: () => count("evidenceWrites").pipe(Effect.andThen(Effect.die("unsafe discovery wrote evidence"))),
-    read: () => count("evidenceWrites").pipe(Effect.andThen(Effect.die("unsafe discovery read evidence")))
+    put: () => boundaryFailure("evidenceWrites"),
+    read: () => boundaryFailure("evidenceWrites")
   })
-  return {
-    foundation: (configuration: ProductionRepositoryHostConfiguration) =>
+  const app = CodexAppServer.of({
+    incarnation: CodexServerIncarnation.make("production-unsafe-discovery-incarnation"),
+    startThread: () => boundaryFailure("executorCalls"),
+    readThread: () => boundaryFailure("executorCalls"),
+    resumeThread: () => boundaryFailure("executorCalls"),
+    startTurn: () => boundaryFailure("executorCalls"),
+    interruptTurn: () => boundaryFailure("executorCalls"),
+    listBackgroundTerminals: () => boundaryFailure("executorCalls"),
+    terminateBackgroundTerminal: () => boundaryFailure("executorCalls"),
+    close: boundaryFailure("executorCalls")
+  })
+  const productionGraph = productionRepositoryHostGraph({
+    journalStore: (_configuration, defaultLayer) =>
       Layer.unwrap(
         Effect.gen(function* () {
-          const foundation = yield* Layer.build(productionGraph.foundation(configuration))
+          yield* count("boundaryAcquisitions")
+          const foundation = yield* Layer.build(defaultLayer)
           const journal = Context.get(foundation, JournalStore)
           const lifecycle = Context.get(foundation, RunLifecycleJournal)
           const countJournalMutation = <A, E>(effect: Effect.Effect<A, E>) =>
-            Ref.update(calls, (current) => ({ ...current, journalMutations: current.journalMutations + 1 })).pipe(
-              Effect.andThen(effect)
-            )
+            boundaryFailure("journalMutations").pipe(Effect.andThen(effect))
           const wrappedJournal = JournalStore.of({
             ...journal,
             append: (runId, key, event) => countJournalMutation(journal.append(runId, key, event)),
             beginRun: (runId, target, initialControlPolicy) =>
               countJournalMutation(journal.beginRun(runId, target, initialControlPolicy)),
-            terminateRun: (runId, disposition, evidence) =>
-              countJournalMutation(journal.terminateRun(runId, disposition, evidence)),
+            terminateRun: (runId, disposition, journalEvidence) =>
+              countJournalMutation(journal.terminateRun(runId, disposition, journalEvidence)),
             retireTerminalRun: (runId) => countJournalMutation(journal.retireTerminalRun(runId))
           })
           const wrappedLifecycle = RunLifecycleJournal.of({
@@ -618,38 +662,60 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
           )
         })
       ),
-    run: (_configuration: ProductionRepositoryHostConfiguration, selection: ProductionRunSelection) =>
+    githubClient: () => Layer.effect(GithubGraphqlClient, count("boundaryAcquisitions").pipe(Effect.as(githubClient))),
+    codexAppServer: () => Layer.effect(CodexAppServer, count("boundaryAcquisitions").pipe(Effect.as(app))),
+    gitCommand: () => Layer.effect(GitCommand, count("boundaryAcquisitions").pipe(Effect.as(gitCommand))),
+    plannedAttemptExecutor: () =>
+      Layer.effect(PlannedAttemptExecutor, count("boundaryAcquisitions").pipe(Effect.as(executor))),
+    integrator: () =>
       Layer.effectContext(
         Effect.gen(function* () {
-          yield* Ref.update(calls, (current) => ({ ...current, runGraphsBuilt: current.runGraphsBuilt + 1 }))
+          yield* count("boundaryAcquisitions")
+          const ownership = yield* CoordinatorOwnership
           return Context.empty().pipe(
-            Context.add(GithubGraphqlClient, githubClient),
-            Context.add(TrackerGraphReader, trackerReader),
-            Context.add(TrackerMutation, trackerMutation),
-            Context.add(GitCommand, gitCommand),
-            Context.add(PlannedAttemptExecutor, executor),
             Context.add(Integrator, integrator),
-            Context.add(IntegratorGit, integratorGit),
-            Context.add(EvidenceStore, evidence),
-            Context.add(
-              JournaledRunObservationSource,
-              JournaledRunObservationSource.of({
-                acceptedHistory: currentSignalOf(
-                  TraceCursor.make({ position: JournalPosition.make(1), runId: selection.runId })
-                ),
-                awaitEstablished: Effect.die("unsafe discovery must not build a Run graph"),
-                current: currentSignalOf({ _tag: "NotReady" as const })
-              })
-            ),
-            Context.add(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))
+            Context.add(IntegratorCandidateProviderAuthority, unavailableIntegratorCandidateProviderAuthority),
+            Context.add(CoordinatorOwnership, ownership)
           )
+        })
+      ),
+    evidenceStore: () => Layer.effect(EvidenceStore, count("boundaryAcquisitions").pipe(Effect.as(evidence)))
+  })
+  const graph = {
+    ...productionGraph,
+    run: (
+      configuration: ProductionRepositoryHostConfiguration,
+      selection: ProductionRunSelection,
+      onFailure: (failure: unknown) => Effect.Effect<void>
+    ) =>
+      Layer.unwrap(
+        Effect.gen(function* () {
+          yield* count("boundaryAcquisitions")
+          return productionGraph.run(configuration, selection, onFailure)
         })
       )
   }
+  return graph
 }
 
-const assertNoUnsafeDiscoveryBoundaryCalls = (calls: UnsafeDiscoveryBoundaryCalls) => {
-  expect(calls).toEqual(noUnsafeDiscoveryBoundaryCalls)
+const assertNoProviderOrJournalStateChanges = (calls: UnsafeDiscoveryBoundaryCalls) => {
+  expect({
+    githubGraphqlRequests: calls.githubGraphqlRequests,
+    gitCommandCalls: calls.gitCommandCalls,
+    executorCalls: calls.executorCalls,
+    integratorOperations: calls.integratorOperations,
+    evidenceWrites: calls.evidenceWrites,
+    journalMutations: calls.journalMutations
+  }).toEqual({
+    githubGraphqlRequests: noUnsafeDiscoveryBoundaryCalls.githubGraphqlRequests,
+    gitCommandCalls: noUnsafeDiscoveryBoundaryCalls.gitCommandCalls,
+    executorCalls: noUnsafeDiscoveryBoundaryCalls.executorCalls,
+    integratorOperations: noUnsafeDiscoveryBoundaryCalls.integratorOperations,
+    evidenceWrites: noUnsafeDiscoveryBoundaryCalls.evidenceWrites,
+    journalMutations: noUnsafeDiscoveryBoundaryCalls.journalMutations
+  })
+  // Discovery must acquire only the SQLite journal adapter; no Run graph or provider adapter is built.
+  expect(calls.boundaryAcquisitions).toBe(1)
 }
 
 it.effect("terminal Run is not reactivated", () =>
@@ -721,7 +787,7 @@ it.effect("terminal Run is not reactivated", () =>
 )
 
 it.effect(
-  "two unfinished Runs fail before GitHub requests, Git commands, Codex executor calls, or Integrator operations and name both identities",
+  "two unfinished Runs fail before GitHub requests, Git commands, Codex executor calls, Integrator operations, evidence writes, or Journal mutations and name both identities",
   () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -756,7 +822,7 @@ it.effect(
             expect.objectContaining({ runId: secondRunId })
           ])
         })
-        assertNoUnsafeDiscoveryBoundaryCalls(yield* Ref.get(calls))
+        assertNoProviderOrJournalStateChanges(yield* Ref.get(calls))
       }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
     )
 )
@@ -792,7 +858,7 @@ it.effect(
 
         expect(failure).toBeInstanceOf(ProductionRunSelectionConflict)
         expect(failure).toMatchObject({ requestedTarget, conflicts: [{ runId, target: recordedTarget }] })
-        assertNoUnsafeDiscoveryBoundaryCalls(yield* Ref.get(calls))
+        assertNoProviderOrJournalStateChanges(yield* Ref.get(calls))
       }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
     )
 )
@@ -836,7 +902,7 @@ it.effect(
           partition: "Hot",
           runId
         })
-        assertNoUnsafeDiscoveryBoundaryCalls(yield* Ref.get(calls))
+        assertNoProviderOrJournalStateChanges(yield* Ref.get(calls))
       }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
     )
 )
@@ -849,8 +915,8 @@ it("production host installs one coordinator-owned GitHub, Git, executor, Integr
     "productionCoordinatorOwnershipLayer(",
     "sqliteJournalStoreLayer(",
     "githubDeliveryAuthorityLayer.pipe(",
-    "nodeCodexPlannedAttemptExecutorLayer.pipe(",
-    "nodeCodexIntegratorLayer(integratorConfiguration).pipe("
+    "nodeCodexPlannedAttemptExecutorLayer).pipe(",
+    "nodeCodexIntegratorLayer(integratorConfiguration)"
   ]) {
     expect(productionHostSource.split(construction)).toHaveLength(2)
   }

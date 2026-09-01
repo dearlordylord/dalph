@@ -10,6 +10,7 @@ import {
   type DeliveryRuntimeObservationState,
   EvidenceStore,
   GitCommonDirectoryTarget,
+  type GitCommand,
   InitialControlPolicy,
   Integrator,
   IntegratorCandidateProviderAuthority,
@@ -43,7 +44,11 @@ import {
   decodeProductionRepositoryHostConfiguration,
   productionPlannedTaskAttemptLayer
 } from "./production-configuration.js"
-import { productionRunReactivationLayer, productionWorkflowInterpreterLayer } from "./production.js"
+import {
+  productionRunReactivationLayer,
+  productionWorkflowInterpreterLayer,
+  type ProductionRunReconstructionObservation
+} from "./production.js"
 
 /** Passive process-local state exposed only after one exact Run beginning is acknowledged. */
 export interface ProductionHostObservation {
@@ -71,6 +76,27 @@ export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, R
 
 /** Low-level process substitution used by hermetic host qualification. */
 export interface ProductionRepositoryHostAdapters<ECodex = never, EGithub = never, ETrace = never> {
+  /** Optional journal layer wrapper for qualification. The supplied default remains SQLite-backed. */
+  readonly journalStore?: (
+    configuration: ProductionRepositoryHostConfiguration,
+    defaultLayer: ReturnType<typeof sqliteJournalStoreLayer>
+  ) => ReturnType<typeof sqliteJournalStoreLayer>
+  /** Optional Git command boundary used by hermetic qualification. */
+  readonly gitCommand?: () => Layer.Layer<GitCommand>
+  /** Optional executor boundary used by hermetic qualification. */
+  readonly plannedAttemptExecutor?: () => Layer.Layer<PlannedAttemptExecutor, never, CodexAppServer | GitCommand>
+  /** Optional Integrator boundary used by hermetic qualification. */
+  readonly integrator?: (
+    configuration: CodexIntegratorConfiguration
+  ) => Layer.Layer<
+    Integrator | IntegratorCandidateProviderAuthority,
+    never,
+    CodexAppServer | GitCommand | CoordinatorOwnership
+  >
+  /** Optional evidence boundary used by hermetic qualification. */
+  readonly evidenceStore?: (configuration: ProductionRepositoryHostConfiguration) => Layer.Layer<EvidenceStore>
+  /** Optional observation after the real in-Run recovery projection is assembled. */
+  readonly onReconstructed?: (input: ProductionRunReconstructionObservation) => Effect.Effect<void>
   readonly codexAppServer?: (
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<CodexAppServer, ECodex>
@@ -99,6 +125,84 @@ const defaultCodexAppServerLayer = (
   }).pipe(Layer.provide(attemptStore), Layer.provide(NodeServices.layer))
 }
 
+const makeGithubAuthorityLayer = <ECodex, EGithub, ETrace>(
+  configuration: ProductionRepositoryHostConfiguration,
+  adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace>
+) => {
+  const githubClientLayer = adapters.githubClient?.(configuration) ?? defaultGithubClientLayer(configuration)
+  return githubDeliveryAuthorityLayer.pipe(Layer.provide(githubClientLayer), Layer.provide(NodeCrypto.layer))
+}
+
+const makeEvidenceLayer = <ECodex, EGithub, ETrace>(
+  configuration: ProductionRepositoryHostConfiguration,
+  adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace>
+) =>
+  adapters.evidenceStore?.(configuration) ??
+  nodeEvidenceStoreLayer(configuration.evidenceStoreRoot).pipe(Layer.provide(NodeServices.layer))
+
+const makeCodexAppServerLayer = <ECodex, EGithub, ETrace>(
+  configuration: ProductionRepositoryHostConfiguration,
+  adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace>,
+  attemptStoreLayer: ReturnType<typeof nodeCodexAttemptStoreLayer>
+): Layer.Layer<CodexAppServer, ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>> =>
+  adapters.codexAppServer?.(configuration) ?? defaultCodexAppServerLayer(configuration, attemptStoreLayer)
+
+const makeGitCommandLayer = <ECodex, EGithub, ETrace>(
+  adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace>
+) => (adapters.gitCommand?.() ?? nodeGitCommandLayer).pipe(Layer.provide(NodeServices.layer))
+
+const makeWorkflowTraceLayer = <ECodex, EGithub, ETrace>(
+  adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace>
+) => adapters.workflowTrace?.() ?? defaultWorkflowTraceLayer
+
+const makeSharedServicesLayer = <ECodex, EGithub, ETrace>(
+  configuration: ProductionRepositoryHostConfiguration,
+  adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace>,
+  ownership: CoordinatorOwnership["Service"]
+) => {
+  const githubAuthorityLayer = makeGithubAuthorityLayer(configuration, adapters)
+  const evidenceLayer = makeEvidenceLayer(configuration, adapters)
+  const attemptStoreLayer = nodeCodexAttemptStoreLayer({ stateDirectory: configuration.codexStateDirectory }).pipe(
+    Layer.provide(NodeServices.layer)
+  )
+  /* v8 ignore start -- @preserve Hermetic host tests replace the process boundary; this assignment retains the production Codex app-server default. */
+  const appLayer = makeCodexAppServerLayer(configuration, adapters, attemptStoreLayer)
+  /* v8 ignore stop */
+  const gitCommandLayer = makeGitCommandLayer(adapters)
+  const activityCensusLayer = nodeCodexOwnedActivityCensusLayer.pipe(Layer.provide(appLayer))
+  const executorLayer = (adapters.plannedAttemptExecutor?.() ?? nodeCodexPlannedAttemptExecutorLayer).pipe(
+    Layer.provide(appLayer),
+    Layer.provide(activityCensusLayer),
+    Layer.provide(attemptStoreLayer),
+    Layer.provide(evidenceLayer),
+    Layer.provide(gitCommandLayer),
+    Layer.provide(NodeCrypto.layer),
+    Layer.provide(NodeServices.layer)
+  )
+  const integratorConfiguration = CodexIntegratorConfiguration.make({
+    candidateWorktreeRoot: configuration.integratorCandidateWorktreeRoot,
+    commonDirectory: configuration.commonDirectory,
+    privateStoreLocator: configuration.integratorPrivateStore,
+    repository: configuration.repository
+  })
+  const integratorLayer = (
+    adapters.integrator?.(integratorConfiguration) ?? nodeCodexIntegratorLayer(integratorConfiguration)
+  ).pipe(
+    Layer.provide(appLayer),
+    Layer.provide(activityCensusLayer),
+    Layer.provide(gitCommandLayer),
+    Layer.provide(NodeServices.layer),
+    Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
+  )
+  return Layer.mergeAll(
+    githubAuthorityLayer,
+    evidenceLayer,
+    executorLayer,
+    integratorLayer,
+    makeWorkflowTraceLayer(adapters)
+  )
+}
+
 /**
  * Complete production repository graph. Optional adapters replace only the
  * network/process edge for qualification; the mutation capability topology,
@@ -111,10 +215,10 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
     const ownership = productionCoordinatorOwnershipLayer(
       GitCommonDirectoryTarget.make(configuration.commonDirectory)
     ).pipe(Layer.provide(NodeServices.layer))
-    const journal = journalStoreCapabilities(sqliteJournalStoreLayer({ filename: configuration.journalDatabase })).pipe(
-      Layer.provide(ownership)
-    )
-    return Layer.merge(ownership, journal)
+    const defaultJournalLayer = sqliteJournalStoreLayer({ filename: configuration.journalDatabase })
+    const journalStoreLayer = adapters.journalStore?.(configuration, defaultJournalLayer) ?? defaultJournalLayer
+    const journal = journalStoreCapabilities(journalStoreLayer)
+    return journal.pipe(Layer.provideMerge(ownership))
   },
   run: (
     configuration: ProductionRepositoryHostConfiguration,
@@ -126,56 +230,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const ownership = yield* CoordinatorOwnership
         const journal = yield* JournalStore
         const lifecycle = yield* RunLifecycleJournal
-        /* v8 ignore start -- @preserve Hermetic host tests replace the live GitHub boundary; this assignment retains the production-only provider default. */
-        const githubClientLayer = adapters.githubClient?.(configuration) ?? defaultGithubClientLayer(configuration)
-        /* v8 ignore stop */
-        const githubAuthorityLayer = githubDeliveryAuthorityLayer.pipe(
-          Layer.provide(githubClientLayer),
-          Layer.provide(NodeCrypto.layer)
-        )
-        const evidenceLayer = nodeEvidenceStoreLayer(configuration.evidenceStoreRoot).pipe(
-          Layer.provide(NodeServices.layer)
-        )
-        const attemptStoreLayer = nodeCodexAttemptStoreLayer({
-          stateDirectory: configuration.codexStateDirectory
-        }).pipe(Layer.provide(NodeServices.layer))
-        /* v8 ignore start -- @preserve Hermetic host tests replace the process boundary; this assignment retains the production Codex app-server default. */
-        const appLayer: Layer.Layer<
-          CodexAppServer,
-          ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>
-        > = adapters.codexAppServer?.(configuration) ?? defaultCodexAppServerLayer(configuration, attemptStoreLayer)
-        /* v8 ignore stop */
-        const gitCommandLayer = nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer))
-        const activityCensusLayer = nodeCodexOwnedActivityCensusLayer.pipe(Layer.provide(appLayer))
-        const executorLayer = nodeCodexPlannedAttemptExecutorLayer.pipe(
-          Layer.provide(appLayer),
-          Layer.provide(activityCensusLayer),
-          Layer.provide(attemptStoreLayer),
-          Layer.provide(evidenceLayer),
-          Layer.provide(gitCommandLayer),
-          Layer.provide(NodeCrypto.layer),
-          Layer.provide(NodeServices.layer)
-        )
-        const integratorConfiguration = CodexIntegratorConfiguration.make({
-          candidateWorktreeRoot: configuration.integratorCandidateWorktreeRoot,
-          commonDirectory: configuration.commonDirectory,
-          privateStoreLocator: configuration.integratorPrivateStore,
-          repository: configuration.repository
-        })
-        const integratorLayer = nodeCodexIntegratorLayer(integratorConfiguration).pipe(
-          Layer.provide(appLayer),
-          Layer.provide(activityCensusLayer),
-          Layer.provide(gitCommandLayer),
-          Layer.provide(NodeServices.layer),
-          Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
-        )
-        const sharedServices = Layer.mergeAll(
-          githubAuthorityLayer,
-          evidenceLayer,
-          executorLayer,
-          integratorLayer,
-          adapters.workflowTrace?.() ?? defaultWorkflowTraceLayer
-        )
+        const sharedServices = makeSharedServicesLayer(configuration, adapters, ownership)
         const services = yield* Layer.build(sharedServices)
         const tracker = Context.get(services, TrackerMutation)
         const trackerReader = Context.get(services, TrackerGraphReader)
@@ -207,7 +262,8 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             coordinatorOwnership: ownership,
             integrationFinality: completionClaim,
             integrator,
-            journalStoreLayer: journalLayer
+            journalStoreLayer: journalLayer,
+            ...(adapters.onReconstructed === undefined ? {} : { onReconstructed: adapters.onReconstructed })
           }
         ).pipe(
           Layer.provide(Layer.succeed(TrackerGraphReader, trackerReader)),
