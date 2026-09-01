@@ -68,6 +68,10 @@ review. It changes no Dalph runtime behavior.
 - With #264–#267 and #269 complete, #268 is unblocked for its accepted
   composition-only capstone. It must not add another runtime scheduler, read
   authority, executor lifecycle, or capacity policy.
+- The separate [determinism discussion handoff](DETERMINISM-DISCUSSION-HANDOFF.md)
+  records the #268 cassette-order evidence and open Effect/Journal questions.
+  It is not an accepted decision or a #268 blocking edge; this lane continues
+  the bounded #309 composition while that investigation proceeds separately.
 - Preserve the separate #270 candidate at
   `origin/integrate/live-mvp-270-sync@82c922c7f`. A separate lane owns #270
   implementation, integration, and verification. This lane must not compose or
