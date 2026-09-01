@@ -61,6 +61,7 @@ import {
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import { deliveryRuntime } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-adapter.js"
 import { DeliveryActionExecutor } from "../../../orchestrator/src/coordination/delivery/delivery-action-executor.js"
+import { DeliveryAcceptedFactPublication } from "../../../orchestrator/src/coordination/delivery/delivery-accepted-fact-publication.js"
 import { makeReactiveDeliveryRelationsLayer } from "../../../orchestrator/src/coordination/delivery/reactive-delivery-relations.js"
 import { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
@@ -812,6 +813,7 @@ const makeRunActivationDriverImplementation = () => {
               integrationTargets
             )
             const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
+            const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))
             const productionAdmissionBasis = Option.getOrThrow(yield* relation.changes.pipe(Stream.runHead)).taskWork
             const reconstructedAdmissionBasis = {
               capacity: policy.taskExecutionCapacity,
@@ -1126,8 +1128,9 @@ const makeRunActivationDriverImplementation = () => {
                     const trackerObservationsBefore = records.filter(
                       ({ event }) => event._tag === "TaskTrackerFactsObserved"
                     ).length
-                    finalityProof = yield* runStabilizedDelivery(target, relation).pipe(
+                    finalityProof = yield* runStabilizedDelivery(target, runId, relation).pipe(
                       Effect.provideService(DeliveryActionExecutor, finalityExecutor),
+                      Effect.provideService(DeliveryAcceptedFactPublication, acceptedFactPublication),
                       Effect.provideService(PlannedTaskAttemptPlanner, finalityPlanner)
                     )
                     trackerCalls +=

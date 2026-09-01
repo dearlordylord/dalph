@@ -7,7 +7,6 @@ import {
   provideOptionalEvidenceStore,
   type DeliveryActionAdapterEnvironment
 } from "./delivery-action-adapter-environment.js"
-import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
 import {
   DeliveryActionExecutor,
   type DeliveryActionExecutionError,
@@ -126,7 +125,6 @@ export const makeLiveDeliveryActionExecutor = Effect.fn("DeliveryActionExecutor.
 ) {
   const dependencies = yield* Effect.context<DeliveryActionAdapterEnvironment>()
   const evidenceStore = optionalEvidenceStoreOf(yield* Effect.context<never>())
-  const acceptedFactPublication = yield* DeliveryAcceptedFactPublication
   const passiveObserver = yield* PassivePlannedAttemptObserver
   const passivePublication = yield* PassivePlannedAttemptProjectionPublication
   return DeliveryActionExecutor.of({
@@ -136,9 +134,7 @@ export const makeLiveDeliveryActionExecutor = Effect.fn("DeliveryActionExecutor.
         Effect.provideService(PassivePlannedAttemptObserver, passiveObserver),
         Effect.provideService(PassivePlannedAttemptProjectionPublication, passivePublication)
       )
-      return provideOptionalEvidenceStore(execution, evidenceStore).pipe(
-        Effect.tap(() => acceptedFactPublication.awaitCurrent)
-      )
+      return provideOptionalEvidenceStore(execution, evidenceStore)
     }
   })
 })

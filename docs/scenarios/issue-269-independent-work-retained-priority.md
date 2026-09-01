@@ -426,3 +426,108 @@ opens a fresh current-first subscription from durable Journal facts.
   chronology: all post-claim graph reads settle, A through E reach their
   specification reads, and the story continues through the remaining delivery
   checkpoints.
+
+## An action owner remains live until its accepted successor frontier reaches the runtime
+
+### Governing behavior
+
+[Issue #193's persistent live-request scenario](issue-193-run-reactive-delivery-actions.md#one-persistent-github-claim-proposal-starts-one-live-request)
+requires a settled action to leave one exact owner and lets its accepted
+successor start. [The accepted graph-progress scenario above](#accepted-graph-progress-cannot-strand-the-next-task-specification-reads)
+requires every coherent accepted publication to reach the runtime without a
+second relation read. This scenario preserves both rules and refines the exact
+ordering between them: the runtime may settle the predecessor only after it
+has consumed the accepted publication through which the action returned.
+
+[D33 No silent drop and D34 Quiescence is not
+completion](../DELIVERY-INVARIANTS.md#progress) prohibit losing successor work
+or claiming quiescence while its predecessor still owns a live action. The
+formal `everyBegunSettles` law remains unchanged because the activation-local
+publication handoff is below that model's abstraction. This refinement adds no
+Journal record, authority read, retry, persisted queue, or scheduling priority.
+
+### Starting situation and trigger
+
+No person triggers this in-process handoff. Dalph has one exact live owner for
+the post-claim graph-read proposal that precedes task A's current
+task-work-specification read. The runtime still holds the intent-era evaluation
+at Journal position 22; that evaluation does not yet contain A's specification
+proposal.
+
+The existing action protocol calls the tracker, records its result, and the
+Journal accepts the relation facts through position 23. The existing accepted-
+fact publication boundary waits until delivery planning publishes one coherent
+position-23 evaluation containing A's exact specification proposal. The action
+then returns. Its completion and that evaluation travel through independent
+in-process queue offers, so the completion may be taken first even though the
+relation has already published position 23.
+
+Git, the executor, claims, and tracker mutations do not apply at this handoff:
+the tracker read already returned, and the remaining steps coordinate only the
+two process-local notifications that follow its ordinary Journal publication.
+
+### Ordered runtime handoff and result
+
+1. The action returns one activation-local proof naming the exact Run and
+   Journal position 23 as the accepted prefix through which delivery planning
+   has published. The runtime's completion already names the exact predecessor
+   proposal; the descriptive relation does not copy or validate that identity.
+2. If the runtime takes the completion before it takes the position-23
+   evaluation, it retains the exact live owner and the child-completion
+   acknowledgement. It does not settle the owner, release its reservation,
+   admit a successor, report quiescence, or reread the relation.
+3. The runtime consumes ordinary queued relation evaluations. An older
+   evaluation cannot satisfy the proof. A proof naming another Run or a result
+   naming another proposal fails the activation closed rather than settling
+   either owner.
+4. When the runtime applies the coherent position-23 evaluation, it applies
+   the retained completion exactly once: the predecessor owner settles once,
+   the child is acknowledged once, and A's exact specification proposal is
+   admitted once from that evaluation.
+5. A later accepted empty evaluation at position 24 removes A's settled
+   specification owner and permits ordinary quiescence. Position 23 alone is
+   not silently rewritten into an empty frontier.
+
+The operator sees delivery continue into A's specification read instead of an
+early incomplete return. Dalph must not depend on queue offer order, polling,
+sleeping, an extra relation read, a copied graph cache, a persisted barrier, or
+a second revision authority. It must not acknowledge the predecessor child or
+remove its owner before the runtime reaches position 23, and it must not apply
+the retained completion twice.
+
+If Dalph dies while completion is waiting, the owner, acknowledgement, and
+publication proof disappear with the activation. The Journal already contains
+the accepted prefix, so ordinary restart reconstructs work from that history
+and opens a fresh current-first relation subscription. No new crash event,
+completion record, or replay token is persisted. A relation failure while the
+completion waits keeps the existing scoped cleanup behavior and fails the
+activation; it does not convert missing publication into permission to settle.
+
+### Acceptance-test mapping
+
+- `keeps an action owner until its accepted successor publication reaches the
+  runtime` in
+  `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`
+  deterministically offers completion before the position-23 evaluation,
+  proves that the owner and child acknowledgement remain live, then releases
+  position 23 and proves the predecessor settles once, A is admitted once, and
+  a later empty position 24 reaches quiescence.
+- `fails closed when an action completion proof differs from the exact
+  activation Run or proposal` in the same file proves that a foreign Run is
+  rejected even before reconstruction exposes a runtime Run snapshot, and
+  that neither invalid identity can settle the live owner or acknowledge its
+  child.
+- `settles pending completions in their publication arrival order when one
+  evaluation releases both` in the same file proves that one later accepted
+  evaluation flushes multiple ready completions in FIFO order rather than
+  depending on queue priority.
+- `rolls back an owner when its pending completion loses the relation` in the
+  same file proves that relation failure interrupts the unacknowledged child,
+  removes its process-local owner through the existing scoped cleanup, and
+  records no successful action outcome.
+- Downstream #268 blocking edge: `emits the exact DS01 through DS13 delivery
+  checkpoint table` in
+  `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`
+  remains pending on composition. It will prove that this local ordering lets
+  the five accepted post-claim results expose A through E's specification reads
+  in the complete delivery story.

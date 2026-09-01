@@ -34,6 +34,7 @@ import {
   DeliveryActionExecutor,
   type DeliveryActionExecutionLease
 } from "../../../orchestrator/src/coordination/delivery/delivery-action-executor.js"
+import { DeliveryAcceptedFactPublication } from "../../../orchestrator/src/coordination/delivery/delivery-accepted-fact-publication.js"
 import { makeReactiveDeliveryRelationsLayer } from "../../../orchestrator/src/coordination/delivery/reactive-delivery-relations.js"
 import { executeFreshTrackerGraphRead } from "../../../orchestrator/src/coordination/delivery/delivery-action-adapter-common.js"
 import { executeIntegrationAction } from "../../../orchestrator/src/coordination/delivery/integration-delivery-action-adapter.js"
@@ -1022,6 +1023,7 @@ const makeCancellationDriverImplementation = () => {
         runtimeResources.integrationTargets
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
+      const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))
       const workflowInterpreter = yield* WorkflowInterpreter
       const workflowTrace = yield* WorkflowTrace
       const finalityExecutor = DeliveryActionExecutor.of({
@@ -1282,8 +1284,9 @@ const makeCancellationDriverImplementation = () => {
           } else if (latestClassificationGraph === undefined) {
             return yield* Effect.die("production finality handoff had no established graph read")
           }
-          const proof = yield* runStabilizedDelivery(target, relation).pipe(
+          const proof = yield* runStabilizedDelivery(target, runId, relation).pipe(
             Effect.provideService(DeliveryActionExecutor, finalityExecutor),
+            Effect.provideService(DeliveryAcceptedFactPublication, acceptedFactPublication),
             Effect.provideService(PlannedTaskAttemptPlanner, finalityPlanner)
           )
           if (!("disposition" in proof) || proof.disposition !== command.disposition) {

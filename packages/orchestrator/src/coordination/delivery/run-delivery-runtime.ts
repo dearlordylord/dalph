@@ -1,3 +1,5 @@
+/* eslint-disable max-lines -- One gated event loop owns admission, evaluations, completion publication, and quiescence. */
+import { RunId } from "@dalph/contracts"
 import { Context, Deferred, Effect, Exit, Option, Queue, Ref, Schema, Semaphore, Stream } from "effect"
 import type * as Cause from "effect/Cause"
 import {
@@ -13,7 +15,7 @@ import {
   type DeliveryActionResult,
   type DeliverySemanticTraceEvent
 } from "./delivery-action-executor.js"
-import type { DeliveryActionProposal, DeliveryProposalId } from "./delivery-action-proposal.js"
+import { DeliveryProposalId, type DeliveryActionProposal } from "./delivery-action-proposal.js"
 import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
 import type { DeliveryAdmissionReservation } from "./delivery-runtime-admission.js"
 import {
@@ -43,6 +45,10 @@ import {
   deliveryRuntimeLocalDeferralAppliesAt,
   type DeliveryRuntimeLocalDeferral
 } from "./delivery-runtime-local-deferral.js"
+import {
+  DeliveryAcceptedFactPublication,
+  type DeliveryAcceptedPublicationBoundary
+} from "./delivery-accepted-fact-publication.js"
 
 export { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
 export * from "./delivery-runtime-phase.js"
@@ -57,11 +63,27 @@ export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedErro
   }
 ) {}
 
+/** A completion proof names a different Run, owner, or result, so no live action may settle from it. */
+export class DeliveryActionCompletionPublicationMismatch extends Schema.TaggedError<DeliveryActionCompletionPublicationMismatch>()(
+  "DeliveryActionCompletionPublicationMismatch",
+  {
+    expectedProposalId: DeliveryProposalId,
+    expectedRunId: RunId,
+    publicationRunId: RunId,
+    resultProposalId: DeliveryProposalId
+  }
+) {}
+
 type LiveOwner = RuntimeObservation.DeliveryRuntimeLiveOwnerSource
+
+interface PublishedDeliveryActionResult {
+  readonly publicationThrough: DeliveryAcceptedPublicationBoundary
+  readonly result: DeliveryActionResult
+}
 
 interface Completion {
   readonly acknowledged: Deferred.Deferred<void>
-  readonly exit: Exit.Exit<DeliveryActionResult, DeliveryActionExecutionError | PlannedTaskAttemptError>
+  readonly exit: Exit.Exit<PublishedDeliveryActionResult, DeliveryActionExecutionError | PlannedTaskAttemptError>
   readonly proposalId: DeliveryProposalId
 }
 
@@ -80,6 +102,8 @@ export type DeliveryRuntimeInput<E = never> = CurrentSignal<DeliveryRuntimeEvalu
 /**
  * The sole runtime-coloured consumer of the descriptive delivery relation.
  * It owns subscriptions, admission, live actions, completion, and quiescence.
+ * Its required Run identity comes from the activation, not the optional
+ * reconstructed snapshot carried by an evaluation.
  *
  * TODO: this is the largest unmodelled state machine in the system. Every
  * property the delivery requirements rest on — restart mid-attempt, capacity
@@ -93,17 +117,20 @@ export type DeliveryRuntimeInput<E = never> = CurrentSignal<DeliveryRuntimeEvalu
  * single highest-value model in the study.
  */
 export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(function* <E>(
+  expectedRunId: RunId,
   relation: DeliveryRuntimeInput<E>,
   phase: DeliveryRuntimePhaseType = DeliveryRuntimePhase.Ordinary
 ): Effect.fn.Return<
   DeliveryRuntimeQuiescence,
   | E
   | ApplicationExiting
+  | DeliveryActionCompletionPublicationMismatch
   | DeliveryActionExecutionError
   | DeliveryRuntimeProposalOwnershipConflict
   | DeliveryRuntimeReconfirmationStateInvalid
   | PlannedTaskAttemptError,
   | DeliveryActionExecutor
+  | DeliveryAcceptedFactPublication
   | RuntimeObservation.DeliveryRuntimeObservationPublication
   | DeliveryRuntimeResources
   | OperationIdAllocator
@@ -114,6 +141,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
     Effect.gen(function* () {
       const scope = yield* Effect.scope
       const executor = yield* DeliveryActionExecutor
+      const acceptedFactPublication = yield* DeliveryAcceptedFactPublication
       const resources = yield* DeliveryRuntimeResources
       const runtimeObservation = yield* RuntimeObservation.DeliveryRuntimeObservationPublication
       const operationAllocator = yield* OperationIdAllocator
@@ -125,6 +153,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const events = yield* Queue.unbounded<RuntimeEvent<E>>()
       const owners = yield* Ref.make<ReadonlyMap<DeliveryProposalId, LiveOwner>>(new Map())
       const localDeferrals = yield* Ref.make<ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>>(new Map())
+      const pendingCompletions = yield* Ref.make<ReadonlyMap<DeliveryProposalId, Completion>>(new Map())
       const latest = yield* Ref.make<Option.Option<DeliveryRuntimeEvaluation>>(Option.none())
       const selectionGate = yield* Semaphore.make(1)
       const integrationTargets = resources.integrationTargets
@@ -201,7 +230,15 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           )
         )
         const child = Effect.gen(function* () {
-          const exit = yield* Effect.exit(run)
+          const exit = yield* Effect.exit(
+            run.pipe(
+              Effect.flatMap((result) =>
+                acceptedFactPublication.awaitCurrent.pipe(
+                  Effect.map((publicationThrough) => ({ publicationThrough, result }))
+                )
+              )
+            )
+          )
           const acknowledged = yield* Deferred.make<void>()
           yield* Queue.offer(events, {
             _tag: "ActionCompleted",
@@ -269,8 +306,39 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       })
 
       const applyCompletion = Effect.fn("DeliveryRuntime.applyCompletion")(function* (completion: Completion) {
-        const result = yield* selectionGate.withPermit(
+        const applied = yield* selectionGate.withPermit(
           Effect.gen(function* () {
+            const current = Option.getOrThrow(yield* Ref.get(latest))
+            if (Exit.isSuccess(completion.exit)) {
+              const published = completion.exit.value
+              if (
+                expectedRunId !== published.publicationThrough.runId ||
+                completion.proposalId !== published.result.proposalId
+              ) {
+                return yield* new DeliveryActionCompletionPublicationMismatch({
+                  expectedProposalId: completion.proposalId,
+                  expectedRunId,
+                  publicationRunId: published.publicationThrough.runId,
+                  resultProposalId: published.result.proposalId
+                })
+              }
+              if (current.acceptedAt === null || current.acceptedAt < published.publicationThrough.acceptedThrough) {
+                const pending = yield* Ref.get(pendingCompletions)
+                yield* Ref.set(pendingCompletions, new Map(pending).set(completion.proposalId, completion))
+                yield* emit({
+                  _tag: "ActionCompletionPublicationPending",
+                  acceptedThrough: published.publicationThrough.acceptedThrough,
+                  proposalId: completion.proposalId
+                })
+                return Option.none<
+                  Exit.Exit<DeliveryActionResult, DeliveryActionExecutionError | PlannedTaskAttemptError>
+                >()
+              }
+            }
+            yield* Ref.update(
+              pendingCompletions,
+              (pending) => new Map([...pending].filter(([proposalId]) => proposalId !== completion.proposalId))
+            )
             const owner = Option.getOrThrow(Option.fromUndefinedOr((yield* Ref.get(owners)).get(completion.proposalId)))
             const intentRecorded = yield* owner.intentRecorded
             if (Exit.isFailure(completion.exit)) {
@@ -283,19 +351,16 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               )
               yield* publishRuntimeObservationInsideGate()
             } else {
+              const actionResult = completion.exit.value.result
               yield* admission.complete(owner.reservation)
-              yield* emit({ _tag: "ActionOutcome", result: completion.exit.value })
+              yield* emit({ _tag: "ActionOutcome", result: actionResult })
               yield* owner.settle
               yield* publishRuntimeObservationInsideGate()
               // Sample the accepted signal before deciding whether this owner coalesces with the next proposal.
               const current = Option.getOrThrow(yield* Ref.get(latest))
               yield* Ref.set(latest, Option.some(current))
               yield* admission.synchronize(current.taskWork)
-              const localDeferral = deliveryRuntimeLocalDeferralAfter(
-                completion.exit.value,
-                owner.proposal,
-                current.acceptedAt
-              )
+              const localDeferral = deliveryRuntimeLocalDeferralAfter(actionResult, owner.proposal, current.acceptedAt)
               if (Option.isSome(localDeferral)) {
                 const proposalIds =
                   localDeferral.value._tag === "PassiveOwnerAttached"
@@ -326,11 +391,26 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                 yield* publishRuntimeObservationInsideGate()
               }
             }
-            return completion.exit
+            return Option.some(Exit.map(completion.exit, ({ result }) => result))
           })
         )
-        yield* Deferred.succeed(completion.acknowledged, undefined)
-        return result
+        if (Option.isSome(applied)) yield* Deferred.succeed(completion.acknowledged, undefined)
+        return applied
+      })
+
+      const applyPublishedCompletions = Effect.fn("DeliveryRuntime.applyPublishedCompletions")(function* () {
+        const acceptedAt = Option.getOrThrow(yield* Ref.get(latest)).acceptedAt
+        if (acceptedAt === null) return
+        const ready = [...(yield* Ref.get(pendingCompletions)).values()].filter(
+          (completion) =>
+            Exit.isSuccess(completion.exit) && completion.exit.value.publicationThrough.acceptedThrough <= acceptedAt
+        )
+        for (const completion of ready) {
+          const applied = yield* applyCompletion(completion)
+          if (Option.isSome(applied) && Exit.isFailure(applied.value)) {
+            return yield* Effect.failCause(applied.value.cause)
+          }
+        }
       })
 
       const runtimeQuiescence = Effect.fn("DeliveryRuntime.quiescence")(function* (
@@ -434,10 +514,11 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         if (event._tag === "RelationFailed") return yield* Effect.failCause(event.cause)
         if (event._tag === "EvaluationChanged") {
           yield* applyEvaluation(event.evaluation)
+          yield* applyPublishedCompletions()
           return
         }
         const exit = yield* applyCompletion(event.completion)
-        if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
+        if (Option.isSome(exit) && Exit.isFailure(exit.value)) return yield* Effect.failCause(exit.value.cause)
       })
 
       for (;;) {
@@ -462,8 +543,8 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
 })
 
 /** Runs one standalone runtime phase and releases its process-local resources at the phase boundary. */
-export const runDeliveryRuntime = <E>(relation: DeliveryRuntimeInput<E>) =>
-  runDeliveryRuntimePhase(relation).pipe(
+export const runDeliveryRuntime = <E>(expectedRunId: RunId, relation: DeliveryRuntimeInput<E>) =>
+  runDeliveryRuntimePhase(expectedRunId, relation).pipe(
     Effect.ensuring(
       Effect.gen(function* () {
         yield* Effect.flatMap(DeliveryRuntimeResources, ({ integrationTargets }) => integrationTargets.releaseAll)

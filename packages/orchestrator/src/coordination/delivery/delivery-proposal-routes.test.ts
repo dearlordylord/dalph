@@ -187,7 +187,6 @@ import {
   authorizePlannedAttemptContinuationWithPermit
 } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
 import { liveDeliveryActionExecutorLayer, makeLiveDeliveryActionExecutor } from "./live-delivery-action-executor.js"
-import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
 import { makeDeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import {
   completionClaimDeletionRequestFor,
@@ -772,10 +771,6 @@ effectIt.effect("executes cancellation settlement through suspension, relinquish
       Effect.provideService(
         PlannedTaskAttemptPlanner,
         PlannedTaskAttemptPlanner.of({ plan: () => Effect.die("unused attempt planner") })
-      ),
-      Effect.provideService(
-        DeliveryAcceptedFactPublication,
-        DeliveryAcceptedFactPublication.of({ awaitCurrent: Effect.void })
       )
     )
 
@@ -5284,26 +5279,13 @@ describe("delivery proposal route matrix", () => {
         return yield* Effect.die("missing accepted live-dispatch proposal")
       }
       const acceptedAction = { _tag: "AcceptedOperationAction" as const, proposal: acceptedProposal }
-      const directExecutor = yield* withAdapterServices(
-        makeLiveDeliveryActionExecutor(runId, target).pipe(
-          Effect.provideService(
-            DeliveryAcceptedFactPublication,
-            DeliveryAcceptedFactPublication.of({ awaitCurrent: Effect.void })
-          )
-        )
-      )
+      const directExecutor = yield* withAdapterServices(makeLiveDeliveryActionExecutor(runId, target))
       expect(yield* directExecutor.execute(acceptedAction, inertLease)).toMatchObject({
         _tag: "ActionCompleted",
         proposalId: acceptedProposal.id
       })
       const layeredExecutor = yield* withAdapterServices(
-        DeliveryActionExecutor.pipe(
-          Effect.provide(liveDeliveryActionExecutorLayer(runId, target)),
-          Effect.provideService(
-            DeliveryAcceptedFactPublication,
-            DeliveryAcceptedFactPublication.of({ awaitCurrent: Effect.void })
-          )
-        )
+        DeliveryActionExecutor.pipe(Effect.provide(liveDeliveryActionExecutorLayer(runId, target)))
       )
       expect(yield* layeredExecutor.execute(acceptedAction, inertLease)).toMatchObject({
         _tag: "ActionCompleted",

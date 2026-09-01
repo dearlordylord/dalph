@@ -6,6 +6,7 @@ import {
 } from "@dalph/contracts"
 import { Context, Effect, Schema } from "effect"
 import type { InRunJournalService } from "../../workflow-journal/store.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
   InterruptibleWorkflowBoundaryExecution,
   WorkflowInterpreterService,
@@ -280,6 +281,12 @@ export class DeliveryActionExecutor extends Context.Service<DeliveryActionExecut
 
 export type DeliverySemanticTraceEvent =
   | { readonly _tag: "ActionOutcome"; readonly result: DeliveryActionResult }
+  /** One successful action remains owned until the runtime consumes its accepted publication prefix. */
+  | {
+      readonly _tag: "ActionCompletionPublicationPending"
+      readonly acceptedThrough: JournalPosition
+      readonly proposalId: DeliveryProposalId
+    }
   | { readonly _tag: "ProposalAdmitted"; readonly proposalId: DeliveryProposalId }
   | {
       readonly _tag: "ProposalDeferred"
