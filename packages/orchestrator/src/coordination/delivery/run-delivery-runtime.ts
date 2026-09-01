@@ -17,7 +17,7 @@ import {
 } from "./delivery-action-executor.js"
 import { DeliveryProposalId, type DeliveryActionProposal } from "./delivery-action-proposal.js"
 import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
-import type { DeliveryAdmissionReservation } from "./delivery-runtime-admission.js"
+import { deliveryTaskWorkAdmissionBasisOf, type DeliveryAdmissionReservation } from "./delivery-runtime-admission.js"
 import {
   makeDeliveryRuntimeAdmissionLoop,
   DeliveryRuntimeProposalOwnershipConflict
@@ -410,101 +410,108 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         }
       })
 
-      const runtimeQuiescence = Effect.fn("DeliveryRuntime.quiescence")(function* (
-        current: DeliveryRuntimeEvaluation,
-        live: ReadonlyMap<DeliveryProposalId, LiveOwner>
-      ) {
-        const proposedActions = current.proposedActions
-        if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
-          return yield* new DeliveryRuntimeProposalOwnershipConflict({
-            proposalIds: proposedActions.conflicts.map(({ id }) => id)
+      const runtimeQuiescence = Effect.fn("DeliveryRuntime.quiescence")(function* () {
+        return yield* selectionGate.withPermit(
+          Effect.gen(function* () {
+            const current = Option.getOrThrow(yield* Ref.get(latest))
+            const live = yield* Ref.get(owners)
+            const proposedActions = current.proposedActions
+            if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
+              return yield* new DeliveryRuntimeProposalOwnershipConflict({
+                proposalIds: proposedActions.conflicts.map(({ id }) => id)
+              })
+            }
+            const deferred = yield* Ref.get(localDeferrals)
+            const locallyRunnableProposals = proposedActions.proposals.filter(({ id }) => {
+              const localDeferral = deferred.get(id)
+              return (
+                localDeferral === undefined || !deliveryRuntimeLocalDeferralAppliesAt(localDeferral, current.acceptedAt)
+              )
+            })
+            const locallyRunnableFrontier: AvailableProposalFrontier = {
+              ...proposedActions,
+              proposals: locallyRunnableProposals
+            }
+            const everyProposalIsLocallyDeferred = locallyRunnableProposals.length === 0
+            const activeRefreshG2Pending =
+              phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
+            /**
+             * After G2, an active refresh may deliberately retain a Running
+             * executor position while the relation exposes independent work. If
+             * that position fills the whole configured capacity and no local
+             * action owner remains, waiting for another runtime event cannot free
+             * it: the retained executor responsibility is outside this phase.
+             * Return an unsettled quiescence while leaving the proposal in the
+             * descriptive relation so a later ordinary activation can retry it.
+             */
+            const postG2RetainedCapacityBlocks =
+              phase._tag === "ActiveRefreshPostG2RuntimePhase" &&
+              current.activeRefreshBoundary !== undefined &&
+              current.taskWork.held.length >= Number(current.taskWork.capacity) &&
+              current.taskWork.held.every(({ correlation }) =>
+                current.activeRefreshBoundary?.reconciledAttempts.some(
+                  (subject) => subject.runId === correlation.runId && subject.attemptId === correlation.attemptId
+                )
+              ) &&
+              locallyRunnableProposals.length > 0 &&
+              locallyRunnableProposals.every(
+                ({ admission: { taskWorkPosition } }) =>
+                  taskWorkPosition._tag === "TaskWorkPositionRequired" && taskWorkPosition.mode === "ReserveOrReuse"
+              )
+            if (live.size !== 0) return Option.none<DeliveryRuntimeQuiescence>()
+            const ordinaryTaskWorkAdmissionStalled =
+              phase._tag === "OrdinaryDeliveryRuntimePhase"
+                ? classifyTaskWorkAdmissionStalledRuntimeQuiescence(
+                    current,
+                    deliveryTaskWorkAdmissionBasisOf(yield* admission.snapshot),
+                    locallyRunnableFrontier
+                  )
+                : Option.none()
+            if (
+              !activeRefreshG2Pending &&
+              !everyProposalIsLocallyDeferred &&
+              !postG2RetainedCapacityBlocks &&
+              Option.isNone(ordinaryTaskWorkAdmissionStalled)
+            ) {
+              return Option.none<DeliveryRuntimeQuiescence>()
+            }
+            if (Option.isSome(ordinaryTaskWorkAdmissionStalled)) {
+              return Option.some<DeliveryRuntimeQuiescence>(ordinaryTaskWorkAdmissionStalled.value)
+            }
+            const empty: EmptyProposalFrontier = { ...locallyRunnableFrontier, proposals: [] }
+            if (current.quiescence._tag === "QuiescencePassive") {
+              const quiescence: DeliveryRuntimeQuiescence = {
+                _tag: "PassiveRuntimeQuiescence",
+                acceptedAt: current.acceptedAt,
+                current: current.current,
+                disposition: current.quiescence,
+                proposedActions: empty,
+                ...(current.activeRefreshBoundary === undefined
+                  ? {}
+                  : { activeRefreshBoundary: current.activeRefreshBoundary })
+              }
+              return Option.some(quiescence)
+            }
+            const graph = current.current.trackerGraph
+            if (graph._tag !== "GraphEstablished" || current.acceptedAt === null) {
+              return yield* new DeliveryRuntimeReconfirmationStateInvalid({
+                acceptedAt: current.acceptedAt,
+                graphState: graph._tag
+              })
+            }
+            const quiescence: DeliveryRuntimeQuiescence = {
+              _tag: "TrackerReconfirmationQuiescence",
+              acceptedAt: current.acceptedAt,
+              current: { ...current.current, trackerGraph: graph },
+              disposition: current.quiescence,
+              proposedActions: empty,
+              ...(current.activeRefreshBoundary === undefined
+                ? {}
+                : { activeRefreshBoundary: current.activeRefreshBoundary })
+            }
+            return Option.some(quiescence)
           })
-        }
-        const deferred = yield* Ref.get(localDeferrals)
-        const locallyRunnableProposals = proposedActions.proposals.filter(({ id }) => {
-          const localDeferral = deferred.get(id)
-          return (
-            localDeferral === undefined || !deliveryRuntimeLocalDeferralAppliesAt(localDeferral, current.acceptedAt)
-          )
-        })
-        const locallyRunnableFrontier: AvailableProposalFrontier = {
-          ...proposedActions,
-          proposals: locallyRunnableProposals
-        }
-        const everyProposalIsLocallyDeferred = locallyRunnableProposals.length === 0
-        const activeRefreshG2Pending =
-          phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
-        /**
-         * After G2, an active refresh may deliberately retain a Running
-         * executor position while the relation exposes independent work. If
-         * that position fills the whole configured capacity and no local
-         * action owner remains, waiting for another runtime event cannot free
-         * it: the retained executor responsibility is outside this phase.
-         * Return an unsettled quiescence while leaving the proposal in the
-         * descriptive relation so a later ordinary activation can retry it.
-         */
-        const postG2RetainedCapacityBlocks =
-          phase._tag === "ActiveRefreshPostG2RuntimePhase" &&
-          current.activeRefreshBoundary !== undefined &&
-          current.taskWork.held.length >= Number(current.taskWork.capacity) &&
-          current.taskWork.held.every(({ correlation }) =>
-            current.activeRefreshBoundary?.reconciledAttempts.some(
-              (subject) => subject.runId === correlation.runId && subject.attemptId === correlation.attemptId
-            )
-          ) &&
-          locallyRunnableProposals.length > 0 &&
-          locallyRunnableProposals.every(
-            ({ admission: { taskWorkPosition } }) =>
-              taskWorkPosition._tag === "TaskWorkPositionRequired" && taskWorkPosition.mode === "ReserveOrReuse"
-          )
-        const ordinaryTaskWorkAdmissionStalled =
-          phase._tag === "OrdinaryDeliveryRuntimePhase"
-            ? classifyTaskWorkAdmissionStalledRuntimeQuiescence(current, locallyRunnableFrontier)
-            : Option.none()
-        if (
-          live.size !== 0 ||
-          (!activeRefreshG2Pending &&
-            !everyProposalIsLocallyDeferred &&
-            !postG2RetainedCapacityBlocks &&
-            Option.isNone(ordinaryTaskWorkAdmissionStalled))
-        ) {
-          return Option.none<DeliveryRuntimeQuiescence>()
-        }
-        if (Option.isSome(ordinaryTaskWorkAdmissionStalled)) {
-          return Option.some<DeliveryRuntimeQuiescence>(ordinaryTaskWorkAdmissionStalled.value)
-        }
-        const empty: EmptyProposalFrontier = { ...locallyRunnableFrontier, proposals: [] }
-        if (current.quiescence._tag === "QuiescencePassive") {
-          const quiescence: DeliveryRuntimeQuiescence = {
-            _tag: "PassiveRuntimeQuiescence",
-            acceptedAt: current.acceptedAt,
-            current: current.current,
-            disposition: current.quiescence,
-            proposedActions: empty,
-            ...(current.activeRefreshBoundary === undefined
-              ? {}
-              : { activeRefreshBoundary: current.activeRefreshBoundary })
-          }
-          return Option.some(quiescence)
-        }
-        const graph = current.current.trackerGraph
-        if (graph._tag !== "GraphEstablished" || current.acceptedAt === null) {
-          return yield* new DeliveryRuntimeReconfirmationStateInvalid({
-            acceptedAt: current.acceptedAt,
-            graphState: graph._tag
-          })
-        }
-        const quiescence: DeliveryRuntimeQuiescence = {
-          _tag: "TrackerReconfirmationQuiescence",
-          acceptedAt: current.acceptedAt,
-          current: { ...current.current, trackerGraph: graph },
-          disposition: current.quiescence,
-          proposedActions: empty,
-          ...(current.activeRefreshBoundary === undefined
-            ? {}
-            : { activeRefreshBoundary: current.activeRefreshBoundary })
-        }
-        return Option.some(quiescence)
+        )
       })
 
       const applyRuntimeEvent = Effect.fn("DeliveryRuntime.applyEvent")(function* (event: RuntimeEvent<E>) {
@@ -526,9 +533,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           while (yield* admissionLoop.admitPass()) yield* Effect.yieldNow
         }
 
-        const currentAfterAdmission = Option.getOrThrow(yield* Ref.get(latest))
-        const live = yield* Ref.get(owners)
-        const quiescence = yield* runtimeQuiescence(currentAfterAdmission, live)
+        const quiescence = yield* runtimeQuiescence()
         if (Option.isSome(quiescence)) {
           yield* publishRuntimeObservation()
           return quiescence.value

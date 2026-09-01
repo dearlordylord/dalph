@@ -6,6 +6,7 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  PlannedAttemptExecutor,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -119,7 +120,7 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type { DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
-import type { JournalRecord } from "../../workflow-journal/store.js"
+import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { deriveJournalResponsibilityFacts } from "../run/recovery-activation.js"
 import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
@@ -134,6 +135,11 @@ import {
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
 import { deliveryRuntimeLocalDeferralAfter, DeliveryRuntimeLocalDeferral } from "./delivery-runtime-local-deferral.js"
 import { reconcileDeliveryRuntimeLocalDeferrals } from "./delivery-runtime-local-deferral-reconciliation.js"
+import { executeFreshPlannedAttempt } from "./planned-attempt-delivery-action-adapter.js"
+import {
+  PassivePlannedAttemptObserver,
+  PassivePlannedAttemptProjectionPublication
+} from "../run/passive-planned-attempt-observer.js"
 
 const deliveryRuntimeResourceCapabilitiesOf = Effect.fn("RunDeliveryRuntimeTest.makeCapabilities")(function* (
   integrationTargets: Parameters<typeof makeCapabilitiesWithAdmission>[0]
@@ -3278,6 +3284,204 @@ it.effect("quiesces after G2 when retained active capacity cannot be freed local
       expect(result._tag).toBe("TrackerReconfirmationQuiescence")
       expect(result.proposedActions.proposals).toEqual([])
       expect(yield* Ref.get(executed)).toEqual([])
+    })
+  )
+)
+
+const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmissionSnapshotScenario")(function* () {
+  const base = yield* baseEvaluation
+  const [a, b, c, d, e] = ["snapshot-A", "snapshot-B", "snapshot-C", "snapshot-D", "snapshot-E"].map(
+    preparedAttemptFixture
+  )
+  if (a === undefined || b === undefined || c === undefined || d === undefined || e === undefined) {
+    return yield* Effect.die("five effective admission snapshot fixtures must be present")
+  }
+  const [beginC, blockedD, blockedE] = preparedBeginProposalsOf([c, d, e])
+  if (beginC === undefined || blockedD === undefined || blockedE === undefined) {
+    return yield* Effect.die("C, D, and E must each produce one exact Begin proposal")
+  }
+  const blocked = [blockedD, blockedE] as const
+  const initialAt = JournalPosition.make(1)
+  const acceptedThrough = JournalPosition.make(4)
+  const initial = {
+    ...withProposals({ ...base, acceptedAt: initialAt }, [beginC, ...blocked], 3),
+    current: { ...base.current, runId },
+    taskWork: {
+      capacity: TaskWorkCapacity.make(3),
+      held: [a, b].map(({ attempt }) => ({
+        correlation: plannedAttemptExecutorCorrelation(attempt),
+        taskId: attempt.taskId
+      }))
+    }
+  } satisfies DeliveryRuntimeEvaluation
+  const accepted = {
+    ...initial,
+    acceptedAt: acceptedThrough,
+    proposedActions: { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: blocked }
+  } satisfies DeliveryRuntimeEvaluation
+  const poison = {
+    ...accepted,
+    acceptedAt: JournalPosition.make(5),
+    proposedActions: {
+      _tag: "DeliveryProposalOwnershipConflict" as const,
+      conflicts: [{ id: blockedD.id, order: blockedD.order, owners: ["TrackerGraph", "TicketDelivery"] }]
+    }
+  } satisfies DeliveryRuntimeEvaluation
+  const relation = yield* dynamicEvaluationSignal(initial)
+  const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+  const journal = InRunJournal.of({
+    append: (recordRunId, key, event) =>
+      Ref.modify(records, (current) => {
+        const existing = current.find((record) => record.key === key)
+        if (existing !== undefined) return [existing, current] as const
+        const appended = {
+          event,
+          key,
+          position: JournalPosition.make(current.length + 1),
+          runId: recordRunId
+        } satisfies JournalRecord
+        return [appended, [...current, appended]] as const
+      }),
+    read: () => Ref.get(records)
+  })
+  const admissionCreated = yield* Deferred.make<DeliveryRuntimeAdmissionController>()
+  const beginBoundary = yield* Deferred.make<{
+    readonly journalTags: ReadonlyArray<JournalRecord["event"]["_tag"]>
+    readonly position: unknown
+  }>()
+  const journalCountAtPublication = yield* Deferred.make<number>()
+  const publicationCalls = yield* Ref.make(0)
+  const integrationTargets = yield* makeIntegrationTargetResourceController()
+  const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
+  const resources = {
+    ...capabilities.resources,
+    makeAdmissionController: (basis: Parameters<typeof capabilities.resources.makeAdmissionController>[0]) =>
+      capabilities.resources
+        .makeAdmissionController(basis)
+        .pipe(Effect.tap((controller) => Deferred.succeed(admissionCreated, controller)))
+  }
+  const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+    correlation: plannedAttemptExecutorCorrelation(c.attempt)
+  })
+  const plannedAttemptExecutor = PlannedAttemptExecutor.of({
+    begin: () =>
+      Effect.gen(function* () {
+        const admission = yield* Deferred.await(admissionCreated)
+        yield* Deferred.succeed(beginBoundary, {
+          journalTags: (yield* Ref.get(records)).map(({ event }) => event._tag),
+          position: (yield* admission.snapshot).positions.get(c.attempt.taskId)
+        })
+        return executing
+      }),
+    observe: () => Effect.die("the attached C projection is supplied without another executor read"),
+    requestSuspension: () => Effect.die("the snapshot scenario does not suspend C"),
+    resume: () => Effect.die("the snapshot scenario does not resume C")
+  })
+  const passiveObserver = PassivePlannedAttemptObserver.of({
+    attach: () => Effect.succeed({ acceptedFacts: "UnchangedPassiveObservation", report: executing })
+  })
+  const passivePublication = PassivePlannedAttemptProjectionPublication.of({
+    publish: () => Effect.die("the controlled C attachment emits no later projection"),
+    publishWithPermit: () => Effect.die("the controlled C attachment already has an accepted executing report")
+  })
+  const actionExecutor = DeliveryActionExecutor.of({
+    execute: (action, lease) => {
+      if (action._tag !== "IdentityFreeAction" || action.proposal.route._tag !== "FreshExecutorWorkflowRoute") {
+        return Effect.die("only C's exact fresh executor action may cross the action boundary")
+      }
+      return executeFreshPlannedAttempt(action, action.proposal.route, lease).pipe(
+        Effect.provideService(InRunJournal, journal),
+        Effect.provideService(PlannedAttemptExecutor, plannedAttemptExecutor),
+        Effect.provideService(PassivePlannedAttemptObserver, passiveObserver),
+        Effect.provideService(PassivePlannedAttemptProjectionPublication, passivePublication)
+      )
+    }
+  })
+  const blockedIds = new Set(blocked.map(({ id }) => id))
+  const deferred = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+  const trace = DeliverySemanticTrace.of({
+    emit: (event) =>
+      event._tag === "ProposalDeferred" && blockedIds.has(event.proposalId)
+        ? Ref.updateAndGet(deferred, (current) =>
+            current.includes(event.proposalId) ? current : [...current, event.proposalId]
+          ).pipe(
+            Effect.flatMap((current) => (current.length === blocked.length ? relation.publish(poison) : Effect.void))
+          )
+        : Effect.void
+  })
+  const publication = DeliveryAcceptedFactPublication.of({
+    awaitCurrent: Effect.gen(function* () {
+      yield* Deferred.succeed(journalCountAtPublication, (yield* Ref.get(records)).length)
+      yield* Ref.update(publicationCalls, (count) => count + 1)
+      yield* relation.publish(accepted)
+      return { _tag: "DeliveryAcceptedPublicationBoundary" as const, acceptedThrough, runId }
+    })
+  })
+
+  const result = yield* runDeliveryRuntimePhase(runId, relation).pipe(
+    Effect.provide(plannerLayer),
+    Effect.provide(deterministicOperationIdAllocatorLayer("runtime-effective-admission-snapshot")),
+    Effect.provide(plannedAttemptProtocolControllerLayer),
+    Effect.provide(deliveryRuntimeResourceCapabilitiesLayer({ ...capabilities, resources }).pipe(Layer.fresh)),
+    Effect.provideService(DeliveryActionExecutor, actionExecutor),
+    Effect.provideService(DeliveryAcceptedFactPublication, publication),
+    Effect.provideService(DeliverySemanticTrace, trace)
+  )
+  return {
+    acceptedTaskWork: accepted.taskWork,
+    beginBoundary: yield* Deferred.await(beginBoundary),
+    blocked,
+    expectedCorrelations: [a, b, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt)),
+    finalJournalTags: (yield* Ref.get(records)).map(({ event }) => event._tag),
+    journalCountAtPublication: yield* Deferred.await(journalCountAtPublication),
+    publicationCalls: yield* Ref.get(publicationCalls),
+    result
+  }
+})
+
+it.effect(
+  "binds C before its journal-first Begin and returns admission-stalled from the effective admission snapshot",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = yield* runEffectiveAdmissionSnapshotScenario()
+        expect(scenario.beginBoundary.position).toMatchObject({ correlation: scenario.expectedCorrelations[2] })
+        expect(scenario.beginBoundary.journalTags).toEqual([
+          "PlannedAttemptExecutorWorkResponsibilityBegan",
+          "PlannedAttemptExecutorCommandIntended"
+        ])
+        expect(scenario.result._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+        expect(scenario.result.proposedActions.proposals).toEqual(scenario.blocked)
+        if (scenario.result._tag !== "TaskWorkAdmissionStalledRuntimeQuiescence") {
+          return yield* Effect.die("the effective admission snapshot must classify blocked D and E")
+        }
+        expect(scenario.result.taskWork.held.map(({ correlation }) => correlation)).toEqual(
+          scenario.expectedCorrelations
+        )
+      })
+    )
+)
+
+it.effect("does not journal or publish the process-local admission snapshot", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const scenario = yield* runEffectiveAdmissionSnapshotScenario()
+      expect(scenario.finalJournalTags).toEqual([
+        "PlannedAttemptExecutorWorkResponsibilityBegan",
+        "PlannedAttemptExecutorCommandIntended",
+        "PlannedAttemptExecutorCommandResponseObserved",
+        "PlannedAttemptExecutorWorkReported"
+      ])
+      expect(scenario.journalCountAtPublication).toBe(scenario.finalJournalTags.length)
+      expect(scenario.publicationCalls).toBe(1)
+      expect(scenario.acceptedTaskWork.held.map(({ correlation }) => correlation)).toEqual(
+        scenario.expectedCorrelations.slice(0, 2)
+      )
+      expect(scenario.result._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+      if (scenario.result._tag !== "TaskWorkAdmissionStalledRuntimeQuiescence") {
+        return yield* Effect.die("the process-local snapshot must not be persisted before quiescence")
+      }
+      expect(scenario.result.taskWork.held.map(({ correlation }) => correlation)).toEqual(scenario.expectedCorrelations)
     })
   )
 )
