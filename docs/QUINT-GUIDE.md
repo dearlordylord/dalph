@@ -38,8 +38,8 @@ collected deterministic and negative tests, sampled invariant/witness check,
 and complete finite-state verification with no arbitrary depth token.
 
 The current proof projections are `taskFactReconciliation_proof.qnt`,
-`plannedAttemptExecutor_proof.qnt`, and `applicationExit_proof.qnt`. The
-task-fact projection includes the
+`plannedAttemptExecutor_proof.qnt`, `applicationExit_proof.qnt`, and
+`acceptedResultIntegration_proof.qnt`. The task-fact projection includes the
 accepted #218/#281 active-work slice: it separately proves `Running`
 establishment, tracker/timer source provenance, and healthy/unreadable
 observation behavior. Their negative test modules are the mutation

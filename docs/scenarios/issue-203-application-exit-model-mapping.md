@@ -18,11 +18,14 @@ The tables use these short names for the accepted chronological scenarios:
 - **Death** — Dalph dies before the requested Exit has a successful result.
 - **Timeout** — the original drain reaches five seconds.
 - **Failure** — a quick drain operation fails conclusively.
-- **Host scoped** — Alice's configured production repository host's bounded drain
-  closes its registered process-local quick-drain resources (for example,
-  Codex), then exposes the exact lifecycle result. The host returns from its
-  reporting callback, and only then closes remaining scoped resources and
-  releases coordinator ownership.
+- **Host scoped** — Alice's configured production repository host runs its
+  registered process-local quick-drain close operations before exposing the
+  exact lifecycle result: `Succeeded` proves those operations closed their
+  resources, `Failed` proves useful operations settled with diagnostics but not
+  necessarily that every resource closed, and `TimedOut` may leave unresolved
+  resources for later host scope finalization. The host returns from its
+  reporting callback, and only then do remaining scope finalizers close
+  resources and release coordinator ownership.
 - **Restart** — startup after success and ambiguous interruption is identical.
 - **Races** — Exit races with Pause, Unpause, termination, or another Exit.
 - **Several Runs** — startup rejects several unfinished Runs before activation.
@@ -40,7 +43,7 @@ The tables use these short names for the accepted chronological scenarios:
 | Idle, Outside call, Executor, Atomic, Death, Timeout, Failure, Races | `acceptExit` | Linearize the first request with the process-wide admission cutoff. |
 | Failure, Races | `joinExit` | A later caller joins the same tick and result instead of starting another drain. |
 | Idle, Executor, Atomic | `reportSuccess`, `stopAfterSuccess` | Report the ordinary recoverable result before requesting graceful status zero. |
-| Host scoped | `selectHostScopedMode`, `reportSuccess`, `reportFailure`, `advanceTick`, `finalizeHostScope` | Select the tagged host policy, expose the same exact result after bounded drain work, then release scope-owned coordinator ownership without a process-end event. |
+| Host scoped | `selectHostScopedMode`, `reportSuccess`, `reportFailure`, `advanceTick`, `finalizeHostScope` | Select the tagged host policy, run registered quick-drain close operations before the exact outcome (success proves closure, failure records settled diagnostics, and timeout may leave unresolved resources), then finalize remaining scope resources and coordinator ownership without a process-end event. |
 | Failure | `reportFailure`, `forceAfterFailure` | Wait for useful independent quick work, retain diagnostics, then request forced nonzero termination. |
 | Atomic, Death, Timeout, Failure, Races | `advanceTick` | Advance the one monotonic five-tick drain; the fifth transition atomically times out and forces termination. |
 | Death | `unexpectedDeath` | Distinguish disappearance before a result from graceful success, failure, and timeout. |
@@ -116,7 +119,7 @@ gate.
 | Death | `deathBeforeResultRestartsWithoutLifecycleStateTest`; `unexpectedDeathSuccessIsDetectedTest` | fresh-start and result distinction unit tests; production-backed MBT | #209 authored request-to-death cassette and ordinary fresh-start evidence |
 | Timeout | `fifthTickForceTerminatesAStuckAtomicBoundaryTest`, `timeoutRetainsAnEarlierConclusiveFailureDiagnosticTest`; early/fifth-without-force negative controls | monotonic tick, fifth-tick precedence, forced process-end unit tests, #209 cross-family earlier-diagnostic timeout evidence, and #210 `repeated SIGTERM joins the original stuck Linux child drain and exits nonzero at five seconds`; production-backed MBT | #211 records equivalent manual macOS evidence |
 | Failure | `conclusiveFailureWaitsForIndependentQuickDrainWorkTest`, `usefulQuickWorkBlocksConclusiveFailureTest`; early-failure and zero-status negative controls | failure guard, #209 cross-family concurrent runtime drain and typed forced process-end tests, and #210 `a successor Linux child acquires the coordinator lock after zero success and nonzero failed or timed-out Exit`; production-backed MBT | #208 proves exact cleanup preservation without inventing cleanup work; #211 records equivalent manual macOS evidence |
-| Host scoped | `hostScopedExitReportsExactResultBeforeScopeReleaseTest`, `hostScopedFailureReportsBeforeScopeReleaseTest`, `hostScopedTimeoutReportsBeforeScopeReleaseTest`, `hostScopedRestartClearsModeAndTimerTest`; `hostScopeFinalizationBeforeResultIsDetectedTest` | `graceful host Exit reports the lifecycle result, then releases the coordinator lock`, `does not finalize host resources while the reporting callback is blocked`, and `host Exit timeout preserves recovery and starts a fresh five-second lifecycle`; the production graph observer test proves request/trace connectivity and no process-end event | #297 production-host scope/finalization boundary |
+| Host scoped | `hostScopedExitReportsExactResultBeforeScopeReleaseTest`, `hostScopedFailureReportsBeforeScopeReleaseTest`, `hostScopedTimeoutReportsBeforeScopeReleaseTest`, `hostScopedRestartClearsModeAndTimerTest`; `hostScopeFinalizationBeforeResultIsDetectedTest` | `graceful host Exit reports the exact outcome after its registered quick-drain operations`, `does not finalize remaining host resources while the reporting callback is blocked`, and `host Exit timeout preserves recovery and starts a fresh five-second lifecycle`; the production graph observer test proves request/trace connectivity and no process-end event | #297 production-host scope/finalization boundary |
 | Restart | `deathBeforeResultRestartsWithoutLifecycleStateTest`, `pauseAppliedBeforeCutoffRemainsDurableTest`; restored-mode negative control | fresh-start unit test, #209 authored death cassette and ordinary Run-entry evidence, and #210 `signal receipt, scope closure, and unexpected death leave only the ordinary journal prefix`; production-backed MBT | #211 records equivalent manual macOS evidence |
 | Races | `joinedExitUsesTheOriginalTickAndSharedResultTest`, `onlyPreauthorizedRunTerminationAppendMayFinishTest`, `postCutoffForwardWorkCannotBeginTest`, `postCutoffControlCannotApplyTest`, `postCutoffOwnerPreparationCannotBeginTest`; joined/cutoff/authorization negative controls | cutoff, typed rejection, and join unit tests; production-backed MBT | #204 shared admission and deterministic race tests |
 | Several Runs | no Exit transition | no Exit decision is made | Existing `runActivation` rejection remains authoritative; #204 consumes only an activated V1 Run. |
