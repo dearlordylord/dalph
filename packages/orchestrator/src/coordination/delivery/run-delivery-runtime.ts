@@ -306,6 +306,10 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         const applied = yield* selectionGate.withPermit(
           Effect.gen(function* () {
             const current = Option.getOrThrow(yield* Ref.get(latest))
+            const owner = Option.getOrThrow(Option.fromUndefinedOr((yield* Ref.get(owners)).get(completion.proposalId)))
+            const localDeferral = Exit.isSuccess(completion.exit)
+              ? deliveryRuntimeLocalDeferralAfter(completion.exit.value.result, owner.proposal, current.acceptedAt)
+              : Option.none<DeliveryRuntimeLocalDeferral>()
             if (Exit.isSuccess(completion.exit)) {
               const published = completion.exit.value
               if (
@@ -319,14 +323,20 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                   resultProposalId: published.result.proposalId
                 })
               }
-              if (current.acceptedAt === null || current.acceptedAt < published.publicationThrough.acceptedThrough) {
+              if (
+                current.acceptedAt === null ||
+                current.acceptedAt < published.publicationThrough.acceptedThrough ||
+                (Option.isNone(localDeferral) && proposalIsPresent(current.proposedActions, completion.proposalId))
+              ) {
                 const pending = yield* Ref.get(pendingCompletions)
                 yield* Ref.set(pendingCompletions, new Map(pending).set(completion.proposalId, completion))
-                yield* emit({
-                  _tag: "ActionCompletionPublicationPending",
-                  acceptedThrough: published.publicationThrough.acceptedThrough,
-                  proposalId: completion.proposalId
-                })
+                if (!pending.has(completion.proposalId)) {
+                  yield* emit({
+                    _tag: "ActionCompletionPublicationPending",
+                    acceptedThrough: published.publicationThrough.acceptedThrough,
+                    proposalId: completion.proposalId
+                  })
+                }
                 return Option.none<
                   Exit.Exit<DeliveryActionResult, DeliveryActionExecutionError | PlannedTaskAttemptError>
                 >()
@@ -336,7 +346,6 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               pendingCompletions,
               (pending) => new Map([...pending].filter(([proposalId]) => proposalId !== completion.proposalId))
             )
-            const owner = Option.getOrThrow(Option.fromUndefinedOr((yield* Ref.get(owners)).get(completion.proposalId)))
             const intentRecorded = yield* owner.intentRecorded
             if (Exit.isFailure(completion.exit)) {
               yield* admission.rollback(owner.reservation, intentRecorded)
@@ -357,7 +366,6 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               const current = Option.getOrThrow(yield* Ref.get(latest))
               yield* Ref.set(latest, Option.some(current))
               yield* admission.synchronize(current.taskWork)
-              const localDeferral = deliveryRuntimeLocalDeferralAfter(actionResult, owner.proposal, current.acceptedAt)
               if (Option.isSome(localDeferral)) {
                 const proposalIds =
                   localDeferral.value._tag === "PassiveOwnerAttached"
