@@ -15,6 +15,7 @@ import {
 import {
   FixtureTarget,
   OperationId,
+  TraceOutputError,
   TrackerRevision,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
@@ -22,7 +23,8 @@ import {
 import {
   type AuthoredCassetteDecision,
   AuthoredCassetteStoryItem,
-  AuthoredCausalSelection
+  AuthoredCausalSelection,
+  AuthoredScenarioCassette
 } from "../../src/cassettes/authored-domain.js"
 import {
   AuthoredCausalSelectionFailure,
@@ -413,5 +415,36 @@ it.effect("coalesces notification and timer hints then retains B1 until its exac
     expect(finalBReport).toBeDefined()
     expect(suspend !== undefined && finalBReport !== undefined && suspend.position < finalBReport.position).toBe(true)
     expect(run.observedBehavior.taskWorkResults).toEqual([])
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("surfaces a reactivation-owner interaction defect before terminal assertions", () =>
+  Effect.gen(function* () {
+    const processDeathIndex = activeWorkF2SafelySuspendsAuthoredCassette.story.findIndex(
+      ({ _tag }) => _tag === "CoordinatorProcessDies"
+    )
+    const ownerSelectionIndex = activeWorkF2SafelySuspendsAuthoredCassette.story.findIndex(
+      (item, index) => index > processDeathIndex && item._tag === "DalphSelects"
+    )
+    expect(processDeathIndex).toBeGreaterThanOrEqual(0)
+    expect(ownerSelectionIndex).toBeGreaterThan(processDeathIndex)
+    const malformedOwnerInteraction = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+      ...activeWorkF2SafelySuspendsAuthoredCassette,
+      name: "reactivation owner surfaces an exact interaction defect",
+      story: activeWorkF2SafelySuspendsAuthoredCassette.story.map((item, index) =>
+        index === ownerSelectionIndex
+          ? { _tag: "DalphSelects", operation: { _tag: "ReadTaskClaim", taskId: "A" } }
+          : item
+      )
+    })
+
+    const exit = yield* runAuthoredScenarioCassette(malformedOwnerInteraction).pipe(Effect.exit)
+    expect(Exit.isFailure(exit)).toBe(true)
+    if (Exit.isFailure(exit)) {
+      expect(exit.cause.reasons.every(Cause.isDieReason)).toBe(true)
+      const defects = exit.cause.reasons.flatMap((reason) => (Cause.isDieReason(reason) ? [reason.defect] : []))
+      expect(defects).toHaveLength(1)
+      expect(defects[0]).toBeInstanceOf(TraceOutputError)
+    }
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
