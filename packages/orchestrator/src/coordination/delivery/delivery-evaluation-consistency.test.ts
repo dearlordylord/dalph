@@ -14,7 +14,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Queue, Semaphore, Stream, SubscriptionRef } from "effect"
+import { Deferred, Effect, Fiber, Layer, Queue, Semaphore, Stream, SubscriptionRef } from "effect"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { expect } from "vitest"
@@ -319,6 +319,64 @@ it.effect("emits one coherent same-position planning successor before a later ac
       ])
     })
   )
+)
+
+it.effect("a replacement runtime assembly immediately exposes the current same-position lineage successor", () =>
+  Effect.gen(function* () {
+    const position80 = JournalPosition.make(80)
+    const initialBundle = bundle(TrackerGraphState.cases.GraphNotEstablished.make({}))
+    const atPosition80: DeliveryRelationInputBundle = {
+      ...initialBundle,
+      actionInputs: {
+        ...initialBundle.actionInputs,
+        runtimeFacts: { ...initialBundle.actionInputs.runtimeFacts, acceptedAt: position80, runId }
+      }
+    }
+    const coherent = yield* SubscriptionRef.make(atPosition80)
+    const worktree = samePositionProposals(samePositionWorktreeTransition)
+    const lineage = samePositionProposals(samePositionLineageTransition)
+    const planning = yield* SubscriptionRef.make(deliveryProposalFrontierOf([worktree]))
+    const publicationGate = yield* Semaphore.make(1)
+
+    const observeCurrentEvaluationInFreshScope = () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const { assembly, consequences } = yield* Effect.all({
+            assembly: DeliveryRuntimeAssembly,
+            consequences: delivery
+          })
+          const planningSignal = {
+            ...currentSignalFromCurrentFirstStream(SubscriptionRef.changes(planning)),
+            getWithinStablePublication: SubscriptionRef.get(planning)
+          }
+          const attachment = yield* assembly.of({ delivery: consequences, proposedActions: planningSignal }).attach
+          return attachment.current
+        }).pipe(
+          Effect.provide(
+            Layer.fresh(
+              makeDeliveryRelationsLayer({
+                coherent: currentSignalFromCurrentFirstStream(SubscriptionRef.changes(coherent)),
+                publicationConsistency: { withStablePublication: (effect) => publicationGate.withPermit(effect) }
+              })
+            )
+          )
+        )
+      )
+
+    const scope1Current = yield* observeCurrentEvaluationInFreshScope()
+    expect(scope1Current).toMatchObject({
+      acceptedAt: position80,
+      proposedActions: { _tag: "DeliveryProposalsAvailable", proposals: worktree.map(({ id }) => ({ id })) }
+    })
+
+    yield* publicationGate.withPermit(SubscriptionRef.set(planning, deliveryProposalFrontierOf([lineage])))
+
+    const scope2Current = yield* observeCurrentEvaluationInFreshScope()
+    expect(scope2Current).toMatchObject({
+      acceptedAt: position80,
+      proposedActions: { _tag: "DeliveryProposalsAvailable", proposals: lineage.map(({ id }) => ({ id })) }
+    })
+  })
 )
 
 it("removes process revisions and general invalidation from runtime assembly", () => {
