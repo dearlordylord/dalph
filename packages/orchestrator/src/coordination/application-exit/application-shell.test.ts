@@ -1,12 +1,10 @@
 import { it } from "@effect/vitest"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Option, Ref, Scope } from "effect"
 import { TestClock } from "effect/testing"
-import { expect, expectTypeOf } from "vitest"
+import { expect } from "vitest"
 import {
   ApplicationExitDiagnostic,
-  ApplicationExitPreFinalizationResult,
   ApplicationExitResult,
-  type ApplicationExitPreFinalizationResult as ApplicationExitPreFinalizationResultType,
   type ApplicationExitResult as ApplicationExitResultType,
   type ApplicationProcessEndDecision
 } from "./lifecycle-decision.js"
@@ -28,14 +26,11 @@ import { makeTaskClaimReleaseOperation, TaskClaimReleaseAuthority } from "../../
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import {
   ApplicationExitDrainFailure,
-  type ApplicationExitHostFinalizationRequest,
-  type ApplicationProcessLifecycleService,
   ApplicationExitRequestBoundary,
-  type ApplicationExitResultReportLease,
   type ApplicationExitDrain,
   type ApplicationExitTraceEvent,
   makeApplicationExitRequestBoundary,
-  makeApplicationExitPreFinalizationShell,
+  makeProductionHostApplicationExitShell,
   makeApplicationExitShell
 } from "./application-shell.js"
 
@@ -192,67 +187,32 @@ it.effect("cancels an ordinary Exit requester while process ending is blocked", 
   )
 )
 
-it.effect("reports host drain readiness before scope finalization without claiming ordinary success", () =>
+it.effect("reports the exact host lifecycle result before scope finalization", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      expectTypeOf<ApplicationExitHostFinalizationRequest>().not.toMatchTypeOf<ApplicationProcessLifecycleService>()
-      expectTypeOf<ApplicationProcessLifecycleService>().not.toMatchTypeOf<ApplicationExitHostFinalizationRequest>()
-      expectTypeOf<
-        ApplicationExitResultReportLease<ApplicationExitPreFinalizationResultType>
-      >().not.toMatchTypeOf<ApplicationExitPreFinalizationResultType>()
-      expectTypeOf<
-        ApplicationExitResultReportLease<ApplicationExitPreFinalizationResultType>
-      >().not.toMatchTypeOf<ApplicationExitResultType>()
-      expectTypeOf<
-        Extract<ApplicationExitPreFinalizationResultType, { readonly _tag: "ReadyForFinalization" }>
-      >().not.toMatchTypeOf<Extract<ApplicationExitResultType, { readonly _tag: "Succeeded" }>>()
       const releaseCount = yield* Ref.make(0)
-      const finalizationRequestCount = yield* Ref.make(0)
-      const finalizationRequested = yield* Deferred.make<void>()
       const trace = yield* Ref.make<ReadonlyArray<ApplicationExitTraceEvent>>([])
       const ownership = CoordinatorOwnership.of({
         release: Ref.update(releaseCount, (count) => count + 1),
         runMutation: (mutation) => mutation
       })
-      const shell = yield* makeApplicationExitPreFinalizationShell(
-        ownership,
-        {
-          request: Ref.update(finalizationRequestCount, (count) => count + 1).pipe(
-            Effect.andThen(Deferred.succeed(finalizationRequested, undefined))
-          )
-        },
-        { emit: (event) => Ref.update(trace, (current) => [...current, event]) }
-      )
+      const shell = yield* makeProductionHostApplicationExitShell({
+        emit: (event) => Ref.update(trace, (current) => [...current, event])
+      })
 
-      const report = yield* shell.requestBoundary.requestExit
-      const result = report.result
-      expect(result).toEqual(
-        ApplicationExitPreFinalizationResult.cases.ReadyForFinalization.make({ requestedStatus: 0 })
-      )
-      expect(result._tag).toBe("ReadyForFinalization")
-      expect(result._tag).not.toBe("Succeeded")
-      expect(result).not.toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      const result = yield* shell.requestBoundary.requestExit
+      expect(result).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      expect(result._tag).toBe("Succeeded")
       expect(yield* Ref.get(releaseCount)).toBe(0)
       expect(yield* Ref.get(trace).pipe(Effect.map((events) => events.map(({ _tag }) => _tag)))).not.toContain(
         "CoordinatorLockReleased"
       )
       expect(yield* Ref.get(trace).pipe(Effect.map((events) => events.map(({ _tag }) => _tag)))).toContain(
-        "ExitDrainResultReported"
+        "ExitResultReported"
       )
       expect(yield* Ref.get(trace).pipe(Effect.map((events) => events.map(({ _tag }) => _tag)))).not.toContain(
         "ProcessEndRequested"
       )
-      expect(yield* Deferred.isDone(finalizationRequested)).toBe(false)
-
-      yield* report.acknowledge
-      expect(yield* Deferred.isDone(finalizationRequested)).toBe(true)
-      const traceAfterAcknowledgement = yield* Ref.get(trace)
-      expect(traceAfterAcknowledgement.map(({ _tag }) => _tag)).toContain("ExitDrainReportAcknowledged")
-      expect(yield* Ref.get(finalizationRequestCount)).toBe(1)
-      // A repeated acknowledgement joins the same report lease and does not
-      // issue another host-finalization request.
-      yield* report.acknowledge
-      expect(yield* Ref.get(finalizationRequestCount)).toBe(1)
       yield* ownership.release
       expect(yield* Ref.get(releaseCount)).toBe(1)
     })

@@ -48,24 +48,6 @@ export const ApplicationExitResult = Schema.TaggedUnion({
 })
 export type ApplicationExitResult = typeof ApplicationExitResult.Type
 
-/**
- * Host-facing result after admission closes and the bounded Exit drain settles.
- * `ReadyForFinalization` deliberately says nothing about host scope resources
- * or coordinator ownership; those are finalized after this result is exposed.
- */
-export const ApplicationExitPreFinalizationResult = Schema.TaggedUnion({
-  DrainFailed: {
-    diagnostics: Schema.NonEmptyArray(ApplicationExitDiagnostic),
-    requestedStatus: Schema.Literal(forcedProcessStatus)
-  },
-  DrainTimedOut: {
-    diagnostics: Schema.Array(ApplicationExitDiagnostic),
-    requestedStatus: Schema.Literal(forcedProcessStatus)
-  },
-  ReadyForFinalization: { requestedStatus: Schema.Literal(successfulProcessStatus) }
-})
-export type ApplicationExitPreFinalizationResult = typeof ApplicationExitPreFinalizationResult.Type
-
 /** A forward-progress request reached the shared boundary after Exit closed it. */
 export class ApplicationExiting extends Schema.TaggedError<ApplicationExiting>()("ApplicationExiting", {}) {}
 

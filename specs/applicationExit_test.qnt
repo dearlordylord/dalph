@@ -9,10 +9,108 @@ module applicationExitTest {
       .then(stopAfterSuccess)
       .expect(and {
         state.cutoffCount == 1,
+        state.mode == Ordinary,
         state.result == Succeeded,
+        state.resultProvenance == OrdinaryResult,
         state.phase == ProcessGoneGraceful,
         successfulExitRequiresRecoverableBoundary,
+        ordinarySuccessReleasesCoordinatorBeforeResult,
         successReportsBeforeGracefulProcessEnd,
+      })
+  }
+
+  run hostScopedExitReportsExactResultBeforeScopeReleaseTest = {
+    init
+      .then(selectHostScopedMode)
+      .then(acceptExit)
+      .then(reportSuccess)
+      .expect(and {
+        state.mode == ProductionHostScoped,
+        state.phase == HostResultReported,
+        state.result == Succeeded,
+        state.resultProvenance == ProductionHostResult,
+        state.coordinatorLockHeld,
+        not(state.hostScopeFinalized),
+        state.trace.hostResultReported,
+        hostResultBeforeScopeFinalization,
+        hostResultProvenanceIsExplicit,
+        successfulExitRequiresRecoverableBoundary,
+      })
+      .then(finalizeHostScope)
+      .expect(and {
+        state.phase == HostScopeFinalized,
+        not(state.coordinatorLockHeld),
+        state.hostScopeFinalized,
+        state.trace.hostScopeFinalized,
+        hostResultBeforeScopeFinalization,
+        hostScopeFinalizationReleasesCoordinator,
+      })
+  }
+
+  run hostScopedTimeoutReportsBeforeScopeReleaseTest = {
+    init
+      .then(selectHostScopedMode)
+      .then(acceptExit)
+      .then(advanceTick)
+      .then(advanceTick)
+      .then(advanceTick)
+      .then(advanceTick)
+      .then(advanceTick)
+      .expect(and {
+        state.phase == HostResultReported,
+        state.result == TimedOut,
+        state.resultProvenance == ProductionHostResult,
+        state.coordinatorLockHeld,
+        state.trace.hostResultReported,
+        not(state.trace.forcedTerminationRequested),
+        fifthTickAtomicallyForcesTimedOutTermination,
+      })
+      .then(finalizeHostScope)
+      .expect(and {
+        state.phase == HostScopeFinalized,
+        not(state.coordinatorLockHeld),
+        hostResultBeforeScopeFinalization,
+      })
+  }
+
+  run hostScopedFailureReportsBeforeScopeReleaseTest = {
+    init
+      .then(selectHostScopedMode)
+      .then(produceJournalWrite)
+      .then(acceptExit)
+      .then(failProducedWrite)
+      .then(reportFailure)
+      .expect(and {
+        state.phase == HostResultReported,
+        state.result == Failed,
+        state.resultProvenance == ProductionHostResult,
+        state.coordinatorLockHeld,
+        state.trace.hostResultReported,
+        hostResultBeforeScopeFinalization,
+      })
+      .then(finalizeHostScope)
+      .expect(and {
+        state.phase == HostScopeFinalized,
+        not(state.coordinatorLockHeld),
+        hostScopeFinalizationReleasesCoordinator,
+      })
+  }
+
+  run hostScopedRestartClearsModeAndTimerTest = {
+    init
+      .then(selectHostScopedMode)
+      .then(acceptExit)
+      .then(reportSuccess)
+      .then(finalizeHostScope)
+      .then(restartApplication)
+      .expect(and {
+        state.phase == Serving,
+        state.mode == Ordinary,
+        state.result == NoExitResult,
+        state.resultProvenance == NoExitProvenance,
+        state.tick == 0,
+        not(state.hostScopeFinalized),
+        restartRestoresNoApplicationLifecycleState,
       })
   }
 

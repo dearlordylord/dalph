@@ -203,6 +203,22 @@ module applicationExitNegativeTest {
     },
   }
 
+  // Deliberate #297 mutant: the host scope releases its coordinator lock
+  // before exposing any exact ApplicationExitResult. The ordering invariant
+  // must turn red for this inverted/omitted-result implementation.
+  action finalizeHostScopeBeforeResult: bool = all {
+    state.phase == Draining,
+    state.mode == ProductionHostScoped,
+    state.result == NoExitResult,
+    state' = {
+      ...state,
+      phase: HostScopeFinalized,
+      coordinatorLockHeld: false,
+      hostScopeFinalized: true,
+      trace: { ...state.trace, hostScopeFinalized: true },
+    },
+  }
+
   run secondCutoffIsDetectedTest = {
     init.then(acceptExit).then(closeCutoffTwice).expect(not(cutoffClosesAtMostOncePerApplicationIncarnation))
   }
@@ -307,5 +323,10 @@ module applicationExitNegativeTest {
   run restoredLifecycleModeIsDetectedTest = {
     init.then(acceptExit).then(unexpectedDeath).then(restartWithOldLifecycleState)
       .expect(not(restartRestoresNoApplicationLifecycleState))
+  }
+
+  run hostScopeFinalizationBeforeResultIsDetectedTest = {
+    init.then(selectHostScopedMode).then(acceptExit).then(finalizeHostScopeBeforeResult)
+      .expect(not(hostResultBeforeScopeFinalization))
   }
 }

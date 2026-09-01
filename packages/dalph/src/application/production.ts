@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Production workflow assembly keeps its capability topology co-located for auditability. */
 import { NodeServices } from "@effect/platform-node"
 import { type IntegrationTarget, PlannedAttemptExecutor, type RunId } from "@dalph/contracts"
 import {
@@ -123,13 +124,28 @@ export type ProductionApplicationProcessEndObserver = (decision: ApplicationProc
 /** Side-effect-only observation of lifecycle trace events emitted by Exit. */
 export type ProductionApplicationExitTraceObserver = (event: ApplicationExitTraceEvent) => Effect.Effect<void>
 
+/**
+ * The production workflow either receives one already-constructed host-scoped
+ * shell or constructs one ordinary shell with its process-local observers.
+ * Keeping these as tagged variants prevents a supplied host shell from being
+ * paired with observer fields that the workflow would silently ignore.
+ */
+export type ProductionWorkflowApplicationExitBoundary =
+  | { readonly _tag: "SuppliedHostShell"; readonly shell: ApplicationExitShell["Service"] }
+  | {
+      readonly _tag: "ConstructOrdinaryShell"
+      readonly requestObserver?: ProductionApplicationExitRequestObserver
+      readonly processEndObserver?: ProductionApplicationProcessEndObserver
+      readonly traceObserver?: ProductionApplicationExitTraceObserver
+    }
+
 /** Optional production boundaries that advance one accepted result through delivery and finality. */
 // eslint-disable-next-line functional/no-mixed-types -- Production qualification groups typed service values and one typed reconstruction observation callback.
 export interface ProductionWorkflowRuntimeBoundaries {
   /** Already-acquired repository owner shared with host discovery and SQLite. */
   readonly coordinatorOwnership?: CoordinatorOwnership["Service"]
-  /** Application-scoped Exit shell owned by the configured repository host. */
-  readonly applicationExit?: ApplicationExitShell["Service"]
+  /** One explicit application Exit construction topology; host shells carry no ordinary observers. */
+  readonly applicationExit?: ProductionWorkflowApplicationExitBoundary
   /** Optional journal implementation for process-boundary acceptance tests. */
   readonly journalStoreLayer?: Layer.Layer<
     JournalStore | RunLifecycleJournal,
@@ -147,12 +163,6 @@ export interface ProductionWorkflowRuntimeBoundaries {
   readonly onApplicationExitShell?: (applicationExit: ApplicationExitShell["Service"]) => Effect.Effect<void>
   /** Side-effect-only observation of the actual workflow Git command service. */
   readonly workflowGitCommandObserver?: ProductionWorkflowGitCommandObserver
-  /** Optional direct observation used only when this layer constructs an ordinary application shell. */
-  readonly applicationExitRequestObserver?: ProductionApplicationExitRequestObserver
-  /** Optional process-end observation used only when this layer constructs an ordinary application shell. */
-  readonly applicationProcessEndObserver?: ProductionApplicationProcessEndObserver
-  /** Optional lifecycle-event observation used only when this layer constructs an ordinary application shell. */
-  readonly applicationExitTraceObserver?: ProductionApplicationExitTraceObserver
   /** Optional direct observation of disposition cleanup boundary calls. */
   readonly workflowCleanupObserver?: ProductionWorkflowCleanupObserver
 }
@@ -398,37 +408,40 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       ? plannedAttemptExecutorLayer
       : plannedAttemptExecutorLayer.pipe(Layer.provide(Layer.succeed(EvidenceStore, acceptedResultEvidenceStore)))
   const applicationExitLayer =
-    runtimeBoundaries.applicationExit === undefined
+    runtimeBoundaries.applicationExit === undefined ||
+    runtimeBoundaries.applicationExit._tag === "ConstructOrdinaryShell"
       ? Layer.effect(
           ApplicationExitShell,
           Effect.gen(function* () {
             const ownership = yield* CoordinatorOwnership
             const processLifecycle = {
               requestEnd: (decision: ApplicationProcessEndDecision) =>
-                runtimeBoundaries.applicationProcessEndObserver?.(decision) ?? Effect.void
+                runtimeBoundaries.applicationExit?._tag === "ConstructOrdinaryShell"
+                  ? (runtimeBoundaries.applicationExit.processEndObserver?.(decision) ?? Effect.void)
+                  : Effect.void
             }
             const trace =
-              runtimeBoundaries.applicationExitTraceObserver === undefined
+              runtimeBoundaries.applicationExit?._tag !== "ConstructOrdinaryShell" ||
+              runtimeBoundaries.applicationExit.traceObserver === undefined
                 ? undefined
-                : { emit: runtimeBoundaries.applicationExitTraceObserver }
+                : { emit: runtimeBoundaries.applicationExit.traceObserver }
             const applicationExit = yield* makeApplicationExitShell(ownership, processLifecycle, trace)
             const requestBoundary =
-              runtimeBoundaries.applicationExitRequestObserver === undefined
+              runtimeBoundaries.applicationExit?._tag !== "ConstructOrdinaryShell" ||
+              runtimeBoundaries.applicationExit.requestObserver === undefined
                 ? applicationExit.requestBoundary
                 : {
-                    requestExit: runtimeBoundaries
-                      .applicationExitRequestObserver()
+                    requestExit: runtimeBoundaries.applicationExit
+                      .requestObserver()
                       .pipe(Effect.andThen(applicationExit.requestBoundary.requestExit))
                   }
             return { ...applicationExit, requestBoundary }
           })
         )
-      : // A host supplies the already-constructed prefinalization shell. Its
-        // request and trace observers were installed at construction, so retain
+      : // A host supplies the already-constructed host-scoped shell. Retain
         // this exact object for workflow and Codex instead of decorating it or
-        // introducing a second shell. The ordinary process-end observer above
-        // intentionally has no meaning in this branch.
-        Layer.succeed(ApplicationExitShell, runtimeBoundaries.applicationExit)
+        // introducing a second shell; its construction owns request/trace taps.
+        Layer.succeed(ApplicationExitShell, runtimeBoundaries.applicationExit.shell)
   const executorWithApplicationExit = executorWithAcceptedEvidence.pipe(Layer.provideMerge(applicationExitLayer))
   const integratorLayer = integrator === undefined ? Layer.empty : Layer.succeed(Integrator, Integrator.of(integrator))
   const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, executorWithApplicationExit)

@@ -257,12 +257,17 @@ without admitting a successor. Its existing protocol intent remains the basis
 for ordinary restart reconciliation if the process deadline wins.
 
 Exit request, result, failure, timeout, signal, and process death are
-application-lifecycle facts outside every Run workflow journal. Success requires
-no live action owner, unsafe executor, unacknowledged produced journal write,
-reservation, fiber, or held coordinator lock. A conclusive failure force-terminates after
-the remaining useful quick work settles; a drain still unresolved at five
-seconds force-terminates nonzero. Restart restores no Exit mode or timer and
-uses ordinary Run establishment and owning-boundary reconciliation.
+application-lifecycle facts outside every Run workflow journal. In the ordinary
+process-exit shell, success requires no live action owner, unsafe executor,
+unacknowledged produced journal write, reservation, fiber, or held coordinator
+lock. The #297 production-host-scoped shell exposes the same exact result after
+the bounded drain while its enclosing host scope still owns the coordinator
+lock; returning from the host callback then closes resources and releases that
+lock, without a process-end capability or event. A conclusive failure and a
+five-second unresolved drain force-terminate only through the ordinary
+process-exit shell; host-scoped failure/timeout results remain non-graceful and
+are followed by ordinary scope finalization. Restart restores no Exit mode or
+timer and uses ordinary Run establishment and owning-boundary reconciliation.
 
 The accepted chronology is in
 [issue-169-graceful-application-exit.md](scenarios/issue-169-graceful-application-exit.md),

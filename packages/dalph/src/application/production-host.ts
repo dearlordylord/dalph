@@ -5,10 +5,8 @@ import {
   type GithubGraphqlClient,
   type RunReactivationOwner,
   type ApplicationExitRequestBoundaryService,
-  type ApplicationExitResultReportLease,
   type ApplicationExitShellService,
-  type ApplicationExitPreFinalizationResult,
-  type ApplicationExitHostFinalizationRequest,
+  type ApplicationExitResult,
   ApplicationExitShell,
   CompletionClaimBoundary,
   CompletionTaskBoundary,
@@ -40,7 +38,7 @@ import {
   taskClaimAcquisitionPlannerLayer,
   type ProductionRunSelection,
   type TraceCursor,
-  makeApplicationExitPreFinalizationShell,
+  makeProductionHostApplicationExitShell,
   selectProductionRun
 } from "@dalph/orchestrator"
 import { Context, Deferred, Effect, Layer, type Scope } from "effect"
@@ -70,10 +68,8 @@ export interface ProductionHostObservation {
   readonly acceptedHistory: CurrentSignal<TraceCursor>
   readonly current: CurrentSignal<DeliveryRuntimeObservationState>
   readonly selection: ProductionRunSelection
-  /** Host report lease; acknowledgement asks this host scope to finalize resources and ownership. */
-  readonly applicationExitRequestBoundary: ApplicationExitRequestBoundaryService<
-    ApplicationExitResultReportLease<ApplicationExitPreFinalizationResult>
-  >
+  /** Exact lifecycle result reported before this host scope finalizes resources and ownership. */
+  readonly applicationExitRequestBoundary: ApplicationExitRequestBoundaryService<ApplicationExitResult>
 }
 
 type ProductionHostFoundation = CoordinatorOwnership | JournalStore | RunLifecycleJournal
@@ -121,12 +117,9 @@ export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, R
   readonly foundation: (
     configuration: ProductionRepositoryHostConfiguration
   ) => Layer.Layer<ProductionHostFoundation, EFoundation, RFoundation>
-  /** Builds the one host shell before the Run graph so its real boundaries can be observed at construction. */
-  readonly makeApplicationExit?: (
-    ownership: CoordinatorOwnership["Service"],
-    hostFinalizationRequest: ApplicationExitHostFinalizationRequest
-  ) => Effect.Effect<
-    ApplicationExitShellService<ApplicationExitResultReportLease<ApplicationExitPreFinalizationResult>>,
+  /** Builds the one host-scoped shell before the Run graph; no fallback shell is permitted. */
+  readonly makeApplicationExit: () => Effect.Effect<
+    ApplicationExitShellService<ApplicationExitResult>,
     never,
     Scope.Scope
   >
@@ -134,7 +127,7 @@ export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, R
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
     onFailure: (failure: EActivation) => Effect.Effect<void>,
-    applicationExit: ApplicationExitShellService<ApplicationExitResultReportLease<ApplicationExitPreFinalizationResult>>
+    applicationExit: ApplicationExitShellService<ApplicationExitResult>
   ) => Layer.Layer<JournaledRunObservationSource | RunReactivationOwner, ERun, ProductionHostFoundation | RRun>
 }
 
@@ -303,21 +296,17 @@ const observedIntegratorLayer = <E, R>(
 
 /**
  * Keeps the coordinator lock held until the host scope closes after its caller
- * acknowledges its exact lifecycle report. The application shell still owns
+ * reports the exact lifecycle result and returns. The application shell owns
  * the decision and bounded drain; scope finalization owns the final lock release.
  */
 const makeHostApplicationExitShell = Effect.fn("ProductionRepositoryHost.makeApplicationExitShell")(function* (
-  ownership: CoordinatorOwnership["Service"],
-  hostFinalizationRequest: ApplicationExitHostFinalizationRequest,
   options: ProductionRepositoryHostApplicationExitConstructionOptions = {}
 ) {
   const trace = {
     emit: (event: Parameters<ProductionApplicationExitTraceObserver>[0]) =>
       options.traceObserver?.(event) ?? Effect.void
   }
-  const shell = yield* makeApplicationExitPreFinalizationShell(
-    ownership,
-    hostFinalizationRequest,
+  const shell = yield* makeProductionHostApplicationExitShell(
     { emit: trace.emit },
     options.requestObserver === undefined ? {} : { onRequest: options.requestObserver }
   )
@@ -333,11 +322,8 @@ const makeHostApplicationExitShell = Effect.fn("ProductionRepositoryHost.makeApp
 export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, ETrace = never>(
   adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
 ) => ({
-  makeApplicationExit: (
-    ownership: CoordinatorOwnership["Service"],
-    hostFinalizationRequest: ApplicationExitHostFinalizationRequest
-  ) =>
-    makeHostApplicationExitShell(ownership, hostFinalizationRequest, {
+  makeApplicationExit: () =>
+    makeHostApplicationExitShell({
       ...(adapters.applicationExitRequestObserver === undefined
         ? {}
         : { requestObserver: adapters.applicationExitRequestObserver }),
@@ -365,7 +351,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
     onFailure: (failure: TaskTrackerMutationThrottled) => Effect.Effect<void>,
-    applicationExit: ApplicationExitShellService<ApplicationExitResultReportLease<ApplicationExitPreFinalizationResult>>
+    applicationExit: ApplicationExitShellService<ApplicationExitResult>
   ) =>
     Layer.unwrap(
       // eslint-disable-next-line complexity -- One production graph resolves optional edge adapters and observation while preserving one scoped service topology.
@@ -470,7 +456,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             integrationFinality: completionClaim,
             integrator,
             journalStoreLayer: journalLayer,
-            applicationExit,
+            applicationExit: { _tag: "SuppliedHostShell", shell: applicationExit },
             ...(workflowApplicationExitObserver === undefined
               ? {}
               : { onApplicationExitShell: workflowApplicationExitObserver }),
@@ -528,14 +514,7 @@ export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFounda
       const configuration = yield* decodeProductionRepositoryHostConfiguration(input)
       const foundation = yield* Layer.build(graph.foundation(configuration))
       const selection = yield* selectProductionRun(configuration.target).pipe(Effect.provide(foundation))
-      const hostFinalizationRequested = yield* Deferred.make<void>()
-      const applicationExit = yield* graph.makeApplicationExit === undefined
-        ? makeHostApplicationExitShell(Context.get(foundation, CoordinatorOwnership), {
-            request: Deferred.succeed(hostFinalizationRequested, undefined).pipe(Effect.asVoid)
-          })
-        : graph.makeApplicationExit(Context.get(foundation, CoordinatorOwnership), {
-            request: Deferred.succeed(hostFinalizationRequested, undefined).pipe(Effect.asVoid)
-          })
+      const applicationExit = yield* graph.makeApplicationExit()
       const activationFailure = yield* Deferred.make<never, EActivation>()
       const run = yield* Layer.build(
         graph.run(
@@ -553,19 +532,12 @@ export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFounda
         selection,
         applicationExitRequestBoundary: applicationExit.requestBoundary
       } satisfies ProductionHostObservation
-      // A caller acknowledges its visible report through the exact host lease.
-      // That acknowledgement asks this host invocation to leave serving mode;
-      // interruption then closes the Run and foundation scopes, releasing
-      // resources and the coordinator lock. A typed activation failure can
+      // The caller reports the exact lifecycle result and returns from this
+      // callback; normal Effect.scoped finalization then closes the Run and
+      // foundation resources and releases coordinator ownership. A typed activation failure can
       // arrive after the Run has been established; keep the host effect
       // attached to that failure so closure does not turn it into Run finality,
       // Exit, or a host retry.
-      return yield* Effect.raceFirst(
-        Effect.raceFirst(
-          use(observation),
-          Deferred.await(hostFinalizationRequested).pipe(Effect.andThen(Effect.interrupt))
-        ),
-        Deferred.await(activationFailure)
-      )
+      return yield* Effect.raceFirst(use(observation), Deferred.await(activationFailure))
     })
   )

@@ -595,25 +595,38 @@ afterward.
 → `applicationExit` states cutoff uniqueness, no later forward owner,
 joined-request result agreement, and monotonic non-resetting ticks.
 
-**D51 Successful Exit proves recoverability, not work completion.** Success
-requires every running executor attempt to have an exact correlated safe-or-
-terminal report, every produced journal write to be acknowledged, and every
-process-local owner, reservation, fiber, task-work position, and coordinator
-lock to be released. An ambiguous outside effect may remain only behind its
+**D51 Successful Exit proves recoverability, not work completion.** For the
+ordinary process-exit shell, success requires every running executor attempt to
+have an exact correlated safe-or-terminal report, every produced journal write
+to be acknowledged, and every process-local owner, reservation, fiber,
+task-work position, and coordinator lock to be released. Its trace reaches
+`CoordinatorLockReleased`, then reports the exact result, then requests the real
+process-end boundary. An ambiguous outside effect may remain only behind its
 acknowledged exact intent and with no local owner able to send a successor.
-Exit never starts an executor `begin` or `resume` request, fresh reconciliation,
-stabilization, durable-resource cleanup, attempt replacement, or Run
-termination.
-→ `applicationExit` states the typed owner-disposition and success guards;
-`plannedAttemptExecutor` retains exact suspension and position-release proof.
+
+The #297 production-host-scoped path is a distinct result/finalization
+phenomenon: it exposes the same exact `ApplicationExitResult` after admission
+closes and the bounded drain completes, before the host scope finalizers close
+resources and release coordinator ownership. Its `Succeeded` does not claim
+that lock release has already occurred, and host mode has no process-end
+capability or `ProcessEndRequested` event. In both modes Exit never starts an
+executor `begin` or `resume` request, fresh reconciliation, stabilization,
+durable-resource cleanup, attempt replacement, or Run termination.
+→ `applicationExit` states ordinary release-before-success and host
+result-before-scope-finalization with explicit mode/provenance; production host
+tests observe the host result before scope finalizers; `plannedAttemptExecutor`
+retains exact suspension and position-release proof.
 
 **D52 Exit lifecycle is not Run workflow history.** Exit request, result,
 failure, timeout, signal, and process death are never appended to a Run journal
-or restored as an application mode. A conclusive failure force-terminates
-nonzero after useful quick drain work settles. The fifth monotonic drain tick
-force-terminates unresolved work nonzero. Neither path proves safe suspension,
-an outside result, cleanup disposition, Pause, cancellation, or Run
-termination; later startup uses ordinary Run establishment and reconciliation.
+or restored as an application mode. In the ordinary process-exit shell, a
+conclusive failure force-terminates nonzero after useful quick drain work
+settles, and the fifth monotonic drain tick force-terminates unresolved work
+nonzero. Host-scoped failure and timeout results remain non-graceful and are
+followed by host scope finalization rather than a process-end request. Neither
+path proves safe suspension, an outside result, cleanup disposition, Pause,
+cancellation, or Run termination; later startup uses ordinary Run establishment
+and reconciliation.
 → `applicationExit` states lifecycle non-persistence and forced-termination
 non-inference; `runActivation` retains ordinary process-loss reopening.
 

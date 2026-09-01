@@ -6,8 +6,7 @@ import { DatabaseSync } from "node:sqlite"
 import nodeProcess from "node:process"
 import {
   ApplicationExitShell,
-  type ApplicationExitPreFinalizationResult,
-  type ApplicationExitResultReportLease,
+  type ApplicationExitResult,
   type ApplicationExitShellService,
   ClaimOwner,
   ClaimToken,
@@ -49,7 +48,8 @@ import {
   taskWorkCapacityPolicyRecordKey,
   TrackerRevision,
   workflowJournalEventVersion,
-  githubTaskIdFor
+  githubTaskIdFor,
+  makeProductionHostApplicationExitShell
 } from "@dalph/orchestrator"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import {
@@ -190,6 +190,7 @@ it.effect(
       const foundation = Layer.merge(ownershipLayer, storage)
       const graph = {
         foundation: () => foundation,
+        makeApplicationExit: () => makeProductionHostApplicationExitShell(),
         run: (configuration: ProductionRepositoryHostConfiguration, selection: ProductionRunSelection) =>
           Layer.effectContext(
             Effect.gen(function* () {
@@ -250,6 +251,7 @@ it.effect("production host exposes TaskTrackerMutationThrottled unchanged and te
     })
     const graph = {
       foundation: () => Layer.merge(ownershipLayer, memoryJournalStoreLayer),
+      makeApplicationExit: () => makeProductionHostApplicationExitShell(),
       run: (
         configuration: ProductionRepositoryHostConfiguration,
         selection: ProductionRunSelection,
@@ -552,6 +554,7 @@ it.effect("invalid production host configuration opens no scoped production grap
     const foundation = () => foundationLayer
     const graph = {
       foundation,
+      makeApplicationExit: () => makeProductionHostApplicationExitShell(),
       run: () =>
         Layer.merge(
           Layer.succeed(
@@ -600,6 +603,7 @@ it.effect("allocated and recovered selections identify the exact Run and never a
     ).pipe(Layer.provide(base))
     const graph = {
       foundation: () => foundation,
+      makeApplicationExit: () => makeProductionHostApplicationExitShell(),
       run: (configuration: ProductionRepositoryHostConfiguration, selection: ProductionRunSelection) =>
         Layer.effectContext(
           Effect.gen(function* () {
@@ -750,8 +754,8 @@ it.effect("cold production host records one beginning before the first GitHub de
 
 /**
  * Scenario mapping: a supervisor requests Exit through the production host's
- * supplied prefinalization shell; request and lifecycle trace observers see
- * the real boundary events, while no process-end event is fabricated.
+ * supplied host-scoped shell; request and lifecycle trace observers see the
+ * real boundary events, while no process-end event is fabricated.
  */
 it.effect("production host connects supplied Exit request and trace observers", () =>
   Effect.scoped(
@@ -767,7 +771,6 @@ it.effect("production host connects supplied Exit request and trace observers", 
       yield* fileSystem.makeDirectory(evidence, { recursive: true })
       yield* fileSystem.chmod(codexState, 0o700)
       const providerStarted = yield* Deferred.make<void>()
-      const cutoffObserved = yield* Deferred.make<void>()
       const requestObservers = yield* Ref.make(0)
       const traceEvents = yield* Ref.make<ReadonlyArray<string>>([])
       const resultTag = yield* Ref.make<string | undefined>(undefined)
@@ -787,12 +790,7 @@ it.effect("production host connects supplied Exit request and trace observers", 
       })
       const adapters: ProductionRepositoryHostAdapters = {
         applicationExitRequestObserver: () => Ref.update(requestObservers, (count) => count + 1),
-        applicationExitTraceObserver: (event) =>
-          Ref.update(traceEvents, (current) => [...current, event._tag]).pipe(
-            Effect.andThen(
-              event._tag === "AdmissionCutoffClosed" ? Deferred.succeed(cutoffObserved, undefined) : Effect.void
-            )
-          ),
+        applicationExitTraceObserver: (event) => Ref.update(traceEvents, (current) => [...current, event._tag]),
         codexAppServer: () => Layer.succeed(CodexAppServer, app),
         githubClient: () => Layer.succeed(GithubGraphqlClient, githubClient)
       }
@@ -814,24 +812,19 @@ it.effect("production host connects supplied Exit request and trace observers", 
         (observation) =>
           Effect.gen(function* () {
             yield* Deferred.await(providerStarted)
-            const request = yield* observation.applicationExitRequestBoundary.requestExit.pipe(Effect.forkChild)
-            yield* Deferred.await(cutoffObserved)
-            yield* TestClock.adjust("5 seconds")
-            const report = yield* Fiber.join(request)
-            yield* Ref.set(resultTag, report.result._tag)
-            yield* report.acknowledge
-            return yield* Effect.never
+            const result = yield* observation.applicationExitRequestBoundary.requestExit
+            yield* Ref.set(resultTag, result._tag)
+            return result
           })
       ).pipe(Effect.exit)
 
-      expect(Exit.isFailure(hostExit)).toBe(true)
-      expect(yield* Ref.get(resultTag)).toBe("ReadyForFinalization")
+      expect(Exit.isSuccess(hostExit)).toBe(true)
+      expect(yield* Ref.get(resultTag)).toBe("Succeeded")
       expect(yield* Ref.get(requestObservers)).toBe(1)
       const observedTrace = yield* Ref.get(traceEvents)
       expect(observedTrace).toContain("ExitRequested")
       expect(observedTrace).toContain("AdmissionCutoffClosed")
-      expect(observedTrace).toContain("ExitDrainResultReported")
-      expect(observedTrace).toContain("ExitDrainReportAcknowledged")
+      expect(observedTrace).toContain("ExitResultReported")
       expect(observedTrace).not.toContain("ProcessEndRequested")
     }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
   )
@@ -1171,9 +1164,7 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
       configuration: ProductionRepositoryHostConfiguration,
       selection: ProductionRunSelection,
       onFailure: (failure: unknown) => Effect.Effect<void>,
-      applicationExit: ApplicationExitShellService<
-        ApplicationExitResultReportLease<ApplicationExitPreFinalizationResult>
-      >
+      applicationExit: ApplicationExitShellService<ApplicationExitResult>
     ) =>
       Layer.unwrap(
         Effect.gen(function* () {
@@ -1492,11 +1483,9 @@ it.effect(
           configuration: ProductionRepositoryHostConfiguration,
           selection: ProductionRunSelection,
           onFailure: (failure: unknown) => Effect.Effect<void>,
-          applicationExit: ApplicationExitShellService<
-            ApplicationExitResultReportLease<ApplicationExitPreFinalizationResult>
-          >
+          applicationExit: ApplicationExitShellService<ApplicationExitResult>
         ) => productionGraph.run(configuration, selection, onFailure, applicationExit)
-        const graph = { foundation, run }
+        const graph = { foundation, makeApplicationExit: productionGraph.makeApplicationExit, run }
         const firstReady = yield* Deferred.make<void>()
         const releaseFirst = yield* Deferred.make<void>()
         const firstSelectionRunId = yield* Deferred.make<RunId>()

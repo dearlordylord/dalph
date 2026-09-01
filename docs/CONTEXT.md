@@ -62,9 +62,18 @@ reports its completion, timeout, or failure outside every Run workflow journal.
 _Avoid_: Run workflow, applied control direction, Effect scope finalization
 
 **Graceful application Exit**:
-The application-lifecycle outcome in which Dalph reaches its accepted shutdown
-boundary, reports the result, and then ends its process.
+The ordinary application-lifecycle outcome in which Dalph reaches its accepted
+shutdown boundary, reports the result, and then requests process termination.
 _Avoid_: Process disappearance, coordinator death, cancellation, Run termination
+
+**Production-host-scoped Exit result**:
+The exact `ApplicationExitResult` that Alice's production host receives after
+the Exit admission cutoff and bounded drain. The host reports the result and
+returns from its use callback; only then does host scope finalization close
+process-local resources and release coordinator ownership. A host-scoped
+`Succeeded` therefore describes the completed bounded drain, not an already
+released coordinator lock, and this mode has no process-end capability or event.
+_Avoid_: Report lease, acknowledgement actor, process-end request, Run journal fact
 
 **Exit admission cutoff**:
 The process-wide point at which an accepted graceful application Exit request
