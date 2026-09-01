@@ -261,11 +261,12 @@ discipline](../DELIVERY-INVARIANTS.md#admission-and-capacity) requires admission
 to respect every position currently held by unfinished exact work, while [D29
 Authority separation](../DELIVERY-INVARIANTS.md#process-and-durability) keeps
 derived positions process-local and out of workflow history. At the formal
-abstraction, `deliveryCore.qnt`'s `positionDiscipline` and `admissionRule` laws
-require positions to follow outstanding work and prevent admission past
-capacity. That model does not represent the short in-process interval in which
-the runtime's admission controller has bound a newly accepted exact position
-but the descriptive relation still lists the earlier held-position prefix.
+abstraction, [`deliveryCore.qnt`'s `positionDiscipline` and `admissionRule`
+laws](../../research/verification-bakeoff/quint/deliveryCore.qnt) require
+positions to follow outstanding work and prevent admission past capacity. That
+model does not represent the short in-process interval in which the runtime's
+admission controller has bound a newly accepted exact position but the
+descriptive relation still lists the earlier held-position prefix.
 
 This scenario refines only quiescence during that interval. It does not make
 the admission controller a durable or outside authority, replace the delivery
@@ -278,9 +279,12 @@ own denied proposals can make progress.
 
 No person directly triggers this handoff. One ordinary activation has capacity
 three. Its current delivery-relation evaluation lists exact executing attempts
-A1 and B1 as holding two positions. Exact prepared attempts C1, D1, and E1 each
-have a `Begin` proposal that requires `ReserveOrReuse`; none has previously
-received `Begin`.
+A1 and B1 as holding two positions. Their exact executor projections were
+accepted before this causal cut and their process-local delivery-action owners
+have already settled; the direct predecessor test therefore starts with their
+two exact positions and no A1 or B1 owner. Exact prepared attempts C1, D1, and
+E1 each have a `Begin` proposal that requires `ReserveOrReuse`; none has
+previously received `Begin`.
 
 The same activation reserves the one free position for C1. Immediately before
 entering C1's exact planned-attempt protocol, it binds that reservation to
@@ -292,17 +296,19 @@ relation evaluation available to this runtime still lists only A1 and B1 in
 C1 at capacity three, it denies D1 and E1 with
 `TaskWorkPositionUnavailable`.
 
-The activation also obtains the exact executor projections required for A1,
-B1, and C1. Each returns the already-accepted `ExecutorWorkExecuting` report,
-installs its process-local passive attachment, and settles its delivery-action
-owner. The concrete trigger for the decision below is settlement of the final
-one of those owners: no live action remains, D1 and E1 are still denied, and no
-outside event queued inside this runtime can free a position.
+The activation selects C1, making C1 the only live delivery-action owner in
+this causal cut. C1's accepted `ExecutorWorkExecuting` report installs its
+process-local passive attachment and settles that final owner. The concrete
+trigger for the decision below is C1's settlement: no live action remains, D1
+and E1 are still denied, and no outside event queued inside this runtime can
+free a position.
 
 Git, the tracker, claims, refs, and worktrees do not change at this handoff.
 No additional executor call applies because D1 and E1 were denied before their
-action boundary, while A1, B1, and C1 have received their one exact projection
-call and C1 has also received its one `Begin`.
+action boundary. A1 and B1's earlier projection calls are starting facts
+outside this causal cut; C1 receives the cut's one exact `Begin` call and the
+accepted executing response is reused when its passive attachment is
+installed.
 
 ### Ordered runtime handoff and result
 
@@ -324,11 +330,11 @@ call and C1 has also received its one `Begin`.
 5. The runtime applies that completion once and settles C1's delivery-action
    owner only after its latest evaluation has consumed the accepted prefix. If
    the completion wins the queue first, the publication-through barrier keeps
-   the exact owner until the matching `EvaluationChanged` is applied. A1, B1,
-   and C1 each retain their process-local passive attachment after their exact
-   projection returns, so settling the last of those three owners leaves no live
-   action. C1's bound admission position remains because
-   `ExecutorWorkExecuting` is unfinished; D1 and E1 remain denied.
+   the exact owner until the matching `EvaluationChanged` is applied. A1 and
+   B1 have no live owner at this causal cut; settling C1 therefore leaves no
+   live action. C1's passive attachment remains process-local and its bound
+   admission position remains because `ExecutorWorkExecuting` is unfinished;
+   D1 and E1 remain denied.
 6. Still within the runtime's existing selection boundary, Dalph reads one
    typed snapshot from its admission controller. That snapshot contains the
    accepted exact A1 and B1 positions plus C1's exact bound runtime position;
@@ -386,28 +392,35 @@ No serialized snapshot or admission-state variant may be supplied to restart.
   The direct test must begin with only A1/B1 in the relation basis, admit and
   bind C1, record its responsibility and exact `Begin` intent before the one
   executor call, record and accept the exact executing response before owner
-  settlement, leave the relation basis unchanged, and settle all three passive
-  observations. It must assert one C1 `Begin`, one exact A1/B1/C1 projection,
-  no D/E call, exact A/B/C correlations in the typed result, and a D/E-only
-  frontier. It must use explicit Effect synchronization rather than time or
-  scheduler order.
+  settlement, leave the relation basis unchanged, and settle C1 as the only
+  live owner in this cut. A1 and B1's positions and already-settled owners are
+  starting facts, not actions replayed by this test. It must assert one C1
+  `Begin`, no D/E call, exact A/B/C correlations in the typed result, and a
+  D/E-only frontier. It must use explicit Effect synchronization rather than
+  time or scheduler order.
 - Add `does not journal or publish the process-local admission snapshot` to the
   same direct runtime suite. Starting after C1's accepted-publication boundary
   returns and before the final owner settles, it must record the exact Journal
-  length and relation-publication history, settle the final owner, and assert
-  that neither boundary changes while the runtime reads the snapshot and returns
-  `TaskWorkAdmissionStalledRuntimeQuiescence`. The unchanged relation must still
-  list A1/B1 while the typed result reports A1/B1/C1. Asserting only that an
-  admission-snapshot type is absent from a public union is supporting structure,
-  not sufficient acceptance evidence.
+  length. Its deterministic causal guard emits one final controlled relation
+  publication after D1 and E1 are denied; a bounded counter at that actual
+  relation `publish` boundary must record the count immediately afterward and
+  prove that it remains unchanged while the runtime reads the snapshot and
+  returns `TaskWorkAdmissionStalledRuntimeQuiescence`. Counting
+  `awaitCurrent` calls is not relation-publication evidence. The Journal must
+  also remain unchanged, and the relation must still list A1/B1 while the typed
+  result reports A1/B1/C1. Asserting only that an admission-snapshot type is
+  absent from a public union is supporting structure, not sufficient
+  acceptance evidence.
 - Add `restart reconstructs three unfinished task positions without an
   admission snapshot` in
   `packages/orchestrator/src/control/task-work-capacity.test.ts`. It must discard
   the original admission controller, construct a fresh recovery/controller
   layer from the Journal, and assert exact A1/B1/C1 positions derived from
   `PlannedAttemptExecutorWorkResponsibilityBegan` plus the accepted lifecycle
-  history that contains no Safe or Terminal release. Its exact accepted event
-  list must contain no quiescence or admission-snapshot record.
+  history that contains no Safe or Terminal release. Both recovery and the
+  fresh controller must report each exact `(RunId, AttemptId)` correlation;
+  task identity alone is not sufficient reconstruction evidence. Its exact
+  accepted event list must contain no quiescence or admission-snapshot record.
 - `reconciles existing, pending, and integration-backed admission positions`
   in `packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.test.ts`
   remains supporting evidence that synchronization preserves a locally bound
@@ -419,9 +432,12 @@ No serialized snapshot or admission-state variant may be supplied to restart.
   exact positions are already present in the relation basis.
 - `emits the exact DS01 through DS13 delivery checkpoint table` in
   `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`
-  is the required vertical acceptance test: at this exact handoff it must
-  consume `CoordinatorActivationReturned(RunMustRemainActive,
-  RunnableTransition)` before the later G1 read begins.
+  is the only mapping for the complete A1/B1/C1 observer sequence and the
+  required vertical acceptance test. It remains pending until this predecessor
+  range is composed into downstream #268; it is not claimed green here. At
+  this exact handoff it must consume
+  `CoordinatorActivationReturned(RunMustRemainActive, RunnableTransition)`
+  before the later G1 read begins.
 
 ## Unchanged passive attachment does not hide the full-capacity handoff
 
