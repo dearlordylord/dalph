@@ -2068,7 +2068,7 @@ export const applicationServerCloseAfterExecutorDrains = (
 }
 
 const registerApplicationServerDrain = (
-  shell: ApplicationExitShellService,
+  shell: ApplicationExitShell["Service"],
   close: Effect.Effect<void, CodexAppServerFailure>
 ) =>
   shell.registerProcessLocalDrain({

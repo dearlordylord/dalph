@@ -3,6 +3,10 @@ import { NodeCrypto } from "@effect/platform-node"
 import {
   ApplicationExitDiagnostic,
   ApplicationExitDrainFailure,
+  ApplicationExiting,
+  ApplicationExitPreFinalizationResult,
+  type ApplicationExitPreFinalizationResult as ApplicationExitPreFinalizationResultType,
+  type ApplicationExitShellService,
   ApplicationExitResult,
   CoordinatorOwnership,
   InitialControlPolicy,
@@ -17,7 +21,8 @@ import {
   currentSignalOf,
   memoryJournalStoreLayer
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Fiber, Layer, Ref, type Scope } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref, type Scope } from "effect"
+import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { type ProductionRepositoryHostGraph, withProductionRepositoryHost } from "./production-host.js"
@@ -53,7 +58,7 @@ const scopedCoordinatorOwnershipLayer = (ownership: CoordinatorOwnership["Servic
 const makeHostGraph = (
   foundation: Layer.Layer<CoordinatorOwnership | JournalStore | RunLifecycleJournal>,
   onRun: (
-    applicationExit: Parameters<ProductionRepositoryHostGraph<never, never, never, never, never>["run"]>[3]
+    applicationExit: ApplicationExitShellService<ApplicationExitPreFinalizationResultType>
   ) => Effect.Effect<void, never, Scope.Scope>
 ) =>
   ({
@@ -113,7 +118,16 @@ it.effect("graceful host Exit closes admission, returns the lifecycle result, th
       ),
       memoryJournalStoreLayer
     )
-    const graph = makeHostGraph(foundation, () => Effect.void)
+    const shell = yield* Ref.make<ApplicationExitShellService<ApplicationExitPreFinalizationResultType> | undefined>(
+      undefined
+    )
+    const graph = makeHostGraph(foundation, (applicationExit) =>
+      Ref.set(shell, applicationExit).pipe(
+        Effect.andThen(
+          Effect.addFinalizer(() => Ref.update(events, (current) => [...current, "run-resources-released"]))
+        )
+      )
+    )
 
     const result = yield* withProductionRepositoryHost(validRawConfiguration(), graph, (observation) =>
       observation.applicationExitRequestBoundary.requestExit.pipe(
@@ -121,8 +135,75 @@ it.effect("graceful host Exit closes admission, returns the lifecycle result, th
       )
     )
 
-    expect(result).toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
-    expect(yield* Ref.get(events)).toEqual(["result:Succeeded", "coordinator-released"])
+    expect(result).toEqual(ApplicationExitPreFinalizationResult.cases.ReadyForFinalization.make({ requestedStatus: 0 }))
+    expect(result._tag).toBe("ReadyForFinalization")
+    expect(result._tag).not.toBe("Succeeded")
+    expect(result).not.toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+    expect(yield* Ref.get(events)).toEqual([
+      "result:ReadyForFinalization",
+      "run-resources-released",
+      "coordinator-released"
+    ])
+    const applicationExit = yield* Ref.get(shell)
+    expect(applicationExit).toBeDefined()
+    if (applicationExit !== undefined) {
+      expect(yield* applicationExit.admission.snapshot).toMatchObject({ cutoffClosed: true })
+      expect(yield* applicationExit.admission.prepareForwardOwner("AtomicBoundary").pipe(Effect.flip)).toBeInstanceOf(
+        ApplicationExiting
+      )
+    }
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+/**
+ * Scenario mapping: a supervisor request runs in a child while Alice's host
+ * callback is still serving; the typed result is observed before that pending
+ * serving scope is interrupted and its resources/lock are finalized.
+ */
+it.effect("a child Exit request stops a pending host invocation after its typed result", () =>
+  Effect.gen(function* () {
+    const events = yield* Ref.make<ReadonlyArray<string>>([])
+    const result = yield* Ref.make<ApplicationExitPreFinalizationResultType | undefined>(undefined)
+    const foundation = Layer.merge(
+      scopedCoordinatorOwnershipLayer(
+        CoordinatorOwnership.of({
+          release: Ref.update(events, (current) => [...current, "coordinator-released"]),
+          runMutation: (mutation) => mutation
+        })
+      ),
+      memoryJournalStoreLayer
+    )
+    const graph = makeHostGraph(foundation, () =>
+      Effect.addFinalizer(() => Ref.update(events, (current) => [...current, "run-resources-released"]))
+    )
+
+    const hostExit = yield* withProductionRepositoryHost(validRawConfiguration(), graph, (observation) =>
+      Effect.gen(function* () {
+        yield* observation.applicationExitRequestBoundary.requestExit.pipe(
+          Effect.tap((exitResult) =>
+            Ref.update(result, () => exitResult).pipe(
+              Effect.andThen(Ref.update(events, (current) => [...current, `result:${exitResult._tag}`]))
+            )
+          ),
+          Effect.forkChild
+        )
+        return yield* Effect.never
+      })
+    ).pipe(Effect.exit)
+
+    expect(Exit.isFailure(hostExit)).toBe(true)
+    const observedResult = yield* Ref.get(result)
+    expect(observedResult).toEqual(
+      ApplicationExitPreFinalizationResult.cases.ReadyForFinalization.make({ requestedStatus: 0 })
+    )
+    expect(observedResult?._tag).toBe("ReadyForFinalization")
+    expect(observedResult?._tag).not.toBe("Succeeded")
+    expect(observedResult).not.toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+    expect(yield* Ref.get(events)).toEqual([
+      "result:ReadyForFinalization",
+      "run-resources-released",
+      "coordinator-released"
+    ])
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
@@ -144,9 +225,13 @@ it.effect("host cancellation without an Exit result never reports graceful shutd
       memoryJournalStoreLayer
     )
     const graph = makeHostGraph(foundation, (applicationExit) =>
-      applicationExit === undefined
-        ? Effect.die("host Exit shell is required")
-        : applicationExit.registerProcessLocalDrain({ closeProcessLocalResources: Effect.never })
+      Effect.gen(function* () {
+        yield* applicationExit.awaitExitRequested.pipe(
+          Effect.andThen(Deferred.succeed(entered, undefined)),
+          Effect.forkChild
+        )
+        yield* applicationExit.registerProcessLocalDrain({ closeProcessLocalResources: Effect.never })
+      })
     )
     const running = yield* withProductionRepositoryHost(validRawConfiguration(), graph, (observation) =>
       Effect.gen(function* () {
@@ -155,7 +240,6 @@ it.effect("host cancellation without an Exit result never reports graceful shutd
           Effect.forkChild
         )
         yield* Ref.update(events, (current) => [...current, "exit-requested"])
-        yield* Deferred.succeed(entered, undefined)
         yield* Fiber.join(exiting)
       })
     ).pipe(Effect.forkChild)
@@ -191,7 +275,6 @@ it.effect("Exit timeout or conclusive drain failure remains non-graceful and pre
       )
       const graph = makeHostGraph(foundation, (applicationExit) =>
         Effect.gen(function* () {
-          if (applicationExit === undefined) return yield* Effect.die("host Exit shell is required")
           const admission = yield* applicationExit.admission.snapshot
           yield* Ref.update(admissionCutoffs, (current) => [...current, admission.cutoffClosed])
           const registration = yield* Ref.getAndUpdate(registrations, (count) => count + 1)
@@ -219,8 +302,102 @@ it.effect("Exit timeout or conclusive drain failure remains non-graceful and pre
       )
       const secondRecords = yield* journal.read(firstSelection.runId)
 
-      expect(first.result._tag).toBe("Failed")
+      expect(first.result._tag).toBe("DrainFailed")
+      expect(first.result).not.toEqual(
+        ApplicationExitResult.cases.Failed.make({
+          diagnostics: [ApplicationExitDiagnostic.make("controlled host drain failed")],
+          requestedStatus: 1
+        })
+      )
       expect(firstSelection._tag).toBe("Recovered")
+      expect(firstRecords.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+      expect(secondRecords.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+      expect(yield* Ref.get(admissionCutoffs)).toEqual([false, false])
+      expect(yield* Ref.get(releases)).toBe(2)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+/**
+ * Scenario mapping: a stuck process-local drain reaches the fixed five-second
+ * deadline, reports TimedOut, and a restarted host gets a new cutoff/timer.
+ */
+it.effect("host Exit timeout preserves recovery and starts a fresh five-second lifecycle", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const memory = yield* Layer.build(memoryJournalStoreLayer)
+      const journal = Context.get(memory, JournalStore)
+      const lifecycle = Context.get(memory, RunLifecycleJournal)
+      const releases = yield* Ref.make(0)
+      const registrations = yield* Ref.make(0)
+      const firstDrainStarted = yield* Deferred.make<void>()
+      const secondDrainStarted = yield* Deferred.make<void>()
+      const releaseSecondDrain = yield* Deferred.make<void>()
+      const admissionCutoffs = yield* Ref.make<ReadonlyArray<boolean>>([])
+      const ownership = CoordinatorOwnership.of({
+        release: Ref.update(releases, (count) => count + 1),
+        runMutation: (mutation) => mutation
+      })
+      const foundation = Layer.mergeAll(
+        scopedCoordinatorOwnershipLayer(ownership),
+        Layer.succeed(JournalStore, journal),
+        Layer.succeed(RunLifecycleJournal, lifecycle)
+      )
+      const graph = makeHostGraph(foundation, (applicationExit) =>
+        Effect.gen(function* () {
+          const admission = yield* applicationExit.admission.snapshot
+          yield* Ref.update(admissionCutoffs, (current) => [...current, admission.cutoffClosed])
+          const registration = yield* Ref.getAndUpdate(registrations, (count) => count + 1)
+          yield* applicationExit.registerProcessLocalDrain(
+            registration === 0
+              ? {
+                  closeProcessLocalResources: Deferred.succeed(firstDrainStarted, undefined).pipe(
+                    Effect.andThen(Effect.never)
+                  )
+                }
+              : {
+                  closeProcessLocalResources: Deferred.succeed(secondDrainStarted, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseSecondDrain))
+                  )
+                }
+          )
+        })
+      )
+
+      const first = yield* withProductionRepositoryHost(validRawConfiguration(), graph, (observation) =>
+        Effect.gen(function* () {
+          const request = yield* observation.applicationExitRequestBoundary.requestExit.pipe(Effect.forkChild)
+          yield* Deferred.await(firstDrainStarted)
+          yield* TestClock.adjust("5 seconds")
+          return { result: yield* Fiber.join(request), selection: observation.selection }
+        })
+      )
+      const firstRecords = yield* journal.read(first.selection.runId)
+
+      const second = yield* withProductionRepositoryHost(validRawConfiguration(), graph, (observation) =>
+        Effect.gen(function* () {
+          const request = yield* observation.applicationExitRequestBoundary.requestExit.pipe(Effect.forkChild)
+          yield* Deferred.await(secondDrainStarted)
+          yield* TestClock.adjust("4 seconds")
+          expect(request.pollUnsafe()).toBeUndefined()
+          yield* Deferred.succeed(releaseSecondDrain, undefined)
+          return { result: yield* Fiber.join(request), selection: observation.selection }
+        })
+      )
+      const secondRecords = yield* journal.read(second.selection.runId)
+
+      expect(first.result).toEqual(
+        ApplicationExitPreFinalizationResult.cases.DrainTimedOut.make({ diagnostics: [], requestedStatus: 1 })
+      )
+      expect(first.result._tag).toBe("DrainTimedOut")
+      expect(second.result).toEqual(
+        ApplicationExitPreFinalizationResult.cases.ReadyForFinalization.make({ requestedStatus: 0 })
+      )
+      expect(second.result._tag).not.toBe("Succeeded")
+      expect(first.result).not.toEqual(
+        ApplicationExitResult.cases.TimedOut.make({ diagnostics: [], requestedStatus: 1 })
+      )
+      expect(second.selection).toEqual({ _tag: "Recovered", runId: first.selection.runId })
       expect(firstRecords.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
       expect(secondRecords.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
       expect(yield* Ref.get(admissionCutoffs)).toEqual([false, false])

@@ -1,10 +1,12 @@
 import { it } from "@effect/vitest"
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Option, Ref, Scope } from "effect"
 import { TestClock } from "effect/testing"
-import { expect } from "vitest"
+import { expect, expectTypeOf } from "vitest"
 import {
   ApplicationExitDiagnostic,
+  ApplicationExitPreFinalizationResult,
   ApplicationExitResult,
+  type ApplicationExitPreFinalizationResult as ApplicationExitPreFinalizationResultType,
   type ApplicationExitResult as ApplicationExitResultType,
   type ApplicationProcessEndDecision
 } from "./lifecycle-decision.js"
@@ -30,6 +32,7 @@ import {
   type ApplicationExitDrain,
   type ApplicationExitTraceEvent,
   makeApplicationExitRequestBoundary,
+  makeApplicationExitPreFinalizationShell,
   makeApplicationExitShell
 } from "./application-shell.js"
 
@@ -137,6 +140,45 @@ it.effect("exits successfully within five seconds after flushing writes and rele
       expect(yield* Ref.get(lifecycleCassette)).toEqual(idleApplicationExitAuthoredCassette)
       // Application lifecycle recording is deliberately projected outside the Run journal.
       expect(yield* Ref.get(runJournal)).toEqual(["WorkflowRunBegan"])
+    })
+  )
+)
+
+it.effect("reports host drain readiness before scope finalization without claiming ordinary success", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      expectTypeOf<
+        Extract<ApplicationExitPreFinalizationResultType, { readonly _tag: "ReadyForFinalization" }>
+      >().not.toMatchTypeOf<Extract<ApplicationExitResultType, { readonly _tag: "Succeeded" }>>()
+      const releaseCount = yield* Ref.make(0)
+      const trace = yield* Ref.make<ReadonlyArray<ApplicationExitTraceEvent>>([])
+      const ownership = CoordinatorOwnership.of({
+        release: Ref.update(releaseCount, (count) => count + 1),
+        runMutation: (mutation) => mutation
+      })
+      const shell = yield* makeApplicationExitPreFinalizationShell(
+        ownership,
+        { requestEnd: () => Effect.void },
+        { emit: (event) => Ref.update(trace, (current) => [...current, event]) }
+      )
+
+      const result = yield* shell.requestBoundary.requestExit
+      expect(result).toEqual(
+        ApplicationExitPreFinalizationResult.cases.ReadyForFinalization.make({ requestedStatus: 0 })
+      )
+      expect(result._tag).toBe("ReadyForFinalization")
+      expect(result._tag).not.toBe("Succeeded")
+      expect(result).not.toEqual(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      expect(yield* Ref.get(releaseCount)).toBe(0)
+      expect(yield* Ref.get(trace).pipe(Effect.map((events) => events.map(({ _tag }) => _tag)))).not.toContain(
+        "CoordinatorLockReleased"
+      )
+      expect(yield* Ref.get(trace).pipe(Effect.map((events) => events.map(({ _tag }) => _tag)))).toContain(
+        "ExitDrainResultReported"
+      )
+
+      yield* ownership.release
+      expect(yield* Ref.get(releaseCount)).toBe(1)
     })
   )
 )

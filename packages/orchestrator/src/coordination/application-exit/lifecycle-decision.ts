@@ -48,6 +48,24 @@ export const ApplicationExitResult = Schema.TaggedUnion({
 })
 export type ApplicationExitResult = typeof ApplicationExitResult.Type
 
+/**
+ * Host-facing result after admission closes and the bounded Exit drain settles.
+ * `ReadyForFinalization` deliberately says nothing about host scope resources
+ * or coordinator ownership; those are finalized after this result is exposed.
+ */
+export const ApplicationExitPreFinalizationResult = Schema.TaggedUnion({
+  DrainFailed: {
+    diagnostics: Schema.NonEmptyArray(ApplicationExitDiagnostic),
+    requestedStatus: Schema.Literal(forcedProcessStatus)
+  },
+  DrainTimedOut: {
+    diagnostics: Schema.Array(ApplicationExitDiagnostic),
+    requestedStatus: Schema.Literal(forcedProcessStatus)
+  },
+  ReadyForFinalization: { requestedStatus: Schema.Literal(successfulProcessStatus) }
+})
+export type ApplicationExitPreFinalizationResult = typeof ApplicationExitPreFinalizationResult.Type
+
 /** A forward-progress request reached the shared boundary after Exit closed it. */
 export class ApplicationExiting extends Schema.TaggedError<ApplicationExiting>()("ApplicationExiting", {}) {}
 
@@ -317,6 +335,14 @@ export const decideApplicationProcessEnd = (result: ApplicationExitResult): Appl
     Succeeded: () => ApplicationProcessEndDecision.RequestGracefulTermination({ status: successfulProcessStatus }),
     TimedOut: () => ApplicationProcessEndDecision.RequestForcedTermination({ status: forcedProcessStatus })
   })
+
+/** A host may request graceful process ending only after its bounded drain is ready. */
+export const decideApplicationPreFinalizationProcessEnd = (
+  result: ApplicationExitPreFinalizationResult
+): ApplicationProcessEndDecision =>
+  result._tag === "ReadyForFinalization"
+    ? ApplicationProcessEndDecision.RequestGracefulTermination({ status: successfulProcessStatus })
+    : ApplicationProcessEndDecision.RequestForcedTermination({ status: forcedProcessStatus })
 
 /** Startup always constructs fresh serving state; it accepts no prior Exit mode or result. */
 export const freshApplicationExitState = (): {

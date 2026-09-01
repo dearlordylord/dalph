@@ -6,6 +6,8 @@ import {
   type RunReactivationOwner,
   type ApplicationExitRequestBoundaryService,
   type ApplicationExitShellService,
+  type ApplicationExitPreFinalizationResult,
+  type ApplicationProcessLifecycleService,
   ApplicationExitShell,
   CompletionClaimBoundary,
   CompletionTaskBoundary,
@@ -37,7 +39,7 @@ import {
   taskClaimAcquisitionPlannerLayer,
   type ProductionRunSelection,
   type TraceCursor,
-  makeApplicationExitShell,
+  makeApplicationExitPreFinalizationShell,
   selectProductionRun
 } from "@dalph/orchestrator"
 import { Context, Deferred, Effect, Layer } from "effect"
@@ -69,7 +71,7 @@ export interface ProductionHostObservation {
   readonly current: CurrentSignal<DeliveryRuntimeObservationState>
   readonly selection: ProductionRunSelection
   /** Transport-neutral lifecycle request shared with the configured host scope. */
-  readonly applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
+  readonly applicationExitRequestBoundary: ApplicationExitRequestBoundaryService<ApplicationExitPreFinalizationResult>
 }
 
 type ProductionHostFoundation = CoordinatorOwnership | JournalStore | RunLifecycleJournal
@@ -100,7 +102,7 @@ export type ProductionRepositoryHostBoundaryObserver = (
 
 /** Qualification-only observation of the workflow's host-owned Exit shell. */
 type ProductionRepositoryHostApplicationExitObserver = (
-  applicationExit: ApplicationExitShellService
+  applicationExit: ApplicationExitShell["Service"]
 ) => Effect.Effect<void>
 
 /**
@@ -115,7 +117,7 @@ export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, R
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
     onFailure: (failure: EActivation) => Effect.Effect<void>,
-    applicationExit: ApplicationExitShellService
+    applicationExit: ApplicationExitShellService<ApplicationExitPreFinalizationResult>
   ) => Layer.Layer<JournaledRunObservationSource | RunReactivationOwner, ERun, ProductionHostFoundation | RRun>
 }
 
@@ -291,14 +293,14 @@ const observedIntegratorLayer = <E, R>(
  */
 const makeHostApplicationExitShell = Effect.fn("ProductionRepositoryHost.makeApplicationExitShell")(function* (
   ownership: CoordinatorOwnership["Service"],
-  processLifecycle: Parameters<typeof makeApplicationExitShell>[1],
+  processLifecycle: ApplicationProcessLifecycleService,
   onExitResultObserved: Effect.Effect<void>
 ) {
-  const shell = yield* makeApplicationExitShell(
+  const shell = yield* makeApplicationExitPreFinalizationShell(
     ownership,
     processLifecycle,
     { emit: () => Effect.void },
-    { coordinatorLockRelease: "HostScopeFinalization", onExitResultObserved }
+    { onExitResultObserved }
   )
   return shell
 })
@@ -332,7 +334,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
     onFailure: (failure: TaskTrackerMutationThrottled) => Effect.Effect<void>,
-    applicationExit: ApplicationExitShellService
+    applicationExit: ApplicationExitShellService<ApplicationExitPreFinalizationResult>
   ) =>
     Layer.unwrap(
       // eslint-disable-next-line complexity -- One production graph resolves optional edge adapters and observation while preserving one scoped service topology.

@@ -81,7 +81,7 @@ import {
 import type { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
 import { ApplicationExitAdmission, type ForwardOwnerLease } from "../application-exit/lifecycle.js"
 import { ApplicationExitDiagnostic } from "../application-exit/lifecycle-decision.js"
-import { ApplicationExitDrainFailure, type ApplicationExitShellService } from "../application-exit/application-shell.js"
+import { type ApplicationExitShell, ApplicationExitDrainFailure } from "../application-exit/application-shell.js"
 import { suspendExecutingExecutorWorkForApplicationExit } from "../application-exit/executor-drain.js"
 import {
   AppliedRunCancellation,
@@ -250,7 +250,7 @@ const validateRun = Effect.fn("JournaledRunBootstrap.validateRun")(function* (
 export const journaledRunBootstrapLayer = (
   expectedRunId: RunId,
   runtimeLayer: (input: JournaledRuntimeLayerInput) => JournaledRuntimeLayer,
-  applicationExit: ApplicationExitShellService,
+  applicationExit: ApplicationExitShell["Service"],
   maintenanceObservation: JournalMaintenanceObservationService,
   operatorControlGraphReadBoundary: OperatorControlGraphReadBoundary = identityOperatorControlGraphReadBoundary
 ) =>

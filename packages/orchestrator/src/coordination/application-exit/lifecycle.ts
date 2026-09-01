@@ -53,10 +53,10 @@ const boundaryAccepts = (owner: RegisteredInterruptibleOwner, intent: Interrupti
   owner.boundary._tag === "NoBoundaryCall" ||
   (owner.boundary._tag === "BoundaryResultRecorded" && continuesCompletionClaimCleanup(owner.boundary.intent, intent))
 
-export interface ApplicationExitRequest {
+export interface ApplicationExitRequest<TResult = ApplicationExitResult> {
   readonly cutoffAt: bigint
   readonly first: boolean
-  readonly result: Deferred.Deferred<ApplicationExitResult>
+  readonly result: Deferred.Deferred<TResult>
 }
 
 interface ExitRequestDecision extends Omit<ApplicationExitRequest, "result"> {
@@ -116,11 +116,11 @@ export class ApplicationExitAdmission extends Context.Service<
   ApplicationExitAdmissionService
 >()("@dalph/ApplicationExitAdmission") {}
 
-export interface ApplicationExitLifecycleService {
+export interface ApplicationExitLifecycleService<TResult = ApplicationExitResult> {
   readonly admission: ApplicationExitAdmissionService
   /** Every request closes or joins one cutoff, monotonic deadline, driver, and result. */
-  readonly requestExit: Effect.Effect<ApplicationExitRequest>
-  readonly completeExit: (result: ApplicationExitResult) => Effect.Effect<boolean>
+  readonly requestExit: Effect.Effect<ApplicationExitRequest<TResult>>
+  readonly completeExit: (result: TResult) => Effect.Effect<boolean>
   readonly awaitExitDriverFinished: Effect.Effect<void>
   readonly completeExitDriver: Effect.Effect<boolean>
   /** Completes only after Exit closed admission and every pre-cutoff owner released. */
@@ -129,8 +129,8 @@ export interface ApplicationExitLifecycleService {
   readonly awaitExitRequested: Effect.Effect<void>
 }
 
-export const makeApplicationExitLifecycle = Effect.fn("ApplicationExitLifecycle.make")(function* () {
-  const result = yield* Deferred.make<ApplicationExitResult>()
+const makeApplicationExitLifecycleEffect = Effect.fn("ApplicationExitLifecycle.make")(function* <TResult>() {
+  const result = yield* Deferred.make<TResult>()
   const exitDriverFinished = yield* Deferred.make<void>()
   const exitRequested = yield* Deferred.make<void>()
   const forwardOwnersReleased = yield* Deferred.make<void>()
@@ -289,7 +289,7 @@ export const makeApplicationExitLifecycle = Effect.fn("ApplicationExitLifecycle.
     )
     if (decision.first) yield* Deferred.succeed(exitRequested, undefined)
     if (decision.ownersDrained) yield* Deferred.succeed(forwardOwnersReleased, undefined)
-    return { cutoffAt: decision.cutoffAt, first: decision.first, result } satisfies ApplicationExitRequest
+    return { cutoffAt: decision.cutoffAt, first: decision.first, result } satisfies ApplicationExitRequest<TResult>
   })
 
   const snapshot = Ref.get(state).pipe(
@@ -320,5 +320,9 @@ export const makeApplicationExitLifecycle = Effect.fn("ApplicationExitLifecycle.
     completeExitDriver: Deferred.succeed(exitDriverFinished, undefined),
     completeExit: (exitResult) => Deferred.succeed(result, exitResult),
     requestExit
-  } satisfies ApplicationExitLifecycleService
+  } satisfies ApplicationExitLifecycleService<TResult>
 })
+
+/** Builds one typed Exit lifecycle; the default result preserves the ordinary application contract. */
+export const makeApplicationExitLifecycle = <TResult = ApplicationExitResult>() =>
+  makeApplicationExitLifecycleEffect<TResult>()

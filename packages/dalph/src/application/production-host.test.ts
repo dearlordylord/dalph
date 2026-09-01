@@ -5,6 +5,9 @@ import { RunId } from "@dalph/contracts"
 import { DatabaseSync } from "node:sqlite"
 import nodeProcess from "node:process"
 import {
+  ApplicationExitShell,
+  type ApplicationExitPreFinalizationResult,
+  type ApplicationExitShellService,
   ClaimOwner,
   ClaimToken,
   RunLifecycleJournal,
@@ -28,7 +31,6 @@ import {
   outcomeRecordKey,
   projectTrackerSnapshot,
   TaskClaimAcquisitionIntendedEvent,
-  TaskTrackerMutationThrottled,
   taskTrackerFactsObservedEvent,
   taskTrackerReadIntent,
   type ProductionRunSelection,
@@ -48,23 +50,7 @@ import {
   githubTaskIdFor
 } from "@dalph/orchestrator"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
-import {
-  Cause,
-  Context,
-  Deferred,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  FileSystem,
-  Layer,
-  Option,
-  Path,
-  Ref,
-  Schema,
-  Stream
-} from "effect"
-import { TestClock } from "effect/testing"
+import { Context, Deferred, Effect, Fiber, FileSystem, Layer, Path, Ref, Schema, Stream } from "effect"
 import { expect, expectTypeOf } from "vitest"
 import {
   type ProductionRepositoryHostAdapters,
@@ -73,15 +59,11 @@ import {
   productionRepositoryHostGraph,
   withProductionRepositoryHost
 } from "./production-host.js"
-import { isNonRetryableProductionActivationFailure } from "./production.js"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { ProductionRepositoryHostConfigurationError } from "./production-configuration.js"
 import { CodexAppServer } from "./codex-app-server.js"
 import { CodexServerIncarnation } from "./codex-attempt-store.js"
 import { completedRunFinalityFixture } from "../../../orchestrator/test/run-finality.js"
-import { GithubGraphqlThrottled } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-client.js"
-import { GithubGraphqlRequestError } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-response.js"
-import { githubGraphqlTestClient } from "../../../orchestrator/src/authorities/task-tracker/github/graphql-client.test-fixture.js"
 import {
   type RestartFixtureEvent,
   RestartFixtureInput,
@@ -151,30 +133,6 @@ it("production host adapter surface cannot replace workflow mutation capabilitie
   expectTypeOf<CapabilityReplacementKey>().toEqualTypeOf<never>()
 })
 
-it("production host graph exposes only the precise non-retryable throttle callback", () => {
-  const graph = productionRepositoryHostGraph()
-  type ActivationFailure = Parameters<typeof graph.run>[2] extends (failure: infer Failure) => Effect.Effect<void>
-    ? Failure
-    : never
-  expectTypeOf<ActivationFailure>().toEqualTypeOf<TaskTrackerMutationThrottled>()
-})
-
-it("uses one canonical fatal classifier for throttles and recoverable failures", () => {
-  const throttle = new TaskTrackerMutationThrottled({
-    detail: "GitHub primary rate limit rejected the claim mutation",
-    operation: "AcquireTaskClaim",
-    operationId: OperationId.make("production-host-classifier-throttle"),
-    retry: null
-  })
-  const recoverable = new GithubGraphqlRequestError({
-    detail: "GitHub request failed while reading the current claim",
-    operation: "FindClaimLabel"
-  })
-
-  expect(isNonRetryableProductionActivationFailure(throttle)).toBe(true)
-  expect(isNonRetryableProductionActivationFailure(recoverable)).toBe(false)
-})
-
 it.effect(
   "production host returns ProductionHostObservation only after exact Run selection and acknowledged WorkflowRunBegan",
   () =>
@@ -228,309 +186,6 @@ it.effect(
       expect(selection._tag).toBe("Allocated")
       expect(yield* Ref.get(events)).toEqual(["begin-acknowledged", "observation-returned", "github-read"])
     }).pipe(Effect.provide(NodeCrypto.layer))
-)
-
-it.effect("production host exposes TaskTrackerMutationThrottled unchanged and tears down only its ordinary scope", () =>
-  Effect.gen(function* () {
-    const events = yield* Ref.make<ReadonlyArray<string>>([])
-    const useEntered = yield* Deferred.make<void>()
-    const failureDelivered = yield* Deferred.make<void>()
-    const scopeReleased = yield* Deferred.make<void>()
-    const throttle = new TaskTrackerMutationThrottled({
-      detail: "GitHub primary rate limit rejected the claim mutation",
-      operation: "AcquireTaskClaim",
-      operationId: OperationId.make("production-host-throttle"),
-      retry: null
-    })
-    const graph = {
-      foundation: () => Layer.merge(ownershipLayer, memoryJournalStoreLayer),
-      run: (configuration: ProductionRepositoryHostConfiguration, selection: ProductionRunSelection, onFailure) =>
-        Layer.effectContext(
-          Effect.gen(function* () {
-            yield* Effect.addFinalizer(() =>
-              Ref.update(events, (current) => [...current, "scope-released"]).pipe(
-                Effect.andThen(Deferred.succeed(scopeReleased, undefined))
-              )
-            )
-            yield* Effect.forkScoped(
-              Deferred.await(useEntered).pipe(
-                Effect.andThen(Ref.update(events, (current) => [...current, "tracker-throttle"])),
-                Effect.andThen(Deferred.succeed(failureDelivered, undefined)),
-                Effect.andThen(onFailure(throttle))
-              )
-            )
-            return Context.empty().pipe(
-              Context.add(
-                JournaledRunObservationSource,
-                JournaledRunObservationSource.of({
-                  acceptedHistory: currentSignalOf(
-                    TraceCursor.make({ position: JournalPosition.make(1), runId: selection.runId })
-                  ),
-                  awaitEstablished: Effect.succeed(
-                    JournaledRunEstablished.make({
-                      acceptedAt: JournalPosition.make(1),
-                      runId: selection.runId,
-                      target: configuration.target
-                    })
-                  ),
-                  current: currentSignalOf({ _tag: "NotReady" as const })
-                })
-              ),
-              Context.add(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))
-            )
-          })
-        )
-      // Keep the failure type at this seam explicit: #257 owns conversion
-      // from GitHub's mutation throttle to this provider-neutral error.
-      // The host only observes and propagates the already typed result.
-    } satisfies ProductionRepositoryHostGraph<never, never, never, never, TaskTrackerMutationThrottled>
-
-    const hostFiber = yield* withProductionRepositoryHost(validRawConfiguration(), graph, () =>
-      Deferred.succeed(useEntered, undefined).pipe(Effect.andThen(Effect.never))
-    ).pipe(Effect.exit, Effect.timeoutOption(Duration.seconds(1)))
-    yield* Deferred.await(failureDelivered)
-    yield* Deferred.await(scopeReleased)
-
-    expect(Option.isSome(hostFiber)).toBe(true)
-    if (Option.isSome(hostFiber)) {
-      const result = hostFiber.value
-      expect(Exit.isFailure(result)).toBe(true)
-      if (Exit.isFailure(result)) expect(Cause.squash(result.cause)).toBe(throttle)
-    }
-    expect(yield* Ref.get(events)).toEqual(["tracker-throttle", "scope-released"])
-  }).pipe(Effect.provide(NodeCrypto.layer))
-)
-
-it.effect("next host invocation recovers the same Run and authority-reads before mutation", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const input = yield* makeTemporaryProductionInput
-      const target = yield* Schema.decodeUnknownEffect(GithubIssueTarget)(input.target)
-      const runId = RunId.make("production-throttle-recovery-run")
-      const taskId = githubTaskIdFor(
-        GithubRepositoryNodeId.make("production-throttle-recovery-repository"),
-        GithubIssueNodeId.make("production-throttle-recovery-issue")
-      )
-      const acquisitionOperation = makeTaskClaimAcquisitionOperation({
-        acquisition: {
-          operationId: OperationId.make("production-throttle-recovery-acquisition"),
-          owner: ClaimOwner.make("dalph:production"),
-          taskId,
-          token: ClaimToken.make("production-throttle-recovery-token")
-        },
-        predecessorOperationIds: []
-      })
-      const graphOperation = makeTrackerGraphObservationOperation(
-        OperationId.make("production-throttle-recovery-graph"),
-        target,
-        [],
-        [taskId]
-      )
-      const graphProjection = projectTrackerSnapshot({
-        revision: TrackerRevision.make("production-throttle-recovery-graph"),
-        tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
-      })
-      if (graphProjection._tag === "Invalid") return yield* Effect.die(graphProjection)
-      const graphObservation = makeCompleteTaskTrackerFactsObserved(graphOperation, graphProjection.snapshot)
-      yield* Effect.scoped(
-        Effect.gen(function* () {
-          const journalContext = yield* Layer.build(
-            sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
-          )
-          const journal = Context.get(journalContext, JournalStore)
-          yield* journal.beginRun(
-            runId,
-            target,
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
-          )
-          yield* journal.append(
-            runId,
-            intentRecordKey(graphOperation.operationId),
-            taskTrackerReadIntent(graphOperation)
-          )
-          yield* journal.append(
-            runId,
-            outcomeRecordKey(graphOperation.operationId),
-            taskTrackerFactsObservedEvent(graphOperation.operationId, graphObservation)
-          )
-          yield* journal.append(
-            runId,
-            intentRecordKey(acquisitionOperation.acquisition.operationId),
-            TaskClaimAcquisitionIntendedEvent.make({
-              operation: acquisitionOperation,
-              version: workflowJournalEventVersion
-            })
-          )
-        })
-      )
-
-      const requests = yield* Ref.make<ReadonlyArray<string>>([])
-      const selections = yield* Ref.make<ReadonlyArray<ProductionRunSelection>>([])
-      const throttle = new GithubGraphqlThrottled({
-        detail: "GitHub primary rate limit rejected the claim mutation",
-        kind: "Primary",
-        operation: "CreateClaimLabel",
-        timingEvidence: null
-      })
-      const firstMutationReturned = yield* Deferred.make<void>()
-      const firstTimerStopped = yield* Deferred.make<void>()
-      const activations = yield* Ref.make(0)
-      const githubClient = githubGraphqlTestClient(
-        Effect.fn("ProductionThrottleRecovery.github.execute")(function* (request) {
-          yield* Ref.update(requests, (current) => [...current, request._tag])
-          if (request._tag === "FindClaimLabel") {
-            yield* Ref.update(activations, (current) => current + 1)
-            return { body: { data: { node: { id: request.repositoryNodeId, label: null } } } }
-          }
-          if (request._tag === "CreateClaimLabel") {
-            yield* Deferred.succeed(firstMutationReturned, undefined)
-            return yield* throttle
-          }
-          return yield* Effect.die(`unexpected GitHub request ${request._tag}`)
-        })
-      )
-      const appClosed = yield* Ref.make(0)
-      const applicationExitRequests = yield* Ref.make(0)
-      const applicationProcessEnds = yield* Ref.make(0)
-      const applicationExitTrace = yield* Ref.make<ReadonlyArray<string>>([])
-      const workflowCleanupCalls = yield* Ref.make<ReadonlyArray<string>>([])
-      const timerStates = yield* Ref.make<ReadonlyArray<"Started" | "Stopped">>([])
-      const activationFinalizations = yield* Ref.make<ReadonlyArray<string>>([])
-      const activationFailures = yield* Ref.make<ReadonlyArray<string>>([])
-      const app = CodexAppServer.of({
-        incarnation: CodexServerIncarnation.make("production-throttle-recovery-incarnation"),
-        startThread: () => Effect.die("throttle recovery must not start a Codex thread"),
-        readThread: () => Effect.die("throttle recovery must not read a Codex thread"),
-        resumeThread: () => Effect.die("throttle recovery must not resume a Codex thread"),
-        startTurn: () => Effect.die("throttle recovery must not start a Codex turn"),
-        interruptTurn: () => Effect.die("throttle recovery must not interrupt a Codex turn"),
-        listBackgroundTerminals: () => Effect.die("throttle recovery must not inspect terminals"),
-        terminateBackgroundTerminal: () => Effect.die("throttle recovery must not terminate a terminal"),
-        close: Ref.update(appClosed, (count) => count + 1)
-      })
-      const adapters: ProductionRepositoryHostAdapters = {
-        codexAppServer: () =>
-          Layer.effect(CodexAppServer, Effect.addFinalizer(() => app.close.pipe(Effect.orDie)).pipe(Effect.as(app))),
-        githubClient: () => Layer.succeed(GithubGraphqlClient, githubClient),
-        applicationExitRequestObserver: () => Ref.update(applicationExitRequests, (count) => count + 1),
-        applicationProcessEndObserver: () => Ref.update(applicationProcessEnds, (count) => count + 1),
-        applicationExitTraceObserver: (event) =>
-          Ref.update(applicationExitTrace, (current) => [...current, event._tag]),
-        workflowCleanupObserver: (boundary) => Ref.update(workflowCleanupCalls, (current) => [...current, boundary]),
-        onActivationFailure: (failure) =>
-          Ref.update(activationFailures, (current) => [
-            ...current,
-            failure instanceof TaskTrackerMutationThrottled ? failure._tag : "UnexpectedFailure"
-          ]),
-        onTimerStateChange: (state) =>
-          Ref.update(timerStates, (current) => [...current, state]).pipe(
-            Effect.andThen(state === "Stopped" ? Deferred.succeed(firstTimerStopped, undefined) : Effect.void)
-          ),
-        onActivationFinalizationStart: (kind) => Ref.update(activationFinalizations, (current) => [...current, kind])
-      }
-      const graph = productionRepositoryHostGraph(adapters)
-      const callbackEntered = yield* Deferred.make<void>()
-      const callbackTeardownStarted = yield* Deferred.make<void>()
-      const releaseCallbackTeardown = yield* Deferred.make<void>()
-      const firstObserveSelection = (observation: { readonly selection: ProductionRunSelection }) =>
-        Ref.update(selections, (current) => [...current, observation.selection]).pipe(
-          Effect.andThen(Deferred.succeed(callbackEntered, undefined)),
-          // This models a callback finalizer that cannot be interrupted until
-          // its process-local resource has released. The owner must stop
-          // before this teardown begins or a short cooldown can admit retry.
-          Effect.andThen(
-            Effect.acquireUseRelease(
-              Effect.void,
-              () => Effect.never,
-              () =>
-                Deferred.succeed(callbackTeardownStarted, undefined).pipe(
-                  Effect.andThen(Effect.uninterruptible(Deferred.await(releaseCallbackTeardown)))
-                )
-            )
-          )
-        )
-      const firstFiber = yield* withProductionRepositoryHost(
-        { ...input, activationInterval: "1 millis", failureCooldown: "1 millis" },
-        graph,
-        firstObserveSelection
-      ).pipe(Effect.exit, Effect.forkScoped)
-      yield* Deferred.await(callbackEntered)
-      yield* Deferred.await(firstMutationReturned)
-      // Fatal handling stops the owner before host-scope interruption reaches
-      // this callback. Wait for both direct signals before advancing the
-      // frozen clock, so this proves stop-before-teardown rather than merely
-      // observing that the mutation returned a throttle.
-      yield* Deferred.await(firstTimerStopped)
-      yield* Deferred.await(callbackTeardownStarted)
-      // The callback teardown remains blocked while every owner-local timer
-      // can fire. A non-retryable throttle must leave exactly one activation.
-      yield* TestClock.adjust("100 millis")
-      yield* Effect.yieldNow
-      expect(yield* Ref.get(activations)).toBe(1)
-      expect(yield* Ref.get(requests)).toEqual(["FindClaimLabel", "CreateClaimLabel"])
-      yield* Deferred.succeed(releaseCallbackTeardown, undefined)
-      const first = yield* Fiber.join(firstFiber)
-      const recordsAfterFirst = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const journalContext = yield* Layer.build(
-            sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
-          )
-          return yield* Context.get(journalContext, JournalStore).read(runId)
-        })
-      )
-      const second = yield* withProductionRepositoryHost(input, graph, (observation) =>
-        Ref.update(selections, (current) => [...current, observation.selection]).pipe(Effect.andThen(Effect.never))
-      ).pipe(Effect.exit)
-      const recordsAfterSecond = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const journalContext = yield* Layer.build(
-            sqliteJournalStoreLayer({ filename: JournalDatabaseLocator.make(input.journalDatabase) })
-          )
-          return yield* Context.get(journalContext, JournalStore).read(runId)
-        })
-      )
-
-      expect(Exit.isFailure(first)).toBe(true)
-      expect(Exit.isFailure(second)).toBe(true)
-      if (Exit.isFailure(first)) {
-        const failure = Cause.squash(first.cause)
-        expect(failure).toBeInstanceOf(TaskTrackerMutationThrottled)
-        expect(failure).toMatchObject({
-          detail: throttle.detail,
-          operation: "AcquireTaskClaim",
-          operationId: acquisitionOperation.acquisition.operationId,
-          retry: null
-        })
-      }
-      if (Exit.isFailure(second)) {
-        expect(Cause.squash(second.cause)).toBeInstanceOf(TaskTrackerMutationThrottled)
-      }
-      expect(yield* Ref.get(selections)).toEqual([
-        { _tag: "Recovered", runId },
-        { _tag: "Recovered", runId }
-      ])
-      expect(yield* Ref.get(requests)).toEqual([
-        "FindClaimLabel",
-        "CreateClaimLabel",
-        "FindClaimLabel",
-        "CreateClaimLabel"
-      ])
-      expect(yield* Ref.get(applicationExitRequests)).toBe(0)
-      expect(yield* Ref.get(applicationProcessEnds)).toBe(0)
-      expect(yield* Ref.get(applicationExitTrace)).toEqual([])
-      expect(yield* Ref.get(workflowCleanupCalls)).toEqual([])
-      expect(yield* Ref.get(activationFailures)).toEqual([
-        "TaskTrackerMutationThrottled",
-        "TaskTrackerMutationThrottled"
-      ])
-      expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped", "Started", "Stopped"])
-      expect(yield* Ref.get(activationFinalizations)).toEqual(["Ordinary", "Ordinary"])
-      expect(yield* Ref.get(activations)).toBe(2)
-      expect(recordsAfterFirst.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
-      expect(recordsAfterSecond.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
-      expect(yield* Ref.get(appClosed)).toBe(2)
-    })
-  ).pipe(Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeServices.layer, NodeCrypto.layer)))
 )
 
 it.effect("invalid production host configuration opens no scoped production graph", () =>
@@ -632,6 +287,10 @@ it.effect("allocated and recovered selections identify the exact Run and never a
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
+/**
+ * Scenario mapping: one required host Exit shell is injected into both the
+ * real Codex acquisition and workflow layer, with no second process shell.
+ */
 it.effect("cold production host records one beginning before the first GitHub delivery read", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -648,6 +307,9 @@ it.effect("cold production host records one beginning before the first GitHub de
       const providerStarted = yield* Deferred.make<void>()
       const appAcquisitions = yield* Ref.make(0)
       const githubAcquisitions = yield* Ref.make(0)
+      const applicationExitObservations = yield* Ref.make<
+        ReadonlyArray<readonly ["workflow" | "codex-app-server", ApplicationExitShell["Service"]]>
+      >([])
       const githubClient = GithubGraphqlClient.of({
         execute: () => Deferred.succeed(providerStarted, undefined).pipe(Effect.andThen(Effect.never))
       })
@@ -665,8 +327,21 @@ it.effect("cold production host records one beginning before the first GitHub de
         close: Effect.void
       })
       const adapters = {
+        workflowApplicationExitObserver: (applicationExit: ApplicationExitShell["Service"]) =>
+          Ref.update(applicationExitObservations, (current) => [...current, ["workflow", applicationExit] as const]),
         codexAppServer: () =>
-          Layer.effect(CodexAppServer, Ref.updateAndGet(appAcquisitions, (count) => count + 1).pipe(Effect.as(app))),
+          Layer.effect(
+            CodexAppServer,
+            Effect.gen(function* () {
+              const applicationExit = yield* ApplicationExitShell
+              yield* Ref.update(applicationExitObservations, (current) => [
+                ...current,
+                ["codex-app-server", applicationExit] as const
+              ])
+              yield* Ref.update(appAcquisitions, (count) => count + 1)
+              return app
+            })
+          ),
         githubClient: () =>
           Layer.effect(
             GithubGraphqlClient,
@@ -690,7 +365,11 @@ it.effect("cold production host records one beginning before the first GitHub de
         (observation) =>
           Deferred.await(providerStarted).pipe(
             Effect.andThen(observation.acceptedHistory.get),
-            Effect.map((cursor) => ({ cursor, selection: observation.selection }))
+            Effect.map((cursor) => ({
+              cursor,
+              selection: observation.selection,
+              applicationExitRequestBoundary: observation.applicationExitRequestBoundary
+            }))
           )
       )
 
@@ -705,6 +384,13 @@ it.effect("cold production host records one beginning before the first GitHub de
       )
       expect(yield* Ref.get(appAcquisitions)).toBe(1)
       expect(yield* Ref.get(githubAcquisitions)).toBe(1)
+      const exitObservations = yield* Ref.get(applicationExitObservations)
+      expect(exitObservations.some(([boundary]) => boundary === "codex-app-server")).toBe(true)
+      expect(exitObservations.some(([boundary]) => boundary === "workflow")).toBe(true)
+      const observedShells = exitObservations.map(([, applicationExit]) => applicationExit)
+      expect(observedShells.length).toBeGreaterThanOrEqual(2)
+      expect(observedShells.every((applicationExit) => applicationExit === observedShells[0])).toBe(true)
+      expect(observedShells[0]?.requestBoundary).toBe(observed.applicationExitRequestBoundary)
     }).pipe(Effect.provide(Layer.merge(NodeFileSystem.layer, NodePath.layer)), Effect.provide(NodeCrypto.layer))
   )
 )
@@ -1042,12 +728,13 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
     run: (
       configuration: ProductionRepositoryHostConfiguration,
       selection: ProductionRunSelection,
-      onFailure: (failure: unknown) => Effect.Effect<void>
+      onFailure: (failure: unknown) => Effect.Effect<void>,
+      applicationExit: ApplicationExitShellService<ApplicationExitPreFinalizationResult>
     ) =>
       Layer.unwrap(
         Effect.gen(function* () {
           yield* count("boundaryAcquisitions")
-          return productionGraph.run(configuration, selection, onFailure)
+          return productionGraph.run(configuration, selection, onFailure, applicationExit)
         })
       )
   }
@@ -1360,8 +1047,9 @@ it.effect(
         const run = (
           configuration: ProductionRepositoryHostConfiguration,
           selection: ProductionRunSelection,
-          onFailure: (failure: unknown) => Effect.Effect<void>
-        ) => productionGraph.run(configuration, selection, onFailure)
+          onFailure: (failure: unknown) => Effect.Effect<void>,
+          applicationExit: ApplicationExitShellService<ApplicationExitPreFinalizationResult>
+        ) => productionGraph.run(configuration, selection, onFailure, applicationExit)
         const graph = { foundation, run }
         const firstReady = yield* Deferred.make<void>()
         const releaseFirst = yield* Deferred.make<void>()

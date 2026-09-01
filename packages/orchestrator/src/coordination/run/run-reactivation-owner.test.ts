@@ -68,7 +68,7 @@ type TestOwnerOptions<E, R> = Omit<RunReactivationOwnerOptions<E, R>, "activateA
   readonly activateActiveWorkAuthorityRefresh?: RunReactivationOwnerOptions<E, R>["activateActiveWorkAuthorityRefresh"]
 }
 
-const ownerLayer = <E, R>(shell: ApplicationExitShellService, options: TestOwnerOptions<E, R>) =>
+const ownerLayer = <E, R>(shell: ApplicationExitShell["Service"], options: TestOwnerOptions<E, R>) =>
   runReactivationOwnerLayer({
     ...options,
     activateActiveWorkAuthorityRefresh:
@@ -77,7 +77,7 @@ const ownerLayer = <E, R>(shell: ApplicationExitShellService, options: TestOwner
   }).pipe(Layer.provide(Layer.succeed(ApplicationExitShell, shell)))
 
 const provideOwner = <E, R, A>(
-  shell: ApplicationExitShellService,
+  shell: ApplicationExitShell["Service"],
   options: TestOwnerOptions<E, R>,
   program: (owner: RunReactivationOwnerService) => Effect.Effect<A>
 ) =>
