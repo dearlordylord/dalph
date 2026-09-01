@@ -66,14 +66,19 @@ review. It changes no Dalph runtime behavior.
   repository gate passed before composition. Independent combined review found
   no remaining runtime or architecture finding.
 - With #264–#267 and #269 complete, #268 has reached its cassette-composition
-  prerequisite, issue #309. The #309 scenario commit
-  `4cf7b7708280ed9e17176ac014589e2449e297aa` is pushed on
-  `work/issue-309-concurrent-interaction-group`. A later eight-file causal
-  implementation candidate is preserved uncommitted and unpushed in its
-  worktree. Its refined nine-node, four-edge scenario is proposed and remains
-  pending explicit repository-owner acceptance. Under the operational-scenario
-  gate, neither #309 nor downstream #268 implementation may be committed until
-  that acceptance is recorded.
+  prerequisite, issue #309. The previously accepted nine-node #309 causal
+  group and its direct evidence are committed and pushed at exact commit
+  `e6d98926f`. The additional authority-lane behavior needed by #268 is a new
+  proposal, not part of that earlier acceptance. Its proposed #309 scenario is
+  committed and pushed at exact commit
+  `0253bda6924d3bd9ead68fc2fba69fab332a2e36` on
+  `work/issue-309-concurrent-interaction-group`; the proposed downstream #268
+  boundary scenario is committed and pushed at exact commit
+  `4b59855efb538e79637ce976763a70fbe7569636` on
+  `work/issue-268-delivery-capstone`. Both proposals have clean independent
+  Standards and Spec reviews, but neither review is owner acceptance. Explicit
+  repository-owner acceptance of both proposed texts is the current gate for
+  behavior-changing implementation.
 - The separate [determinism discussion handoff](DETERMINISM-DISCUSSION-HANDOFF.md)
   records the #268 cassette-order evidence and open Effect/Journal questions.
   It is not an accepted decision or a #268 blocking edge; this lane continues
@@ -324,104 +329,242 @@ Trade-off: separate worktrees added one integration step, but kept cassette
 causality and admission-priority changes independently reviewable before the
 combined interaction review.
 
-### 5. Obtain owner acceptance for #309, then compose #268
+### 5. Obtain owner acceptance for the proposed #309 and #268 scenarios, then implement #309 before #268
 
-The maintainer is trying to run the accepted #268 DS01–DS13 production story
-through one controlled cassette. The original group treated five interactions
-as roots and left four causal successors strict, which erased the actual
-plan-before-worktree and worktree-before-Begin relationships. The proposed
-#309 scenario instead places the exact nine interactions in one bounded graph
-with four edges: `P_D → W_D`, `P_E → W_E`, `W_B → X_B`, and `W_C → X_C`.
-The following activation return remains a strict join after the group.
+The maintainer is trying to run the accepted DS01–DS13 source story through one
+controlled cassette without turning incidental fiber order into authored
+behavior. The earlier nine-node, four-edge #309 prerequisite is already
+accepted, implemented, pushed at exact commit `e6d98926f`, and clean under its
+concluding Standards and Spec implementation reviews. Its 49/49 focused tests,
+22,680-order exhaustive proof, 1/1 cursor-owner coverage check, typecheck,
+Effect diagnostics, scoped lint, and diff check remain historical evidence.
+The completed-group publication stays inside the existing uninterruptible
+cursor transition permit; this delays a pending interruption through the local
+callback and forbids consuming callback re-entry, but prevents a strict
+activation return from overtaking or losing the one group occurrence.
 
-Status: pending explicit repository-owner acceptance. The scenario commit
-`4cf7b7708280ed9e17176ac014589e2449e297aa` is pushed on
-`work/issue-309-concurrent-interaction-group`. The later refined scenario and
-causal implementation candidate modify eight files and are preserved
-uncommitted and unpushed in
-`/workspace/typescript/dalph-worktrees/issue-309-concurrent-interaction-group`.
-The integration fixed point remains
-`a1b81c4fbcd189d62b480d6e637c62278ca7b829`; this records neither scenario
-acceptance nor implementation completion.
+That earlier work started from integration code fixed point
+`a1b81c4fbcd189d62b480d6e637c62278ca7b829` and proposed the causal scenario at
+`4cf7b7708280ed9e17176ac014589e2449e297aa`. Its review loop also established
+canonical claim-fingerprint uniqueness, exact controlled `X_A`, `X_B`, and
+`X_C` outputs, and presentation that distinguishes direct authored edges from
+possible transitive order. Commit `e6d98926f` remains on the #309 issue branch;
+this plan update does not claim that it is composed on the integration branch
+or in #268.
 
-The focused five-file command passed 49/49 tests across
-`packages/dalph/test/cassettes/authored-domain.test.ts`,
-`packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts`,
-`packages/dalph/test/cassettes/authored-domain.property.test.ts`,
-`packages/dalph/test/cassettes/authored-presentation.test.ts`, and
-`packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts`. All
-22,680 legal schedules ran in five deterministic first-root shards under the
-ordinary 10-second per-test bound. The separate cursor-owner coverage check
-passed 1/1. Typecheck, Effect diagnostics, scoped lint, and the candidate diff
-check also passed. The unchanged `authored-coverage.test.ts` case
-`changedAttemptChoiceRace` remains baseline red and reproduced identically at
-exact base `4cf7b7708`; it is not included in the 49/49 result and is neither
-hidden nor repaired in #309. These results qualify the candidate but cannot
-substitute for the repository owner's scenario acceptance.
+The next behavior is not covered by that earlier acceptance. Exact proposed
+scenario commits are:
 
-Independent review found that a strict activation-return claim could overtake
-completed-group occurrence publication. The candidate now uses the existing
-cursor transition permit for completion, keeps group occurrence publication
-uninterruptible within that transition, and makes activation return join the
-publication. This prevents an advanced group from losing or reordering its
-occurrence. It deliberately delays interruption until the local observation
-callback returns, and a consuming `onOccurrence` callback must not re-enter
-the same cursor permit. That non-reentrant callback contract is narrower than
-adding another queue or scheduler, but it must remain explicit.
+- #309 authority-lane amendment:
+  `0253bda6924d3bd9ead68fc2fba69fab332a2e36` on
+  `work/issue-309-concurrent-interaction-group`.
+- #268 capstone boundary refinement:
+  `4b59855efb538e79637ce976763a70fbe7569636` on
+  `work/issue-268-delivery-capstone`.
 
-Other review repairs enforce canonical claim-fingerprint uniqueness across the
-closed member union, return the exact controlled `X_A`, `X_B`, and `X_C`
-outputs, and distinguish direct authored edges from merely possible transitive
-presentation order. Both Standards and Spec re-reviews report their code and
-spec findings resolved. They do not establish overall acceptance: explicit
-repository-owner acceptance and the factual scenario-status update remain
-open.
+Both proposed texts have completed independent Standards and Spec reviews with
+no remaining finding. Those reviews establish internal consistency only. They
+do not establish repository-owner acceptance, implementation completion, or
+integration. Explicit repository-owner acceptance of both exact proposed
+commits is the current operational-scenario gate. No behavior-changing #309 or
+#268 implementation may begin or resume before that acceptance is recorded.
 
-After the repository owner accepts the refined scenario:
+The two scenario amendments are not accepted, and no reviewed implementation
+of either amendment exists. At the #268 worktree whose HEAD is the scenario
+documentation commit, five dirty behavior-changing files preserve a candidate
+that predates the proposed scenario text and therefore predates any future
+owner acceptance of it. This candidate is frozen unauthorized WIP and
+recoverable evidence only. It receives no further implementation, commit, or
+composition before owner acceptance, cannot satisfy a scenario-to-test row,
+and cannot count as implementation evidence. Its current dirty inventory is:
 
-1. Update its factual status with the accepting owner, date, and reference.
-2. Run one read-only Standards and Spec re-review against that accepted text.
-3. Commit and push #309, then compose the exact commit into #268.
-4. In the maintained capstone, replace the five roots and four strict
-   successors with the exact nine-node, four-edge DAG while keeping the
-   activation return strict.
-5. Remove the temporary diagnostic instrumentation and progress watchdog, and
-   remove the stale task-id corruption. Retain the reactivation-return
-   lifecycle files because they express required production chronology rather
-   than diagnostics.
-6. Complete the seven DS01–DS13 scenario proofs below, update the manifest and
-   documentation, run the applicable repository gates, and repeat the required
-   reviews until no reasonable finding remains.
+- modified `packages/dalph/src/cassettes/authored-runner.ts`;
+- modified `packages/dalph/src/cassettes/catalog.ts`;
+- modified `packages/dalph/src/cassettes/delivery-story-capstone.ts`;
+- untracked `packages/dalph/src/cassettes/authored-reactivation-return.ts`; and
+- untracked
+  `packages/dalph/test/cassettes/authored-reactivation-return.test.ts`.
 
-Do not add new runtime scheduling, read authority, executor lifecycle, or
-capacity policy in #268. If the thirteen-beat story exposes a missing behavior,
-return it to #265, #266, #267, or #269.
+Before composing #309 into that worktree, inventory these exact paths again,
+record their content hashes, preserve every version, and reconcile each
+intentional change against the accepted #309 diff. Do not overwrite or infer
+ownership from path overlap. Stash object
+`83a272e839ef32622b0684fb823d9ef4e1545d05` was verified present as
+`stash@{1}` while this plan was updated. If it remains present, protect it from
+drop, clear, destructive apply, or rewrite until the candidate is fully
+reconciled and independently reviewed. If it is absent later, stop composition
+and locate equivalent preserved evidence before changing the candidate.
 
-Scenario-to-test mapping after #309 acceptance and composition:
+The corrected chronology has three distinct shapes:
 
-- DS-01 through DS-13 → one table-driven maintained-cassette test containing
-  exact Run, attempt, Base SHA, claim, worktree, capacity, held, retained,
-  fingerprint, and report identities.
-- Alice edits B → notification/timer → ordinary graph/focused reads → Suspend
-  → Safe → release → one named vertical test with zero repeated Begin/Resume.
-- Lost notification and duplicate hints → one bounded-timer/coalescing test.
-- Unchanged A/C observation → one test asserting no report ordinal, executor
-  command, or report-triggered graph read.
-- Restart → one test asserting passive reattachment for A/C/D and no restored
-  hint, timer cursor, or derived refresh requirement.
-- Continue B → one exact Resume after capacity becomes available, ahead of
-  unstarted work.
-- Active-work refresh versus final stabilization → one test proving the two
-  graph reads have distinct causes and ordering.
+At an active-refresh cut, the concrete boundary sequence for one healthy task
+is: Dalph selects the task's tracker specification read; the tracker returns
+that exact task's specification; Dalph selects the task's current-claim read;
+the tracker returns that exact task's current claim; Dalph performs the Git
+planned-worktree read for the exact attempt; and Dalph performs the Git
+target-lineage read for that exact attempt. Only after that concrete sequence
+is established does this plan use `S → T → Q → R → W → L` as its
+shorthand.
 
-Trade-offs: exhaustive enumeration costs more than the superseded 120-order
-proof, but checks the complete finite partial order instead of sampling it.
-Holding the existing transition permit through occurrence publication delays
-interruption and forbids consuming-callback re-entry, but closes the observed
-publication/activation race without inventing another concurrency authority.
-Waiting for explicit owner acceptance leaves a verified candidate uncommitted,
-but preserves the fail-closed scenario gate and prevents review evidence from
-being misreported as an accepted behavior decision.
+At executing restart, the executor returns the current unchanged
+`ExecutorWorkExecuting` projection for exact attempt `attempt:A:0`, then exact
+attempt `attempt:C:2`, then exact attempt `attempt:D:3`. Only after naming those
+executor boundaries does this plan use `P_A`, `P_C`, and `P_D` as shorthand.
+
+1. After the first active graph result, A and C each perform an independent
+   six-node specification-to-lineage chain
+   `S → T → Q → R → W → L`; B performs only its independent
+   two-node specification lane `S_B → T_B`. The bounded group therefore has
+   fourteen nodes, eleven direct edges, and exactly
+   `14! / (6! * 2! * 6!) = 84,084` legal schedules. It publishes once after all
+   fourteen roles. Only then is strict B1 Suspend available. There is no
+   cross-task edge.
+2. Executing restart is strict, not a concurrent authority group:
+   `startup graph → P_A → P_C → P_D → next graph →
+   CoordinatorActivationReturned(RunMustRemainActive(UnsettledResponsibility))`.
+   It performs three unchanged Executing projections and zero specification,
+   claim, worktree, lineage, Begin, Resume, or Suspend calls. The return settles
+   before TrackerNotification or Timer hints become available.
+3. After those hints and the later active graph result, A and D each perform an
+   independent six-node `S → T → Q → R → W → L` chain. This
+   bounded group has twelve nodes, ten direct edges, and exactly
+   `12! / (6! * 6!) = 924` legal schedules. It publishes once after all twelve
+   roles. Only then is strict C2 Suspend available. There is no A-before-D or
+   D-before-A edge.
+
+Three committed production probes establish the premises without accepting
+the proposed cassette behavior:
+
+- `c305b3543f94014967831562abd8e429d053515e` proves an active-refresh
+  authority lane can reach its claim read while an independent specification
+  read remains in flight. It supports the later A/D group only.
+- `bb40c4c8c` proves the exact executing-restart graph/projection/graph order
+  and its zero authority lanes.
+- `5578b8daa8778e98a14f9a61e93dd2cf393d69ce` proves the role-generic rule that
+  a constrained task's one Suspend remains unavailable until all healthy
+  subjects' authority tails settle.
+
+The proposed #268 scenario adds three real production-result settlement
+boundaries. The cursor reserves the exact authored item without advancing,
+runs the owning production Effect interruptibly, and, only after an exact
+validated success, settles and publishes under one short uninterruptible
+cursor handoff. It performs no automatic retry.
+
+- Capacity revision two and capacity two must be durably applied and the exact
+  public result settled before `CoordinatorProcessDies` is exposed. A
+  committed-but-unacknowledged append exposes no death in that run; a fresh run
+  must reconcile through the ordinary reduced-capacity read and must not apply
+  the change twice.
+- Exact C2 `ExecutorWorkSafelySuspended` at report ordinal two must be accepted
+  into the ordinary report protocol and published before
+  `OperatorContinuesAttempt(B1)` is exposed. A provider return, early
+  interruption, or ambiguous committed result is not enough; reconciliation
+  must not issue another Suspend or create ordinal three.
+- The reconstructed ordinary activation and finality result
+  `RunMustRemainActive(UnsettledResponsibility)` must settle exactly once after
+  the strict restart prefix and before reactivation hints are exposed. A wrong,
+  failed, interrupted, or duplicate return cannot fabricate settlement.
+
+Two baseline focused-suite defects reproduced identically at exact pre-#309
+base `4cf7b7708280ed9e17176ac014589e2449e297aa` and the current #309 tip:
+
+- The historical `changedAttemptChoiceRace` defect is
+  `packages/dalph/test/cassettes/authored-coverage.test.ts` — `runs the authored
+  candidate and promotion outcomes through their production adapters`. It
+  fails at story position 25: expected `ExpectedBehavior`, received
+  `ReadTrackerGraph`.
+- `packages/dalph/test/cassettes/cassette-residuals.test.ts` — `round-trips
+  restart, release, worktree, Git, and lost-response histories` fails at story
+  position 39: expected `TrackerGraphReadReturned`, received
+  `ExpectedBehavior`.
+
+The first name and the position-25 aggregate failure describe the same defect,
+not a third red. Both defects are baseline failures, not regressions introduced
+by either documentation proposal. They were excluded from the earlier 49/49
+result and are neither hidden nor repaired here.
+
+After the repository owner accepts both exact proposals, use this conditional
+TDD and delegation order:
+
+The orchestrator classifies complexity before every dispatch. Sol agents own
+semantic TDD, interruption and failure behavior, ambiguity, merge conflicts,
+architectural decisions, and Standards or Spec review. Luna max agents may own
+only pinned commands, formatting, evidence collection, compiler-guided exact
+API migrations, literal fixture transcription, and conflict-free composition
+of an exact reviewed ref. A Luna max agent must stop and escalate any semantic
+ambiguity, unexpected diff, failing assumption, or merge conflict to a Sol
+agent; it must not choose a behavior or conflict resolution.
+
+1. Record the accepting owner, date, and reference in both scenario files.
+   Dispatch one Sol implementation agent in the #309 worktree to make the
+   proposed direct tests fail for the intended reason and then implement the
+   narrow closed four-case member union, exact result/projection correlation,
+   two bounded groups, and strict restart support.
+2. Dispatch independent Sol Standards and Spec review agents against the exact
+   #309 diff. Return every reasonable finding to the implementation agent and
+   repeat the implementation/review loop until both reviews are clean. Run the
+   focused tests and required repository gates before committing and pushing
+   one reviewable #309 commit.
+3. Compose that exact #309 commit into the #268 worktree. Only then dispatch a
+   Sol implementation agent for #268 to drive the capacity/death,
+   Safe/Continue, activation-return, and full DS01–DS13 proofs red then green
+   through the real production seams.
+4. Dispatch independent Sol Standards and Spec review agents against the exact
+   #268 diff. Repeat the same finding/repair/re-review loop, then run focused
+   tests, `pnpm check:all`, and the final applicable `pnpm check:quint` gate.
+5. Compose only reviewed exact commits through the integration worktree. Sync
+   the integration worktree with `master` at a deliberate boundary, preserve
+   unrelated changes, rerun the combined scenario mappings and repository
+   gates, and do not claim shipment merely because integration is green.
+
+Do not add new runtime scheduling, tracker or Git authority, executor
+lifecycle, capacity policy, retry authority, timeout, queue, or persisted
+cursor/frontier state. If the thirteen-beat story exposes a missing production
+behavior, return it to its owning issue instead of absorbing it into cassette
+matching.
+
+Scenario-to-test mapping after acceptance:
+
+- Initial fourteen-node A/B/C cut → #309
+  `partitions all 84084 active-refresh orders by three canonical lane
+  positions` and `consumes every active-refresh specification-to-lineage order
+  before B Suspend`, backed by probe `5578b8daa8778e98a14f9a61e93dd2cf393d69ce`.
+- Strict restart graph/projection/graph/return cut with zero authority lanes →
+  probe `bb40c4c8c`, `completes the startup graph read then serially reattaches A
+  C and D before the next graph read`, plus #268 `runs reconstructed ordinary
+  activation through strict exact projections before returning unsettled
+  responsibility`.
+- Later twelve-node A/D cut → #309 `partitions and consumes all 924 post-hint
+  A D authority orders before C Suspend`, backed by probe
+  `c305b3543f94014967831562abd8e429d053515e`.
+- Capacity before death → #268 `keeps authored process death unavailable
+  before the production capacity result`, `settles one production capacity
+  revision before delayed interruption and process death`, and `distinguishes
+  pre-commit interruption from a committed lost capacity response using only
+  the reduced policy`.
+- C2 Safe before Continue B → #268 `keeps Continue B unavailable before the
+  production C2 Safe publication`, `settles exact C2 Safe once before delayed
+  interruption and Continue B`, and `preserves named C2 Safe failure families
+  and reconciles a committed lost response without retry`.
+- Restart return before hints → #268 `keeps restart hints unavailable before
+  the production finality result` and `settles the reconstructed restart return
+  once before delayed interruption and later hints`.
+- DS-01 through DS-13 → #268 `emits the exact DS01 through DS13 delivery
+  checkpoint table`, retaining exact Run, attempt, Base SHA, claim, worktree,
+  capacity, held, retained, fingerprint, and accepted-outcome identities.
+
+Trade-offs: the two closed group shapes cost more schema and exhaustive-test
+work than a flat batch, but preserve the production-proved independent lanes
+without creating a generic workflow DAG. Enumerating 84,084 and 924 schedules
+costs more than sampling, but proves each complete finite partial order. The
+short uninterruptible settlement handoff can delay interruption, but avoids a
+durable success with no matching occurrence; production I/O remains
+interruptible. Waiting for explicit owner acceptance keeps reviewed proposals
+unaccepted and leaves no reviewed implementation of their amendments. It also
+freezes the older five-file #268 WIP as recoverable evidence instead of
+authorizing it. This preserves the fail-closed operational-scenario gate and
+prevents review or historical-WIP evidence from being reported as an accepted
+behavior decision.
 
 ### 6. Remind the separately owned #270 lane
 
