@@ -128,6 +128,8 @@ export type ProductionApplicationExitTraceObserver = (event: ApplicationExitTrac
 export interface ProductionWorkflowRuntimeBoundaries {
   /** Already-acquired repository owner shared with host discovery and SQLite. */
   readonly coordinatorOwnership?: CoordinatorOwnership["Service"]
+  /** Application-scoped Exit shell owned by the configured repository host. */
+  readonly applicationExit?: ApplicationExitShell["Service"]
   /** Optional journal implementation for process-boundary acceptance tests. */
   readonly journalStoreLayer?: Layer.Layer<
     JournalStore | RunLifecycleJournal,
@@ -393,30 +395,33 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     acceptedResultEvidenceStore === undefined
       ? plannedAttemptExecutorLayer
       : plannedAttemptExecutorLayer.pipe(Layer.provide(Layer.succeed(EvidenceStore, acceptedResultEvidenceStore)))
-  const applicationExitLayer = Layer.effect(
-    ApplicationExitShell,
-    Effect.gen(function* () {
-      const ownership = yield* CoordinatorOwnership
-      const processLifecycle = {
-        requestEnd: (decision: ApplicationProcessEndDecision) =>
-          runtimeBoundaries.applicationProcessEndObserver?.(decision) ?? Effect.void
-      }
-      const trace =
-        runtimeBoundaries.applicationExitTraceObserver === undefined
-          ? undefined
-          : { emit: runtimeBoundaries.applicationExitTraceObserver }
-      const applicationExit = yield* makeApplicationExitShell(ownership, processLifecycle, trace)
-      const requestBoundary =
-        runtimeBoundaries.applicationExitRequestObserver === undefined
-          ? applicationExit.requestBoundary
-          : {
-              requestExit: runtimeBoundaries
-                .applicationExitRequestObserver()
-                .pipe(Effect.andThen(applicationExit.requestBoundary.requestExit))
+  const applicationExitLayer =
+    runtimeBoundaries.applicationExit === undefined
+      ? Layer.effect(
+          ApplicationExitShell,
+          Effect.gen(function* () {
+            const ownership = yield* CoordinatorOwnership
+            const processLifecycle = {
+              requestEnd: (decision: ApplicationProcessEndDecision) =>
+                runtimeBoundaries.applicationProcessEndObserver?.(decision) ?? Effect.void
             }
-      return { ...applicationExit, requestBoundary }
-    })
-  )
+            const trace =
+              runtimeBoundaries.applicationExitTraceObserver === undefined
+                ? undefined
+                : { emit: runtimeBoundaries.applicationExitTraceObserver }
+            const applicationExit = yield* makeApplicationExitShell(ownership, processLifecycle, trace)
+            const requestBoundary =
+              runtimeBoundaries.applicationExitRequestObserver === undefined
+                ? applicationExit.requestBoundary
+                : {
+                    requestExit: runtimeBoundaries
+                      .applicationExitRequestObserver()
+                      .pipe(Effect.andThen(applicationExit.requestBoundary.requestExit))
+                  }
+            return { ...applicationExit, requestBoundary }
+          })
+        )
+      : Layer.succeed(ApplicationExitShell, runtimeBoundaries.applicationExit)
   const executorWithApplicationExit = executorWithAcceptedEvidence.pipe(Layer.provideMerge(applicationExitLayer))
   const integratorLayer = integrator === undefined ? Layer.empty : Layer.succeed(Integrator, Integrator.of(integrator))
   const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, executorWithApplicationExit)

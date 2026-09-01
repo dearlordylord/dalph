@@ -1,8 +1,12 @@
+/* eslint-disable max-lines -- Production host composition keeps one scoped lifecycle and its qualification seams auditable. */
 import { NodeCrypto, NodeHttpClient, NodeServices } from "@effect/platform-node"
 import { IntegrationTarget, PlannedAttemptExecutor } from "@dalph/contracts"
 import {
   type GithubGraphqlClient,
   type RunReactivationOwner,
+  type ApplicationExitRequestBoundaryService,
+  type ApplicationExitShellService,
+  ApplicationExitShell,
   CompletionClaimBoundary,
   CompletionTaskBoundary,
   CoordinatorOwnership,
@@ -33,6 +37,7 @@ import {
   taskClaimAcquisitionPlannerLayer,
   type ProductionRunSelection,
   type TraceCursor,
+  makeApplicationExitShell,
   selectProductionRun
 } from "@dalph/orchestrator"
 import { Context, Deferred, Effect, Layer } from "effect"
@@ -58,11 +63,13 @@ import {
   type ProductionRunReconstructionObservation
 } from "./production.js"
 
-/** Passive process-local state exposed only after one exact Run beginning is acknowledged. */
+/** Process-local signals and the host-owned lifecycle boundary exposed after one exact Run beginning is acknowledged. */
 export interface ProductionHostObservation {
   readonly acceptedHistory: CurrentSignal<TraceCursor>
   readonly current: CurrentSignal<DeliveryRuntimeObservationState>
   readonly selection: ProductionRunSelection
+  /** Transport-neutral lifecycle request shared with the configured host scope. */
+  readonly applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
 }
 
 type ProductionHostFoundation = CoordinatorOwnership | JournalStore | RunLifecycleJournal
@@ -102,7 +109,8 @@ export interface ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, R
   readonly run: (
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
-    onFailure: (failure: EActivation) => Effect.Effect<void>
+    onFailure: (failure: EActivation) => Effect.Effect<void>,
+    applicationExit?: ApplicationExitShellService
   ) => Layer.Layer<JournaledRunObservationSource | RunReactivationOwner, ERun, ProductionHostFoundation | RRun>
 }
 
@@ -270,6 +278,21 @@ const observedIntegratorLayer = <E, R>(
 }
 
 /**
+ * Keeps the coordinator lock held until the host scope closes after its caller
+ * has received the lifecycle result. The application shell still owns the
+ * decision and bounded drain; scope finalization owns the final lock release.
+ */
+const makeHostApplicationExitShell = Effect.fn("ProductionRepositoryHost.makeApplicationExitShell")(function* (
+  ownership: CoordinatorOwnership["Service"]
+) {
+  const shell = yield* makeApplicationExitShell(
+    { ...ownership, release: Effect.void },
+    { requestEnd: () => Effect.void }
+  )
+  return shell
+})
+
+/**
  * Complete production repository graph. Optional adapters replace only named
  * network or process edges for qualification; the mutation capability topology,
  * one shared Codex service, and Run chronology remain unchanged. The optional
@@ -297,7 +320,8 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
   run: (
     configuration: ProductionRepositoryHostConfiguration,
     selection: ProductionRunSelection,
-    onFailure: (failure: TaskTrackerMutationThrottled) => Effect.Effect<void>
+    onFailure: (failure: TaskTrackerMutationThrottled) => Effect.Effect<void>,
+    applicationExit?: ApplicationExitShellService
   ) =>
     Layer.unwrap(
       // eslint-disable-next-line complexity -- One production graph resolves optional edge adapters and observation while preserving one scoped service topology.
@@ -321,10 +345,17 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           stateDirectory: configuration.codexStateDirectory
         }).pipe(Layer.provide(NodeServices.layer))
         /* v8 ignore start -- @preserve Hermetic host tests replace the process boundary; this assignment retains the production Codex app-server default. */
-        const appLayer: Layer.Layer<
+        const appLayerWithoutApplicationExit: Layer.Layer<
           CodexAppServer,
           ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>
         > = adapters.codexAppServer?.(configuration) ?? defaultCodexAppServerLayer(configuration, attemptStoreLayer)
+        const appLayer: Layer.Layer<
+          CodexAppServer,
+          ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>
+        > =
+          applicationExit === undefined
+            ? appLayerWithoutApplicationExit
+            : appLayerWithoutApplicationExit.pipe(Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)))
         /* v8 ignore stop */
         const gitCommandLayer = observedGitCommandLayer(
           nodeGitCommandLayer.pipe(Layer.provide(NodeServices.layer)),
@@ -407,6 +438,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
             ...(adapters.applicationExitTraceObserver === undefined
               ? {}
               : { applicationExitTraceObserver: adapters.applicationExitTraceObserver }),
+            ...(applicationExit === undefined ? {} : { applicationExit }),
             ...(adapters.onReconstructed === undefined ? {} : { onReconstructed: adapters.onReconstructed }),
             ...(adapters.workflowCleanupObserver === undefined
               ? {}
@@ -461,9 +493,15 @@ export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFounda
       const configuration = yield* decodeProductionRepositoryHostConfiguration(input)
       const foundation = yield* Layer.build(graph.foundation(configuration))
       const selection = yield* selectProductionRun(configuration.target).pipe(Effect.provide(foundation))
+      const applicationExit = yield* makeHostApplicationExitShell(Context.get(foundation, CoordinatorOwnership))
       const activationFailure = yield* Deferred.make<never, EActivation>()
       const run = yield* Layer.build(
-        graph.run(configuration, selection, (failure) => Deferred.fail(activationFailure, failure).pipe(Effect.asVoid))
+        graph.run(
+          configuration,
+          selection,
+          (failure) => Deferred.fail(activationFailure, failure).pipe(Effect.asVoid),
+          applicationExit
+        )
       ).pipe(Effect.provide(foundation))
       const source = Context.get(run, JournaledRunObservationSource)
       yield* Effect.raceFirst(source.awaitEstablished, Deferred.await(activationFailure))
@@ -472,7 +510,12 @@ export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFounda
       // outer scope closes ordinary process-local resources without turning
       // the failure into Run finality, Exit, or a host retry.
       return yield* Effect.raceFirst(
-        use({ acceptedHistory: source.acceptedHistory, current: source.current, selection }),
+        use({
+          acceptedHistory: source.acceptedHistory,
+          current: source.current,
+          selection,
+          applicationExitRequestBoundary: applicationExit.requestBoundary
+        }),
         Deferred.await(activationFailure)
       )
     })
