@@ -21,6 +21,39 @@ const historicalRun = Effect.runSync(
   )
 )
 
+it("records B Safe then rereads tracker G1 before D begins and preserves the activation return", () => {
+  const story = maintainedAuthoredCassetteCatalog.autonomousExecutorDeliveryCapstone.story
+  const bSafe = story.findIndex(
+    (item) =>
+      item._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" &&
+      item.report._tag === "ExecutorWorkSafelySuspended" &&
+      item.report.attemptId === "attempt:B:1"
+  )
+
+  expect(bSafe).toBeGreaterThanOrEqual(0)
+  expect(story.slice(bSafe, bSafe + 6)).toMatchObject([
+    {
+      _tag: "PlannedAttemptExecutorPassiveLifecycleChanged",
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:B:1" }
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "delivery-story-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: { revision: "delivery-story-G1" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:D:3" },
+      request: "Begin"
+    },
+    {
+      _tag: "PlannedAttemptExecutorProjectionReturned",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:D:3" }
+    },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    }
+  ])
+})
+
 it.effect(
   "emits the exact DS01 through DS13 delivery checkpoint table",
   () =>
