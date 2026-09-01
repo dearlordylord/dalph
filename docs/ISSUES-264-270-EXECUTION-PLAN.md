@@ -1,6 +1,6 @@
 # Issues 264–270 execution plan
 
-Status: active follow-on plan, recorded 2026-08-30 and updated 2026-08-31.
+Status: active follow-on plan, recorded 2026-08-30 and updated 2026-09-01.
 
 This document lets a new implementation session continue the autonomous
 executor-work sequence without reconstructing the preceding integration and
@@ -65,13 +65,20 @@ review. It changes no Dalph runtime behavior.
   cassettes, 100% changed executable coverage, and gitleaks. #269's full
   repository gate passed before composition. Independent combined review found
   no remaining runtime or architecture finding.
-- With #264–#267 and #269 complete, #268 is unblocked for its accepted
-  composition-only capstone. It must not add another runtime scheduler, read
-  authority, executor lifecycle, or capacity policy.
+- With #264–#267 and #269 complete, #268 has reached its cassette-composition
+  prerequisite, issue #309. The #309 scenario commit
+  `4cf7b7708280ed9e17176ac014589e2449e297aa` is pushed on
+  `work/issue-309-concurrent-interaction-group`. A later eight-file causal
+  implementation candidate is preserved uncommitted and unpushed in its
+  worktree. Its refined nine-node, four-edge scenario is proposed and remains
+  pending explicit repository-owner acceptance. Under the operational-scenario
+  gate, neither #309 nor downstream #268 implementation may be committed until
+  that acceptance is recorded.
 - The separate [determinism discussion handoff](DETERMINISM-DISCUSSION-HANDOFF.md)
   records the #268 cassette-order evidence and open Effect/Journal questions.
   It is not an accepted decision or a #268 blocking edge; this lane continues
-  the bounded #309 composition while that investigation proceeds separately.
+  preserving the bounded #309 candidate while that investigation proceeds
+  separately.
 - Preserve the separate #270 candidate at
   `origin/integrate/live-mvp-270-sync@82c922c7f`. A separate lane owns #270
   implementation, integration, and verification. This lane must not compose or
@@ -317,18 +324,80 @@ Trade-off: separate worktrees added one integration step, but kept cassette
 causality and admission-priority changes independently reviewable before the
 combined interaction review.
 
-### 5. Dispatch #268 as the composition-only capstone
+### 5. Obtain owner acceptance for #309, then compose #268
 
-Status: unblocked at exact integration tip
-`a1b81c4fbcd189d62b480d6e637c62278ca7b829`. #268 may now compose and prove
-the accepted thirteen-beat story; its dispatch does not authorize new runtime
-policy.
+The maintainer is trying to run the accepted #268 DS01–DS13 production story
+through one controlled cassette. The original group treated five interactions
+as roots and left four causal successors strict, which erased the actual
+plan-before-worktree and worktree-before-Begin relationships. The proposed
+#309 scenario instead places the exact nine interactions in one bounded graph
+with four edges: `P_D → W_D`, `P_E → W_E`, `W_B → X_B`, and `W_C → X_C`.
+The following activation return remains a strict join after the group.
+
+Status: pending explicit repository-owner acceptance. The scenario commit
+`4cf7b7708280ed9e17176ac014589e2449e297aa` is pushed on
+`work/issue-309-concurrent-interaction-group`. The later refined scenario and
+causal implementation candidate modify eight files and are preserved
+uncommitted and unpushed in
+`/workspace/typescript/dalph-worktrees/issue-309-concurrent-interaction-group`.
+The integration fixed point remains
+`a1b81c4fbcd189d62b480d6e637c62278ca7b829`; this records neither scenario
+acceptance nor implementation completion.
+
+The focused five-file command passed 49/49 tests across
+`packages/dalph/test/cassettes/authored-domain.test.ts`,
+`packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts`,
+`packages/dalph/test/cassettes/authored-domain.property.test.ts`,
+`packages/dalph/test/cassettes/authored-presentation.test.ts`, and
+`packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts`. All
+22,680 legal schedules ran in five deterministic first-root shards under the
+ordinary 10-second per-test bound. The separate cursor-owner coverage check
+passed 1/1. Typecheck, Effect diagnostics, scoped lint, and the candidate diff
+check also passed. The unchanged `authored-coverage.test.ts` case
+`changedAttemptChoiceRace` remains baseline red and reproduced identically at
+exact base `4cf7b7708`; it is not included in the 49/49 result and is neither
+hidden nor repaired in #309. These results qualify the candidate but cannot
+substitute for the repository owner's scenario acceptance.
+
+Independent review found that a strict activation-return claim could overtake
+completed-group occurrence publication. The candidate now uses the existing
+cursor transition permit for completion, keeps group occurrence publication
+uninterruptible within that transition, and makes activation return join the
+publication. This prevents an advanced group from losing or reordering its
+occurrence. It deliberately delays interruption until the local observation
+callback returns, and a consuming `onOccurrence` callback must not re-enter
+the same cursor permit. That non-reentrant callback contract is narrower than
+adding another queue or scheduler, but it must remain explicit.
+
+Other review repairs enforce canonical claim-fingerprint uniqueness across the
+closed member union, return the exact controlled `X_A`, `X_B`, and `X_C`
+outputs, and distinguish direct authored edges from merely possible transitive
+presentation order. Both Standards and Spec re-reviews report their code and
+spec findings resolved. They do not establish overall acceptance: explicit
+repository-owner acceptance and the factual scenario-status update remain
+open.
+
+After the repository owner accepts the refined scenario:
+
+1. Update its factual status with the accepting owner, date, and reference.
+2. Run one read-only Standards and Spec re-review against that accepted text.
+3. Commit and push #309, then compose the exact commit into #268.
+4. In the maintained capstone, replace the five roots and four strict
+   successors with the exact nine-node, four-edge DAG while keeping the
+   activation return strict.
+5. Remove the temporary diagnostic instrumentation and progress watchdog, and
+   remove the stale task-id corruption. Retain the reactivation-return
+   lifecycle files because they express required production chronology rather
+   than diagnostics.
+6. Complete the seven DS01–DS13 scenario proofs below, update the manifest and
+   documentation, run the applicable repository gates, and repeat the required
+   reviews until no reasonable finding remains.
 
 Do not add new runtime scheduling, read authority, executor lifecycle, or
 capacity policy in #268. If the thirteen-beat story exposes a missing behavior,
 return it to #265, #266, #267, or #269.
 
-Scenario-to-test mapping:
+Scenario-to-test mapping after #309 acceptance and composition:
 
 - DS-01 through DS-13 → one table-driven maintained-cassette test containing
   exact Run, attempt, Base SHA, claim, worktree, capacity, held, retained,
@@ -345,14 +414,23 @@ Scenario-to-test mapping:
 - Active-work refresh versus final stabilization → one test proving the two
   graph reads have distinct causes and ordering.
 
-### 6. Hand off #270 to its separate lane
+Trade-offs: exhaustive enumeration costs more than the superseded 120-order
+proof, but checks the complete finite partial order instead of sampling it.
+Holding the existing transition permit through occurrence publication delays
+interruption and forbids consuming-callback re-entry, but closes the observed
+publication/activation race without inventing another concurrency authority.
+Waiting for explicit owner acceptance leaves a verified candidate uncommitted,
+but preserves the fail-closed scenario gate and prevents review evidence from
+being misreported as an accepted behavior decision.
 
-This lane ends after #264–#269 are complete and #268 is ready. At that point,
+### 6. Remind the separately owned #270 lane
+
+This entry is reminder-only. After #264–#269 are complete and #268 is ready,
 remind the user to resume the separate #270 implementation and integration
-lane from `origin/integrate/live-mvp-270-sync@82c922c7f`. That lane owns its
-pinned integration base, semantic-conflict resolution, focused combined tests,
-repository gates, reviews, and any required final model check. This lane does
-not inspect, compose, merge, or verify #270.
+lane from `origin/integrate/live-mvp-270-sync@82c922c7f`. That lane retains
+ownership of its pinned integration base, semantic-conflict resolution,
+focused combined tests, repository gates, reviews, and any required final
+model check. This lane does not inspect, compose, merge, or verify #270.
 
 The separate stale-promotion lane also owns any #271 dispatch or merge
 decision. Recording #270 here does not authorize this lane to dispatch #271 or
