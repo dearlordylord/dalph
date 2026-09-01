@@ -919,18 +919,13 @@ the no-silent-drop outcome but does not model this process-local
 same-position evaluation-to-runtime handoff. The direct tests below own that
 finer chronology.
 
-### Shared accepted facts and capacity
+### Shared position-80 planning facts
 
 No person triggers either in-process handoff below. Dalph is configured with
-three task-work positions. The exact correlations `(RunId R, AttemptId A1)`,
-`(R, B1)`, and `(R, C1)` hold all three positions. D1 and E1 remain exact
-`ReserveOrReuse` proposals without positions, have no accepted `Begin` intent,
-and have received no executor command. A task ID by itself is not evidence that
-one of those positions is held or available.
-
-Dalph has accepted A1's exact worktree-read intent and result through Journal
-position 80. One coherent evaluation at position 80 contains A1's
-`ObservePlannedAttemptContinuationWorktree` proposal and C1's
+separate controlled fixtures for the publication-only and live-runtime cuts.
+Both start after Dalph has accepted A1's exact worktree-read intent and result
+through Journal position 80. One coherent evaluation at position 80 contains
+A1's `ObservePlannedAttemptContinuationWorktree` proposal and C1's
 `ObservePlannedAttemptContinuationClaim` proposal. Using the same accepted
 position-80 facts, delivery planning can advance A1's next exact action to
 `ReadTargetLineage` while C1's claim observation remains present. That planning
@@ -942,7 +937,9 @@ and cancellation facts, and every other runtime fact remain unchanged.
 
 This first cut characterizes evaluation publication only. It has no live
 delivery-action owner and therefore makes no claim about completion settlement
-or acknowledgement.
+or acknowledgement. Its controlled fixture is configured with capacity one,
+an empty held-position basis, and only the A1 and C1 proposals described below;
+it contains no B1, D1, or E1 fact or proposal.
 
 1. The runtime evaluation assembly has made the coherent position-80
    evaluation with A1's worktree proposal and C1's claim proposal observable.
@@ -951,12 +948,12 @@ or acknowledgement.
    current delivery consequences, the current planned-action frontier, and the
    current runtime facts, then makes exactly one coherent position-80 successor
    observable. Its frontier contains A1's exact `ReadTargetLineage`, still
-   contains C1's exact claim observation, and retains D1/E1 as position-blocked
-   work. Delivery planning owns the planned-action advancement; runtime
-   evaluation assembly owns the coherent sampling and exposure of the assembled
-   evaluation. The descriptive relation supplies current values; it does not
-   independently trigger runtime evaluation exposure. No particular
-   stream-combination operator is prescribed.
+   contains C1's exact claim observation, and contains no other proposal.
+   Delivery planning owns the planned-action advancement; runtime evaluation
+   assembly owns the coherent sampling and exposure of the assembled evaluation.
+   The descriptive relation supplies current values; it does not independently
+   trigger runtime evaluation exposure. No particular stream-combination
+   operator is prescribed.
 3. Any evaluation-defining component advancing must cause that coherent
    current evaluation to be exposed under the existing gate. The runtime
    facts component is not a privileged or sole change trigger.
@@ -966,12 +963,17 @@ or acknowledgement.
 
 ### Live-owner completion handoff
 
-The runtime acceptance cut starts separately. The runtime has consumed the
-stale position-80 worktree evaluation and still owns A1's exact live worktree
-action. That action has returned its ordinary result. The runtime has obtained
-the accepted-publication proof associated with the same accepted worktree
-result, and the completion can reach runtime event handling before the runtime
-consumes the newly assembled position-80 lineage evaluation.
+The runtime acceptance cut starts separately with capacity three. The exact
+correlations `(RunId R, AttemptId A1)`, `(R, B1)`, and `(R, C1)` hold all three
+positions. D1 and E1 remain exact `ReserveOrReuse` proposals without positions,
+have no accepted `Begin` intent, and have received no executor command. A task
+ID by itself is not evidence that one of those positions is held or available.
+The runtime has consumed the stale position-80 worktree evaluation and still
+owns A1's exact live worktree action. That action has returned its ordinary
+result. The runtime has obtained the accepted-publication proof associated with
+the same accepted worktree result, and the completion can reach runtime event
+handling before the runtime consumes the newly assembled position-80 lineage
+evaluation.
 
 1. The test offers A1's completion first and holds the exact position-80
    lineage evaluation behind an explicit synchronization boundary. Equal
@@ -1004,15 +1006,16 @@ revision, or inventing another current-value or ordering authority.
 No person triggers the component replacement or process losses below. The
 direct event is an orderly replacement of one runtime-evaluation-assembly
 scope, not a process crash. Scope 1 has exposed the coherent position-80
-worktree evaluation and then closes normally. The controlled authoritative
-`CurrentSignal`s for delivery consequences, the planned-action frontier, and
-runtime facts outlive that scope. While no assembly consumer exists, current
-planning advances to A1's position-80 lineage read. Scope 2 constructs a new
-runtime evaluation assembly and current-first subscription over those current
-signals. Its first value must immediately be the coherent position-80 lineage
-evaluation with C1 retained and D1/E1 position-blocked. It must not carry an
-assembly revision from Scope 1, call Git, or require a provider wake-up merely
-to expose the current value.
+worktree evaluation with C1's claim observation and then closes normally. This
+controlled fixture also has capacity one, an empty held-position basis, and no
+B1, D1, or E1 fact or proposal. The authoritative `CurrentSignal`s for delivery
+consequences, the planned-action frontier, and runtime facts outlive that scope.
+While no assembly consumer exists, current planning advances to A1's position-80
+lineage read. Scope 2 constructs a new runtime evaluation assembly and
+current-first subscription over those current signals. Its first value must
+immediately be the coherent position-80 lineage evaluation with C1 retained.
+It must not carry an assembly revision from Scope 1, call Git, or require a
+provider wake-up merely to expose the current value.
 
 This orderly replacement proves only runtime-evaluation-assembly attachment
 and current-first exposure. It does not simulate process loss, construct or
@@ -1059,10 +1062,11 @@ restart is not direct evidence for either pre-consumption crash cut.
   position-80 lineage with otherwise unchanged runtime facts, and position-81
   sentinel. It proves all three coherent evaluations arrive once and in order
   without a timeout, poll, reread, or persisted revision; it does not claim to
-  settle a runtime owner or prove durable restart reconstruction. Its inputs
-  are separately reconstructed relation, planning, and runtime-fact values, so
-  it owns only process-local assembly coherence.
-- Add `keeps a same-position worktree completion pending until its lineage
+  settle a runtime owner or prove durable restart reconstruction. Its
+  capacity-one fixture has an empty held-position basis and only A1/C1
+  proposals. Its inputs are separately reconstructed relation, planning, and
+  runtime-fact values, so it owns only process-local assembly coherence.
+- `keeps a same-position worktree completion pending until its lineage
   successor reaches the runtime` in
   `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`.
   The direct runtime test starts with exact live A1 worktree ownership and an
@@ -1071,17 +1075,18 @@ restart is not direct evidence for either pre-consumption crash cut.
   remove or acknowledge the owner. After release, it proves one settlement,
   one acknowledgement, one lineage admission, retained C1, exact held
   correlations A1/B1/C1 at capacity three, and no D1/E1 executor call.
-- Add `a replacement runtime assembly immediately exposes the current
+- `a replacement runtime assembly immediately exposes the current
   same-position lineage successor` in
   `packages/orchestrator/src/coordination/delivery/delivery-evaluation-consistency.test.ts`.
   Scope 1 observes the position-80 worktree evaluation and closes normally.
   The controlled authoritative current signals survive; with no assembly
   consumer, current planning advances to the position-80 lineage proposal.
   Scope 2 constructs a new assembly and current-first subscription and must
-  immediately expose A1 lineage with C1 retained and D1/E1 blocked. This is a
-  component-lifetime test of attachment and current-first exposure only. It
-  proves no assembly revision, Git call, or provider wake-up crosses the scope
-  boundary; it makes no runtime-owner, action-admission, or process-crash claim.
+  immediately expose A1 lineage with C1 retained. This capacity-one fixture has
+  no held positions and no B1, D1, or E1 proposal. It is a component-lifetime
+  test of attachment and current-first exposure only. It proves no assembly
+  revision, Git call, or provider wake-up crosses the scope boundary; it makes
+  no runtime-owner, action-admission, or process-crash claim.
 - Whole-process reconstruction before evaluation consumption and after
   admission but before intent is inherited rather than newly mapped here.
   `restart reprojects the exact executing attempt once then reattaches without
