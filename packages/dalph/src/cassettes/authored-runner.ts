@@ -1495,15 +1495,20 @@ const runAuthoredScenarioCassetteWith = (request: {
       const acceptedSafeReport = yield* Ref.make<Option.Option<AuthoredSafelySuspendedExecutorReportItem>>(
         Option.none()
       )
+      type PublicationObserverJournalFailure = Effect.Error<ReturnType<JournalStore["Service"]["read"]>>
+      const publicationObserverJournalFailure = yield* Ref.make<PublicationObserverJournalFailure | undefined>(
+        undefined
+      )
+      const authoredInteractionFailure = yield* Ref.make<AuthoredCassetteInteractionMismatch | undefined>(undefined)
       const publicationObserver = DeliveryRelationPublicationObserver.of({
         observe: (bundle) =>
           Effect.gen(function* () {
             const reserved = yield* Ref.get(acceptedSafeReport)
             const acceptedThrough = bundle.actionInputs.runtimeFacts.acceptedAt
             if (Option.isSome(reserved) && acceptedThrough !== null) {
+              const records = yield* sharedJournal.read(runId)
               yield* Effect.uninterruptible(
                 Effect.gen(function* () {
-                  const records = yield* sharedJournal.read(runId).pipe(Effect.orDie)
                   const acceptedSafeRecords = records.flatMap(({ event, position }) =>
                     position <= acceptedThrough &&
                     event._tag === "PlannedAttemptExecutorWorkReported" &&
@@ -1538,8 +1543,11 @@ const runAuthoredScenarioCassetteWith = (request: {
             // A read-only diagnostic observer defect never changes production cassette execution.
             yield* Effect.exit(Effect.sync(() => options.onDeliveryPublication?.(publication)))
           }).pipe(
-            Effect.catchTag("AuthoredCassetteInteractionMismatch", (failure) =>
-              Ref.set(authoredInteractionFailure, failure).pipe(Effect.andThen(Effect.die(failure)))
+            Effect.catch((failure) =>
+              (failure instanceof AuthoredCassetteInteractionMismatch
+                ? Ref.set(authoredInteractionFailure, failure)
+                : Ref.set(publicationObserverJournalFailure, failure)
+              ).pipe(Effect.andThen(Effect.die(failure)))
             )
           )
       })
@@ -1591,7 +1599,6 @@ const runAuthoredScenarioCassetteWith = (request: {
       const evidenceStoreContext = yield* Layer.build(memoryEvidenceStoreLayer)
       const evidenceStore = Context.get(evidenceStoreContext, EvidenceStore)
       const acceptedEvidencePublicationFailure = yield* Ref.make<EvidenceStoreFailure | undefined>(undefined)
-      const authoredInteractionFailure = yield* Ref.make<AuthoredCassetteInteractionMismatch | undefined>(undefined)
       const acquisitionTaskIds = yield* Ref.make<ReadonlyMap<OperationId, TaskId>>(new Map())
       const prepareExecutorReport = Effect.fn("AuthoredCassette.sealAcceptedExecutorEvidence")(function* (
         report: PlannedAttemptExecutorReport
@@ -2075,7 +2082,8 @@ const runAuthoredScenarioCassetteWith = (request: {
         survivingExecutorReports,
         unresolvedLostExecutorResponses,
         prepareExecutorReport,
-        (reserved) => Ref.set(acceptedSafeReport, Option.some(reserved))
+        (reserved) => Ref.set(acceptedSafeReport, Option.some(reserved)),
+        (failure) => Ref.set(authoredInteractionFailure, failure)
       )
       const runtimeLayerFor = (
         activationOrdinal: AuthoredRunActivationOrdinalType,
@@ -3087,12 +3095,17 @@ const runAuthoredScenarioCassetteWith = (request: {
         }
         return yield* standardCoordinatorExecution
       })
-      const execution = yield* Effect.scoped(
-        processProvidedCoordinatorExecution.pipe(
-          Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver),
-          Effect.provideService(DeliveryRuntimeObservationObserver, runtimeObservationObserver)
+      const executionExit = yield* Effect.exit(
+        Effect.scoped(
+          processProvidedCoordinatorExecution.pipe(
+            Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver),
+            Effect.provideService(DeliveryRuntimeObservationObserver, runtimeObservationObserver)
+          )
         )
       )
+      const publicationJournalFailure = yield* Ref.get(publicationObserverJournalFailure)
+      if (publicationJournalFailure !== undefined) return yield* publicationJournalFailure
+      const execution = yield* Exit.match(executionExit, { onFailure: Effect.failCause, onSuccess: Effect.succeed })
       const { activationOrdinals, coordinatorExitAtAssertions, records } = execution
       /* v8 ignore next -- @preserve Later authored activations return after their declared final read; action failures are asserted by the direct protocol cassette. */
       if (coordinatorExitAtAssertions !== undefined && Exit.isFailure(coordinatorExitAtAssertions)) {

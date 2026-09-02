@@ -3,7 +3,11 @@ import { plannedAttemptExecutorCorrelation, type RunId } from "@dalph/contracts"
 import { Context, Deferred, Effect, Exit, Layer, Option, Ref, Schema, Semaphore, Stream } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
-import { TaskWorkCapacityControl, taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
+import {
+  SetTaskWorkCapacityRequest,
+  TaskWorkCapacityControl,
+  taskWorkCapacityControlLayer
+} from "../../control/task-work-capacity.js"
 import type { InitialControlPolicy } from "../../control/policy.js"
 import {
   ControlDirectionApplication,
@@ -358,10 +362,17 @@ export const journaledRunBootstrapLayer = (
       ) =>
         withLeasedRuntimeControls(({ taskWorkCapacity }) => use(taskWorkCapacity)).pipe(
           Effect.catchIf(isRuntimeControlAdmissionUnavailable, ({ state }) =>
-            Effect.gen(function* () {
-              if (state === "RuntimeClosing") return yield* new JournaledRunNotActive()
-              return yield* withJournalControl(use(inactiveTaskWorkCapacity))
-            })
+            state === "RuntimeClosing"
+              ? Effect.fail(new JournaledRunNotActive())
+              : activation.withPermit(
+                  withJournalControl(
+                    Effect.gen(function* () {
+                      const current = yield* Ref.get(runtimeState)
+                      if (current._tag !== "RuntimeInactive") return yield* new JournaledRunNotActive()
+                      return yield* use(inactiveTaskWorkCapacity)
+                    })
+                  )
+                )
           )
         )
 
@@ -839,7 +850,9 @@ export const journaledRunBootstrapLayer = (
             return yield* withPublishedOrStoredQuarantineControl((control) => control.read(request))
           }),
         readTaskWorkCapacity: (runId) =>
-          withRuntimeOrJournalTaskWorkCapacity((taskWorkCapacity) => taskWorkCapacity.read(runId)),
+          runId !== expectedRunId
+            ? Effect.fail(new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: runId }))
+            : withRuntimeOrJournalTaskWorkCapacity((taskWorkCapacity) => taskWorkCapacity.read(runId)),
         observePause: (input) =>
           Stream.unwrap(
             withRuntimeControls(({ deliveryRuntimeResources, journal, runId }) =>
@@ -851,7 +864,13 @@ export const journaledRunBootstrapLayer = (
             )
           ),
         setTaskWorkCapacity: (input) =>
-          withRuntimeOrJournalTaskWorkCapacity((taskWorkCapacity) => taskWorkCapacity.apply(input))
+          Effect.gen(function* () {
+            const request = yield* Schema.decodeUnknownEffect(SetTaskWorkCapacityRequest)(input)
+            if (request.runId !== expectedRunId) {
+              return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: request.runId })
+            }
+            return yield* withRuntimeOrJournalTaskWorkCapacity((taskWorkCapacity) => taskWorkCapacity.apply(request))
+          })
       }
 
       return JournaledRunBootstrap.of({

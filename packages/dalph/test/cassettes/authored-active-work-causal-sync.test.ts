@@ -27,6 +27,7 @@ import {
   AuthoredScenarioCassette
 } from "../../src/cassettes/authored-domain.js"
 import {
+  type AuthoredCassetteInteractionMismatch,
   AuthoredCausalSelectionFailure,
   type AuthoredOperationCausalContext,
   type AuthoredSafelySuspendedExecutorReportItem,
@@ -43,6 +44,7 @@ import {
   maintainedAuthoredCassetteCatalog,
   runAuthoredScenarioCassette
 } from "../../src/cassettes/index.js"
+import { runUnpauseAfterSafeSuspensionAuthoredCassette } from "../../src/cassettes/catalog.js"
 
 const taskB = TaskId.make("B")
 const target = FixtureTarget.make("active-work-target")
@@ -434,6 +436,102 @@ it.effect("reobserves B1 executing without advancing or manufacturing another re
   })
 )
 
+it.effect("reobserves an exact committed Safe report while its authored publication is still reserved", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("active-work-committed-safe-reobservation")
+    const correlation = { attemptId: AttemptId.make("attempt:C:2"), runId }
+    const safe = AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorWorkReported.make({
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: correlation.attemptId },
+      request: "Suspend"
+    })
+    const cursor = yield* makeStoryCursor([safe, terminal])
+    yield* cursor.consumeExecutorReportFor("Suspend", correlation.attemptId)
+    const committed = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+    const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(
+      new Map([[plannedAttemptExecutorCorrelationKey(correlation), committed]])
+    )
+
+    const observing = yield* observeThroughControlledExecutor(cursor, runId, correlation, reports).pipe(
+      Effect.forkChild
+    )
+    yield* Effect.yieldNow
+
+    const exit = observing.pollUnsafe()
+    expect(exit).toBeDefined()
+    if (exit === undefined) return
+    expect(yield* Fiber.join(observing)).toEqual({ _tag: "Exact", report: committed })
+    expect(yield* cursor.storyPosition).toBe(0)
+  })
+)
+
+it.effect("fails exact reserved Safe reconciliation for missing, wrong, or unresolved surviving reports", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("active-work-invalid-safe-reobservation")
+    const correlation = { attemptId: AttemptId.make("attempt:C:2"), runId }
+    const foreignCorrelation = { attemptId: AttemptId.make("attempt:C:foreign"), runId }
+    const safe = AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorWorkReported.make({
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: correlation.attemptId },
+      request: "Suspend"
+    })
+    for (const fixture of [
+      { report: undefined, unresolved: false },
+      { report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }), unresolved: false },
+      {
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+          correlation: foreignCorrelation
+        }),
+        unresolved: false
+      },
+      { report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation }), unresolved: true }
+    ]) {
+      const cursor = yield* makeStoryCursor([safe, terminal])
+      yield* cursor.consumeExecutorReportFor("Suspend", correlation.attemptId)
+      const key = plannedAttemptExecutorCorrelationKey(correlation)
+      const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(
+        fixture.report === undefined ? new Map() : new Map([[key, fixture.report]])
+      )
+      const unresolved = yield* Ref.make<ReadonlySet<string>>(fixture.unresolved ? new Set([key]) : new Set())
+      const captured = yield* Ref.make<AuthoredCassetteInteractionMismatch | undefined>(undefined)
+      const exit = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        return yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+      }).pipe(
+        Effect.provide(
+          controlledExecutorLayer(
+            cursor,
+            runId,
+            () => Effect.void,
+            reports,
+            unresolved,
+            Effect.succeed,
+            () => Effect.void,
+            (failure) => Ref.set(captured, failure)
+          )
+        ),
+        Effect.exit
+      )
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const failure = yield* Ref.get(captured)
+      expect(failure).toMatchObject({
+        _tag: "AuthoredCassetteInteractionMismatch",
+        actual: JSON.stringify({
+          correlation: fixture.report?.correlation ?? null,
+          report: fixture.report?._tag ?? "NoReport",
+          unresolved: fixture.unresolved
+        }),
+        expected: "committed ExecutorWorkSafelySuspended for attempt:C:2",
+        storyPosition: 0
+      })
+      if (Exit.isFailure(exit)) {
+        expect(exit.cause.reasons.flatMap((reason) => (Cause.isDieReason(reason) ? [reason.defect] : []))).toContain(
+          failure
+        )
+      }
+    }
+  })
+)
+
 it.effect("allows only B1 safe or terminal observations to consume B1's lifecycle result", () =>
   Effect.gen(function* () {
     for (const report of [
@@ -531,6 +629,53 @@ it.effect("coalesces notification and timer hints then retains B1 until its exac
     expect(finalBReport).toBeDefined()
     expect(suspend !== undefined && finalBReport !== undefined && suspend.position < finalBReport.position).toBe(true)
     expect(run.observedBehavior.taskWorkResults).toEqual([])
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("reconciles a committed Safe publication after process death without another Suspend or duplicate Safe", () =>
+  Effect.gen(function* () {
+    const safeIndex = runUnpauseAfterSafeSuspensionAuthoredCassette.story.findIndex(
+      (item) =>
+        item._tag === "PlannedAttemptExecutorWorkReported" &&
+        item.request === "Suspend" &&
+        item.report._tag === "ExecutorWorkSafelySuspended" &&
+        item.report.attemptId === "attempt:A:0"
+    )
+    if (safeIndex < 0) {
+      return yield* Effect.die("the maintained scenario does not contain its exact Safe publication cut")
+    }
+    const interruptedPublication = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+      ...runUnpauseAfterSafeSuspensionAuthoredCassette,
+      name: "committed Safe publication reconciles after process death",
+      story: [
+        ...runUnpauseAfterSafeSuspensionAuthoredCassette.story.slice(0, safeIndex + 1),
+        AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.make({}),
+        ...runUnpauseAfterSafeSuspensionAuthoredCassette.story.slice(safeIndex + 1)
+      ]
+    })
+    const run = yield* runAuthoredScenarioCassette(interruptedPublication)
+    const attemptId = AttemptId.make("attempt:A:0")
+    const suspends = run.records.filter(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorCommandIntended" &&
+        event.command === "Suspend" &&
+        event.plannedAttempt.attemptId === attemptId
+    )
+    const safeReports = run.records.flatMap(({ event, position }) =>
+      event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === attemptId
+        ? [{ ordinal: event.ordinal, position, report: event.report._tag }]
+        : []
+    )
+
+    expect(suspends).toHaveLength(1)
+    expect(safeReports.slice(0, 2)).toEqual([
+      expect.objectContaining({ ordinal: 1, report: "ExecutorWorkExecuting" }),
+      expect.objectContaining({ ordinal: 2, report: "ExecutorWorkSafelySuspended" })
+    ])
+    expect(
+      safeReports.filter(({ report }) => report === "ExecutorWorkSafelySuspended").map(({ ordinal }) => ordinal)
+    ).toEqual([2])
+    expect(run.activationOrdinals).toEqual([1, 2])
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 

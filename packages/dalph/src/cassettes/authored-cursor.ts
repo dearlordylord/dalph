@@ -106,12 +106,30 @@ export type AuthoredSafelySuspendedExecutorReportItem =
 type ReservableStoryItem =
   | AuthoredPlannedAttemptExecutorOutcomeItem
   | typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type
+const reservedStoryPositionsThroughFollowingProcessDeath = 2
 
 /** One process-local authored item held behind its production result boundary. */
 interface AuthoredCursorReservation {
+  /** The Safe append committed, then this exact process death cut off its ordinary accepted-fact publication. */
+  readonly followingProcessDeath?: {
+    readonly index: number
+    readonly item: typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type
+  }
   readonly index: number
   readonly item: ReservableStoryItem
 }
+
+type ExecutorProjectionOrReservedSafeClaim =
+  | { readonly _tag: "None" }
+  | {
+      readonly _tag: "Projection"
+      readonly item: typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type
+    }
+  | { readonly _tag: "ReservedSafe"; readonly item: AuthoredSafelySuspendedExecutorReportItem }
+
+const storyPositionAfterReservation = (reservation: AuthoredCursorReservation): number =>
+  reservation.index +
+  (reservation.followingProcessDeath === undefined ? 1 : reservedStoryPositionsThroughFollowingProcessDeath)
 
 interface ConcurrentInteractionGroupState {
   readonly consumedRoles: ReadonlySet<AuthoredConcurrentInteractionNode["role"]>
@@ -312,6 +330,25 @@ const authoredSafelySuspendedExecutorReportMatches = (
 ): item is AuthoredSafelySuspendedExecutorReportItem =>
   isAuthoredSafelySuspendedExecutorReport(item) && request === "Suspend" && item.report.attemptId === attemptId
 
+const authoredExecutorProjectionMatches = (
+  item: StoryItem | undefined,
+  attemptId: AttemptId
+): item is typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type =>
+  item?._tag === "PlannedAttemptExecutorProjectionReturned" && item.report.attemptId === attemptId
+
+const resolveActiveExecutorReservation = (
+  active: AuthoredCursorReservation | undefined,
+  attemptId: AttemptId,
+  position: SubscriptionRef.SubscriptionRef<number>,
+  retry: Effect.Effect<ExecutorProjectionOrReservedSafeClaim>
+): Effect.Effect<ExecutorProjectionOrReservedSafeClaim> | undefined => {
+  if (active === undefined) return undefined
+  if (authoredSafelySuspendedExecutorReportMatches(active.item, "Suspend", attemptId)) {
+    return Effect.succeed({ _tag: "ReservedSafe", item: active.item })
+  }
+  return awaitsLaterStoryItem(position, active.index).pipe(Effect.andThen(retry))
+}
+
 const executorReportImmediatelyBefore = (
   item: StoryItem | undefined,
   next: StoryItem | undefined,
@@ -377,6 +414,21 @@ const mismatchExpectedTag = (item: StoryItem | undefined): string =>
 type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
   | { readonly _tag: "Mismatch"; readonly index: number; readonly item: StoryItem | undefined }
+
+const claimAuthoredExecutorProjection = (
+  story: ReadonlyArray<StoryItem>,
+  index: number,
+  attemptId: AttemptId
+): readonly [
+  ClaimedStoryItem<typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type>,
+  number
+] => {
+  const item = story[index]
+  return authoredExecutorProjectionMatches(item, attemptId)
+    ? ([{ _tag: "Claimed" as const, index, item }, index + 1] as const)
+    : ([{ _tag: "Mismatch" as const, index, item }, index] as const)
+}
+
 export interface StoryCursor {
   /** Release the exact pre-admission control latch after its production application has completed. */
   readonly completeControlDirectionBeforeDeliveryActionAdmission: Effect.Effect<void>
@@ -519,6 +571,10 @@ export interface StoryCursor {
   ) => Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type>
   >
+  /** Claims an explicit projection or reports the exact Safe item blocking that same attempt. */
+  readonly consumeExecutorProjectionOrReservedSafeFor: (
+    attemptId: AttemptId
+  ) => Effect.Effect<ExecutorProjectionOrReservedSafeClaim>
   /** Consume an executor lifecycle change only for its exact attached attempt owner. */
   readonly consumePassiveExecutorLifecycleChangeFor: (
     attemptId: AttemptId
@@ -1289,7 +1345,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
               storyPosition: index
             })
           }
-          yield* SubscriptionRef.set(position, index + 1)
+          yield* SubscriptionRef.set(position, storyPositionAfterReservation(active))
           yield* Ref.set(reservation, undefined)
           yield* options.onOccurrence?.({ item, storyPosition: index + 1 }) ?? Effect.void
           yield* announceTerminalAssertions
@@ -1784,6 +1840,35 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         ).pipe(Effect.orDie)
       )
     })
+  const consumeExecutorProjectionOrReservedSafeFor: StoryCursor["consumeExecutorProjectionOrReservedSafeFor"] =
+    Effect.fn("AuthoredCassette.consumeExecutorProjectionOrReservedSafeFor")(function* (attemptId) {
+      const active = yield* Ref.get(reservation)
+      const activeResolution = resolveActiveExecutorReservation(
+        active,
+        attemptId,
+        position,
+        consumeExecutorProjectionOrReservedSafeFor(attemptId)
+      )
+      if (activeResolution !== undefined) return yield* activeResolution
+      if (yield* awaitControlBoundary()) return yield* consumeExecutorProjectionOrReservedSafeFor(attemptId)
+      const claimed = yield* transition.withPermits(1)(
+        SubscriptionRef.modify(position, (index) => claimAuthoredExecutorProjection(story, index, attemptId))
+      )
+      if (claimed._tag === "Claimed") {
+        yield* options.onOccurrence?.({ item: claimed.item, storyPosition: claimed.index + 1 }) ?? Effect.void
+      }
+      yield* announceTerminalAssertions
+      if (yield* awaitBarrierAdvance(claimed)) {
+        return yield* consumeExecutorProjectionOrReservedSafeFor(attemptId)
+      }
+      if (claimed._tag === "Mismatch") return { _tag: "None" }
+      return {
+        _tag: "Projection" as const,
+        item: yield* Schema.decodeUnknownEffect(
+          AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned
+        )(claimed.item).pipe(Effect.orDie)
+      }
+    })
   const consumePassiveExecutorLifecycleChangeFor: StoryCursor["consumePassiveExecutorLifecycleChangeFor"] = (
     attemptId
   ) =>
@@ -2216,6 +2301,29 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     return yield* awaitInFlightOperatorItems
   })
   const pauseAtCoordinatorProcessDeath = Effect.gen(function* () {
+    const reservedDeath = yield* transition.withPermits(1)(
+      Effect.gen(function* () {
+        const active = yield* Ref.get(reservation)
+        if (
+          active === undefined ||
+          !isAuthoredSafelySuspendedExecutorReport(active.item) ||
+          active.followingProcessDeath !== undefined
+        ) {
+          return Option.none<typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type>()
+        }
+        const item = story[active.index + 1]
+        if (item?._tag !== "CoordinatorProcessDies") {
+          return Option.none<typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type>()
+        }
+        yield* Ref.set(reservation, { ...active, followingProcessDeath: { index: active.index + 1, item } })
+        return Option.some(item)
+      })
+    )
+    if (Option.isSome(reservedDeath)) {
+      const storyPosition = (yield* SubscriptionRef.get(position)) + reservedStoryPositionsThroughFollowingProcessDeath
+      yield* options.onOccurrence?.({ item: reservedDeath.value, storyPosition }) ?? Effect.void
+      return yield* Effect.die(new AuthoredCoordinatorProcessDies({ storyPosition: storyPosition - 1 }))
+    }
     const bypassControlBoundary = Option.isSome(yield* SubscriptionRef.get(controlDirectionBeforeAdmission))
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type =>
@@ -2534,6 +2642,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     beginExecutorReportRequest,
     endExecutorReportRequest,
     consumeExecutorProjectionFor,
+    consumeExecutorProjectionOrReservedSafeFor,
     consumePassiveExecutorLifecycleChangeFor,
     passiveExecutorLifecycleChangesFor,
     consumeExecutorRequestPublicationHold,
