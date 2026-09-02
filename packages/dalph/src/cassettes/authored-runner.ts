@@ -2159,16 +2159,16 @@ const runAuthoredScenarioCassetteWith = (request: {
       const latestRuntimeActivationOrdinal = yield* Ref.make(0)
       const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
       const unresolvedLostExecutorResponses = yield* Ref.make<ReadonlySet<string>>(new Set())
-      const executorLayer = controlledExecutorLayer(
+      const executorLayer = controlledExecutorLayer({
         cursor,
         runId,
-        applyNextControlDirection,
-        survivingExecutorReports,
-        unresolvedLostExecutorResponses,
-        prepareExecutorReport,
-        (reserved) => Ref.set(acceptedSafeReport, Option.some(reserved)),
-        (failure) => Ref.set(authoredInteractionFailure, failure)
-      )
+        beforeExecutorReport: applyNextControlDirection,
+        survivingReports: survivingExecutorReports,
+        unresolvedLostResponses: unresolvedLostExecutorResponses,
+        prepareReport: prepareExecutorReport,
+        reserveAcceptedSafeReport: (reserved) => Ref.set(acceptedSafeReport, Option.some(reserved)),
+        reportMismatch: (failure) => Ref.set(authoredInteractionFailure, failure)
+      })
       const runtimeLayerFor = (
         activationOrdinal: AuthoredRunActivationOrdinalType,
         opportunity: RunActivationOpportunityValue

@@ -338,17 +338,19 @@ const authoredExecutorProjectionMatches = (
 ): item is typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type =>
   item?._tag === "PlannedAttemptExecutorProjectionReturned" && item.report.attemptId === attemptId
 
-const resolveActiveExecutorReservation = (
+type ActiveExecutorReservationDecision =
+  | { readonly _tag: "ReservedSafe"; readonly item: AuthoredSafelySuspendedExecutorReportItem }
+  | { readonly _tag: "WaitForReservation"; readonly index: number }
+
+const decideActiveExecutorReservation = (
   active: AuthoredCursorReservation | undefined,
-  attemptId: AttemptId,
-  position: SubscriptionRef.SubscriptionRef<number>,
-  retry: Effect.Effect<ExecutorProjectionOrReservedSafeClaim>
-): Effect.Effect<ExecutorProjectionOrReservedSafeClaim> | undefined => {
+  attemptId: AttemptId
+): ActiveExecutorReservationDecision | undefined => {
   if (active === undefined) return undefined
   if (authoredSafelySuspendedExecutorReportMatches(active.item, "Suspend", attemptId)) {
-    return Effect.succeed({ _tag: "ReservedSafe", item: active.item })
+    return { _tag: "ReservedSafe", item: active.item }
   }
-  return awaitsLaterStoryItem(position, active.index).pipe(Effect.andThen(retry))
+  return { _tag: "WaitForReservation", index: active.index }
 }
 
 const executorReportImmediatelyBefore = (
@@ -416,6 +418,15 @@ const mismatchExpectedTag = (item: StoryItem | undefined): string =>
 type ClaimedStoryItem<A extends StoryItem> =
   | { readonly _tag: "Claimed"; readonly index: number; readonly item: A }
   | { readonly _tag: "Mismatch"; readonly index: number; readonly item: StoryItem | undefined }
+
+type ExecutorProjectionClaimDecision =
+  | ActiveExecutorReservationDecision
+  | {
+      readonly _tag: "ProjectionClaim"
+      readonly claimed: ClaimedStoryItem<
+        typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type
+      >
+    }
 
 const claimAuthoredExecutorProjection = (
   story: ReadonlyArray<StoryItem>,
@@ -1844,18 +1855,33 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     })
   const consumeExecutorProjectionOrReservedSafeFor: StoryCursor["consumeExecutorProjectionOrReservedSafeFor"] =
     Effect.fn("AuthoredCassette.consumeExecutorProjectionOrReservedSafeFor")(function* (attemptId) {
-      const active = yield* Ref.get(reservation)
-      const activeResolution = resolveActiveExecutorReservation(
-        active,
-        attemptId,
-        position,
-        consumeExecutorProjectionOrReservedSafeFor(attemptId)
+      const activeBeforeControl = yield* transition.withPermits(1)(
+        Ref.get(reservation).pipe(Effect.map((active) => decideActiveExecutorReservation(active, attemptId)))
       )
-      if (activeResolution !== undefined) return yield* activeResolution
+      if (activeBeforeControl?._tag === "ReservedSafe") return activeBeforeControl
+      if (activeBeforeControl?._tag === "WaitForReservation") {
+        yield* awaitsLaterStoryItem(position, activeBeforeControl.index)
+        return yield* consumeExecutorProjectionOrReservedSafeFor(attemptId)
+      }
       if (yield* awaitControlBoundary()) return yield* consumeExecutorProjectionOrReservedSafeFor(attemptId)
-      const claimed = yield* transition.withPermits(1)(
-        SubscriptionRef.modify(position, (index) => claimAuthoredExecutorProjection(story, index, attemptId))
+      const decision: ExecutorProjectionClaimDecision = yield* transition.withPermits(1)(
+        Effect.gen(function* () {
+          const active = decideActiveExecutorReservation(yield* Ref.get(reservation), attemptId)
+          if (active !== undefined) return active
+          return {
+            _tag: "ProjectionClaim" as const,
+            claimed: yield* SubscriptionRef.modify(position, (index) =>
+              claimAuthoredExecutorProjection(story, index, attemptId)
+            )
+          }
+        })
       )
+      if (decision._tag === "ReservedSafe") return decision
+      if (decision._tag === "WaitForReservation") {
+        yield* awaitsLaterStoryItem(position, decision.index)
+        return yield* consumeExecutorProjectionOrReservedSafeFor(attemptId)
+      }
+      const claimed = decision.claimed
       if (claimed._tag === "Claimed") {
         yield* options.onOccurrence?.({ item: claimed.item, storyPosition: claimed.index + 1 }) ?? Effect.void
       }

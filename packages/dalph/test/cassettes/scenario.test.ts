@@ -759,7 +759,15 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
       const executor = yield* PlannedAttemptExecutor
       return yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
     }).pipe(
-      Effect.provide(controlledExecutorLayer(emptyCursor, runId, () => Effect.void, reports, unresolved)),
+      Effect.provide(
+        controlledExecutorLayer({
+          cursor: emptyCursor,
+          runId,
+          beforeExecutorReport: () => Effect.void,
+          survivingReports: reports,
+          unresolvedLostResponses: unresolved
+        })
+      ),
       Effect.exit
     )
     expect(Exit.isFailure(missingProjectionExit)).toBe(true)
@@ -778,13 +786,13 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
       return yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
     }).pipe(
       Effect.provide(
-        controlledExecutorLayer(
-          contradictoryCursor,
+        controlledExecutorLayer({
+          cursor: contradictoryCursor,
           runId,
-          () => Effect.void,
-          yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()),
-          yield* Ref.make<ReadonlySet<string>>(new Set())
-        )
+          beforeExecutorReport: () => Effect.void,
+          survivingReports: yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()),
+          unresolvedLostResponses: yield* Ref.make<ReadonlySet<string>>(new Set())
+        })
       )
     )
     expect(foreignAttemptProjection).toMatchObject({ _tag: "NoReport", correlation })
@@ -802,13 +810,13 @@ it.effect("fails closed at cursor and executor-projection boundaries", () =>
       return yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
     }).pipe(
       Effect.provide(
-        controlledExecutorLayer(
-          foreignRunCursor,
-          foreignRunId,
-          () => Effect.void,
-          yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()),
-          yield* Ref.make<ReadonlySet<string>>(new Set())
-        )
+        controlledExecutorLayer({
+          cursor: foreignRunCursor,
+          runId: foreignRunId,
+          beforeExecutorReport: () => Effect.void,
+          survivingReports: yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()),
+          unresolvedLostResponses: yield* Ref.make<ReadonlySet<string>>(new Set())
+        })
       )
     )
     expect(foreignRunProjection).toMatchObject({

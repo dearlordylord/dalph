@@ -2,11 +2,39 @@ import {
   type PlannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorProjection,
   type PlannedAttemptExecutorReport,
+  type PlannedTaskAttempt,
+  type RunId,
   plannedAttemptExecutorCorrelationKey,
   samePlannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import { Effect, Ref } from "effect"
-import { AuthoredCassetteInteractionMismatch, type StoryCursor } from "./authored-cursor.js"
+import {
+  AuthoredCassetteInteractionMismatch,
+  type AuthoredSafelySuspendedExecutorReportItem,
+  type StoryCursor
+} from "./authored-cursor.js"
+
+type ControlledExecutorRequest = "Begin" | "Resume" | "Suspend"
+
+interface ControlledExecutorCallbacks {
+  readonly beforeExecutorReport: (
+    plannedAttempt: PlannedTaskAttempt,
+    request: ControlledExecutorRequest
+  ) => Effect.Effect<void>
+  readonly prepareReport?: (report: PlannedAttemptExecutorReport) => Effect.Effect<PlannedAttemptExecutorReport>
+  readonly reportMismatch?: (failure: AuthoredCassetteInteractionMismatch) => Effect.Effect<void>
+  readonly reserveAcceptedSafeReport?: (item: AuthoredSafelySuspendedExecutorReportItem) => Effect.Effect<void>
+}
+
+interface ControlledExecutorState {
+  readonly cursor: StoryCursor
+  readonly runId: RunId
+  readonly survivingReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>
+  readonly unresolvedLostResponses: Ref.Ref<ReadonlySet<string>>
+}
+
+/** Correlated state and controlled boundary callbacks for one exact executor/Run adapter. */
+export type ControlledExecutorConfig = ControlledExecutorCallbacks & ControlledExecutorState
 
 /** Reconciles one accepted Safe fact whose ordinary publication response was cut off by process death. */
 export const reconcileReservedSafelySuspendedExecutorReport = Effect.fn(

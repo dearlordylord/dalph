@@ -34,8 +34,13 @@ import {
   type AuthoredCassetteStoryItem
 } from "./authored-domain.js"
 import type * as Cursor from "./authored-cursor.js"
-import { reconcileReservedSafelySuspendedExecutorReport } from "./authored-executor-reconciliation.js"
+import {
+  type ControlledExecutorConfig,
+  reconcileReservedSafelySuspendedExecutorReport
+} from "./authored-executor-reconciliation.js"
 import { trackerReadFailure } from "./authored-tracker-read-results.js"
+
+export type { ControlledExecutorConfig } from "./authored-executor-reconciliation.js"
 
 type StoryCursor = Cursor.StoryCursor
 const evidenceDigestHexLength = 64
@@ -309,20 +314,9 @@ const isAcceptedSafelySuspendedExecutorReport = (
   item.request === "Suspend" &&
   item.report._tag === "ExecutorWorkSafelySuspended"
 
-export const controlledExecutorLayer = (
-  cursor: StoryCursor,
-  runId: RunId,
-  beforeExecutorReport: (
-    plannedAttempt: PlannedTaskAttempt,
-    request: "Begin" | "Resume" | "Suspend"
-  ) => Effect.Effect<void>,
-  survivingReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
-  unresolvedLostResponses: Ref.Ref<ReadonlySet<string>>,
-  prepareReport: (report: PlannedAttemptExecutorReport) => Effect.Effect<PlannedAttemptExecutorReport> = Effect.succeed,
-  reserveAcceptedSafeReport: (item: Cursor.AuthoredSafelySuspendedExecutorReportItem) => Effect.Effect<void> = () =>
-    Effect.void,
-  reportMismatch: (failure: Cursor.AuthoredCassetteInteractionMismatch) => Effect.Effect<void> = () => Effect.void
-) => {
+export const controlledExecutorLayer = (config: ControlledExecutorConfig) => {
+  const { beforeExecutorReport, cursor, runId, survivingReports, unresolvedLostResponses } = config
+  const prepareReport = config.prepareReport ?? Effect.succeed
   const consume = Effect.fn("AuthoredCassette.PlannedAttemptExecutor.consume")(function* (
     request: "Begin" | "Resume" | "Suspend",
     plannedAttempt: PlannedTaskAttempt
@@ -362,7 +356,9 @@ export const controlledExecutorLayer = (
         survivingReports,
         (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])
       )
-      if (isAcceptedSafelySuspendedExecutorReport(item)) yield* reserveAcceptedSafeReport(item)
+      if (isAcceptedSafelySuspendedExecutorReport(item)) {
+        yield* config.reserveAcceptedSafeReport?.(item) ?? Effect.void
+      }
       if (item._tag === "PlannedAttemptExecutorResponseLost") {
         yield* Ref.update(unresolvedLostResponses, (current) =>
           new Set(current).add(plannedAttemptExecutorCorrelationKey(correlation))
@@ -382,7 +378,7 @@ export const controlledExecutorLayer = (
           return yield* reconcileReservedSafelySuspendedExecutorReport({
             correlation,
             cursor,
-            reportInteractionMismatch: reportMismatch,
+            reportInteractionMismatch: config.reportMismatch ?? (() => Effect.void),
             reports: survivingReports,
             unresolvedLostResponses
           })

@@ -17,7 +17,7 @@ import {
   WorktreeLocator,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Stream, SubscriptionRef } from "effect"
+import { Cause, Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Stream, SubscriptionRef } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -90,7 +90,9 @@ import {
   type DeliveryProposalFrontier,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
+  DeliveryRelationReconciliationError,
   deliveryFinalityOf,
+  TrackerGraphRelationError,
   TrackerGraphState
 } from "./relations.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
@@ -1984,6 +1986,75 @@ it.effect("fails with the exact relation cause before admitting any proposal", (
     )
 
     expect(failure).toEqual(relationFailure)
+  }).pipe(Effect.scoped)
+)
+
+it.effect("preserves both C2 delivery relation source failures after one admitted Suspend without retrying", () =>
+  Effect.gen(function* () {
+    const c2Attempt = PlannedTaskAttempt.make({
+      ...plannedAttempt,
+      attemptId: AttemptId.make("attempt:C:2"),
+      taskId: TaskId.make("C")
+    })
+    const c2Suspension = recoveredProposalFor(
+      RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: c2Attempt }),
+      new Set(),
+      c2Attempt
+    )
+    const relationFailures = [
+      new TrackerGraphRelationError({
+        cause: Cause.fail("the C2 tracker graph relation failed"),
+        summary: "the accepted C2 report could not be joined to the tracker graph"
+      }),
+      new DeliveryRelationReconciliationError({
+        cause: Cause.fail("the accepted C2 delivery relation could not reconcile")
+      })
+    ] as const
+
+    for (const expected of relationFailures) {
+      const executorCalls = yield* Ref.make(0)
+      const publicationCalls = yield* Ref.make(0)
+      const initial = {
+        ...withProposals(yield* baseEvaluation, [c2Suspension], 1),
+        taskWork: {
+          capacity: TaskWorkCapacity.make(1),
+          held: [{ taskId: c2Attempt.taskId, correlation: plannedAttemptExecutorCorrelation(c2Attempt) }]
+        }
+      }
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const failure = yield* runDeliveryRuntimeQuiescence(
+        relation,
+        DeliveryAcceptedFactPublication.of({
+          awaitCurrent: Ref.update(publicationCalls, (count) => count + 1).pipe(Effect.andThen(Effect.fail(expected)))
+        })
+      ).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: (action) =>
+              Effect.gen(function* () {
+                expect(action.proposal).toEqual(c2Suspension)
+                yield* Ref.update(executorCalls, (count) => count + 1)
+                return {
+                  _tag: "ExecutorReportPublished" as const,
+                  acceptedFacts: "Changed" as const,
+                  plannedAttempt: c2Attempt,
+                  proposalId: action.proposal.id,
+                  report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+                    correlation: plannedAttemptExecutorCorrelation(c2Attempt)
+                  })
+                }
+              })
+          })
+        ),
+        Effect.flip
+      )
+
+      expect(failure, expected._tag).toBe(expected)
+      expect(yield* Ref.get(executorCalls), expected._tag).toBe(1)
+      expect(yield* Ref.get(publicationCalls), expected._tag).toBe(1)
+    }
   }).pipe(Effect.scoped)
 )
 
