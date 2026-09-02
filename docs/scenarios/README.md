@@ -90,6 +90,14 @@ table does not claim that the corrections are on `master` or shipped.
 | `issue-269-independent-work-retained-priority.md` | 269 | Complete and composed through `a1b81c4fb`; issue closed |
 | `issue-267-exact-causal-active-work-cassette.md` | 267 | Complete and composed through `a1b81c4fb`; issue closed |
 
+**Draft recovery specification awaiting maintainer acceptance** — this file
+changes no runtime behavior and does not authorize implementation until its
+own status banner is updated after explicit acceptance.
+
+| File | Owning issue | Status |
+|---|---:|---|
+| `issue-268-controlled-delivery-story.md` | 268 | Draft controlled DS-01--DS-13 recovery chronology on fixed base `e79f64e3a` |
+
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state
 which behavior is no longer accepted. They must not authorize implementation
