@@ -94,7 +94,7 @@ it.effect(
       )
       const control = yield* TaskWorkCapacityControl
 
-      yield* control.apply({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
+      yield* control.apply({ capacity: TaskWorkCapacity.make(1), expectedRevision: initialRunPolicyRevision, runId })
 
       const records = yield* journal.read(runId)
       const reduced = reduceWorkflowJournalHistory(runId, records)
@@ -130,7 +130,7 @@ it.effect("rejects a stale capacity revision without appending another applied c
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
     )
     const control = yield* TaskWorkCapacityControl
-    const request = { capacity: 1, expectedRevision: initialRunPolicyRevision, runId }
+    const request = { capacity: TaskWorkCapacity.make(1), expectedRevision: initialRunPolicyRevision, runId }
 
     yield* control.apply(request)
     const stale = yield* control.apply(request).pipe(Effect.flip)
@@ -182,7 +182,9 @@ it.effect("rereads the winning policy when another writer commits the requested 
     })
     const conflict = yield* Effect.gen(function* () {
       const control = yield* TaskWorkCapacityControl
-      return yield* control.apply({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId }).pipe(Effect.flip)
+      return yield* control
+        .apply({ capacity: TaskWorkCapacity.make(1), expectedRevision: initialRunPolicyRevision, runId })
+        .pipe(Effect.flip)
     }).pipe(
       Effect.provide(
         taskWorkCapacityControlLayer.pipe(Layer.provide(Layer.succeed(InRunJournal, InRunJournal.of(racingJournal))))
@@ -209,7 +211,7 @@ it.effect("restart reconstructs three unfinished task positions without an admis
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
     )
     const control = yield* TaskWorkCapacityControl
-    yield* control.apply({ capacity: 3, expectedRevision: initialRunPolicyRevision, runId })
+    yield* control.apply({ capacity: TaskWorkCapacity.make(3), expectedRevision: initialRunPolicyRevision, runId })
     const attempts = ["A", "B", "C"].map((task) =>
       PlannedTaskAttempt.make({
         attemptId: AttemptId.make(`restart-capacity-${task}`),

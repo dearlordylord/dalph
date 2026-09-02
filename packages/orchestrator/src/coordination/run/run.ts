@@ -239,13 +239,20 @@ export interface JournaledRunBootstrapService {
       runId: RunId
     ) => Effect.Effect<
       Effect.Success<ReturnType<TaskWorkCapacityControl["Service"]["read"]>>,
-      Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["read"]>> | ApplicationExiting | JournaledRunNotActive
+      | Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["read"]>>
+      | ApplicationExiting
+      | JournaledRunIdentityMismatch
+      | JournaledRunNotActive
     >
     readonly setTaskWorkCapacity: (
       input: unknown
     ) => Effect.Effect<
       Effect.Success<ReturnType<TaskWorkCapacityControl["Service"]["apply"]>>,
-      Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["apply"]>> | ApplicationExiting | JournaledRunNotActive
+      | Schema.SchemaError
+      | Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["apply"]>>
+      | ApplicationExiting
+      | JournaledRunIdentityMismatch
+      | JournaledRunNotActive
     >
     /**
      * Alice passively observes the exact applied Pause through a transport-independent stream.

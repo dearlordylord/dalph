@@ -1,8 +1,38 @@
-import { Cause, Effect, Exit, Fiber, Option, Schema } from "effect"
+import { it as effectIt } from "@effect/vitest"
+import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Schema } from "effect"
 import { NodeCrypto } from "@effect/platform-node"
 import { expect, it } from "vitest"
-import { AttemptId, GitCommitSha, GitRepositoryLocator, TaskId } from "@dalph/contracts"
-import { TaskWorkCapacity } from "@dalph/orchestrator"
+import { AttemptId, GitCommitSha, GitRepositoryLocator, RunId, TaskId } from "@dalph/contracts"
+import {
+  ApplicationExiting,
+  initialRunPolicyRevision,
+  InRunJournalRunMismatch,
+  JournalDataCorruption,
+  JournalHistoryCorruption,
+  JournalHistoryInvalid,
+  type JournaledRunBootstrap,
+  JournaledRunIdentityMismatch,
+  JournaledRunNotActive,
+  JournalPartitionContradiction,
+  JournalPosition,
+  JournalPositionGap,
+  JournalRecordKey,
+  JournalRecordMismatch,
+  JournalSchemaIncompatible,
+  JournalSchemaVersion,
+  JournalStorageAccessDenied,
+  JournalStorageCapacityExhausted,
+  JournalStorageLocked,
+  JournalStorageUnavailable,
+  JournalStoreContradiction,
+  RunControlPolicy,
+  RunPolicyRevision,
+  SetTaskWorkCapacityRequest,
+  TaskWorkCapacityPolicyRevisionConflict,
+  TaskWorkCapacity,
+  WorkflowRunAlreadyTerminated,
+  WorkflowRunNotBegan
+} from "@dalph/orchestrator"
 import {
   AuthoredCassetteStoryItem,
   CassetteIdentityRenaming,
@@ -21,6 +51,7 @@ import {
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
 import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
+import { driveAuthoredTaskWorkCapacityChange } from "../../src/cassettes/authored-runner.js"
 import {
   renderAuthoredStoryItemLandmark,
   renderAuthoredStoryItemLyric
@@ -34,6 +65,276 @@ const findStoryItemOf = <Tag extends AuthoredCassetteStoryItem["_tag"]>(tag: Tag
   )
 
 const findStoryItem = findStoryItemOf
+
+effectIt.effect("keeps authored process death unavailable before the production capacity result", () =>
+  Effect.gen(function* () {
+    const capacity = findStoryItem("SetTaskExecutionCapacity")
+    const death = findStoryItem("CoordinatorProcessDies")
+    const cursor = yield* makeStoryCursor([capacity, death])
+    const productionStarted = yield* Deferred.make<void>()
+    const productionResult = yield* Deferred.make<void>()
+    const application = yield* Effect.gen(function* () {
+      const reserved = yield* cursor.consumeCapacityChange
+      expect(Option.isSome(reserved)).toBe(true)
+      yield* Deferred.succeed(productionStarted, undefined)
+      yield* Deferred.await(productionResult)
+    }).pipe(Effect.forkChild)
+
+    yield* Deferred.await(productionStarted)
+
+    expect(yield* cursor.storyPosition).toBe(0)
+    expect((yield* cursor.currentStoryItem)?._tag).toBe("SetTaskExecutionCapacity")
+    yield* Fiber.interrupt(application)
+  })
+)
+
+effectIt.effect("settles one production capacity revision before delayed interruption and process death", () =>
+  Effect.gen(function* () {
+    const publicationEntered = yield* Deferred.make<void>()
+    const releasePublication = yield* Deferred.make<void>()
+    const occurrenceCount = yield* Ref.make(0)
+    const capacity = findStoryItem("SetTaskExecutionCapacity")
+    const death = findStoryItem("CoordinatorProcessDies")
+    const cursor = yield* makeStoryCursor([capacity, death], {
+      onOccurrence: ({ item }) =>
+        item._tag === "SetTaskExecutionCapacity"
+          ? Ref.update(occurrenceCount, (count) => count + 1).pipe(
+              Effect.andThen(Deferred.succeed(publicationEntered, undefined)),
+              Effect.andThen(Deferred.await(releasePublication))
+            )
+          : Effect.void
+    })
+    const reserved = yield* cursor.consumeCapacityChange
+    if (Option.isNone(reserved)) return yield* Effect.die("the exact capacity item was not reserved")
+
+    const settlement = yield* cursor
+      .settleCapacityChange(reserved.value)
+      .pipe(Effect.forkChild({ startImmediately: true }))
+    yield* Deferred.await(publicationEntered)
+    const interruptionRequested = yield* Deferred.make<void>()
+    const interruptionFinished = yield* Deferred.make<void>()
+    const interrupted = yield* Deferred.succeed(interruptionRequested, undefined).pipe(
+      Effect.andThen(Fiber.interrupt(settlement)),
+      Effect.tap(() => Deferred.succeed(interruptionFinished, undefined)),
+      Effect.forkScoped({ startImmediately: true })
+    )
+    yield* Deferred.await(interruptionRequested)
+    const processDeathAttempted = yield* Deferred.make<void>()
+    const processDeathFinished = yield* Deferred.make<void>()
+    const processDeath = yield* Deferred.succeed(processDeathAttempted, undefined).pipe(
+      Effect.andThen(cursor.pauseAtCoordinatorProcessDeath),
+      Effect.exit,
+      Effect.tap(() => Deferred.succeed(processDeathFinished, undefined)),
+      Effect.forkScoped({ startImmediately: true })
+    )
+    yield* Deferred.await(processDeathAttempted)
+    expect(yield* Deferred.isDone(interruptionFinished)).toBe(false)
+    expect(yield* Deferred.isDone(processDeathFinished)).toBe(false)
+
+    yield* Deferred.succeed(releasePublication, undefined)
+    yield* Fiber.join(interrupted)
+    expect(Exit.isFailure(yield* Fiber.await(settlement))).toBe(true)
+    const deathExit = yield* Fiber.join(processDeath)
+    expect(Exit.isFailure(deathExit)).toBe(true)
+    if (Exit.isFailure(deathExit)) expect(Cause.hasDies(deathExit.cause)).toBe(true)
+    expect(yield* Ref.get(occurrenceCount)).toBe(1)
+    expect(yield* cursor.storyPosition).toBe(2)
+
+    const duplicate = yield* cursor.settleCapacityChange(reserved.value).pipe(Effect.exit)
+    expect(Exit.isFailure(duplicate)).toBe(true)
+  })
+)
+
+const capacityTwo = AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.make({
+  capacity: TaskWorkCapacity.make(2)
+})
+const processDeath = findStoryItem("CoordinatorProcessDies")
+const initialCapacityPolicy = RunControlPolicy.make({
+  revision: initialRunPolicyRevision,
+  taskExecutionCapacity: TaskWorkCapacity.make(3)
+})
+const revisedCapacityPolicy = RunControlPolicy.make({
+  revision: RunPolicyRevision.make(2),
+  taskExecutionCapacity: TaskWorkCapacity.make(2)
+})
+
+effectIt.effect(
+  "distinguishes pre-commit interruption from a committed lost capacity response using only the reduced policy",
+  () =>
+    Effect.gen(function* () {
+      const runId = RunId.make("authored-capacity-settlement")
+
+      const precommitCursor = yield* makeStoryCursor([capacityTwo, processDeath])
+      const precommitApplyStarted = yield* Deferred.make<void>()
+      const precommitReads = yield* Ref.make(0)
+      const precommitApplies = yield* Ref.make(0)
+      const precommit = yield* driveAuthoredTaskWorkCapacityChange({
+        cursor: precommitCursor,
+        operatorControl: {
+          readTaskWorkCapacity: () =>
+            Ref.update(precommitReads, (count) => count + 1).pipe(Effect.as(initialCapacityPolicy)),
+          setTaskWorkCapacity: () =>
+            Ref.update(precommitApplies, (count) => count + 1).pipe(
+              Effect.andThen(Deferred.succeed(precommitApplyStarted, undefined)),
+              Effect.andThen(Effect.never)
+            )
+        },
+        runId
+      }).pipe(Effect.forkScoped({ startImmediately: true }))
+      yield* Deferred.await(precommitApplyStarted)
+      yield* Fiber.interrupt(precommit)
+
+      expect(yield* precommitCursor.storyPosition).toBe(0)
+      expect((yield* precommitCursor.currentStoryItem)?._tag).toBe("SetTaskExecutionCapacity")
+      expect(yield* Ref.get(precommitReads)).toBe(1)
+      expect(yield* Ref.get(precommitApplies)).toBe(1)
+
+      const committedCursor = yield* makeStoryCursor([capacityTwo, processDeath])
+      const committedPolicy = yield* Ref.make(initialCapacityPolicy)
+      const committedReads = yield* Ref.make(0)
+      const committedApplies = yield* Ref.make(0)
+      const lostResponse = new JournalStorageUnavailable({
+        detail: "capacity revision two committed before its response was lost",
+        operation: "JournalStore.append"
+      })
+      const operatorControl = {
+        readTaskWorkCapacity: () =>
+          Ref.update(committedReads, (count) => count + 1).pipe(Effect.andThen(Ref.get(committedPolicy))),
+        setTaskWorkCapacity: () =>
+          Ref.update(committedApplies, (count) => count + 1).pipe(
+            Effect.andThen(Ref.set(committedPolicy, revisedCapacityPolicy)),
+            Effect.andThen(Effect.fail(lostResponse))
+          )
+      }
+
+      expect(
+        yield* driveAuthoredTaskWorkCapacityChange({ cursor: committedCursor, operatorControl, runId }).pipe(
+          Effect.flip
+        )
+      ).toBe(lostResponse)
+      expect(yield* committedCursor.storyPosition).toBe(0)
+      expect(yield* Ref.get(committedPolicy)).toEqual(revisedCapacityPolicy)
+
+      const reconciledCursor = yield* makeStoryCursor([capacityTwo, processDeath])
+      yield* driveAuthoredTaskWorkCapacityChange({ cursor: reconciledCursor, operatorControl, runId })
+      expect(yield* reconciledCursor.storyPosition).toBe(1)
+      expect(yield* Ref.get(committedReads)).toBe(2)
+      expect(yield* Ref.get(committedApplies)).toBe(1)
+      expect(yield* Ref.get(committedPolicy)).toEqual(revisedCapacityPolicy)
+
+      const deathExit = yield* reconciledCursor.pauseAtCoordinatorProcessDeath.pipe(Effect.exit)
+      expect(Exit.isFailure(deathExit)).toBe(true)
+      expect(yield* reconciledCursor.storyPosition).toBe(2)
+    })
+)
+
+type CapacityOperatorControl = JournaledRunBootstrap["Service"]["operatorControl"]
+type CapacityReadFailure =
+  | Effect.Error<ReturnType<CapacityOperatorControl["readTaskWorkCapacity"]>>
+  | JournaledRunIdentityMismatch
+type CapacityApplyFailure =
+  | Effect.Error<ReturnType<CapacityOperatorControl["setTaskWorkCapacity"]>>
+  | JournaledRunIdentityMismatch
+type FailureFixtures<Failure extends { readonly _tag: string }> = {
+  readonly [Tag in Failure["_tag"]]: Extract<Failure, { readonly _tag: Tag }>
+}
+
+const capacityReadFailureFixtures = (runId: RunId): FailureFixtures<CapacityReadFailure> => {
+  const foreignRunId = RunId.make("foreign-authored-capacity-failure-surface")
+  const position = JournalPosition.make(1)
+  const operation = "JournalStore.read" as const
+  return {
+    ApplicationExiting: new ApplicationExiting(),
+    InRunJournalRunMismatch: new InRunJournalRunMismatch({ expectedRunId: runId, requestedRunId: foreignRunId }),
+    InvalidWorkflowJournalHistory: { _tag: "InvalidWorkflowJournalHistory", issues: [], records: [], runId },
+    JournalDataCorruption: new JournalDataCorruption({ detail: "invalid journal bytes", operation }),
+    JournalHistoryCorruption: new JournalHistoryCorruption({
+      detail: "invalid Run history",
+      operation,
+      partition: "Hot",
+      runId
+    }),
+    JournalHistoryInvalid: new JournalHistoryInvalid({ detail: "invalid appended prefix", position, runId }),
+    JournalPartitionContradiction: new JournalPartitionContradiction({ runId }),
+    JournalPositionGap: new JournalPositionGap({ expectedPosition: position, position, runId }),
+    JournalRecordMismatch: new JournalRecordMismatch({
+      key: JournalRecordKey.make("capacity-fixture"),
+      position,
+      runId
+    }),
+    JournalSchemaIncompatible: new JournalSchemaIncompatible({
+      found: JournalSchemaVersion.make(2),
+      supported: JournalSchemaVersion.make(1)
+    }),
+    JournalStorageAccessDenied: new JournalStorageAccessDenied({ detail: "read denied", operation }),
+    JournalStorageCapacityExhausted: new JournalStorageCapacityExhausted({
+      detail: "read capacity exhausted",
+      operation
+    }),
+    JournalStorageLocked: new JournalStorageLocked({ detail: "read locked", operation }),
+    JournalStorageUnavailable: new JournalStorageUnavailable({ detail: "read unavailable", operation }),
+    JournaledRunIdentityMismatch: new JournaledRunIdentityMismatch({
+      expectedRunId: runId,
+      requestedRunId: foreignRunId
+    }),
+    JournaledRunNotActive: new JournaledRunNotActive(),
+    WorkflowRunNotBegan: new WorkflowRunNotBegan({ runId })
+  }
+}
+
+const capacityApplyFailureFixtures = (
+  runId: RunId,
+  schemaError: Schema.SchemaError
+): FailureFixtures<CapacityApplyFailure> => ({
+  ...capacityReadFailureFixtures(runId),
+  JournalStoreContradiction: new JournalStoreContradiction({
+    existingPosition: JournalPosition.make(1),
+    key: JournalRecordKey.make("capacity-fixture"),
+    runId
+  }),
+  SchemaError: schemaError,
+  TaskWorkCapacityPolicyRevisionConflict: new TaskWorkCapacityPolicyRevisionConflict({
+    current: revisedCapacityPolicy,
+    expectedRevision: initialRunPolicyRevision,
+    runId
+  }),
+  WorkflowRunAlreadyTerminated: new WorkflowRunAlreadyTerminated({ runId, terminatedAt: JournalPosition.make(2) })
+})
+
+effectIt.effect("preserves every public capacity failure without advancing or retrying", () =>
+  Effect.gen(function* () {
+    const runId = RunId.make("authored-capacity-failure-surface")
+    const schemaError = yield* Schema.decodeUnknownEffect(SetTaskWorkCapacityRequest)({}).pipe(Effect.flip)
+    for (const [boundary, failures] of [
+      ["read", Object.values(capacityReadFailureFixtures(runId))],
+      ["apply", Object.values(capacityApplyFailureFixtures(runId, schemaError))]
+    ] as const) {
+      for (const failure of failures) {
+        const cursor = yield* makeStoryCursor([capacityTwo, processDeath])
+        const reads = yield* Ref.make(0)
+        const applies = yield* Ref.make(0)
+        const operatorControl = {
+          readTaskWorkCapacity: () =>
+            Ref.update(reads, (count) => count + 1).pipe(
+              Effect.andThen(
+                boundary === "read" ? Effect.fail(failure as never) : Effect.succeed(initialCapacityPolicy)
+              )
+            ),
+          setTaskWorkCapacity: () =>
+            Ref.update(applies, (count) => count + 1).pipe(Effect.andThen(Effect.fail(failure as never)))
+        }
+
+        expect(yield* driveAuthoredTaskWorkCapacityChange({ cursor, operatorControl, runId }).pipe(Effect.flip)).toBe(
+          failure
+        )
+        expect(yield* cursor.storyPosition).toBe(0)
+        expect((yield* cursor.currentStoryItem)?._tag).toBe("SetTaskExecutionCapacity")
+        expect(yield* Ref.get(reads)).toBe(1)
+        expect(yield* Ref.get(applies)).toBe(boundary === "read" ? 0 : 1)
+      }
+    }
+  })
+)
 
 type WorkAuthorizationChronologyItem =
   | { readonly _tag: "CoordinatorProcessDies" }

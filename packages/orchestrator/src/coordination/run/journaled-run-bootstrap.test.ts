@@ -1,8 +1,12 @@
 import {
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
   makeTaskWorkSpecification,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
@@ -18,6 +22,7 @@ import {
 import { it } from "@effect/vitest"
 import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node"
 import {
+  Cause,
   Context,
   Deferred,
   Effect,
@@ -38,17 +43,18 @@ import { expect } from "vitest"
 import { TestClock } from "effect/testing"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
-import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
+import { GitTargetLineageReadFailure, TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import {
   TrackerAdapterReadContext,
   TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
-  TrackerGraphReader
+  TrackerGraphReader,
+  TrackerReadError
 } from "../../authorities/task-tracker/graph-reader.js"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
 import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
-import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
+import { TaskWorkCapacityControl, taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import { Journal } from "../delivery/journal.js"
@@ -56,7 +62,13 @@ import { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runt
 import { DeliveryRelationPublicationObserver } from "../delivery/delivery-publication-observer.js"
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "../delivery/in-memory-relations.js"
-import { currentSignalOf, type DeliveryRelationInputBundle, TrackerGraphState } from "../delivery/relations.js"
+import {
+  currentSignalOf,
+  DeliveryRelationReconciliationError,
+  type DeliveryRelationInputBundle,
+  TrackerGraphState
+} from "../delivery/relations.js"
+import { IntegrationFinalityRuntimeUnavailable } from "../delivery/integration-finality-boundary.js"
 import { RunFinalityDecision, type RunFinalityProof } from "../frontier/frontier.js"
 import {
   activeWorkAuthorityRefreshSubjectsForRunState,
@@ -117,7 +129,7 @@ import {
 import { makeRunFinalityEvidence, runTerminationDispositionOf } from "../frontier/run-finality.js"
 import { AllocatedWorkflowRunId, freshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
-import { JournaledRunBootstrap, type AcceptedRunReactivationObservers } from "./run.js"
+import { JournaledRunBootstrap, JournaledRunIdentityMismatch, type AcceptedRunReactivationObservers } from "./run.js"
 import { journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
 import {
   PassivePlannedAttemptObserver,
@@ -139,7 +151,11 @@ import {
   type ApplicationProcessLifecycleService,
   makeApplicationExitShell
 } from "../application-exit/application-shell.js"
-import { ApplicationExitDiagnostic, ApplicationExitResult } from "../application-exit/lifecycle-decision.js"
+import {
+  ApplicationExiting,
+  ApplicationExitDiagnostic,
+  ApplicationExitResult
+} from "../application-exit/lifecycle-decision.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { controlDirectionApplicationLayer } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { attemptChoiceControlLayer } from "../../workflow/protocols/attempt-choice/control.js"
@@ -432,6 +448,183 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   const bootstrap = Context.get(yield* Layer.build(application), JournaledRunBootstrap)
   return { ...bootstrap, applicationExitRequestBoundary: sharedApplicationExit.requestBoundary }
 })
+
+it.effect("preserves exact reconstructed activation failures at the real bootstrap and finality boundary", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const baseSha = GitCommitSha.make("a".repeat(40))
+      const integrationTarget = IntegrationTarget.make({
+        ref: IntegrationTargetRef.make("refs/heads/main"),
+        repository: GitRepositoryLocator.make("/dalph/bootstrap/reconstructed-failure.git")
+      })
+      const openProgramFailures = [
+        () =>
+          new TrackerReadError({
+            detail: "the reconstructed startup graph could not be decoded",
+            operation: "TrackerGraphReader.decode"
+          }),
+        () =>
+          new GitTargetLineageReadFailure({
+            detail: "the reconstructed target lineage was unavailable",
+            plannedBaseSha: baseSha,
+            target: integrationTarget
+          }),
+        (runId: RunId) =>
+          new PlannedAttemptExecutorCommandFailure({
+            command: "Suspend",
+            correlation: { attemptId: AttemptId.make("attempt:A:reconstructed-failure"), runId },
+            detail: "the reconstructed executor boundary failed"
+          }),
+        () =>
+          new JournalStorageUnavailable({
+            detail: "the reconstructed Journal could not be read",
+            operation: "JournalStore.read"
+          }),
+        () =>
+          new DeliveryRelationReconciliationError({
+            cause: Cause.fail("the reconstructed delivery relation was incoherent")
+          }),
+        () => new IntegrationFinalityRuntimeUnavailable()
+      ] as const
+
+      for (const [index, makeFailure] of openProgramFailures.entries()) {
+        const target = FixtureTarget.make(`journaled-bootstrap-reconstructed-program-failure-${index}`)
+        const runId = yield* freshWorkflowRunId(target)
+        const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+        const storage = Context.get(journalContext, JournalStore)
+        yield* storage.beginRun(runId, target, initialPolicy)
+        const bootstrap = yield* buildBootstrap(runId, storage)
+        const programCalls = yield* Ref.make(0)
+        const expected = makeFailure(runId)
+        const observed = yield* bootstrap
+          .activate(
+            target,
+            Effect.succeed(initialPolicy),
+            runId,
+            Ref.update(programCalls, (count) => count + 1).pipe(Effect.andThen(Effect.fail(expected)))
+          )
+          .pipe(Effect.flip)
+
+        expect(observed, expected._tag).toBe(expected)
+        expect(yield* Ref.get(programCalls), expected._tag).toBe(1)
+        expect(
+          (yield* storage.read(runId)).map(({ event }) => event._tag),
+          expected._tag
+        ).toEqual(["WorkflowRunBegan"])
+      }
+
+      const recordedTarget = FixtureTarget.make("journaled-bootstrap-reconstructed-recorded-target")
+      const requestedTarget = FixtureTarget.make("journaled-bootstrap-reconstructed-requested-target")
+      const targetMismatchRunId = yield* freshWorkflowRunId(recordedTarget)
+      const targetMismatchContext = yield* Layer.build(memoryJournalStoreLayer)
+      const targetMismatchDelegate = Context.get(targetMismatchContext, JournalStore)
+      yield* targetMismatchDelegate.beginRun(targetMismatchRunId, recordedTarget, initialPolicy)
+      const scanCalls = yield* Ref.make(0)
+      const recoveryReadCalls = yield* Ref.make(0)
+      const rawReadCalls = yield* Ref.make(0)
+      const beginCalls = yield* Ref.make(0)
+      const appendCalls = yield* Ref.make(0)
+      const targetMismatchStorage = JournalStore.of({
+        ...targetMismatchDelegate,
+        append: (...input) =>
+          Ref.update(appendCalls, (count) => count + 1).pipe(Effect.andThen(targetMismatchDelegate.append(...input))),
+        beginRun: (...input) =>
+          Ref.update(beginCalls, (count) => count + 1).pipe(Effect.andThen(targetMismatchDelegate.beginRun(...input))),
+        read: (requestedRunId) =>
+          Ref.update(rawReadCalls, (count) => count + 1).pipe(
+            Effect.andThen(targetMismatchDelegate.read(requestedRunId))
+          ),
+        readRunForRecovery: (...input) =>
+          Ref.update(recoveryReadCalls, (count) => count + 1).pipe(
+            Effect.andThen(targetMismatchDelegate.readRunForRecovery(...input))
+          ),
+        scanHot: () =>
+          Ref.update(scanCalls, (count) => count + 1).pipe(Effect.andThen(targetMismatchDelegate.scanHot()))
+      })
+      const targetMismatchBootstrap = yield* buildBootstrap(targetMismatchRunId, targetMismatchStorage)
+      const initialPolicyCalls = yield* Ref.make(0)
+      const targetMismatchProgramCalls = yield* Ref.make(0)
+      const expectedTargetMismatch = new WorkflowRunTargetMismatch({
+        recordedTarget,
+        requestedTarget,
+        runId: targetMismatchRunId
+      })
+      expect(
+        yield* targetMismatchBootstrap
+          .activate(
+            requestedTarget,
+            Ref.update(initialPolicyCalls, (count) => count + 1).pipe(Effect.as(initialPolicy)),
+            targetMismatchRunId,
+            Ref.update(targetMismatchProgramCalls, (count) => count + 1).pipe(
+              Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
+            )
+          )
+          .pipe(Effect.flip)
+      ).toEqual(expectedTargetMismatch)
+      expect(yield* Ref.get(scanCalls)).toBe(1)
+      expect(yield* Ref.get(recoveryReadCalls)).toBe(1)
+      expect(yield* Ref.get(rawReadCalls)).toBe(0)
+      expect(yield* Ref.get(beginCalls)).toBe(0)
+      expect(yield* Ref.get(appendCalls)).toBe(0)
+      expect(yield* Ref.get(initialPolicyCalls)).toBe(0)
+      expect(yield* Ref.get(targetMismatchProgramCalls)).toBe(0)
+      expect((yield* targetMismatchDelegate.read(targetMismatchRunId)).map(({ event }) => event._tag)).toEqual([
+        "WorkflowRunBegan"
+      ])
+
+      const expectedRunId = yield* freshWorkflowRunId(FixtureTarget.make("journaled-bootstrap-expected-run"))
+      const foreignRunId = yield* freshWorkflowRunId(FixtureTarget.make("journaled-bootstrap-foreign-run"))
+      const identityContext = yield* Layer.build(memoryJournalStoreLayer)
+      const identityStorage = Context.get(identityContext, JournalStore)
+      const identityBootstrap = yield* buildBootstrap(expectedRunId, identityStorage)
+      const identityProgramCalls = yield* Ref.make(0)
+      const identityFailure = new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: foreignRunId })
+      expect(
+        yield* identityBootstrap
+          .activate(
+            FixtureTarget.make("journaled-bootstrap-foreign-run-target"),
+            Effect.succeed(initialPolicy),
+            foreignRunId,
+            Ref.update(identityProgramCalls, (count) => count + 1).pipe(
+              Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+            )
+          )
+          .pipe(Effect.flip)
+      ).toEqual(identityFailure)
+      expect(yield* Ref.get(identityProgramCalls)).toBe(0)
+      expect(yield* identityStorage.read(expectedRunId)).toEqual([])
+      expect(yield* identityStorage.read(foreignRunId)).toEqual([])
+
+      const exitingTarget = FixtureTarget.make("journaled-bootstrap-reconstructed-application-exit")
+      const exitingRunId = yield* freshWorkflowRunId(exitingTarget)
+      const exitingContext = yield* Layer.build(memoryJournalStoreLayer)
+      const exitingStorage = Context.get(exitingContext, JournalStore)
+      const applicationExit = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      const exitingBootstrap = yield* buildBootstrap(
+        exitingRunId,
+        exitingStorage,
+        defaultTrackerGraphReader,
+        applicationExit
+      )
+      yield* applicationExit.requestBoundary.requestExit
+      const exitingProgramCalls = yield* Ref.make(0)
+      expect(
+        yield* exitingBootstrap
+          .activate(
+            exitingTarget,
+            Effect.succeed(initialPolicy),
+            exitingRunId,
+            Ref.update(exitingProgramCalls, (count) => count + 1).pipe(
+              Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+            )
+          )
+          .pipe(Effect.flip)
+      ).toEqual(new ApplicationExiting())
+      expect(yield* Ref.get(exitingProgramCalls)).toBe(0)
+      expect(yield* exitingStorage.read(exitingRunId)).toEqual([])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
 
 const appendExecutorHistory = (
   journal: JournalStore["Service"],
@@ -2890,6 +3083,411 @@ it.effect("applies inactive Run controls through the Journal while inactive Task
       expect(unpaused.event).toMatchObject({ _tag: "ControlDirectionApplied", direction: "Unpause" })
       expect(yield* bootstrap.readRunReactivationControl(target, runId)).toBe("RunUnpaused")
       expect(yield* Ref.get(observed)).toEqual(["Pause", "Unpause"])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("reads and changes one inactive task-work capacity through the process Journal", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-inactive-capacity")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      yield* storage.beginRun(runId, target, initialPolicy)
+
+      expect(yield* bootstrap.operatorControl.readTaskWorkCapacity(runId)).toEqual({
+        revision: initialRunPolicyRevision,
+        taskExecutionCapacity: 2
+      })
+      expect(
+        yield* bootstrap.operatorControl.setTaskWorkCapacity({
+          capacity: 1,
+          expectedRevision: initialRunPolicyRevision,
+          runId
+        })
+      ).toEqual({ revision: 2, taskExecutionCapacity: 1 })
+      expect(yield* bootstrap.operatorControl.readTaskWorkCapacity(runId)).toEqual({
+        revision: 2,
+        taskExecutionCapacity: 1
+      })
+
+      const stale = yield* bootstrap.operatorControl
+        .setTaskWorkCapacity({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
+        .pipe(Effect.flip)
+      expect(stale).toMatchObject({
+        _tag: "TaskWorkCapacityPolicyRevisionConflict",
+        current: { revision: 2, taskExecutionCapacity: 1 },
+        expectedRevision: initialRunPolicyRevision,
+        runId
+      })
+      expect(
+        yield* bootstrap.operatorControl
+          .readTaskWorkCapacity(RunId.make("inactive-capacity-wrong-run"))
+          .pipe(Effect.flip)
+      ).toMatchObject({
+        _tag: "JournaledRunIdentityMismatch",
+        expectedRunId: runId,
+        requestedRunId: "inactive-capacity-wrong-run"
+      })
+      expect(
+        yield* bootstrap.operatorControl
+          .setTaskWorkCapacity({
+            capacity: 1,
+            expectedRevision: initialRunPolicyRevision,
+            runId: RunId.make("inactive-capacity-wrong-run")
+          })
+          .pipe(Effect.flip)
+      ).toMatchObject({
+        _tag: "JournaledRunIdentityMismatch",
+        expectedRunId: runId,
+        requestedRunId: "inactive-capacity-wrong-run"
+      })
+      expect((yield* storage.read(runId)).filter(({ event }) => event._tag === "TaskWorkCapacityChanged")).toHaveLength(
+        1
+      )
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("keeps activation out of inactive capacity read and apply until each Journal boundary releases", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-inactive-capacity-activation-exclusion")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      yield* delegate.beginRun(runId, target, initialPolicy)
+      const firstReadStarted = yield* Deferred.make<void>()
+      const releaseFirstRead = yield* Deferred.make<void>()
+      const capacityAppendStarted = yield* Deferred.make<void>()
+      const releaseCapacityAppend = yield* Deferred.make<void>()
+      const blockCapacityAppend = yield* Ref.make(false)
+      const reads = yield* Ref.make(0)
+      const storage = JournalStore.of({
+        ...delegate,
+        append: (requestedRunId, key, event) =>
+          event._tag === "TaskWorkCapacityChanged"
+            ? Ref.get(blockCapacityAppend).pipe(
+                Effect.flatMap((blocked) =>
+                  blocked
+                    ? Deferred.succeed(capacityAppendStarted, undefined).pipe(
+                        Effect.andThen(Deferred.await(releaseCapacityAppend)),
+                        Effect.andThen(delegate.append(requestedRunId, key, event))
+                      )
+                    : delegate.append(requestedRunId, key, event)
+                )
+              )
+            : delegate.append(requestedRunId, key, event),
+        read: (requestedRunId) =>
+          Ref.getAndUpdate(reads, (count) => count + 1).pipe(
+            Effect.flatMap((count) =>
+              count === 0
+                ? Deferred.succeed(firstReadStarted, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseFirstRead)),
+                    Effect.andThen(delegate.read(requestedRunId))
+                  )
+                : delegate.read(requestedRunId)
+            )
+          )
+      })
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const reading = yield* bootstrap.operatorControl.readTaskWorkCapacity(runId).pipe(Effect.forkChild)
+      yield* Deferred.await(firstReadStarted)
+
+      const activationEntered = yield* Deferred.make<void>()
+      const releaseActivation = yield* Deferred.make<void>()
+      const activating = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Deferred.succeed(activationEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseActivation)),
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+          )
+        )
+        .pipe(Effect.forkChild)
+
+      expect(yield* Deferred.isDone(activationEntered)).toBe(false)
+      yield* Deferred.succeed(releaseFirstRead, undefined)
+      expect(yield* Fiber.join(reading)).toEqual({ revision: initialRunPolicyRevision, taskExecutionCapacity: 2 })
+      yield* Deferred.await(activationEntered)
+      yield* Deferred.succeed(releaseActivation, undefined)
+      expect(yield* Fiber.join(activating)).toMatchObject({ _tag: "RunMustRemainActive" })
+
+      yield* Ref.set(blockCapacityAppend, true)
+      const applying = yield* bootstrap.operatorControl
+        .setTaskWorkCapacity({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
+        .pipe(Effect.forkChild({ startImmediately: true }))
+      yield* Deferred.await(capacityAppendStarted)
+      const appliedActivationEntered = yield* Deferred.make<RunControlPolicy>()
+      const releaseAppliedActivation = yield* Deferred.make<void>()
+      const activatingAfterApply = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.gen(function* () {
+            const policy = yield* (yield* TaskWorkCapacityControl).read(runId)
+            yield* Deferred.succeed(appliedActivationEntered, policy)
+            yield* Deferred.await(releaseAppliedActivation)
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          })
+        )
+        .pipe(Effect.forkChild({ startImmediately: true }))
+
+      expect(yield* Deferred.isDone(appliedActivationEntered)).toBe(false)
+      yield* Deferred.succeed(releaseCapacityAppend, undefined)
+      expect(yield* Fiber.join(applying)).toEqual({ revision: 2, taskExecutionCapacity: 1 })
+      expect(yield* Deferred.await(appliedActivationEntered)).toEqual({ revision: 2, taskExecutionCapacity: 1 })
+      yield* Deferred.succeed(releaseAppliedActivation, undefined)
+      expect(yield* Fiber.join(activatingAfterApply)).toMatchObject({ _tag: "RunMustRemainActive" })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("rejects a foreign capacity Run before active or inactive runtime and Journal control", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-capacity-foreign-run")
+      const runId = yield* freshWorkflowRunId(target)
+      const foreignRunId = RunId.make("journaled-bootstrap-capacity-existing-foreign-run")
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      yield* delegate.beginRun(runId, target, initialPolicy)
+      yield* delegate.beginRun(foreignRunId, target, initialPolicy)
+      const reads = yield* Ref.make(0)
+      const appends = yield* Ref.make(0)
+      const storage = JournalStore.of({
+        ...delegate,
+        append: (...input) => Ref.update(appends, (count) => count + 1).pipe(Effect.andThen(delegate.append(...input))),
+        read: (requestedRunId) =>
+          Ref.update(reads, (count) => count + 1).pipe(Effect.andThen(delegate.read(requestedRunId)))
+      })
+      const bootstrap = yield* buildBootstrap(runId, storage)
+
+      expect(yield* bootstrap.operatorControl.readTaskWorkCapacity(foreignRunId).pipe(Effect.flip)).toMatchObject({
+        _tag: "JournaledRunIdentityMismatch",
+        expectedRunId: runId,
+        requestedRunId: foreignRunId
+      })
+      expect(
+        yield* bootstrap.operatorControl
+          .setTaskWorkCapacity({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId: foreignRunId })
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "JournaledRunIdentityMismatch", expectedRunId: runId, requestedRunId: foreignRunId })
+      expect(yield* Ref.get(reads)).toBe(0)
+      expect(yield* Ref.get(appends)).toBe(0)
+
+      const activeJournalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const activeDelegate = Context.get(activeJournalContext, JournalStore)
+      yield* activeDelegate.beginRun(runId, target, initialPolicy)
+      const activeReads = yield* Ref.make(0)
+      const activeAppends = yield* Ref.make(0)
+      const activeStorage = JournalStore.of({
+        ...activeDelegate,
+        append: (...input) =>
+          Ref.update(activeAppends, (count) => count + 1).pipe(Effect.andThen(activeDelegate.append(...input))),
+        read: (requestedRunId) =>
+          Ref.update(activeReads, (count) => count + 1).pipe(Effect.andThen(activeDelegate.read(requestedRunId)))
+      })
+      const activeBootstrap = yield* buildBootstrap(runId, activeStorage)
+
+      const activationEntered = yield* Deferred.make<void>()
+      const releaseActivation = yield* Deferred.make<void>()
+      const activating = yield* activeBootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Deferred.succeed(activationEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseActivation)),
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(activationEntered)
+      yield* activeDelegate.beginRun(foreignRunId, target, initialPolicy)
+      const activeReadsBefore = yield* Ref.get(activeReads)
+      const activeAppendsBefore = yield* Ref.get(activeAppends)
+
+      expect(yield* activeBootstrap.operatorControl.readTaskWorkCapacity(foreignRunId).pipe(Effect.flip)).toMatchObject(
+        { _tag: "JournaledRunIdentityMismatch", expectedRunId: runId, requestedRunId: foreignRunId }
+      )
+      expect(
+        yield* activeBootstrap.operatorControl
+          .setTaskWorkCapacity({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId: foreignRunId })
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "JournaledRunIdentityMismatch", expectedRunId: runId, requestedRunId: foreignRunId })
+      expect(yield* Ref.get(activeReads)).toBe(activeReadsBefore)
+      expect(yield* Ref.get(activeAppends)).toBe(activeAppendsBefore)
+
+      yield* Deferred.succeed(releaseActivation, undefined)
+      expect(yield* Fiber.join(activating)).toMatchObject({ _tag: "RunMustRemainActive" })
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("interrupts inactive task-work capacity before append without changing policy", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-inactive-capacity-precommit-interruption")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      yield* delegate.beginRun(runId, target, initialPolicy)
+      const appendStarted = yield* Deferred.make<void>()
+      const storage = JournalStore.of({
+        ...delegate,
+        append: (requestedRunId, key, event) =>
+          event._tag === "TaskWorkCapacityChanged"
+            ? Deferred.succeed(appendStarted, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.andThen(delegate.append(requestedRunId, key, event))
+              )
+            : delegate.append(requestedRunId, key, event)
+      })
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const applying = yield* bootstrap.operatorControl
+        .setTaskWorkCapacity({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(appendStarted)
+      yield* Fiber.interrupt(applying)
+
+      const activationPolicy = yield* Deferred.make<RunControlPolicy>()
+      expect(
+        yield* bootstrap.activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.gen(function* () {
+            yield* Deferred.succeed(activationPolicy, yield* (yield* TaskWorkCapacityControl).read(runId))
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          })
+        )
+      ).toMatchObject({ _tag: "RunMustRemainActive" })
+      expect(yield* Deferred.await(activationPolicy)).toEqual({
+        revision: initialRunPolicyRevision,
+        taskExecutionCapacity: 2
+      })
+      expect((yield* delegate.read(runId)).filter(({ event }) => event._tag === "TaskWorkCapacityChanged")).toEqual([])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("reconciles an inactive capacity append that committed before its response was lost", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-inactive-capacity-committed-lost-response")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      yield* delegate.beginRun(runId, target, initialPolicy)
+      const appendAttempts = yield* Ref.make(0)
+      const lostResponse = new JournalStorageUnavailable({
+        detail: "capacity append committed before response was lost",
+        operation: "JournalStore.append"
+      })
+      const storage = JournalStore.of({
+        ...delegate,
+        append: (requestedRunId, key, event) =>
+          event._tag === "TaskWorkCapacityChanged"
+            ? Ref.update(appendAttempts, (count) => count + 1).pipe(
+                Effect.andThen(delegate.append(requestedRunId, key, event)),
+                Effect.andThen(Effect.fail(lostResponse))
+              )
+            : delegate.append(requestedRunId, key, event)
+      })
+      const bootstrap = yield* buildBootstrap(runId, storage)
+
+      expect(
+        yield* bootstrap.operatorControl
+          .setTaskWorkCapacity({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
+          .pipe(Effect.flip)
+      ).toBe(lostResponse)
+      expect(yield* bootstrap.operatorControl.readTaskWorkCapacity(runId)).toEqual({
+        revision: 2,
+        taskExecutionCapacity: 1
+      })
+      const activationPolicy = yield* Deferred.make<RunControlPolicy>()
+      expect(
+        yield* bootstrap.activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.gen(function* () {
+            yield* Deferred.succeed(activationPolicy, yield* (yield* TaskWorkCapacityControl).read(runId))
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          })
+        )
+      ).toMatchObject({ _tag: "RunMustRemainActive" })
+      expect(yield* Deferred.await(activationPolicy)).toEqual({ revision: 2, taskExecutionCapacity: 1 })
+      expect(
+        yield* bootstrap.operatorControl
+          .setTaskWorkCapacity({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
+          .pipe(Effect.flip)
+      ).toMatchObject({
+        _tag: "TaskWorkCapacityPolicyRevisionConflict",
+        current: { revision: 2, taskExecutionCapacity: 1 },
+        expectedRevision: initialRunPolicyRevision,
+        runId
+      })
+      expect(yield* Ref.get(appendAttempts)).toBe(1)
+      expect(
+        (yield* delegate.read(runId)).filter(({ event }) => event._tag === "TaskWorkCapacityChanged")
+      ).toHaveLength(1)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("preserves inactive task-work capacity Journal read and append failures", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-inactive-capacity-failures")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      yield* delegate.beginRun(runId, target, initialPolicy)
+      const readFailure = new JournalStorageUnavailable({
+        detail: "inactive capacity read unavailable",
+        operation: "JournalStore.read"
+      })
+      const readAttempts = yield* Ref.make(0)
+      const readFailingStorage = JournalStore.of({
+        ...delegate,
+        read: (requestedRunId) =>
+          requestedRunId === runId
+            ? Ref.update(readAttempts, (count) => count + 1).pipe(Effect.andThen(Effect.fail(readFailure)))
+            : delegate.read(requestedRunId)
+      })
+      const readFailingBootstrap = yield* buildBootstrap(runId, readFailingStorage)
+      expect(yield* readFailingBootstrap.operatorControl.readTaskWorkCapacity(runId).pipe(Effect.flip)).toBe(
+        readFailure
+      )
+      expect(yield* Ref.get(readAttempts)).toBe(1)
+
+      const appendFailure = new JournalStorageUnavailable({
+        detail: "inactive capacity append unavailable",
+        operation: "JournalStore.append"
+      })
+      const appendAttempts = yield* Ref.make(0)
+      const appendFailingStorage = JournalStore.of({
+        ...delegate,
+        append: (requestedRunId, key, event) =>
+          event._tag === "TaskWorkCapacityChanged"
+            ? Ref.update(appendAttempts, (count) => count + 1).pipe(Effect.andThen(Effect.fail(appendFailure)))
+            : delegate.append(requestedRunId, key, event)
+      })
+      const appendFailingBootstrap = yield* buildBootstrap(runId, appendFailingStorage)
+      expect(
+        yield* appendFailingBootstrap.operatorControl
+          .setTaskWorkCapacity({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
+          .pipe(Effect.flip)
+      ).toBe(appendFailure)
+      expect(yield* Ref.get(appendAttempts)).toBe(1)
+      expect((yield* delegate.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )

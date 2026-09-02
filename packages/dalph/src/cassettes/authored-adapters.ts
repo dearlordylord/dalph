@@ -33,9 +33,16 @@ import {
   type AuthoredCassetteDecision as CassetteDecision,
   type AuthoredCassetteStoryItem
 } from "./authored-domain.js"
-import type { StoryCursor } from "./authored-cursor.js"
+import type * as Cursor from "./authored-cursor.js"
+import {
+  type ControlledExecutorConfig,
+  reconcileReservedSafelySuspendedExecutorReport
+} from "./authored-executor-reconciliation.js"
 import { trackerReadFailure } from "./authored-tracker-read-results.js"
 
+export type { ControlledExecutorConfig } from "./authored-executor-reconciliation.js"
+
+type StoryCursor = Cursor.StoryCursor
 const evidenceDigestHexLength = 64
 
 export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
@@ -291,18 +298,25 @@ const executorReport = (
   )
 }
 
-export const controlledExecutorLayer = (
-  cursor: StoryCursor,
-  runId: RunId,
-  beforeExecutorReport: (
-    plannedAttempt: PlannedTaskAttempt,
-    request: "Begin" | "Resume" | "Suspend"
-  ) => Effect.Effect<void>,
-  survivingReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
-  unresolvedLostResponses: Ref.Ref<ReadonlySet<string>>,
-  prepareReport: (report: PlannedAttemptExecutorReport) => Effect.Effect<PlannedAttemptExecutorReport> = Effect.succeed
-) => {
-  const reports = survivingReports
+const isAcceptedSafelySuspendedExecutorReport = (
+  item: Extract<
+    AuthoredCassetteStoryItem,
+    {
+      readonly _tag:
+        | "PlannedAttemptExecutorPassiveLifecycleChanged"
+        | "PlannedAttemptExecutorProjectionReturned"
+        | "PlannedAttemptExecutorResponseLost"
+        | "PlannedAttemptExecutorWorkReported"
+    }
+  >
+): item is Cursor.AuthoredSafelySuspendedExecutorReportItem =>
+  item._tag === "PlannedAttemptExecutorWorkReported" &&
+  item.request === "Suspend" &&
+  item.report._tag === "ExecutorWorkSafelySuspended"
+
+export const controlledExecutorLayer = (config: ControlledExecutorConfig) => {
+  const { beforeExecutorReport, cursor, runId, survivingReports, unresolvedLostResponses } = config
+  const prepareReport = config.prepareReport ?? Effect.succeed
   const consume = Effect.fn("AuthoredCassette.PlannedAttemptExecutor.consume")(function* (
     request: "Begin" | "Resume" | "Suspend",
     plannedAttempt: PlannedTaskAttempt
@@ -339,9 +353,12 @@ export const controlledExecutorLayer = (
       }
       const report = yield* prepareReport(executorReport(item, runId))
       yield* Ref.update(
-        reports,
+        survivingReports,
         (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])
       )
+      if (isAcceptedSafelySuspendedExecutorReport(item)) {
+        yield* config.reserveAcceptedSafeReport?.(item) ?? Effect.void
+      }
       if (item._tag === "PlannedAttemptExecutorResponseLost") {
         yield* Ref.update(unresolvedLostResponses, (current) =>
           new Set(current).add(plannedAttemptExecutorCorrelationKey(correlation))
@@ -356,8 +373,17 @@ export const controlledExecutorLayer = (
   const executor = PlannedAttemptExecutor.of({
     observe: (correlation) =>
       Effect.gen(function* () {
-        const projection = yield* cursor.consumeExecutorProjectionFor(correlation.attemptId)
-        if (Option.isNone(projection)) {
+        const claim = yield* cursor.consumeExecutorProjectionOrReservedSafeFor(correlation.attemptId)
+        if (claim._tag === "ReservedSafe") {
+          return yield* reconcileReservedSafelySuspendedExecutorReport({
+            correlation,
+            cursor,
+            reportInteractionMismatch: config.reportMismatch ?? (() => Effect.void),
+            reports: survivingReports,
+            unresolvedLostResponses
+          })
+        }
+        if (claim._tag === "None") {
           const unresolved = yield* Ref.get(unresolvedLostResponses)
           if (unresolved.has(plannedAttemptExecutorCorrelationKey(correlation))) {
             return yield* Effect.die(
@@ -366,12 +392,12 @@ export const controlledExecutorLayer = (
               )
             )
           }
-          const report = (yield* Ref.get(reports)).get(plannedAttemptExecutorCorrelationKey(correlation))
+          const report = (yield* Ref.get(survivingReports)).get(plannedAttemptExecutorCorrelationKey(correlation))
           return report === undefined
             ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
             : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
         }
-        const projectedReport = yield* prepareReport(executorReport(projection.value, runId))
+        const projectedReport = yield* prepareReport(executorReport(claim.item, runId))
         if (!samePlannedAttemptExecutorCorrelation(projectedReport.correlation, correlation)) {
           return PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
             expected: correlation,
@@ -379,7 +405,7 @@ export const controlledExecutorLayer = (
           })
         }
         yield* Ref.update(
-          reports,
+          survivingReports,
           (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), projectedReport]])
         )
         yield* Ref.update(unresolvedLostResponses, (current) => {
@@ -407,7 +433,7 @@ export const controlledExecutorLayer = (
                 Effect.gen(function* () {
                   const report = yield* prepareReport(executorReport(item, runId))
                   yield* Ref.update(
-                    reports,
+                    survivingReports,
                     (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])
                   )
                   return PlannedAttemptExecutorProjection.cases.Exact.make({ report })

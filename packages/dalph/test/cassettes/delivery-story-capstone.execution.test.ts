@@ -55,19 +55,132 @@ it("records B Safe then rereads tracker G1 before D begins and preserves the act
 })
 
 it.effect(
-  "emits the exact DS01 through DS13 delivery checkpoint table",
+  "observes reconstructed capacity revision two with all three recovered held positions",
   () =>
     Effect.gen(function* () {
       const run = yield* capstoneRun
-      const initial = run.deliveryFrames.find(({ graph }) => graph._tag === "Established")
+      const publications = run.observationCaptures.flatMap((capture) =>
+        capture._tag === "DeliveryPublicationCaptured" ? [capture.publication] : []
+      )
+      const reconstructed = publications.find(
+        ({ activationOrdinal, bundle }) =>
+          activationOrdinal === 2 &&
+          bundle.publication.policy.revision === 2 &&
+          bundle.publication.policy.taskExecutionCapacity === 2 &&
+          bundle.actionInputs.runtimeFacts.taskWork.held.length === 3
+      )
 
-      expect(run.reactivationOwnerProcessGenerationCount).toBe(2)
-      expect(initial?.capacity).toBe(3)
+      expect(reconstructed?.activationOrdinal).toBe(2)
+      expect(reconstructed?.bundle.publication.policy).toEqual({ revision: 2, taskExecutionCapacity: 2 })
       expect(
-        initial?.graph._tag === "Established"
-          ? initial.graph.tasks.map(({ id, prerequisiteIds }) => ({ id, prerequisiteIds }))
+        reconstructed?.bundle.actionInputs.runtimeFacts.taskWork.held
+          .map(({ correlation, taskId }) => ({ attemptId: correlation.attemptId, runId: correlation.runId, taskId }))
+          .toSorted((left, right) => left.taskId.localeCompare(right.taskId))
+      ).toEqual([
+        { attemptId: "attempt:A:0", runId: run.runId, taskId: "A" },
+        { attemptId: "attempt:C:2", runId: run.runId, taskId: "C" },
+        { attemptId: "attempt:D:3", runId: run.runId, taskId: "D" }
+      ])
+      expect(publications.every(({ bundle }) => bundle.publication.policy.revision <= 2)).toBe(true)
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "records exactly one C2 Safe ordinal before Continue B",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* capstoneRun
+      const c2Reports = run.records.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report.correlation.runId === run.runId &&
+          event.report.correlation.attemptId === "attempt:C:2"
+      )
+
+      expect(
+        c2Reports.map(({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported"
+            ? { ordinal: event.ordinal, report: event.report._tag }
+            : undefined
+        )
+      ).toEqual([
+        { ordinal: 1, report: "ExecutorWorkExecuting" },
+        { ordinal: 2, report: "ExecutorWorkSafelySuspended" }
+      ])
+      expect(
+        c2Reports.some(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported" && event.ordinal === 3)
+      ).toBe(false)
+
+      const safe = run.observationCaptures.find(
+        (capture) =>
+          capture._tag === "AuthoredStoryOccurrenceCaptured" &&
+          capture.occurrence._tag === "PlannedAttemptExecutorWorkReported" &&
+          capture.occurrence.request === "Suspend" &&
+          capture.occurrence.report._tag === "ExecutorWorkSafelySuspended" &&
+          capture.occurrence.report.attemptId === "attempt:C:2"
+      )
+      const continued = run.observationCaptures.find(
+        (capture) =>
+          capture._tag === "AuthoredStoryOccurrenceCaptured" &&
+          capture.occurrence._tag === "OperatorContinuesAttempt" &&
+          capture.occurrence.attemptId === "attempt:B:1"
+      )
+      expect(safe).toBeDefined()
+      expect(continued).toBeDefined()
+      if (safe === undefined || continued === undefined) return
+      expect(safe.captureOrder).toBeLessThan(continued.captureOrder)
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "runs reconstructed ordinary activation through strict exact projections before returning unsettled responsibility",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* capstoneRun
+      const reconstructedOccurrences = run.observationCaptures.flatMap((capture) =>
+        capture.activationOrdinal === 2 && capture._tag === "AuthoredStoryOccurrenceCaptured"
+          ? [capture.occurrence]
           : []
-      ).toEqual(["A", "B", "C", "D", "E"].map((id) => ({ id, prerequisiteIds: [] })))
+      )
+      const returnedAt = reconstructedOccurrences.findIndex((item) => item._tag === "CoordinatorActivationReturned")
+      expect(returnedAt).toBeGreaterThanOrEqual(0)
+      expect(reconstructedOccurrences.slice(0, returnedAt + 1)).toMatchObject([
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph" } },
+        { _tag: "TrackerGraphReadReturned", graph: { revision: "delivery-story-G1" } },
+        {
+          _tag: "PlannedAttemptExecutorProjectionReturned",
+          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" }
+        },
+        {
+          _tag: "PlannedAttemptExecutorProjectionReturned",
+          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:C:2" }
+        },
+        {
+          _tag: "PlannedAttemptExecutorProjectionReturned",
+          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:D:3" }
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph" } },
+        { _tag: "TrackerGraphReadReturned", graph: { revision: "delivery-story-G1" } },
+        {
+          _tag: "CoordinatorActivationReturned",
+          decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+        }
+      ])
+      expect(
+        reconstructedOccurrences
+          .slice(0, returnedAt + 1)
+          .some((item) =>
+            [
+              "TaskWorkSpecificationReadReturned",
+              "TaskClaimReadReturned",
+              "PlannedAttemptWorktreeReadReturned",
+              "TargetLineageReadReturned",
+              "PlannedAttemptExecutorWorkReported"
+            ].includes(item._tag)
+          )
+      ).toBe(false)
     }),
   capstoneTimeout
 )
