@@ -2894,6 +2894,105 @@ it.effect("applies inactive Run controls through the Journal while inactive Task
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
+it.effect("reads and changes one inactive task-work capacity through the process Journal", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-inactive-capacity")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      yield* storage.beginRun(runId, target, initialPolicy)
+
+      expect(yield* bootstrap.operatorControl.readTaskWorkCapacity(runId)).toEqual({
+        revision: initialRunPolicyRevision,
+        taskExecutionCapacity: 2
+      })
+      expect(
+        yield* bootstrap.operatorControl.setTaskWorkCapacity({
+          capacity: 1,
+          expectedRevision: initialRunPolicyRevision,
+          runId
+        })
+      ).toEqual({ revision: 2, taskExecutionCapacity: 1 })
+      expect(yield* bootstrap.operatorControl.readTaskWorkCapacity(runId)).toEqual({
+        revision: 2,
+        taskExecutionCapacity: 1
+      })
+
+      const stale = yield* bootstrap.operatorControl
+        .setTaskWorkCapacity({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
+        .pipe(Effect.flip)
+      expect(stale).toMatchObject({
+        _tag: "TaskWorkCapacityPolicyRevisionConflict",
+        current: { revision: 2, taskExecutionCapacity: 1 },
+        expectedRevision: initialRunPolicyRevision,
+        runId
+      })
+      expect(
+        yield* bootstrap.operatorControl
+          .readTaskWorkCapacity(RunId.make("inactive-capacity-wrong-run"))
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "WorkflowRunNotBegan", runId: "inactive-capacity-wrong-run" })
+      expect(
+        yield* bootstrap.operatorControl
+          .setTaskWorkCapacity({
+            capacity: 1,
+            expectedRevision: initialRunPolicyRevision,
+            runId: RunId.make("inactive-capacity-wrong-run")
+          })
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "WorkflowRunNotBegan", runId: "inactive-capacity-wrong-run" })
+      expect((yield* storage.read(runId)).filter(({ event }) => event._tag === "TaskWorkCapacityChanged")).toHaveLength(
+        1
+      )
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("preserves inactive task-work capacity Journal read and append failures", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-inactive-capacity-failures")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const delegate = Context.get(journalContext, JournalStore)
+      yield* delegate.beginRun(runId, target, initialPolicy)
+      const readFailure = new JournalStorageUnavailable({
+        detail: "inactive capacity read unavailable",
+        operation: "JournalStore.read"
+      })
+      const readFailingStorage = JournalStore.of({
+        ...delegate,
+        read: (requestedRunId) => (requestedRunId === runId ? Effect.fail(readFailure) : delegate.read(requestedRunId))
+      })
+      const readFailingBootstrap = yield* buildBootstrap(runId, readFailingStorage)
+      expect(yield* readFailingBootstrap.operatorControl.readTaskWorkCapacity(runId).pipe(Effect.flip)).toBe(
+        readFailure
+      )
+
+      const appendFailure = new JournalStorageUnavailable({
+        detail: "inactive capacity append unavailable",
+        operation: "JournalStore.append"
+      })
+      const appendFailingStorage = JournalStore.of({
+        ...delegate,
+        append: (requestedRunId, key, event) =>
+          event._tag === "TaskWorkCapacityChanged"
+            ? Effect.fail(appendFailure)
+            : delegate.append(requestedRunId, key, event)
+      })
+      const appendFailingBootstrap = yield* buildBootstrap(runId, appendFailingStorage)
+      expect(
+        yield* appendFailingBootstrap.operatorControl
+          .setTaskWorkCapacity({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
+          .pipe(Effect.flip)
+      ).toBe(appendFailure)
+      expect((yield* delegate.read(runId)).map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan"])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 it.effect("reads inactive integration quarantine control from the Journal", () =>
   Effect.scoped(
     Effect.gen(function* () {

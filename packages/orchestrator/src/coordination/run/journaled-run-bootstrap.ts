@@ -3,7 +3,7 @@ import { plannedAttemptExecutorCorrelation, type RunId } from "@dalph/contracts"
 import { Context, Deferred, Effect, Exit, Layer, Option, Ref, Schema, Semaphore, Stream } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
-import { TaskWorkCapacityControl } from "../../control/task-work-capacity.js"
+import { TaskWorkCapacityControl, taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
 import type { InitialControlPolicy } from "../../control/policy.js"
 import {
   ControlDirectionApplication,
@@ -132,6 +132,22 @@ interface RuntimeControlLease {
   readonly controls: RuntimeControls
   readonly forwardOwner: ForwardOwnerLease
 }
+
+type RuntimeControlAcquisition =
+  | { readonly _tag: "Acquired"; readonly controls: RuntimeControls }
+  | { readonly _tag: "Unavailable"; readonly state: "RuntimeClosing" | "RuntimeInactive" }
+
+/**
+ * Distinguishes an inactive Run from one that is still draining accepted control work, so an
+ * inactive Journal control cannot overtake an accepted runtime control lease.
+ */
+class RuntimeControlAdmissionUnavailable extends Schema.TaggedError<RuntimeControlAdmissionUnavailable>()(
+  "RuntimeControlAdmissionUnavailable",
+  { state: Schema.Literals(["RuntimeClosing", "RuntimeInactive"]) }
+) {}
+
+const isRuntimeControlAdmissionUnavailable = (failure: unknown): failure is RuntimeControlAdmissionUnavailable =>
+  failure instanceof RuntimeControlAdmissionUnavailable
 
 const identityOperatorControlGraphReadBoundary: OperatorControlGraphReadBoundary = (effect) => effect
 
@@ -267,6 +283,10 @@ export const journaledRunBootstrapLayer = (
         controlDirectionApplicationLayer.pipe(Layer.provide(Layer.succeed(InRunJournal, inRunJournal)))
       )
       const inactiveControlDirection = Context.get(inactiveControlContext, ControlDirectionApplication)
+      const inactiveTaskWorkCapacityContext = yield* Layer.build(
+        taskWorkCapacityControlLayer.pipe(Layer.provide(Layer.succeed(InRunJournal, inRunJournal)))
+      )
+      const inactiveTaskWorkCapacity = Context.get(inactiveTaskWorkCapacityContext, TaskWorkCapacityControl)
       const acceptedRunReactivationObservers = yield* Ref.make<Option.Option<AcceptedRunReactivationObservers>>(
         Option.none()
       )
@@ -282,19 +302,21 @@ export const journaledRunBootstrapLayer = (
 
       const acquireControlLease = Effect.fn("JournaledRunBootstrap.acquireControlLease")(function* () {
         const forwardOwner = yield* admission.acquireForwardOwner("InterruptibleBoundary")
-        const controls = yield* Ref.modify(runtimeState, (current) =>
-          current._tag === "RuntimeAcceptingControl"
-            ? [
-                Option.some(current.controls),
-                { ...current, activeLeases: current.activeLeases + 1 } satisfies RuntimeControlState
-              ]
-            : [Option.none<RuntimeControls>(), current]
+        const acquisition = yield* Ref.modify(
+          runtimeState,
+          (current): [RuntimeControlAcquisition, RuntimeControlState] =>
+            current._tag === "RuntimeAcceptingControl"
+              ? [
+                  { _tag: "Acquired" as const, controls: current.controls },
+                  { ...current, activeLeases: current.activeLeases + 1 } satisfies RuntimeControlState
+                ]
+              : [{ _tag: "Unavailable" as const, state: current._tag }, current]
         )
-        if (Option.isNone(controls)) {
+        if (acquisition._tag === "Unavailable") {
           yield* forwardOwner.release
-          return yield* new JournaledRunNotActive()
+          return yield* new RuntimeControlAdmissionUnavailable({ state: acquisition.state })
         }
-        return { controls: controls.value, forwardOwner } satisfies RuntimeControlLease
+        return { controls: acquisition.controls, forwardOwner } satisfies RuntimeControlLease
       })
 
       const releaseControlLease = Effect.fn("JournaledRunBootstrap.releaseControlLease")(function* (
@@ -316,14 +338,31 @@ export const journaledRunBootstrapLayer = (
         if (Option.isSome(signal)) yield* Deferred.succeed(signal.value, undefined)
       })
 
-      const withRuntimeControls = <A, E>(use: (controls: RuntimeControls) => Effect.Effect<A, E>) =>
+      const withLeasedRuntimeControls = <A, E>(use: (controls: RuntimeControls) => Effect.Effect<A, E>) =>
         Effect.acquireUseRelease(acquireControlLease(), ({ controls }) => use(controls), releaseControlLease)
+
+      const withRuntimeControls = <A, E>(use: (controls: RuntimeControls) => Effect.Effect<A, E>) =>
+        withLeasedRuntimeControls(use).pipe(
+          Effect.catchIf(isRuntimeControlAdmissionUnavailable, () => Effect.fail(new JournaledRunNotActive()))
+        )
 
       const withJournalControl = <A, E>(control: Effect.Effect<A, E>) =>
         Effect.acquireUseRelease(
           admission.acquireForwardOwner("InterruptibleBoundary"),
           () => control,
           (owner) => owner.release
+        )
+
+      const withRuntimeOrJournalTaskWorkCapacity = <A, E>(
+        use: (control: TaskWorkCapacityControl["Service"]) => Effect.Effect<A, E>
+      ) =>
+        withLeasedRuntimeControls(({ taskWorkCapacity }) => use(taskWorkCapacity)).pipe(
+          Effect.catchIf(isRuntimeControlAdmissionUnavailable, ({ state }) =>
+            Effect.gen(function* () {
+              if (state === "RuntimeClosing") return yield* new JournaledRunNotActive()
+              return yield* withJournalControl(use(inactiveTaskWorkCapacity))
+            })
+          )
         )
 
       const withPublishedOrStoredQuarantineControl = <A, E>(
@@ -799,7 +838,8 @@ export const journaledRunBootstrapLayer = (
             }
             return yield* withPublishedOrStoredQuarantineControl((control) => control.read(request))
           }),
-        readTaskWorkCapacity: (runId) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.read(runId)),
+        readTaskWorkCapacity: (runId) =>
+          withRuntimeOrJournalTaskWorkCapacity((taskWorkCapacity) => taskWorkCapacity.read(runId)),
         observePause: (input) =>
           Stream.unwrap(
             withRuntimeControls(({ deliveryRuntimeResources, journal, runId }) =>
@@ -810,7 +850,8 @@ export const journaledRunBootstrapLayer = (
               )
             )
           ),
-        setTaskWorkCapacity: (input) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.apply(input))
+        setTaskWorkCapacity: (input) =>
+          withRuntimeOrJournalTaskWorkCapacity((taskWorkCapacity) => taskWorkCapacity.apply(input))
       }
 
       return JournaledRunBootstrap.of({
