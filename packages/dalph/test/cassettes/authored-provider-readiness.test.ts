@@ -319,6 +319,26 @@ it.effect(
       yield* Fiber.interrupt(interrupted)
       expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
 
+      const readinessAfterAcknowledgement = yield* makeAuthoredProviderReadiness([], [relation])
+      const afterAcceptedAppendStarted = yield* Deferred.make<void>()
+      const afterAcceptedAppendCleaned = yield* Deferred.make<void>()
+      const interruptedAfterAcknowledgement = yield* appendAuthoredJournalEvent({
+        afterAcceptedAppend: Deferred.succeed(afterAcceptedAppendStarted, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(Deferred.succeed(afterAcceptedAppendCleaned, undefined))
+        ),
+        append: Effect.void,
+        event,
+        readiness: readinessAfterAcknowledgement
+      }).pipe(Effect.forkScoped({ startImmediately: true }))
+      yield* Deferred.await(afterAcceptedAppendStarted)
+      expect(
+        Option.isSome(yield* readinessAfterAcknowledgement.pollIntegratorTarget(relation.target.correlation))
+      ).toBe(true)
+      yield* Fiber.interrupt(interruptedAfterAcknowledgement)
+      yield* Deferred.await(afterAcceptedAppendCleaned)
+      yield* readinessAfterAcknowledgement.assertAllReleased()
+
       const foreign = acceptedReport(
         AttemptId.make("attempt:foreign:0"),
         RunId.make("foreign-report"),

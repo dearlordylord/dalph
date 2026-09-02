@@ -27,7 +27,7 @@ export const appendAuthoredJournalEvent = <A, E, R, E2, R2>(request: {
       if (request.event._tag === "PlannedAttemptExecutorWorkReported") {
         yield* releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(request.readiness, request.event.report)
       }
-      yield* request.afterAcceptedAppend
+      yield* restore(request.afterAcceptedAppend)
       return accepted
     })
   )
