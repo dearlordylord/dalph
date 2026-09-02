@@ -18,6 +18,20 @@ const capstoneRun = Effect.runSync(
   )
 )
 
+const timerOnlyCapstoneInput = {
+  ...maintainedAuthoredCassetteCatalog.autonomousExecutorDeliveryCapstone,
+  story: maintainedAuthoredCassetteCatalog.autonomousExecutorDeliveryCapstone.story.map((item, index, story) =>
+    item._tag === "CassetteOffersRunReactivationHints" &&
+    !story.slice(0, index).some(({ _tag }) => _tag === "CassetteOffersRunReactivationHints")
+      ? { ...item, hints: ["Timer", "Timer"] as const }
+      : item
+  )
+}
+
+const timerOnlyCapstoneRun = Effect.runSync(
+  Effect.cached(runAuthoredScenarioCassette(timerOnlyCapstoneInput).pipe(Effect.provide(NodeCrypto.layer)))
+)
+
 const expectedAttempts = [
   {
     attemptId: "attempt:A:0",
@@ -334,14 +348,154 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
             : []
         )
       )
-    const checkpoint = (beat: string, frame: AuthoredDeliveryFrame, capacity: number = frame.capacity) => ({
-      accepted: acceptedOutcomes(frame),
-      beat,
-      capacity,
-      graph: establishedRevision(frame),
-      held: heldTasks(frame),
-      retained: retainedTasks(frame)
-    })
+    const prefixAt = (beat: string, frame: AuthoredDeliveryFrame) => {
+      const acceptedAt = frame.acceptedAt
+      if (acceptedAt === null) return expect.fail(`${beat} must carry a committed Journal boundary`)
+      return records.filter(({ position }) => position <= acceptedAt)
+    }
+    const attemptIdentitiesAt = (prefix: typeof records) =>
+      prefix
+        .flatMap(({ event }) =>
+          event._tag === "TaskAttemptPlanned"
+            ? [
+                {
+                  attemptId: event.operation.plannedAttempt.attemptId,
+                  taskId: event.operation.plannedAttempt.taskId,
+                  taskRevision: event.operation.plannedAttempt.taskRevision
+                }
+              ]
+            : []
+        )
+        .toSorted((left, right) => left.taskId.localeCompare(right.taskId))
+    const activeClaimsAt = (prefix: typeof records) => {
+      const released = new Set(
+        prefix.flatMap(({ event }) => (event._tag === "TaskClaimReleased" ? [event.release.claim.token] : []))
+      )
+      return prefix
+        .flatMap(({ event }) =>
+          event._tag === "TaskClaimAcquired" && !released.has(event.claim.token)
+            ? [
+                {
+                  operationId: event.claim.operationId,
+                  owner: event.claim.owner,
+                  state: "Active" as const,
+                  taskId: event.claim.taskId,
+                  token: event.claim.token
+                }
+              ]
+            : []
+        )
+        .toSorted((left, right) => left.taskId.localeCompare(right.taskId))
+    }
+    const resourcesAt = (prefix: typeof records) =>
+      prefix
+        .flatMap(({ event }) => {
+          if (event._tag !== "TaskAttemptPlanned") return []
+          const { plannedAttempt } = event.operation
+          const reconciliation = prefix.find(
+            ({ event: candidate }) =>
+              candidate._tag === "TaskWorktreeReconciliationIntended" &&
+              candidate.operation.plannedAttempt.attemptId === plannedAttempt.attemptId
+          )
+          const reconciliationOperationId =
+            reconciliation?.event._tag === "TaskWorktreeReconciliationIntended"
+              ? reconciliation.event.operation.operationId
+              : undefined
+          const ready =
+            reconciliationOperationId === undefined
+              ? undefined
+              : prefix.find(
+                  ({ event: candidate }) =>
+                    candidate._tag === "TaskWorktreeReady" && candidate.operationId === reconciliationOperationId
+                )
+          return [
+            {
+              attemptId: plannedAttempt.attemptId,
+              baseSha: plannedAttempt.baseSha,
+              branch: plannedAttempt.branch,
+              executor: plannedAttempt.executor,
+              ready:
+                ready?.event._tag === "TaskWorktreeReady"
+                  ? {
+                      baseSha: ready.event.proof.baseSha,
+                      branch: ready.event.proof.branch,
+                      worktree: ready.event.proof.worktree
+                    }
+                  : null,
+              taskId: plannedAttempt.taskId,
+              worktree: plannedAttempt.worktree
+            }
+          ]
+        })
+        .toSorted((left, right) => left.taskId.localeCompare(right.taskId))
+    const currentFingerprintsAt = (prefix: typeof records) => {
+      const current = new Map<string, string>()
+      for (const { event } of prefix) {
+        if (
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+        ) {
+          current.set(event.observation.factFamily.taskId, event.observation.factFamily.fingerprint)
+        }
+      }
+      return [...current]
+        .map(([taskId, fingerprint]) => ({ fingerprint, taskId }))
+        .toSorted((left, right) => left.taskId.localeCompare(right.taskId))
+    }
+    const reportsAt = (prefix: typeof records) =>
+      prefix
+        .flatMap(({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported"
+            ? [
+                {
+                  attemptId: event.report.correlation.attemptId,
+                  ordinal: event.ordinal,
+                  report: reportLabel(event.report)
+                }
+              ]
+            : []
+        )
+        .toSorted((left, right) => left.attemptId.localeCompare(right.attemptId) || left.ordinal - right.ordinal)
+    const awaitingAliceAt = (prefix: typeof records) => {
+      const safe = prefix.some(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report.correlation.attemptId === "attempt:B:1" &&
+          event.report._tag === "ExecutorWorkSafelySuspended"
+      )
+      const continued = prefix.some(
+        ({ event }) =>
+          event._tag === "AttemptChoiceApplied" &&
+          event.subject.plannedAttempt.attemptId === "attempt:B:1" &&
+          event.choice === "ContinueExistingAttempt"
+      )
+      return safe && !continued
+        ? {
+            _tag: "NotDemonstrated" as const,
+            missingBoundary: "public available-choice view for the exact Run and Attempt"
+          }
+        : { _tag: "Demonstrated" as const, taskIds: [] as ReadonlyArray<string> }
+    }
+    const checkpoint = (beat: string, frame: AuthoredDeliveryFrame, capacity: number = frame.capacity) => {
+      const prefix = prefixAt(beat, frame)
+      const runIds = new Set(prefix.map(({ runId }) => runId))
+      if (runIds.size !== 1) return expect.fail(`${beat} must carry one exact Run identity`)
+      return {
+        accepted: acceptedOutcomes(frame),
+        attempts: attemptIdentitiesAt(prefix),
+        awaitingAlice: awaitingAliceAt(prefix),
+        beat,
+        capacity,
+        claims: activeClaimsAt(prefix),
+        fingerprints: currentFingerprintsAt(prefix),
+        graph: establishedRevision(frame),
+        held: heldTasks(frame),
+        reports: reportsAt(prefix),
+        resources: resourcesAt(prefix),
+        retained: retainedTasks(frame),
+        runId: [...runIds][0]
+      }
+    }
     if (frames.ds01.graph._tag !== "Established") return expect.fail("DS-01 must have an established graph")
     expect(frames.ds01.graph.tasks.map(({ id, prerequisiteIds }) => ({ id, prerequisiteIds }))).toEqual(
       ["A", "B", "C", "D", "E"].map((id) => ({ id, prerequisiteIds: [] }))
@@ -352,7 +506,10 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
     expect(boundaries.ds08.occurrence._tag).toBe("CoordinatorProcessDies")
     expect(boundaries.ds08.liveOwners).toEqual([])
     const capacityChange = records.find(({ event }) => event._tag === "TaskWorkCapacityChanged")
-    expect(capacityChange?.event).toMatchObject({
+    if (capacityChange?.event._tag !== "TaskWorkCapacityChanged") {
+      return expect.fail("DS-07 lacks its exact durable capacity change")
+    }
+    expect(capacityChange.event).toMatchObject({
       _tag: "TaskWorkCapacityChanged",
       capacity: 2,
       previousRevision: 1,
@@ -365,8 +522,8 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
       checkpoint("DS-04", frames.ds04),
       checkpoint("DS-05", frames.ds05),
       checkpoint("DS-06", frames.ds06),
-      checkpoint("DS-07", frames.ds07, 2),
-      checkpoint("DS-08", frames.ds08, 2),
+      checkpoint("DS-07", frames.ds07, capacityChange.event.capacity),
+      checkpoint("DS-08", frames.ds08, capacityChange.event.capacity),
       checkpoint("DS-09", frames.ds09),
       checkpoint("DS-10", frames.ds10),
       checkpoint("DS-11", frames.ds11),
@@ -374,26 +531,256 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
       checkpoint("DS-13", frames.ds13)
     ]
 
+    const exactAttemptIdentities = expectedAttempts.map(({ attemptId, taskId, taskRevision }) => ({
+      attemptId,
+      taskId,
+      taskRevision
+    }))
+    const exactReadyResources = expectedAttempts.map(({ attemptId, baseSha, branch, executor, taskId, worktree }) => ({
+      attemptId,
+      baseSha,
+      branch,
+      executor,
+      ready: { baseSha, branch, worktree },
+      taskId,
+      worktree
+    }))
+    const exactInitialFingerprints = expectedAttempts.map(({ taskId, taskRevision: fingerprint }) => ({
+      fingerprint,
+      taskId
+    }))
+    const exactChangedFingerprints = exactInitialFingerprints.map((fingerprint) =>
+      fingerprint.taskId === "B" ? { fingerprint: bF2, taskId: "B" } : fingerprint
+    )
+    const exactActiveClaims = activeClaimsAt(prefixAt("DS-02", frames.ds02))
+    const noAwaitingAlice = { _tag: "Demonstrated", taskIds: [] }
+    const unavailableAwaitingAlice = {
+      _tag: "NotDemonstrated",
+      missingBoundary: "public available-choice view for the exact Run and Attempt"
+    }
+    const initialReports = [
+      { attemptId: "attempt:A:0", ordinal: 1, report: "ExecutorWorkExecuting" },
+      { attemptId: "attempt:B:1", ordinal: 1, report: "ExecutorWorkExecuting" },
+      { attemptId: "attempt:C:2", ordinal: 1, report: "ExecutorWorkExecuting" }
+    ]
+    const bSafeReports = [
+      { attemptId: "attempt:A:0", ordinal: 1, report: "ExecutorWorkExecuting" },
+      { attemptId: "attempt:B:1", ordinal: 1, report: "ExecutorWorkExecuting" },
+      { attemptId: "attempt:B:1", ordinal: 2, report: "ExecutorWorkSafelySuspended" },
+      { attemptId: "attempt:C:2", ordinal: 1, report: "ExecutorWorkExecuting" }
+    ]
+    const dRunningReports = [...bSafeReports, { attemptId: "attempt:D:3", ordinal: 1, report: "ExecutorWorkExecuting" }]
+    const cSafeReports = [
+      ...bSafeReports,
+      { attemptId: "attempt:C:2", ordinal: 2, report: "ExecutorWorkSafelySuspended" },
+      { attemptId: "attempt:D:3", ordinal: 1, report: "ExecutorWorkExecuting" }
+    ]
+    const resumedReports = [
+      { attemptId: "attempt:A:0", ordinal: 1, report: "ExecutorWorkExecuting" },
+      { attemptId: "attempt:A:0", ordinal: 2, report: "ExecutorWorkTerminal:Accepted" },
+      { attemptId: "attempt:B:1", ordinal: 1, report: "ExecutorWorkExecuting" },
+      { attemptId: "attempt:B:1", ordinal: 2, report: "ExecutorWorkSafelySuspended" },
+      { attemptId: "attempt:B:1", ordinal: 3, report: "ExecutorWorkExecuting" },
+      { attemptId: "attempt:C:2", ordinal: 1, report: "ExecutorWorkExecuting" },
+      { attemptId: "attempt:C:2", ordinal: 2, report: "ExecutorWorkSafelySuspended" },
+      { attemptId: "attempt:D:3", ordinal: 1, report: "ExecutorWorkExecuting" }
+    ]
+
     expect(checkpointTable).toEqual([
-      { accepted: "—", beat: "DS-01", capacity: 3, graph: "delivery-story-G0", held: "—", retained: "—" },
-      { accepted: "—", beat: "DS-02", capacity: 3, graph: "delivery-story-G0", held: "A+B+C", retained: "—" },
-      { accepted: "—", beat: "DS-03", capacity: 3, graph: "delivery-story-G1", held: "A+B+C", retained: "—" },
-      { accepted: "—", beat: "DS-04", capacity: 3, graph: "delivery-story-G1", held: "A+B+C", retained: "—" },
-      { accepted: "—", beat: "DS-05", capacity: 3, graph: "delivery-story-G1", held: "A+C", retained: "B" },
-      { accepted: "—", beat: "DS-06", capacity: 3, graph: "delivery-story-G1", held: "A+C+D", retained: "B" },
-      { accepted: "—", beat: "DS-07", capacity: 2, graph: "delivery-story-G1", held: "A+C+D", retained: "B" },
-      { accepted: "—", beat: "DS-08", capacity: 2, graph: "delivery-story-G1", held: "A+C+D", retained: "B" },
-      { accepted: "—", beat: "DS-09", capacity: 2, graph: "delivery-story-G1", held: "A+C+D", retained: "B" },
-      { accepted: "—", beat: "DS-10", capacity: 2, graph: "delivery-story-G2", held: "A+C+D", retained: "B" },
-      { accepted: "—", beat: "DS-11", capacity: 2, graph: "delivery-story-G2", held: "A+D", retained: "B+C" },
-      { accepted: "—", beat: "DS-12", capacity: 2, graph: "delivery-story-G2", held: "A+D", retained: "B+C" },
+      {
+        accepted: "—",
+        attempts: [],
+        awaitingAlice: noAwaitingAlice,
+        beat: "DS-01",
+        capacity: 3,
+        claims: [],
+        fingerprints: [],
+        graph: "delivery-story-G0",
+        held: "—",
+        reports: [],
+        resources: [],
+        retained: "—",
+        runId: run.runId
+      },
+      {
+        accepted: "—",
+        attempts: exactAttemptIdentities,
+        awaitingAlice: noAwaitingAlice,
+        beat: "DS-02",
+        capacity: 3,
+        claims: exactActiveClaims,
+        fingerprints: exactInitialFingerprints,
+        graph: "delivery-story-G0",
+        held: "A+B+C",
+        reports: initialReports,
+        resources: exactReadyResources,
+        retained: "—",
+        runId: run.runId
+      },
+      {
+        accepted: "—",
+        attempts: exactAttemptIdentities,
+        awaitingAlice: noAwaitingAlice,
+        beat: "DS-03",
+        capacity: 3,
+        claims: exactActiveClaims,
+        fingerprints: exactInitialFingerprints,
+        graph: "delivery-story-G1",
+        held: "A+B+C",
+        reports: initialReports,
+        resources: exactReadyResources,
+        retained: "—",
+        runId: run.runId
+      },
+      {
+        accepted: "—",
+        attempts: exactAttemptIdentities,
+        awaitingAlice: noAwaitingAlice,
+        beat: "DS-04",
+        capacity: 3,
+        claims: exactActiveClaims,
+        fingerprints: exactChangedFingerprints,
+        graph: "delivery-story-G1",
+        held: "A+B+C",
+        reports: initialReports,
+        resources: exactReadyResources,
+        retained: "—",
+        runId: run.runId
+      },
+      {
+        accepted: "—",
+        attempts: exactAttemptIdentities,
+        awaitingAlice: unavailableAwaitingAlice,
+        beat: "DS-05",
+        capacity: 3,
+        claims: exactActiveClaims,
+        fingerprints: exactChangedFingerprints,
+        graph: "delivery-story-G1",
+        held: "A+C",
+        reports: bSafeReports,
+        resources: exactReadyResources,
+        retained: "B",
+        runId: run.runId
+      },
+      {
+        accepted: "—",
+        attempts: exactAttemptIdentities,
+        awaitingAlice: unavailableAwaitingAlice,
+        beat: "DS-06",
+        capacity: 3,
+        claims: exactActiveClaims,
+        fingerprints: exactChangedFingerprints,
+        graph: "delivery-story-G1",
+        held: "A+C+D",
+        reports: dRunningReports,
+        resources: exactReadyResources,
+        retained: "B",
+        runId: run.runId
+      },
+      {
+        accepted: "—",
+        attempts: exactAttemptIdentities,
+        awaitingAlice: unavailableAwaitingAlice,
+        beat: "DS-07",
+        capacity: 2,
+        claims: exactActiveClaims,
+        fingerprints: exactChangedFingerprints,
+        graph: "delivery-story-G1",
+        held: "A+C+D",
+        reports: dRunningReports,
+        resources: exactReadyResources,
+        retained: "B",
+        runId: run.runId
+      },
+      {
+        accepted: "—",
+        attempts: exactAttemptIdentities,
+        awaitingAlice: unavailableAwaitingAlice,
+        beat: "DS-08",
+        capacity: 2,
+        claims: exactActiveClaims,
+        fingerprints: exactChangedFingerprints,
+        graph: "delivery-story-G1",
+        held: "A+C+D",
+        reports: dRunningReports,
+        resources: exactReadyResources,
+        retained: "B",
+        runId: run.runId
+      },
+      {
+        accepted: "—",
+        attempts: exactAttemptIdentities,
+        awaitingAlice: unavailableAwaitingAlice,
+        beat: "DS-09",
+        capacity: 2,
+        claims: exactActiveClaims,
+        fingerprints: exactChangedFingerprints,
+        graph: "delivery-story-G1",
+        held: "A+C+D",
+        reports: dRunningReports,
+        resources: exactReadyResources,
+        retained: "B",
+        runId: run.runId
+      },
+      {
+        accepted: "—",
+        attempts: exactAttemptIdentities,
+        awaitingAlice: unavailableAwaitingAlice,
+        beat: "DS-10",
+        capacity: 2,
+        claims: exactActiveClaims,
+        fingerprints: exactChangedFingerprints,
+        graph: "delivery-story-G2",
+        held: "A+C+D",
+        reports: dRunningReports,
+        resources: exactReadyResources,
+        retained: "B",
+        runId: run.runId
+      },
+      {
+        accepted: "—",
+        attempts: exactAttemptIdentities,
+        awaitingAlice: unavailableAwaitingAlice,
+        beat: "DS-11",
+        capacity: 2,
+        claims: exactActiveClaims,
+        fingerprints: exactChangedFingerprints,
+        graph: "delivery-story-G2",
+        held: "A+D",
+        reports: cSafeReports,
+        resources: exactReadyResources,
+        retained: "B+C",
+        runId: run.runId
+      },
+      {
+        accepted: "—",
+        attempts: exactAttemptIdentities,
+        awaitingAlice: noAwaitingAlice,
+        beat: "DS-12",
+        capacity: 2,
+        claims: exactActiveClaims,
+        fingerprints: exactChangedFingerprints,
+        graph: "delivery-story-G2",
+        held: "A+D",
+        reports: cSafeReports,
+        resources: exactReadyResources,
+        retained: "B+C",
+        runId: run.runId
+      },
       {
         accepted: "A@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        attempts: exactAttemptIdentities,
+        awaitingAlice: noAwaitingAlice,
         beat: "DS-13",
         capacity: 2,
+        claims: exactActiveClaims,
+        fingerprints: exactChangedFingerprints,
         graph: "delivery-story-G2",
         held: "B+D",
-        retained: "A+C"
+        reports: resumedReports,
+        resources: exactReadyResources,
+        retained: "A+C",
+        runId: run.runId
       }
     ])
   })
@@ -511,42 +898,89 @@ it.effect("retains exact Run attempt claim and resource identities across DS01 t
       { beat: "DS-11", claimReleases: 0, replacements: 0, retained: "B+C" },
       { beat: "DS-13", claimReleases: 0, replacements: 0, retained: "A+C" }
     ])
-    const cSafeAt = run.records.find(
+    const ds11AcceptedAt = frames.ds11.acceptedAt
+    if (ds11AcceptedAt === null) return expect.fail("DS-11 lacks an exact committed boundary")
+    const ds11Prefix = run.records.filter(({ position }) => position <= ds11AcceptedAt)
+    const cPlan = ds11Prefix.find(
+      ({ event }) => event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.attemptId === "attempt:C:2"
+    )
+    const cReconciliation = ds11Prefix.find(
+      ({ event }) =>
+        event._tag === "TaskWorktreeReconciliationIntended" &&
+        event.operation.plannedAttempt.attemptId === "attempt:C:2"
+    )
+    const cReconciliationOperationId =
+      cReconciliation?.event._tag === "TaskWorktreeReconciliationIntended"
+        ? cReconciliation.event.operation.operationId
+        : undefined
+    const cReady =
+      cReconciliationOperationId === undefined
+        ? undefined
+        : ds11Prefix.find(
+            ({ event }) => event._tag === "TaskWorktreeReady" && event.operationId === cReconciliationOperationId
+          )
+    const cClaim = acquiredClaims.find(({ taskId }) => taskId === "C")
+    const cClaimAtDs11 = ds11Prefix.find(
+      ({ event }) => event._tag === "TaskClaimAcquired" && event.claim.taskId === "C"
+    )
+    const cSafe = ds11Prefix.find(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkReported" &&
         event.report.correlation.attemptId === "attempt:C:2" &&
         event.report._tag === "ExecutorWorkSafelySuspended"
-    )?.position
-    const cBeganAt = run.records.find(
+    )
+    const cleanupEvents = ds11Prefix.filter(
+      ({ event }) => event._tag.startsWith("WorktreeCleanup") || event._tag.startsWith("BranchCleanup")
+    )
+    const cReplacements = ds11Prefix.filter(
+      ({ event }) => event._tag === "PlannedAttemptReplaced" && event.subject.plannedAttempt.attemptId === "attempt:C:2"
+    )
+    const cClaimReleases = ds11Prefix.filter(
       ({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-        event.plannedAttempt.attemptId === "attempt:C:2"
-    )?.position
-    const cWorktree = readyWorktrees.find(({ attemptId }) => attemptId === "attempt:C:2")
-    const cClaim = acquiredClaims.find(({ taskId }) => taskId === "C")
+        (event._tag === "TaskClaimReleaseIntended" && event.operation.release.claim.taskId === "C") ||
+        (event._tag === "TaskClaimReleased" && event.release.claim.taskId === "C")
+    )
+    if (cPlan?.event._tag !== "TaskAttemptPlanned") return expect.fail("DS-11 lost C's exact attempt plan")
+    if (cReady?.event._tag !== "TaskWorktreeReady") return expect.fail("DS-11 lost C's exact ready worktree")
+    if (cSafe?.event._tag !== "PlannedAttemptExecutorWorkReported") return expect.fail("DS-11 lacks C2 Safe")
+    if (cClaim === undefined || cClaimAtDs11?.event._tag !== "TaskClaimAcquired") {
+      return expect.fail("DS-11 lost C's exact active claim")
+    }
+    const { runId: _cRunId, ...cPlanIdentity } = cPlan.event.operation.plannedAttempt
+
     expect({
-      beganBeforeWait: cBeganAt !== undefined && cSafeAt !== undefined && cBeganAt < cSafeAt,
-      claimRetained: cClaim !== undefined,
+      claim: cClaimAtDs11.event.claim,
+      claimReleases: cClaimReleases,
+      cleanupEvents,
       held: frames.ds11.heldPositions.some(({ taskId }) => taskId === "C"),
+      plan: cPlanIdentity,
+      replacements: cReplacements,
       retained: retainedTasks(frames.ds11).split("+").includes("C"),
-      safeBeforeFrame: cSafeAt !== undefined && frames.ds11.acceptedAt !== null && cSafeAt <= frames.ds11.acceptedAt,
-      worktreeRetained:
-        cWorktree !== undefined &&
-        frames.ds11.acceptedAt !== null &&
-        cWorktree.intendedAt < cWorktree.readyAt &&
-        cWorktree.readyAt <= frames.ds11.acceptedAt
+      safe: {
+        attemptId: cSafe.event.report.correlation.attemptId,
+        ordinal: cSafe.event.ordinal,
+        report: reportLabel(cSafe.event.report)
+      },
+      worktree: cReady.event.proof
     }).toEqual({
-      beganBeforeWait: true,
-      claimRetained: true,
+      claim: cClaim,
+      claimReleases: [],
+      cleanupEvents: [],
       held: false,
+      plan: expectedAttempts[2],
+      replacements: [],
       retained: true,
-      safeBeforeFrame: true,
-      worktreeRetained: true
+      safe: { attemptId: "attempt:C:2", ordinal: 2, report: "ExecutorWorkSafelySuspended" },
+      worktree: {
+        baseSha: expectedAttempts[2].baseSha,
+        branch: expectedAttempts[2].branch,
+        worktree: expectedAttempts[2].worktree
+      }
     })
   })
 )
 
-it.effect("publishes B F2 through one active refresh and one later stabilization before Safe release", () =>
+it.effect("publishes B F2 through one active refresh and rereads G1 after Safe before D begins", () =>
   Effect.gen(function* () {
     const run = yield* capstoneRun
     const { boundaries, frames } = causalCapstoneCheckpoints(run)
@@ -691,6 +1125,72 @@ it.effect("publishes B F2 through one active refresh and one later stabilization
   })
 )
 
+it.effect("uses duplicate timer fallback hints for the same active refresh without a second activation", () =>
+  Effect.gen(function* () {
+    const baseline = yield* capstoneRun
+    const run = yield* timerOnlyCapstoneRun
+    const { boundaries, frames } = causalCapstoneCheckpoints(run)
+    const activeWindow = run.observationMoments.filter(
+      (moment) =>
+        moment.captureOrder > boundaries.initialHints.captureOrder && moment.captureOrder < boundaries.ds07.captureOrder
+    )
+    const activeOrdinals = new Set(
+      activeWindow.flatMap((moment) =>
+        moment._tag === "DeliveryPublicationMoment" || moment._tag === "DeliveryRuntimeOwnersMoment"
+          ? [moment.activationOrdinal]
+          : []
+      )
+    )
+    const normalizeHints = (candidate: AuthoredScenarioCassetteRun) =>
+      publicOccurrences(candidate).map((occurrence) =>
+        occurrence._tag === "CassetteOffersRunReactivationHints"
+          ? { _tag: occurrence._tag, hints: ["ordinary-hint"] }
+          : occurrence
+      )
+
+    expect(boundaries.initialHints.occurrence).toEqual({
+      _tag: "CassetteOffersRunReactivationHints",
+      hints: ["Timer", "Timer"]
+    })
+    expect(activeOrdinals.size).toBe(1)
+    expect(
+      activeWindow.filter(
+        (moment) =>
+          moment._tag === "AuthoredStoryOccurrenceMoment" && moment.occurrence._tag === "CoordinatorActivationReturned"
+      )
+    ).toHaveLength(1)
+    expect(frames.ds03.graph._tag === "Established" ? frames.ds03.graph.revision : null).toBe("delivery-story-G1")
+    expect(
+      run.records.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+          event.observation.factFamily.taskId === "B" &&
+          event.observation.factFamily.fingerprint === bF2
+      )
+    ).toHaveLength(1)
+    expect(
+      run.records.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report.correlation.attemptId === "attempt:B:1" &&
+          event.report._tag === "ExecutorWorkSafelySuspended"
+      )
+    ).toHaveLength(1)
+    expect(
+      run.records.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandIntended" &&
+          event.command === "Suspend" &&
+          event.plannedAttempt.attemptId === "attempt:B:1"
+      )
+    ).toHaveLength(1)
+    expect(heldTasks(frames.ds04)).toBe("A+B+C")
+    expect(retainedTasks(frames.ds05)).toBe("B")
+    expect(normalizeHints(run)).toEqual(normalizeHints(baseline))
+  })
+)
+
 it.effect("records B's F1-to-F2 transition and one same-attempt Continue and Resume", () =>
   Effect.gen(function* () {
     const run = yield* capstoneRun
@@ -704,6 +1204,11 @@ it.effect("records B's F1-to-F2 transition and one same-attempt Continue and Res
     const choices = run.records.flatMap(({ event }) => (event._tag === "AttemptChoiceApplied" ? [event] : []))
     const resumeIntents = run.records.flatMap(({ event }) =>
       event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Resume" ? [event] : []
+    )
+    const commandIntents = run.records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorCommandIntended"
+        ? [{ attemptId: event.plannedAttempt.attemptId, command: event.command, ordinal: event.ordinal }]
+        : []
     )
     const reports = run.records.flatMap(({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkReported"
@@ -723,6 +1228,37 @@ it.effect("records B's F1-to-F2 transition and one same-attempt Continue and Res
     })
     expect(resumeIntents).toHaveLength(1)
     expect(resumeIntents[0]?.plannedAttempt).toEqual(choices[0]?.subject.plannedAttempt)
+    expect(
+      expectedAttempts.map(({ attemptId }) => ({
+        attemptId,
+        commands: commandIntents
+          .filter((intent) => intent.attemptId === attemptId)
+          .map(({ command, ordinal }) => ({ command, ordinal }))
+      }))
+    ).toEqual([
+      { attemptId: "attempt:A:0", commands: [{ command: "Begin", ordinal: 1 }] },
+      {
+        attemptId: "attempt:B:1",
+        commands: [
+          { command: "Begin", ordinal: 1 },
+          { command: "Suspend", ordinal: 2 },
+          { command: "Resume", ordinal: 3 }
+        ]
+      },
+      {
+        attemptId: "attempt:C:2",
+        commands: [
+          { command: "Begin", ordinal: 1 },
+          { command: "Suspend", ordinal: 2 }
+        ]
+      },
+      { attemptId: "attempt:D:3", commands: [{ command: "Begin", ordinal: 1 }] },
+      { attemptId: "attempt:E:4", commands: [] }
+    ])
+    expect(commandIntents.filter(({ command }) => command === "Begin")).toHaveLength(4)
+    expect(commandIntents.filter(({ command }) => command === "Resume")).toEqual([
+      { attemptId: "attempt:B:1", command: "Resume", ordinal: 3 }
+    ])
     expect(
       expectedAttempts.map(({ attemptId }) => ({
         attemptId,

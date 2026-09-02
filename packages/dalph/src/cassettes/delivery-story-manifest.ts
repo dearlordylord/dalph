@@ -78,14 +78,13 @@ const restartTest = capstoneTest("preserves the double-diamond middle positions 
 const checkpointTest = capstoneTest("emits the exact DS01 through DS13 delivery checkpoint table")
 const identityTest = capstoneTest("retains exact Run attempt claim and resource identities across DS01 through DS13")
 const activeRefreshTest = capstoneTest(
-  "publishes B F2 through one active refresh and one later stabilization before Safe release"
+  "publishes B F2 through one active refresh and rereads G1 after Safe before D begins"
+)
+const timerFallbackTest = capstoneTest(
+  "uses duplicate timer fallback hints for the same active refresh without a second activation"
 )
 const bContinuationTest = capstoneTest("records B's F1-to-F2 transition and one same-attempt Continue and Resume")
-const capacityTest = capstoneTest("observes reduced capacity revision two before the authored restart cut")
 const cSafeTest = capstoneTest("records exactly one C2 Safe ordinal before Continue B")
-const reconstructedRestartTest = capstoneTest(
-  "runs reconstructed ordinary activation through strict exact projections before returning unsettled responsibility"
-)
 const authorityGroupTest = capstoneTest(
   "preserves the post-hint A D authority group without weakening the thirteen-beat story"
 )
@@ -122,17 +121,35 @@ export const deliveryStoryManifest = {
     slice("DS-01", autonomousCapstoneKey, checkpointTest, identityTest),
     slice("DS-02", autonomousCapstoneKey, checkpointTest, identityTest),
     slice("DS-03", autonomousCapstoneKey, checkpointTest, activeRefreshTest, authorityGroupTest),
-    slice("DS-04", autonomousCapstoneKey, checkpointTest, activeRefreshTest, authorityGroupTest),
+    slice("DS-04", autonomousCapstoneKey, checkpointTest, activeRefreshTest, timerFallbackTest, authorityGroupTest),
     missing(
       "DS-05",
       "The capstone proves B Safe, position release, retained claim/attempt/worktree/work, and ordered F1/F2, but no public production view lists Continue, Restart, and Stop as three simultaneously available choices for Alice."
     ),
-    slice("DS-06", autonomousCapstoneKey, checkpointTest, admissionPriorityTest),
-    slice("DS-07", autonomousCapstoneKey, checkpointTest, capacityTest),
-    slice("DS-08", autonomousCapstoneKey, checkpointTest, capacityTest, reconstructedRestartTest),
-    slice("DS-09", autonomousCapstoneKey, checkpointTest, identityTest, reconstructedRestartTest),
-    slice("DS-10", autonomousCapstoneKey, checkpointTest, authorityGroupTest),
-    slice("DS-11", autonomousCapstoneKey, checkpointTest, identityTest, cSafeTest),
+    missing(
+      "DS-06",
+      "The capstone proves D admission and every retained B resource, but no public available-choice view confirms that exact B attempt remains awaiting Alice."
+    ),
+    missing(
+      "DS-07",
+      "The capstone proves capacity revision 1 to 2 without eviction and every retained B resource, but no public available-choice view confirms that exact B attempt remains awaiting Alice."
+    ),
+    missing(
+      "DS-08",
+      "The capstone proves coordinator loss with an empty local owner view and the last durable A/C/D held plus B retained view, but no public available-choice view confirms that exact B attempt remains awaiting Alice."
+    ),
+    missing(
+      "DS-09",
+      "The capstone proves exact restart reconstruction without Begin or Resume and every retained B resource, but no public available-choice view confirms that exact B attempt remains awaiting Alice."
+    ),
+    missing(
+      "DS-10",
+      "The capstone proves G2 and C suspension while B remains retained, but no public available-choice view confirms that exact B attempt remains awaiting Alice."
+    ),
+    missing(
+      "DS-11",
+      "The capstone proves C Safe and retained claim/attempt/worktree/work for both B and C, but no public available-choice view confirms that exact B attempt remains awaiting Alice."
+    ),
     slice("DS-12", autonomousCapstoneKey, checkpointTest, cSafeTest, bContinuationTest),
     slice("DS-13", autonomousCapstoneKey, checkpointTest, identityTest, admissionPriorityTest, bContinuationTest),
     slice(
