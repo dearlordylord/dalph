@@ -2,12 +2,12 @@
 
 Owning issue: [#268](https://github.com/dearlordylord/dalph/issues/268)
 
-Status: proposed #268 scenario refinement after deterministic controlled-Effect
-probes. Repository-owner acceptance and the blocking #309 amendment named below
-are required before behavior-changing implementation. Issue #268 owns this
-capstone chronology and its cassette-driver settlement boundaries; the closed
-#267 scenario remains evidence composed by this story, not the owner of these
-new requirements.
+Status: accepted #268 scenario refinement. The repository owner accepted this
+chronology before implementation; the blocking #309 amendment named below is
+still required before the complete capstone may be accepted as passing. Issue
+#268 owns this capstone chronology and its cassette-driver settlement
+boundaries; the closed #267 scenario remains evidence composed by this story,
+not the owner of these new requirements.
 
 ## Governing behavior and blocking edge
 
@@ -102,19 +102,28 @@ Each of the three cuts below follows the same two-phase rule:
    blocked provider or Journal operation cannot block an independent cursor
    claim by retaining the permit.
 2. The adapter runs the named production Effect, or its owning-authority
-   reconciliation read after ambiguity, interruptibly. A production
-   failure before an exact successful result exits the current run through its
-   existing tagged production failure and the existing
+   reconciliation read after ambiguity, interruptibly. For C2 this includes
+   the executor call, report validation and append, and ordinary publication of
+   the accepted Journal position. A production failure before that exact
+   accepted publication exits the current run through its existing tagged
+   production failure and the existing
    `AuthoredScenarioCassetteRunFailure` result channel, retaining its exact tag
    and payload. An interruption remains an Effect interrupted exit rather than
    being mislabeled as success or as a domain failure. Neither outcome settles
    the cursor.
-3. After the exact result succeeds and validates, the result-to-cursor handoff
-   becomes uninterruptible. It acquires the existing cursor permit, settles
-   that exact reserved item, publishes its one cassette occurrence, and
-   releases the permit as one linearization boundary. Interruption arriving
-   while permit acquisition or occurrence publication is blocked is delayed
-   until this handoff completes; the caller then observes the pending
+3. After the exact result succeeds and ordinary delivery publishes its accepted
+   Journal position, the result-to-cursor handoff becomes uninterruptible. For
+   C2, that one handoff reads the published Journal prefix, proves the exact
+   Run, attempt correlation, Safe report ordinal two, and accepted position,
+   acquires the existing cursor permit, settles that exact reserved item, and
+   publishes its one cassette occurrence. The Journal read is inside this
+   handoff because publication has already made the durable fact visible and an
+   interruption between reread and settlement would split one accepted
+   occurrence from its cassette chronology. A typed Journal-read or exact-match
+   failure still exits unchanged; uninterruptibility delays interruption, not
+   failures. Interruption arriving during the read, permit acquisition, or
+   occurrence publication is delayed until the handoff completes or fails and
+   releases the permit; after success the caller observes the pending
    interruption only after exact settlement.
 4. The adapter performs zero automatic retries in the current controlled run.
    A duplicate settlement attempt in a direct test fails through the existing
@@ -160,8 +169,8 @@ rule applies.
 
 | Boundary | Existing public failures in this chronology |
 |---|---|
-| Capacity pre-read | `JournalReadError`, `InvalidWorkflowJournalHistory`, `WorkflowRunNotBegan`, `ApplicationExiting`, or `JournaledRunNotActive` |
-| Capacity direct apply | `JournalAppendError` with its exact constituent tag/payload, `InvalidWorkflowJournalHistory`, `SchemaError`, `TaskWorkCapacityPolicyRevisionConflict`, `WorkflowRunNotBegan`, `ApplicationExiting`, or `JournaledRunNotActive` |
+| Capacity pre-read | `JournalReadError`, `InvalidWorkflowJournalHistory`, `WorkflowRunNotBegan`, `ApplicationExiting`, `JournaledRunIdentityMismatch`, or `JournaledRunNotActive` |
+| Capacity direct apply | `JournalAppendError` with its exact constituent tag/payload, `InvalidWorkflowJournalHistory`, `SchemaError`, `TaskWorkCapacityPolicyRevisionConflict`, `WorkflowRunNotBegan`, `ApplicationExiting`, `JournaledRunIdentityMismatch`, or `JournaledRunNotActive` |
 | C2 Suspend/report acceptance | The applicable part of the stable exported `DeliveryActionExecutionError`: `JournalReadError`, `JournalAppendError`, `PlannedAttemptExecutorCommandFailure`, `PlannedAttemptExecutorCorrelationMismatch`, `PlannedAttemptExecutorResponsibilityAbandoned`, `PlannedAttemptExecutorResponsibilityContradiction`, `PlannedAttemptExecutorResponsibilityMissing`, `PlannedAttemptExecutorSuspensionNotAuthorized`, `PlannedAttemptExecutorSuspensionLimitReached`, `PlannedAttemptExecutorWorkAlreadyTerminal`, `PlannedAttemptExecutorCommandReconciliationRequired`, `PlannedAttemptExecutorProjectionNoCurrentReport`, `PlannedAttemptExecutorProjectionTemporarilyUnavailable`, `PlannedAttemptExecutorProjectionUnreadable`, `PlannedAttemptExecutorProjectionCorrelationMismatch`, `PlannedAttemptExecutorInitializationCorrelationContradiction`, `PlannedAttemptExecutorInitialReportCausalityContradiction`, `PlannedAttemptExecutorLifecycleTransitionContradiction`, `PlannedAttemptExecutorTerminalReportContradiction`, `PlannedAttemptExecutorStateNoCurrentReport`, `PlannedAttemptExecutorStateTemporarilyUnavailable`, `PlannedAttemptExecutorStateUnreadable`, or `DeliveryRelationSourceError` (`TrackerGraphRelationError` or `DeliveryRelationReconciliationError`); `ApplicationExiting` may reject the admitted outer activation before this operation completes |
 | Reconstructed ordinary activation/finality | Closed outer cases `ApplicationExiting`, `JournaledRunBootstrapError`, and `JournaledRunIdentityMismatch`; the activation program's generic error parameter remains open and transparently carries whichever typed tracker, Git, executor, Journal, delivery-runtime, or finality failure the supplied production program returns |
 
@@ -217,15 +226,52 @@ zero in-process retries, and an unsettled cursor item and strict successor. An
 authored duplicate or wrong item is separately
 `AuthoredCassetteInteractionMismatch`; it is not a production failure.
 
-This narrow uninterruptible region does not cover the production call. The
-trade-off is that a pending interruption may be delayed for the short local
-permit/publication handoff. Releasing interruptibility earlier would allow a
-durable successful result with no matching cassette occurrence or let the next
-authored boundary overtake publication; an expert would reject that split
-outcome. Extending uninterruptibility across provider, Journal, or finality work
-would delay shutdown across real I/O and is likewise rejected.
+This narrow uninterruptible region does not cover the executor/provider call,
+the report append, or finality work. It does cover C2's post-publication Journal
+reread because that reread and exact cursor settlement form one local
+linearization boundary after the durable fact is already accepted. The
+trade-off is that a pending interruption may be delayed by that Journal read
+and the cursor permit/publication handoff. Releasing interruptibility earlier
+would allow a durable successful result with no matching cassette occurrence
+or let the next authored boundary overtake publication; both independent
+reviewers judged that split outcome worse than delayed interruption. Extending
+uninterruptibility across the earlier provider call or report append would
+instead delay shutdown before a durable result exists and remains rejected.
 
 ## The capacity revision commits before process death is exposed
+
+### Bootstrap identity and activation exclusion
+
+`JournaledRunBootstrap` is installed for exact Run R. A well-formed public
+capacity request may still carry foreign Run F, including when F has its own
+valid Journal history. Whether R's runtime is active or inactive,
+`readTaskWorkCapacity(F)` and `setTaskWorkCapacity(..., F)` fail exact
+`JournaledRunIdentityMismatch(expectedRunId R, requestedRunId F)` before Dalph
+leases R's runtime controls, reads either Run's Journal, or appends any event.
+The caller observes one typed failure and zero runtime-control, raw-Journal,
+or retry calls. A future API may remove the redundant Run argument entirely;
+#268 preserves the current public shape and binds that capability to R instead
+of allowing it to address another Run.
+
+When R's runtime is inactive, its public capacity read or apply acquires the
+existing activation permit and then the existing forward-progress owner before
+reading or appending through the raw Journal control. It holds both until that
+one control call succeeds, fails, or is interrupted. An activation arriving
+while the Journal call is blocked cannot reconstruct policy concurrently. If a
+pre-commit apply is interrupted, both owners release and the waiting activation
+reconstructs revision one/capacity three. If revision two commits but its
+response is lost, both owners still release; the waiting activation reconstructs
+revision two/capacity two, and neither the failed caller nor activation appends
+a duplicate capacity event. `RuntimeClosing` rejects the control call instead
+of entering raw Journal control.
+
+The repository owner and an independent reviewer both accepted the exact-Run
+check and continuous exclusion as production correctness rules. The exclusion
+trade-off is concrete: slow inactive Journal I/O delays activation. Allowing
+activation to enter between the capacity read and append would instead let it
+reconstruct revision one while revision two is being applied, creating live
+policy that disagrees with durable policy; correctness wins over that
+concurrency.
 
 ### Starting facts, trigger, and ordered boundaries
 
@@ -409,14 +455,16 @@ assertions. Aggregate cassette totals do not substitute for these proofs.
 
 | Chronological result | Required direct proof |
 |---|---|
+| Active and inactive public capacity reads/applies reject a well-formed foreign Run before runtime controls or either Run's Journal is touched | `packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts` — `rejects a foreign capacity Run before active or inactive runtime and Journal control` |
+| An inactive capacity read or apply holds the existing activation permit and forward owner until its Journal boundary releases; `RuntimeClosing` fails rather than entering raw Journal control | `packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts` — `keeps activation out of inactive capacity read and apply until each Journal boundary releases` |
 | Capacity application remains interruptible; while its real Journal append/result is blocked, process death is unavailable and interruption settles nothing | `packages/dalph/test/cassettes/cassette-residuals.test.ts` — `keeps authored process death unavailable before the production capacity result` |
 | After revision two succeeds, interruption blocked on cursor permit/publication is delayed; capacity settles once, death becomes available, and a duplicate fails exact mismatch | `packages/dalph/test/cassettes/cassette-residuals.test.ts` — `settles one production capacity revision before delayed interruption and process death` |
-| A pre-commit interruption leaves reduced policy revision one and the cursor unchanged after one apply at most; a committed-but-unacknowledged append is later observed only as latest policy revision two/capacity two but exposes no death in the interrupted run, and reconciliation makes no apply call | `packages/dalph/test/cassettes/cassette-residuals.test.ts` — `distinguishes pre-commit interruption from a committed lost capacity response using only the reduced policy` |
+| A pre-commit interruption releases both owners so activation reconstructs revision one/capacity three; a committed-but-unacknowledged append releases both owners so activation reconstructs revision two/capacity two, exposes no death in the interrupted run, and causes no duplicate apply or revision three | `packages/dalph/test/cassettes/cassette-residuals.test.ts` — `distinguishes pre-commit interruption from a committed lost capacity response using only the reduced policy` |
 | Every capacity pre-read/direct-apply failure preserves exact tag/payload, leaves death unavailable, calls the prevented boundary zero times and the reached boundary once, and performs zero retry | `packages/dalph/test/cassettes/cassette-residuals.test.ts` — `preserves every public capacity failure without advancing or retrying` |
 | The completed capacity run's ordinary reduced policy is exactly revision two/capacity two, with no later revision | `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `observes reduced capacity revision two before the authored restart cut` |
 | C2 Safe remains interruptible before the real accepted report publication; Continue B is unavailable and failure/interruption creates no ordinal two | `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `keeps Continue B unavailable before the production C2 Safe publication` |
 | After exact C2 ordinal two succeeds, interruption blocked on cursor permit/publication is delayed; Safe settles once, Continue becomes available, and duplicate settlement fails exact mismatch | `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `settles exact C2 Safe once before delayed interruption and Continue B` |
-| Named applicable direct-Suspend and passive-publication failure representatives preserve exact tag/payload, call Suspend at most once, advance neither Safe nor Continue, and perform zero retry; committed ordinal-two ambiguity reconciles without another Suspend or ordinal | `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `preserves named C2 Safe failure families and reconciles a committed lost response without retry` |
+| Named applicable direct-Suspend and passive-publication failure representatives preserve exact tag/payload, call Suspend at most once, advance neither Safe nor Continue, and perform zero retry; committed ordinal-two ambiguity reconciles the exact Run/C2 correlation without another Suspend, Safe report, or ordinal before exact Continue B is exposed | `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `preserves named C2 Safe failure families and reconciles a committed lost response without retry` |
 | A valid C2 Suspend proposal requires and receives its matching planned-attempt protocol admission; the no-admission lease remains a separate fail-closed invariant check | `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts` — `admits an independently proposed suspension after one unchanged passive observation`; `packages/orchestrator/src/coordination/delivery/delivery-runtime-observation.test.ts` — `rejects protocol work when the admitted action owns no planned-attempt permit` |
 | The completed run has C2 Executing ordinal one and exactly one Safe ordinal two, with no ordinal three | `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `records exactly one C2 Safe ordinal before Continue B` |
 | The executing restart reconstructs real journal facts, completes strict `startup graph -> P_A -> P_C -> P_D -> next graph` with three exact unchanged Executing projections and no A/C/D specification, claim, worktree, lineage, or executor command calls, then returns exact UnsettledResponsibility | Committed characterization `bb40c4c8c`, `packages/dalph/test/scenarios/production.test.ts` — `completes the startup graph read then serially reattaches A C and D before the next graph read`; `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `runs reconstructed ordinary activation through strict exact projections before returning unsettled responsibility` |
