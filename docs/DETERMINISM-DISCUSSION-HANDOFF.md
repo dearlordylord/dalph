@@ -4,6 +4,57 @@ Status: investigation handoff only. This document is not an accepted issue,
 operational scenario, specification, or architecture decision. It changes no
 Dalph runtime behavior and does not block the active #268 composition work.
 
+## 2026-09-01 investigation result and owning follow-up
+
+GitHub issue [#312](https://github.com/dearlordylord/dalph/issues/312) now owns
+the proposed hermetic-interpreter repeatability contract and the separate audit
+of exact user-facing dry-run output. This section supersedes the earlier
+provisional recommendation to build or compare a canonical test Scheduler
+before production-shaped evidence exists.
+
+The current production workflow machinery already behaves repeatably when
+composed with controlled Layers. Throwaway prototypes changed no production
+source. They ran the ordinary concurrent `runWorkflow`, Journal wrapper,
+reactive delivery/action runtime, integration-target ownership, Integrator,
+target promotion, tracker completion, and Run finality. With the same finite
+graph, starting Journal, explicit Run activations, controlled boundary results
+and readiness, deterministic visible identities, controlled time, and pinned
+Effect/Node interpreter, fresh executions produced literal-equal Journal and
+boundary traces without a separately supplied fiber schedule.
+
+The evidence covers increasing frontier widths, generated task-position
+capacities and delays, integration-target contention, chain/fork/join/diamond
+and disconnected graph shapes, and a complete A/B-to-D Accepted-result journey
+through `WorkflowRunTerminated(Completed)`. No controlled same-input divergence
+was found. The consolidated evidence is
+`research/deterministic-effect-runtime-prototype.md` on local branch
+`prototype/deterministic-effect-runtime`, through commits `3adfcac15`,
+`a8ae540bf`, `085cea4f3`, `25f3c3cfb`, `3b1e8ee11`, and `2dbcf3b49`.
+
+This supports *implementation-relative determinism*, not confluence under
+every legal Effect scheduler. Proposals are sorted and admitted canonically,
+but concurrent children race to one Journal semaphore and one completion
+queue. The pinned Effect runtime's stable waiter/resumption behavior supplies
+the observed equal-ready tie-break. A runtime upgrade that changes literal
+ordering must therefore be reviewed as an interpreter change. Production must
+still preserve truthful real GitHub, Git, executor, network, process, and timer
+observation order; it must not rewrite live history to resemble a hermetic run.
+
+Do not add a custom Scheduler, explicit per-run schedule, single-worker runtime,
+transition driver, or `PersistedQueue` without first retaining a controlled
+same-input counterexample that makes one necessary. The default adoption path
+is an accepted operational scenario plus maintained hermetic exact-trace tests.
+Production code changes are conditional: refactor a hard-wired adapter seam only
+if the accepted test cannot inject the required controlled Layer through an
+ordinary workflow composition.
+
+The user-facing dry-run command is a desirable second scope, not yet a proven
+contract. Issue #101 already guarantees seeded simulated timing. #312 must now
+audit whether the same repository fixture, explicit seed, configuration, and
+pinned toolchain reproduce boundary calls, identities, semantic trace, and CLI
+bytes; retain the first implicit input before proposing a code change. Do not
+infer live-production repeatability from a deterministic dry run.
+
 ## Concrete question exposed by #268
 
 A maintainer runs the #268 DS01–DS13 cassette through the ordinary production
