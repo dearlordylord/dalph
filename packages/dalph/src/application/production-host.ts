@@ -371,11 +371,13 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const attemptStoreLayer = nodeCodexAttemptStoreLayer({
           stateDirectory: configuration.codexStateDirectory
         }).pipe(Layer.provide(NodeServices.layer))
+        /* v8 ignore start -- @preserve Hermetic host tests replace the process boundary; this assignment retains the production Codex app-server default. */
         const appLayerWithoutApplicationExit: Layer.Layer<
           CodexAppServer,
           ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>,
           ApplicationExitShell
         > = adapters.codexAppServer?.(configuration) ?? defaultCodexAppServerLayer(configuration, attemptStoreLayer)
+        /* v8 ignore stop */
         const appLayer: Layer.Layer<
           CodexAppServer,
           ECodex | Layer.Error<ReturnType<typeof defaultCodexAppServerLayer>>

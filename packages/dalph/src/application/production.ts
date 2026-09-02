@@ -408,41 +408,37 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
     acceptedResultEvidenceStore === undefined
       ? plannedAttemptExecutorLayer
       : plannedAttemptExecutorLayer.pipe(Layer.provide(Layer.succeed(EvidenceStore, acceptedResultEvidenceStore)))
+  const applicationExitBoundary = runtimeBoundaries.applicationExit
   const applicationExitLayer =
-    runtimeBoundaries.applicationExit === undefined ||
-    runtimeBoundaries.applicationExit._tag === "ConstructOrdinaryShell"
-      ? Layer.effect(
+    applicationExitBoundary?._tag === "SuppliedHostShell"
+      ? // A host supplies the already-constructed host-scoped shell. Retain
+        // this exact object for workflow and the executor instead of decorating it or
+        // introducing a second shell; its construction owns request/trace taps.
+        Layer.succeed(ApplicationExitShell, applicationExitBoundary.shell)
+      : Layer.effect(
           ApplicationExitShell,
           Effect.gen(function* () {
             const ownership = yield* CoordinatorOwnership
             const processLifecycle = {
               requestEnd: (decision: ApplicationProcessEndDecision) =>
-                runtimeBoundaries.applicationExit?._tag === "ConstructOrdinaryShell"
-                  ? (runtimeBoundaries.applicationExit.processEndObserver?.(decision) ?? Effect.void)
-                  : Effect.void
+                applicationExitBoundary?.processEndObserver?.(decision) ?? Effect.void
             }
             const trace =
-              runtimeBoundaries.applicationExit?._tag !== "ConstructOrdinaryShell" ||
-              runtimeBoundaries.applicationExit.traceObserver === undefined
+              applicationExitBoundary?.traceObserver === undefined
                 ? undefined
-                : { emit: runtimeBoundaries.applicationExit.traceObserver }
+                : { emit: applicationExitBoundary.traceObserver }
             const applicationExit = yield* makeApplicationExitShell(ownership, processLifecycle, trace)
             const requestBoundary =
-              runtimeBoundaries.applicationExit?._tag !== "ConstructOrdinaryShell" ||
-              runtimeBoundaries.applicationExit.requestObserver === undefined
+              applicationExitBoundary?.requestObserver === undefined
                 ? applicationExit.requestBoundary
                 : {
-                    requestExit: runtimeBoundaries.applicationExit
+                    requestExit: applicationExitBoundary
                       .requestObserver()
                       .pipe(Effect.andThen(applicationExit.requestBoundary.requestExit))
                   }
             return { ...applicationExit, requestBoundary }
           })
         )
-      : // A host supplies the already-constructed host-scoped shell. Retain
-        // this exact object for workflow and Codex instead of decorating it or
-        // introducing a second shell; its construction owns request/trace taps.
-        Layer.succeed(ApplicationExitShell, runtimeBoundaries.applicationExit.shell)
   const executorWithApplicationExit = executorWithAcceptedEvidence.pipe(Layer.provideMerge(applicationExitLayer))
   const integratorLayer = integrator === undefined ? Layer.empty : Layer.succeed(Integrator, Integrator.of(integrator))
   const nonJournaledRuntimeInputs = Layer.merge(baseInterpreterLayer, executorWithApplicationExit)

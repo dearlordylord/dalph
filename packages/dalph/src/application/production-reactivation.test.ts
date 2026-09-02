@@ -46,6 +46,7 @@ import {
   RunReactivationHint,
   RunReactivationOwner,
   TaskClaimAcquisitionPlanner,
+  TaskTrackerMutationThrottled,
   TaskWorkCapacity,
   TrackerGraphReader,
   TrackerReadError,
@@ -115,6 +116,81 @@ import {
 } from "../../../orchestrator/test/task-tracker-facts.js"
 
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
+
+/**
+ * Scenario mapping: a production owner reports a retryable activation failure
+ * through the ordinary observer, and reports a throttle there even when no
+ * separate non-retryable observer was configured.
+ */
+it.effect("reports both recoverable and unhandled non-retryable production activation failures", () =>
+  Effect.gen(function* () {
+    const failures = [
+      new Error("recoverable tracker read failure"),
+      new TaskTrackerMutationThrottled({
+        detail: "GitHub rejected the claim mutation",
+        operation: "AcquireTaskClaim",
+        operationId: OperationId.make("production-reactivation-unhandled-throttle"),
+        retry: null
+      })
+    ] as const
+
+    for (const failure of failures) {
+      const observed = yield* Deferred.make<unknown>()
+      // The generic bootstrap method preserves any caller program error. This
+      // controlled mock instead injects the exact runtime value asserted below.
+      const injectedFailure = Effect.fail(failure) as Effect.Effect<never>
+      const applicationExit = ApplicationExitShell.of({
+        admission: {
+          prepareForwardOwner: () => Effect.succeed({ cancel: Effect.void, register: Effect.die("unused") }),
+          acquireForwardOwner: () => Effect.die("unused"),
+          snapshot: Effect.succeed({ cutoffClosed: false, preparingOwnerCount: 0, registeredOwnerCount: 0 })
+        },
+        awaitExitRequested: Effect.never,
+        awaitExecutorDrains: Effect.void,
+        registerExecutorDrain: () => Effect.void,
+        registerProcessLocalDrain: () => Effect.void,
+        requestBoundary: { requestExit: Effect.never }
+      })
+      const bootstrap = Layer.mock(JournaledRunBootstrap, {
+        activate: () => injectedFailure,
+        activateActiveWorkAuthorityRefresh: () => injectedFailure,
+        readRunReactivationControl: () => Effect.succeed("RunUnpaused" as const),
+        registerAcceptedRunReactivationObservers: () => Effect.void,
+        operatorControl: {
+          applyRunCancellation: () => Effect.die("unused"),
+          applyIntegrationQuarantineDirection: () => Effect.die("unused"),
+          applyAttemptChoice: () => Effect.die("unused"),
+          applyControlDirection: () => Effect.die("unused"),
+          applyTaskClaimReacquisition: () => Effect.die("unused"),
+          readAttemptChoice: () => Effect.die("unused"),
+          readIntegrationQuarantineDirection: () => Effect.die("unused"),
+          readTaskWorkCapacity: () => Effect.die("unused"),
+          observePause: () => Stream.empty,
+          setTaskWorkCapacity: () => Effect.die("unused")
+        }
+      })
+      const layer = productionRunReactivationLayer(
+        FixtureTarget.make("production-reactivation-failure-target"),
+        Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity })),
+        RunId.make("production-reactivation-failure-run"),
+        { onFailure: (reported) => Deferred.succeed(observed, reported).pipe(Effect.asVoid) }
+      ).pipe(
+        Layer.provide(bootstrap),
+        Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)),
+        Layer.provide(Layer.mock(PlannedTaskAttemptPlanner, {})),
+        Layer.provide(Layer.mock(TaskClaimAcquisitionPlanner, {}))
+      )
+
+      const reported = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* RunReactivationOwner
+          return yield* Deferred.await(observed)
+        }).pipe(Effect.provide(layer))
+      )
+      expect(reported).toBe(failure)
+    }
+  })
+)
 
 type CapturedProductionOpportunity =
   | { readonly _tag: "OrdinaryRunEntry" }
@@ -1025,7 +1101,22 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                       })
                     ).pipe(Layer.provide(sqliteJournalStoreLayer({ filename: journalFilename })))
                   )
-            const runtimeBoundaries = journalStoreLayer === undefined ? undefined : { journalStoreLayer }
+            const applicationExitRequests = yield* Ref.make(0)
+            const applicationProcessEnds = yield* Ref.make(0)
+            const applicationExitEvents = yield* Ref.make<ReadonlyArray<string>>([])
+            const observeApplicationExit = source === "TrackerNotification"
+            const runtimeBoundaries = {
+              ...(journalStoreLayer === undefined ? {} : { journalStoreLayer }),
+              applicationExit: observeApplicationExit
+                ? {
+                    _tag: "ConstructOrdinaryShell" as const,
+                    processEndObserver: () => Ref.update(applicationProcessEnds, (count) => count + 1),
+                    requestObserver: () => Ref.update(applicationExitRequests, (count) => count + 1),
+                    traceObserver: (event: { readonly _tag: string }) =>
+                      Ref.update(applicationExitEvents, (current) => [...current, event._tag])
+                  }
+                : { _tag: "ConstructOrdinaryShell" as const }
+            }
             const application = productionWorkflowInterpreterLayer(
               runId,
               GitCommonDirectoryTarget.make(`${directory}/.git`),
@@ -1216,6 +1307,19 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: journalFilename }))
               )
             )
+            const applicationExitResult = yield* applicationExit.requestBoundary.requestExit
+            const expectedApplicationExitResult =
+              processCrash === "AfterConstraintBeforeSuspendIntent" || processCrash === "SuspendResponseLost"
+                ? "Failed"
+                : "Succeeded"
+            expect(applicationExitResult._tag).toBe(expectedApplicationExitResult)
+            expect(yield* Ref.get(applicationExitRequests)).toBe(observeApplicationExit ? 1 : 0)
+            expect(yield* Ref.get(applicationProcessEnds)).toBe(observeApplicationExit ? 1 : 0)
+            if (observeApplicationExit) {
+              expect(yield* Ref.get(applicationExitEvents)).toContain("ExitResultReported")
+            } else {
+              expect(yield* Ref.get(applicationExitEvents)).toEqual([])
+            }
             return {
               activeActivation:
                 source === "AcceptedFactPublication" || source === "OperatorWake"

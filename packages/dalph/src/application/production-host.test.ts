@@ -169,6 +169,22 @@ it("ordinary Exit shells cannot inhabit the production-host shell boundary", () 
   expectTypeOf<SuppliedHostShell>().toEqualTypeOf<ProductionHostApplicationExitShellService>()
 })
 
+/**
+ * Scenario mapping: a supervisor requests Exit from a host constructed without
+ * qualification observers; the real shell still reports success and does not
+ * require an observer callback to make progress.
+ */
+it.effect("production host Exit succeeds when qualification observers are absent", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const applicationExit = yield* productionRepositoryHostGraph().makeApplicationExit()
+      const result = yield* applicationExit.requestBoundary.requestExit
+
+      expect(result._tag).toBe("Succeeded")
+    })
+  )
+)
+
 it("production host graph exposes only the precise non-retryable throttle callback", () => {
   const graph = productionRepositoryHostGraph()
   type ActivationFailure = Parameters<typeof graph.run>[2] extends (failure: infer Failure) => Effect.Effect<void>
@@ -452,6 +468,10 @@ it.effect("next host invocation recovers the same Run and authority-reads before
         onActivationFinalizationStart: (kind) => Ref.update(activationFinalizations, (current) => [...current, kind])
       }
       const graph = productionRepositoryHostGraph(adapters)
+      const { onActivationFailure: _onActivationFailure, ...adaptersWithoutActivationFailureObserver } = adapters
+      const graphWithoutActivationFailureObserver = productionRepositoryHostGraph(
+        adaptersWithoutActivationFailureObserver
+      )
       const callbackEntered = yield* Deferred.make<void>()
       const callbackTeardownStarted = yield* Deferred.make<void>()
       const releaseCallbackTeardown = yield* Deferred.make<void>()
@@ -501,7 +521,7 @@ it.effect("next host invocation recovers the same Run and authority-reads before
           return yield* Context.get(journalContext, JournalStore).read(runId)
         })
       )
-      const second = yield* withProductionRepositoryHost(input, graph, (observation) =>
+      const second = yield* withProductionRepositoryHost(input, graphWithoutActivationFailureObserver, (observation) =>
         Ref.update(selections, (current) => [...current, observation.selection]).pipe(Effect.andThen(Effect.never))
       ).pipe(Effect.exit)
       const recordsAfterSecond = yield* Effect.scoped(
@@ -541,10 +561,7 @@ it.effect("next host invocation recovers the same Run and authority-reads before
       expect(yield* Ref.get(applicationExitRequests)).toBe(0)
       expect(yield* Ref.get(applicationExitTrace)).toEqual([])
       expect(yield* Ref.get(workflowCleanupCalls)).toEqual([])
-      expect(yield* Ref.get(activationFailures)).toEqual([
-        "TaskTrackerMutationThrottled",
-        "TaskTrackerMutationThrottled"
-      ])
+      expect(yield* Ref.get(activationFailures)).toEqual(["TaskTrackerMutationThrottled"])
       expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped", "Started", "Stopped"])
       expect(yield* Ref.get(activationFinalizations)).toEqual(["Ordinary", "Ordinary"])
       expect(yield* Ref.get(activations)).toBe(2)
@@ -696,6 +713,11 @@ it.effect("cold production host records one beginning before the first GitHub de
         close: Effect.void
       })
       const adapters = {
+        onActivationFinalizationStart: () => Effect.void,
+        onReconstructed: () => Effect.void,
+        onTimerStateChange: () => Effect.void,
+        workflowCleanupObserver: () => Effect.void,
+        workflowGitCommandObserver: () => Effect.void,
         workflowApplicationExitObserver: (applicationExit: ApplicationExitShell["Service"]) =>
           Ref.update(applicationExitObservations, (current) => [...current, ["workflow", applicationExit] as const]),
         codexAppServer: () =>
