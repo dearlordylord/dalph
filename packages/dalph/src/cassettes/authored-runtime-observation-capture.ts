@@ -5,31 +5,41 @@ import type {
 } from "@dalph/orchestrator"
 import { Effect, Ref } from "effect"
 
-interface AuthoredRuntimeObservationCaptureOptions<Correlation> {
-  readonly captureEvaluation: (evaluation: DeliveryRuntimeEvaluation, correlation: Correlation) => Effect.Effect<void>
+interface AuthoredRuntimeOwnerCaptureOptions<Correlation> {
   readonly captureOwners: (
     liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>,
     correlation: Correlation
   ) => Effect.Effect<void>
-  readonly correlate: () => Effect.Effect<Correlation>
+  readonly correlateOwners: () => Effect.Effect<Correlation>
+}
+
+interface AuthoredRuntimeEvaluationCaptureOptions<Correlation> {
+  readonly captureEvaluation: (evaluation: DeliveryRuntimeEvaluation, correlation: Correlation) => Effect.Effect<void>
+  readonly correlateEvaluation: () => Effect.Effect<Correlation>
 }
 
 /** Internal cassette observer: every callback captures its evaluation; only owner changes capture owner state. */
 export const makeAuthoredRuntimeObservationCaptureObserver = Effect.fn(
   "AuthoredCassette.makeRuntimeObservationCaptureObserver"
-)(function* <Correlation>(options: AuthoredRuntimeObservationCaptureOptions<Correlation>) {
+)(function* <OwnerCorrelation, EvaluationCorrelation>(
+  ownerOptions: AuthoredRuntimeOwnerCaptureOptions<OwnerCorrelation>,
+  evaluationOptions?: AuthoredRuntimeEvaluationCaptureOptions<EvaluationCorrelation>
+) {
   const lastRuntimeOwners = yield* Ref.make<string | null>(null)
   return {
     observe: (observation) =>
       Effect.gen(function* () {
-        const correlation = yield* options.correlate()
-        yield* options.captureEvaluation(observation.evaluation, correlation)
+        if (evaluationOptions !== undefined) {
+          const correlation = yield* evaluationOptions.correlateEvaluation()
+          yield* evaluationOptions.captureEvaluation(observation.evaluation, correlation)
+        }
         const identity = JSON.stringify(observation.liveOwners)
         const previous = yield* Ref.get(lastRuntimeOwners)
         if (previous === identity) return
         yield* Ref.set(lastRuntimeOwners, identity)
         if (previous === null && observation.liveOwners.length === 0) return
-        yield* options.captureOwners(observation.liveOwners, correlation)
+        const correlation = yield* ownerOptions.correlateOwners()
+        yield* ownerOptions.captureOwners(observation.liveOwners, correlation)
       })
   } satisfies { readonly observe: (observation: DeliveryRuntimeReadyObservation) => Effect.Effect<void> }
 })

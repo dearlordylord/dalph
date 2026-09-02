@@ -9,13 +9,18 @@ import {
   maintainedAuthoredCassetteCatalog,
   runAuthoredScenarioCassette
 } from "../../src/cassettes/index.js"
+import {
+  type InternalAuthoredRuntimeEvaluationCapture,
+  type InternalAuthoredScenarioCassetteRun,
+  runAuthoredScenarioCassetteWithRuntimeEvaluations
+} from "../../src/cassettes/authored-runner.js"
 
 const lastItemIndex = -1
 const capstoneRun = Effect.runSync(
   Effect.cached(
-    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.autonomousExecutorDeliveryCapstone).pipe(
-      Effect.provide(NodeCrypto.layer)
-    )
+    runAuthoredScenarioCassetteWithRuntimeEvaluations(
+      maintainedAuthoredCassetteCatalog.autonomousExecutorDeliveryCapstone
+    ).pipe(Effect.provide(NodeCrypto.layer))
   )
 )
 
@@ -74,10 +79,7 @@ const bF2 =
 type ObservationMoment = AuthoredScenarioCassetteRun["observationMoments"][number]
 type StoryMoment = Extract<ObservationMoment, { readonly _tag: "AuthoredStoryOccurrenceMoment" }>
 type PublicationMoment = Extract<ObservationMoment, { readonly _tag: "DeliveryPublicationMoment" }>
-type RuntimeEvaluationCapture = Extract<
-  AuthoredScenarioCassetteRun["observationCaptures"][number],
-  { readonly _tag: "DeliveryRuntimeEvaluationCaptured" }
->
+type RuntimeEvaluationCapture = InternalAuthoredRuntimeEvaluationCapture
 
 const bSpecificationConstraintsFrom = (capture: RuntimeEvaluationCapture) => {
   const facts =
@@ -103,13 +105,12 @@ const bSpecificationConstraintsFrom = (capture: RuntimeEvaluationCapture) => {
 }
 
 const runtimeEvaluationCaptureAt = (
-  run: AuthoredScenarioCassetteRun,
+  run: InternalAuthoredScenarioCassetteRun,
   beat: string,
   frame: AuthoredDeliveryFrame
 ): RuntimeEvaluationCapture => {
-  const captures = run.observationCaptures.filter(
-    (capture): capture is RuntimeEvaluationCapture =>
-      capture._tag === "DeliveryRuntimeEvaluationCaptured" &&
+  const captures = run.runtimeEvaluationCaptures.filter(
+    (capture) =>
       capture.activationOrdinal === frame.activationOrdinal &&
       capture.storyPosition === frame.storyPosition &&
       capture.evaluation.acceptedAt === frame.acceptedAt
@@ -885,7 +886,6 @@ it.effect("captures B's exact F1 F2 choices from each production runtime observa
         activationOrdinal: capture.activationOrdinal,
         beat,
         captureCount: 1,
-        captureOrder: capture.captureOrder,
         storyPosition: capture.storyPosition
       }
     })

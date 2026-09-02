@@ -235,7 +235,6 @@ export type AuthoredObservationCapture = AuthoredObservationCorrelation &
   (
     | { readonly _tag: "AuthoredStoryOccurrenceCaptured"; readonly occurrence: AuthoredCassetteStoryItem }
     | { readonly _tag: "DeliveryPublicationCaptured"; readonly publication: AuthoredDeliveryPublication }
-    | { readonly _tag: "DeliveryRuntimeEvaluationCaptured"; readonly evaluation: DeliveryRuntimeEvaluation }
     | {
         readonly _tag: "DeliveryRuntimeOwnersCaptured"
         readonly liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
@@ -245,7 +244,6 @@ export type AuthoredObservationCapture = AuthoredObservationCorrelation &
 type AuthoredObservationCaptureInput =
   | { readonly _tag: "AuthoredStoryOccurrenceCaptured"; readonly occurrence: AuthoredCassetteStoryItem }
   | { readonly _tag: "DeliveryPublicationCaptured"; readonly publication: AuthoredDeliveryPublication }
-  | { readonly _tag: "DeliveryRuntimeEvaluationCaptured"; readonly evaluation: DeliveryRuntimeEvaluation }
   | {
       readonly _tag: "DeliveryRuntimeOwnersCaptured"
       readonly liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
@@ -263,9 +261,20 @@ export type AuthoredObservationMoment = AuthoredObservationMomentContext &
   (
     | { readonly _tag: "AuthoredStoryOccurrenceMoment"; readonly occurrence: AuthoredCassetteStoryItem }
     | { readonly _tag: "DeliveryPublicationMoment"; readonly deliveryFrame: AuthoredDeliveryFrame }
-    | { readonly _tag: "DeliveryRuntimeEvaluationMoment"; readonly evaluation: DeliveryRuntimeEvaluation }
     | { readonly _tag: "DeliveryRuntimeOwnersMoment" }
   )
+
+/** Internal test evidence for one production runtime-observer callback. Not part of the cassette public API. */
+export interface InternalAuthoredRuntimeEvaluationCapture {
+  readonly activationOrdinal: AuthoredRunActivationOrdinalType
+  readonly evaluation: DeliveryRuntimeEvaluation
+  readonly storyPosition: AuthoredStoryPosition
+}
+
+/** Internal cassette result used only by source-local causal assertions. */
+export interface InternalAuthoredScenarioCassetteRun extends AuthoredScenarioCassetteRun {
+  readonly runtimeEvaluationCaptures: ReadonlyArray<InternalAuthoredRuntimeEvaluationCapture>
+}
 
 export interface AuthoredDeliveryFrame {
   readonly activationOrdinal: AuthoredRunActivationOrdinalType
@@ -1180,15 +1189,6 @@ export const evaluateAuthoredObservationCapture: (
         liveOwners: capture.liveOwners
       } satisfies AuthoredObservationMoment
     }
-    if (capture._tag === "DeliveryRuntimeEvaluationCaptured") {
-      return {
-        _tag: "DeliveryRuntimeEvaluationMoment",
-        ...correlation,
-        deliveryFrame,
-        evaluation: capture.evaluation,
-        liveOwners
-      } satisfies AuthoredObservationMoment
-    }
     return {
       _tag: "AuthoredStoryOccurrenceMoment",
       ...correlation,
@@ -1419,10 +1419,10 @@ const handleAuthoredTaskClaimJournalEvent = (request: {
   })
 
 /** Decodes and drives one story through the ordinary production delivery program. */
-const runAuthoredScenarioCassetteWith = (request: {
-  readonly input: unknown
-  readonly options: AuthoredScenarioCassetteRunOptions
-}) => {
+const runAuthoredScenarioCassetteWith = (
+  request: { readonly input: unknown; readonly options: AuthoredScenarioCassetteRunOptions },
+  captureRuntimeEvaluation?: (capture: InternalAuthoredRuntimeEvaluationCapture) => Effect.Effect<void>
+) => {
   const { input, options } = request
   return Effect.scoped(
     // eslint-disable-next-line complexity -- One chronological adapter owns activation, crash, candidate, and terminal story boundaries.
@@ -1449,14 +1449,12 @@ const runAuthoredScenarioCassetteWith = (request: {
             captureOrder: AuthoredObservationCaptureOrder.make(nextOrder),
             storyPosition
           }
-          const captured: AuthoredObservationCapture = Match.value(observation).pipe(
-            Match.tagsExhaustive({
-              AuthoredStoryOccurrenceCaptured: ({ _tag, occurrence }) => ({ ...correlation, _tag, occurrence }),
-              DeliveryPublicationCaptured: ({ _tag, publication }) => ({ ...correlation, _tag, publication }),
-              DeliveryRuntimeEvaluationCaptured: ({ _tag, evaluation }) => ({ ...correlation, _tag, evaluation }),
-              DeliveryRuntimeOwnersCaptured: ({ _tag, liveOwners }) => ({ ...correlation, _tag, liveOwners })
-            })
-          )
+          const captured: AuthoredObservationCapture =
+            observation._tag === "AuthoredStoryOccurrenceCaptured"
+              ? { ...correlation, _tag: observation._tag, occurrence: observation.occurrence }
+              : observation._tag === "DeliveryPublicationCaptured"
+                ? { ...correlation, _tag: observation._tag, publication: observation.publication }
+                : { ...correlation, _tag: observation._tag, liveOwners: observation.liveOwners }
           return [captured, { captures: [...captures, captured], nextOrder: nextOrder + 1 }]
         })
         yield* Effect.exit(Effect.sync(() => options.onObservationCapture?.(capture)))
@@ -1514,15 +1512,26 @@ const runAuthoredScenarioCassetteWith = (request: {
             yield* Effect.exit(Effect.sync(() => options.onDeliveryPublication?.(publication)))
           })
       })
-      const runtimeObservationObserver = yield* makeAuthoredRuntimeObservationCaptureObserver({
-        captureEvaluation: (evaluation, storyPosition) =>
-          appendObservation({ _tag: "DeliveryRuntimeEvaluationCaptured", evaluation }, storyPosition).pipe(
-            Effect.asVoid
-          ),
-        captureOwners: (liveOwners, storyPosition) =>
-          appendObservation({ _tag: "DeliveryRuntimeOwnersCaptured", liveOwners }, storyPosition).pipe(Effect.asVoid),
-        correlate: () => cursor.storyPosition.pipe(Effect.map((position) => AuthoredStoryPosition.make(position)))
-      })
+      const runtimeObservationObserver = yield* makeAuthoredRuntimeObservationCaptureObserver(
+        {
+          captureOwners: (liveOwners, storyPosition) =>
+            appendObservation({ _tag: "DeliveryRuntimeOwnersCaptured", liveOwners }, storyPosition).pipe(Effect.asVoid),
+          correlateOwners: () =>
+            cursor.storyPosition.pipe(Effect.map((position) => AuthoredStoryPosition.make(position)))
+        },
+        captureRuntimeEvaluation === undefined
+          ? undefined
+          : {
+              captureEvaluation: (evaluation, correlation) => captureRuntimeEvaluation({ ...correlation, evaluation }),
+              correlateEvaluation: () =>
+                Effect.all({
+                  activationOrdinal: Ref.get(activeDeliveryActivation),
+                  storyPosition: cursor.storyPosition.pipe(
+                    Effect.map((position) => AuthoredStoryPosition.make(position))
+                  )
+                })
+            }
+      )
       const admittedContinuationChoiceApplied = yield* Deferred.make<void>()
       const targetPromotionStory = cassette.story.some((item) => item._tag.startsWith("TargetPromotion"))
       const exactCausalTrackerReadStory = cassette.story.some((item) => item._tag === "ConcurrentTrackerReadBatch")
@@ -3080,3 +3089,19 @@ export const runAuthoredScenarioCassette: (
   input,
   options = {}
 ) => runAuthoredScenarioCassetteWith({ input, options })
+
+/** Internal source-test runner that retains every production runtime-observer evaluation callback. */
+export const runAuthoredScenarioCassetteWithRuntimeEvaluations: (
+  input: unknown,
+  options?: AuthoredScenarioCassetteRunOptions
+) => Effect.Effect<InternalAuthoredScenarioCassetteRun, AuthoredScenarioCassetteRunFailure, Crypto.Crypto> = (
+  input,
+  options = {}
+) =>
+  Effect.gen(function* () {
+    const runtimeEvaluationCaptures = yield* Ref.make<ReadonlyArray<InternalAuthoredRuntimeEvaluationCapture>>([])
+    const run = yield* runAuthoredScenarioCassetteWith({ input, options }, (capture) =>
+      Ref.update(runtimeEvaluationCaptures, (captures) => [...captures, capture])
+    )
+    return { ...run, runtimeEvaluationCaptures: yield* Ref.get(runtimeEvaluationCaptures) }
+  })
