@@ -3,9 +3,32 @@ import { Deferred, Effect, Exit, Fiber, Option, Ref } from "effect"
 import { expect } from "vitest"
 import { AttemptId } from "@dalph/contracts"
 import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
-import { settleCoordinatorActivationReturn } from "../../src/cassettes/authored-runner.js"
+import {
+  settleAuthoredReactivationOwnerReturn,
+  settleCoordinatorActivationReturn
+} from "../../src/cassettes/authored-runner.js"
 
 const unsettledResponsibility = { _tag: "RunMustRemainActive" as const, reason: "UnsettledResponsibility" as const }
+
+it.effect(
+  "settles only authored current-first callback returns while leaving absent and unrelated boundaries untouched",
+  () =>
+    Effect.gen(function* () {
+      const returned = { _tag: "CoordinatorActivationReturned" as const, decision: unsettledResponsibility }
+      const hints = { _tag: "CassetteOffersRunReactivationHints" as const, hints: ["Timer"] as const }
+      const currentFirst = { _tag: "CurrentFirstReactivationAfterProcessDeath" as const }
+
+      const authored = yield* makeStoryCursor([returned, hints])
+      yield* settleAuthoredReactivationOwnerReturn(currentFirst, authored, unsettledResponsibility)
+      expect(yield* authored.storyPosition).toBe(1)
+      yield* settleAuthoredReactivationOwnerReturn(currentFirst, authored, unsettledResponsibility)
+      expect(yield* authored.storyPosition).toBe(1)
+
+      const unrelated = yield* makeStoryCursor([returned])
+      yield* settleAuthoredReactivationOwnerReturn(undefined, unrelated, unsettledResponsibility)
+      expect(yield* unrelated.storyPosition).toBe(0)
+    })
+)
 
 it.effect("keeps restart hints unavailable before the production finality result", () =>
   Effect.gen(function* () {

@@ -33,7 +33,11 @@ import {
   type AuthoredCassetteDecision as CassetteDecision,
   type AuthoredCassetteStoryItem
 } from "./authored-domain.js"
-import type * as Cursor from "./authored-cursor.js"
+import {
+  authoredConcurrentGraphReadCause,
+  type AuthoredSafelySuspendedExecutorReportItem,
+  type StoryCursor
+} from "./authored-cursor.js"
 import {
   type ControlledExecutorConfig,
   reconcileReservedSafelySuspendedExecutorReport
@@ -42,7 +46,6 @@ import { trackerReadFailure } from "./authored-tracker-read-results.js"
 
 export type { ControlledExecutorConfig } from "./authored-executor-reconciliation.js"
 
-type StoryCursor = Cursor.StoryCursor
 const evidenceDigestHexLength = 64
 
 export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
@@ -234,6 +237,10 @@ export const controlledTrace = (cursor: StoryCursor, options: ControlledTraceOpt
       yield* awaitTraceBoundaries(cursor, item, actual, options)
       const expected = yield* cursor
         .consumeDalphSelectionFor(actual, {
+          graphReadCause:
+            item.operation._tag === "ReadTrackerGraph"
+              ? authoredConcurrentGraphReadCause(item.operation.cause._tag)
+              : undefined,
           operationId: workflowOperationId(item.operation),
           predecessorOperationIds: item.operation.predecessorOperationIds
         })
@@ -299,17 +306,8 @@ const executorReport = (
 }
 
 const isAcceptedSafelySuspendedExecutorReport = (
-  item: Extract<
-    AuthoredCassetteStoryItem,
-    {
-      readonly _tag:
-        | "PlannedAttemptExecutorPassiveLifecycleChanged"
-        | "PlannedAttemptExecutorProjectionReturned"
-        | "PlannedAttemptExecutorResponseLost"
-        | "PlannedAttemptExecutorWorkReported"
-    }
-  >
-): item is Cursor.AuthoredSafelySuspendedExecutorReportItem =>
+  item: AuthoredCassetteStoryItem
+): item is AuthoredSafelySuspendedExecutorReportItem =>
   item._tag === "PlannedAttemptExecutorWorkReported" &&
   item.request === "Suspend" &&
   item.report._tag === "ExecutorWorkSafelySuspended"
@@ -432,6 +430,7 @@ export const controlledExecutorLayer = (config: ControlledExecutorConfig) => {
               Stream.mapEffect((item) =>
                 Effect.gen(function* () {
                   const report = yield* prepareReport(executorReport(item, runId))
+                  yield* config.onPassiveExecutorLifecycleChange?.(report) ?? Effect.void
                   yield* Ref.update(
                     survivingReports,
                     (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])

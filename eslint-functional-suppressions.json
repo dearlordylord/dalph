@@ -28,9 +28,6 @@
     }
   },
   "packages/dalph/src/cassettes/authored-runner.ts": {
-    "functional/immutable-data": {
-      "count": 3
-    },
     "functional/prefer-tacit": {
       "count": 2
     },

@@ -167,7 +167,18 @@ export type AuthoredPlannedAttemptExecutorReport = typeof AuthoredPlannedAttempt
  * group. The closed union is deliberately narrower than the top-level story
  * language.
  */
+const AuthoredConcurrentInteractionRole = Schema.NonEmptyString.pipe(Schema.brand("AuthoredConcurrentInteractionRole"))
+type AuthoredConcurrentInteractionRole = typeof AuthoredConcurrentInteractionRole.Type
+
 export const AuthoredConcurrentInteractionMember = Schema.TaggedUnion({
+  CoordinatorActivationReturned: {
+    decision: Schema.TaggedUnion({
+      RunMayTerminate: {},
+      RunMustRemainActive: {
+        reason: Schema.Literals(["RunnableTransition", "TrackerTargetUnsettled", "UnsettledResponsibility"])
+      }
+    })
+  },
   DalphSelects: {
     causal: Schema.optionalKey(Schema.Never),
     causalAnchor: Schema.optionalKey(Schema.Never),
@@ -177,20 +188,18 @@ export const AuthoredConcurrentInteractionMember = Schema.TaggedUnion({
     report: AuthoredPlannedAttemptExecutorReport.cases.ExecutorWorkExecuting,
     request: Schema.Literal("Begin")
   },
+  /** A graph result paired to its real operation cause and, when visible, its authored selection role. */
+  TrackerGraphReadReturned: {
+    cause: Schema.Literals(["AttemptRestartAuthorityCheck", "PostQuiescenceReconfirmation"]),
+    graph: AuthoredTrackerGraph,
+    selectionRole: Schema.optionalKey(AuthoredConcurrentInteractionRole)
+  },
   /** Exact current-claim read completion; the claim value remains provider authority rather than cassette identity. */
   TaskClaimCurrentReadReturned: { taskId: TaskId },
   /** Exact specification read completion; body and title are controlled output rather than cassette identity. */
   TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields
 })
 export type AuthoredConcurrentInteractionMember = typeof AuthoredConcurrentInteractionMember.Type
-
-/**
- * Unique cassette-only name of one interaction occurrence inside one
- * concurrent interaction group. It is neither a claim key nor a production
- * identity.
- */
-const AuthoredConcurrentInteractionRole = Schema.NonEmptyString.pipe(Schema.brand("AuthoredConcurrentInteractionRole"))
-type AuthoredConcurrentInteractionRole = typeof AuthoredConcurrentInteractionRole.Type
 
 /**
  * One authored graph node around the closed concurrent-interaction language.
@@ -208,21 +217,31 @@ export type AuthoredConcurrentInteractionNode = typeof AuthoredConcurrentInterac
  * Controlled executor output is intentionally absent from the executor key.
  */
 export type AuthoredConcurrentInteractionClaimKey =
+  | {
+      readonly _tag: "CoordinatorActivationReturned"
+      readonly decision: (typeof AuthoredConcurrentInteractionMember.cases.CoordinatorActivationReturned.Type)["decision"]
+    }
   | { readonly _tag: "DalphSelects"; readonly operation: AuthoredCassetteDecision }
   | { readonly _tag: "PlannedAttemptExecutorWorkReported"; readonly attemptId: AttemptId; readonly request: "Begin" }
   | { readonly _tag: "TaskClaimCurrentReadReturned"; readonly taskId: TaskId }
   | { readonly _tag: "TaskWorkSpecificationReadReturned"; readonly taskId: TaskId }
+  | {
+      readonly _tag: "TrackerGraphReadReturned"
+      readonly cause: "AttemptRestartAuthorityCheck" | "PostQuiescenceReconfirmation"
+    }
 
 export const authoredConcurrentInteractionClaimKey = (
   member: AuthoredConcurrentInteractionMember
 ): AuthoredConcurrentInteractionClaimKey =>
   Match.valueTags(member, {
+    CoordinatorActivationReturned: ({ decision }) => ({ _tag: "CoordinatorActivationReturned" as const, decision }),
     DalphSelects: ({ operation }) => ({ _tag: "DalphSelects" as const, operation }),
     PlannedAttemptExecutorWorkReported: ({ report, request }) => ({
       _tag: "PlannedAttemptExecutorWorkReported" as const,
       attemptId: report.attemptId,
       request
     }),
+    TrackerGraphReadReturned: ({ cause }) => ({ _tag: "TrackerGraphReadReturned" as const, cause }),
     TaskClaimCurrentReadReturned: ({ taskId }) => ({ _tag: "TaskClaimCurrentReadReturned" as const, taskId }),
     TaskWorkSpecificationReadReturned: ({ taskId }) => ({ _tag: "TaskWorkSpecificationReadReturned" as const, taskId })
   })
@@ -262,6 +281,32 @@ const concurrentInteractionGraphIsValid = Schema.makeFilter(
       }
       const missing = member.predecessorRoles.find((predecessorRole) => !roleSet.has(predecessorRole))
       if (missing !== undefined) return `concurrent interaction predecessor ${missing} is not a member of the group`
+      const selectionRole =
+        member.interaction._tag === "TrackerGraphReadReturned" ? member.interaction.selectionRole : undefined
+      if (selectionRole !== undefined) {
+        const selection = members.find(({ role }) => role === selectionRole)
+        if (
+          selection?.interaction._tag !== "DalphSelects" ||
+          selection.interaction.operation._tag !== "ReadTrackerGraph" ||
+          !member.predecessorRoles.includes(selectionRole)
+        ) {
+          return `concurrent graph result ${member.role} must causally follow its named graph selection role`
+        }
+      }
+      if (
+        member.interaction._tag === "TrackerGraphReadReturned" &&
+        member.interaction.cause === "PostQuiescenceReconfirmation" &&
+        member.interaction.selectionRole === undefined
+      ) {
+        return `post-quiescence graph result ${member.role} requires its exact selection role`
+      }
+      if (
+        member.interaction._tag === "TrackerGraphReadReturned" &&
+        member.interaction.cause === "AttemptRestartAuthorityCheck" &&
+        member.interaction.selectionRole !== undefined
+      ) {
+        return `Restart authority graph result ${member.role} must not fabricate a selection role`
+      }
     }
     return concurrentInteractionGraphHasCycle(members)
       ? "concurrent interaction predecessor roles must form an acyclic graph"
@@ -1197,9 +1242,42 @@ const AuthoredProcessLifecycle = Schema.TaggedUnion({
   CurrentFirstReactivationAfterProcessDeath: {},
   ReactivationOwnerProcessGenerations: {}
 })
+
+/**
+ * Test-only choreography for an external provider fact: selecting the target
+ * worktree operation may happen early, but its controlled Git result is not
+ * ready until the exact Integrator candidate observation has returned.
+ */
+const AuthoredControlledProviderReadiness = Schema.Struct({
+  source: Schema.Struct({ candidateText: IntegratorCandidateText, correlation: IntegratorSessionCorrelation }),
+  target: Schema.Struct({ attemptId: AttemptId, taskId: TaskId })
+})
+/**
+ * Test-only choreography for an executor boundary: one exact successful Git
+ * promotion makes one exact initial Begin provider call ready.
+ */
+const AuthoredControlledExecutorReadiness = Schema.Struct({
+  source: Schema.Struct({
+    candidateCommit: GitCommitSha,
+    expectedTargetHead: GitCommitSha,
+    integrationTarget: IntegrationTarget
+  }),
+  target: Schema.Struct({ attemptId: AttemptId, taskId: TaskId })
+})
+/**
+ * Test-only choreography for an outer Integrator boundary: one exact accepted
+ * passive executor lifecycle change must be consumed before one exact Integrator request.
+ */
+const AuthoredControlledIntegratorReadiness = Schema.Struct({
+  source: Schema.Struct({ acceptedCommit: GitCommitSha, attemptId: AttemptId }),
+  target: Schema.Struct({ correlation: IntegratorSessionCorrelation })
+})
 const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCassette", {
   name: Schema.NonEmptyString,
   processLifecycle: Schema.optionalKey(AuthoredProcessLifecycle),
+  controlledProviderReadiness: Schema.optionalKey(Schema.Array(AuthoredControlledProviderReadiness)),
+  controlledExecutorReadiness: Schema.optionalKey(Schema.Array(AuthoredControlledExecutorReadiness)),
+  controlledIntegratorReadiness: Schema.optionalKey(Schema.Array(AuthoredControlledIntegratorReadiness)),
   schemaVersion: Schema.Literal(authoredScenarioCassetteVersion),
   startingFacts: Schema.Struct({
     executorWork: Schema.Literal("NoPriorReport"),
@@ -1214,6 +1292,172 @@ const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCasse
   }),
   story: Schema.Array(AuthoredCassetteStoryItem)
 })
+
+const integratorCorrelationEquivalence = Schema.toEquivalence(IntegratorSessionCorrelation)
+const controlledProviderReadinessIsWellFormed = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+    const relations = cassette.controlledProviderReadiness ?? []
+    for (const [index, relation] of relations.entries()) {
+      const targetIndexes = cassette.story.flatMap((item, storyIndex) =>
+        item._tag === "DalphSelects" &&
+        item.operation._tag === "ReconcileTaskWorktree" &&
+        item.operation.attemptId === relation.target.attemptId &&
+        item.operation.taskId === relation.target.taskId
+          ? [storyIndex]
+          : []
+      )
+      const requestIndexes = cassette.story.flatMap((item, storyIndex) =>
+        item._tag === "IntegratorRequestReceived" &&
+        integratorCorrelationEquivalence(item.correlation, relation.source.correlation)
+          ? [storyIndex]
+          : []
+      )
+      const sourceIndexes = cassette.story.flatMap((item, storyIndex) =>
+        item._tag === "IntegratorGitObservationReturned" && item.candidateText === relation.source.candidateText
+          ? [storyIndex]
+          : []
+      )
+      if (targetIndexes.length !== 1 || requestIndexes.length !== 1 || sourceIndexes.length !== 1) {
+        return `controlled provider readiness ${index} must name one exact target, Integrator session, and candidate observation`
+      }
+      const targetIndex = targetIndexes[0]
+      const requestIndex = requestIndexes[0]
+      const sourceIndex = sourceIndexes[0]
+      if (targetIndex === undefined || requestIndex === undefined || sourceIndex === undefined) {
+        return `controlled provider readiness ${index} is missing an authored endpoint`
+      }
+      if (targetIndex >= sourceIndex || requestIndex >= sourceIndex) {
+        return `controlled provider readiness ${index} must select its target and receive its Integrator request before the source observation`
+      }
+      const duplicates = relations.filter(
+        (candidate) =>
+          (candidate.target.attemptId === relation.target.attemptId &&
+            candidate.target.taskId === relation.target.taskId) ||
+          (candidate.source.candidateText === relation.source.candidateText &&
+            integratorCorrelationEquivalence(candidate.source.correlation, relation.source.correlation))
+      )
+      if (duplicates.length !== 1) return `controlled provider readiness ${index} must be one-to-one`
+    }
+    return undefined
+  }
+)
+
+const controlledExecutorReadinessIsWellFormed = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+    const candidateObservationOffset = 2
+    const promotionReadOffset = 3
+    const promotionResultOffset = 4
+    const relations = cassette.controlledExecutorReadiness ?? []
+    for (const [index, relation] of relations.entries()) {
+      const sourceIndexes = cassette.story.flatMap((item, storyIndex) => {
+        if (
+          item._tag !== "IntegratorRequestReceived" ||
+          !Equal.equals(item.correlation.integrationTarget, relation.source.integrationTarget) ||
+          item.correlation.expectedTargetHead !== relation.source.expectedTargetHead
+        ) {
+          return []
+        }
+        const result = cassette.story[storyIndex + 1]
+        const observation = cassette.story[storyIndex + candidateObservationOffset]
+        const promotionRead = cassette.story[storyIndex + promotionReadOffset]
+        const promotion = cassette.story[storyIndex + promotionResultOffset]
+        return result?._tag === "IntegratorResultReturned" &&
+          result.result._tag === "PreparedCandidate" &&
+          observation?._tag === "IntegratorGitObservationReturned" &&
+          observation.candidateText === result.result.candidateText &&
+          observation.observation._tag === "Commit" &&
+          observation.observation.commit === relation.source.candidateCommit &&
+          promotionRead?._tag === "TargetPromotionGitReadReturned" &&
+          promotionRead.candidateCommit === relation.source.candidateCommit &&
+          promotionRead.repository === relation.source.integrationTarget.repository &&
+          promotionRead.observation.currentHeadSha === relation.source.expectedTargetHead &&
+          promotion?._tag === "TargetPromotionCompareAndSetReturned" &&
+          promotion.result._tag === "Applied"
+          ? [storyIndex + promotionResultOffset]
+          : []
+      })
+      const targetSelectionIndexes = cassette.story.flatMap((item, storyIndex) =>
+        item._tag === "DalphSelects" &&
+        item.operation._tag === "ReconcileTaskWorktree" &&
+        item.operation.attemptId === relation.target.attemptId &&
+        item.operation.taskId === relation.target.taskId
+          ? [storyIndex]
+          : []
+      )
+      const targetIndexes = cassette.story.flatMap((item, storyIndex) =>
+        item._tag === "PlannedAttemptExecutorWorkReported" &&
+        item.request === "Begin" &&
+        item.report.attemptId === relation.target.attemptId
+          ? [storyIndex]
+          : []
+      )
+      if (sourceIndexes.length !== 1 || targetSelectionIndexes.length !== 1 || targetIndexes.length !== 1) {
+        return `controlled executor readiness ${index} must name one exact successful promotion, worktree selection, and Begin result`
+      }
+      const sourceIndex = sourceIndexes[0]
+      const targetSelectionIndex = targetSelectionIndexes[0]
+      const targetIndex = targetIndexes[0]
+      if (
+        sourceIndex === undefined ||
+        targetSelectionIndex === undefined ||
+        targetIndex === undefined ||
+        targetSelectionIndex >= targetIndex ||
+        sourceIndex >= targetIndex
+      ) {
+        return `controlled executor readiness ${index} must place successful promotion before Begin`
+      }
+      const duplicates = relations.filter(
+        (candidate) =>
+          (candidate.target.attemptId === relation.target.attemptId &&
+            candidate.target.taskId === relation.target.taskId) ||
+          (candidate.source.candidateCommit === relation.source.candidateCommit &&
+            candidate.source.expectedTargetHead === relation.source.expectedTargetHead &&
+            Equal.equals(candidate.source.integrationTarget, relation.source.integrationTarget))
+      )
+      if (duplicates.length !== 1) return `controlled executor readiness ${index} must be one-to-one`
+    }
+    return undefined
+  }
+)
+
+const controlledIntegratorReadinessIsWellFormed = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+    const relations = cassette.controlledIntegratorReadiness ?? []
+    for (const [index, relation] of relations.entries()) {
+      const sourceIndexes = cassette.story.flatMap((item, storyIndex) =>
+        item._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" &&
+        item.report._tag === "ExecutorWorkTerminal" &&
+        item.report.attemptId === relation.source.attemptId &&
+        item.report.result._tag === "Accepted" &&
+        item.report.result.acceptedResult.commit === relation.source.acceptedCommit
+          ? [storyIndex]
+          : []
+      )
+      const targetIndexes = cassette.story.flatMap((item, storyIndex) =>
+        item._tag === "IntegratorRequestReceived" &&
+        integratorCorrelationEquivalence(item.correlation, relation.target.correlation)
+          ? [storyIndex]
+          : []
+      )
+      if (sourceIndexes.length !== 1 || targetIndexes.length !== 1) {
+        return `controlled Integrator readiness ${index} must name one exact accepted passive lifecycle change and Integrator request`
+      }
+      const sourceIndex = sourceIndexes[0]
+      const targetIndex = targetIndexes[0]
+      if (sourceIndex === undefined || targetIndex === undefined || sourceIndex >= targetIndex) {
+        return `controlled Integrator readiness ${index} must place the accepted passive lifecycle change before the Integrator request`
+      }
+      const duplicates = relations.filter(
+        (candidate) =>
+          (candidate.source.attemptId === relation.source.attemptId &&
+            candidate.source.acceptedCommit === relation.source.acceptedCommit) ||
+          integratorCorrelationEquivalence(candidate.target.correlation, relation.target.correlation)
+      )
+      if (duplicates.length !== 1) return `controlled Integrator readiness ${index} must be one-to-one`
+    }
+    return undefined
+  }
+)
 
 const reactivationInputsHaveExplicitProcessLifecycle = Schema.makeFilter(
   (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
@@ -1615,6 +1859,11 @@ const AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteShape.check(
   .check(ambiguousBoundaryLossesImmediatelyCrash)
   .check(beginResponsesAreExecuting)
   .check(reactivationInputsHaveExplicitProcessLifecycle)
+  .check(
+    controlledProviderReadinessIsWellFormed,
+    controlledExecutorReadinessIsWellFormed,
+    controlledIntegratorReadinessIsWellFormed
+  )
   .check(lostExecutorResponsesRequireExplicitProjection)
   .check(completionFinalityStoryIsComplete)
   .check(admittedContinuationHoldHasExactAttemptChoiceClosure)

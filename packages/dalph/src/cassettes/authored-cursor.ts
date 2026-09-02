@@ -64,9 +64,14 @@ class AuthoredConcurrentReadBatchFailure extends Schema.TaggedError<AuthoredConc
 
 /** Raw operation identity observed at the real WorkflowTrace selection seam. */
 export interface AuthoredOperationCausalContext {
+  readonly graphReadCause?: "AttemptRestartAuthorityCheck" | "PostQuiescenceReconfirmation" | undefined
   readonly operationId: OperationId
   readonly predecessorOperationIds: ReadonlyArray<OperationId>
 }
+
+/** Narrows the two graph causes supported by the closed concurrent-group language. */
+export const authoredConcurrentGraphReadCause = (cause: string): AuthoredOperationCausalContext["graphReadCause"] =>
+  cause === "AttemptRestartAuthorityCheck" || cause === "PostQuiescenceReconfirmation" ? cause : undefined
 
 /**
  * A cassette-only lifecycle control. It is raised as an Effect defect so the
@@ -136,6 +141,7 @@ const storyPositionAfterReservation = (reservation: AuthoredCursorReservation): 
 interface ConcurrentInteractionGroupState {
   readonly consumedRoles: ReadonlySet<AuthoredConcurrentInteractionNode["role"]>
   readonly index: number
+  readonly operationContexts: ReadonlyMap<AuthoredConcurrentInteractionNode["role"], AuthoredOperationCausalContext>
 }
 
 type ConcurrentInteractionIncomingClaimKey =
@@ -157,6 +163,14 @@ type ConcurrentTaskClaimReadMember = Extract<
 type ConcurrentTaskWorkSpecificationMember = Extract<
   AuthoredConcurrentInteractionMember,
   { readonly _tag: "TaskWorkSpecificationReadReturned" }
+>
+type ConcurrentTrackerGraphMember = Extract<
+  AuthoredConcurrentInteractionMember,
+  { readonly _tag: "TrackerGraphReadReturned" }
+>
+type ConcurrentCoordinatorReturnMember = Extract<
+  AuthoredConcurrentInteractionMember,
+  { readonly _tag: "CoordinatorActivationReturned" }
 >
 
 type ConcurrentInteractionClaimDecision =
@@ -219,7 +233,11 @@ const prepareConcurrentInteractionState = (
       index
     }
   }
-  const state: ConcurrentInteractionGroupState = prior ?? { consumedRoles: new Set(), index }
+  const state: ConcurrentInteractionGroupState = prior ?? {
+    consumedRoles: new Set(),
+    index,
+    operationContexts: new Map()
+  }
   return { _tag: "Ready", index, item, state }
 }
 
@@ -228,7 +246,8 @@ const decideConcurrentInteractionClaim = (
   item: StoryItem | undefined,
   index: number,
   prior: ConcurrentInteractionGroupState | undefined,
-  claimKey: ConcurrentInteractionIncomingClaimKey
+  claimKey: ConcurrentInteractionIncomingClaimKey,
+  context?: AuthoredOperationCausalContext
 ): ConcurrentInteractionClaimDecision => {
   const prepared = prepareConcurrentInteractionState(item, index, prior)
   if (prepared._tag !== "Ready") return prepared
@@ -257,7 +276,54 @@ const decideConcurrentInteractionClaim = (
       index
     }
   }
+  const selectedGraphResult = prepared.item.members.find(
+    (node) => node.interaction._tag === "TrackerGraphReadReturned" && node.interaction.selectionRole === role
+  )
+  if (
+    selectedGraphResult?.interaction._tag === "TrackerGraphReadReturned" &&
+    context?.graphReadCause !== selectedGraphResult.interaction.cause
+  ) {
+    return {
+      _tag: "Failure",
+      detail: `concurrent graph selection ${role} requires cause ${selectedGraphResult.interaction.cause}`,
+      index
+    }
+  }
+  if (match.node.interaction._tag === "TrackerGraphReadReturned") {
+    if (context?.graphReadCause !== match.node.interaction.cause) {
+      return {
+        _tag: "Failure",
+        detail: `concurrent graph result ${role} requires cause ${match.node.interaction.cause}`,
+        index
+      }
+    }
+    const selectionRole = match.node.interaction.selectionRole
+    const selectionContext =
+      selectionRole === undefined ? undefined : prepared.state.operationContexts.get(selectionRole)
+    if (selectionRole !== undefined && selectionContext?.operationId !== context.operationId) {
+      return {
+        _tag: "Failure",
+        detail: `concurrent graph result ${role} does not match selection ${selectionRole}'s operation identity`,
+        index
+      }
+    }
+    if (
+      selectionRole === undefined &&
+      [...prepared.state.operationContexts.values()].some(({ operationId }) => operationId === context.operationId)
+    ) {
+      return { _tag: "Failure", detail: `concurrent graph result ${role} reuses an operation identity`, index }
+    }
+  }
   const consumedRoles = new Set(prepared.state.consumedRoles).add(role)
+  const recordsOperationContext =
+    context !== undefined &&
+    ((match.node.interaction._tag === "DalphSelects" && match.node.interaction.operation._tag === "ReadTrackerGraph") ||
+      (match.node.interaction._tag === "TrackerGraphReadReturned" &&
+        match.node.interaction.selectionRole === undefined))
+  const operationContexts = new Map([
+    ...prepared.state.operationContexts,
+    ...(recordsOperationContext ? ([[role, context]] as const) : [])
+  ])
   const completed = consumedRoles.size === prepared.item.members.length
   return {
     _tag: "Claimed",
@@ -265,7 +331,7 @@ const decideConcurrentInteractionClaim = (
     index,
     item: prepared.item,
     member: match.node.interaction,
-    nextState: completed ? undefined : { consumedRoles, index }
+    nextState: completed ? undefined : { consumedRoles, index, operationContexts }
   }
 }
 
@@ -909,14 +975,15 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     new AuthoredCassetteInteractionMismatch({ actual: detail, expected: "ConcurrentInteractionGroup", storyPosition })
 
   const claimConcurrentInteraction = Effect.fn("AuthoredCassette.claimConcurrentInteraction")(function* (
-    claimKey: ConcurrentInteractionIncomingClaimKey
+    claimKey: ConcurrentInteractionIncomingClaimKey,
+    context?: AuthoredOperationCausalContext
   ) {
     const result = yield* transition.withPermits(1)(
       Effect.gen(function* () {
         const index = yield* SubscriptionRef.get(position)
         const item = story[index]
         const prior = yield* Ref.get(concurrentInteractionGroupState)
-        const decision = decideConcurrentInteractionClaim(item, index, prior, claimKey)
+        const decision = decideConcurrentInteractionClaim(item, index, prior, claimKey, context)
         if (decision._tag !== "Claimed") return decision
         return yield* Effect.uninterruptible(
           Effect.gen(function* () {
@@ -939,9 +1006,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   })
 
   const claimConcurrentSelection = Effect.fn("AuthoredCassette.claimConcurrentSelection")(function* (
-    operation: CassetteDecision
+    operation: CassetteDecision,
+    context?: AuthoredOperationCausalContext
   ): Effect.fn.Return<Option.Option<ConcurrentSelectionMember>, AuthoredCassetteInteractionMismatch> {
-    const claimed = yield* claimConcurrentInteraction({ _tag: "DalphSelects", operation })
+    const claimed = yield* claimConcurrentInteraction({ _tag: "DalphSelects", operation }, context)
     if (Option.isNone(claimed)) return Option.none<ConcurrentSelectionMember>()
     if (claimed.value._tag !== "DalphSelects") {
       return yield* concurrentInteractionFailure(
@@ -1000,6 +1068,38 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       return Option.some(claimed.value)
     }
   )
+
+  const claimConcurrentTrackerGraph = Effect.fn("AuthoredCassette.claimConcurrentTrackerGraph")(function* (
+    context: AuthoredOperationCausalContext | undefined
+  ): Effect.fn.Return<Option.Option<ConcurrentTrackerGraphMember>, AuthoredCassetteInteractionMismatch> {
+    if (context?.graphReadCause === undefined) return Option.none<ConcurrentTrackerGraphMember>()
+    const claimed = yield* claimConcurrentInteraction(
+      { _tag: "TrackerGraphReadReturned", cause: context.graphReadCause },
+      context
+    )
+    if (Option.isNone(claimed)) return Option.none<ConcurrentTrackerGraphMember>()
+    if (claimed.value._tag !== "TrackerGraphReadReturned") {
+      return yield* concurrentInteractionFailure(
+        "a tracker-graph result resolved to an incompatible group member",
+        yield* SubscriptionRef.get(position)
+      )
+    }
+    return Option.some(claimed.value)
+  })
+
+  const claimConcurrentCoordinatorReturn = Effect.fn("AuthoredCassette.claimConcurrentCoordinatorReturn")(function* (
+    decision: CoordinatorActivationDecision
+  ): Effect.fn.Return<Option.Option<ConcurrentCoordinatorReturnMember>, AuthoredCassetteInteractionMismatch> {
+    const claimed = yield* claimConcurrentInteraction({ _tag: "CoordinatorActivationReturned", decision })
+    if (Option.isNone(claimed)) return Option.none<ConcurrentCoordinatorReturnMember>()
+    if (claimed.value._tag !== "CoordinatorActivationReturned") {
+      return yield* concurrentInteractionFailure(
+        "a coordinator return resolved to an incompatible group member",
+        yield* SubscriptionRef.get(position)
+      )
+    }
+    return Option.some(claimed.value)
+  })
 
   const currentConcurrentTrackerReadBatch = Effect.fn("AuthoredCassette.currentConcurrentTrackerReadBatch")(
     function* () {
@@ -1535,7 +1635,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeDalphSelectionForLoop: StoryCursor["consumeDalphSelectionFor"] = Effect.fn(
     "AuthoredCassette.consumeDalphSelectionForLoop"
   )(function* (operation, context) {
-    const grouped = yield* claimConcurrentSelection(operation)
+    const grouped = yield* claimConcurrentSelection(operation, context)
     return yield* Option.match(grouped, {
       onNone: () => consumeDalphSelectionOutsideConcurrentGroup(operation, context),
       onSome: Effect.succeed
@@ -1564,6 +1664,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeCoordinatorActivationReturnedFor: StoryCursor["consumeCoordinatorActivationReturnedFor"] = Effect.fn(
     "AuthoredCassette.consumeCoordinatorActivationReturnedFor"
   )(function* (decision) {
+    const grouped = yield* claimConcurrentCoordinatorReturn(decision)
+    if (Option.isSome(grouped)) {
+      return AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.make({ decision: grouped.value.decision })
+    }
     const claimed = yield* claimNextPublishedThroughTransition(
       (item): item is typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type =>
         item?._tag === "CoordinatorActivationReturned" &&
@@ -2329,32 +2433,31 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     return yield* awaitInFlightOperatorItems
   })
   const pauseAtCoordinatorProcessDeath = Effect.gen(function* () {
-    const reservedDeath = yield* transition.withPermits(1)(
+    const reservedBoundary = yield* transition.withPermits(1)(
       Effect.gen(function* () {
         const active = yield* Ref.get(reservation)
-        if (
-          active === undefined ||
-          active._tag !== "ReservedItem" ||
-          !isAuthoredSafelySuspendedExecutorReport(active.item) ||
-          story[active.index + 1]?._tag !== "CoordinatorProcessDies"
-        ) {
-          return Option.none<typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type>()
+        if (active === undefined || !isAuthoredSafelySuspendedExecutorReport(active.item)) {
+          return { _tag: "NoReservedSafe" as const }
+        }
+        if (active._tag !== "ReservedItem" || story[active.index + 1]?._tag !== "CoordinatorProcessDies") {
+          return { _tag: "ReservedSafeWithoutImmediateDeath" as const }
         }
         const item = story[active.index + 1]
         /* v8 ignore next -- @preserve The guard above narrows this exact authored successor. */
-        if (item?._tag !== "CoordinatorProcessDies") return Option.none()
+        if (item?._tag !== "CoordinatorProcessDies") return { _tag: "ReservedSafeWithoutImmediateDeath" as const }
         yield* Ref.set(reservation, {
           _tag: "ReservedSafeThroughProcessDeath",
           followingProcessDeath: { index: active.index + 1, item },
           index: active.index,
           item: active.item
         })
-        return Option.some(item)
+        return { _tag: "ReservedSafeWithImmediateDeath" as const, item }
       })
     )
-    if (Option.isSome(reservedDeath)) {
+    if (reservedBoundary._tag === "ReservedSafeWithoutImmediateDeath") return
+    if (reservedBoundary._tag === "ReservedSafeWithImmediateDeath") {
       const storyPosition = (yield* SubscriptionRef.get(position)) + reservedStoryPositionsThroughFollowingProcessDeath
-      yield* options.onOccurrence?.({ item: reservedDeath.value, storyPosition }) ?? Effect.void
+      yield* options.onOccurrence?.({ item: reservedBoundary.item, storyPosition }) ?? Effect.void
       return yield* Effect.die(new AuthoredCoordinatorProcessDies({ storyPosition: storyPosition - 1 }))
     }
     const bypassControlBoundary = Option.isSome(yield* SubscriptionRef.get(controlDirectionBeforeAdmission))
@@ -2610,6 +2713,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const consumeTrackerGraphFor: StoryCursor["consumeTrackerGraphFor"] = Effect.fn(
     "AuthoredCassette.consumeTrackerGraphFor"
   )(function* (target, context) {
+    const grouped = yield* claimConcurrentTrackerGraph(context)
+    if (Option.isSome(grouped)) {
+      return yield* Schema.decodeUnknownEffect(AuthoredTrackerGraphReadResult)(grouped.value).pipe(Effect.orDie)
+    }
     const concurrent = yield* consumeConcurrentTrackerReadResult(
       context,
       (member) => member.operation._tag === "ReadTrackerGraph" && member.operation.target === target

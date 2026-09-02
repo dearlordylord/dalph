@@ -1087,9 +1087,8 @@ const safelySuspendedStoryBeforeAssertions: ReadonlyArray<AuthoredCassetteStoryI
   }),
   decodeStoryItem({ _tag: "CoordinatorProcessDies" }),
   decodeStoryItem({
-    _tag: "PlannedAttemptExecutorWorkReported",
-    report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:0" },
-    request: "Suspend"
+    _tag: "PlannedAttemptExecutorProjectionReturned",
+    report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:0" }
   }),
   decodeStoryItem({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }),
   decodeStoryItem({ _tag: "TrackerGraphReadReturned", graph: singletonGraph })
@@ -1124,7 +1123,7 @@ export const lostPlannedWorktreeSafelySuspendsAuthoredCassette: ScenarioCassette
         {
           _tag: "PlannedAttemptExecutorCommandProjectionObserved",
           attemptId: "attempt:A:0",
-          report: "ExecutorWorkExecuting"
+          report: "ExecutorWorkSafelySuspended"
         },
         { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkSafelySuspended" }
       ],
@@ -1821,6 +1820,70 @@ const changedAttemptRestartWithHeldContinuationThroughChoice = [
   { ...changedAttemptRestartRequest, requestNonce: "restart-held-continuation-A" }
 ] as const
 
+/** Final activation G2 and Restart authority are independent reads with only their real internal causal edges. */
+const changedAttemptHeldResumeAuthorityGroup = {
+  _tag: "ConcurrentInteractionGroup",
+  members: [
+    {
+      interaction: { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      predecessorRoles: [],
+      role: "activation-finality-selection"
+    },
+    {
+      interaction: {
+        _tag: "TrackerGraphReadReturned",
+        cause: "PostQuiescenceReconfirmation",
+        graph: singletonGraph,
+        selectionRole: "activation-finality-selection"
+      },
+      predecessorRoles: ["activation-finality-selection"],
+      role: "activation-finality-result"
+    },
+    {
+      interaction: {
+        _tag: "CoordinatorActivationReturned",
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      },
+      predecessorRoles: ["activation-finality-result"],
+      role: "activation-return"
+    },
+    {
+      interaction: { _tag: "TrackerGraphReadReturned", cause: "AttemptRestartAuthorityCheck", graph: singletonGraph },
+      predecessorRoles: [],
+      role: "restart-authority-graph"
+    },
+    {
+      interaction: { _tag: "TaskWorkSpecificationReadReturned", ...changedAttemptSpecification },
+      predecessorRoles: ["restart-authority-graph"],
+      role: "restart-authority-specification"
+    },
+    {
+      interaction: { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+      predecessorRoles: ["restart-authority-specification"],
+      role: "restart-authority-claim"
+    },
+    {
+      interaction: {
+        _tag: "DalphSelects",
+        operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:A:1", taskId: "A" }
+      },
+      predecessorRoles: ["restart-authority-claim"],
+      role: "successor-worktree-selection"
+    },
+    {
+      interaction: {
+        _tag: "PlannedAttemptExecutorWorkReported",
+        report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:1" },
+        request: "Begin"
+      },
+      predecessorRoles: ["successor-worktree-selection"],
+      role: "successor-begin-result"
+    }
+  ]
+} as const
+
+const changedAttemptSuccessorAuthorityPrefixLength = 2
+
 /** A terminal Restart choice cancels an admitted but unissued Resume, then ordinary authority starts P2. */
 export const changedAttemptRestartCancelsHeldResumeAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
@@ -1829,8 +1892,12 @@ export const changedAttemptRestartCancelsHeldResumeAuthoredCassette: ScenarioCas
   name: "Alice restarts after Dalph cancels the admitted but unissued Resume",
   story: [
     ...changedAttemptRestartWithHeldContinuationThroughChoice,
-    ...changedAttemptRestartAuthorityReads,
-    ...changedAttemptSuccessorStory,
+    changedAttemptHeldResumeAuthorityGroup,
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
+    ...changedAttemptSuccessorStory.slice(changedAttemptSuccessorAuthorityPrefixLength),
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: singletonGraph },
     {
       ...attemptChoiceExpectedBehavior,
       taskWork: { absences: [], results: [{ _tag: "PlannedWorkForTaskCompleted", taskId: "A" }] }
@@ -2050,7 +2117,7 @@ export const compatibleTargetAdvanceContinuesAuthoredCassette: ScenarioCassette 
         {
           _tag: "PlannedAttemptExecutorCommandProjectionObserved",
           attemptId: "attempt:A:0",
-          report: "ExecutorWorkExecuting"
+          report: "ExecutorWorkSafelySuspended"
         },
         { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkSafelySuspended" },
         {
@@ -2129,7 +2196,7 @@ export const incompatibleTargetRewriteSafelySuspendsAuthoredCassette: ScenarioCa
         {
           _tag: "PlannedAttemptExecutorCommandProjectionObserved",
           attemptId: "attempt:A:0",
-          report: "ExecutorWorkExecuting"
+          report: "ExecutorWorkSafelySuspended"
         },
         { _tag: "PlannedAttemptExecutorWorkReported", attemptId: "attempt:A:0", report: "ExecutorWorkSafelySuspended" },
         { _tag: "PlannedAttemptExecutorWorkResponsibilityBegan", attemptId: "attempt:C:0", taskId: "C" },
@@ -4346,6 +4413,11 @@ const doubleDiamondAcceptedReport = (attempt: {
   }
 })
 
+const doubleDiamondAcceptedLifecycleChange = (attempt: {
+  readonly attemptId: string
+  readonly taskId: (typeof doubleDiamondTaskIds)[number]
+}) => ({ ...doubleDiamondAcceptedReport(attempt), _tag: "PlannedAttemptExecutorPassiveLifecycleChanged" as const })
+
 type DoubleDiamondTaskId = (typeof doubleDiamondTaskIds)[number]
 type DoubleDiamondIntegrationPositions = {
   readonly queuedAt: number
@@ -4374,15 +4446,15 @@ const fiveTaskDiamondIntegrationPositions = {
 
 const doubleDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 108, startedAt: 114, targetLineageObservedAt: 119 },
-  C: { queuedAt: 111, startedAt: 160, targetLineageObservedAt: 162 },
+  B: { queuedAt: 110, startedAt: 116, targetLineageObservedAt: 119 },
+  C: { queuedAt: 113, startedAt: 157, targetLineageObservedAt: 159 },
   D: { queuedAt: 214, startedAt: 256, targetLineageObservedAt: 258 },
   E: { queuedAt: 326, startedAt: 328, targetLineageObservedAt: 340 },
   F: { queuedAt: 327, startedAt: 372, targetLineageObservedAt: 374 },
   G: { queuedAt: 541, startedAt: 542, targetLineageObservedAt: 552 },
   H: { queuedAt: 442, startedAt: 444, targetLineageObservedAt: 456 },
   I: { queuedAt: 443, startedAt: 488, targetLineageObservedAt: 490 },
-  X: { queuedAt: 148, startedAt: 194, targetLineageObservedAt: 224 }
+  X: { queuedAt: 162, startedAt: 194, targetLineageObservedAt: 224 }
 } as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
 
 const integrationPositionsForDiamondTask = (
@@ -4390,6 +4462,57 @@ const integrationPositionsForDiamondTask = (
   fiveTaskDiamond: boolean
 ): DoubleDiamondIntegrationPositions =>
   fiveTaskDiamond ? fiveTaskDiamondIntegrationPositions[taskId] : doubleDiamondIntegrationPositions[taskId]
+
+const doubleDiamondIntegrationSession = (
+  attempt: { readonly attemptId: string; readonly taskId: DoubleDiamondTaskId },
+  repository = "/dalph/cassettes/double-diamond.git"
+) => {
+  const acceptedResultCommit = doubleDiamondAcceptedCommit(attempt.taskId)
+  const expectedTargetHead = "2222222222222222222222222222222222222222"
+  const candidateText = `refs/heads/dalph/integrator-candidate-${attempt.taskId}`
+  const attemptName = attempt.attemptId.replaceAll(":", "-")
+  const fiveTaskDiamond = repository === "/dalph/cassettes/five-task-diamond.git"
+  const worktreeRoot = fiveTaskDiamond ? "/dalph/cassettes/five-task-diamond" : "/dalph/cassettes/double-diamond"
+  const executor = fiveTaskDiamond ? "executor:five-task-diamond" : "executor:double-diamond"
+  const { queuedAt, startedAt, targetLineageObservedAt } = integrationPositionsForDiamondTask(
+    attempt.taskId,
+    fiveTaskDiamond
+  )
+  const candidateResource = `integrator-resource:$authored-run:${attempt.attemptId}:${startedAt}:${targetLineageObservedAt}:${expectedTargetHead}:${acceptedResultCommit}:${repository}:refs/heads/master`
+  return {
+    candidateText,
+    correlation: {
+      acceptedResult: {
+        commit: acceptedResultCommit,
+        evidenceManifest: {
+          byteLength: 281,
+          digest: "1111111111111111111111111111111111111111111111111111111111111111"
+        }
+      },
+      candidateResource,
+      expectedTargetHead,
+      integrationTarget: { repository, ref: "refs/heads/master" },
+      plannedAttempt: {
+        attemptId: attempt.attemptId,
+        baseSha: expectedTargetHead,
+        branch: `refs/heads/dalph/${attemptName}`,
+        executor,
+        runId: "$authored-run",
+        taskId: attempt.taskId,
+        taskRevision: makeTaskWorkSpecification({
+          body: `Complete double-diamond task ${attempt.taskId}.`,
+          taskId: TaskId.make(attempt.taskId),
+          title: `Complete ${attempt.taskId}`
+        }).fingerprint,
+        worktree: `${worktreeRoot}/${attemptName}`
+      },
+      queuedAt,
+      sessionId: candidateResource.replace("integrator-resource:", "integrator-session:"),
+      startedAt,
+      targetLineageObservedAt
+    }
+  }
+}
 
 /** Every accepted executor result crosses the ordinary integration and completion-finality boundaries. */
 const doubleDiamondIntegrationFinality = (
@@ -4403,46 +4526,10 @@ const doubleDiamondIntegrationFinality = (
   }> = [attempt],
   repository = "/dalph/cassettes/double-diamond.git"
 ) => {
-  const acceptedResultCommit = doubleDiamondAcceptedCommit(attempt.taskId)
   const candidateCommit = doubleDiamondCandidateCommit(attempt.taskId)
-  const expectedTargetHead = "2222222222222222222222222222222222222222"
-  const candidateText = `refs/heads/dalph/integrator-candidate-${attempt.taskId}`
-  const attemptName = attempt.attemptId.replaceAll(":", "-")
-  const fiveTaskDiamond = repository === "/dalph/cassettes/five-task-diamond.git"
-  const worktreeRoot = fiveTaskDiamond ? "/dalph/cassettes/five-task-diamond" : "/dalph/cassettes/double-diamond"
-  const executor = fiveTaskDiamond ? "executor:five-task-diamond" : "executor:double-diamond"
-  const { queuedAt, startedAt, targetLineageObservedAt } = integrationPositionsForDiamondTask(
-    attempt.taskId,
-    fiveTaskDiamond
-  )
-  const candidateResource = `integrator-resource:$authored-run:${attempt.attemptId}:${startedAt}:${targetLineageObservedAt}:${expectedTargetHead}:${acceptedResultCommit}:${repository}:refs/heads/master`
-  const correlation = {
-    acceptedResult: {
-      commit: acceptedResultCommit,
-      evidenceManifest: { byteLength: 281, digest: "1111111111111111111111111111111111111111111111111111111111111111" }
-    },
-    candidateResource,
-    expectedTargetHead,
-    integrationTarget: { repository, ref: "refs/heads/master" },
-    plannedAttempt: {
-      attemptId: attempt.attemptId,
-      baseSha: expectedTargetHead,
-      branch: `refs/heads/dalph/${attemptName}`,
-      executor,
-      runId: "$authored-run",
-      taskId: attempt.taskId,
-      taskRevision: makeTaskWorkSpecification({
-        body: `Complete double-diamond task ${attempt.taskId}.`,
-        taskId: TaskId.make(attempt.taskId),
-        title: `Complete ${attempt.taskId}`
-      }).fingerprint,
-      worktree: `${worktreeRoot}/${attemptName}`
-    },
-    queuedAt,
-    sessionId: candidateResource.replace("integrator-resource:", "integrator-session:"),
-    startedAt,
-    targetLineageObservedAt
-  }
+  const { candidateText, correlation } = doubleDiamondIntegrationSession(attempt, repository)
+  const expectedTargetHead = correlation.expectedTargetHead
+  const acceptedResultCommit = correlation.acceptedResult.commit
   return [
     ...(continueQueuedIntegration
       ? []
@@ -4541,29 +4628,24 @@ const doubleDiamondRestartIntegrationAuthorization = () => [
   }
 ]
 
-/** X's worktree follows B's candidate Git observation; X starts after B's successful promotion CAS and before completion finality. */
-const doubleDiamondRestartedBIntegrationFinality = () =>
-  doubleDiamondIntegrationFinality(
+/** X's worktree request is selected early; controlled Git readiness follows B's exact candidate observation. */
+const doubleDiamondRestartedBIntegrationFinality = () => [
+  decodeStoryItem({
+    _tag: "DalphSelects" as const,
+    operation: { _tag: "ReconcileTaskWorktree" as const, ...doubleDiamondAttempts.x }
+  }),
+  ...doubleDiamondIntegrationFinality(
     doubleDiamondAttempts.b,
     doubleDiamondGraphs.xObservedDuringRestart,
     [],
     true
   ).flatMap(
     (item): ReadonlyArray<AuthoredCassetteStoryItem> =>
-      item._tag === "IntegratorGitObservationReturned"
-        ? [
-            decodeStoryItem(item),
-            decodeStoryItem({
-              _tag: "DalphSelects" as const,
-              operation: { _tag: "ReconcileTaskWorktree" as const, ...doubleDiamondAttempts.x }
-            })
-          ]
-        : item._tag === "TargetPromotionCompareAndSetReturned"
-          ? [decodeStoryItem(item), decodeStoryItem(doubleDiamondExecutorReport(doubleDiamondAttempts.x))]
-          : item._tag === "CompletionTaskRequestReturned"
-            ? [decodeStoryItem(item), decodeStoryItem(doubleDiamondAcceptedReport(doubleDiamondAttempts.x))]
-            : [decodeStoryItem(item)]
+      item._tag === "TargetPromotionCompareAndSetReturned"
+        ? [decodeStoryItem(item), decodeStoryItem(doubleDiamondExecutorReport(doubleDiamondAttempts.x))]
+        : [decodeStoryItem(item)]
   )
+]
 
 /** The real delivery runtime consumes a staggered double diamond and reconstructs both middle positions before observing X. */
 export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
@@ -4571,6 +4653,28 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
 )({
   _tag: "AuthoredScenarioCassette",
   name: "accepted results settle through integration and later tracker observations consume a staggered double diamond while restart-delayed X waits for capacity",
+  controlledProviderReadiness: [
+    { source: doubleDiamondIntegrationSession(doubleDiamondAttempts.b), target: doubleDiamondAttempts.x }
+  ],
+  controlledExecutorReadiness: [
+    {
+      source: {
+        candidateCommit: doubleDiamondCandidateCommit(doubleDiamondAttempts.b.taskId),
+        expectedTargetHead: doubleDiamondIntegrationSession(doubleDiamondAttempts.b).correlation.expectedTargetHead,
+        integrationTarget: doubleDiamondIntegrationSession(doubleDiamondAttempts.b).correlation.integrationTarget
+      },
+      target: doubleDiamondAttempts.x
+    }
+  ],
+  controlledIntegratorReadiness: [
+    {
+      source: {
+        acceptedCommit: doubleDiamondAcceptedCommit(doubleDiamondAttempts.x.taskId),
+        attemptId: doubleDiamondAttempts.x.attemptId
+      },
+      target: { correlation: doubleDiamondIntegrationSession(doubleDiamondAttempts.c).correlation }
+    }
+  ],
   schemaVersion: 1,
   startingFacts: {
     executorWork: "NoPriorReport",
@@ -4627,6 +4731,7 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
         taskId: doubleDiamondAttempts.c.taskId
       }
     },
+    doubleDiamondAcceptedLifecycleChange(doubleDiamondAttempts.x),
     ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.c, doubleDiamondGraphs.bComplete, [], true),
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.middlePairComplete, [
       doubleDiamondAttempts.d

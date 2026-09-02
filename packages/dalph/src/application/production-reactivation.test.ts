@@ -1726,10 +1726,7 @@ it.effect("a later tracker edit waits for the next independent notification or t
     expect(beforeSecond.executorCalls).toEqual([])
     expect(result.activeActivationCount).toBe(2)
     expect(result.activeSources).toEqual(["TrackerNotification", "TrackerNotification"])
-    expect(result.executorCalls).toEqual([
-      { command: "Suspend", taskId: "A" },
-      { command: "observe", taskId: "A" }
-    ])
+    expect(result.executorCalls).toEqual([{ command: "Suspend", taskId: "A" }])
     expect(
       result.journalRecords.filter(
         ({ event }) =>
@@ -1834,10 +1831,7 @@ it.effect.each(completeAuthorityConstraintCases)(
         source: "Timer",
         threeExecuting: true
       })
-      expect(result.executorCalls).toEqual([
-        { command: "Suspend", taskId: "B" },
-        { command: "observe", taskId: "B" }
-      ])
+      expect(result.executorCalls).toEqual([{ command: "Suspend", taskId: "B" }])
       expect(result.executorCalls.filter(({ taskId }) => taskId === "A" || taskId === "C")).toEqual([])
       expectOneSuspensionAfterObservation(
         result.journalRecords,
@@ -2142,7 +2136,6 @@ it.effect("production refresh recovers a constraint observed before a crashed su
     }
     expect(result.executorCalls).toEqual([
       { command: "Suspend", taskId: "A" },
-      { command: "observe", taskId: "A" },
       { command: "Begin", taskId: "B" }
     ])
     if (constraint === undefined) {

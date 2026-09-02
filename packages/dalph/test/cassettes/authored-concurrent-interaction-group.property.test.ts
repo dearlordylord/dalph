@@ -140,6 +140,9 @@ const consumeRole = (
       return cursor.consumeTaskClaimReadFor(member.taskId).pipe(Effect.asVoid)
     case "PlannedAttemptExecutorWorkReported":
       return Effect.die(`active authority fixture role ${role} unexpectedly contains an executor report`)
+    case "CoordinatorActivationReturned":
+    case "TrackerGraphReadReturned":
+      return Effect.die(`active authority fixture role ${role} unexpectedly contains a lifecycle causal member`)
   }
 }
 

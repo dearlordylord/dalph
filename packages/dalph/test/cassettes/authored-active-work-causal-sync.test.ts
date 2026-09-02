@@ -1367,6 +1367,20 @@ it.effect("preserves named C2 Safe failure families and reconciles a committed l
       })
     }
 
+    const laterDeath = AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.make({})
+    const nonDeathCursor = yield* makeStoryCursor([safe, continued, laterDeath])
+    const nonDeathReserved = yield* nonDeathCursor.consumeExecutorReportFor("Suspend", correlation.attemptId)
+    if (!isSafelySuspendedExecutorReport(nonDeathReserved)) {
+      return yield* Effect.die("C2 Safe was not reserved before the non-death append probe")
+    }
+    yield* nonDeathCursor.pauseAtCoordinatorProcessDeath
+    expect(yield* nonDeathCursor.storyPosition).toBe(0)
+    yield* nonDeathCursor.settleSafelySuspendedExecutorReport(nonDeathReserved)
+    expect(yield* nonDeathCursor.consumeAttemptChoice).toEqual(Option.some(continued))
+    const laterDeathExit = yield* nonDeathCursor.pauseAtCoordinatorProcessDeath.pipe(Effect.exit)
+    expect(Exit.isFailure(laterDeathExit)).toBe(true)
+    expect(yield* nonDeathCursor.storyPosition).toBe(3)
+
     const settledSafeOccurrences = yield* Ref.make(0)
     const cursor = yield* makeStoryCursor(
       [safe, AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.make({}), continued],

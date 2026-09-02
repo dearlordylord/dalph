@@ -1066,6 +1066,39 @@ few matcher updates, not production serialization. No production authority,
 Journal fact, derived frontier, resource position, or provider request is
 added or persisted.
 
+### Downstream #268 graph additions and provider choreography
+
+Issue #268 composes two later cuts that the earlier four-case amendment could
+not state truthfully. Both cuts reuse this one causal-group matcher and cursor
+permit; they add no production scheduler, provider call, or workflow authority.
+
+The changed-attempt restart cut contains two independent graph-read lanes. A
+post-quiescence graph result follows its exact `ReadTrackerGraph` selection and
+is correlated by the production trace's existing operation identity and
+`PostQuiescenceReconfirmation` cause; the activation return follows that
+result. The restart-authority graph result carries the distinct existing
+`AttemptRestartAuthorityCheck` cause and has no fabricated selection. The
+closed member language therefore also admits the existing
+`TrackerGraphReadReturned` and `CoordinatorActivationReturned` forms. Missing,
+wrong, duplicated, or crossed operation identities and causes fail closed.
+
+The resulting closed language has six forms. This section supersedes the
+earlier four-case count, but it deliberately retains the earlier rejection of
+executor projections and arbitrary story items inside the group.
+
+The ten-task capstone needs a different, narrower test-only relation. After B's
+successful promotion compare-and-set, X begins while B completion finality and
+C's pre-integration lineage read may continue. The accepted #167 chronology
+then requires X's exact terminal accepted passive lifecycle change before C crosses the
+outer Integrator boundary. It does not require X before B cleanup or C lineage
+preflight. The existing controlled-provider readiness registry therefore owns
+one additional exact relation: X's accepted passive lifecycle change, including AttemptId
+and commit, releases C's full Integrator session correlation. C's Integrator
+request waits on the Deferred before claiming the cursor, without holding the
+cursor permit. Foreign or non-accepted lifecycle changes do not release it;
+unrelated Integrator requests do not wait. This is external test choreography,
+not a Dalph dependency or production scheduling rule.
+
 ### Accepted scenario-to-test mapping
 
 The following names are the direct implementation evidence for the accepted
@@ -1074,7 +1107,9 @@ not claimed as #309 implementation evidence.
 
 | Chronological result | Current executable proof or downstream status |
 |---|---|
-| The closed four-case member union decodes exact noncausal selections, Begin/Executing responses, exact specification results, and exact current-claim results; encode/decode preserves every valid member and edge | `packages/dalph/test/cassettes/authored-domain.test.ts` — `accepts the four exact interaction forms in a causal concurrent group`; `packages/dalph/test/cassettes/authored-domain.property.test.ts` — `roundtrips every closed causal group member and predecessor graph through the story-item boundary` |
+| The changed-attempt restart admits all 56 topological orders of its independent three-node activation-finality lane and five-node Restart-authority lane, preserves exact graph-read cause and operation identity, and advances once | `packages/dalph/test/cassettes/authored-concurrent-graph-causality.test.ts` — `accepts all 56 legal interleavings of finality and the complete Restart authority lane`; exact correlation, fail-closed retry, and schema-negative tests in the same file |
+| B finality and C lineage preflight may finish before X, while the exact C Integrator request remains pending until X's exact terminal accepted passive lifecycle change is consumed and releases it once | `packages/dalph/test/cassettes/authored-provider-readiness.test.ts` — exact source/target, foreign, unrelated, malformed, pull-versus-passive-boundary, and no-timeout proofs; `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `consumes a staggered graph while restart-added X waits for recovered capacity` |
+| The closed six-case member union decodes exact noncausal selections, Begin/Executing responses, exact specification results, exact current-claim results, causally identified graph returns, and coordinator activation returns; encode/decode preserves every valid member and edge | `packages/dalph/test/cassettes/authored-domain.test.ts` and `packages/dalph/test/cassettes/authored-domain.property.test.ts` cover the closed member surface and round-trip; `packages/dalph/test/cassettes/authored-concurrent-graph-causality.test.ts` covers graph-return identity and activation-return causality |
 | Duplicate tag-plus-TaskId T/R keys even with different outputs, unsupported returned/failure/control tags including executor projections, causal selections, invalid executor members, batches, and nested groups fail decoding | `packages/dalph/test/cassettes/authored-domain.test.ts` — `rejects ambiguous specification and claim keys and every unsupported grouped interaction`; `rejects causal selections and non-Begin-Executing reports inside a concurrent interaction group` |
 | One task's exact T consumes through `consumeTaskWorkSpecificationFor` and enables only its Q while another task's selected specification result is Deferred; foreign, early, and duplicate task results fail without mutation | `packages/dalph/test/cassettes/scenario.test.ts` — `lets A reach claim while an independent grouped specification result remains in flight`; `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `claims exact specification and current-claim results once without crossing task lanes` |
 | After Q, a blocked controlled `currentObservation` leaves exact R, occurrence, and position untouched; authority failure or interruption while that Deferred is blocked fabricates no R | `packages/dalph/test/cassettes/scenario.test.ts` — `does not fabricate an exact current-claim return before controlled authority success`, with deterministic result, failure, and pre-result-interruption cases |
