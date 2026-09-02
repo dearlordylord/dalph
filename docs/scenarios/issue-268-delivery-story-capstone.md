@@ -3,11 +3,14 @@
 Owning issue: [#268](https://github.com/dearlordylord/dalph/issues/268)
 
 Status: proposed #268 scenario refinement after deterministic controlled-Effect
-probes. Repository-owner acceptance and the blocking #309 amendment named below
-are required before behavior-changing implementation. Issue #268 owns this
-capstone chronology and its cassette-driver settlement boundaries; the closed
-#267 scenario remains evidence composed by this story, not the owner of these
-new requirements.
+probes. In the current repository-owner conversation, the owner accepted the
+two-judge production-change rule below. The independent review is complete and
+its exact decision is recorded below; the documentation commit containing that
+record activates the rule. The blocking #309 amendment named below remains
+required for capstone implementation. Issue #268 owns this capstone chronology
+and its cassette-driver settlement boundaries; the closed #267 scenario
+remains evidence composed by this story, not the owner of these new
+requirements.
 
 ## Governing behavior and blocking edge
 
@@ -81,9 +84,55 @@ cassette language for the two actual authority groups. No Quint law governs
 cursor playback; the production laws above constrain the facts that playback
 must preserve.
 
-This scenario refines only controlled cassette composition. It preserves every
-linked production rule and adds no tracker, Git, executor, Journal, capacity,
-choice, finality, or retry authority.
+### Two-judge gate for a production behavior change discovered by the capstone
+
+A failing capstone may expose an ordinary production defect instead of a
+cassette-composition defect. A production behavior change is permitted only
+after these two judges independently make and record the same judgment:
+
+1. The **main agent thread (the orchestrator)** makes the context-aware,
+   dependent judgment that the change improves production correctness or code
+   quality, aligns with this accepted vertical goal, and is necessary because
+   a cassette-only workaround would falsify the production behavior.
+2. A separate **unbiased sub-agent reviewer** receives the standalone
+   production scenario, governing invariants, and production code or diff.
+   The reviewer is not given the main thread's conclusion and is not prompted
+   to make the cassette pass. From that blind input, the reviewer independently
+   concludes whether the change improves production correctness or code
+   quality.
+
+Both written judgments must concur before implementation. If they disagree,
+the change is not implemented; the proposal is revised or returned to the
+repository owner. The accepted #268 chronology supplies the existing behavior
+expectation for the dependent judgment. The accepted
+[post-G2 exact-capacity-stall scenario](issue-269-post-g2-admission-stalled-quiescence.md)
+supplies a standalone production problem for blind review, not an instruction
+to approve a known cassette fix.
+
+For the post-G2 admission stall, the recorded decisions are:
+
+- Repository owner: **YES** to this two-judge rule in the current conversation.
+- Main agent thread (the orchestrator): **YES** to the standalone production
+  behavior as a correctness and liveness improvement; **NO** to rejected
+  candidate `f77c743f4` because historical runtime-bound provenance does not
+  prove that current D success and current E denial were causally applied.
+- Unbiased sub-agent reviewer: **YES** to the standalone production behavior as
+  a correctness and code-quality improvement; **NO** to `f77c743f4` as the
+  implementation candidate. The independent review instead requires a
+  distinct result retaining E, an exact current causal proof, bounded negative
+  controls, and the existing reactivation generation mechanism.
+
+The two judges therefore concur on the behavior and reject the same candidate.
+The documentation commit containing this reviewed record activates the gate;
+it does not accept `f77c743f4` or any later implementation automatically.
+
+Any permitted runtime change must have a direct production-boundary test and
+full negative controls. It must preserve the tracker, Git, executor, Journal,
+admission, and control authorities and every governing invariant; add no
+cassette-specific flag or provenance branch; and remain bounded to the
+standalone defect. Cassette success is vertical validation only, never the
+justification. This reversible ticket policy adds no tracker, Git, executor,
+Journal, capacity, choice, finality, retry, or scheduling authority.
 
 ## One settlement rule at all three cassette cuts
 
@@ -425,9 +474,11 @@ assertions. Aggregate cassette totals do not substitute for these proofs.
 | Closed outer activation failures and representative tracker/Git/executor/Journal/delivery-relation/finality program failures preserve exact tag/payload, call activation once or zero when rejected earlier, advance neither return nor hint, and perform zero retry | `packages/dalph/test/cassettes/authored-reactivation-return.test.ts` — `transparently preserves representative restart activation failures without advancing or retrying` |
 | The initial active authority cut remains the separate fourteen-node, eleven-edge group and drains before its strict successor | Blocking #309 tests — `partitions all 84084 active-refresh orders by three canonical lane positions`; `consumes every active-refresh specification-to-lineage order before B Suspend` |
 | After the restart return and hints, executing A and D use exactly two independent six-node authority chains: twelve nodes, ten edges, and 924 legal orders; either reaches claim while the other's specification result is blocked, and the group drains before its strict successor | Committed production premise `c305b3543`, `packages/dalph/src/application/production-reactivation.test.ts` — `allows one active-refresh authority lane to reach claim while independent specification reads remain in flight`; blocking #309 Deferred/group tests — `partitions all 924 post-hint active-refresh orders by two canonical lane positions`; `consumes every post-hint A D authority order before advancing`; then `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `preserves the post-hint A D authority group without weakening the thirteen-beat story` |
+| A post-G2 production change is considered only after the main agent thread (the orchestrator) and an unbiased sub-agent reviewer record concurring correctness/code-quality judgments; the standalone defect has direct production tests and complete negative controls, with no cassette-specific branch | The recorded YES-behavior/NO-`f77c743f4` judgments under this section; `issue-269-post-g2-admission-stalled-quiescence.md` scenario-to-test mapping; direct orchestrator production tests named there |
 | DS-01 through DS-13 retain exact Run, attempts, Base SHA, claims, worktrees, capacity, held/retained states, and accepted outcomes through all three cuts | `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `emits the exact DS01 through DS13 delivery checkpoint table` |
 
 The direct boundary tests must be red against the current cursor-before-result
-drivers, then green through production-seam composition. The capstone and this
-scenario remain blocked—not partially accepted—until the #309 amendment and all
+drivers, then green through production-seam composition. The two-judge gate and
+standalone post-G2 behavior are accepted by the recorded review. The capstone
+remains blocked—not partially implemented—until the #309 amendment and all
 mapped rows are implemented and reviewed.
