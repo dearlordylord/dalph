@@ -30,8 +30,11 @@ interface DeliveryStoryAcceptanceTest {
   readonly declaration: "it" | "it.effect" | "scenario"
   readonly name: string
   readonly sourceFile:
+    | "packages/dalph/src/application/production-reactivation.test.ts"
     | "packages/dalph/test/cassettes/scenario.test.ts"
     | "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
+    | "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts"
+    | "packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts"
     | "prototypes/reducer-lab/src/cassette-lab.smoke.ts"
 }
 
@@ -73,15 +76,40 @@ const capstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
   sourceFile: "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
 })
 
+const maintainedTest = (
+  sourceFile: Extract<
+    DeliveryStoryAcceptanceTest["sourceFile"],
+    | "packages/dalph/src/application/production-reactivation.test.ts"
+    | "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts"
+    | "packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts"
+  >,
+  name: string
+): DeliveryStoryAcceptanceTest => ({ declaration: "it.effect", name, sourceFile })
+
 const topologyTest = capstoneTest("consumes a staggered graph while restart-added X waits for recovered capacity")
 const restartTest = capstoneTest("preserves the double-diamond middle positions across coordinator restart")
 const checkpointTest = capstoneTest("emits the exact DS01 through DS13 delivery checkpoint table")
+const choiceProjectionTest = capstoneTest(
+  "projects B's exact F1 F2 choices from the production runtime evaluation until Continue"
+)
 const identityTest = capstoneTest("retains exact Run attempt claim and resource identities across DS01 through DS13")
 const activeRefreshTest = capstoneTest(
   "publishes B F2 through one active refresh and rereads G1 after Safe before D begins"
 )
-const timerFallbackTest = capstoneTest(
-  "uses duplicate timer fallback hints for the same active refresh without a second activation"
+const timerFallbackOwnerTest = maintainedTest(
+  "packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts",
+  "rechecks after a lost notification when TestClock fires, with no Run read per timer"
+)
+const timerFallbackAuthorityTest = maintainedTest(
+  "packages/dalph/src/application/production-reactivation.test.ts",
+  "lost or pre-subscription tracker notification is recovered by the ordinary timer and executes an active authority read"
+)
+const runtimeObservationTest = maintainedTest(
+  "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts",
+  "publishes current-first exact live-owner observations until standalone runtime quiescence"
+)
+const runtimeProjectionBridgeTest = scenarioTest(
+  "reuses one delivery relation evaluation for the authored publication frame"
 )
 const bContinuationTest = capstoneTest("records B's F1-to-F2 transition and one same-attempt Continue and Resume")
 const cSafeTest = capstoneTest("records exactly one C2 Safe ordinal before Continue B")
@@ -121,34 +149,78 @@ export const deliveryStoryManifest = {
     slice("DS-01", autonomousCapstoneKey, checkpointTest, identityTest),
     slice("DS-02", autonomousCapstoneKey, checkpointTest, identityTest),
     slice("DS-03", autonomousCapstoneKey, checkpointTest, activeRefreshTest, authorityGroupTest),
-    slice("DS-04", autonomousCapstoneKey, checkpointTest, activeRefreshTest, timerFallbackTest, authorityGroupTest),
-    missing(
+    slice(
+      "DS-04",
+      autonomousCapstoneKey,
+      checkpointTest,
+      activeRefreshTest,
+      timerFallbackOwnerTest,
+      timerFallbackAuthorityTest,
+      authorityGroupTest
+    ),
+    slice(
       "DS-05",
-      "The capstone proves B Safe, position release, retained claim/attempt/worktree/work, and ordered F1/F2, but no public production view lists Continue, Restart, and Stop as three simultaneously available choices for Alice."
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
     ),
-    missing(
+    slice(
       "DS-06",
-      "The capstone proves D admission and every retained B resource, but no public available-choice view confirms that exact B attempt remains awaiting Alice."
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
     ),
-    missing(
+    slice(
       "DS-07",
-      "The capstone proves capacity revision 1 to 2 without eviction and every retained B resource, but no public available-choice view confirms that exact B attempt remains awaiting Alice."
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
     ),
-    missing(
+    slice(
       "DS-08",
-      "The capstone proves coordinator loss with an empty local owner view and the last durable A/C/D held plus B retained view, but no public available-choice view confirms that exact B attempt remains awaiting Alice."
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
     ),
-    missing(
+    slice(
       "DS-09",
-      "The capstone proves exact restart reconstruction without Begin or Resume and every retained B resource, but no public available-choice view confirms that exact B attempt remains awaiting Alice."
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
     ),
-    missing(
+    slice(
       "DS-10",
-      "The capstone proves G2 and C suspension while B remains retained, but no public available-choice view confirms that exact B attempt remains awaiting Alice."
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
     ),
-    missing(
+    slice(
       "DS-11",
-      "The capstone proves C Safe and retained claim/attempt/worktree/work for both B and C, but no public available-choice view confirms that exact B attempt remains awaiting Alice."
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      cSafeTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
     ),
     slice("DS-12", autonomousCapstoneKey, checkpointTest, cSafeTest, bContinuationTest),
     slice("DS-13", autonomousCapstoneKey, checkpointTest, identityTest, admissionPriorityTest, bContinuationTest),

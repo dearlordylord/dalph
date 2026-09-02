@@ -59,14 +59,10 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
       .slice(0, 13)
       .map(({ beatId, coverage }) => ({ beatId, cassetteKeys: coverage.cassetteKeys, coverage: coverage._tag }))
   ).toEqual(
-    Array.from({ length: 13 }, (_, index) =>
-      index >= 4 && index <= 10
-        ? { beatId: `DS-${String(index + 1).padStart(2, "0")}`, cassetteKeys: [], coverage: "NotImplemented" }
-        : {
-            beatId: `DS-${String(index + 1).padStart(2, "0")}`,
-            cassetteKeys: ["authored:autonomousExecutorDeliveryCapstone"],
-            coverage: "DemonstratedByMaintainedSlice"
-          }
-    )
+    Array.from({ length: 13 }, (_, index) => ({
+      beatId: `DS-${String(index + 1).padStart(2, "0")}`,
+      cassetteKeys: ["authored:autonomousExecutorDeliveryCapstone"],
+      coverage: "DemonstratedByMaintainedSlice"
+    }))
   )
 })

@@ -18,20 +18,6 @@ const capstoneRun = Effect.runSync(
   )
 )
 
-const timerOnlyCapstoneInput = {
-  ...maintainedAuthoredCassetteCatalog.autonomousExecutorDeliveryCapstone,
-  story: maintainedAuthoredCassetteCatalog.autonomousExecutorDeliveryCapstone.story.map((item, index, story) =>
-    item._tag === "CassetteOffersRunReactivationHints" &&
-    !story.slice(0, index).some(({ _tag }) => _tag === "CassetteOffersRunReactivationHints")
-      ? { ...item, hints: ["Timer", "Timer"] as const }
-      : item
-  )
-}
-
-const timerOnlyCapstoneRun = Effect.runSync(
-  Effect.cached(runAuthoredScenarioCassette(timerOnlyCapstoneInput).pipe(Effect.provide(NodeCrypto.layer)))
-)
-
 const expectedAttempts = [
   {
     attemptId: "attempt:A:0",
@@ -456,7 +442,7 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
             : []
         )
         .toSorted((left, right) => left.attemptId.localeCompare(right.attemptId) || left.ordinal - right.ordinal)
-    const awaitingAliceAt = (prefix: typeof records) => {
+    const awaitingAliceAt = (prefix: typeof records, frame: AuthoredDeliveryFrame) => {
       const safe = prefix.some(
         ({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" &&
@@ -469,12 +455,23 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
           event.subject.plannedAttempt.attemptId === "attempt:B:1" &&
           event.choice === "ContinueExistingAttempt"
       )
-      return safe && !continued
-        ? {
-            _tag: "NotDemonstrated" as const,
-            missingBoundary: "public available-choice view for the exact Run and Attempt"
-          }
-        : { _tag: "Demonstrated" as const, taskIds: [] as ReadonlyArray<string> }
+      const specificationConstraint = frame.deliveries
+        .find(({ taskId }) => taskId === "B")
+        ?.standings.find(({ kind }) => kind === "PlannedAttemptTaskSpecificationChangeConstraint")
+      if (safe && !continued) {
+        if (specificationConstraint === undefined) {
+          return expect.fail("B Safe must remain visible through its exact specification-change constraint")
+        }
+        return {
+          _tag: "Demonstrated" as const,
+          choices: [JSON.parse(specificationConstraint.exact) as unknown],
+          taskIds: ["B"]
+        }
+      }
+      if (continued && specificationConstraint !== undefined) {
+        return expect.fail("B's specification-change constraint must disappear after Continue is applied")
+      }
+      return { _tag: "Demonstrated" as const, choices: [], taskIds: [] as ReadonlyArray<string> }
     }
     const checkpoint = (beat: string, frame: AuthoredDeliveryFrame, capacity: number = frame.capacity) => {
       const prefix = prefixAt(beat, frame)
@@ -483,7 +480,7 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
       return {
         accepted: acceptedOutcomes(frame),
         attempts: attemptIdentitiesAt(prefix),
-        awaitingAlice: awaitingAliceAt(prefix),
+        awaitingAlice: awaitingAliceAt(prefix, frame),
         beat,
         capacity,
         claims: activeClaimsAt(prefix),
@@ -552,11 +549,28 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
     const exactChangedFingerprints = exactInitialFingerprints.map((fingerprint) =>
       fingerprint.taskId === "B" ? { fingerprint: bF2, taskId: "B" } : fingerprint
     )
-    const exactActiveClaims = activeClaimsAt(prefixAt("DS-02", frames.ds02))
-    const noAwaitingAlice = { _tag: "Demonstrated", taskIds: [] }
-    const unavailableAwaitingAlice = {
-      _tag: "NotDemonstrated",
-      missingBoundary: "public available-choice view for the exact Run and Attempt"
+    const exactActiveClaims = prefixAt("DS-02", frames.ds02)
+      .flatMap(({ event }) =>
+        event._tag === "TaskClaimAcquisitionIntended"
+          ? [{ ...event.operation.acquisition, state: "Active" as const }]
+          : []
+      )
+      .toSorted((left, right) => left.taskId.localeCompare(right.taskId))
+    const noAwaitingAlice = { _tag: "Demonstrated", choices: [], taskIds: [] }
+    const bAwaitingAlice = {
+      _tag: "Demonstrated",
+      choices: [
+        {
+          _tag: "PlannedAttemptTaskSpecificationChangeConstraint",
+          availableResolutions: ["ContinueExistingAttempt", "RestartTaskImplementation", "StopTaskImplementation"],
+          correlation: { attemptId: "attempt:B:1", runId: run.runId },
+          observedFingerprint: bF2,
+          plannedFingerprint: bF1,
+          taskId: "B",
+          wakeCondition: "TaskResolutionApplied"
+        }
+      ],
+      taskIds: ["B"]
     }
     const initialReports = [
       { attemptId: "attempt:A:0", ordinal: 1, report: "ExecutorWorkExecuting" },
@@ -650,7 +664,7 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
       {
         accepted: "—",
         attempts: exactAttemptIdentities,
-        awaitingAlice: unavailableAwaitingAlice,
+        awaitingAlice: bAwaitingAlice,
         beat: "DS-05",
         capacity: 3,
         claims: exactActiveClaims,
@@ -665,7 +679,7 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
       {
         accepted: "—",
         attempts: exactAttemptIdentities,
-        awaitingAlice: unavailableAwaitingAlice,
+        awaitingAlice: bAwaitingAlice,
         beat: "DS-06",
         capacity: 3,
         claims: exactActiveClaims,
@@ -680,7 +694,7 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
       {
         accepted: "—",
         attempts: exactAttemptIdentities,
-        awaitingAlice: unavailableAwaitingAlice,
+        awaitingAlice: bAwaitingAlice,
         beat: "DS-07",
         capacity: 2,
         claims: exactActiveClaims,
@@ -695,7 +709,7 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
       {
         accepted: "—",
         attempts: exactAttemptIdentities,
-        awaitingAlice: unavailableAwaitingAlice,
+        awaitingAlice: bAwaitingAlice,
         beat: "DS-08",
         capacity: 2,
         claims: exactActiveClaims,
@@ -710,7 +724,7 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
       {
         accepted: "—",
         attempts: exactAttemptIdentities,
-        awaitingAlice: unavailableAwaitingAlice,
+        awaitingAlice: bAwaitingAlice,
         beat: "DS-09",
         capacity: 2,
         claims: exactActiveClaims,
@@ -725,7 +739,7 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
       {
         accepted: "—",
         attempts: exactAttemptIdentities,
-        awaitingAlice: unavailableAwaitingAlice,
+        awaitingAlice: bAwaitingAlice,
         beat: "DS-10",
         capacity: 2,
         claims: exactActiveClaims,
@@ -740,7 +754,7 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
       {
         accepted: "—",
         attempts: exactAttemptIdentities,
-        awaitingAlice: unavailableAwaitingAlice,
+        awaitingAlice: bAwaitingAlice,
         beat: "DS-11",
         capacity: 2,
         claims: exactActiveClaims,
@@ -783,6 +797,34 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
         runId: run.runId
       }
     ])
+  })
+)
+
+it.effect("projects B's exact F1 F2 choices from the production runtime evaluation until Continue", () =>
+  Effect.gen(function* () {
+    const run = yield* capstoneRun
+    const { frames } = causalCapstoneCheckpoints(run)
+    const specificationConstraint = (frame: AuthoredDeliveryFrame) =>
+      frame.deliveries
+        .find(({ taskId }) => taskId === "B")
+        ?.standings.find(({ kind }) => kind === "PlannedAttemptTaskSpecificationChangeConstraint")
+    const expected = {
+      _tag: "PlannedAttemptTaskSpecificationChangeConstraint",
+      availableResolutions: ["ContinueExistingAttempt", "RestartTaskImplementation", "StopTaskImplementation"],
+      correlation: { attemptId: "attempt:B:1", runId: run.runId },
+      observedFingerprint: bF2,
+      plannedFingerprint: bF1,
+      taskId: "B",
+      wakeCondition: "TaskResolutionApplied"
+    }
+
+    for (const frame of [frames.ds05, frames.ds06, frames.ds07, frames.ds08, frames.ds09, frames.ds10, frames.ds11]) {
+      const constraint = specificationConstraint(frame)
+      if (constraint === undefined) return expect.fail("B must remain awaiting Alice through DS-11")
+      expect(JSON.parse(constraint.exact)).toEqual(expected)
+    }
+    expect(specificationConstraint(frames.ds12)).toBeUndefined()
+    expect(specificationConstraint(frames.ds13)).toBeUndefined()
   })
 )
 
@@ -1122,72 +1164,6 @@ it.effect("publishes B F2 through one active refresh and rereads G1 after Safe b
     expect(heldTasks(frames.ds04)).toBe("A+B+C")
     expect(heldTasks(frames.ds05)).toBe("A+C")
     expect(retainedTasks(frames.ds05)).toBe("B")
-  })
-)
-
-it.effect("uses duplicate timer fallback hints for the same active refresh without a second activation", () =>
-  Effect.gen(function* () {
-    const baseline = yield* capstoneRun
-    const run = yield* timerOnlyCapstoneRun
-    const { boundaries, frames } = causalCapstoneCheckpoints(run)
-    const activeWindow = run.observationMoments.filter(
-      (moment) =>
-        moment.captureOrder > boundaries.initialHints.captureOrder && moment.captureOrder < boundaries.ds07.captureOrder
-    )
-    const activeOrdinals = new Set(
-      activeWindow.flatMap((moment) =>
-        moment._tag === "DeliveryPublicationMoment" || moment._tag === "DeliveryRuntimeOwnersMoment"
-          ? [moment.activationOrdinal]
-          : []
-      )
-    )
-    const normalizeHints = (candidate: AuthoredScenarioCassetteRun) =>
-      publicOccurrences(candidate).map((occurrence) =>
-        occurrence._tag === "CassetteOffersRunReactivationHints"
-          ? { _tag: occurrence._tag, hints: ["ordinary-hint"] }
-          : occurrence
-      )
-
-    expect(boundaries.initialHints.occurrence).toEqual({
-      _tag: "CassetteOffersRunReactivationHints",
-      hints: ["Timer", "Timer"]
-    })
-    expect(activeOrdinals.size).toBe(1)
-    expect(
-      activeWindow.filter(
-        (moment) =>
-          moment._tag === "AuthoredStoryOccurrenceMoment" && moment.occurrence._tag === "CoordinatorActivationReturned"
-      )
-    ).toHaveLength(1)
-    expect(frames.ds03.graph._tag === "Established" ? frames.ds03.graph.revision : null).toBe("delivery-story-G1")
-    expect(
-      run.records.filter(
-        ({ event }) =>
-          event._tag === "TaskTrackerFactsObserved" &&
-          event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
-          event.observation.factFamily.taskId === "B" &&
-          event.observation.factFamily.fingerprint === bF2
-      )
-    ).toHaveLength(1)
-    expect(
-      run.records.filter(
-        ({ event }) =>
-          event._tag === "PlannedAttemptExecutorWorkReported" &&
-          event.report.correlation.attemptId === "attempt:B:1" &&
-          event.report._tag === "ExecutorWorkSafelySuspended"
-      )
-    ).toHaveLength(1)
-    expect(
-      run.records.filter(
-        ({ event }) =>
-          event._tag === "PlannedAttemptExecutorCommandIntended" &&
-          event.command === "Suspend" &&
-          event.plannedAttempt.attemptId === "attempt:B:1"
-      )
-    ).toHaveLength(1)
-    expect(heldTasks(frames.ds04)).toBe("A+B+C")
-    expect(retainedTasks(frames.ds05)).toBe("B")
-    expect(normalizeHints(run)).toEqual(normalizeHints(baseline))
   })
 )
 
