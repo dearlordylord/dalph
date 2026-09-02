@@ -2,6 +2,7 @@ import { NodeCrypto } from "@effect/platform-node"
 import { Effect } from "effect"
 import { expect, it } from "vitest"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
+import { makeAuthoredRuntimeObservationCaptureObserver } from "../../src/cassettes/authored-runtime-observation-capture.js"
 
 it("captures runtime evaluations, delivery publications, and live owners in one authored observation order", async () => {
   const run = await Effect.runPromise(
@@ -37,17 +38,40 @@ it("captures runtime evaluations, delivery publications, and live owners in one 
   expect(run.observationMoments.some(({ _tag }) => _tag === "AuthoredStoryOccurrenceMoment")).toBe(true)
   expect(run.observationMoments.some(({ _tag }) => _tag === "DeliveryPublicationMoment")).toBe(true)
   const runtimeEvaluationCaptures = run.observationCaptures.filter(
-    (capture) => capture._tag === "DeliveryRuntimeObservationCaptured"
+    (capture) => capture._tag === "DeliveryRuntimeEvaluationCaptured"
   )
   expect(runtimeEvaluationCaptures.length).toBeGreaterThan(0)
-  expect(new Set(runtimeEvaluationCaptures.map(({ observation }) => observation.evaluation)).size).toBe(
-    runtimeEvaluationCaptures.length
-  )
   for (const capture of runtimeEvaluationCaptures) {
+    expect("liveOwners" in capture).toBe(false)
     const moment = run.observationMoments.find(({ captureOrder }) => captureOrder === capture.captureOrder)
-    expect(moment?._tag).toBe("DeliveryRuntimeObservationMoment")
-    if (moment?._tag === "DeliveryRuntimeObservationMoment") expect(moment.observation).toBe(capture.observation)
+    expect(moment?._tag).toBe("DeliveryRuntimeEvaluationMoment")
+    if (moment?._tag === "DeliveryRuntimeEvaluationMoment") expect(moment.evaluation).toBe(capture.evaluation)
   }
+
+  const evaluation = runtimeEvaluationCaptures[0]?.evaluation
+  expect(evaluation).toBeDefined()
+  if (evaluation === undefined) return
+  let nextCorrelation = 0
+  const explicitlyCaptured: Array<{ readonly correlation: number; readonly evaluation: typeof evaluation }> = []
+  const explicitlyCapturedOwners: Array<unknown> = []
+  const observer = await Effect.runPromise(
+    makeAuthoredRuntimeObservationCaptureObserver({
+      captureEvaluation: (captured, correlation) =>
+        Effect.sync(() => explicitlyCaptured.push({ correlation, evaluation: captured })),
+      captureOwners: (liveOwners) => Effect.sync(() => explicitlyCapturedOwners.push(liveOwners)),
+      correlate: () =>
+        Effect.sync(() => {
+          nextCorrelation += 1
+          return nextCorrelation
+        })
+    })
+  )
+  for (let index = 0; index < 3; index += 1) {
+    await Effect.runPromise(observer.observe({ _tag: "Ready", evaluation, liveOwners: [] }))
+  }
+  expect(explicitlyCaptured.map(({ correlation }) => correlation)).toEqual([1, 2, 3])
+  expect(explicitlyCaptured.map(({ evaluation }) => evaluation)).toEqual([evaluation, evaluation, evaluation])
+  expect(explicitlyCapturedOwners).toEqual([])
   expect(
     run.observationMoments.some(
       (moment) =>

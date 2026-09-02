@@ -222,8 +222,16 @@ export const deliveryStoryManifest = {
       runtimeObservationTest,
       runtimeProjectionBridgeTest
     ),
-    slice("DS-12", autonomousCapstoneKey, checkpointTest, cSafeTest, bContinuationTest),
-    slice("DS-13", autonomousCapstoneKey, checkpointTest, identityTest, admissionPriorityTest, bContinuationTest),
+    slice("DS-12", autonomousCapstoneKey, checkpointTest, choiceProjectionTest, cSafeTest, bContinuationTest),
+    slice(
+      "DS-13",
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      admissionPriorityTest,
+      bContinuationTest
+    ),
     slice(
       "DS-14",
       ["authored:acceptedResultRestartsIntoIntegration"],

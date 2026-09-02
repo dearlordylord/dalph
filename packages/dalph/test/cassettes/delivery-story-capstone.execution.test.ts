@@ -74,6 +74,49 @@ const bF2 =
 type ObservationMoment = AuthoredScenarioCassetteRun["observationMoments"][number]
 type StoryMoment = Extract<ObservationMoment, { readonly _tag: "AuthoredStoryOccurrenceMoment" }>
 type PublicationMoment = Extract<ObservationMoment, { readonly _tag: "DeliveryPublicationMoment" }>
+type RuntimeEvaluationCapture = Extract<
+  AuthoredScenarioCassetteRun["observationCaptures"][number],
+  { readonly _tag: "DeliveryRuntimeEvaluationCaptured" }
+>
+
+const bSpecificationConstraintsFrom = (capture: RuntimeEvaluationCapture) => {
+  const facts =
+    capture.evaluation.current.ticketDeliveries.deliveries
+      .find(({ taskId }) => taskId === "B")
+      ?.standings.flatMap((standing) =>
+        standing._tag === "ResponsibilitySituation" &&
+        standing.facts._tag === "PlannedAttemptExecutorFreshFacts" &&
+        standing.facts.disposition._tag === "TaskSpecificationChangeConstraint"
+          ? [standing.facts]
+          : []
+      ) ?? []
+  return facts.map((constraintFacts) => {
+    const frontier = deriveRunnableFrontier({
+      freshEligibleTasks: [],
+      responsibility: WorkflowResponsibilityState.make({ entries: [constraintFacts.responsibility] }),
+      responsibilityFacts: [constraintFacts]
+    })
+    expect(frontier.transitions).toEqual([])
+    expect(frontier.explanations).toHaveLength(1)
+    return frontier.explanations[0]
+  })
+}
+
+const runtimeEvaluationCaptureAt = (
+  run: AuthoredScenarioCassetteRun,
+  beat: string,
+  frame: AuthoredDeliveryFrame
+): RuntimeEvaluationCapture => {
+  const captures = run.observationCaptures.filter(
+    (capture): capture is RuntimeEvaluationCapture =>
+      capture._tag === "DeliveryRuntimeEvaluationCaptured" &&
+      capture.activationOrdinal === frame.activationOrdinal &&
+      capture.storyPosition === frame.storyPosition &&
+      capture.evaluation.acceptedAt === frame.acceptedAt
+  )
+  expect(captures, `${beat} production evaluation capture`).toHaveLength(1)
+  return captures[0] ?? expect.fail(`${beat} lacks its exact production runtime evaluation`)
+}
 
 const storyMomentAfter = (
   run: AuthoredScenarioCassetteRun,
@@ -443,7 +486,7 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
             : []
         )
         .toSorted((left, right) => left.attemptId.localeCompare(right.attemptId) || left.ordinal - right.ordinal)
-    const awaitingAliceAt = (prefix: typeof records, frame: AuthoredDeliveryFrame) => {
+    const awaitingAliceAt = (beat: string, prefix: typeof records, frame: AuthoredDeliveryFrame) => {
       const safe = prefix.some(
         ({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" &&
@@ -456,20 +499,14 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
           event.subject.plannedAttempt.attemptId === "attempt:B:1" &&
           event.choice === "ContinueExistingAttempt"
       )
-      const specificationConstraint = frame.deliveries
-        .find(({ taskId }) => taskId === "B")
-        ?.standings.find(({ kind }) => kind === "PlannedAttemptTaskSpecificationChangeConstraint")
       if (safe && !continued) {
-        if (specificationConstraint === undefined) {
+        const specificationConstraints = bSpecificationConstraintsFrom(runtimeEvaluationCaptureAt(run, beat, frame))
+        if (specificationConstraints.length !== 1) {
           return expect.fail("B Safe must remain visible through its exact specification-change constraint")
         }
-        return {
-          _tag: "Demonstrated" as const,
-          choices: [JSON.parse(specificationConstraint.exact) as unknown],
-          taskIds: ["B"]
-        }
+        return { _tag: "Demonstrated" as const, choices: specificationConstraints, taskIds: ["B"] }
       }
-      if (continued && specificationConstraint !== undefined) {
+      if (continued && bSpecificationConstraintsFrom(runtimeEvaluationCaptureAt(run, beat, frame)).length !== 0) {
         return expect.fail("B's specification-change constraint must disappear after Continue is applied")
       }
       return { _tag: "Demonstrated" as const, choices: [], taskIds: [] as ReadonlyArray<string> }
@@ -481,7 +518,7 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
       return {
         accepted: acceptedOutcomes(frame),
         attempts: attemptIdentitiesAt(prefix),
-        awaitingAlice: awaitingAliceAt(prefix, frame),
+        awaitingAlice: awaitingAliceAt(beat, prefix, frame),
         beat,
         capacity,
         claims: activeClaimsAt(prefix),
@@ -550,13 +587,24 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
     const exactChangedFingerprints = exactInitialFingerprints.map((fingerprint) =>
       fingerprint.taskId === "B" ? { fingerprint: bF2, taskId: "B" } : fingerprint
     )
-    const exactActiveClaims = prefixAt("DS-02", frames.ds02)
-      .flatMap(({ event }) =>
-        event._tag === "TaskClaimAcquisitionIntended"
-          ? [{ ...event.operation.acquisition, state: "Active" as const }]
-          : []
-      )
-      .toSorted((left, right) => left.taskId.localeCompare(right.taskId))
+    // The cassette's six initial graph reads consume deterministic operation slots 0–5;
+    // its literal sequential claim requests then consume 6, 7, 8, 10, and 12.
+    const exactActiveClaims = [
+      { operationOrdinal: 6, taskId: "A" },
+      { operationOrdinal: 7, taskId: "B" },
+      { operationOrdinal: 8, taskId: "C" },
+      { operationOrdinal: 10, taskId: "D" },
+      { operationOrdinal: 12, taskId: "E" }
+    ].map(({ operationOrdinal, taskId }) => {
+      const operationId = `cassette:${run.runId}:activation:1:operation:${operationOrdinal}`
+      return {
+        operationId,
+        owner: "delivery-story-owner",
+        state: "Active" as const,
+        taskId,
+        token: `delivery-story-claim:${taskId}:${operationId}`
+      }
+    })
     const noAwaitingAlice = { _tag: "Demonstrated", choices: [], taskIds: [] }
     const bAwaitingAlice = {
       _tag: "Demonstrated",
@@ -805,28 +853,6 @@ it.effect("captures B's exact F1 F2 choices from each production runtime observa
   Effect.gen(function* () {
     const run = yield* capstoneRun
     const { frames } = causalCapstoneCheckpoints(run)
-    const runtimeObservationCaptures = run.observationCaptures.filter(
-      (capture) => capture._tag === "DeliveryRuntimeObservationCaptured"
-    )
-    const specificationConstraint = (capture: (typeof runtimeObservationCaptures)[number]) => {
-      const facts = capture.observation.evaluation.current.ticketDeliveries.deliveries
-        .find(({ taskId }) => taskId === "B")
-        ?.standings.flatMap((standing) =>
-          standing._tag === "ResponsibilitySituation" &&
-          standing.facts._tag === "PlannedAttemptExecutorFreshFacts" &&
-          standing.facts.disposition._tag === "TaskSpecificationChangeConstraint"
-            ? [standing.facts]
-            : []
-        )[0]
-      if (facts === undefined) return undefined
-      const frontier = deriveRunnableFrontier({
-        freshEligibleTasks: [],
-        responsibility: WorkflowResponsibilityState.make({ entries: [facts.responsibility] }),
-        responsibilityFacts: [facts]
-      })
-      expect(frontier.transitions).toEqual([])
-      return frontier.explanations[0]
-    }
     const expected = {
       _tag: "PlannedAttemptTaskSpecificationChangeConstraint",
       availableResolutions: ["ContinueExistingAttempt", "RestartTaskImplementation", "StopTaskImplementation"],
@@ -839,30 +865,26 @@ it.effect("captures B's exact F1 F2 choices from each production runtime observa
 
     const relevantCaptures = (
       [
-        ["DS-05", frames.ds05],
-        ["DS-06", frames.ds06],
-        ["DS-07", frames.ds07],
-        ["DS-08", frames.ds08],
-        ["DS-09", frames.ds09],
-        ["DS-10", frames.ds10],
-        ["DS-11", frames.ds11]
-      ] as const satisfies ReadonlyArray<readonly [string, AuthoredDeliveryFrame]>
-    ).map(([beat, frame]) => {
-      const captures = runtimeObservationCaptures.filter(
-        (capture) =>
-          capture.activationOrdinal === frame.activationOrdinal &&
-          capture.storyPosition === frame.storyPosition &&
-          capture.observation.evaluation.acceptedAt === frame.acceptedAt
+        ["DS-05", frames.ds05, expected],
+        ["DS-06", frames.ds06, expected],
+        ["DS-07", frames.ds07, expected],
+        ["DS-08", frames.ds08, expected],
+        ["DS-09", frames.ds09, expected],
+        ["DS-10", frames.ds10, expected],
+        ["DS-11", frames.ds11, expected],
+        ["DS-12", frames.ds12, undefined],
+        ["DS-13", frames.ds13, undefined]
+      ] as const satisfies ReadonlyArray<readonly [string, AuthoredDeliveryFrame, typeof expected | undefined]>
+    ).map(([beat, frame, expectedConstraint]) => {
+      const capture = runtimeEvaluationCaptureAt(run, beat, frame)
+      expect(bSpecificationConstraintsFrom(capture), beat).toEqual(
+        expectedConstraint === undefined ? [] : [expectedConstraint]
       )
-      expect(captures, `${beat} production evaluation capture`).toHaveLength(1)
-      const capture = captures[0]
-      if (capture === undefined) return expect.fail(`${beat} lacks its exact production runtime observation`)
-      expect(specificationConstraint(capture), beat).toEqual(expected)
       return {
         acceptedAt: frame.acceptedAt,
         activationOrdinal: capture.activationOrdinal,
         beat,
-        captureCount: captures.length,
+        captureCount: 1,
         captureOrder: capture.captureOrder,
         storyPosition: capture.storyPosition
       }
@@ -875,7 +897,9 @@ it.effect("captures B's exact F1 F2 choices from each production runtime observa
       { beat: "DS-08", captureCount: 1 },
       { beat: "DS-09", captureCount: 1 },
       { beat: "DS-10", captureCount: 1 },
-      { beat: "DS-11", captureCount: 1 }
+      { beat: "DS-11", captureCount: 1 },
+      { beat: "DS-12", captureCount: 1 },
+      { beat: "DS-13", captureCount: 1 }
     ])
   })
 )
