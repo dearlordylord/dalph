@@ -29,6 +29,7 @@ import {
 import {
   AuthoredCausalSelectionFailure,
   type AuthoredOperationCausalContext,
+  type AuthoredSafelySuspendedExecutorReportItem,
   type StoryCursor,
   makeStoryCursor
 } from "../../src/cassettes/authored-cursor.js"
@@ -81,6 +82,13 @@ const terminal = AuthoredCassetteStoryItem.cases.ExpectedBehavior.make({
   protocol: null,
   taskWork: { absences: [], results: [] }
 })
+
+const isSafelySuspendedExecutorReport = (
+  item: AuthoredCassetteStoryItem
+): item is AuthoredSafelySuspendedExecutorReportItem =>
+  item._tag === "PlannedAttemptExecutorWorkReported" &&
+  item.request === "Suspend" &&
+  item.report._tag === "ExecutorWorkSafelySuspended"
 
 it.effect("keeps Continue B unavailable before the production C2 Safe publication", () =>
   Effect.gen(function* () {
@@ -154,11 +162,7 @@ it.effect("settles exact C2 Safe once before delayed interruption and Continue B
           : Effect.void
     })
     const reserved = yield* cursor.consumeExecutorReportFor("Suspend", safe.report.attemptId)
-    if (
-      reserved._tag !== "PlannedAttemptExecutorWorkReported" ||
-      reserved.request !== "Suspend" ||
-      reserved.report._tag !== "ExecutorWorkSafelySuspended"
-    ) {
+    if (!isSafelySuspendedExecutorReport(reserved)) {
       return yield* Effect.die("the exact C2 Safe item was not reserved")
     }
 
