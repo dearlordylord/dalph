@@ -818,6 +818,8 @@ export {
   zipCurrentSignals
 } from "./coordination/delivery/relations.js"
 export {
+  DeliveryActionCompletionPublicationMismatch,
+  PostG2TaskWorkOutcomeIdentityMismatch,
   DeliveryRuntimeProposalOwnershipConflict,
   DeliveryRuntimeReconfirmationStateInvalid,
   runDeliveryRuntime

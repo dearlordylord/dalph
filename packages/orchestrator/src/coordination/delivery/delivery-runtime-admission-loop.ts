@@ -1,19 +1,21 @@
 import { Effect, Option, Ref, Schema } from "effect"
+import { samePlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import type { Semaphore } from "effect"
-import type { OperationId } from "../../workflow/identity.js"
-import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import type { DeliverySemanticTraceEvent } from "./delivery-action-executor.js"
-import type { DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
+import {
+  deliveryTaskWorkAdmissionBasisOf,
+  type DeliveryRuntimeAdmissionController
+} from "./delivery-runtime-admission.js"
 import { DeliveryProposalId, type DeliveryActionProposal } from "./delivery-action-proposal.js"
 import type { DeliveryRuntimeLiveOwnerSource } from "./delivery-runtime-observation.js"
-import {
-  liveActionKeyOf,
-  liveActionIsPresent,
-  type LiveDeliveryActionKey,
-  proposalIsAvailable
-} from "./live-delivery-action.js"
-import type { DeliveryProposalFrontier, DeliveryRuntimeEvaluation } from "./relations.js"
+import { liveActionKeyOf, liveActionIsPresent, proposalIsAvailable } from "./live-delivery-action.js"
+import type {
+  DeliveryProposalFrontier,
+  DeliveryRuntimeEvaluation,
+  DeliveryTaskWorkAdmissionBasis
+} from "./relations.js"
+import type { DeliveryRuntimeLocalDeferral } from "./delivery-runtime-local-deferral.js"
 
 /** Two lower relations claim the same proposal identity, so no action is authorized. */
 export class DeliveryRuntimeProposalOwnershipConflict extends Schema.TaggedError<DeliveryRuntimeProposalOwnershipConflict>()(
@@ -31,7 +33,8 @@ type DeliveryRuntimeReservationResult =
 
 type DeliveryRuntimeAdmissionLoopState = {
   readonly admission: DeliveryRuntimeAdmissionController
-  readonly deferredAt: Ref.Ref<ReadonlyMap<DeliveryProposalId, JournalPosition | null>>
+  readonly deferNewPositionUntilLiveOwnersSettle: boolean
+  readonly localDeferrals: Ref.Ref<ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>>
   readonly latest: Ref.Ref<Option.Option<DeliveryRuntimeEvaluation>>
   readonly owners: Ref.Ref<ReadonlyMap<DeliveryProposalId, LiveOwner>>
   readonly selectionGate: Semaphore.Semaphore
@@ -47,8 +50,39 @@ type DeliveryRuntimeAdmissionLoopActions = {
 
 type DeliveryRuntimeAdmissionLoopDependencies = DeliveryRuntimeAdmissionLoopState & DeliveryRuntimeAdmissionLoopActions
 
+interface DeliveryRuntimeAdmissionDeferral {
+  readonly proposalId: DeliveryProposalId
+  readonly reason: DeferredAdmissionResult["reason"]
+}
+
+/** A live owner may still settle or roll back its position, so a new exact position request waits instead of denying early. */
+const proposalWaitsForLiveOwnerToSettleAtFullCapacity = (
+  proposal: DeliveryActionProposal,
+  taskWork: DeliveryTaskWorkAdmissionBasis,
+  liveOwnerCount: number
+): boolean => {
+  const position = proposal.admission.taskWorkPosition
+  const protocol = proposal.admission.plannedAttemptProtocol
+  return (
+    liveOwnerCount > 0 &&
+    taskWork.held.length >= Number(taskWork.capacity) &&
+    position._tag === "TaskWorkPositionRequired" &&
+    position.mode === "ReserveOrReuse" &&
+    protocol._tag === "PlannedAttemptProtocolRequired" &&
+    !taskWork.held.some(({ correlation }) => samePlannedAttemptExecutorCorrelation(correlation, protocol.correlation))
+  )
+}
+
+export interface DeliveryRuntimeAdmissionPassResult {
+  readonly deferrals: ReadonlyArray<DeliveryRuntimeAdmissionDeferral>
+  readonly started: boolean
+}
+
 type DeliveryRuntimeAdmissionLoopObservation = {
-  readonly admitPass: () => Effect.Effect<boolean, ApplicationExiting | DeliveryRuntimeProposalOwnershipConflict>
+  readonly admitPass: () => Effect.Effect<
+    DeliveryRuntimeAdmissionPassResult,
+    ApplicationExiting | DeliveryRuntimeProposalOwnershipConflict
+  >
 }
 
 type DeliveryRuntimeAdmissionLoopCleanup = {
@@ -63,40 +97,21 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
 ) => {
   const {
     admission,
-    deferredAt,
+    deferNewPositionUntilLiveOwnersSettle,
     emit,
     latest,
+    localDeferrals,
     owners,
     publishRuntimeObservationInsideGate,
     reserveAndStart,
     selectionGate
   } = dependencies
-
-  const admitLaterAvailableProposal = Effect.fn("DeliveryRuntimeAdmissionLoop.admitLaterAvailableProposal")(function* (
-    proposals: ReadonlyArray<DeliveryActionProposal>,
-    deferredIndex: number,
-    live: ReadonlyMap<DeliveryProposalId, LiveOwner>,
-    liveActionKeys: ReadonlySet<LiveDeliveryActionKey>,
-    liveOperationIds: ReadonlySet<OperationId>,
-    deferred: ReadonlyMap<DeliveryProposalId, JournalPosition | null>,
-    acceptedAt: JournalPosition | null
-  ) {
-    for (const independent of proposals.slice(deferredIndex + 1)) {
-      if (!proposalIsAvailable(independent, live, liveActionKeys, liveOperationIds, deferred, acceptedAt)) {
-        continue
-      }
-      const laterReservation = yield* reserveAndStart(independent)
-      if (laterReservation._tag === "Started") return laterReservation.started
-      yield* emit({ _tag: "ProposalDeferred", proposalId: independent.id, reason: laterReservation.reason })
-    }
-    return false
-  })
-
   const admitPass = Effect.fn("DeliveryRuntimeAdmissionLoop.admitPass")(function* () {
     return yield* selectionGate.withPermit(
       Effect.gen(function* () {
         const current = Option.getOrThrow(yield* Ref.get(latest))
         yield* admission.synchronize(current.taskWork)
+        const taskWorkBasis = deliveryTaskWorkAdmissionBasisOf(yield* admission.snapshot)
         const proposedActions = current.proposedActions
         if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
           return yield* new DeliveryRuntimeProposalOwnershipConflict({
@@ -104,31 +119,31 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
           })
         }
         const live = yield* Ref.get(owners)
-        const deferred = yield* Ref.get(deferredAt)
+        const deferred = yield* Ref.get(localDeferrals)
         const liveActionKeys = new Set([...live.values()].map(({ proposal }) => liveActionKeyOf(proposal)))
         const liveOperationIds = new Set(
           (yield* Effect.forEach(live.values(), ({ operationId }) => operationId)).flatMap(Option.toArray)
         )
-        const proposal = proposedActions.proposals.find((candidate) =>
-          proposalIsAvailable(candidate, live, liveActionKeys, liveOperationIds, deferred, current.acceptedAt)
-        )
-        if (proposal === undefined) {
-          return false
+        let deferrals: ReadonlyArray<DeliveryRuntimeAdmissionDeferral> = []
+        for (const proposal of proposedActions.proposals) {
+          if (!proposalIsAvailable(proposal, live, liveActionKeys, liveOperationIds, deferred, current.acceptedAt)) {
+            continue
+          }
+          if (
+            deferNewPositionUntilLiveOwnersSettle &&
+            proposalWaitsForLiveOwnerToSettleAtFullCapacity(proposal, taskWorkBasis, live.size)
+          ) {
+            continue
+          }
+          const reservation = yield* reserveAndStart(proposal)
+          if (reservation._tag === "Started") {
+            return { deferrals, started: reservation.started } satisfies DeliveryRuntimeAdmissionPassResult
+          }
+          const deferral = { proposalId: proposal.id, reason: reservation.reason }
+          deferrals = [...deferrals, deferral]
+          yield* emit({ _tag: "ProposalDeferred", ...deferral })
         }
-        const reservation = yield* reserveAndStart(proposal)
-        if (reservation._tag === "Deferred") {
-          yield* emit({ _tag: "ProposalDeferred", proposalId: proposal.id, reason: reservation.reason })
-          return yield* admitLaterAvailableProposal(
-            proposedActions.proposals,
-            proposedActions.proposals.findIndex(({ id }) => id === proposal.id),
-            live,
-            liveActionKeys,
-            liveOperationIds,
-            deferred,
-            current.acceptedAt
-          )
-        }
-        return reservation.started
+        return { deferrals, started: false } satisfies DeliveryRuntimeAdmissionPassResult
       })
     )
   })

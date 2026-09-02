@@ -31,11 +31,16 @@ import { makeTaskAttemptPlanOperation } from "../workflow/registry/operation.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import {
   attemptPlanRecordKey,
+  plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../workflow-journal/record-key.js"
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorStateObservationOrdinal,
   PlannedAttemptExecutorStateObservedEvent,
@@ -193,7 +198,7 @@ it.effect("rereads the winning policy when another writer commits the requested 
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
-it.effect("restart reconstructs the latest applied capacity and both unfinished task positions", () =>
+it.effect("restart reconstructs three unfinished task positions without an admission snapshot", () =>
   Effect.gen(function* () {
     const runId = RunId.make("restart-capacity-run")
     const target = FixtureTarget.make("restart-capacity-target")
@@ -204,8 +209,8 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
     )
     const control = yield* TaskWorkCapacityControl
-    yield* control.apply({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
-    const attempts = ["A", "B"].map((task) =>
+    yield* control.apply({ capacity: 3, expectedRevision: initialRunPolicyRevision, runId })
+    const attempts = ["A", "B", "C"].map((task) =>
       PlannedTaskAttempt.make({
         attemptId: AttemptId.make(`restart-capacity-${task}`),
         baseSha: GitCommitSha.make("1".repeat(40)),
@@ -220,6 +225,10 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
     yield* Effect.forEach(
       attempts,
       (plannedAttempt) => {
+        const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+        const report = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+          correlation: { attemptId: plannedAttempt.attemptId, runId }
+        })
         const operation = makeTaskAttemptPlanOperation({
           operationId: OperationId.make(`plan-${plannedAttempt.attemptId}`),
           plannedAttempt,
@@ -241,11 +250,71 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
                   version: workflowJournalEventVersion
                 })
               )
+            ),
+            Effect.andThen(
+              journal.append(
+                runId,
+                plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+                PlannedAttemptExecutorCommandIntendedEvent.make({
+                  command: "Begin",
+                  initiatedBy: { _tag: "DalphCoordinator" },
+                  occurrenceClassification: "InitiatedAction",
+                  ordinal: commandOrdinal,
+                  plannedAttempt,
+                  version: workflowJournalEventVersion
+                })
+              )
+            ),
+            Effect.andThen(
+              journal.append(
+                runId,
+                plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+                PlannedAttemptExecutorCommandResponseObservedEvent.make({
+                  commandOrdinal,
+                  occurrenceClassification: "NonActionOccurrence",
+                  plannedAttempt,
+                  report,
+                  version: workflowJournalEventVersion
+                })
+              )
+            ),
+            Effect.andThen(
+              journal.append(
+                runId,
+                plannedAttemptExecutorWorkReportedRecordKey(
+                  plannedAttempt.attemptId,
+                  PlannedAttemptExecutorReportOrdinal.make(1)
+                ),
+                PlannedAttemptExecutorWorkReportedEvent.make({
+                  ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+                  report,
+                  version: workflowJournalEventVersion
+                })
+              )
             )
           )
       },
       { discard: true }
     )
+    expect((yield* journal.read(runId)).map(({ event }) => event._tag)).toEqual([
+      "WorkflowRunBegan",
+      "TaskWorkCapacityChanged",
+      "TaskAttemptPlanned",
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorCommandIntended",
+      "PlannedAttemptExecutorCommandResponseObserved",
+      "PlannedAttemptExecutorWorkReported",
+      "TaskAttemptPlanned",
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorCommandIntended",
+      "PlannedAttemptExecutorCommandResponseObserved",
+      "PlannedAttemptExecutorWorkReported",
+      "TaskAttemptPlanned",
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorCommandIntended",
+      "PlannedAttemptExecutorCommandResponseObserved",
+      "PlannedAttemptExecutorWorkReported"
+    ])
     const recovery = yield* makeRunRecoveryProjection(runId).pipe(
       Effect.provideService(
         PlannedAttemptExecutor,
@@ -273,6 +342,12 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
     )
     const current = yield* control.read(runId)
+    const exactReconstructedPositions = [
+      { attemptId: AttemptId.make("restart-capacity-A"), runId, taskId: TaskId.make("A") },
+      { attemptId: AttemptId.make("restart-capacity-B"), runId, taskId: TaskId.make("B") },
+      { attemptId: AttemptId.make("restart-capacity-C"), runId, taskId: TaskId.make("C") }
+    ]
+    expect(recovery.reconstructedPlannedAttemptPositions).toEqual(exactReconstructedPositions)
     const controller = yield* makeDeliveryRuntimeAdmissionController(
       {
         capacity: current.taskExecutionCapacity,
@@ -285,8 +360,13 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
       (yield* makeApplicationExitLifecycle()).admission
     )
 
-    expect(current).toEqual({ revision: 2, taskExecutionCapacity: 1 })
-    expect([...(yield* controller.snapshot).positions.keys()]).toEqual([TaskId.make("A"), TaskId.make("B")])
+    expect(current).toEqual({ revision: 2, taskExecutionCapacity: 3 })
+    expect([...(yield* controller.snapshot).positions]).toEqual(
+      exactReconstructedPositions.map(({ attemptId, runId, taskId }) => [
+        taskId,
+        { _tag: "AcceptedAttemptPosition", correlation: { attemptId, runId } }
+      ])
+    )
   }).pipe(
     Effect.provide(taskWorkCapacityControlLayer),
     Effect.provide(memoryJournalTestLayer),

@@ -2,9 +2,13 @@
 
 Owning issue: [#267](https://github.com/dearlordylord/dalph/issues/267)
 
-Status: complete and composed on `integrate/issues-264-268` through exact
-commit `a1b81c4fbcd189d62b480d6e637c62278ca7b829`; issue #267 is closed. The
-maintained proof is cassette-owned and exposed one missing composition of
+Status: issue #267 was closed after composition on `integrate/issues-264-268`
+through exact commit `a1b81c4fbcd189d62b480d6e637c62278ca7b829`. The
+maintained proof remains a required handoff gate. The reviewed post-Safe G2
+boundary repair now makes the unchanged maintained
+proof green. A focused run passed 1/1; its observed 533 ms test duration is
+execution evidence, not an acceptance bound or timing invariant. The
+cassette-owned proof exposed one missing composition of
 already-accepted #265/#266 behavior:
 when Suspend returns the unchanged Executing projection, the ordinary passive
 owner must remain attached to that exact attempt. The repair adds no provider
@@ -86,7 +90,66 @@ Acceptance tests:
 - `delivery-proposal-routes.test.ts` — “after Suspend returns Executing
   observes exact Safe and releases only that attempt”
 - `authored-active-work-causal-sync.test.ts` — “coalesces notification and
-  timer hints then retains B1 until its exact safe report”
+  timer hints then retains B1 until its exact safe report”; the unchanged
+  required composed proof is green with the reviewed post-Safe G2 boundary
+  repair
+
+## A reactivation-owner interaction failure exits as the same defect
+
+The first coordinator process dies after its accepted work is executing. A
+fresh process starts the current-first production Run reactivation owner. In
+the controlled malformed-interaction case, the cassette expects a different
+exact boundary from the boundary that the production workflow selects. The
+controlled trace boundary creates one `TraceOutputError` for that mismatch.
+
+The production reactivation owner passes that exact error to `onFailure`.
+`onFailure` completes the generation's exact in-memory failure signal. The
+generation can observe terminal assertions, an authored coordinator process
+death, or that owner failure. Before waiting, it samples one initial selection
+cut in fixed order: owner failure, then an atomic nonblocking process-death
+poll, then terminal eligibility. If neither higher-priority signal is ready,
+terminal, non-consuming process-death peek, and owner failure may wake the
+generation. After any wake, a second selection cut samples owner failure and
+then atomically polls process death again. Only when neither is ready may a
+terminal wake return `TerminalAssertions`. When owner failure is ready at
+either cut, the generation exits through `Die` with the same `TraceOutputError`
+object. It does not convert the defect to a typed `Fail`.
+
+The two cuts do not claim one transactional snapshot across the independent
+failure, queue, and terminal primitives. The fixed precedence applies to
+signals observable at the initial cut or the post-wake cut. A signal that
+becomes ready only after the post-wake cut is causally later and cannot
+retroactively replace the selected outcome. The process-death peek is only a
+wake signal; an interrupted losing peek consumes nothing. The atomic poll
+consumes the exact death signal only when failure is absent and death wins.
+
+It is forbidden to swallow the owner failure, wait indefinitely for terminal
+assertions, report a successful terminal or process-death outcome, convert the
+failure to a typed error, or replace the exact defect with a new wrapper. The
+failure signal and the three-way outcome selection are process-local cassette
+harness state. They add no Journal event, provider call, runtime authority,
+retry, or person-facing boundary. A fresh test run constructs a fresh owner
+generation and a fresh signal; no crash-resume promise applies to this
+malformed harness interaction.
+
+Acceptance tests:
+
+- `authored-runner-policy.test.ts` — “ends one reactivation-owner generation
+  at terminal assertions”
+- `authored-runner-policy.test.ts` — “ends one reactivation-owner generation
+  at an authored process death”
+- `authored-runner-policy.test.ts` — “propagates one reactivation-owner
+  failure as the same defect”
+- `authored-runner-policy.test.ts` — “prefers an owner defect when all
+  reactivation-owner outcomes are already ready”
+- `authored-runner-policy.test.ts` — “prefers authored process death when
+  death and terminal assertions are already ready”
+- `authored-runner-policy.test.ts` — “prefers an owner defect that becomes
+  ready with the terminal wake”
+- `authored-runner-policy.test.ts` — “prefers authored process death that
+  becomes ready with the terminal wake”
+- `authored-active-work-causal-sync.test.ts` — “surfaces a
+  reactivation-owner interaction defect before terminal assertions”
 
 ## Maintained production chronology
 
@@ -118,6 +181,9 @@ it lets dry-run, test, and production interpret the same workflow algebra with
 their selected executor. The production wrapper still selects the live
 executor and cleanup. Therefore this entry point introduces no new operational
 scenario; the #265, #266, and #267 scenarios continue to govern its behavior.
+The pending capstone-only settlement and restart cuts are owned by the
+dedicated [#268 scenario](issue-268-delivery-story-capstone.md), not by this
+closed #267 scenario.
 
 ## Scenario-to-test mapping
 
@@ -130,10 +196,17 @@ scenario; the #265, #266, and #267 scenarios continue to govern its behavior.
 | Unchanged executing and foreign attempts do not release B1 | `authored-active-work-causal-sync.test.ts`, executing and exact-owner tests |
 | Exact B1 Safe or Terminal releases B1 | `authored-active-work-causal-sync.test.ts`, exact-owner test; `delivery-proposal-routes.test.ts`, exact production adapter regression |
 | Tracker causality does not change ordinary requested executor-projection consumption | `authored-active-work-causal-sync.test.ts`, causal-only requested-projection test |
-| Current notification wins Startup, later hints coalesce into one trailing refresh, real G1/F1/F2 run, and B1 releases only after exact Safe | `authored-active-work-causal-sync.test.ts`, maintained composed cassette test |
+| A terminal assertion or authored process death ends one reactivation-owner generation with its exact successful outcome | `authored-runner-policy.test.ts`, individual terminal and process-death tests |
+| At both initial and post-wake selection cuts, ready owner defect wins over process death, and ready process death wins over terminal; death is consumed only when selected | `authored-runner-policy.test.ts`, all-ready and death-plus-terminal initial-cut tests; owner-defect-with-terminal-wake and process-death-with-terminal-wake post-wake tests |
+| A malformed post-death boundary completes the owner failure signal and exits through `Die` with the same `TraceOutputError`, never typed `Fail` | `authored-runner-policy.test.ts`, individual same-defect test; `authored-active-work-causal-sync.test.ts`, malformed-interaction test |
+| Current notification wins Startup, later hints coalesce into one trailing refresh, real G1/F1/F2 run, B1 releases only after exact Safe, and the post-Safe G2 handoff completes | `authored-active-work-causal-sync.test.ts`, unchanged maintained composed cassette test, green with the reviewed G2 boundary repair |
 
-Closure evidence: all direct rows above are green. The combined #267/#269
-focused suites passed 194/194 tests. The final #267 repository gate passed
-2,726 tests, 35 model-based tests, all 92 maintained cassettes, 100% changed
-executable coverage, and the gitleaks scan. Independent standards reviews of
-the repaired causal/lifecycle composition found no remaining runtime finding.
+Historical closure evidence for commit
+`a1b81c4fbcd189d62b480d6e637c62278ca7b829` included 194/194 combined
+#267/#269 focused tests, 2,726 repository tests, 35 model-based tests, all 92
+maintained cassettes, 100% changed executable coverage, and the gitleaks scan.
+That historical result alone did not make the maintained composed row green.
+The current reviewed candidate adds the owner-outcome and malformed-interaction
+proofs above and passes the unchanged maintained coalescing cassette 1/1. The
+observed 533 ms focused test duration records that run only; correctness does
+not depend on that duration.

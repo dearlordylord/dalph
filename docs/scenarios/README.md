@@ -90,6 +90,16 @@ table does not claim that the corrections are on `master` or shipped.
 | `issue-269-independent-work-retained-priority.md` | 269 | Complete and composed through `a1b81c4fb`; issue closed |
 | `issue-267-exact-causal-active-work-cassette.md` | 267 | Complete and composed through `a1b81c4fb`; issue closed |
 
+**Accepted amendment and proposed capstone refinement** — the standalone #269
+behavior passed #268's recorded two-judge gate and authorizes bounded test-first
+implementation. The full #268 capstone remains scenario-gated on its separate
+#309 blocking edge and mapped implementation/review requirements.
+
+| File | Owning issue | Status |
+|---|---:|---|
+| `issue-268-delivery-story-capstone.md` | 268 | Proposed; two-judge rule active and post-G2 behavior accepted, pending #309 causal-language amendment and mapped implementation |
+| `issue-269-post-g2-admission-stalled-quiescence.md` | 269 | Accepted behavior amendment for #268 under recorded owner authorization and concurring YES-behavior/NO-`f77c743f4` judgments |
+
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state
 which behavior is no longer accepted. They must not authorize implementation

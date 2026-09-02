@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- One closed schema keeps every authored boundary tag and chronology invariant reviewable together. */
-import { Effect, Match, Schema } from "effect"
+import { Effect, Equal, Match, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -161,6 +161,123 @@ export const AuthoredPlannedAttemptExecutorReport = Schema.TaggedUnion({
   }
 })
 export type AuthoredPlannedAttemptExecutorReport = typeof AuthoredPlannedAttemptExecutorReport.Type
+
+/**
+ * One cursor-visible cassette interaction accepted by the V1 concurrent
+ * group. The closed union is deliberately narrower than the top-level story
+ * language.
+ */
+export const AuthoredConcurrentInteractionMember = Schema.TaggedUnion({
+  DalphSelects: {
+    causal: Schema.optionalKey(Schema.Never),
+    causalAnchor: Schema.optionalKey(Schema.Never),
+    operation: AuthoredCassetteDecision
+  },
+  PlannedAttemptExecutorWorkReported: {
+    report: AuthoredPlannedAttemptExecutorReport.cases.ExecutorWorkExecuting,
+    request: Schema.Literal("Begin")
+  },
+  /** Exact current-claim read completion; the claim value remains provider authority rather than cassette identity. */
+  TaskClaimCurrentReadReturned: { taskId: TaskId },
+  /** Exact specification read completion; body and title are controlled output rather than cassette identity. */
+  TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields
+})
+export type AuthoredConcurrentInteractionMember = typeof AuthoredConcurrentInteractionMember.Type
+
+/**
+ * Unique cassette-only name of one interaction occurrence inside one
+ * concurrent interaction group. It is neither a claim key nor a production
+ * identity.
+ */
+const AuthoredConcurrentInteractionRole = Schema.NonEmptyString.pipe(Schema.brand("AuthoredConcurrentInteractionRole"))
+type AuthoredConcurrentInteractionRole = typeof AuthoredConcurrentInteractionRole.Type
+
+/**
+ * One authored graph node around the closed concurrent-interaction language.
+ * Its predecessor roles describe only the edges inside its containing group.
+ */
+export const AuthoredConcurrentInteractionNode = Schema.Struct({
+  interaction: AuthoredConcurrentInteractionMember,
+  predecessorRoles: Schema.Array(AuthoredConcurrentInteractionRole).check(Schema.isUnique()),
+  role: AuthoredConcurrentInteractionRole
+})
+export type AuthoredConcurrentInteractionNode = typeof AuthoredConcurrentInteractionNode.Type
+
+/**
+ * Exact incoming call identity used to claim one concurrent interaction.
+ * Controlled executor output is intentionally absent from the executor key.
+ */
+export type AuthoredConcurrentInteractionClaimKey =
+  | { readonly _tag: "DalphSelects"; readonly operation: AuthoredCassetteDecision }
+  | { readonly _tag: "PlannedAttemptExecutorWorkReported"; readonly attemptId: AttemptId; readonly request: "Begin" }
+  | { readonly _tag: "TaskClaimCurrentReadReturned"; readonly taskId: TaskId }
+  | { readonly _tag: "TaskWorkSpecificationReadReturned"; readonly taskId: TaskId }
+
+export const authoredConcurrentInteractionClaimKey = (
+  member: AuthoredConcurrentInteractionMember
+): AuthoredConcurrentInteractionClaimKey =>
+  Match.valueTags(member, {
+    DalphSelects: ({ operation }) => ({ _tag: "DalphSelects" as const, operation }),
+    PlannedAttemptExecutorWorkReported: ({ report, request }) => ({
+      _tag: "PlannedAttemptExecutorWorkReported" as const,
+      attemptId: report.attemptId,
+      request
+    }),
+    TaskClaimCurrentReadReturned: ({ taskId }) => ({ _tag: "TaskClaimCurrentReadReturned" as const, taskId }),
+    TaskWorkSpecificationReadReturned: ({ taskId }) => ({ _tag: "TaskWorkSpecificationReadReturned" as const, taskId })
+  })
+
+const concurrentInteractionClaimKeysAreUnique = Schema.makeFilter(
+  (members: ReadonlyArray<AuthoredConcurrentInteractionNode>) => {
+    const keys = members.map(({ interaction }) => authoredConcurrentInteractionClaimKey(interaction))
+    return keys.some((key, index) => keys.slice(0, index).some((prior) => Equal.equals(prior, key)))
+      ? "each concurrent interaction claim key must be unique"
+      : undefined
+  }
+)
+
+const concurrentInteractionGraphHasCycle = (members: ReadonlyArray<AuthoredConcurrentInteractionNode>): boolean => {
+  let consumedRoles: ReadonlyArray<AuthoredConcurrentInteractionRole> = []
+  while (consumedRoles.length < members.length) {
+    const enabled = members.find(
+      ({ predecessorRoles, role }) =>
+        !consumedRoles.includes(role) &&
+        predecessorRoles.every((predecessorRole) => consumedRoles.includes(predecessorRole))
+    )
+    if (enabled === undefined) return true
+    consumedRoles = [...consumedRoles, enabled.role]
+  }
+  return false
+}
+
+const concurrentInteractionGraphIsValid = Schema.makeFilter(
+  (members: ReadonlyArray<AuthoredConcurrentInteractionNode>) => {
+    const roles = members.map(({ role }) => role)
+    if (new Set(roles).size !== roles.length) return "each concurrent interaction role must be unique"
+    const roleSet = new Set(roles)
+    for (const member of members) {
+      const role = member.role
+      if (member.predecessorRoles.some((predecessorRole) => predecessorRole === member.role)) {
+        return `concurrent interaction role ${role} cannot name itself as a predecessor`
+      }
+      const missing = member.predecessorRoles.find((predecessorRole) => !roleSet.has(predecessorRole))
+      if (missing !== undefined) return `concurrent interaction predecessor ${missing} is not a member of the group`
+    }
+    return concurrentInteractionGraphHasCycle(members)
+      ? "concurrent interaction predecessor roles must form an acyclic graph"
+      : undefined
+  }
+)
+
+/**
+ * The finite non-empty graph of cassette interactions whose predecessor
+ * edges are authored while all other arrival order remains unconstrained.
+ * It owns no production concurrency authority.
+ */
+const AuthoredConcurrentInteractionMembers = Schema.NonEmptyArray(AuthoredConcurrentInteractionNode).check(
+  concurrentInteractionClaimKeysAreUnique,
+  concurrentInteractionGraphIsValid
+)
 
 /** Specialist-facing results of one task's planned work; attempt identity is deliberately absent. */
 export const AuthoredTaskWorkResult = Schema.TaggedUnion({
@@ -784,6 +901,8 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   },
   /** One bounded tracker-read phase whose causally named members may complete in either order. */
   ConcurrentTrackerReadBatch: { members: Schema.NonEmptyArray(AuthoredConcurrentTrackerRead) },
+  /** One bounded closed graph of causally constrained controlled interactions. */
+  ConcurrentInteractionGroup: { members: AuthoredConcurrentInteractionMembers },
   DalphSelects: {
     causal: Schema.optionalKey(AuthoredCausalSelection),
     causalAnchor: Schema.optionalKey(AuthoredCausalAnchor),
@@ -963,6 +1082,7 @@ const defineStoryItemOwners = <
 ): Registrations => registrations
 
 export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
+  CassetteConcurrency: ["ConcurrentInteractionGroup"],
   CassetteControl: [
     "CassetteOffersRunReactivationHints",
     "CassettePublishesCurrentTrackerNotification",
@@ -1068,8 +1188,18 @@ export const assertExactlyOneAuthoredCassetteStoryItemOwner = Effect.fn(
 })
 
 const authoredScenarioCassetteVersion = 1 as const
+/**
+ * Harness-only ownership of coordinator process generations. This selects how
+ * the controlled runner composes the one production reactivation owner; it is
+ * not a durable Run fact, scheduler, or Dalph runtime policy.
+ */
+const AuthoredProcessLifecycle = Schema.TaggedUnion({
+  CurrentFirstReactivationAfterProcessDeath: {},
+  ReactivationOwnerProcessGenerations: {}
+})
 const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCassette", {
   name: Schema.NonEmptyString,
+  processLifecycle: Schema.optionalKey(AuthoredProcessLifecycle),
   schemaVersion: Schema.Literal(authoredScenarioCassetteVersion),
   startingFacts: Schema.Struct({
     executorWork: Schema.Literal("NoPriorReport"),
@@ -1084,6 +1214,28 @@ const AuthoredScenarioCassetteShape = Schema.TaggedStruct("AuthoredScenarioCasse
   }),
   story: Schema.Array(AuthoredCassetteStoryItem)
 })
+
+const reactivationInputsHaveExplicitProcessLifecycle = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) => {
+    const hasHints = cassette.story.some((item) => item._tag === "CassetteOffersRunReactivationHints")
+    const hasCurrentFirst = cassette.story.some((item) => item._tag === "CassettePublishesCurrentTrackerNotification")
+    const mode = cassette.processLifecycle?._tag
+    if (!hasHints && !hasCurrentFirst) {
+      return mode === undefined ? undefined : "an authored process lifecycle requires a reactivation-owner input"
+    }
+    if (mode === "CurrentFirstReactivationAfterProcessDeath") {
+      return hasCurrentFirst && cassette.story.some((item) => item._tag === "CoordinatorProcessDies")
+        ? undefined
+        : "current-first reactivation requires an authored process death and current tracker notification"
+    }
+    if (mode === "ReactivationOwnerProcessGenerations") {
+      return hasHints && !hasCurrentFirst
+        ? undefined
+        : "reactivation-owner process generations require authored hints without a current-first notification"
+    }
+    return "reactivation-owner inputs require one explicit authored process lifecycle"
+  }
+)
 
 const exactlyOneAt = (
   tag: AuthoredCassetteStoryItem["_tag"],
@@ -1251,7 +1403,7 @@ const completionFinalityStoryIsComplete = Schema.makeFilter((cassette: typeof Au
             : "Delete"
       )
     return actualSteps.some((step, index) => step !== expectedSteps[index]) || actualSteps.length > expectedSteps.length
-  })?.[0]
+  })
   return incompleteTaskId === undefined
     ? undefined
     : `authored completion finality for ${incompleteTaskId} must be an exact prefix of active-record presence, replacement, two completion-marker presence reads, completion-marker deletion, and completion-marker absence`
@@ -1462,6 +1614,7 @@ const AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteShape.check(
   .check(finalTrackerReadClosesCurrentActivation)
   .check(ambiguousBoundaryLossesImmediatelyCrash)
   .check(beginResponsesAreExecuting)
+  .check(reactivationInputsHaveExplicitProcessLifecycle)
   .check(lostExecutorResponsesRequireExplicitProjection)
   .check(completionFinalityStoryIsComplete)
   .check(admittedContinuationHoldHasExactAttemptChoiceClosure)

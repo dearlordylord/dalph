@@ -1,4 +1,4 @@
-import type { AttemptId, RunId } from "@dalph/contracts"
+import type { AttemptId, PlannedTaskAttempt, RunId } from "@dalph/contracts"
 import type { DeliveryActionProposal } from "./delivery-action-proposal.js"
 import type { DeliveryRuntimeEvaluation } from "./relations.js"
 
@@ -58,16 +58,23 @@ const postG2ActiveTransitionTags: ReadonlySet<string> = new Set<string>([
   "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
 ])
 
-const isActiveRefreshPreG2Subject = (value: unknown): value is ActiveRefreshPreG2Subject => {
+type DeliveryProposalPlannedAttemptSubject = Pick<PlannedTaskAttempt, "attemptId" | "runId" | "taskId">
+
+const isDeliveryProposalPlannedAttemptSubject = (value: unknown): value is DeliveryProposalPlannedAttemptSubject => {
   if (typeof value !== "object" || value === null) return false
   return (
-    "attemptId" in value && "runId" in value && typeof value.attemptId === "string" && typeof value.runId === "string"
+    "attemptId" in value &&
+    "runId" in value &&
+    "taskId" in value &&
+    typeof value.attemptId === "string" &&
+    typeof value.runId === "string" &&
+    typeof value.taskId === "string"
   )
 }
 
-const plannedAttemptOfTransition = (transition: unknown): ActiveRefreshPreG2Subject | undefined => {
+const plannedAttemptOfTransition = (transition: unknown): DeliveryProposalPlannedAttemptSubject | undefined => {
   if (typeof transition !== "object" || transition === null) return undefined
-  if ("plannedAttempt" in transition && isActiveRefreshPreG2Subject(transition.plannedAttempt)) {
+  if ("plannedAttempt" in transition && isDeliveryProposalPlannedAttemptSubject(transition.plannedAttempt)) {
     return transition.plannedAttempt
   }
   if (
@@ -75,7 +82,7 @@ const plannedAttemptOfTransition = (transition: unknown): ActiveRefreshPreG2Subj
     typeof transition.subject === "object" &&
     transition.subject !== null &&
     "plannedAttempt" in transition.subject &&
-    isActiveRefreshPreG2Subject(transition.subject.plannedAttempt)
+    isDeliveryProposalPlannedAttemptSubject(transition.subject.plannedAttempt)
   ) {
     return transition.subject.plannedAttempt
   }
@@ -92,7 +99,10 @@ const proposalTransitionTagOf = (proposal: DeliveryActionProposal): string | und
   return undefined
 }
 
-const proposalPlannedAttemptOf = (proposal: DeliveryActionProposal): ActiveRefreshPreG2Subject | undefined => {
+/** Exact task and planned-attempt subject carried by a proposal route, when that route is attempt-scoped. */
+export const deliveryProposalPlannedAttemptSubject = (
+  proposal: DeliveryActionProposal
+): DeliveryProposalPlannedAttemptSubject | undefined => {
   const route = proposal.route
   if (route._tag === "FreshExecutorWorkflowRoute") return route.step.plannedAttempt
   if (route._tag === "IdentityFreeWorkflowRoute") return plannedAttemptOfTransition(route.transition)
@@ -122,7 +132,7 @@ export const evaluationForPhase = (
       proposedActions: {
         ...evaluation.proposedActions,
         proposals: evaluation.proposedActions.proposals.filter((proposal) => {
-          const subject = proposalPlannedAttemptOf(proposal)
+          const subject = deliveryProposalPlannedAttemptSubject(proposal)
           const transition = proposalTransitionTagOf(proposal)
           return !(
             subject !== undefined &&
@@ -141,7 +151,7 @@ export const evaluationForPhase = (
       proposals: evaluation.proposedActions.proposals.filter((proposal) => {
         if (proposal.route._tag === "TrackerGraphReadRoute") return true
         const transition = proposalTransitionTagOf(proposal)
-        const subject = proposalPlannedAttemptOf(proposal)
+        const subject = deliveryProposalPlannedAttemptSubject(proposal)
         return (
           transition !== undefined &&
           preG2ActiveTransitionTags.has(transition) &&

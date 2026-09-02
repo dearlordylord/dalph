@@ -1748,6 +1748,100 @@ it.each([
   )
 )
 
+effectIt.effect("reconstructs after post-G2 capacity stall without persisted admission state", () =>
+  Effect.gen(function* () {
+    const pendingTaskId = TaskId.make("recovery-post-g2-pending-E")
+    const graphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("recovery-post-g2-current-graph"),
+      coverageTarget,
+      [coveragePlanOperation.operationId],
+      [coverageAttempt.taskId, pendingTaskId]
+    )
+    const graph = validSnapshot({
+      revision: "recovery-post-g2-current-graph",
+      tasks: [coverageAttempt.taskId, pendingTaskId].map((id) => ({
+        id,
+        lifecycle: { _tag: "Open" as const },
+        parentTaskId: null,
+        prerequisiteIds: []
+      }))
+    })
+    const graphEvent = taskTrackerFactsObservedEvent(
+      graphOperation.operationId,
+      makeCompleteTaskTrackerFactsObserved(graphOperation, graph)
+    )
+    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+      correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+    })
+    const records = coverageRecordsWithBeginning([
+      ...coveragePlanRecords(),
+      executorReport(5, executing),
+      coverageRecord(6, taskTrackerReadIntent(graphOperation)),
+      coverageRecord(7, graphEvent)
+    ])
+    const reconstructed: ReconstructedRunState = {
+      ...coverageRunState(records, [coverageResponsibilityAfterBeginning]),
+      controlPolicy: Option.some({ ...coveragePolicy, revision: initialRunPolicyRevision }),
+      graphKnowledge: { taskTrackerFacts: [graphEvent.observation] }
+    }
+    const beforeCrashResources = yield* makeIntegrationTargetResourceController()
+    const beforeCrash = yield* makeRunRecoveryProjection(coverageRunId, undefined, beforeCrashResources).pipe(
+      Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, reconstructed))
+    )
+    const beforeCrashProjection = yield* beforeCrash.readDeliveryProjection
+
+    // A process crash discards the delivery runtime, its admission positions, and its post-G2 cut. A separately
+    // constructed recovery owner receives only the same durable Journal reduction and therefore has no stall witness
+    // to resume or retry; it reconstructs the ordinary D observation and E graph responsibility afresh.
+    const restartedResources = yield* makeIntegrationTargetResourceController()
+    const restarted = yield* makeRunRecoveryProjection(coverageRunId, undefined, restartedResources).pipe(
+      Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, reconstructed))
+    )
+    const projection = yield* restarted.readDeliveryProjection
+
+    expect(projection.evidence).toMatchObject({
+      _tag: "AvailableDeliveryProjectionEvidence",
+      facts: [
+        {
+          _tag: "PlannedAttemptExecutorFreshFacts",
+          disposition: { _tag: "Ready" },
+          responsibility: { plannedAttempt: coverageAttempt }
+        }
+      ]
+    })
+    expect(projection.frontier.transitions).toContainEqual(
+      RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+        acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(5) },
+        plannedAttempt: coverageAttempt
+      })
+    )
+    expect(projection).toEqual(beforeCrashProjection)
+    expect(JSON.stringify(graphEvent.observation)).toContain(pendingTaskId)
+    expect(records.map(({ event }) => event._tag)).toEqual([
+      "WorkflowRunBegan",
+      "TaskClaimAcquisitionIntended",
+      "TaskClaimAcquired",
+      "TaskAttemptPlanned",
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorWorkReported",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved"
+    ])
+    expect(JSON.stringify(records)).not.toMatch(/PostG2|AdmissionStall|TaskWorkPosition/)
+    expect(Object.keys(reconstructed).toSorted()).toEqual([
+      "appliedThrough",
+      "cancellation",
+      "controlPolicy",
+      "graphKnowledge",
+      "pause",
+      "responsibility",
+      "runId",
+      "workflowHistory"
+    ])
+  })
+)
+
 it("reconciles one unsettled command when its prior activation recorded a non-exact projection", () =>
   Effect.runPromise(
     Effect.gen(function* () {

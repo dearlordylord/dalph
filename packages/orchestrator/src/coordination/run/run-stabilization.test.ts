@@ -19,6 +19,7 @@ import { Deferred, Effect, Fiber, Layer, Ref, SubscriptionRef } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot, type TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
+import { TrackerReadError } from "../../authorities/task-tracker/graph-reader.js"
 import type { TaskLifecycle } from "../../authorities/task-tracker/task.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { OperationId } from "../../workflow/identity.js"
@@ -29,7 +30,7 @@ import {
 } from "../../workflow/interpretation/interpreter.js"
 import { makeTrackerGraphObservationOperation, type TrackerGraphReadCause } from "../../workflow/registry/operation.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
-import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import { InRunJournal, JournalStorageUnavailable, type JournalRecord } from "../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
@@ -55,6 +56,7 @@ import {
   DeliverySemanticTrace,
   type DeliveryActionExecutorService
 } from "../delivery/delivery-action-executor.js"
+import { DeliveryAcceptedFactPublication } from "../delivery/delivery-accepted-fact-publication.js"
 import { deliveryProposalsOf } from "../delivery/delivery-proposal.js"
 import { FreshWorkflowStep } from "../delivery/fresh-workflow-step.js"
 import { frontierOf } from "../delivery/ticket-delivery-projection.js"
@@ -87,6 +89,7 @@ import {
 } from "../../workflow/task-tracker-facts/observation.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
+import { makePreparedBeginFixture, preparedBeginProposalsOf } from "../../../test/support/prepared-begin-proposal.js"
 const runId = RunId.make("run-stabilization")
 const target = FixtureTarget.make("run-stabilization-target")
 const emptyFrontier = { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [] }
@@ -192,6 +195,16 @@ const supportWithoutResources = Layer.mergeAll(
   }),
   plannedAttemptProtocolControllerLayer,
   Layer.succeed(
+    DeliveryAcceptedFactPublication,
+    DeliveryAcceptedFactPublication.of({
+      awaitCurrent: Effect.succeed({
+        _tag: "DeliveryAcceptedPublicationBoundary",
+        acceptedThrough: JournalPosition.make(1),
+        runId
+      })
+    })
+  ),
+  Layer.succeed(
     InRunJournal,
     InRunJournal.of({
       append: () => Effect.die("stabilization tests do not append directly through the Run journal"),
@@ -215,6 +228,16 @@ const supportWithoutAllocator = Layer.mergeAll(
     worktreeRoot: WorktreeLocator.make("/stabilization")
   }),
   plannedAttemptProtocolControllerLayer,
+  Layer.succeed(
+    DeliveryAcceptedFactPublication,
+    DeliveryAcceptedFactPublication.of({
+      awaitCurrent: Effect.succeed({
+        _tag: "DeliveryAcceptedPublicationBoundary",
+        acceptedThrough: JournalPosition.make(1),
+        runId
+      })
+    })
+  ),
   Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
 )
 const supportWithResourcesWithoutAllocator = Layer.merge(
@@ -330,7 +353,7 @@ it.effect("starts no tracker stabilization read after the application Exit cutof
       const reads = yield* Ref.make(0)
       yield* lifecycle.requestExit
 
-      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(supportWithoutResources),
         Effect.provide(resources),
         Effect.provideService(
@@ -347,6 +370,342 @@ it.effect("starts no tracker stabilization read after the application Exit cutof
       expect(yield* Ref.get(reads)).toBe(0)
       expect(proof.acceptedAt).toBe(g1.observation.recordedAt)
     })
+  )
+)
+
+it.effect("returns RunMustRemainActive without G2 when task-work admission is stalled", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const [a, b, c, d, e] = ["A", "B", "C", "D", "E"].map((name) =>
+        makePreparedBeginFixture(activeVerticalAttempt, "stabilization-admission-stalled", name)
+      )
+      if (a === undefined || b === undefined || c === undefined || d === undefined || e === undefined) {
+        return yield* Effect.die("five exact stabilization fixtures must be present")
+      }
+      const g1 = graph(
+        "stabilization-admission-stalled-G1",
+        1,
+        snapshot("stabilization-admission-stalled-G1", [d.task, e.task])
+      )
+      const blocked = preparedBeginProposalsOf(runId, [d, e])
+      expect(blocked).toMatchObject([
+        {
+          admission: {
+            plannedAttemptProtocol: {
+              _tag: "PlannedAttemptProtocolRequired",
+              correlation: plannedAttemptExecutorCorrelation(d.attempt)
+            },
+            taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId: d.attempt.taskId }
+          },
+          order: { _tag: "FreshWorkflowOrder", frontierOrdinal: 0 },
+          route: { _tag: "FreshExecutorWorkflowRoute", step: { plannedAttempt: d.attempt } }
+        },
+        {
+          admission: {
+            plannedAttemptProtocol: {
+              _tag: "PlannedAttemptProtocolRequired",
+              correlation: plannedAttemptExecutorCorrelation(e.attempt)
+            },
+            taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId: e.attempt.taskId }
+          },
+          order: { _tag: "FreshWorkflowOrder", frontierOrdinal: 1 },
+          route: { _tag: "FreshExecutorWorkflowRoute", step: { plannedAttempt: e.attempt } }
+        }
+      ])
+      const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
+        ...withRunFacts(evaluation(base, g1, { ...emptyFrontier, proposals: blocked }), false),
+        taskWork: {
+          capacity: TaskWorkCapacity.make(3),
+          held: [a, b, c].map(({ attempt }) => ({
+            taskId: attempt.taskId,
+            correlation: plannedAttemptExecutorCorrelation(attempt)
+          }))
+        }
+      })
+      const reads = yield* Ref.make(0)
+
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
+        Effect.provide(support),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({ execute: () => Effect.die("full capacity must not execute D or E") })
+        ),
+        Effect.provide(
+          Layer.mock(WorkflowInterpreter, {
+            readTrackerGraph: () => Ref.update(reads, (count) => count + 1).pipe(Effect.andThen(Effect.die("no G2")))
+          })
+        )
+      )
+
+      expect(yield* Ref.get(reads)).toBe(0)
+      expect(proof).toEqual({
+        acceptedAt: g1.observation.recordedAt,
+        decision: { _tag: "RunMustRemainActive", reason: "RunnableTransition" }
+      })
+    })
+  )
+)
+
+it.effect("returns unsettled responsibility for exact post-G2 capacity stall without another tracker read", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const [a, b, c, d, e] = ["post-G2-A", "post-G2-B", "post-G2-C", "post-G2-D", "post-G2-E"].map((name) =>
+        makePreparedBeginFixture(activeVerticalAttempt, "stabilization-post-G2-stall", name)
+      )
+      if (a === undefined || b === undefined || c === undefined || d === undefined || e === undefined) {
+        return yield* Effect.die("five exact post-G2 stabilization fixtures must be present")
+      }
+      const [beginD, blockedE] = preparedBeginProposalsOf(runId, [d, e])
+      if (beginD === undefined || blockedE === undefined) {
+        return yield* Effect.die("D and E must each produce one exact Begin proposal")
+      }
+      const g1 = graph(
+        "stabilization-post-G2-stall-G1",
+        1,
+        snapshot(
+          "stabilization-post-G2-stall-G1",
+          [a, b, c, d, e].map(({ task }) => ({
+            id: task.id,
+            lifecycle: { _tag: "Open" as const },
+            parentTaskId: null,
+            prerequisiteIds: []
+          }))
+        ),
+        { _tag: "ExecutingWorkAuthorityCheck" }
+      )
+      const subjects = [a, b, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
+      const boundary: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]> = {
+        _tag: "ActiveRefreshRuntimeBoundary",
+        reconciledAttempts: subjects,
+        runId
+      }
+      const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>(withRunFacts(evaluation(base, g1), false))
+      const reads = yield* Ref.make(0)
+      const executions = yield* Ref.make<ReadonlyArray<string>>([])
+      const interpreter = Layer.mock(WorkflowInterpreter, {
+        readTrackerGraph: (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) =>
+          Effect.gen(function* () {
+            yield* Ref.update(reads, (count) => count + 1)
+            const g2 = graph(operation.operationId, 4, g1.observation.snapshot, {
+              _tag: "PostQuiescenceReconfirmation",
+              quiescentGraphOperationId: g1.observation.operationId
+            })
+            yield* SubscriptionRef.set(state, {
+              ...withRunFacts(evaluation(base, g2, { ...emptyFrontier, proposals: [beginD, blockedE] }), false),
+              activeRefreshBoundary: boundary,
+              taskWork: {
+                capacity: TaskWorkCapacity.make(3),
+                held: [a, c].map(({ attempt }) => ({
+                  correlation: plannedAttemptExecutorCorrelation(attempt),
+                  taskId: attempt.taskId
+                }))
+              }
+            })
+            return g2.observation.snapshot
+          })
+      })
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal }) =>
+          Effect.gen(function* () {
+            if (proposal.id !== beginD.id) return yield* Effect.die("capacity-blocked E must not execute")
+            yield* Ref.update(executions, (ids) => [...ids, proposal.id])
+            yield* SubscriptionRef.update(state, (current) => ({
+              ...current,
+              acceptedAt: JournalPosition.make(5),
+              proposedActions: { ...emptyFrontier, proposals: [blockedE] },
+              taskWork: {
+                capacity: TaskWorkCapacity.make(3),
+                held: [a, c, d].map(({ attempt }) => ({
+                  correlation: plannedAttemptExecutorCorrelation(attempt),
+                  taskId: attempt.taskId
+                }))
+              }
+            }))
+            return {
+              _tag: "ExecutorReportPublished",
+              acceptedFacts: "Changed",
+              plannedAttempt: d.attempt,
+              proposalId: beginD.id,
+              report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                correlation: plannedAttemptExecutorCorrelation(d.attempt)
+              })
+            } as const
+          })
+      })
+
+      const proof = yield* runStabilizedDelivery(
+        target,
+        runId,
+        signalOf(state),
+        activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor(subjects))
+      ).pipe(
+        Effect.provide(support),
+        Effect.provide(interpreter),
+        Effect.provideService(DeliveryActionExecutor, executor)
+      )
+
+      expect(yield* Ref.get(reads)).toBe(1)
+      expect(yield* Ref.get(executions)).toEqual([beginD.id])
+      expect(proof).toEqual({
+        acceptedAt: JournalPosition.make(5),
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      })
+    })
+  )
+)
+
+it.effect("preserves exact Journal and finality read failures before post-G2 admission without starting E", () =>
+  Effect.forEach(
+    ["JournalRead", "JournalAppend", "FinalityTrackerRead"] as const,
+    (boundary) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const base = yield* baseEvaluation
+          const [d, e] = ["stabilization-boundary-D", "stabilization-boundary-E"].map((name) =>
+            makePreparedBeginFixture(activeVerticalAttempt, "stabilization-boundary-failure", name)
+          )
+          if (d === undefined || e === undefined) {
+            return yield* Effect.die("D and E boundary fixtures must be present")
+          }
+          const g1 = graph(
+            `stabilization-${boundary}-G1`,
+            1,
+            snapshot(
+              `stabilization-${boundary}-G1`,
+              [d, e].map(({ task }) => ({
+                id: task.id,
+                lifecycle: { _tag: "Open" as const },
+                parentTaskId: null,
+                prerequisiteIds: []
+              }))
+            ),
+            { _tag: "ExecutingWorkAuthorityCheck" }
+          )
+          const subject = plannedAttemptExecutorCorrelation(activeVerticalAttempt)
+          const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
+            ...withRunFacts(evaluation(base, g1), false),
+            activeRefreshBoundary: { _tag: "ActiveRefreshRuntimeBoundary", reconciledAttempts: [subject], runId }
+          })
+          const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+          const journalReads = yield* Ref.make(0)
+          const journalAppends = yield* Ref.make(0)
+          const providerReads = yield* Ref.make(0)
+          const executions = yield* Ref.make<ReadonlyArray<string>>([])
+          const journalReadFailure = new JournalStorageUnavailable({
+            detail: "post-G2 stabilization Journal read unavailable",
+            operation: "JournalStore.read"
+          })
+          const journalAppendFailure = new JournalStorageUnavailable({
+            detail: "post-G2 stabilization Journal append unavailable",
+            operation: "JournalStore.append"
+          })
+          const finalityReadFailure = new TrackerReadError({
+            detail: "post-quiescence finality tracker read unavailable",
+            operation: "TrackerGraphReader.parse"
+          })
+          const backingJournal = appendableJournalFor(records)
+          const journal = InRunJournal.of({
+            append: (requestedRunId, key, event) =>
+              Ref.update(journalAppends, (count) => count + 1).pipe(
+                Effect.andThen(
+                  boundary === "JournalAppend"
+                    ? Effect.fail(journalAppendFailure)
+                    : backingJournal.append(requestedRunId, key, event)
+                )
+              ),
+            read: (requestedRunId) =>
+              Ref.update(journalReads, (count) => count + 1).pipe(
+                Effect.andThen(
+                  boundary === "JournalRead" ? Effect.fail(journalReadFailure) : backingJournal.read(requestedRunId)
+                )
+              )
+          })
+          const provider = Layer.mock(WorkflowInterpreter, {
+            readTrackerGraph: () =>
+              Ref.update(providerReads, (count) => count + 1).pipe(Effect.andThen(Effect.fail(finalityReadFailure)))
+          })
+          const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(
+            Layer.provide(Layer.succeed(InRunJournal, journal))
+          )
+          const lifecycle = yield* makeApplicationExitLifecycle()
+          const integrationTargets = yield* makeIntegrationTargetResourceController()
+          const retainedResponsibility = {
+            integrationTarget: IntegrationTarget.make({
+              repository: GitRepositoryLocator.make(`/stabilization-${boundary}.git`),
+              ref: IntegrationTargetRef.make("refs/heads/main")
+            }),
+            queuedAt: JournalPosition.make(40)
+          }
+          yield* integrationTargets.acquire(retainedResponsibility)
+          yield* integrationTargets.publishAcceptedOwnership(retainedResponsibility)
+          const resources = deliveryRuntimeResourceCapabilitiesLayer(
+            yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets, lifecycle.admission)
+          )
+
+          const failure = yield* runStabilizedDelivery(
+            target,
+            runId,
+            signalOf(state),
+            activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([subject]))
+          ).pipe(
+            Effect.provide(supportWithoutAllocator),
+            Effect.provide(deterministicOperationIdAllocatorLayer(`stabilization-${boundary}`)),
+            Effect.provide(resources),
+            Effect.provide(journaled),
+            Effect.provideService(InRunJournal, journal),
+            Effect.provideService(
+              DeliveryActionExecutor,
+              DeliveryActionExecutor.of({
+                execute: ({ proposal }) =>
+                  Ref.update(executions, (current) => [...current, proposal.id]).pipe(
+                    Effect.andThen(Effect.die("D or E must not execute before the failed G2 boundary"))
+                  )
+              })
+            ),
+            Effect.flip
+          )
+
+          expect(failure).toEqual(
+            boundary === "JournalRead"
+              ? journalReadFailure
+              : boundary === "JournalAppend"
+                ? journalAppendFailure
+                : finalityReadFailure
+          )
+          expect(yield* Ref.get(executions)).toEqual([])
+          expect(yield* Ref.get(providerReads)).toBe(boundary === "FinalityTrackerRead" ? 1 : 0)
+          expect(yield* Ref.get(journalReads)).toBe(
+            boundary === "JournalRead" ? 1 : boundary === "JournalAppend" ? 2 : 3
+          )
+          expect(yield* Ref.get(journalAppends)).toBe(
+            boundary === "JournalRead" ? 0 : boundary === "JournalAppend" ? 1 : 2
+          )
+          const durableRecords = yield* Ref.get(records)
+          if (boundary === "FinalityTrackerRead") {
+            expect(durableRecords).toHaveLength(2)
+            expect(durableRecords[0]?.event).toMatchObject({
+              _tag: "TaskTrackerReadIntentRecorded",
+              operation: { cause: { _tag: "PostQuiescenceReconfirmation" } }
+            })
+            expect(durableRecords[1]?.event).toMatchObject({
+              _tag: "TaskTrackerFactsObserved",
+              observation: {
+                _tag: "TaskTrackerFactsReadFailed",
+                failure: { _tag: "TrackerReadError", detail: finalityReadFailure.detail }
+              }
+            })
+          } else {
+            expect(durableRecords).toEqual([])
+          }
+          expect(yield* integrationTargets.snapshot).toEqual({
+            activeResponsibilityPositions: new Set(),
+            heldResponsibilityPositions: new Set()
+          })
+        })
+      ),
+    { discard: true }
   )
 )
 
@@ -377,7 +736,7 @@ it.effect("records a stabilization read admitted before Exit but starts no phase
             })
           )
       })
-      const running = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const running = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(supportWithoutResources),
         Effect.provide(resources),
         Effect.provideService(
@@ -441,7 +800,7 @@ it.effect("requests accepted G2 only after G1 becomes quiescent", () =>
             Effect.as(g1.observation.snapshot)
           )
       })
-      const running = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const running = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(support),
         Effect.provideService(DeliveryActionExecutor, DeliveryActionExecutor.of(executor)),
         Effect.provide(interpreter),
@@ -521,6 +880,7 @@ it.effect("active-work refresh and post-quiescence finality perform cause-ordere
       yield* observingInterpreter.readTrackerGraph(g1Operation)
       const proof = yield* runStabilizedDelivery(
         target,
+        runId,
         signalOf(state),
         activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId }]))
       ).pipe(
@@ -612,6 +972,7 @@ it.effect("keeps a new active-refresh G2 nonterminal when its accepted publicati
 
           const proof = yield* runStabilizedDelivery(
             target,
+            runId,
             signalOf(state),
             activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId }]))
           ).pipe(
@@ -710,7 +1071,7 @@ it.effect("replays an intent-only G2 after a crash without allocating a second i
         "Timer",
         activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId: activeVerticalAttempt.attemptId }])
       )
-      const firstAttempt = yield* runStabilizedDelivery(target, signalOf(state), opportunity).pipe(
+      const firstAttempt = yield* runStabilizedDelivery(target, runId, signalOf(state), opportunity).pipe(
         Effect.provide(supportWithResourcesWithoutAllocator),
         Effect.provideService(InRunJournal, journal),
         Effect.provideService(OperationIdAllocator, allocator),
@@ -746,7 +1107,7 @@ it.effect("replays an intent-only G2 after a crash without allocating a second i
         )
       ).toBe(false)
 
-      yield* runStabilizedDelivery(target, signalOf(state), opportunity).pipe(
+      yield* runStabilizedDelivery(target, runId, signalOf(state), opportunity).pipe(
         Effect.provide(supportWithResourcesWithoutAllocator),
         Effect.provideService(InRunJournal, journal),
         Effect.provideService(OperationIdAllocator, allocator),
@@ -918,6 +1279,7 @@ it.effect("reopens ordinary delivery only from exact settled executor lifecycle 
 
         yield* runStabilizedDelivery(
           target,
+          runId,
           signalOf(state),
           activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([correlation]))
         ).pipe(
@@ -1078,7 +1440,7 @@ it.effect("holds an actual independent fresh route until G2 after direct safe or
             event._tag === "ProposalAdmitted" ? Ref.update(admitted, (ids) => [...ids, event.proposalId]) : Effect.void
         })
 
-        const proof = yield* runStabilizedDelivery(target, signalOf(state), opportunity).pipe(
+        const proof = yield* runStabilizedDelivery(target, runId, signalOf(state), opportunity).pipe(
           Effect.provide(support),
           Effect.provideService(DeliveryActionExecutor, DeliveryActionExecutor.of(executor)),
           Effect.provideService(DeliverySemanticTrace, trace),
@@ -1165,6 +1527,7 @@ it.effect("runs independent work revealed by G2 while the active subject remains
       })
       const proof = yield* runStabilizedDelivery(
         target,
+        runId,
         signalOf(state),
         activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([{ runId, attemptId }]))
       ).pipe(
@@ -1240,7 +1603,7 @@ it.effect("runs work published after G2 before phase two subscribes", () =>
           )
       }
 
-      yield* runStabilizedDelivery(target, signal).pipe(
+      yield* runStabilizedDelivery(target, runId, signal).pipe(
         Effect.provide(support),
         Effect.provideService(DeliveryActionExecutor, DeliveryActionExecutor.of(executor)),
         Effect.provide(interpreter)
@@ -1304,7 +1667,7 @@ it.effect("retains accepted integration ownership through G2 and releases it onc
           })
       })
 
-      yield* runStabilizedDelivery(target, signal).pipe(
+      yield* runStabilizedDelivery(target, runId, signal).pipe(
         Effect.provide(supportWithoutResources),
         Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
         Effect.provideService(
@@ -1346,7 +1709,7 @@ it.effect("returns without terminating after equal G2 leaves the Run incomplete"
           )
         }
       })
-      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -1387,7 +1750,7 @@ it.effect("does not request G2 while the Run is paused", () =>
         quiescence: { _tag: "QuiescencePassive" as const, reason: "RunPaused" as const }
       }
       const reads = yield* Ref.make(0)
-      const proof = yield* runStabilizedDelivery(target, currentSignalOf(paused)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, currentSignalOf(paused)).pipe(
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -1426,6 +1789,7 @@ it.effect("does not request G2 when a cancelled passive Run has no accepted G1",
       const reads = yield* Ref.make(0)
       const proof = yield* runStabilizedDelivery(
         target,
+        runId,
         currentSignalOf({
           ...current,
           acceptedAt: null,
@@ -1483,7 +1847,7 @@ it.effect("performs a fresh graph read before classifying a paused cancelled Run
         }
       })
 
-      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -1520,7 +1884,7 @@ it.effect("classifies an applied cancellation only after a fresh non-success gra
         }
       })
 
-      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -1563,7 +1927,7 @@ it.effect("keeps Completed precedence when every task succeeded after cancellati
         }
       })
 
-      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -1612,7 +1976,7 @@ it.effect("classifies conclusive tracker dependency impossibility as Blocked", (
         }
       })
 
-      const proof = yield* runStabilizedDelivery(target, signalOf(state)).pipe(
+      const proof = yield* runStabilizedDelivery(target, runId, signalOf(state)).pipe(
         Effect.provide(support),
         Effect.provideService(
           DeliveryActionExecutor,

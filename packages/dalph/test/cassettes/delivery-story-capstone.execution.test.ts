@@ -6,7 +6,14 @@ import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "
 
 const lastItemIndex = -1
 const capstoneTimeout = 600_000
-const cachedRun = Effect.runSync(
+const capstoneRun = Effect.runSync(
+  Effect.cached(
+    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.autonomousExecutorDeliveryCapstone).pipe(
+      Effect.provide(NodeCrypto.layer)
+    )
+  )
+)
+const historicalRun = Effect.runSync(
   Effect.cached(
     runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory).pipe(
       Effect.provide(NodeCrypto.layer)
@@ -14,11 +21,62 @@ const cachedRun = Effect.runSync(
   )
 )
 
+it("records B Safe then rereads tracker G1 before D begins and preserves the activation return", () => {
+  const story = maintainedAuthoredCassetteCatalog.autonomousExecutorDeliveryCapstone.story
+  const bSafe = story.findIndex(
+    (item) =>
+      item._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" &&
+      item.report._tag === "ExecutorWorkSafelySuspended" &&
+      item.report.attemptId === "attempt:B:1"
+  )
+
+  expect(bSafe).toBeGreaterThanOrEqual(0)
+  expect(story.slice(bSafe, bSafe + 6)).toMatchObject([
+    {
+      _tag: "PlannedAttemptExecutorPassiveLifecycleChanged",
+      report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:B:1" }
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "delivery-story-target" } },
+    { _tag: "TrackerGraphReadReturned", graph: { revision: "delivery-story-G1" } },
+    {
+      _tag: "PlannedAttemptExecutorWorkReported",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:D:3" },
+      request: "Begin"
+    },
+    {
+      _tag: "PlannedAttemptExecutorProjectionReturned",
+      report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:D:3" }
+    },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    }
+  ])
+})
+
+it.effect(
+  "emits the exact DS01 through DS13 delivery checkpoint table",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* capstoneRun
+      const initial = run.deliveryFrames.find(({ graph }) => graph._tag === "Established")
+
+      expect(run.reactivationOwnerProcessGenerationCount).toBe(2)
+      expect(initial?.capacity).toBe(3)
+      expect(
+        initial?.graph._tag === "Established"
+          ? initial.graph.tasks.map(({ id, prerequisiteIds }) => ({ id, prerequisiteIds }))
+          : []
+      ).toEqual(["A", "B", "C", "D", "E"].map((id) => ({ id, prerequisiteIds: [] })))
+    }),
+  capstoneTimeout
+)
+
 it.effect(
   "consumes a staggered graph while restart-added X waits for recovered capacity",
   () =>
     Effect.gen(function* () {
-      const run = yield* cachedRun
+      const run = yield* historicalRun
       const established = run.deliveryFrames.filter(({ graph }) => graph._tag === "Established")
       const completeTopology = established.find(
         ({ graph }) => graph._tag === "Established" && graph.tasks.length === 10
@@ -142,7 +200,7 @@ it.effect(
   "preserves the double-diamond middle positions across coordinator restart",
   () =>
     Effect.gen(function* () {
-      const run = yield* cachedRun
+      const run = yield* historicalRun
       const initial = run.deliveryFrames.find(
         ({ heldPositions }) =>
           heldPositions.some(({ taskId }) => taskId === "B") && heldPositions.some(({ taskId }) => taskId === "C")

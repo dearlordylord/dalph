@@ -164,27 +164,28 @@ export const controlledTrackerAuthorityLayer = (
           )
         )
       const readTaskClaim: TrackerMutation["Service"]["readTaskClaim"] = (taskId) =>
-        cursor.consumeTaskClaimRead.pipe(
+        cursor.consumeTaskClaimReadOverrideFor(taskId).pipe(
+          Effect.orDie,
           Effect.flatMap(
             Option.match({
-              onNone: () => currentObservation(taskId),
+              onNone: () =>
+                Effect.uninterruptibleMask((restore) =>
+                  Effect.gen(function* () {
+                    const observation = yield* restore(currentObservation(taskId))
+                    if (observation.taskId !== taskId) {
+                      return yield* Effect.die(
+                        `controlled task-claim authority returned ${observation.taskId} while reading ${taskId}`
+                      )
+                    }
+                    yield* cursor.consumeTaskClaimReadFor(taskId).pipe(Effect.orDie)
+                    return observation
+                  })
+                ),
               onSome: (item) => {
-                if (item._tag === "TaskClaimCurrentReadReturned") {
-                  return item.taskId === taskId
-                    ? currentObservation(taskId)
-                    : /* v8 ignore next -- @preserve Decoded authored claim reads must name the requested task. */
-                      Effect.die(`authored cassette returned current claim ${item.taskId} for ${taskId}`)
-                }
                 if (item._tag === "TaskClaimReadFailed") {
-                  return item.taskId === taskId
-                    ? Effect.fail(new TaskClaimReadFailure({ detail: item.reason, taskId }))
-                    : /* v8 ignore next -- @preserve Decoded authored failures must name the requested task. */
-                      Effect.die(`authored cassette returned unreadable claim ${item.taskId} for ${taskId}`)
+                  return Effect.fail(new TaskClaimReadFailure({ detail: item.reason, taskId }))
                 }
-                return item.observation.taskId === taskId
-                  ? applyAuthoredObservation(item.observation)
-                  : /* v8 ignore next -- @preserve Decoded authored observations must name the requested task. */
-                    Effect.die(`authored cassette returned task claim ${item.observation.taskId} for ${taskId}`)
+                return applyAuthoredObservation(item.observation)
               }
             })
           )

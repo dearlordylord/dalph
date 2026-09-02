@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Stream } from "effect"
+import { Effect, Equal, Layer, Stream } from "effect"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { RunControlPolicy } from "../../control/policy.js"
 import {
@@ -137,6 +137,10 @@ const deduplicatedPublicationSignal = (
       )
     )
   )
+
+/** Keeps a source change lossless while making its payload unavailable as sampling truth. */
+const changeNotificationsOf = <A, E>(changes: Stream.Stream<A, E>): Stream.Stream<void, E> =>
+  changes.pipe(Stream.map(() => undefined))
 
 /** Explicit non-reactive runtime facts for deterministic relation and shadow evaluation only. */
 export const deterministicDeliveryRuntimeSupport = (_policy: RunControlPolicy) => ({
@@ -278,12 +282,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
           consequences.changes.pipe(Stream.map(() => undefined)),
           planningInputs.changes.pipe(Stream.map(() => undefined))
         ).pipe(Stream.mapEffect(() => get))
-        const changesWithinStablePublication = zipCurrentSignals(consequences, planningInputs).changes
-        return {
-          ...currentSignalFromCurrentFirstStream(changes),
-          changesWithinStablePublication,
-          getWithinStablePublication
-        }
+        return { ...currentSignalFromCurrentFirstStream(changes), getWithinStablePublication }
       }
     })
   )
@@ -297,7 +296,10 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         readonly delivery: CurrentSignal<DeliveryConsequences, E>
         readonly proposedActions: DeliveryActionPlanningSignal<E | DeliveryRelationSourceError>
       }) => {
-        const facts = mapCurrentSignal(input.coherent, ({ actionInputs }) => actionInputs.runtimeFacts)
+        const facts: CurrentSignal<DeliveryRuntimeFacts, DeliveryRelationSourceError> = mapCurrentSignal(
+          input.coherent,
+          ({ actionInputs }) => actionInputs.runtimeFacts
+        )
         const current = mapCurrentSignal(delivery, (delivery) => ({
           _tag: "DeliveryRuntimeSnapshot" as const,
           reflection: delivery.trackerConsequences,
@@ -305,17 +307,14 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
           ticketDeliveries: delivery.ticketDeliveries,
           trackerGraph: delivery.graph
         }))
-        const makeEvaluation = (
-          facts: DeliveryRuntimeFacts,
-          current: Effect.Effect<
-            Omit<DeliveryRuntimeEvaluation["current"], "cancellationApplied" | "runId">,
-            E | DeliveryRelationSourceError
-          >,
-          proposedActions: Effect.Effect<DeliveryRuntimeEvaluation["proposedActions"], E | DeliveryRelationSourceError>
-        ) =>
-          Effect.all({ current, proposedActions }).pipe(
+        const sampleEvaluation = input.publicationConsistency.withStablePublication(
+          Effect.all({
+            current: current.get,
+            facts: facts.get,
+            proposedActions: proposedActions.getWithinStablePublication
+          }).pipe(
             Effect.map(
-              ({ current, proposedActions }): DeliveryRuntimeEvaluation => ({
+              ({ current, facts, proposedActions }): DeliveryRuntimeEvaluation => ({
                 _tag: "DeliveryRuntimeEvaluation",
                 acceptedAt: facts.acceptedAt,
                 current: {
@@ -335,15 +334,34 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
               })
             )
           )
-        const sampleEvaluation = (facts: DeliveryRuntimeFacts) =>
-          makeEvaluation(
-            facts,
-            current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow)),
-            proposedActions.changesWithinStablePublication.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
+        )
+        const invalidations: Stream.Stream<void, E | DeliveryRelationSourceError> = Stream.scoped(
+          Stream.unwrap(
+            Effect.all({
+              delivery: delivery.attach,
+              facts: facts.attach,
+              proposedActions: proposedActions.attach
+            }).pipe(
+              Effect.map(({ delivery, facts, proposedActions }) =>
+                Stream.concat(
+                  Stream.make(undefined),
+                  Stream.mergeAll<void, E | DeliveryRelationSourceError, never>(
+                    [
+                      changeNotificationsOf(delivery.changes),
+                      changeNotificationsOf(proposedActions.changes),
+                      changeNotificationsOf(facts.changes)
+                    ],
+                    { bufferSize: 1, concurrency: 3 }
+                  )
+                )
+              )
+            )
           )
+        )
         const evaluations = currentSignalFromCurrentFirstStream(
-          facts.changes.pipe(
-            Stream.mapEffect((facts) => input.publicationConsistency.withStablePublication(sampleEvaluation(facts)))
+          invalidations.pipe(
+            Stream.mapEffect(() => sampleEvaluation),
+            Stream.changesWith<DeliveryRuntimeEvaluation>(Equal.equals)
           )
         )
         return evaluations

@@ -158,6 +158,8 @@ export interface AuthoredScenarioCassetteRun {
   readonly history: ReturnType<typeof reduceWorkflowJournalHistory>
   readonly observedBehavior: AuthoredObservedBehavior
   readonly records: ReadonlyArray<JournalRecord>
+  /** Fresh production reactivation-owner scopes composed by this authored run. */
+  readonly reactivationOwnerProcessGenerationCount: number
   readonly runId: RunId
   /** Historical views are read from the production trace reader at exact journal cursors. */
   readonly traceHistories: ReadonlyArray<TraceAtCursor>
@@ -348,6 +350,50 @@ export interface AuthoredScenarioCassetteRunOptions {
   /** Synchronous raw notification in the same deterministic order retained by the completed run. */
   readonly onObservationCapture?: (capture: AuthoredObservationCapture) => void
 }
+
+/** The in-memory end condition for one production reactivation-owner process generation. */
+type ReactivationOwnerProcessOutcome = "CoordinatorProcessDied" | "TerminalAssertions"
+
+const readyReactivationOwnerPriorityOutcome = Effect.fn("AuthoredCassette.readyReactivationOwnerPriorityOutcome")(
+  function* (coordinatorProcessDeaths: Queue.Dequeue<void>, failure: Deferred.Deferred<unknown>) {
+    const completedFailure = yield* Deferred.poll(failure)
+    if (Option.isSome(completedFailure)) {
+      return yield* completedFailure.value.pipe(Effect.flatMap((cause) => Effect.die(cause)))
+    }
+    const processDeath = yield* Queue.poll(coordinatorProcessDeaths)
+    if (Option.isSome(processDeath)) {
+      return Option.some<ReactivationOwnerProcessOutcome>("CoordinatorProcessDied")
+    }
+    return Option.none<ReactivationOwnerProcessOutcome>()
+  }
+)
+
+/**
+ * Waits for one owner generation outcome. Simultaneous-ready priority is owner
+ * defect, authored process death, then terminal assertions. The death waiter
+ * peeks without consuming; selection atomically polls the exact signal only
+ * after proving that no owner defect is ready.
+ */
+export const awaitReactivationOwnerProcessOutcome = Effect.fn("AuthoredCassette.awaitReactivationOwnerProcessOutcome")(
+  function* (
+    awaitTerminalAssertions: Effect.Effect<void>,
+    coordinatorProcessDeaths: Queue.Dequeue<void>,
+    failure: Deferred.Deferred<unknown>
+  ) {
+    const alreadyReady = yield* readyReactivationOwnerPriorityOutcome(coordinatorProcessDeaths, failure)
+    if (Option.isSome(alreadyReady)) return alreadyReady.value
+
+    const wake = yield* Effect.raceAllFirst([
+      awaitTerminalAssertions.pipe(Effect.as("TerminalAssertions" as const)),
+      Queue.peek(coordinatorProcessDeaths).pipe(Effect.as("HigherPriorityReady" as const)),
+      Deferred.await(failure).pipe(Effect.as("HigherPriorityReady" as const))
+    ])
+    const priorityOutcome = yield* readyReactivationOwnerPriorityOutcome(coordinatorProcessDeaths, failure)
+    if (Option.isSome(priorityOutcome)) return priorityOutcome.value
+    if (wake === "TerminalAssertions") return wake
+    return yield* Effect.die("a ready reactivation-owner priority signal disappeared before selection")
+  }
+)
 
 type AuthoredPauseObservationResult = (typeof AuthoredCassetteStoryItem.cases.PauseProgressObserved.Type)["result"]
 type AuthoredPauseResponsibility =
@@ -1266,26 +1312,13 @@ type CoordinatorFinalityDecision =
       readonly reason: "RunnableTransition" | "TrackerTargetUnsettled" | "UnsettledResponsibility"
     }
 
-const coordinatorFinalityMatches = (
-  expected: (typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type)["decision"],
-  actual: CoordinatorFinalityDecision
-): boolean => {
-  if (expected._tag !== actual._tag) return false
-  /* v8 ignore start -- @preserve Authored activation boundaries separate incomplete returns that must remain active; terminal runs have no following activation boundary. */
-  if (expected._tag === "RunMayTerminate") return true
-  /* v8 ignore stop -- @preserve */
-  return actual._tag === "RunMustRemainActive" && expected.reason === actual.reason
-}
-
-const settleCoordinatorActivationReturn = <E>(cursor: StoryCursor, exit: Exit.Exit<CoordinatorFinalityDecision, E>) =>
+export const settleCoordinatorActivationReturn = <E>(
+  cursor: StoryCursor,
+  exit: Exit.Exit<CoordinatorFinalityDecision, E>
+) =>
   Effect.gen(function* () {
     if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
-    const expected = yield* cursor.consumeCoordinatorActivationReturned
-    if (!coordinatorFinalityMatches(expected.decision, exit.value)) {
-      return yield* Effect.die(
-        `authored coordinator activation expected ${JSON.stringify(expected.decision)}, received ${JSON.stringify(exit.value)}`
-      )
-    }
+    yield* cursor.consumeCoordinatorActivationReturnedFor(exit.value)
   })
 
 /** The authored death control is a typed defect, never a production failure. */
@@ -1421,6 +1454,16 @@ const runAuthoredScenarioCassetteWith = (request: {
             AuthoredStoryPosition.make(storyPosition)
           ).pipe(Effect.asVoid)
       })
+      const authoredCoordinatorProcessDeaths = yield* Queue.unbounded<void>()
+      const reactivationOwnerProcessGenerationCount = yield* Ref.make(0)
+      const observeAuthoredCoordinatorProcessDeath = <A, E, R>(program: Effect.Effect<A, E, R>) =>
+        program.pipe(
+          Effect.onExit((exit) =>
+            isAuthoredCoordinatorProcessDeath(exit)
+              ? Queue.offer(authoredCoordinatorProcessDeaths, undefined).pipe(Effect.asVoid)
+              : Effect.void
+          )
+        )
       const offerRunReactivationHint = yield* Ref.make<(hint: "TrackerNotification" | "Timer") => Effect.Effect<void>>(
         () => Effect.die("the authored Run reactivation owner is not active")
       )
@@ -1474,11 +1517,6 @@ const runAuthoredScenarioCassetteWith = (request: {
       const admittedContinuationChoiceApplied = yield* Deferred.make<void>()
       const targetPromotionStory = cassette.story.some((item) => item._tag.startsWith("TargetPromotion"))
       const exactCausalTrackerReadStory = cassette.story.some((item) => item._tag === "ConcurrentTrackerReadBatch")
-      const runReactivationHintStory = cassette.story.some(
-        (item) =>
-          item._tag === "CassetteOffersRunReactivationHints" ||
-          item._tag === "CassettePublishesCurrentTrackerNotification"
-      )
       const initial = yield* cursor.consumeInitialPolicy
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
@@ -2771,86 +2809,106 @@ const runAuthoredScenarioCassetteWith = (request: {
             return yield* activateRun(activationOrdinal).pipe(Effect.provide(application))
           })
         )
-      const runThroughProductionReactivationOwner = Effect.gen(function* () {
-        const { application, applicationExit } = yield* makeApplicationProcess
-        const applicationContext = yield* Layer.build(application)
-        const bootstrap = Context.get(applicationContext, JournaledRunBootstrap)
-        const failure = yield* Deferred.make<unknown>()
-        const quietInterval = Duration.hours(1)
-        const trackerNotificationSource = {
-          attach: Effect.gen(function* () {
-            const authored = yield* cursor.consumeCurrentTrackerNotification
-            if (Option.isNone(authored)) {
-              return yield* Effect.die("the authored current-first tracker source requires one exact notification")
-            }
-            return { changes: Stream.empty, current: { _tag: "AuthoredTrackerNotification" as const } }
-          }),
-          changes: Stream.empty,
-          get: Effect.succeed(undefined)
-        }
-        const ownerLayer = runReactivationOwnerLayer({
-          activate: (opportunity) =>
-            Ref.get(latestRuntimeActivationOrdinal).pipe(
-              Effect.flatMap((ordinal) =>
-                runWorkflowWithControlledDeliveryActionExecutor(
-                  command.target,
-                  initialControlPolicySource,
-                  runId,
-                  controlledExecutorFactory,
-                  false,
-                  opportunity
-                ).pipe(
-                  Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
-                  Effect.provideService(JournaledRunBootstrap, bootstrap)
-                )
-              )
-            ),
-          activateActiveWorkAuthorityRefresh: (source) =>
-            Ref.get(latestRuntimeActivationOrdinal).pipe(
-              Effect.flatMap((ordinal) =>
-                runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh(
-                  command.target,
-                  initialControlPolicySource,
-                  runId,
-                  controlledExecutorFactory,
-                  source,
-                  false
-                ).pipe(
-                  Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
-                  Effect.provideService(JournaledRunBootstrap, bootstrap)
-                )
-              )
-            ),
-          activationInterval: quietInterval,
-          failureCooldown: quietInterval,
-          installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
-            bootstrap.registerAcceptedRunReactivationObservers({
-              control,
-              acceptedFactPublication: () => acceptedFactPublication
+      const settleAuthoredReactivationOwnerReturn = (decision: CoordinatorFinalityDecision) =>
+        cassette.processLifecycle?._tag === "ReactivationOwnerProcessGenerations"
+          ? settleCoordinatorActivationReturn(cursor, Exit.succeed(decision))
+          : Effect.void
+      const runThroughProductionReactivationOwner = (
+        trackerSource: { readonly _tag: "CurrentFirst" } | { readonly _tag: "NoCurrent" }
+      ) =>
+        Effect.gen(function* () {
+          yield* Ref.update(reactivationOwnerProcessGenerationCount, (count) => count + 1)
+          const { application, applicationExit } = yield* makeApplicationProcess
+          const applicationContext = yield* Layer.build(application)
+          const bootstrap = Context.get(applicationContext, JournaledRunBootstrap)
+          const failure = yield* Deferred.make<unknown>()
+          const quietInterval = Duration.hours(1)
+          const trackerNotificationSource = {
+            attach: Effect.gen(function* () {
+              const authored = yield* cursor.consumeCurrentTrackerNotification
+              if (Option.isNone(authored) && trackerSource._tag === "CurrentFirst") {
+                return yield* Effect.die("the authored current-first tracker source requires one exact notification")
+              }
+              return {
+                changes: Stream.empty,
+                current: Option.isSome(authored) ? { _tag: "AuthoredTrackerNotification" as const } : undefined
+              }
             }),
-          isTerminationFailure: (cause) => cause instanceof WorkflowRunAlreadyTerminated,
-          onFailure: (cause) => Deferred.succeed(failure, cause).pipe(Effect.asVoid),
-          readControl: bootstrap.readRunReactivationControl(command.target, runId),
-          runId,
-          trackerNotificationSource
-        }).pipe(Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)))
-        const ownerContext = yield* Layer.build(ownerLayer)
-        const processContext = Context.merge(applicationContext, ownerContext)
-        yield* withAuthoredOperatorDriver(
-          Effect.gen(function* () {
-            const owner = yield* RunReactivationOwner
-            yield* Ref.set(offerRunReactivationHint, (hint) =>
-              owner.hint(
-                hint === "TrackerNotification" ? RunReactivationHint.TrackerNotification() : RunReactivationHint.Timer()
+            changes: Stream.empty,
+            get: Effect.succeed(undefined)
+          }
+          const ownerLayer = runReactivationOwnerLayer({
+            activate: (opportunity) =>
+              Ref.get(latestRuntimeActivationOrdinal).pipe(
+                Effect.flatMap((ordinal) =>
+                  observeAuthoredCoordinatorProcessDeath(
+                    runWorkflowWithControlledDeliveryActionExecutor(
+                      command.target,
+                      initialControlPolicySource,
+                      runId,
+                      controlledExecutorFactory,
+                      false,
+                      opportunity
+                    )
+                  ).pipe(
+                    Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
+                    Effect.provideService(JournaledRunBootstrap, bootstrap),
+                    Effect.tap(settleAuthoredReactivationOwnerReturn)
+                  )
+                )
+              ),
+            activateActiveWorkAuthorityRefresh: (source) =>
+              Ref.get(latestRuntimeActivationOrdinal).pipe(
+                Effect.flatMap((ordinal) =>
+                  observeAuthoredCoordinatorProcessDeath(
+                    runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh(
+                      command.target,
+                      initialControlPolicySource,
+                      runId,
+                      controlledExecutorFactory,
+                      source,
+                      false
+                    )
+                  ).pipe(
+                    Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
+                    Effect.provideService(JournaledRunBootstrap, bootstrap),
+                    Effect.tap(settleAuthoredReactivationOwnerReturn)
+                  )
+                )
+              ),
+            activationInterval: quietInterval,
+            failureCooldown: quietInterval,
+            installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
+              bootstrap.registerAcceptedRunReactivationObservers({
+                control,
+                acceptedFactPublication: () => acceptedFactPublication
+              }),
+            isTerminationFailure: (cause) => cause instanceof WorkflowRunAlreadyTerminated,
+            onFailure: (cause) => Deferred.succeed(failure, cause).pipe(Effect.asVoid),
+            readControl: bootstrap.readRunReactivationControl(command.target, runId),
+            runId,
+            trackerNotificationSource
+          }).pipe(Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)))
+          const ownerContext = yield* Layer.build(ownerLayer)
+          const processContext = Context.merge(applicationContext, ownerContext)
+          return yield* withAuthoredOperatorDriver(
+            Effect.gen(function* () {
+              const owner = yield* RunReactivationOwner
+              yield* Ref.set(offerRunReactivationHint, (hint) =>
+                owner.hint(
+                  hint === "TrackerNotification"
+                    ? RunReactivationHint.TrackerNotification()
+                    : RunReactivationHint.Timer()
+                )
               )
-            )
-            yield* Effect.raceFirst(
-              cursor.awaitTerminalAssertions,
-              Deferred.await(failure).pipe(Effect.flatMap((cause) => Effect.die(cause)))
-            )
-          })
-        ).pipe(Effect.provide(processContext))
-      })
+              return yield* awaitReactivationOwnerProcessOutcome(
+                cursor.awaitTerminalAssertions,
+                authoredCoordinatorProcessDeaths,
+                failure
+              )
+            })
+          ).pipe(Effect.provide(processContext))
+        })
       const runAcrossActivations = Effect.gen(function* () {
         const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
         let coordinator = yield* Effect.forkScoped(activateRun(firstActivationOrdinal))
@@ -2910,7 +2968,21 @@ const runAuthoredScenarioCassetteWith = (request: {
             "the authored current-first reactivation story requires one coordinator process death"
           )
         }
-        yield* runThroughProductionReactivationOwner
+        yield* runThroughProductionReactivationOwner({ _tag: "CurrentFirst" })
+        const activationCount = yield* Ref.get(latestRuntimeActivationOrdinal)
+        return {
+          activationOrdinals: Array.from({ length: activationCount }, (_, index) =>
+            AuthoredRunActivationOrdinal.make(index + 1)
+          ),
+          coordinatorExitAtAssertions: undefined,
+          records: yield* sharedJournal.read(runId)
+        }
+      })
+      const runReactivationOwnerLifecycleStory = Effect.gen(function* () {
+        while (!(yield* cursor.atTerminalAssertions)) {
+          const outcome = yield* Effect.scoped(runThroughProductionReactivationOwner({ _tag: "NoCurrent" }))
+          if (outcome === "TerminalAssertions") break
+        }
         const activationCount = yield* Ref.get(latestRuntimeActivationOrdinal)
         return {
           activationOrdinals: Array.from({ length: activationCount }, (_, index) =>
@@ -2935,7 +3007,13 @@ const runAuthoredScenarioCassetteWith = (request: {
         return yield* ordinaryCoordinatorExecution.pipe(Effect.provide(application))
       })
       const processProvidedCoordinatorExecution = Effect.gen(function* () {
-        if (runReactivationHintStory) return yield* runReactivationOwnerStory
+        const lifecycle = cassette.processLifecycle
+        if (lifecycle?._tag === "CurrentFirstReactivationAfterProcessDeath") {
+          return yield* runReactivationOwnerStory
+        }
+        if (lifecycle?._tag === "ReactivationOwnerProcessGenerations") {
+          return yield* runReactivationOwnerLifecycleStory
+        }
         return yield* standardCoordinatorExecution
       })
       const execution = yield* Effect.scoped(
@@ -2973,6 +3051,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         observationMoments,
         observedBehavior,
         records,
+        reactivationOwnerProcessGenerationCount: yield* Ref.get(reactivationOwnerProcessGenerationCount),
         runId,
         traceHistories
       } satisfies AuthoredScenarioCassetteRun

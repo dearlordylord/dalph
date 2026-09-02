@@ -733,13 +733,21 @@ it.effect("waits for the accepted journal position to reach delivery planning be
         target
       )
 
-      yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+      const accepted = yield* journal.append(
+        runId,
+        intentRecordKey(operation.operationId),
+        taskTrackerReadIntent(operation)
+      )
       yield* Deferred.await(refreshStarted)
       const waiting = yield* publication.awaitCurrent.pipe(Effect.forkChild)
       yield* Effect.yieldNow
       expect(waiting.pollUnsafe()).toBeUndefined()
       yield* Deferred.succeed(projectionBlocked, undefined)
-      yield* Fiber.join(waiting)
+      expect(yield* Fiber.join(waiting)).toEqual({
+        _tag: "DeliveryAcceptedPublicationBoundary",
+        acceptedThrough: accepted.position,
+        runId
+      })
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
 )

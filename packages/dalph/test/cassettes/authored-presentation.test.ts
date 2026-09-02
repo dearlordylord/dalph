@@ -1,4 +1,5 @@
 import { AttemptId, TaskId } from "@dalph/contracts"
+import { Schema } from "effect"
 import { IntegratorCandidateText, IntegratorNotPreparedDetail } from "@dalph/orchestrator"
 import { describe, expect, it } from "vitest"
 import { AuthoredCassetteStoryItem } from "../../src/cassettes/authored-domain.js"
@@ -74,6 +75,63 @@ describe("authored delivery landmarks", () => {
 
     expect(renderAuthoredStoryItemLyric(item)).toBe(
       "The task tracker classifies the exact completion request for task B as NotApplied."
+    )
+  })
+
+  it("renders one causal interaction group without inventing claim order", () => {
+    const node = (role: string, predecessorRoles: ReadonlyArray<string>, interaction: unknown) => ({
+      interaction,
+      predecessorRoles,
+      role
+    })
+    const group = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)({
+      _tag: "ConcurrentInteractionGroup",
+      members: [
+        node("P_D", [], {
+          _tag: "DalphSelects",
+          operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:D:1", taskId: "D" }
+        }),
+        node("P_E", [], {
+          _tag: "DalphSelects",
+          operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:E:1", taskId: "E" }
+        }),
+        node("W_B", [], {
+          _tag: "DalphSelects",
+          operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:B:1", taskId: "B" }
+        }),
+        node("W_C", [], {
+          _tag: "DalphSelects",
+          operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:C:1", taskId: "C" }
+        }),
+        node("X_A", [], {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:A:0" },
+          request: "Begin"
+        }),
+        node("W_D", ["P_D"], {
+          _tag: "DalphSelects",
+          operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:D:1", taskId: "D" }
+        }),
+        node("W_E", ["P_E"], {
+          _tag: "DalphSelects",
+          operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:E:1", taskId: "E" }
+        }),
+        node("X_B", ["W_B"], {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:B:1" },
+          request: "Begin"
+        }),
+        node("X_C", ["W_C"], {
+          _tag: "PlannedAttemptExecutorWorkReported",
+          report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:C:1" },
+          request: "Begin"
+        })
+      ]
+    })
+
+    expect(renderAuthoredStoryItemLandmark(group)).toBeNull()
+    expect(renderAuthoredStoryItemLyric(group)).toBe(
+      "The cassette accepts causal interaction group {P_D, P_E, W_B, W_C, X_A, W_D, W_E, X_B, X_C}; authored direct predecessor edges: P_D -> W_D, P_E -> W_E, W_B -> X_B, W_C -> X_C. Only these direct edges are authored; missing direct edges may still be transitively ordered. It advances once after every role is consumed."
     )
   })
 

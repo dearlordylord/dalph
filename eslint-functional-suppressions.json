@@ -187,9 +187,6 @@
   "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts": {
     "functional/no-throw-statements": {
       "count": 2
-    },
-    "functional/prefer-tacit": {
-      "count": 1
     }
   },
   "packages/orchestrator/src/coordination/delivery/ticket-delivery-projection.ts": {

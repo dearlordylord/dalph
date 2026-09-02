@@ -3,6 +3,7 @@ import { makeTaskWorkSpecification, TaskId } from "@dalph/contracts"
 import { Option, Schema } from "effect"
 import { AuthoredScenarioCassette, type AuthoredScenarioCassette as ScenarioCassette } from "./authored.js"
 import { AuthoredCassetteStoryItem, type AuthoredOrchestrationEvidence } from "./authored-domain.js"
+import { deliveryStoryCapstoneAuthoredCassette } from "./delivery-story-capstone.js"
 
 const decodeStoryItem = Schema.decodeUnknownSync(AuthoredCassetteStoryItem)
 const terminalStoryItemOffset = -1
@@ -857,7 +858,7 @@ const unpauseStoryItem = (
         operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" }
       }),
       decodeStoryItem({
-        _tag: "PlannedAttemptExecutorProjectionReturned",
+        _tag: "PlannedAttemptExecutorPassiveLifecycleChanged",
         report: { _tag: "ExecutorWorkTerminal", attemptId: "attempt:B:1", result: { _tag: "Completed" } }
       }),
       decodeStoryItem({
@@ -2490,6 +2491,7 @@ export const activeWorkF2SafelySuspendsAuthoredCassette: ScenarioCassette = Sche
 )({
   ...singletonTaskCompletesAuthoredCassette,
   name: "notification and timer coalesce before B1 safely suspends for F2",
+  processLifecycle: { _tag: "CurrentFirstReactivationAfterProcessDeath" },
   startingFacts: {
     ...singletonTaskCompletesAuthoredCassette.startingFacts,
     taskWorkSpecifications: [
@@ -2572,6 +2574,10 @@ export const activeWorkF2SafelySuspendsAuthoredCassette: ScenarioCassette = Sche
     },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: activeWorkF2Graph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: activeWorkF2Graph },
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
@@ -2587,6 +2593,10 @@ export const activeWorkF2SafelySuspendsAuthoredCassette: ScenarioCassette = Sche
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
     { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
     { _tag: "TrackerGraphReadReturned", graph: activeWorkF2Graph },
+    {
+      _tag: "CoordinatorActivationReturned",
+      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+    },
     {
       _tag: "ExpectedBehavior",
       orchestration: [
@@ -5016,6 +5026,7 @@ type MaintainedAuthoredCassetteName =
   | "completionTaskConflict"
   | "currentCompletionGraphAuthority"
   | "deliveryFinalitySpine"
+  | "autonomousExecutorDeliveryCapstone"
   | "deliveryInvariantStory"
   | "productionShapedFiveTaskDiamond"
   | "dependentTasksCompleteInOneRun"
@@ -5084,6 +5095,7 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     completionTaskConflict: completionTaskConflictAuthoredCassette,
     currentCompletionGraphAuthority: currentCompletionGraphAuthorityAuthoredCassette,
     deliveryFinalitySpine: deliveryFinalitySpineAuthoredCassette,
+    autonomousExecutorDeliveryCapstone: deliveryStoryCapstoneAuthoredCassette,
     deliveryInvariantStory: deliveryInvariantStoryAuthoredCassette,
     productionShapedFiveTaskDiamond: productionShapedFiveTaskDiamondAuthoredCassette,
     dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
