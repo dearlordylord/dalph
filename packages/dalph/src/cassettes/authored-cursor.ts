@@ -298,16 +298,19 @@ const authoredExecutorReportMatches = (
 ): item is AuthoredPlannedAttemptExecutorOutcomeItem =>
   isAuthoredPlannedAttemptExecutorOutcomeItem(item) && item.request === request && item.report.attemptId === attemptId
 
+const isAuthoredSafelySuspendedExecutorReport = (
+  item: StoryItem | undefined
+): item is AuthoredSafelySuspendedExecutorReportItem =>
+  item?._tag === "PlannedAttemptExecutorWorkReported" &&
+  item.request === "Suspend" &&
+  item.report._tag === "ExecutorWorkSafelySuspended"
+
 const authoredSafelySuspendedExecutorReportMatches = (
   item: StoryItem | undefined,
   request: AuthoredExecutorRequest,
   attemptId: AttemptId
 ): item is AuthoredSafelySuspendedExecutorReportItem =>
-  item?._tag === "PlannedAttemptExecutorWorkReported" &&
-  item.request === "Suspend" &&
-  request === "Suspend" &&
-  item.report._tag === "ExecutorWorkSafelySuspended" &&
-  item.report.attemptId === attemptId
+  isAuthoredSafelySuspendedExecutorReport(item) && request === "Suspend" && item.report.attemptId === attemptId
 
 const executorReportImmediatelyBefore = (
   item: StoryItem | undefined,
@@ -1187,6 +1190,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     )
   }
 
+  const runClaimWithOptionalTransition = <A, E>(claim: Effect.Effect<A, E>, throughTransition: boolean) =>
+    throughTransition ? transition.withPermits(1)(claim) : claim
+
+  const publishClaimedOccurrence = <A extends StoryItem>(claimed: ClaimedStoryItem<A>) =>
+    claimed._tag === "Claimed"
+      ? (options.onOccurrence?.({ item: claimed.item, storyPosition: claimed.index + 1 }) ?? Effect.void)
+      : Effect.void
+
   function claimNext<A extends StoryItem>(
     predicate: (item: StoryItem | undefined) => item is A,
     claimOptions: { readonly bypassControlBoundary?: boolean; readonly throughTransition?: boolean } = {}
@@ -1210,11 +1221,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           ? [{ _tag: "Claimed" as const, index, item }, index + 1]
           : [{ _tag: "Mismatch" as const, index, item }, index]
       })
-      const claimEffect = claimOptions.throughTransition === true ? transition.withPermits(1)(claim) : claim
+      const claimEffect = runClaimWithOptionalTransition(claim, claimOptions.throughTransition === true)
       const claimed = yield* claimEffect
-      if (claimed._tag === "Claimed") {
-        yield* options.onOccurrence?.({ item: claimed.item, storyPosition: claimed.index + 1 }) ?? Effect.void
-      }
+      yield* publishClaimedOccurrence(claimed)
       yield* announceTerminalAssertions
       const advanced = claimOptions.bypassControlBoundary === true ? false : yield* awaitBarrierAdvance(claimed)
       return advanced ? yield* claimNext(predicate, claimOptions) : claimed
@@ -1392,13 +1401,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   const awaitReservedExecutorReportBeforeSelection = Effect.fn(
     "AuthoredCassette.awaitReservedExecutorReportBeforeSelection"
   )(function* (item: StoryItem | undefined, index: number) {
-    if (
-      item?._tag !== "PlannedAttemptExecutorWorkReported" ||
-      item.request !== "Suspend" ||
-      item.report._tag !== "ExecutorWorkSafelySuspended"
-    ) {
-      return false
-    }
+    if (!isAuthoredSafelySuspendedExecutorReport(item)) return false
     const activeReservation = yield* Ref.get(reservation)
     if (activeReservation?.index === index) {
       yield* awaitsLaterStoryItem(position, index)
@@ -1425,6 +1428,12 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return true
   })
+  const awaitExecutorBoundaryBeforeSelection = Effect.fn("AuthoredCassette.awaitExecutorBoundaryBeforeSelection")(
+    function* (item: StoryItem | undefined, index: number) {
+      if (yield* awaitReservedExecutorReportBeforeSelection(item, index)) return true
+      return yield* awaitOwnedExecutorRequestPublicationHoldBeforeSelection(item, index)
+    }
+  )
   const consumeDalphSelectionOutsideConcurrentGroup: StoryCursor["consumeDalphSelectionFor"] = Effect.fn(
     "AuthoredCassette.consumeDalphSelectionOutsideConcurrentGroup"
   )(function* (operation, context) {
@@ -1436,10 +1445,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     }
     const claimed = yield* claimNext((item) => authoredDalphSelectionMatches(item, operation))
     if (claimed._tag === "Claimed") return claimed.item
-    if (yield* awaitReservedExecutorReportBeforeSelection(claimed.item, claimed.index)) {
-      return yield* consumeDalphSelectionForLoop(operation, context)
-    }
-    if (yield* awaitOwnedExecutorRequestPublicationHoldBeforeSelection(claimed.item, claimed.index)) {
+    if (yield* awaitExecutorBoundaryBeforeSelection(claimed.item, claimed.index)) {
       return yield* consumeDalphSelectionForLoop(operation, context)
     }
     const activeRequests = yield* SubscriptionRef.get(activeExecutorReportRequests)
@@ -1686,42 +1692,47 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return ownershipOrAdvance !== "Unowned"
   })
-  const consumeExecutorReportOutsideConcurrentGroup: StoryCursor["consumeExecutorReportFor"] = Effect.fn(
-    "AuthoredCassette.consumeExecutorReportOutsideConcurrentGroup"
-  )(function* (request, attemptId) {
-    const reserved = yield* reserveNext((item): item is AuthoredSafelySuspendedExecutorReportItem =>
-      authoredSafelySuspendedExecutorReportMatches(item, request, attemptId)
-    )
-    if (reserved._tag === "Claimed") return reserved.item
-    if (authoredSafelySuspendedExecutorReportMatches(reserved.item, request, attemptId)) {
+  const reserveSafelySuspendedExecutorReport = Effect.fn("AuthoredCassette.reserveSafelySuspendedExecutorReport")(
+    function* (request: AuthoredExecutorRequest, attemptId: AttemptId) {
+      const reserved = yield* reserveNext((item): item is AuthoredSafelySuspendedExecutorReportItem =>
+        authoredSafelySuspendedExecutorReportMatches(item, request, attemptId)
+      )
+      if (reserved._tag === "Claimed") return Option.some(reserved.item)
+      if (!authoredSafelySuspendedExecutorReportMatches(reserved.item, request, attemptId)) return Option.none()
       return yield* new AuthoredCassetteInteractionMismatch({
         actual: `${request}/${attemptId}`,
         expected: "unreserved PlannedAttemptExecutorWorkReported/ExecutorWorkSafelySuspended",
         storyPosition: reserved.index
       })
     }
+  )
+  const awaitMismatchedExecutorReport = Effect.fn("AuthoredCassette.awaitMismatchedExecutorReport")(function* (
+    claimed: ClaimedStoryItem<AuthoredPlannedAttemptExecutorOutcomeItem>,
+    request: AuthoredExecutorRequest,
+    attemptId: AttemptId
+  ) {
+    const currentReport = executorReportImmediatelyBefore(claimed.item, story[claimed.index + 1], request, attemptId)
+    if (currentReport === null || !(yield* awaitOwnedExecutorReport(currentReport, claimed.index))) {
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: `${request}/${attemptId}`,
+        expected: claimed.item?._tag ?? "EndOfStory",
+        storyPosition: claimed.index
+      })
+    }
+    return yield* consumeExecutorReportForLoop(request, attemptId)
+  })
+  const consumeExecutorReportOutsideConcurrentGroup: StoryCursor["consumeExecutorReportFor"] = Effect.fn(
+    "AuthoredCassette.consumeExecutorReportOutsideConcurrentGroup"
+  )(function* (request, attemptId) {
+    const reserved = yield* reserveSafelySuspendedExecutorReport(request, attemptId)
+    if (Option.isSome(reserved)) return reserved.value
     const claimed = yield* claimNext((item) => authoredExecutorReportMatches(item, request, attemptId))
     if (claimed._tag === "Claimed") {
       return yield* Schema.decodeUnknownEffect(AuthoredPlannedAttemptExecutorOutcomeItem)(claimed.item).pipe(
         Effect.orDie
       )
     }
-    const currentReport = executorReportImmediatelyBefore(claimed.item, story[claimed.index + 1], request, attemptId)
-    if (currentReport !== null) {
-      if (!(yield* awaitOwnedExecutorReport(currentReport, claimed.index))) {
-        return yield* new AuthoredCassetteInteractionMismatch({
-          actual: `${request}/${attemptId}`,
-          expected: claimed.item?._tag ?? "EndOfStory",
-          storyPosition: claimed.index
-        })
-      }
-      return yield* consumeExecutorReportForLoop(request, attemptId)
-    }
-    return yield* new AuthoredCassetteInteractionMismatch({
-      actual: `${request}/${attemptId}`,
-      expected: claimed.item?._tag ?? "EndOfStory",
-      storyPosition: claimed.index
-    })
+    return yield* awaitMismatchedExecutorReport(claimed, request, attemptId)
   })
   const consumeExecutorReportForLoop: StoryCursor["consumeExecutorReportFor"] = Effect.fn(
     "AuthoredCassette.consumeExecutorReportFor"
