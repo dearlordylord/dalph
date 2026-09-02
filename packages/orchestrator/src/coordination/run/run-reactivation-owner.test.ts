@@ -968,6 +968,78 @@ it.effect("accepted Pause suppresses active refresh until Unpause completes its 
   )
 )
 
+it.effect("preserves a paused nonterminal post-G2 return in the existing activation generation", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const acceptedControl = yield* Deferred.make<AcceptedRunControlObserver>()
+      const firstActiveStarted = yield* Deferred.make<void>()
+      const releaseFirstActive = yield* Deferred.make<void>()
+      const pausedTrailingRetained = yield* Deferred.make<number>()
+      const secondActiveStarted = yield* Deferred.make<void>()
+      const activeCalls = yield* Ref.make(0)
+      const ordinaryCalls = yield* Ref.make(0)
+      const returnedDecisions = yield* Ref.make<
+        ReadonlyArray<ReturnType<typeof RunFinalityDecision.RunMustRemainActive>>
+      >([])
+      const timerStates = yield* Ref.make<ReadonlyArray<"Started" | "Stopped">>([])
+
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-paused-post-g2-nonterminal"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Ref.update(ordinaryCalls, (count) => count + 1).pipe(
+              Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+            ),
+          activateActiveWorkAuthorityRefresh: () =>
+            Effect.gen(function* () {
+              const ordinal = yield* Ref.updateAndGet(activeCalls, (count) => count + 1)
+              if (ordinal === 1) {
+                yield* Deferred.succeed(firstActiveStarted, undefined)
+                yield* Deferred.await(releaseFirstActive)
+              } else {
+                yield* Deferred.succeed(secondActiveStarted, undefined)
+              }
+              const decision = RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+              yield* Ref.update(returnedDecisions, (current) => [...current, decision])
+              return decision
+            }),
+          trackerNotificationSource: makeCurrentSignal(Effect.succeed({ current: undefined, changes: Stream.never })),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: ({ control }) => Deferred.succeed(acceptedControl, control),
+          onFailure: () => Effect.void,
+          onPausedTrailingActivationRetained: (generation) => Deferred.succeed(pausedTrailingRetained, generation),
+          onTimerStateChange: (state) => Ref.update(timerStates, (current) => [...current, state])
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(firstActiveStarted)
+            yield* owner.hint(RunReactivationHint.Timer())
+            yield* (yield* Deferred.await(acceptedControl))("Pause")
+            yield* Deferred.succeed(releaseFirstActive, undefined)
+            expect(yield* Deferred.await(pausedTrailingRetained)).toBeGreaterThanOrEqual(0)
+            expect(yield* Ref.get(returnedDecisions)).toEqual([
+              { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+            ])
+            expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped"])
+            yield* TestClock.adjust("2 hours")
+            expect(yield* Deferred.isDone(secondActiveStarted)).toBe(false)
+
+            yield* (yield* Deferred.await(acceptedControl))("Unpause")
+            yield* Deferred.await(secondActiveStarted)
+            expect(yield* Ref.get(activeCalls)).toBe(2)
+            expect(yield* Ref.get(ordinaryCalls)).toBe(0)
+            expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped", "Started"])
+          })
+      )
+    })
+  )
+)
+
 it.effect("starts each restarted owner with fresh timer, hint, and coalescing state", () =>
   Effect.scoped(
     Effect.gen(function* () {

@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- One gated event loop owns admission, evaluations, completion publication, and quiescence. */
-import { RunId } from "@dalph/contracts"
+import { plannedAttemptExecutorCorrelation, RunId, samePlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import { Context, Deferred, Effect, Exit, Option, Queue, Ref, Schema, Semaphore, Stream } from "effect"
 import type * as Cause from "effect/Cause"
 import {
@@ -35,11 +35,16 @@ import {
   type DeliveryRuntimePhase as DeliveryRuntimePhaseType
 } from "./delivery-runtime-phase.js"
 import {
+  classifyPostG2TaskWorkAdmissionStalledRuntimeQuiescence,
   classifyTaskWorkAdmissionStalledRuntimeQuiescence,
+  PostG2AdmissionStallCutToken,
+  type AppliedPostG2TaskWorkOutcome,
   type AvailableProposalFrontier,
   type DeliveryRuntimeQuiescence,
-  type EmptyProposalFrontier
+  type EmptyProposalFrontier,
+  type PostG2TaskWorkAdmissionStalledRuntimeQuiescence
 } from "./delivery-runtime-quiescence.js"
+import type { DeliveryRuntimeAdmissionPassResult } from "./delivery-runtime-admission-loop.js"
 import {
   deliveryRuntimeLocalDeferralAfter,
   deliveryRuntimeLocalDeferralAppliesAt,
@@ -92,6 +97,48 @@ type RuntimeEvent<E> =
   | { readonly _tag: "ActionCompleted"; readonly completion: Completion }
   | { readonly _tag: "EvaluationChanged"; readonly evaluation: DeliveryRuntimeEvaluation }
   | { readonly _tag: "RelationFailed"; readonly cause: Cause.Cause<E> }
+  | { readonly _tag: "PostG2AdmissionStallCut"; readonly token: PostG2AdmissionStallCutToken }
+
+type PendingPostG2AdmissionStallCut =
+  | {
+      readonly _tag: "Offered"
+      readonly candidate: Option.Option<PostG2TaskWorkAdmissionStalledRuntimeQuiescence>
+      readonly token: PostG2AdmissionStallCutToken
+    }
+  | {
+      readonly _tag: "Applied"
+      readonly candidate: PostG2TaskWorkAdmissionStalledRuntimeQuiescence
+      readonly token: PostG2AdmissionStallCutToken
+    }
+
+const appliedPostG2TaskWorkOutcomeOf = (
+  result: DeliveryActionResult,
+  proposal: DeliveryActionProposal
+): Option.Option<AppliedPostG2TaskWorkOutcome> => {
+  const taskWorkPosition = proposal.admission.taskWorkPosition
+  const protocol = proposal.admission.plannedAttemptProtocol
+  if (
+    result._tag !== "ExecutorReportPublished" ||
+    result.report._tag !== "ExecutorWorkExecuting" ||
+    taskWorkPosition._tag !== "TaskWorkPositionRequired" ||
+    taskWorkPosition.mode !== "ReserveOrReuse" ||
+    protocol._tag !== "PlannedAttemptProtocolRequired"
+  ) {
+    return Option.none()
+  }
+  const plannedCorrelation = plannedAttemptExecutorCorrelation(result.plannedAttempt)
+  if (
+    !samePlannedAttemptExecutorCorrelation(result.report.correlation, plannedCorrelation) ||
+    !samePlannedAttemptExecutorCorrelation(protocol.correlation, plannedCorrelation)
+  ) {
+    return Option.none()
+  }
+  return Option.some({
+    correlation: plannedCorrelation,
+    proposalId: result.proposalId,
+    taskId: result.plannedAttempt.taskId
+  })
+}
 
 /**
  * The runtime consumes one coherent current-first evaluation signal. Authority
@@ -155,6 +202,11 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const owners = yield* Ref.make<ReadonlyMap<DeliveryProposalId, LiveOwner>>(new Map())
       const localDeferrals = yield* Ref.make<ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>>(new Map())
       const pendingCompletions = yield* Ref.make<ReadonlyMap<DeliveryProposalId, Completion>>(new Map())
+      const appliedPostG2TaskWorkOutcomes = yield* Ref.make<ReadonlyArray<AppliedPostG2TaskWorkOutcome>>([])
+      const pendingPostG2AdmissionStallCut = yield* Ref.make<Option.Option<PendingPostG2AdmissionStallCut>>(
+        Option.none()
+      )
+      let nextPostG2AdmissionStallCutToken = 0
       const latest = yield* Ref.make<Option.Option<DeliveryRuntimeEvaluation>>(Option.none())
       const selectionGate = yield* Semaphore.make(1)
       const integrationTargets = resources.integrationTargets
@@ -169,8 +221,16 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         Stream.fromEffect(Deferred.succeed(evaluationsSubscribed, undefined)).pipe(Stream.drain),
         attachment.changes
       ).pipe(
-        Stream.runForEach((evaluation) => Queue.offer(events, { _tag: "EvaluationChanged", evaluation })),
-        Effect.catchCause((cause) => Queue.offer(events, { _tag: "RelationFailed", cause })),
+        Stream.runForEach((evaluation) =>
+          Queue.offer(events, { _tag: "EvaluationChanged", evaluation }).pipe(
+            Effect.andThen(emit({ _tag: "RuntimeEvaluationOffered", acceptedAt: evaluation.acceptedAt }))
+          )
+        ),
+        Effect.catchCause((cause) =>
+          Queue.offer(events, { _tag: "RelationFailed", cause }).pipe(
+            Effect.andThen(emit({ _tag: "RuntimeRelationFailureOffered" }))
+          )
+        ),
         Effect.forkIn(scope)
       )
       yield* Deferred.await(evaluationsSubscribed)
@@ -245,6 +305,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             _tag: "ActionCompleted",
             completion: { acknowledged, exit, proposalId: proposal.id }
           })
+          yield* emit({ _tag: "RuntimeCompletionOffered", proposalId: proposal.id })
           yield* Deferred.await(acknowledged)
         })
         return yield* installInterruptibleDeliveryChild(scope, child, releaseInterruptedOwner)
@@ -411,6 +472,12 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         } else if (!liveActionIsPresent(current.proposedActions, owner.proposal)) {
           yield* removeOwnerInsideGate(completion.proposalId)
         }
+        if (phase._tag === "ActiveRefreshPostG2RuntimePhase") {
+          const outcome = appliedPostG2TaskWorkOutcomeOf(actionResult, owner.proposal)
+          if (Option.isSome(outcome)) {
+            yield* Ref.update(appliedPostG2TaskWorkOutcomes, (outcomes) => [...outcomes, outcome.value])
+          }
+        }
       })
 
       const applyCompletion = Effect.fn("DeliveryRuntime.applyCompletion")(function* (completion: Completion) {
@@ -455,54 +522,72 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         }
       })
 
+      const locallyRunnableFrontierInsideGate = Effect.fn("DeliveryRuntime.locallyRunnableFrontierInsideGate")(
+        function* (current: DeliveryRuntimeEvaluation) {
+          const proposedActions = current.proposedActions
+          if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
+            return yield* new DeliveryRuntimeProposalOwnershipConflict({
+              proposalIds: proposedActions.conflicts.map(({ id }) => id)
+            })
+          }
+          const deferred = yield* Ref.get(localDeferrals)
+          const locallyRunnableProposals = proposedActions.proposals.filter(({ id }) => {
+            const localDeferral = deferred.get(id)
+            return (
+              localDeferral === undefined || !deliveryRuntimeLocalDeferralAppliesAt(localDeferral, current.acceptedAt)
+            )
+          })
+          return { ...proposedActions, proposals: locallyRunnableProposals } satisfies AvailableProposalFrontier
+        }
+      )
+
+      const postG2AdmissionStallCandidate = Effect.fn("DeliveryRuntime.postG2AdmissionStallCandidate")(function* (
+        admissionPass: DeliveryRuntimeAdmissionPassResult
+      ) {
+        if (phase._tag !== "ActiveRefreshPostG2RuntimePhase") {
+          return Option.none<PostG2TaskWorkAdmissionStalledRuntimeQuiescence>()
+        }
+        return yield* selectionGate.withPermit(
+          Effect.gen(function* () {
+            const current = Option.getOrThrow(yield* Ref.get(latest))
+            const live = yield* Ref.get(owners)
+            const boundary = current.activeRefreshBoundary
+            const phaseSubjectsMatchBoundary =
+              boundary !== undefined &&
+              boundary.reconciledAttempts.length === phase.subjects.length &&
+              boundary.reconciledAttempts.every((boundarySubject) =>
+                phase.subjects.some((subject) => samePlannedAttemptExecutorCorrelation(subject, boundarySubject))
+              )
+            if (live.size !== 0 || !phaseSubjectsMatchBoundary) {
+              return Option.none<PostG2TaskWorkAdmissionStalledRuntimeQuiescence>()
+            }
+            const proposedActions = yield* locallyRunnableFrontierInsideGate(current)
+            const capacityDeniedProposalIds = new Set(
+              admissionPass.deferrals
+                .filter(({ reason }) => reason === "TaskWorkPositionUnavailable")
+                .map(({ proposalId }) => proposalId)
+            )
+            return classifyPostG2TaskWorkAdmissionStalledRuntimeQuiescence(
+              current,
+              deliveryTaskWorkAdmissionBasisOf(yield* admission.snapshot),
+              proposedActions,
+              capacityDeniedProposalIds,
+              yield* Ref.get(appliedPostG2TaskWorkOutcomes)
+            )
+          })
+        )
+      })
+
       const runtimeQuiescence = Effect.fn("DeliveryRuntime.quiescence")(function* () {
         return yield* selectionGate.withPermit(
           Effect.gen(function* () {
             const current = Option.getOrThrow(yield* Ref.get(latest))
             const live = yield* Ref.get(owners)
-            const proposedActions = current.proposedActions
-            if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
-              return yield* new DeliveryRuntimeProposalOwnershipConflict({
-                proposalIds: proposedActions.conflicts.map(({ id }) => id)
-              })
-            }
-            const deferred = yield* Ref.get(localDeferrals)
-            const locallyRunnableProposals = proposedActions.proposals.filter(({ id }) => {
-              const localDeferral = deferred.get(id)
-              return (
-                localDeferral === undefined || !deliveryRuntimeLocalDeferralAppliesAt(localDeferral, current.acceptedAt)
-              )
-            })
-            const locallyRunnableFrontier: AvailableProposalFrontier = {
-              ...proposedActions,
-              proposals: locallyRunnableProposals
-            }
+            const locallyRunnableFrontier = yield* locallyRunnableFrontierInsideGate(current)
+            const locallyRunnableProposals = locallyRunnableFrontier.proposals
             const everyProposalIsLocallyDeferred = locallyRunnableProposals.length === 0
             const activeRefreshG2Pending =
               phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
-            /**
-             * After G2, an active refresh may deliberately retain a Running
-             * executor position while the relation exposes independent work. If
-             * that position fills the whole configured capacity and no local
-             * action owner remains, waiting for another runtime event cannot free
-             * it: the retained executor responsibility is outside this phase.
-             * Return an unsettled quiescence while leaving the proposal in the
-             * descriptive relation so a later ordinary activation can retry it.
-             */
-            const postG2RetainedCapacityBlocks =
-              phase._tag === "ActiveRefreshPostG2RuntimePhase" &&
-              current.activeRefreshBoundary !== undefined &&
-              current.taskWork.held.length >= Number(current.taskWork.capacity) &&
-              current.taskWork.held.every(({ correlation }) =>
-                current.activeRefreshBoundary?.reconciledAttempts.some(
-                  (subject) => subject.runId === correlation.runId && subject.attemptId === correlation.attemptId
-                )
-              ) &&
-              locallyRunnableProposals.length > 0 &&
-              locallyRunnableProposals.every(
-                ({ admission: { taskWorkPosition } }) =>
-                  taskWorkPosition._tag === "TaskWorkPositionRequired" && taskWorkPosition.mode === "ReserveOrReuse"
-              )
             if (live.size !== 0) return Option.none<DeliveryRuntimeQuiescence>()
             const ordinaryTaskWorkAdmissionStalled =
               phase._tag === "OrdinaryDeliveryRuntimePhase"
@@ -515,7 +600,6 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             if (
               !activeRefreshG2Pending &&
               !everyProposalIsLocallyDeferred &&
-              !postG2RetainedCapacityBlocks &&
               Option.isNone(ordinaryTaskWorkAdmissionStalled)
             ) {
               return Option.none<DeliveryRuntimeQuiescence>()
@@ -566,22 +650,73 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           yield* applyPublishedCompletions()
           return
         }
+        if (event._tag === "PostG2AdmissionStallCut") {
+          const acknowledged = yield* Ref.modify(pendingPostG2AdmissionStallCut, (pending) => {
+            if (Option.isNone(pending) || pending.value._tag !== "Offered" || pending.value.token !== event.token) {
+              return [false, pending]
+            }
+            return Option.match(pending.value.candidate, {
+              onNone: () => [true, Option.none<PendingPostG2AdmissionStallCut>()] as const,
+              onSome: (candidate) =>
+                [
+                  true,
+                  Option.some<PendingPostG2AdmissionStallCut>({ _tag: "Applied", candidate, token: event.token })
+                ] as const
+            })
+          })
+          if (acknowledged) yield* emit({ _tag: "PostG2AdmissionStallCutApplied", token: event.token })
+          return
+        }
         const exit = yield* applyCompletion(event.completion)
         if (Option.isSome(exit) && Exit.isFailure(exit.value)) return yield* Effect.failCause(exit.value.cause)
       })
 
       for (;;) {
+        const pendingCut = yield* Ref.get(pendingPostG2AdmissionStallCut)
+        if (Option.isSome(pendingCut) && pendingCut.value._tag === "Applied") {
+          yield* publishRuntimeObservation()
+          return pendingCut.value.candidate
+        }
         const current = Option.getOrThrow(yield* Ref.get(latest))
         const activeRefreshG2Pending =
           phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
+        let admissionPass: DeliveryRuntimeAdmissionPassResult = { deferrals: [], started: false }
         if (!activeRefreshG2Pending) {
-          while (yield* admissionLoop.admitPass()) yield* Effect.yieldNow
+          admissionPass = yield* admissionLoop.admitPass()
+          while (admissionPass.started) {
+            yield* Effect.yieldNow
+            admissionPass = yield* admissionLoop.admitPass()
+          }
         }
 
-        const quiescence = yield* runtimeQuiescence()
-        if (Option.isSome(quiescence)) {
-          yield* publishRuntimeObservation()
-          return quiescence.value
+        const postG2Candidate = yield* postG2AdmissionStallCandidate(admissionPass)
+        const offeredToken = yield* Ref.modify(pendingPostG2AdmissionStallCut, (pending) => {
+          if (Option.isSome(pending) && pending.value._tag === "Offered") {
+            return [
+              Option.none<PostG2AdmissionStallCutToken>(),
+              Option.some({ ...pending.value, candidate: postG2Candidate })
+            ]
+          }
+          if (Option.isNone(postG2Candidate)) return [Option.none<PostG2AdmissionStallCutToken>(), pending]
+          nextPostG2AdmissionStallCutToken += 1
+          const token = PostG2AdmissionStallCutToken.make(nextPostG2AdmissionStallCutToken)
+          return [
+            Option.some(token),
+            Option.some<PendingPostG2AdmissionStallCut>({ _tag: "Offered", candidate: postG2Candidate, token })
+          ]
+        })
+        if (Option.isSome(offeredToken)) {
+          yield* emit({ _tag: "PostG2AdmissionStallCandidateReady", token: offeredToken.value })
+          yield* Queue.offer(events, { _tag: "PostG2AdmissionStallCut", token: offeredToken.value })
+          yield* emit({ _tag: "PostG2AdmissionStallCutOffered", token: offeredToken.value })
+        }
+
+        if (Option.isNone(yield* Ref.get(pendingPostG2AdmissionStallCut))) {
+          const quiescence = yield* runtimeQuiescence()
+          if (Option.isSome(quiescence)) {
+            yield* publishRuntimeObservation()
+            return quiescence.value
+          }
         }
         yield* applyRuntimeEvent(yield* Queue.take(events))
       }

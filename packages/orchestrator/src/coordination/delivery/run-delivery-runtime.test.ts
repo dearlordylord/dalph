@@ -134,6 +134,11 @@ import {
   preparedBeginProposalsOf as derivePreparedBeginProposals
 } from "../../../test/support/prepared-begin-proposal.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
+import {
+  classifyPostG2TaskWorkAdmissionStalledRuntimeQuiescence,
+  type AppliedPostG2TaskWorkOutcome,
+  type AvailableProposalFrontier
+} from "./delivery-runtime-quiescence.js"
 import { deliveryRuntimeLocalDeferralAfter, DeliveryRuntimeLocalDeferral } from "./delivery-runtime-local-deferral.js"
 import { reconcileDeliveryRuntimeLocalDeferrals } from "./delivery-runtime-local-deferral-reconciliation.js"
 import { executeFreshPlannedAttempt } from "./planned-attempt-delivery-action-adapter.js"
@@ -3556,7 +3561,7 @@ it.effect("rejects a captured active proposal after G2 before admitting independ
   )
 )
 
-it.effect("quiesces after G2 when retained active capacity cannot be freed locally", () =>
+it.effect("does not classify a historical retained active position as an applied post-G2 outcome", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const base = yield* baseEvaluation
@@ -3604,7 +3609,8 @@ it.effect("quiesces after G2 when retained active capacity cannot be freed local
       } satisfies DeliveryRuntimeEvaluation
       const relation = yield* dynamicEvaluationSignal(initial)
       const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
-      const result = yield* runDeliveryRuntimePhase(
+      const denied = yield* Deferred.make<void>()
+      const running = yield* runDeliveryRuntimePhase(
         runId,
         relation,
         DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
@@ -3618,14 +3624,303 @@ it.effect("quiesces after G2 when retained active capacity cannot be freed local
                 Effect.andThen(Effect.die("retained capacity must not admit independent work"))
               )
           })
-        )
+        ),
+        Effect.provideService(
+          DeliverySemanticTrace,
+          DeliverySemanticTrace.of({
+            emit: (event) =>
+              event._tag === "ProposalDeferred" &&
+              event.proposalId === independent.id &&
+              event.reason === "TaskWorkPositionUnavailable"
+                ? Deferred.succeed(denied, undefined)
+                : Effect.void
+          })
+        ),
+        Effect.forkChild
       )
+      yield* Deferred.await(denied)
+      yield* relation.publish({
+        ...initial,
+        acceptedAt: JournalPosition.make(11),
+        proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        quiescence: { _tag: "QuiescencePassive", reason: "RunPaused" }
+      })
+      const result = yield* Fiber.join(running)
 
-      expect(result._tag).toBe("TrackerReconfirmationQuiescence")
+      expect(result._tag).toBe("PassiveRuntimeQuiescence")
       expect(result.proposedActions.proposals).toEqual([])
       expect(yield* Ref.get(executed)).toEqual([])
     })
   )
+)
+
+it.effect("returns typed post-G2 admission-stalled quiescence retaining E", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const [a, b, c, d, e] = ["post-g2-A", "post-g2-B", "post-g2-C", "post-g2-D", "post-g2-E"].map(
+        preparedAttemptFixture
+      )
+      if (a === undefined || b === undefined || c === undefined || d === undefined || e === undefined) {
+        return yield* Effect.die("the post-G2 fixture must contain A through E")
+      }
+      const [beginD, blockedE] = preparedBeginProposalsOf([d, e])
+      if (beginD === undefined || blockedE === undefined) {
+        return yield* Effect.die("D and E must each produce one exact Begin proposal")
+      }
+      const acceptedAt = JournalPosition.make(10)
+      const afterDAt = JournalPosition.make(11)
+      const afterPriorEvaluationAt = JournalPosition.make(12)
+      const graphProjection = projectTrackerSnapshot({
+        revision: "post-g2-admission-stall",
+        tasks: [a, b, c, d, e].map(({ attempt }) => ({
+          id: attempt.taskId,
+          lifecycle: { _tag: "Open" as const },
+          parentTaskId: null,
+          prerequisiteIds: []
+        }))
+      })
+      if (graphProjection._tag === "Invalid") return yield* Effect.die("the post-G2 graph must be valid")
+      const graph = TrackerGraphState.cases.GraphEstablished.make({
+        observation: makeTestJournaledTrackerGraphObservation({
+          operationId: OperationId.make("post-g2-admission-stall-graph"),
+          recordedAt: acceptedAt,
+          snapshot: graphProjection.snapshot
+        })
+      })
+      const boundary = {
+        _tag: "ActiveRefreshRuntimeBoundary" as const,
+        runId,
+        reconciledAttempts: [a, b, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
+      }
+      const initial = {
+        ...withProposals(
+          {
+            ...base,
+            acceptedAt,
+            current: { ...base.current, runId, trackerGraph: graph },
+            quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+          },
+          [beginD, blockedE],
+          3
+        ),
+        activeRefreshBoundary: boundary,
+        quiescence: { _tag: "TrackerReconfirmationAllowed" as const },
+        taskWork: {
+          capacity: TaskWorkCapacity.make(3),
+          held: [a, c].map(({ attempt }) => ({
+            correlation: plannedAttemptExecutorCorrelation(attempt),
+            taskId: attempt.taskId
+          }))
+        }
+      } satisfies DeliveryRuntimeEvaluation
+      const afterD = {
+        ...initial,
+        acceptedAt: afterDAt,
+        proposedActions: { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [blockedE] },
+        taskWork: {
+          capacity: TaskWorkCapacity.make(3),
+          held: [a, c, d].map(({ attempt }) => ({
+            correlation: plannedAttemptExecutorCorrelation(attempt),
+            taskId: attempt.taskId
+          }))
+        }
+      } satisfies DeliveryRuntimeEvaluation
+      const afterPriorEvaluation = { ...afterD, acceptedAt: afterPriorEvaluationAt }
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const cutApplied = yield* Deferred.make<unknown>()
+      const cutCandidate = yield* Deferred.make<unknown>()
+      const priorEvaluationOffered = yield* Deferred.make<void>()
+      const trace = DeliverySemanticTrace.of({
+        emit: (event) => {
+          if (event._tag === "PostG2AdmissionStallCandidateReady") {
+            return Deferred.succeed(cutCandidate, event.token).pipe(
+              Effect.andThen(relation.publish(afterPriorEvaluation)),
+              Effect.andThen(Deferred.await(priorEvaluationOffered))
+            )
+          }
+          if (event._tag === "RuntimeEvaluationOffered" && event.acceptedAt === afterPriorEvaluationAt) {
+            return Deferred.succeed(priorEvaluationOffered, undefined)
+          }
+          return event._tag === "PostG2AdmissionStallCutApplied"
+            ? Deferred.succeed(cutApplied, event.token)
+            : Effect.void
+        }
+      })
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal: action }) =>
+          Effect.gen(function* () {
+            if (action.id !== beginD.id) return yield* Effect.die("capacity-blocked E must not execute")
+            yield* Ref.update(executed, (current) => [...current, action.id])
+            yield* relation.publish(afterD)
+            return {
+              _tag: "ExecutorReportPublished",
+              acceptedFacts: "Changed",
+              plannedAttempt: d.attempt,
+              proposalId: action.id,
+              report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                correlation: plannedAttemptExecutorCorrelation(d.attempt)
+              })
+            } satisfies DeliveryActionResult
+          })
+      })
+      const result = yield* runDeliveryRuntimePhase(
+        runId,
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPostG2(boundary.reconciledAttempts)
+      ).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(
+          DeliveryAcceptedFactPublication,
+          DeliveryAcceptedFactPublication.of({
+            awaitCurrent: Effect.succeed({
+              _tag: "DeliveryAcceptedPublicationBoundary",
+              acceptedThrough: afterDAt,
+              runId
+            })
+          })
+        ),
+        Effect.provideService(DeliverySemanticTrace, trace)
+      )
+
+      expect(yield* Deferred.await(cutApplied)).toBe(yield* Deferred.await(cutCandidate))
+      expect(result).toMatchObject({
+        _tag: "PostG2TaskWorkAdmissionStalledRuntimeQuiescence",
+        acceptedAt: afterPriorEvaluationAt,
+        activeRefreshBoundary: boundary,
+        proposedActions: { _tag: "DeliveryProposalsAvailable", proposals: [blockedE] }
+      })
+      expect(yield* Ref.get(executed)).toEqual([beginD.id])
+      if (result._tag !== "PostG2TaskWorkAdmissionStalledRuntimeQuiescence") {
+        return yield* Effect.die("the exact post-G2 stall must retain its typed result")
+      }
+      expect(result.taskWork.held.map(({ correlation }) => correlation)).toEqual(
+        [a, c, d].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
+      )
+    })
+  )
+)
+
+it.effect("rejects post-G2 admission-stalled quiescence outside its complete current causal basis", () =>
+  Effect.gen(function* () {
+    const base = yield* baseEvaluation
+    const [a, c, d, e, unrelated] = ["cut-A", "cut-C", "cut-D", "cut-E", "cut-unrelated"].map(preparedAttemptFixture)
+    if (a === undefined || c === undefined || d === undefined || e === undefined || unrelated === undefined) {
+      return yield* Effect.die("the classifier controls require five exact fixtures")
+    }
+    const [blockedE] = preparedBeginProposalsOf([e])
+    if (blockedE === undefined) return yield* Effect.die("E must produce one exact Begin proposal")
+    if (
+      blockedE.admission.taskWorkPosition._tag !== "TaskWorkPositionRequired" ||
+      blockedE.admission.plannedAttemptProtocol._tag !== "PlannedAttemptProtocolRequired"
+    ) {
+      return yield* Effect.die("E must retain exact correlated task-work admission")
+    }
+    const acceptedAt = JournalPosition.make(21)
+    const graphProjection = projectTrackerSnapshot({
+      revision: "post-g2-classifier-controls",
+      tasks: [a, c, d, e, unrelated].map(({ attempt }) => ({
+        id: attempt.taskId,
+        lifecycle: { _tag: "Open" as const },
+        parentTaskId: null,
+        prerequisiteIds: []
+      }))
+    })
+    if (graphProjection._tag === "Invalid") return yield* Effect.die("the classifier control graph must be valid")
+    const graph = TrackerGraphState.cases.GraphEstablished.make({
+      observation: makeTestJournaledTrackerGraphObservation({
+        operationId: OperationId.make("post-g2-classifier-controls-graph"),
+        recordedAt: acceptedAt,
+        snapshot: graphProjection.snapshot
+      })
+    })
+    const boundary = {
+      _tag: "ActiveRefreshRuntimeBoundary" as const,
+      runId,
+      reconciledAttempts: [a, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
+    }
+    const held = [a, c, d].map(({ attempt }) => ({
+      correlation: plannedAttemptExecutorCorrelation(attempt),
+      taskId: attempt.taskId
+    }))
+    const taskWork = { capacity: TaskWorkCapacity.make(3), held }
+    const current = {
+      ...withProposals(
+        {
+          ...base,
+          acceptedAt,
+          current: { ...base.current, runId, trackerGraph: graph },
+          quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+        },
+        [blockedE],
+        3
+      ),
+      activeRefreshBoundary: boundary,
+      quiescence: { _tag: "TrackerReconfirmationAllowed" as const },
+      taskWork
+    } satisfies DeliveryRuntimeEvaluation
+    const frontier = current.proposedActions as AvailableProposalFrontier
+    const outcome = {
+      correlation: plannedAttemptExecutorCorrelation(d.attempt),
+      proposalId: DeliveryProposalId.make("post-g2-applied-D"),
+      taskId: d.attempt.taskId
+    } satisfies AppliedPostG2TaskWorkOutcome
+    const denied = new Set([blockedE.id])
+    const classify = (
+      evaluation: DeliveryRuntimeEvaluation,
+      effectiveTaskWork = taskWork,
+      proposals = frontier,
+      deniedProposalIds: ReadonlySet<DeliveryProposalId> = denied,
+      outcomes: ReadonlyArray<AppliedPostG2TaskWorkOutcome> = [outcome]
+    ) =>
+      classifyPostG2TaskWorkAdmissionStalledRuntimeQuiescence(
+        evaluation,
+        effectiveTaskWork,
+        proposals,
+        deniedProposalIds,
+        outcomes
+      )
+
+    expect(Option.isSome(classify(current))).toBe(true)
+
+    const unrelatedHeld = [
+      held[0],
+      held[1],
+      { correlation: plannedAttemptExecutorCorrelation(unrelated.attempt), taskId: unrelated.attempt.taskId }
+    ].filter((position): position is NonNullable<typeof position> => position !== undefined)
+    const partial = { capacity: TaskWorkCapacity.make(3), held: held.slice(0, 2) }
+    const empty = { ...frontier, proposals: [] } satisfies AvailableProposalFrontier
+    const existingE = {
+      ...blockedE,
+      admission: {
+        integrationTarget: blockedE.admission.integrationTarget,
+        plannedAttemptProtocol: blockedE.admission.plannedAttemptProtocol,
+        taskWorkPosition: {
+          _tag: "TaskWorkPositionRequired" as const,
+          mode: "Existing" as const,
+          taskId: blockedE.admission.taskWorkPosition.taskId
+        }
+      }
+    } satisfies DeliveryActionProposal
+    const existingFrontier = { ...frontier, proposals: [existingE] } satisfies AvailableProposalFrontier
+    const mismatchedOutcome = {
+      ...outcome,
+      correlation: plannedAttemptExecutorCorrelation(unrelated.attempt)
+    } satisfies AppliedPostG2TaskWorkOutcome
+
+    const controls = [
+      classify({ ...current, taskWork: { ...taskWork, held: unrelatedHeld } }, { ...taskWork, held: unrelatedHeld }),
+      classify({ ...current, taskWork: partial }, partial),
+      classify({ ...current, proposedActions: empty }, taskWork, empty),
+      classify({ ...current, proposedActions: existingFrontier }, taskWork, existingFrontier),
+      classify(current, taskWork, frontier, denied, [mismatchedOutcome]),
+      classify(current, taskWork, frontier, denied, []),
+      classify(current, taskWork, frontier, new Set())
+    ]
+    expect(controls.every(Option.isNone)).toBe(true)
+  })
 )
 
 const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmissionSnapshotScenario")(function* () {

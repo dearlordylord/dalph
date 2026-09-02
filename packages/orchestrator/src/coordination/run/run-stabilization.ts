@@ -76,6 +76,12 @@ const finalityInputsOf = (
 }
 
 const proofOf = (target: TrackerTarget, quiescence: DeliveryRuntimeQuiescence): RunFinalityProof => {
+  if (quiescence._tag === "PostG2TaskWorkAdmissionStalledRuntimeQuiescence") {
+    return {
+      acceptedAt: quiescence.acceptedAt,
+      decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+    }
+  }
   const cancellationAppliedWhilePassive = passiveCancellationApplied(quiescence)
   const decision = deliveryFinalityOf(
     quiescence.current,

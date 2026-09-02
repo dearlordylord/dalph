@@ -87,6 +87,7 @@ import {
   type FreshIdentityDeliveryProposal,
   type IdentityFreeDeliveryProposal
 } from "./delivery-action-proposal.js"
+import type { PostG2AdmissionStallCutToken } from "./delivery-runtime-quiescence.js"
 import type { DeliveryRelationSourceError } from "./relations.js"
 import type {
   advanceAttemptStoppage,
@@ -296,6 +297,18 @@ export type DeliverySemanticTraceEvent =
         | "PlannedAttemptProtocolUnavailable"
         | "TaskWorkPositionUnavailable"
     }
+  /** Test/control observation that the candidate exists before its FIFO cut is offered. */
+  | { readonly _tag: "PostG2AdmissionStallCandidateReady"; readonly token: PostG2AdmissionStallCutToken }
+  /** Test/control observation that the activation-local FIFO cut has been offered. */
+  | { readonly _tag: "PostG2AdmissionStallCutOffered"; readonly token: PostG2AdmissionStallCutToken }
+  /** Test/control acknowledgement emitted only after the activation-local FIFO cut is applied. */
+  | { readonly _tag: "PostG2AdmissionStallCutApplied"; readonly token: PostG2AdmissionStallCutToken }
+  /** Test/control observation emitted after an evaluation event is offered to the runtime queue. */
+  | { readonly _tag: "RuntimeEvaluationOffered"; readonly acceptedAt: JournalPosition | null }
+  /** Test/control observation emitted after a completion event is offered to the runtime queue. */
+  | { readonly _tag: "RuntimeCompletionOffered"; readonly proposalId: DeliveryProposalId }
+  /** Test/control observation emitted after a relation failure is offered to the runtime queue. */
+  | { readonly _tag: "RuntimeRelationFailureOffered" }
 
 export interface DeliverySemanticTraceService {
   readonly emit: (event: DeliverySemanticTraceEvent) => Effect.Effect<void>

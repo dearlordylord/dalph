@@ -1,18 +1,11 @@
 import { Effect, Option, Ref, Schema } from "effect"
 import type { Semaphore } from "effect"
-import type { OperationId } from "../../workflow/identity.js"
-import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import type { DeliverySemanticTraceEvent } from "./delivery-action-executor.js"
 import type { DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { DeliveryProposalId, type DeliveryActionProposal } from "./delivery-action-proposal.js"
 import type { DeliveryRuntimeLiveOwnerSource } from "./delivery-runtime-observation.js"
-import {
-  liveActionKeyOf,
-  liveActionIsPresent,
-  type LiveDeliveryActionKey,
-  proposalIsAvailable
-} from "./live-delivery-action.js"
+import { liveActionKeyOf, liveActionIsPresent, proposalIsAvailable } from "./live-delivery-action.js"
 import type { DeliveryProposalFrontier, DeliveryRuntimeEvaluation } from "./relations.js"
 import type { DeliveryRuntimeLocalDeferral } from "./delivery-runtime-local-deferral.js"
 
@@ -48,8 +41,21 @@ type DeliveryRuntimeAdmissionLoopActions = {
 
 type DeliveryRuntimeAdmissionLoopDependencies = DeliveryRuntimeAdmissionLoopState & DeliveryRuntimeAdmissionLoopActions
 
+export interface DeliveryRuntimeAdmissionDeferral {
+  readonly proposalId: DeliveryProposalId
+  readonly reason: DeferredAdmissionResult["reason"]
+}
+
+export interface DeliveryRuntimeAdmissionPassResult {
+  readonly deferrals: ReadonlyArray<DeliveryRuntimeAdmissionDeferral>
+  readonly started: boolean
+}
+
 type DeliveryRuntimeAdmissionLoopObservation = {
-  readonly admitPass: () => Effect.Effect<boolean, ApplicationExiting | DeliveryRuntimeProposalOwnershipConflict>
+  readonly admitPass: () => Effect.Effect<
+    DeliveryRuntimeAdmissionPassResult,
+    ApplicationExiting | DeliveryRuntimeProposalOwnershipConflict
+  >
 }
 
 type DeliveryRuntimeAdmissionLoopCleanup = {
@@ -73,26 +79,6 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
     selectionGate
   } = dependencies
 
-  const admitLaterAvailableProposal = Effect.fn("DeliveryRuntimeAdmissionLoop.admitLaterAvailableProposal")(function* (
-    proposals: ReadonlyArray<DeliveryActionProposal>,
-    deferredIndex: number,
-    live: ReadonlyMap<DeliveryProposalId, LiveOwner>,
-    liveActionKeys: ReadonlySet<LiveDeliveryActionKey>,
-    liveOperationIds: ReadonlySet<OperationId>,
-    deferred: ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>,
-    acceptedAt: JournalPosition | null
-  ) {
-    for (const independent of proposals.slice(deferredIndex + 1)) {
-      if (!proposalIsAvailable(independent, live, liveActionKeys, liveOperationIds, deferred, acceptedAt)) {
-        continue
-      }
-      const laterReservation = yield* reserveAndStart(independent)
-      if (laterReservation._tag === "Started") return laterReservation.started
-      yield* emit({ _tag: "ProposalDeferred", proposalId: independent.id, reason: laterReservation.reason })
-    }
-    return false
-  })
-
   const admitPass = Effect.fn("DeliveryRuntimeAdmissionLoop.admitPass")(function* () {
     return yield* selectionGate.withPermit(
       Effect.gen(function* () {
@@ -110,26 +96,20 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
         const liveOperationIds = new Set(
           (yield* Effect.forEach(live.values(), ({ operationId }) => operationId)).flatMap(Option.toArray)
         )
-        const proposal = proposedActions.proposals.find((candidate) =>
-          proposalIsAvailable(candidate, live, liveActionKeys, liveOperationIds, deferred, current.acceptedAt)
-        )
-        if (proposal === undefined) {
-          return false
+        const deferrals: Array<DeliveryRuntimeAdmissionDeferral> = []
+        for (const proposal of proposedActions.proposals) {
+          if (!proposalIsAvailable(proposal, live, liveActionKeys, liveOperationIds, deferred, current.acceptedAt)) {
+            continue
+          }
+          const reservation = yield* reserveAndStart(proposal)
+          if (reservation._tag === "Started") {
+            return { deferrals, started: reservation.started } satisfies DeliveryRuntimeAdmissionPassResult
+          }
+          const deferral = { proposalId: proposal.id, reason: reservation.reason }
+          deferrals.push(deferral)
+          yield* emit({ _tag: "ProposalDeferred", ...deferral })
         }
-        const reservation = yield* reserveAndStart(proposal)
-        if (reservation._tag === "Deferred") {
-          yield* emit({ _tag: "ProposalDeferred", proposalId: proposal.id, reason: reservation.reason })
-          return yield* admitLaterAvailableProposal(
-            proposedActions.proposals,
-            proposedActions.proposals.findIndex(({ id }) => id === proposal.id),
-            live,
-            liveActionKeys,
-            liveOperationIds,
-            deferred,
-            current.acceptedAt
-          )
-        }
-        return reservation.started
+        return { deferrals, started: false } satisfies DeliveryRuntimeAdmissionPassResult
       })
     )
   })

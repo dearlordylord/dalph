@@ -2,7 +2,7 @@ import {
   Context,
   Data,
   Deferred,
-  Duration,
+  type Duration,
   Effect,
   Fiber,
   Layer,
@@ -10,7 +10,6 @@ import {
   Queue,
   Ref,
   Schedule,
-  Schema,
   Semaphore,
   Stream
 } from "effect"
@@ -20,6 +19,15 @@ import { ApplicationExitShell } from "../application-exit/application-shell.js"
 import { attachCurrentSignal, type CurrentSignal } from "../delivery/relations.js"
 import type { AcceptedRunControlDirection, AcceptedRunControlObserver, RunReactivationControlState } from "./run.js"
 import { type ActiveWorkAuthorityRefreshSource, RunActivationOpportunity } from "./run-activation-opportunity.js"
+import { finitePositiveDuration } from "./run-reactivation-state.js"
+import type {
+  ActivationPhase,
+  RunReactivationMessage,
+  TrailingActivationKind,
+  TrailingActivationObligation
+} from "./run-reactivation-state.js"
+
+export { RunReactivationIntervalInvalid } from "./run-reactivation-state.js"
 
 /** A non-authoritative request to ask the ordinary Run entry for current facts. */
 export type RunReactivationHint = Data.TaggedEnum<{
@@ -70,6 +78,8 @@ export interface RunReactivationOwnerOptions<E, R = never, EInstall = E> {
   readonly onTrailingActivationRecorded?: (generation: number) => Effect.Effect<void>
   /** Optional process-local idle-handoff observation for deterministic lifecycle tests. */
   readonly onActivationHandoffIdle?: () => Effect.Effect<void>
+  /** Optional test/control acknowledgement after Pause retains an exact trailing activation. */
+  readonly onPausedTrailingActivationRetained?: (generation: number) => Effect.Effect<void>
 }
 
 /** Only ephemeral hints are public; ownership, pause state, and shutdown stay in the scoped Layer. */
@@ -77,55 +87,10 @@ export interface RunReactivationOwnerService {
   readonly hint: (hint: RunReactivationHint) => Effect.Effect<void>
 }
 
-/** The application supplied a timer or cooldown that cannot drive a bounded local loop. */
-export class RunReactivationIntervalInvalid extends Schema.TaggedError<RunReactivationIntervalInvalid>()(
-  "RunReactivationIntervalInvalid",
-  { detail: Schema.String }
-) {}
-
 /** Public application seam for one exact unterminated Run's process-local owner. */
 export class RunReactivationOwner extends Context.Service<RunReactivationOwner, RunReactivationOwnerService>()(
   "@dalph/RunReactivationOwner"
 ) {}
-
-type RunReactivationMessage =
-  | { readonly _tag: "Hint"; readonly hint: RunReactivationHint }
-  /** A hint that arrived while an activation was crossing its handoff boundary. */
-  | { readonly _tag: "TrailingActivation"; readonly generation: number }
-
-type TrailingActivationKind =
-  | { readonly _tag: "Ordinary" }
-  | { readonly _tag: "ActiveWorkAuthorityRefresh"; readonly source: ActiveWorkAuthorityRefreshSource }
-
-/**
- * One activation promised by a hint that crossed an activation handoff. The
- * obligation retains whether an authority source requires another active
- * refresh and remains process-local until the worker admits it.
- */
-type TrailingActivationObligation = {
-  readonly _tag: "PendingTrailingActivation"
-  readonly generation: number
-  readonly kind: TrailingActivationKind
-}
-
-/**
- * The owner gate's activation phase. Finalizing remains visible until the
- * worker either admits the trailing activation or returns to its
- * idle wait. A generation changes at that handoff, so a producer that
- * observed the old phase cannot be mistaken for a producer arriving after it.
- */
-type ActivationPhase =
-  | { readonly _tag: "Idle"; readonly generation: number }
-  | { readonly _tag: "Running"; readonly generation: number }
-  | { readonly _tag: "Finalizing"; readonly generation: number }
-
-const finitePositiveDuration = (input: Duration.Input, name: string) => {
-  const duration = Duration.fromInput(input)
-  if (Option.isNone(duration) || !Duration.isFinite(duration.value) || !Duration.isPositive(duration.value)) {
-    return Effect.fail(new RunReactivationIntervalInvalid({ detail: `${name} must be finite and greater than zero` }))
-  }
-  return Effect.succeed(duration.value)
-}
 
 /**
  * Builds one scoped owner and starts its worker during Layer acquisition. A
@@ -145,7 +110,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
       // preparation to disappear before it snapshots and runs local drains.
       const startupPreparation = yield* applicationExit.admission.prepareForwardOwner("InterruptibleBoundary")
       yield* Effect.addFinalizer(() => startupPreparation.cancel)
-      const messages = yield* Queue.sliding<RunReactivationMessage>(1)
+      const messages = yield* Queue.sliding<RunReactivationMessage<RunReactivationHint>>(1)
       const commandGate = yield* Semaphore.make(1)
       const shutdown = yield* Deferred.make<void>()
       const stopped = yield* Ref.make(false)
@@ -331,7 +296,12 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
               yield* stopTimerFiber()
             } else {
               yield* startTimerFiber()
-              yield* offerHintInsideGate(RunReactivationHint.OperatorWake())
+              const pending = yield* Ref.get(trailingActivationObligation)
+              if (Option.isSome(pending)) {
+                yield* Queue.offer(messages, { _tag: "TrailingActivation", generation: pending.value.generation })
+              } else {
+                yield* offerHintInsideGate(RunReactivationHint.OperatorWake())
+              }
             }
           })
         )
@@ -461,6 +431,12 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
                   return yield* Effect.die("Run reactivation entered Running before activation admission")
                 }
                 const pending = yield* Ref.get(trailingActivationObligation)
+                if ((yield* Ref.get(controlState)) === "RunPaused") {
+                  if (Option.isSome(pending) && options.onPausedTrailingActivationRetained !== undefined) {
+                    yield* options.onPausedTrailingActivationRetained(pending.value.generation)
+                  }
+                  return { _tag: "Paused" as const }
+                }
                 if (Option.isSome(pending)) {
                   if (next._tag === "TrailingActivation" && next.generation !== pending.value.generation) {
                     return yield* Effect.die("Run reactivation trailing obligation generation changed before admission")
@@ -475,10 +451,11 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
                   })
                   return pending.value.kind._tag === "ActiveWorkAuthorityRefresh"
                     ? {
+                        _tag: "Admitted" as const,
                         hint: RunReactivationHint[pending.value.kind.source](),
                         activationKind: "ActiveWorkAuthorityRefresh" as const
                       }
-                    : { hint: undefined, activationKind: "Ordinary" as const }
+                    : { _tag: "Admitted" as const, hint: undefined, activationKind: "Ordinary" as const }
                 }
                 if (next._tag === "TrailingActivation") {
                   return yield* Effect.die("Run reactivation consumed an unrecorded trailing obligation")
@@ -489,6 +466,7 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
                   generation: phase._tag === "Finalizing" ? phase.generation + 1 : phase.generation
                 })
                 return {
+                  _tag: "Admitted" as const,
                   hint,
                   activationKind:
                     hint._tag === "TrackerNotification" || hint._tag === "Timer"
@@ -497,6 +475,10 @@ export const runReactivationOwnerLayer = <E, R, EInstall>(options: RunReactivati
                 }
               })
             )
+            if (activation._tag === "Paused") {
+              yield* loop()
+              return
+            }
             yield* processHint(activation.hint).pipe(
               Effect.ensuring(
                 commandGate.withPermit(

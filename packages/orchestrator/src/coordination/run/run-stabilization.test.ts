@@ -446,6 +446,115 @@ it.effect("returns RunMustRemainActive without G2 when task-work admission is st
   )
 )
 
+it.effect("returns unsettled responsibility for exact post-G2 capacity stall without another tracker read", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const [a, b, c, d, e] = ["post-G2-A", "post-G2-B", "post-G2-C", "post-G2-D", "post-G2-E"].map((name) =>
+        makePreparedBeginFixture(activeVerticalAttempt, "stabilization-post-G2-stall", name)
+      )
+      if (a === undefined || b === undefined || c === undefined || d === undefined || e === undefined) {
+        return yield* Effect.die("five exact post-G2 stabilization fixtures must be present")
+      }
+      const [beginD, blockedE] = preparedBeginProposalsOf(runId, [d, e])
+      if (beginD === undefined || blockedE === undefined) {
+        return yield* Effect.die("D and E must each produce one exact Begin proposal")
+      }
+      const g1 = graph(
+        "stabilization-post-G2-stall-G1",
+        1,
+        snapshot(
+          "stabilization-post-G2-stall-G1",
+          [a, b, c, d, e].map(({ task }) => ({
+            id: task.id,
+            lifecycle: { _tag: "Open" as const },
+            parentTaskId: null,
+            prerequisiteIds: []
+          }))
+        ),
+        { _tag: "ExecutingWorkAuthorityCheck" }
+      )
+      const subjects = [a, b, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
+      const boundary: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]> = {
+        _tag: "ActiveRefreshRuntimeBoundary",
+        reconciledAttempts: subjects,
+        runId
+      }
+      const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>(withRunFacts(evaluation(base, g1), false))
+      const reads = yield* Ref.make(0)
+      const executions = yield* Ref.make<ReadonlyArray<string>>([])
+      const interpreter = Layer.mock(WorkflowInterpreter, {
+        readTrackerGraph: (operation: ReturnType<typeof makeTrackerGraphObservationOperation>) =>
+          Effect.gen(function* () {
+            yield* Ref.update(reads, (count) => count + 1)
+            const g2 = graph(operation.operationId, 4, g1.observation.snapshot, {
+              _tag: "PostQuiescenceReconfirmation",
+              quiescentGraphOperationId: g1.observation.operationId
+            })
+            yield* SubscriptionRef.set(state, {
+              ...withRunFacts(evaluation(base, g2, { ...emptyFrontier, proposals: [beginD, blockedE] }), false),
+              activeRefreshBoundary: boundary,
+              taskWork: {
+                capacity: TaskWorkCapacity.make(3),
+                held: [a, c].map(({ attempt }) => ({
+                  correlation: plannedAttemptExecutorCorrelation(attempt),
+                  taskId: attempt.taskId
+                }))
+              }
+            })
+            return g2.observation.snapshot
+          })
+      })
+      const executor = DeliveryActionExecutor.of({
+        execute: ({ proposal }) =>
+          Effect.gen(function* () {
+            if (proposal.id !== beginD.id) return yield* Effect.die("capacity-blocked E must not execute")
+            yield* Ref.update(executions, (ids) => [...ids, proposal.id])
+            yield* SubscriptionRef.update(state, (current) => ({
+              ...current,
+              acceptedAt: JournalPosition.make(5),
+              proposedActions: { ...emptyFrontier, proposals: [blockedE] },
+              taskWork: {
+                capacity: TaskWorkCapacity.make(3),
+                held: [a, c, d].map(({ attempt }) => ({
+                  correlation: plannedAttemptExecutorCorrelation(attempt),
+                  taskId: attempt.taskId
+                }))
+              }
+            }))
+            return {
+              _tag: "ExecutorReportPublished",
+              acceptedFacts: "Changed",
+              plannedAttempt: d.attempt,
+              proposalId: beginD.id,
+              report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                correlation: plannedAttemptExecutorCorrelation(d.attempt)
+              })
+            } as const
+          })
+      })
+
+      const proof = yield* runStabilizedDelivery(
+        target,
+        runId,
+        signalOf(state),
+        activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor(subjects))
+      ).pipe(
+        Effect.provide(support),
+        Effect.provide(interpreter),
+        Effect.provideService(DeliveryActionExecutor, executor)
+      )
+
+      expect(yield* Ref.get(reads)).toBe(1)
+      expect(yield* Ref.get(executions)).toEqual([beginD.id])
+      expect(proof).toEqual({
+        acceptedAt: JournalPosition.make(5),
+        decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+      })
+    })
+  )
+)
+
 it.effect("records a stabilization read admitted before Exit but starts no phase-two action", () =>
   Effect.scoped(
     Effect.gen(function* () {
