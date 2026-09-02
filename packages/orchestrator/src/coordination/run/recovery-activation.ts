@@ -3116,7 +3116,7 @@ const unsettledExecutorCommandFor = (
  * Suspend intent. A later activation may reconsider the still-live constraint
  * once this projection is before its new read boundary.
  */
-const isExecutingCommandSettlementAfter =
+const isExecutingCommandBoundaryEvidenceAfter =
   (activationBaselinePosition: Option.Option<JournalPosition>) =>
   (candidate: ReturnType<typeof plannedAttemptExecutorEvidence>[number]): boolean =>
     [
@@ -3137,7 +3137,7 @@ const suspensionWasReconciledToExecutingDuringActiveRefresh = (
   // response or projection. The activation-local boundary still needs its
   // historical provenance after Safe or Terminal.
   const evidence = plannedAttemptExecutorEvidence(records, plannedAttempt).findLast(
-    isExecutingCommandSettlementAfter(activationBaselinePosition)
+    isExecutingCommandBoundaryEvidenceAfter(activationBaselinePosition)
   )
   if (
     evidence === undefined ||
