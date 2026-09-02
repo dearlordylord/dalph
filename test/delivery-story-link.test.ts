@@ -38,6 +38,7 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
 
   expect(documentedBeatIds).toEqual(deliveryStoryManifest.beats.map(({ beatId }) => beatId))
   expect(manifestBlock).toBe(renderDeliveryStoryManifest())
+  expect(deliveryStoryManifest.cassetteKey).toBe("authored:deliveryInvariantStory")
   expect(document).toContain(`maintained catalog key is \`${deliveryStoryManifest.cassetteKey}\``)
   expect(deliveryStoryManifest.cassetteAcceptanceTests.length).toBeGreaterThan(0)
   expect(deliveryStoryManifest.cassetteAcceptanceTests.every(acceptanceTestExists)).toBe(true)
@@ -53,4 +54,15 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
       expect(coverage.acceptanceTests.every(acceptanceTestExists)).toBe(true)
     }
   }
+  expect(
+    deliveryStoryManifest.beats
+      .slice(0, 13)
+      .map(({ beatId, coverage }) => ({ beatId, cassetteKeys: coverage.cassetteKeys, coverage: coverage._tag }))
+  ).toEqual(
+    Array.from({ length: 13 }, (_, index) => ({
+      beatId: `DS-${String(index + 1).padStart(2, "0")}`,
+      cassetteKeys: ["authored:autonomousExecutorDeliveryCapstone"],
+      coverage: "DemonstratedByMaintainedSlice"
+    }))
+  )
 })

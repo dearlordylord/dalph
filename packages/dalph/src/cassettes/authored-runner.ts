@@ -151,6 +151,7 @@ import {
 } from "./authored-cursor.js"
 import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
+import { makeAuthoredRuntimeObservationCaptureObserver } from "./authored-runtime-observation-capture.js"
 import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
 import {
   afterAuthoredExecutorReadiness,
@@ -382,6 +383,18 @@ export type AuthoredObservationMoment = AuthoredObservationMomentContext &
     | { readonly _tag: "DeliveryPublicationMoment"; readonly deliveryFrame: AuthoredDeliveryFrame }
     | { readonly _tag: "DeliveryRuntimeOwnersMoment" }
   )
+
+/** Internal test evidence for one production runtime-observer callback. Not part of the cassette public API. */
+export interface InternalAuthoredRuntimeEvaluationCapture {
+  readonly activationOrdinal: AuthoredRunActivationOrdinalType
+  readonly evaluation: DeliveryRuntimeEvaluation
+  readonly storyPosition: AuthoredStoryPosition
+}
+
+/** Internal cassette result used only by source-local causal assertions. */
+export interface InternalAuthoredScenarioCassetteRun extends AuthoredScenarioCassetteRun {
+  readonly runtimeEvaluationCaptures: ReadonlyArray<InternalAuthoredRuntimeEvaluationCapture>
+}
 
 export interface AuthoredDeliveryFrame {
   readonly activationOrdinal: AuthoredRunActivationOrdinalType
@@ -1542,10 +1555,10 @@ const handleAuthoredTaskClaimJournalEvent = (request: {
   })
 
 /** Decodes and drives one story through the ordinary production delivery program. */
-const runAuthoredScenarioCassetteWith = (request: {
-  readonly input: unknown
-  readonly options: AuthoredScenarioCassetteRunOptions
-}) => {
+const runAuthoredScenarioCassetteWith = (
+  request: { readonly input: unknown; readonly options: AuthoredScenarioCassetteRunOptions },
+  captureRuntimeEvaluation?: (capture: InternalAuthoredRuntimeEvaluationCapture) => Effect.Effect<void>
+) => {
   const { input, options } = request
   return Effect.scoped(
     // eslint-disable-next-line complexity -- One chronological adapter owns activation, crash, candidate, and terminal story boundaries.
@@ -1612,7 +1625,6 @@ const runAuthoredScenarioCassetteWith = (request: {
       )
       const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<AuthoredDeliveryPublication>>([])
       const deliveryPublicationSignals = yield* Queue.unbounded<AuthoredDeliveryPublication>()
-      const lastRuntimeOwners = yield* Ref.make<string | null>(null)
       const plannedSuspensionExecutorBoundaryGate = yield* Ref.make<
         Option.Option<{
           readonly attemptId: AttemptId
@@ -1666,20 +1678,26 @@ const runAuthoredScenarioCassetteWith = (request: {
             )
           )
       })
-      const runtimeObservationObserver = DeliveryRuntimeObservationObserver.of({
-        observe: ({ liveOwners }) =>
-          Effect.gen(function* () {
-            const identity = JSON.stringify(liveOwners)
-            const previous = yield* Ref.get(lastRuntimeOwners)
-            if (previous === identity) return
-            yield* Ref.set(lastRuntimeOwners, identity)
-            if (previous === null && liveOwners.length === 0) return
-            yield* appendObservation(
-              { _tag: "DeliveryRuntimeOwnersCaptured", liveOwners },
-              AuthoredStoryPosition.make(yield* cursor.storyPosition)
-            )
-          })
-      })
+      const runtimeObservationObserver = yield* makeAuthoredRuntimeObservationCaptureObserver(
+        {
+          captureOwners: (liveOwners, storyPosition) =>
+            appendObservation({ _tag: "DeliveryRuntimeOwnersCaptured", liveOwners }, storyPosition).pipe(Effect.asVoid),
+          correlateOwners: () =>
+            cursor.storyPosition.pipe(Effect.map((position) => AuthoredStoryPosition.make(position)))
+        },
+        captureRuntimeEvaluation === undefined
+          ? undefined
+          : {
+              captureEvaluation: (evaluation, correlation) => captureRuntimeEvaluation({ ...correlation, evaluation }),
+              correlateEvaluation: () =>
+                Effect.all({
+                  activationOrdinal: Ref.get(activeDeliveryActivation),
+                  storyPosition: cursor.storyPosition.pipe(
+                    Effect.map((position) => AuthoredStoryPosition.make(position))
+                  )
+                })
+            }
+      )
       const admittedContinuationChoiceApplied = yield* Deferred.make<void>()
       const operatorAttemptChoiceLifecycle = yield* makeAuthoredOperatorRequestLifecycle()
       const targetPromotionStory = cassette.story.some((item) => item._tag.startsWith("TargetPromotion"))
@@ -3325,3 +3343,19 @@ export const runAuthoredScenarioCassette: (
   input,
   options = {}
 ) => runAuthoredScenarioCassetteWith({ input, options })
+
+/** Internal source-test runner that retains every production runtime-observer evaluation callback. */
+export const runAuthoredScenarioCassetteWithRuntimeEvaluations: (
+  input: unknown,
+  options?: AuthoredScenarioCassetteRunOptions
+) => Effect.Effect<InternalAuthoredScenarioCassetteRun, AuthoredScenarioCassetteRunFailure, Crypto.Crypto> = (
+  input,
+  options = {}
+) =>
+  Effect.gen(function* () {
+    const runtimeEvaluationCaptures = yield* Ref.make<ReadonlyArray<InternalAuthoredRuntimeEvaluationCapture>>([])
+    const run = yield* runAuthoredScenarioCassetteWith({ input, options }, (capture) =>
+      Ref.update(runtimeEvaluationCaptures, (captures) => [...captures, capture])
+    )
+    return { ...run, runtimeEvaluationCaptures: yield* Ref.get(runtimeEvaluationCaptures) }
+  })

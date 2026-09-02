@@ -30,8 +30,11 @@ interface DeliveryStoryAcceptanceTest {
   readonly declaration: "it" | "it.effect" | "scenario"
   readonly name: string
   readonly sourceFile:
+    | "packages/dalph/src/application/production-reactivation.test.ts"
     | "packages/dalph/test/cassettes/scenario.test.ts"
     | "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
+    | "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts"
+    | "packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts"
     | "prototypes/reducer-lab/src/cassette-lab.smoke.ts"
 }
 
@@ -73,16 +76,48 @@ const capstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
   sourceFile: "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
 })
 
+const maintainedTest = (
+  sourceFile: Extract<
+    DeliveryStoryAcceptanceTest["sourceFile"],
+    | "packages/dalph/src/application/production-reactivation.test.ts"
+    | "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts"
+    | "packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts"
+  >,
+  name: string
+): DeliveryStoryAcceptanceTest => ({ declaration: "it.effect", name, sourceFile })
+
 const topologyTest = capstoneTest("consumes a staggered graph while restart-added X waits for recovered capacity")
 const restartTest = capstoneTest("preserves the double-diamond middle positions across coordinator restart")
-
-const spine = (
-  beatId: DeliveryStoryBeatId,
-  ...acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
-): DeliveryStoryBeatManifestEntry => ({
-  beatId,
-  coverage: { _tag: "DemonstratedBySpine", acceptanceTests, cassetteKeys: ["authored:deliveryInvariantStory"] }
-})
+const checkpointTest = capstoneTest("emits the exact DS01 through DS13 delivery checkpoint table")
+const choiceProjectionTest = capstoneTest(
+  "captures B's exact F1 F2 choices from each production runtime observation through Continue"
+)
+const identityTest = capstoneTest("retains exact Run attempt claim and resource identities across DS01 through DS13")
+const activeRefreshTest = capstoneTest(
+  "publishes B F2 through one active refresh and rereads G1 after Safe before D begins"
+)
+const timerFallbackOwnerTest = maintainedTest(
+  "packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts",
+  "rechecks after a lost notification when TestClock fires, with no Run read per timer"
+)
+const timerSpecificationRefreshTest = maintainedTest(
+  "packages/dalph/src/application/production-reactivation.test.ts",
+  "accepted B F2 refresh suspends only B1 while A1 and C1 continue executing"
+)
+const runtimeObservationTest = maintainedTest(
+  "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts",
+  "publishes current-first exact live-owner observations until standalone runtime quiescence"
+)
+const runtimeProjectionBridgeTest = scenarioTest(
+  "reuses one delivery relation evaluation for the authored publication frame"
+)
+const bContinuationTest = capstoneTest("records B's F1-to-F2 transition and one same-attempt Continue and Resume")
+const cSafeTest = capstoneTest("records exactly one C2 Safe ordinal before Continue B")
+const authorityGroupTest = capstoneTest(
+  "preserves the post-hint A D authority group without weakening the thirteen-beat story"
+)
+const admissionPriorityTest = capstoneTest("admits retained B ahead of unstarted E after A releases its position")
+const autonomousCapstoneKey = ["authored:autonomousExecutorDeliveryCapstone"] as const
 
 const slice = (
   beatId: DeliveryStoryBeatId,
@@ -103,7 +138,7 @@ const missing = (beatId: DeliveryStoryBeatId, reason: string): DeliveryStoryBeat
 
 /**
  * Machine-readable coverage for the prose story. The long spine proves the
- * double-diamond graph/restart path; one maintained story proves one narrower beat;
+ * double-diamond graph/restart path; one maintained story proves the narrower early beats;
  * unsupported combined behavior remains explicit instead of fabricated.
  */
 export const deliveryStoryManifest = {
@@ -111,42 +146,91 @@ export const deliveryStoryManifest = {
   cassetteAcceptanceTests: [topologyTest, restartTest],
   sourceDocument: "docs/DELIVERY-STORY.md" as const,
   beats: [
-    missing(
-      "DS-01",
-      "The maintained double diamond starts with only A eligible; the prose beat requires five independent eligible tasks."
-    ),
-    missing("DS-02", "No maintained run admits A, B, and C together yet."),
-    missing(
-      "DS-03",
-      "No maintained cassette represents Alice editing B and then observes the exact G0-to-G1 tracker revision change."
-    ),
-    missing(
+    slice("DS-01", autonomousCapstoneKey, checkpointTest, identityTest),
+    slice("DS-02", autonomousCapstoneKey, checkpointTest, identityTest),
+    slice("DS-03", autonomousCapstoneKey, checkpointTest, activeRefreshTest, authorityGroupTest),
+    slice(
       "DS-04",
-      "No named acceptance test proves B's changed graph/specification rereads, safe-suspension request, and retained position together."
+      autonomousCapstoneKey,
+      checkpointTest,
+      activeRefreshTest,
+      timerFallbackOwnerTest,
+      timerSpecificationRefreshTest,
+      authorityGroupTest
     ),
-    missing(
+    slice(
       "DS-05",
-      "The current changed-attempt choice supports Continue or Stop, not the prose beat's three choices including Restart."
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
     ),
-    missing(
+    slice(
       "DS-06",
-      "No maintained run admits D after B's changed-instruction suspension releases one of three held positions."
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
     ),
-    missing(
+    slice(
       "DS-07",
-      "No maintained catalog cassette lowers capacity from three to two while A, C, and D all remain held."
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
     ),
-    spine("DS-08", restartTest),
-    missing("DS-09", "The maintained double diamond recovers held B and C, not held A, C, and D plus retained B."),
-    missing("DS-10", "No maintained run closes C without success and then asks its exact executor to suspend."),
-    missing("DS-11", "No maintained run releases closed C's position while retaining its reversible lifecycle wait."),
-    missing(
-      "DS-12",
-      "No maintained run applies Continue to retained B while two other tasks consume all current capacity."
+    slice(
+      "DS-08",
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
     ),
-    missing(
+    slice(
+      "DS-09",
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
+    ),
+    slice(
+      "DS-10",
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
+    ),
+    slice(
+      "DS-11",
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      cSafeTest,
+      runtimeObservationTest,
+      runtimeProjectionBridgeTest
+    ),
+    slice("DS-12", autonomousCapstoneKey, checkpointTest, choiceProjectionTest, cSafeTest, bContinuationTest),
+    slice(
       "DS-13",
-      "No maintained run releases A's position after its accepted result and then admits already-owned B."
+      autonomousCapstoneKey,
+      checkpointTest,
+      choiceProjectionTest,
+      identityTest,
+      admissionPriorityTest,
+      bContinuationTest
     ),
     slice(
       "DS-14",

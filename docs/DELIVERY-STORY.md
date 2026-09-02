@@ -147,7 +147,7 @@ executable and no obligation is outstanding, so the coordinator returns
 | 5 | B safely suspended | G₁ | 3 | A C | B | B | D10 D12 D16 |
 | 6 | D admitted | G₁ | 3 | A C D | B | B | D6 D13 D15 |
 | 7 | capacity 3 → 2 | G₁ | 2 | A C D | B | B | **D13** |
-| 8 | coordinator loss; executor substrate remains observable | G₁ | 2 | — | — | — | D29 D30 |
+| 8 | coordinator loss; executor substrate remains observable | G₁ | 2 | A C D | B | B | D29 D30 |
 | 9 | restart | G₁ | 2 | A C D | B | B | **D31 D1 D3** |
 | 10 | C closed, asked to suspend | G₂ | 2 | A C D | B | B | D18 D24 |
 | 11 | C safely suspended | G₂ | 2 | A D | B C | B | D10 D12 D16 |
@@ -208,8 +208,26 @@ consistent with `INVARIANTS.md`: I9 is modelled by no tool in the study.
 
 The maintained catalog key is `authored:deliveryInvariantStory`. Its source
 manifest names this document and all 22 beat numbers; this document names the
-same key. Every demonstrated manifest row also names the exact registered
-acceptance test that checks its evidence; a catalog key by itself is not proof.
+same key. The separately maintained
+`authored:autonomousExecutorDeliveryCapstone` composes DS-01 through DS-13
+through the production workflow algebra and stops before A enters integration;
+it does not replace or rename the 22-beat historical spine. Its public output
+proves B's Safe boundary and retained resources at DS-05. The existing
+`DeliveryRuntimeResources.runtimeObservation` publishes the current ticket
+delivery whose exact `PlannedAttemptTaskSpecificationChangeConstraint` carries
+B's Run, attempt, F1/F2 fingerprints, and the three available resolutions.
+The authored frame is evaluated from the exact bundle captured at the real
+reactive-delivery publication seam through the same production
+`deliveryRuntime` composition; `reuses one delivery relation evaluation for
+the authored publication frame` proves that bridge rather than reconstructing
+the choice from Journal history.
+That constraint remains present through DS-11 and disappears after Alice's
+exact Continue is applied at DS-12. It is the read-only available-choice
+projection; `AttemptChoiceControl.read` remains only the lookup for an already-
+applied request. The story adds no query, authority, or persisted derived state.
+Every demonstrated
+manifest row also names the exact registered acceptance test that checks its
+evidence; a catalog key by itself is not proof.
 `keeps every delivery-story beat linked to maintained evidence or an explicit
 implementation gap` checks both directions, exact catalog keys, exact test
 declarations, and the byte-for-byte manifest block. `consumes a staggered graph
@@ -217,6 +235,65 @@ while restart-added X waits for recovered capacity` runs the executable graph sl
 through `runAuthoredScenarioCassette` and checks that it reaches its declared
 end.
 
+- `emits the exact DS01 through DS13 delivery checkpoint table` derives each
+  row after an independently identified public graph, report, capacity, death,
+  choice, or activation-return boundary, then checks the exact Run, attempt,
+  Base SHA, active claim, branch, worktree, executor, fingerprint, report
+  identity/ordinal, G0/G1/G2, capacity, held, retained, and accepted-result
+  values. Before B Safe and after Continue, public facts demonstrate that no
+  attempt is awaiting Alice; DS-05 through DS-11 carry B's exact current
+  specification-change constraint and its three resolutions. The
+  DS-08 row keeps the
+  last durable A/C/D/B delivery view while the same public death moment carries
+  an empty process-local owner view; DS-07/08 take capacity two from the exact
+  revision-two Journal event/reduced policy rather than from a future frame. It
+  neither reads a private cursor nor derives an `awaiting Alice` interval from
+  Journal positions.
+- `captures B's exact F1 F2 choices from each production runtime observation
+  through Continue` checks the actual runtime-observation evaluation's current
+  ticket-delivery constraint at every
+  DS-05–DS-11 frame: exact Run and attempt, planned F1, observed F2, and the
+  Continue, Restart, and Stop resolutions. It also checks that applying
+  Continue removes the constraint at DS-12 and DS-13.
+- `retains exact Run attempt claim and resource identities across DS01 through
+  DS13` checks one Run identity and the exact A0/B1/C2/D3/E4 Base SHA, active
+  claims, branches, worktrees, and executor locators; it also proves no claim
+  release or plan replacement through DS-05/09/11/13. At the exact DS-11
+  boundary, C still has its original plan, claim, branch, ready worktree, and
+  Safe report, with no worktree/branch cleanup or replacement record; this is
+  the direct reversible-wait resource state, not an inference from earlier
+  readiness alone.
+- `publishes B F2 through one active refresh and rereads G1 after Safe before D
+  begins` checks the actual four-hint burst leads to one activation, the
+  executing-work G1 read precedes F2 and B Suspend/Safe, unchanged A/C append no
+  command, report, or executor-state read, and exactly one post-quiescence G1
+  read occurs after Safe and before D begins.
+- `rechecks after a lost notification when TestClock fires, with no Run read
+  per timer` advances the maintained reactivation owner with `TestClock` and a
+  `Deferred`, proving the bounded timer creates the next activation after no
+  notification arrives. `accepted B F2 refresh suspends only B1 while A1 and C1
+  continue executing` separately proves that a timer-sourced production refresh
+  observes B's changed instructions, suspends B, and leaves A and C executing.
+  The two tests provide compositional lost-notification/timer and B/F2 evidence;
+  neither is represented as one combined execution, and the cassette does not
+  relabel authored hints as a substitute.
+- `records B's F1-to-F2 transition and one same-attempt Continue and Resume`,
+  `records exactly one C2 Safe ordinal before Continue B`, and `admits retained
+  B ahead of unstarted E after A releases its position` check the applied
+  Operator and executor chronology at beats 11–13 without claiming a DS-05
+  choice-list view. The command assertion counts exactly one durable Begin for
+  A, B, and C (and later D), exactly one B Resume, and no duplicate Begin or
+  Resume intent.
+- `observes reduced capacity revision two before the authored restart cut` and
+  `runs reconstructed ordinary activation through strict exact projections
+  before returning unsettled responsibility` check revision 1→2 with no
+  revision 3, then the graph/A/C/D-projection/graph restart sequence with no
+  durable Begin/Resume command, active-refresh authority chain, or hint at that
+  cut. The exact activation return precedes both later hints.
+- `preserves the post-hint A D authority group without weakening the
+  thirteen-beat story` checks both accepted authority groups join before their
+  strict B and C Suspend successors. The exhaustive 84,084- and 924-order
+  group tests remain the independent concurrency proof.
 - `consumes a staggered graph while restart-added X waits for recovered
   capacity` checks the exact twelve prerequisite edges,
   ordered eligible waves A, B+C, B+C+X after restart, D+X, E+F, H+I, G, and empty, plus the held
@@ -244,19 +321,19 @@ end.
 cassette|authored:deliveryInvariantStory
 cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#consumes a staggered graph while restart-added X waits for recovered capacity
 cassette-test|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#preserves the double-diamond middle positions across coordinator restart
-DS-01|NotImplemented|The maintained double diamond starts with only A eligible; the prose beat requires five independent eligible tasks.
-DS-02|NotImplemented|No maintained run admits A, B, and C together yet.
-DS-03|NotImplemented|No maintained cassette represents Alice editing B and then observes the exact G0-to-G1 tracker revision change.
-DS-04|NotImplemented|No named acceptance test proves B's changed graph/specification rereads, safe-suspension request, and retained position together.
-DS-05|NotImplemented|The current changed-attempt choice supports Continue or Stop, not the prose beat's three choices including Restart.
-DS-06|NotImplemented|No maintained run admits D after B's changed-instruction suspension releases one of three held positions.
-DS-07|NotImplemented|No maintained catalog cassette lowers capacity from three to two while A, C, and D all remain held.
-DS-08|DemonstratedBySpine|authored:deliveryInvariantStory|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#preserves the double-diamond middle positions across coordinator restart
-DS-09|NotImplemented|The maintained double diamond recovers held B and C, not held A, C, and D plus retained B.
-DS-10|NotImplemented|No maintained run closes C without success and then asks its exact executor to suspend.
-DS-11|NotImplemented|No maintained run releases closed C's position while retaining its reversible lifecycle wait.
-DS-12|NotImplemented|No maintained run applies Continue to retained B while two other tasks consume all current capacity.
-DS-13|NotImplemented|No maintained run releases A's position after its accepted result and then admits already-owned B.
+DS-01|DemonstratedByMaintainedSlice|authored:autonomousExecutorDeliveryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#emits the exact DS01 through DS13 delivery checkpoint table,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#retains exact Run attempt claim and resource identities across DS01 through DS13
+DS-02|DemonstratedByMaintainedSlice|authored:autonomousExecutorDeliveryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#emits the exact DS01 through DS13 delivery checkpoint table,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#retains exact Run attempt claim and resource identities across DS01 through DS13
+DS-03|DemonstratedByMaintainedSlice|authored:autonomousExecutorDeliveryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#emits the exact DS01 through DS13 delivery checkpoint table,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#publishes B F2 through one active refresh and rereads G1 after Safe before D begins,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#preserves the post-hint A D authority group without weakening the thirteen-beat story
+DS-04|DemonstratedByMaintainedSlice|authored:autonomousExecutorDeliveryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#emits the exact DS01 through DS13 delivery checkpoint table,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#publishes B F2 through one active refresh and rereads G1 after Safe before D begins,packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts#it.effect#rechecks after a lost notification when TestClock fires, with no Run read per timer,packages/dalph/src/application/production-reactivation.test.ts#it.effect#accepted B F2 refresh suspends only B1 while A1 and C1 continue executing,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#preserves the post-hint A D authority group without weakening the thirteen-beat story
+DS-05|DemonstratedByMaintainedSlice|authored:autonomousExecutorDeliveryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#emits the exact DS01 through DS13 delivery checkpoint table,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#captures B's exact F1 F2 choices from each production runtime observation through Continue,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#retains exact Run attempt claim and resource identities across DS01 through DS13,packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts#it.effect#publishes current-first exact live-owner observations until standalone runtime quiescence,packages/dalph/test/cassettes/scenario.test.ts#it.effect#reuses one delivery relation evaluation for the authored publication frame
+DS-06|DemonstratedByMaintainedSlice|authored:autonomousExecutorDeliveryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#emits the exact DS01 through DS13 delivery checkpoint table,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#captures B's exact F1 F2 choices from each production runtime observation through Continue,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#retains exact Run attempt claim and resource identities across DS01 through DS13,packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts#it.effect#publishes current-first exact live-owner observations until standalone runtime quiescence,packages/dalph/test/cassettes/scenario.test.ts#it.effect#reuses one delivery relation evaluation for the authored publication frame
+DS-07|DemonstratedByMaintainedSlice|authored:autonomousExecutorDeliveryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#emits the exact DS01 through DS13 delivery checkpoint table,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#captures B's exact F1 F2 choices from each production runtime observation through Continue,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#retains exact Run attempt claim and resource identities across DS01 through DS13,packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts#it.effect#publishes current-first exact live-owner observations until standalone runtime quiescence,packages/dalph/test/cassettes/scenario.test.ts#it.effect#reuses one delivery relation evaluation for the authored publication frame
+DS-08|DemonstratedByMaintainedSlice|authored:autonomousExecutorDeliveryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#emits the exact DS01 through DS13 delivery checkpoint table,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#captures B's exact F1 F2 choices from each production runtime observation through Continue,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#retains exact Run attempt claim and resource identities across DS01 through DS13,packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts#it.effect#publishes current-first exact live-owner observations until standalone runtime quiescence,packages/dalph/test/cassettes/scenario.test.ts#it.effect#reuses one delivery relation evaluation for the authored publication frame
+DS-09|DemonstratedByMaintainedSlice|authored:autonomousExecutorDeliveryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#emits the exact DS01 through DS13 delivery checkpoint table,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#captures B's exact F1 F2 choices from each production runtime observation through Continue,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#retains exact Run attempt claim and resource identities across DS01 through DS13,packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts#it.effect#publishes current-first exact live-owner observations until standalone runtime quiescence,packages/dalph/test/cassettes/scenario.test.ts#it.effect#reuses one delivery relation evaluation for the authored publication frame
+DS-10|DemonstratedByMaintainedSlice|authored:autonomousExecutorDeliveryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#emits the exact DS01 through DS13 delivery checkpoint table,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#captures B's exact F1 F2 choices from each production runtime observation through Continue,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#retains exact Run attempt claim and resource identities across DS01 through DS13,packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts#it.effect#publishes current-first exact live-owner observations until standalone runtime quiescence,packages/dalph/test/cassettes/scenario.test.ts#it.effect#reuses one delivery relation evaluation for the authored publication frame
+DS-11|DemonstratedByMaintainedSlice|authored:autonomousExecutorDeliveryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#emits the exact DS01 through DS13 delivery checkpoint table,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#captures B's exact F1 F2 choices from each production runtime observation through Continue,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#retains exact Run attempt claim and resource identities across DS01 through DS13,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#records exactly one C2 Safe ordinal before Continue B,packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts#it.effect#publishes current-first exact live-owner observations until standalone runtime quiescence,packages/dalph/test/cassettes/scenario.test.ts#it.effect#reuses one delivery relation evaluation for the authored publication frame
+DS-12|DemonstratedByMaintainedSlice|authored:autonomousExecutorDeliveryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#emits the exact DS01 through DS13 delivery checkpoint table,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#captures B's exact F1 F2 choices from each production runtime observation through Continue,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#records exactly one C2 Safe ordinal before Continue B,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#records B's F1-to-F2 transition and one same-attempt Continue and Resume
+DS-13|DemonstratedByMaintainedSlice|authored:autonomousExecutorDeliveryCapstone|packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#emits the exact DS01 through DS13 delivery checkpoint table,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#captures B's exact F1 F2 choices from each production runtime observation through Continue,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#retains exact Run attempt claim and resource identities across DS01 through DS13,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#admits retained B ahead of unstarted E after A releases its position,packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts#it.effect#records B's F1-to-F2 transition and one same-attempt Continue and Resume
 DS-14|DemonstratedByMaintainedSlice|authored:acceptedResultRestartsIntoIntegration|packages/dalph/test/cassettes/scenario.test.ts#it.effect#continues an accepted result after process death and crosses its integration cutoff once
 DS-15|NotImplemented|No named acceptance test proves the candidate's exact ordered expected-head and accepted-result parents for this beat.
 DS-16|NotImplemented|The maintained stale-head cassette detects H2 before compare-and-set; it does not send the beat's rejected exact-head offer.
