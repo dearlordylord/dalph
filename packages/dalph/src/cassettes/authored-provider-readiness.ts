@@ -1,6 +1,6 @@
 import { Deferred, Effect, Option, Schema } from "effect"
 import type { AttemptId, GitCommitSha, IntegrationTarget, PlannedAttemptExecutorReport, TaskId } from "@dalph/contracts"
-import { IntegratorSessionCorrelation, type IntegratorCandidateText } from "@dalph/orchestrator"
+import { IntegratorSessionCorrelation, type IntegratorCandidateText, type JournalRecord } from "@dalph/orchestrator"
 import type { AuthoredScenarioCassette } from "./authored-domain.js"
 
 type ReadinessRelation = NonNullable<AuthoredScenarioCassette["controlledProviderReadiness"]>[number]
@@ -13,6 +13,24 @@ type ExecutorReadinessSource = {
   readonly expectedTargetHead: GitCommitSha
   readonly integrationTarget: IntegrationTarget
 }
+
+/** Keeps the accepted Journal append interruptible, then settles its cassette handoff atomically after acknowledgement. */
+export const appendAuthoredJournalEvent = <A, E, R, E2, R2>(request: {
+  readonly afterAcceptedAppend: Effect.Effect<void, E2, R2>
+  readonly append: Effect.Effect<A, E, R>
+  readonly event: JournalRecord["event"]
+  readonly readiness: AuthoredProviderReadiness
+}): Effect.Effect<A, E | E2, R | R2> =>
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const accepted = yield* restore(request.append)
+      if (request.event._tag === "PlannedAttemptExecutorWorkReported") {
+        yield* releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(request.readiness, request.event.report)
+      }
+      yield* request.afterAcceptedAppend
+      return accepted
+    })
+  )
 
 const correlationEquivalence = Schema.toEquivalence(IntegratorSessionCorrelation)
 const targetMatches = (left: ReadinessTarget, right: ReadinessTarget) =>

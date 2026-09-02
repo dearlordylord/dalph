@@ -12,12 +12,22 @@ import {
   RunId,
   TaskId
 } from "@dalph/contracts"
-import { IntegratorCandidateText, IntegratorSessionCorrelation } from "@dalph/orchestrator"
+import {
+  IntegratorCandidateText,
+  IntegratorSessionCorrelation,
+  JournalStore,
+  memoryJournalTestLayer,
+  plannedAttemptExecutorWorkReportedRecordKey,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  workflowJournalEventVersion
+} from "@dalph/orchestrator"
 import { AuthoredScenarioCassette } from "../../src/cassettes/authored-domain.js"
 import { controlledExecutorLayer } from "../../src/cassettes/authored-adapters.js"
 import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
 import {
   afterAuthoredExecutorReadiness,
+  appendAuthoredJournalEvent,
   makeAuthoredExecutorReadiness,
   makeAuthoredProviderReadiness,
   releaseAuthoredIntegratorReadinessFromAcceptedWorkReport
@@ -232,20 +242,35 @@ it.effect("keeps Integrator pending after passive pull until the exact report ap
     expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
     expect(Option.isSome(yield* Stream.runHead(observation.changes))).toBe(true)
     expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
-    const appendAcknowledged = yield* Deferred.make<void>()
-    const publication = yield* Deferred.await(appendAcknowledged).pipe(
-      Effect.andThen(
-        releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(
-          readiness,
-          acceptedReport(relation.source.attemptId, runId, relation.source.acceptedCommit)
-        )
-      ),
-      Effect.forkScoped({ startImmediately: true })
-    )
+    const appendRelease = yield* Deferred.make<void>()
+    const report = acceptedReport(relation.source.attemptId, runId, relation.source.acceptedCommit)
+    const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
+    const event = PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal,
+      report,
+      version: workflowJournalEventVersion
+    })
+    const publication = yield* Effect.gen(function* () {
+      const journal = yield* JournalStore
+      return yield* appendAuthoredJournalEvent({
+        afterAcceptedAppend: Effect.void,
+        append: Deferred.await(appendRelease).pipe(
+          Effect.andThen(
+            journal.append(
+              runId,
+              plannedAttemptExecutorWorkReportedRecordKey(report.correlation.attemptId, ordinal),
+              event
+            )
+          )
+        ),
+        event,
+        readiness
+      })
+    }).pipe(Effect.provide(memoryJournalTestLayer), Effect.forkScoped({ startImmediately: true }))
     expect(publication.pollUnsafe()).toBeUndefined()
     expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
-    yield* Deferred.succeed(appendAcknowledged, undefined)
-    expect(yield* Fiber.join(publication)).toBe(true)
+    yield* Deferred.succeed(appendRelease, undefined)
+    yield* Fiber.join(publication)
     expect(Option.isSome(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
     expect(
       yield* releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(
@@ -258,35 +283,93 @@ it.effect("keeps Integrator pending after passive pull until the exact report ap
   })
 )
 
-it.effect("does not release Integrator readiness when report publication fails or names a foreign report", () =>
-  Effect.gen(function* () {
-    const relation = deliveryInvariantStoryAuthoredCassette.controlledIntegratorReadiness?.[0]
-    if (relation === undefined)
-      return yield* Effect.die("delivery invariant story has no Integrator readiness relation")
-    const readiness = yield* makeAuthoredProviderReadiness([], [relation])
-    const exact = acceptedReport(
-      relation.source.attemptId,
-      RunId.make("failed-publication"),
-      relation.source.acceptedCommit
-    )
-    const failed = yield* Effect.fail("append failed").pipe(
-      Effect.andThen(releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(readiness, exact)),
-      Effect.exit
-    )
-    expect(Exit.isFailure(failed)).toBe(true)
-    expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
-    expect(
-      yield* releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(
-        readiness,
-        acceptedReport(
-          AttemptId.make("attempt:foreign:0"),
-          RunId.make("foreign-report"),
-          relation.source.acceptedCommit
-        )
+it.effect(
+  "does not release Integrator readiness when the report append fails, is interrupted, or carries a foreign report",
+  () =>
+    Effect.gen(function* () {
+      const relation = deliveryInvariantStoryAuthoredCassette.controlledIntegratorReadiness?.[0]
+      if (relation === undefined)
+        return yield* Effect.die("delivery invariant story has no Integrator readiness relation")
+      const readiness = yield* makeAuthoredProviderReadiness([], [relation])
+      const runId = RunId.make("failed-publication")
+      const exact = acceptedReport(relation.source.attemptId, runId, relation.source.acceptedCommit)
+      const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
+      const event = PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal,
+        report: exact,
+        version: workflowJournalEventVersion
+      })
+      const failed = yield* appendAuthoredJournalEvent({
+        afterAcceptedAppend: Effect.void,
+        append: Effect.fail("append failed"),
+        event,
+        readiness
+      }).pipe(Effect.exit)
+      expect(Exit.isFailure(failed)).toBe(true)
+      expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
+
+      const appendStarted = yield* Deferred.make<void>()
+      const interrupted = yield* appendAuthoredJournalEvent({
+        afterAcceptedAppend: Effect.void,
+        append: Deferred.succeed(appendStarted, undefined).pipe(Effect.andThen(Effect.never)),
+        event,
+        readiness
+      }).pipe(Effect.forkScoped({ startImmediately: true }))
+      yield* Deferred.await(appendStarted)
+      yield* Fiber.interrupt(interrupted)
+      expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
+
+      const foreign = acceptedReport(
+        AttemptId.make("attempt:foreign:0"),
+        RunId.make("foreign-report"),
+        relation.source.acceptedCommit
       )
-    ).toBe(false)
-    expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
-  })
+      const foreignOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
+      const foreignEvent = PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: foreignOrdinal,
+        report: foreign,
+        version: workflowJournalEventVersion
+      })
+      yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        yield* appendAuthoredJournalEvent({
+          afterAcceptedAppend: Effect.void,
+          append: journal.append(
+            foreign.correlation.runId,
+            plannedAttemptExecutorWorkReportedRecordKey(foreign.correlation.attemptId, foreignOrdinal),
+            foreignEvent
+          ),
+          event: foreignEvent,
+          readiness
+        })
+      }).pipe(Effect.provide(memoryJournalTestLayer))
+      expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
+
+      const unaccepted = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation: { attemptId: relation.source.attemptId, runId: RunId.make("unaccepted-report") },
+        result: { _tag: "Completed" }
+      })
+      const unacceptedOrdinal = PlannedAttemptExecutorReportOrdinal.make(3)
+      const unacceptedEvent = PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: unacceptedOrdinal,
+        report: unaccepted,
+        version: workflowJournalEventVersion
+      })
+      yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        yield* appendAuthoredJournalEvent({
+          afterAcceptedAppend: Effect.void,
+          append: journal.append(
+            unaccepted.correlation.runId,
+            plannedAttemptExecutorWorkReportedRecordKey(unaccepted.correlation.attemptId, unacceptedOrdinal),
+            unacceptedEvent
+          ),
+          event: unacceptedEvent,
+          readiness
+        })
+      }).pipe(Effect.provide(memoryJournalTestLayer))
+      expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
+    })
 )
 
 it("authors C lineage preflight before X acceptance and C integration after it", () => {

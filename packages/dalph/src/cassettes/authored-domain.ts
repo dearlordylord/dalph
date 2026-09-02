@@ -250,11 +250,16 @@ export const authoredConcurrentInteractionClaimKey = (
     TaskWorkSpecificationReadReturned: ({ taskId }) => ({ _tag: "TaskWorkSpecificationReadReturned" as const, taskId })
   })
 
+const concurrentInteractionHasAtMostOneActivationReturn = Schema.makeFilter(
+  (members: ReadonlyArray<AuthoredConcurrentInteractionNode>) => {
+    return members.filter(({ interaction }) => interaction._tag === "CoordinatorActivationReturned").length > 1
+      ? "a concurrent interaction group may contain at most one coordinator activation return"
+      : undefined
+  }
+)
+
 const concurrentInteractionClaimKeysAreUnique = Schema.makeFilter(
   (members: ReadonlyArray<AuthoredConcurrentInteractionNode>) => {
-    if (members.filter(({ interaction }) => interaction._tag === "CoordinatorActivationReturned").length > 1) {
-      return "a concurrent interaction group may contain at most one coordinator activation return"
-    }
     const keys = members.map(({ interaction }) => authoredConcurrentInteractionClaimKey(interaction))
     return keys.some((key, index) => keys.slice(0, index).some((prior) => Equal.equals(prior, key)))
       ? "each concurrent interaction claim key must be unique"
@@ -327,6 +332,7 @@ const concurrentInteractionGraphIsValid = Schema.makeFilter(
  * It owns no production concurrency authority.
  */
 const AuthoredConcurrentInteractionMembers = Schema.NonEmptyArray(AuthoredConcurrentInteractionNode).check(
+  concurrentInteractionHasAtMostOneActivationReturn,
   concurrentInteractionClaimKeysAreUnique,
   concurrentInteractionGraphIsValid
 )

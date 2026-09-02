@@ -154,9 +154,9 @@ import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
 import {
   afterAuthoredExecutorReadiness,
+  appendAuthoredJournalEvent,
   makeAuthoredExecutorReadiness,
-  makeAuthoredProviderReadiness,
-  releaseAuthoredIntegratorReadinessFromAcceptedWorkReport
+  makeAuthoredProviderReadiness
 } from "./authored-provider-readiness.js"
 import { makeAuthoredOperatorRequestLifecycle } from "./authored-operator-request-lifecycle.js"
 
@@ -1880,26 +1880,21 @@ const runAuthoredScenarioCassetteWith = (request: {
           JournalStore.of({
             ...sharedJournal,
             append: (requestedRunId, key, event) =>
-              sharedJournal.append(requestedRunId, key, event).pipe(
-                Effect.tap(() =>
-                  Effect.gen(function* () {
-                    if (event._tag === "PlannedAttemptExecutorWorkReported") {
-                      yield* releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(
-                        controlledProviderReadiness,
-                        event.report
-                      )
-                    }
-                    const taskClaimHandled = yield* handleAuthoredTaskClaimJournalEvent({
-                      acquisitionTaskIds,
-                      authoredInteractionFailure,
-                      cursor,
-                      event
-                    })
-                    if (taskClaimHandled) return
-                    yield* pauseAfterJournalAppend(key, event)
+              appendAuthoredJournalEvent({
+                afterAcceptedAppend: Effect.gen(function* () {
+                  const taskClaimHandled = yield* handleAuthoredTaskClaimJournalEvent({
+                    acquisitionTaskIds,
+                    authoredInteractionFailure,
+                    cursor,
+                    event
                   })
-                )
-              )
+                  if (taskClaimHandled) return
+                  yield* pauseAfterJournalAppend(key, event)
+                }),
+                append: sharedJournal.append(requestedRunId, key, event),
+                event,
+                readiness: controlledProviderReadiness
+              })
           })
         )
       )
