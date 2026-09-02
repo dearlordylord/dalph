@@ -10,6 +10,8 @@ import {
 import {
   type AuthoredCassetteDecision as CassetteDecision,
   type AuthoredCausalSelection,
+  AuthoredConcurrentGraphReadCause,
+  type AuthoredConcurrentGraphReadCause as ConcurrentGraphReadCause,
   type AuthoredConcurrentInteractionClaimKey,
   type AuthoredConcurrentInteractionMember,
   type AuthoredConcurrentInteractionNode,
@@ -64,14 +66,14 @@ class AuthoredConcurrentReadBatchFailure extends Schema.TaggedError<AuthoredConc
 
 /** Raw operation identity observed at the real WorkflowTrace selection seam. */
 export interface AuthoredOperationCausalContext {
-  readonly graphReadCause?: "AttemptRestartAuthorityCheck" | "PostQuiescenceReconfirmation" | undefined
+  readonly graphReadCause?: ConcurrentGraphReadCause | undefined
   readonly operationId: OperationId
   readonly predecessorOperationIds: ReadonlyArray<OperationId>
 }
 
 /** Narrows the two graph causes supported by the closed concurrent-group language. */
 export const authoredConcurrentGraphReadCause = (cause: string): AuthoredOperationCausalContext["graphReadCause"] =>
-  cause === "AttemptRestartAuthorityCheck" || cause === "PostQuiescenceReconfirmation" ? cause : undefined
+  Option.getOrUndefined(Schema.decodeUnknownOption(AuthoredConcurrentGraphReadCause)(cause))
 
 /**
  * A cassette-only lifecycle control. It is raised as an Effect defect so the
@@ -618,6 +620,10 @@ export interface StoryCursor {
     Option.Option<typeof AuthoredCassetteStoryItem.cases.CassettePublishesCurrentTrackerNotification.Type>
   >
   readonly consumeAttemptChoice: Effect.Effect<Option.Option<AttemptChoiceItem>>
+  /** Claims one operator request and installs its process owner before the cursor advances. */
+  readonly consumeAttemptChoiceClaimed: <A, E, R>(
+    onClaim: (item: AttemptChoiceItem) => Effect.Effect<A, E, R>
+  ) => Effect.Effect<Option.Option<{ readonly claim: A; readonly item: AttemptChoiceItem }>, E, R>
   readonly consumeDalphSelection: Effect.Effect<typeof AuthoredCassetteStoryItem.cases.DalphSelects.Type, CursorFailure>
   /** Concurrent operations wait for their exact authored selection instead of consuming a sibling selection. */
   readonly consumeDalphSelectionFor: (
@@ -2246,6 +2252,28 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
           item?._tag === "SetTaskExecutionCapacity"
       )
   )
+  const consumeAttemptChoiceClaimed: StoryCursor["consumeAttemptChoiceClaimed"] = Effect.fn(
+    "AuthoredCassette.consumeAttemptChoiceClaimed"
+  )(function* (onClaim) {
+    if (yield* awaitControlBoundary()) return yield* consumeAttemptChoiceClaimed(onClaim)
+    const claimed = yield* transition.withPermits(1)(
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          const index = yield* SubscriptionRef.get(position)
+          const item = story[index]
+          if (!isAuthoredAttemptChoiceItem(item)) return { _tag: "Mismatch" as const, index, item }
+          const decoded = yield* Schema.decodeUnknownEffect(AuthoredAttemptChoiceItem)(item).pipe(Effect.orDie)
+          const claim = yield* onClaim(decoded)
+          yield* SubscriptionRef.set(position, index + 1)
+          return { _tag: "Claimed" as const, claim, index, item: decoded }
+        })
+      )
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    yield* options.onOccurrence?.({ item: claimed.item, storyPosition: claimed.index + 1 }) ?? Effect.void
+    yield* announceTerminalAssertions
+    return Option.some({ claim: claimed.claim, item: claimed.item })
+  })
   const consumeAttemptChoice = Effect.gen(function* () {
     const claimed = yield* claimNext(isAuthoredAttemptChoiceItem, { throughTransition: true })
     if (claimed._tag === "Mismatch") return Option.none()
@@ -2763,6 +2791,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeCompletionTaskRequestLookupReturned,
     consumeCompletionTaskRequestReturned,
     consumeAttemptChoice,
+    consumeAttemptChoiceClaimed,
     consumeAttemptChoiceRace,
     consumeCapacityChange,
     settleCapacityChange,

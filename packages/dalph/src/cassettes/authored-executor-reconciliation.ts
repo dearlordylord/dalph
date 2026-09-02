@@ -22,7 +22,6 @@ interface ControlledExecutorCallbacks {
     request: ControlledExecutorRequest
   ) => Effect.Effect<void>
   readonly prepareReport?: (report: PlannedAttemptExecutorReport) => Effect.Effect<PlannedAttemptExecutorReport>
-  readonly onPassiveExecutorLifecycleChange?: (report: PlannedAttemptExecutorReport) => Effect.Effect<void>
   readonly reportMismatch?: (failure: AuthoredCassetteInteractionMismatch) => Effect.Effect<void>
   readonly reserveAcceptedSafeReport?: (item: AuthoredSafelySuspendedExecutorReportItem) => Effect.Effect<void>
 }

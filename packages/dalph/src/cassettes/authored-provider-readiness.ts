@@ -47,8 +47,8 @@ export const afterAuthoredExecutorReadiness = <A, E, R>(
   call: Effect.Effect<A, E, R>
 ) => readiness.awaitTarget(target).pipe(Effect.andThen(call))
 
-/** Releases Integrator readiness only from the exact accepted passive lifecycle change consumed by the harness. */
-export const releaseAuthoredIntegratorReadinessFromPassiveLifecycleChange = (
+/** Releases Integrator readiness only after the ordinary journal accepted this exact work report. */
+export const releaseAuthoredIntegratorReadinessFromAcceptedWorkReport = (
   readiness: AuthoredProviderReadiness,
   report: PlannedAttemptExecutorReport
 ): Effect.Effect<boolean> =>

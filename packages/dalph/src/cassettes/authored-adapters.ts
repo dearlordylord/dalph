@@ -430,7 +430,6 @@ export const controlledExecutorLayer = (config: ControlledExecutorConfig) => {
               Stream.mapEffect((item) =>
                 Effect.gen(function* () {
                   const report = yield* prepareReport(executorReport(item, runId))
-                  yield* config.onPassiveExecutorLifecycleChange?.(report) ?? Effect.void
                   yield* Ref.update(
                     survivingReports,
                     (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])

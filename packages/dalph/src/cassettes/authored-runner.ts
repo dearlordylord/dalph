@@ -143,6 +143,7 @@ import {
 import {
   AuthoredCassetteInteractionMismatch,
   AuthoredCoordinatorProcessDies,
+  authoredConcurrentGraphReadCause,
   makeStoryCursor,
   type AuthoredSafelySuspendedExecutorReportItem,
   type AuthoredStoryOccurrenceObserved,
@@ -155,7 +156,7 @@ import {
   afterAuthoredExecutorReadiness,
   makeAuthoredExecutorReadiness,
   makeAuthoredProviderReadiness,
-  releaseAuthoredIntegratorReadinessFromPassiveLifecycleChange
+  releaseAuthoredIntegratorReadinessFromAcceptedWorkReport
 } from "./authored-provider-readiness.js"
 import { makeAuthoredOperatorRequestLifecycle } from "./authored-operator-request-lifecycle.js"
 
@@ -1882,6 +1883,12 @@ const runAuthoredScenarioCassetteWith = (request: {
               sharedJournal.append(requestedRunId, key, event).pipe(
                 Effect.tap(() =>
                   Effect.gen(function* () {
+                    if (event._tag === "PlannedAttemptExecutorWorkReported") {
+                      yield* releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(
+                        controlledProviderReadiness,
+                        event.report
+                      )
+                    }
                     const taskClaimHandled = yield* handleAuthoredTaskClaimJournalEvent({
                       acquisitionTaskIds,
                       authoredInteractionFailure,
@@ -2115,11 +2122,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               ? {
                   readTrackerGraph: (operation) =>
                     consumeControlledTrackerGraph(cursor, operation.target, {
-                      graphReadCause:
-                        operation.cause._tag === "AttemptRestartAuthorityCheck" ||
-                        operation.cause._tag === "PostQuiescenceReconfirmation"
-                          ? operation.cause._tag
-                          : undefined,
+                      graphReadCause: authoredConcurrentGraphReadCause(operation.cause._tag),
                       operationId: operation.operationId,
                       predecessorOperationIds: operation.predecessorOperationIds
                     }),
@@ -2248,10 +2251,6 @@ const runAuthoredScenarioCassetteWith = (request: {
         cursor,
         runId,
         beforeExecutorReport: applyNextControlDirection,
-        onPassiveExecutorLifecycleChange: (report) =>
-          releaseAuthoredIntegratorReadinessFromPassiveLifecycleChange(controlledProviderReadiness, report).pipe(
-            Effect.asVoid
-          ),
         survivingReports: survivingExecutorReports,
         unresolvedLostResponses: unresolvedLostExecutorResponses,
         prepareReport: prepareExecutorReport,
@@ -2480,35 +2479,43 @@ const runAuthoredScenarioCassetteWith = (request: {
                 yield* Deferred.succeed(admittedContinuationChoiceApplied, undefined)
               }
             })
-            const driveAttemptChoice = Effect.gen(function* () {
-              const authored = yield* cursor.consumeAttemptChoice
-              /* v8 ignore start -- @preserve The exhaustive direct-item dispatcher invokes this driver only for the current attempt-choice tag. */
-              if (Option.isNone(authored)) return
-              /* v8 ignore stop -- @preserve */
-              const item = authored.value
-              const requestId = AttemptChoiceRequestId.make({ nonce: item.requestNonce, runId })
-              yield* operatorAttemptChoiceLifecycle.run(
-                JSON.stringify(requestId),
-                Effect.gen(function* () {
-                  const plannedAttempt = yield* requirePlannedAttempt(item)
-                  const result = yield* applyAttemptChoice(
-                    plannedAttempt,
-                    item.observedTaskRevision,
-                    attemptChoiceDirectionFor(item),
-                    item.requestNonce
+            const driveAttemptChoice = Effect.uninterruptibleMask((restore) =>
+              Effect.gen(function* () {
+                const authored = yield* cursor.consumeAttemptChoiceClaimed((item) =>
+                  operatorAttemptChoiceLifecycle.claim(
+                    JSON.stringify(AttemptChoiceRequestId.make({ nonce: item.requestNonce, runId }))
                   )
-                  if (item.expected._tag === "Rejected") {
-                    if (!attemptChoiceRejectionMatches(item, result)) {
-                      return yield* Effect.die(
-                        new Error(`authored attempt-choice rejection mismatch for ${item.requestNonce}`)
+                )
+                /* v8 ignore start -- @preserve The exhaustive direct-item dispatcher invokes this driver only for the current attempt-choice tag. */
+                if (Option.isNone(authored)) return
+                /* v8 ignore stop -- @preserve */
+                const { claim, item } = authored.value
+                const requestId = AttemptChoiceRequestId.make({ nonce: item.requestNonce, runId })
+                yield* operatorAttemptChoiceLifecycle.runClaimed(
+                  claim,
+                  restore(
+                    Effect.gen(function* () {
+                      const plannedAttempt = yield* requirePlannedAttempt(item)
+                      const result = yield* applyAttemptChoice(
+                        plannedAttempt,
+                        item.observedTaskRevision,
+                        attemptChoiceDirectionFor(item),
+                        item.requestNonce
                       )
-                    }
-                    return
-                  }
-                  yield* confirmAppliedAttemptChoice(item, requestId, result)
-                })
-              )
-            }).pipe(Effect.orDie)
+                      if (item.expected._tag === "Rejected") {
+                        if (!attemptChoiceRejectionMatches(item, result)) {
+                          return yield* Effect.die(
+                            new Error(`authored attempt-choice rejection mismatch for ${item.requestNonce}`)
+                          )
+                        }
+                        return
+                      }
+                      yield* confirmAppliedAttemptChoice(item, requestId, result)
+                    })
+                  )
+                )
+              })
+            ).pipe(Effect.orDie)
             const driveAttemptChoiceRace = Effect.gen(function* () {
               const authored = yield* cursor.consumeAttemptChoiceRace
               /* v8 ignore start -- @preserve The tag-selected driver runs only while the race item is current. */

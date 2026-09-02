@@ -1,6 +1,6 @@
 import { Deferred, Effect, Exit, Option, Ref } from "effect"
 
-interface InFlightRequest {
+interface AuthoredOperatorRequestClaim {
   readonly completion: Deferred.Deferred<Exit.Exit<void, unknown>>
   readonly identity: string
 }
@@ -8,14 +8,18 @@ interface InFlightRequest {
 /** Test-only ownership of one external operator request that may outlive a coordinator activation. */
 type AuthoredOperatorRequestLifecycle = {
   readonly awaitInFlightAtBoundary: () => Effect.Effect<void>
+  readonly claim: (identity: string) => Effect.Effect<AuthoredOperatorRequestClaim>
   readonly pollInFlight: () => Effect.Effect<Option.Option<string>>
-  readonly run: <A, E, R>(identity: string, request: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+  readonly runClaimed: <A, E, R>(
+    claim: AuthoredOperatorRequestClaim,
+    request: Effect.Effect<A, E, R>
+  ) => Effect.Effect<A, E, R>
 }
 
 /** Keeps request completion process-scoped while snapshotting only work already active at a callback return. */
 export const makeAuthoredOperatorRequestLifecycle = Effect.fn("AuthoredCassette.makeOperatorRequestLifecycle")(
   function* (): Effect.fn.Return<AuthoredOperatorRequestLifecycle> {
-    const active = yield* Ref.make<Option.Option<InFlightRequest>>(Option.none())
+    const active = yield* Ref.make<Option.Option<AuthoredOperatorRequestClaim>>(Option.none())
 
     return {
       awaitInFlightAtBoundary: () =>
@@ -35,31 +39,36 @@ export const makeAuthoredOperatorRequestLifecycle = Effect.fn("AuthoredCassette.
             })
           )
         ),
-      pollInFlight: () => Ref.get(active).pipe(Effect.map(Option.map(({ identity }) => identity))),
-      run: (identity, request) =>
+      claim: (identity) =>
         Effect.gen(function* () {
-          const completion = yield* Deferred.make<Exit.Exit<void, unknown>>()
-          const token = { completion, identity }
+          const token = { completion: yield* Deferred.make<Exit.Exit<void, unknown>>(), identity }
           const installed = yield* Ref.modify(active, (current) =>
             Option.isNone(current) ? [true, Option.some(token)] : [false, current]
           )
           if (!installed) return yield* Effect.die(`authored operator request ${identity} overlaps another request`)
-
-          return yield* request.pipe(
-            Effect.onExit((exit) =>
-              Deferred.succeed(
-                completion,
-                Exit.map(exit, () => undefined)
-              ).pipe(
-                Effect.andThen(
-                  Ref.update(active, (current) =>
-                    Option.isSome(current) && current.value === token ? Option.none() : current
-                  )
+          return token
+        }),
+      pollInFlight: () => Ref.get(active).pipe(Effect.map(Option.map(({ identity }) => identity))),
+      runClaimed: (token, request) =>
+        Ref.get(active).pipe(
+          Effect.flatMap((current) =>
+            Option.isSome(current) && current.value === token
+              ? request
+              : Effect.die(`authored operator request ${token.identity} does not own the active claim`)
+          ),
+          Effect.onExit((exit) =>
+            Deferred.succeed(
+              token.completion,
+              Exit.map(exit, () => undefined)
+            ).pipe(
+              Effect.andThen(
+                Ref.update(active, (current) =>
+                  Option.isSome(current) && current.value === token ? Option.none() : current
                 )
               )
             )
           )
-        })
+        )
     }
   }
 )

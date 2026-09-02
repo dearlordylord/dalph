@@ -170,6 +170,13 @@ export type AuthoredPlannedAttemptExecutorReport = typeof AuthoredPlannedAttempt
 const AuthoredConcurrentInteractionRole = Schema.NonEmptyString.pipe(Schema.brand("AuthoredConcurrentInteractionRole"))
 type AuthoredConcurrentInteractionRole = typeof AuthoredConcurrentInteractionRole.Type
 
+/** The closed set of tracker-graph read causes that carry concurrent authored identity. */
+export const AuthoredConcurrentGraphReadCause = Schema.Literals([
+  "AttemptRestartAuthorityCheck",
+  "PostQuiescenceReconfirmation"
+])
+export type AuthoredConcurrentGraphReadCause = typeof AuthoredConcurrentGraphReadCause.Type
+
 export const AuthoredConcurrentInteractionMember = Schema.TaggedUnion({
   CoordinatorActivationReturned: {
     decision: Schema.TaggedUnion({
@@ -190,7 +197,7 @@ export const AuthoredConcurrentInteractionMember = Schema.TaggedUnion({
   },
   /** A graph result paired to its real operation cause and, when visible, its authored selection role. */
   TrackerGraphReadReturned: {
-    cause: Schema.Literals(["AttemptRestartAuthorityCheck", "PostQuiescenceReconfirmation"]),
+    cause: AuthoredConcurrentGraphReadCause,
     graph: AuthoredTrackerGraph,
     selectionRole: Schema.optionalKey(AuthoredConcurrentInteractionRole)
   },
@@ -225,10 +232,7 @@ export type AuthoredConcurrentInteractionClaimKey =
   | { readonly _tag: "PlannedAttemptExecutorWorkReported"; readonly attemptId: AttemptId; readonly request: "Begin" }
   | { readonly _tag: "TaskClaimCurrentReadReturned"; readonly taskId: TaskId }
   | { readonly _tag: "TaskWorkSpecificationReadReturned"; readonly taskId: TaskId }
-  | {
-      readonly _tag: "TrackerGraphReadReturned"
-      readonly cause: "AttemptRestartAuthorityCheck" | "PostQuiescenceReconfirmation"
-    }
+  | { readonly _tag: "TrackerGraphReadReturned"; readonly cause: AuthoredConcurrentGraphReadCause }
 
 export const authoredConcurrentInteractionClaimKey = (
   member: AuthoredConcurrentInteractionMember
@@ -248,6 +252,9 @@ export const authoredConcurrentInteractionClaimKey = (
 
 const concurrentInteractionClaimKeysAreUnique = Schema.makeFilter(
   (members: ReadonlyArray<AuthoredConcurrentInteractionNode>) => {
+    if (members.filter(({ interaction }) => interaction._tag === "CoordinatorActivationReturned").length > 1) {
+      return "a concurrent interaction group may contain at most one coordinator activation return"
+    }
     const keys = members.map(({ interaction }) => authoredConcurrentInteractionClaimKey(interaction))
     return keys.some((key, index) => keys.slice(0, index).some((prior) => Equal.equals(prior, key)))
       ? "each concurrent interaction claim key must be unique"

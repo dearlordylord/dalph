@@ -2,8 +2,13 @@ import { it } from "@effect/vitest"
 import { Cause, Deferred, Effect, Exit, Fiber, Option, Schema } from "effect"
 import { describe, expect } from "vitest"
 import { AttemptId, TaskId } from "@dalph/contracts"
+import { OperationId, TrackerTarget } from "@dalph/orchestrator"
 import { AuthoredCassetteStoryItem } from "../../src/cassettes/authored-domain.js"
-import { makeStoryCursor, type StoryCursor } from "../../src/cassettes/authored-cursor.js"
+import {
+  authoredConcurrentGraphReadCause,
+  makeStoryCursor,
+  type StoryCursor
+} from "../../src/cassettes/authored-cursor.js"
 
 const aAttemptId = AttemptId.make("attempt:A:0")
 const bAttemptId = AttemptId.make("attempt:B:1")
@@ -54,6 +59,50 @@ const activationReturn = AuthoredCassetteStoryItem.cases.CoordinatorActivationRe
   decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
 })
 const story = [concurrentGroup, activationReturn]
+
+it("rejects two activation returns even when their decisions differ", () => {
+  expect(() =>
+    Schema.decodeUnknownSync(AuthoredCassetteStoryItem)({
+      _tag: "ConcurrentInteractionGroup",
+      members: [
+        concurrentNode("return-active", [], {
+          _tag: "CoordinatorActivationReturned",
+          decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
+        }),
+        concurrentNode("return-terminal", [], {
+          _tag: "CoordinatorActivationReturned",
+          decision: { _tag: "RunMayTerminate" }
+        })
+      ]
+    })
+  ).toThrow(/at most one coordinator activation return/)
+})
+
+it.effect("rejects an unsupported concurrent graph cause without advancing the group", () =>
+  Effect.gen(function* () {
+    const group = yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem)({
+      _tag: "ConcurrentInteractionGroup",
+      members: [
+        concurrentNode("restart-graph", [], {
+          _tag: "TrackerGraphReadReturned",
+          cause: "AttemptRestartAuthorityCheck",
+          graph: { revision: "revision-1", tasks: [] }
+        })
+      ]
+    })
+    const cursor = yield* makeStoryCursor([group])
+    const failure = yield* cursor
+      .consumeTrackerGraphFor(yield* Schema.decodeUnknownEffect(TrackerTarget)("cassette-target"), {
+        graphReadCause: authoredConcurrentGraphReadCause("UnsupportedGraphCause"),
+        operationId: OperationId.make("unsupported-graph-cause"),
+        predecessorOperationIds: []
+      })
+      .pipe(Effect.flip)
+
+    expect(failure._tag).toBe("AuthoredCassetteInteractionMismatch")
+    expect(yield* cursor.storyPosition).toBe(0)
+  })
+)
 
 const taskA = TaskId.make("A")
 const taskB = TaskId.make("B")

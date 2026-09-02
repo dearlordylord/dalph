@@ -1,7 +1,10 @@
 import { it } from "@effect/vitest"
-import { Effect, Fiber, Option, Ref, Schema, Stream } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import {
+  EvidenceDigest,
+  EvidenceReference,
+  AttemptId,
   GitCommitSha,
   IntegrationTargetRef,
   PlannedAttemptExecutorLifecycleObservation,
@@ -17,9 +20,21 @@ import {
   afterAuthoredExecutorReadiness,
   makeAuthoredExecutorReadiness,
   makeAuthoredProviderReadiness,
-  releaseAuthoredIntegratorReadinessFromPassiveLifecycleChange
+  releaseAuthoredIntegratorReadinessFromAcceptedWorkReport
 } from "../../src/cassettes/authored-provider-readiness.js"
 import { deliveryInvariantStoryAuthoredCassette } from "../../src/cassettes/catalog.js"
+
+const acceptedReport = (attemptId: AttemptId, runId: RunId, commit: GitCommitSha) =>
+  PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+    correlation: { attemptId, runId },
+    result: {
+      _tag: "Accepted",
+      acceptedResult: {
+        commit,
+        evidenceManifest: EvidenceReference.make({ byteLength: 1, digest: EvidenceDigest.make("1".repeat(64)) })
+      }
+    }
+  })
 
 it.effect("releases only the exact controlled provider source without using time or cursor polling", () =>
   Effect.gen(function* () {
@@ -150,7 +165,7 @@ it.effect("releases the exact C Integrator request only after X's accepted lifec
     yield* readiness.awaitIntegratorTarget(unrelated)
 
     expect(
-      yield* releaseAuthoredIntegratorReadinessFromPassiveLifecycleChange(
+      yield* releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(
         readiness,
         PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
           correlation: { attemptId: relation.source.attemptId, runId: RunId.make("unrelated-executing-projection") }
@@ -158,7 +173,7 @@ it.effect("releases the exact C Integrator request only after X's accepted lifec
       )
     ).toBe(false)
     expect(
-      yield* releaseAuthoredIntegratorReadinessFromPassiveLifecycleChange(
+      yield* releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(
         readiness,
         PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation: { attemptId: relation.source.attemptId, runId: RunId.make("unaccepted-passive-change") },
@@ -181,7 +196,7 @@ it.effect("releases the exact C Integrator request only after X's accepted lifec
   })
 )
 
-it.effect("releases Integrator readiness at passive consumption, never at an identical pull projection", () =>
+it.effect("keeps Integrator pending after passive pull until the exact report append is accepted", () =>
   Effect.gen(function* () {
     const relation = deliveryInvariantStoryAuthoredCassette.controlledIntegratorReadiness?.[0]
     const passive = deliveryInvariantStoryAuthoredCassette.story.find(
@@ -206,8 +221,6 @@ it.effect("releases Integrator readiness at passive consumption, never at an ide
         controlledExecutorLayer({
           beforeExecutorReport: () => Effect.void,
           cursor,
-          onPassiveExecutorLifecycleChange: (report) =>
-            releaseAuthoredIntegratorReadinessFromPassiveLifecycleChange(readiness, report).pipe(Effect.asVoid),
           runId,
           survivingReports: yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()),
           unresolvedLostResponses: yield* Ref.make<ReadonlySet<string>>(new Set())
@@ -218,9 +231,61 @@ it.effect("releases Integrator readiness at passive consumption, never at an ide
     expect(observation.current).toMatchObject({ _tag: "Exact", report: { _tag: "ExecutorWorkTerminal" } })
     expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
     expect(Option.isSome(yield* Stream.runHead(observation.changes))).toBe(true)
+    expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
+    const appendAcknowledged = yield* Deferred.make<void>()
+    const publication = yield* Deferred.await(appendAcknowledged).pipe(
+      Effect.andThen(
+        releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(
+          readiness,
+          acceptedReport(relation.source.attemptId, runId, relation.source.acceptedCommit)
+        )
+      ),
+      Effect.forkScoped({ startImmediately: true })
+    )
+    expect(publication.pollUnsafe()).toBeUndefined()
+    expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
+    yield* Deferred.succeed(appendAcknowledged, undefined)
+    expect(yield* Fiber.join(publication)).toBe(true)
     expect(Option.isSome(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
+    expect(
+      yield* releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(
+        readiness,
+        acceptedReport(relation.source.attemptId, runId, relation.source.acceptedCommit)
+      )
+    ).toBe(false)
     expect(yield* cursor.storyPosition).toBe(2)
     yield* readiness.assertAllReleased()
+  })
+)
+
+it.effect("does not release Integrator readiness when report publication fails or names a foreign report", () =>
+  Effect.gen(function* () {
+    const relation = deliveryInvariantStoryAuthoredCassette.controlledIntegratorReadiness?.[0]
+    if (relation === undefined)
+      return yield* Effect.die("delivery invariant story has no Integrator readiness relation")
+    const readiness = yield* makeAuthoredProviderReadiness([], [relation])
+    const exact = acceptedReport(
+      relation.source.attemptId,
+      RunId.make("failed-publication"),
+      relation.source.acceptedCommit
+    )
+    const failed = yield* Effect.fail("append failed").pipe(
+      Effect.andThen(releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(readiness, exact)),
+      Effect.exit
+    )
+    expect(Exit.isFailure(failed)).toBe(true)
+    expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
+    expect(
+      yield* releaseAuthoredIntegratorReadinessFromAcceptedWorkReport(
+        readiness,
+        acceptedReport(
+          AttemptId.make("attempt:foreign:0"),
+          RunId.make("foreign-report"),
+          relation.source.acceptedCommit
+        )
+      )
+    ).toBe(false)
+    expect(Option.isNone(yield* readiness.pollIntegratorTarget(relation.target.correlation))).toBe(true)
   })
 )
 
