@@ -70,11 +70,209 @@ const bF1 = expectedAttempts[1].taskRevision
 const bF2 =
   "tr1.eyJib2R5IjoiQWxpY2UgY2hhbmdlZCBkZWxpdmVyeS1zdG9yeSB0YXNrIEIuIiwidGl0bGUiOiJJbXBsZW1lbnQgY2hhbmdlZCBCIn0"
 
+type ObservationMoment = AuthoredScenarioCassetteRun["observationMoments"][number]
+type StoryMoment = Extract<ObservationMoment, { readonly _tag: "AuthoredStoryOccurrenceMoment" }>
+type PublicationMoment = Extract<ObservationMoment, { readonly _tag: "DeliveryPublicationMoment" }>
+
+const storyMomentAfter = (
+  run: AuthoredScenarioCassetteRun,
+  label: string,
+  afterCaptureOrder: number,
+  predicate: (occurrence: StoryMoment["occurrence"]) => boolean
+): StoryMoment =>
+  run.observationMoments.find(
+    (moment): moment is StoryMoment =>
+      moment._tag === "AuthoredStoryOccurrenceMoment" &&
+      moment.captureOrder > afterCaptureOrder &&
+      predicate(moment.occurrence)
+  ) ?? expect.fail(`missing ${label} public occurrence`)
+
+const publicationAfter = (
+  run: AuthoredScenarioCassetteRun,
+  label: string,
+  boundary: Pick<ObservationMoment, "captureOrder">,
+  before: Pick<ObservationMoment, "captureOrder"> | null = null
+): PublicationMoment =>
+  run.observationMoments.find(
+    (moment): moment is PublicationMoment =>
+      moment._tag === "DeliveryPublicationMoment" &&
+      moment.captureOrder > boundary.captureOrder &&
+      (before === null || moment.captureOrder < before.captureOrder)
+  ) ?? expect.fail(`missing ${label} public delivery publication`)
+
 const exactFrame = (
   run: AuthoredScenarioCassetteRun,
   label: string,
   predicate: (frame: AuthoredDeliveryFrame) => boolean
 ): AuthoredDeliveryFrame => run.deliveryFrames.find(predicate) ?? expect.fail(`missing ${label} delivery frame`)
+
+const causalCapstoneCheckpoints = (run: AuthoredScenarioCassetteRun) => {
+  const ds01Boundary = storyMomentAfter(run, "DS-01 graph result", 0, ({ _tag }) => _tag === "TrackerGraphReadReturned")
+  const ds02Boundary = storyMomentAfter(
+    run,
+    "DS-02 initial executor group",
+    ds01Boundary.captureOrder,
+    (occurrence) =>
+      occurrence._tag === "ConcurrentInteractionGroup" &&
+      ["X_A", "X_B", "X_C"].every((role) => occurrence.members.some((member) => member.role === role))
+  )
+  const initialHints = storyMomentAfter(
+    run,
+    "initial reactivation hints",
+    ds02Boundary.captureOrder,
+    ({ _tag }) => _tag === "CassetteOffersRunReactivationHints"
+  )
+  const ds03Boundary = storyMomentAfter(
+    run,
+    "DS-03 G1 graph result",
+    initialHints.captureOrder,
+    ({ _tag }) => _tag === "TrackerGraphReadReturned"
+  )
+  const ds04Boundary = storyMomentAfter(
+    run,
+    "DS-04 B Suspend result",
+    ds03Boundary.captureOrder,
+    (occurrence) =>
+      occurrence._tag === "PlannedAttemptExecutorWorkReported" &&
+      occurrence.request === "Suspend" &&
+      occurrence.report.attemptId === "attempt:B:1"
+  )
+  const ds05Boundary = storyMomentAfter(
+    run,
+    "DS-05 B Safe publication",
+    ds04Boundary.captureOrder,
+    (occurrence) =>
+      occurrence._tag === "PlannedAttemptExecutorPassiveLifecycleChanged" &&
+      occurrence.report._tag === "ExecutorWorkSafelySuspended" &&
+      occurrence.report.attemptId === "attempt:B:1"
+  )
+  const ds06Boundary = storyMomentAfter(
+    run,
+    "DS-06 D Begin result",
+    ds05Boundary.captureOrder,
+    (occurrence) =>
+      occurrence._tag === "PlannedAttemptExecutorWorkReported" &&
+      occurrence.request === "Begin" &&
+      occurrence.report.attemptId === "attempt:D:3"
+  )
+  const ds07Boundary = storyMomentAfter(
+    run,
+    "DS-07 capacity application",
+    ds06Boundary.captureOrder,
+    ({ _tag }) => _tag === "SetTaskExecutionCapacity"
+  )
+  const ds08Boundary = storyMomentAfter(
+    run,
+    "DS-08 coordinator process death",
+    ds07Boundary.captureOrder,
+    ({ _tag }) => _tag === "CoordinatorProcessDies"
+  )
+  const ds09Boundary = storyMomentAfter(
+    run,
+    "DS-09 reconstructed activation return",
+    ds08Boundary.captureOrder,
+    ({ _tag }) => _tag === "CoordinatorActivationReturned"
+  )
+  const restartHints = storyMomentAfter(
+    run,
+    "post-restart reactivation hints",
+    ds09Boundary.captureOrder,
+    ({ _tag }) => _tag === "CassetteOffersRunReactivationHints"
+  )
+  const ds10Boundary = storyMomentAfter(
+    run,
+    "DS-10 G2 graph result",
+    restartHints.captureOrder,
+    ({ _tag }) => _tag === "TrackerGraphReadReturned"
+  )
+  const ds11Boundary = storyMomentAfter(
+    run,
+    "DS-11 C Safe result",
+    ds10Boundary.captureOrder,
+    (occurrence) =>
+      occurrence._tag === "PlannedAttemptExecutorWorkReported" &&
+      occurrence.request === "Suspend" &&
+      occurrence.report._tag === "ExecutorWorkSafelySuspended" &&
+      occurrence.report.attemptId === "attempt:C:2"
+  )
+  const ds12Boundary = storyMomentAfter(
+    run,
+    "DS-12 Continue B application",
+    ds11Boundary.captureOrder,
+    ({ _tag }) => _tag === "OperatorContinuesAttempt"
+  )
+  const ds13Boundary = storyMomentAfter(
+    run,
+    "DS-13 B Resume result",
+    ds12Boundary.captureOrder,
+    (occurrence) =>
+      occurrence._tag === "PlannedAttemptExecutorWorkReported" &&
+      occurrence.request === "Resume" &&
+      occurrence.report.attemptId === "attempt:B:1"
+  )
+  const boundaryMoments = [
+    ds01Boundary,
+    ds02Boundary,
+    ds03Boundary,
+    ds04Boundary,
+    ds05Boundary,
+    ds06Boundary,
+    ds07Boundary,
+    ds08Boundary,
+    ds09Boundary,
+    ds10Boundary,
+    ds11Boundary,
+    ds12Boundary,
+    ds13Boundary
+  ]
+
+  expect(boundaryMoments.map(({ captureOrder }) => captureOrder)).toEqual(
+    boundaryMoments.map(({ captureOrder }) => captureOrder).toSorted((left, right) => left - right)
+  )
+  expect(new Set(boundaryMoments.map(({ captureOrder }) => captureOrder)).size).toBe(boundaryMoments.length)
+  if (
+    ds07Boundary.deliveryFrame === null ||
+    ds08Boundary.deliveryFrame === null ||
+    ds09Boundary.deliveryFrame === null
+  ) {
+    return expect.fail("capacity, process death, and reconstructed return must carry their last public delivery views")
+  }
+
+  return {
+    boundaries: {
+      ds01: ds01Boundary,
+      ds02: ds02Boundary,
+      ds03: ds03Boundary,
+      ds04: ds04Boundary,
+      ds05: ds05Boundary,
+      ds06: ds06Boundary,
+      ds07: ds07Boundary,
+      ds08: ds08Boundary,
+      ds09: ds09Boundary,
+      ds10: ds10Boundary,
+      ds11: ds11Boundary,
+      ds12: ds12Boundary,
+      ds13: ds13Boundary,
+      initialHints,
+      restartHints
+    },
+    frames: {
+      ds01: publicationAfter(run, "DS-01", ds01Boundary, ds02Boundary).deliveryFrame,
+      ds02: publicationAfter(run, "DS-02", ds02Boundary, ds03Boundary).deliveryFrame,
+      ds03: publicationAfter(run, "DS-03", ds03Boundary, ds04Boundary).deliveryFrame,
+      ds04: publicationAfter(run, "DS-04", ds04Boundary, ds05Boundary).deliveryFrame,
+      ds05: publicationAfter(run, "DS-05", ds05Boundary, ds06Boundary).deliveryFrame,
+      ds06: publicationAfter(run, "DS-06", ds06Boundary, ds07Boundary).deliveryFrame,
+      ds07: ds07Boundary.deliveryFrame,
+      ds08: ds08Boundary.deliveryFrame,
+      ds09: ds09Boundary.deliveryFrame,
+      ds10: publicationAfter(run, "DS-10", ds10Boundary, ds11Boundary).deliveryFrame,
+      ds11: publicationAfter(run, "DS-11", ds11Boundary, ds12Boundary).deliveryFrame,
+      ds12: publicationAfter(run, "DS-12", ds12Boundary, ds13Boundary).deliveryFrame,
+      ds13: publicationAfter(run, "DS-13", ds13Boundary).deliveryFrame
+    }
+  }
+}
 
 const publicOccurrences = (run: AuthoredScenarioCassetteRun) =>
   run.observationMoments.flatMap((moment) =>
@@ -114,14 +312,7 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
   Effect.gen(function* () {
     const run = yield* capstoneRun
     const records = run.records
-    const recordOf = (label: string, predicate: (record: (typeof records)[number]) => boolean) =>
-      records.find(predicate) ?? expect.fail(`missing ${label} journal record`)
-    const frameAfter = (
-      label: string,
-      position: number,
-      predicate: (frame: AuthoredDeliveryFrame) => boolean
-    ): AuthoredDeliveryFrame =>
-      exactFrame(run, label, (frame) => frame.acceptedAt !== null && frame.acceptedAt >= position && predicate(frame))
+    const { boundaries, frames } = causalCapstoneCheckpoints(run)
     const attemptById = new Map(
       records.flatMap(({ event }) =>
         event._tag === "TaskAttemptPlanned"
@@ -143,287 +334,65 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
             : []
         )
       )
-    const bSafe = recordOf(
-      "B Safe",
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkReported" &&
-        event.report.correlation.attemptId === "attempt:B:1" &&
-        event.report._tag === "ExecutorWorkSafelySuspended"
-    )
-    const continueB = recordOf(
-      "Continue B",
-      ({ event }) =>
-        event._tag === "AttemptChoiceApplied" &&
-        event.choice === "ContinueExistingAttempt" &&
-        event.subject.plannedAttempt.attemptId === "attempt:B:1"
-    )
-    const awaitingAlice = (frame: AuthoredDeliveryFrame): string =>
-      frame.acceptedAt !== null && bSafe.position <= frame.acceptedAt && frame.acceptedAt < continueB.position
-        ? "B"
-        : "—"
-    const aliveCheckpoint = (beat: string, frame: AuthoredDeliveryFrame) => ({
+    const checkpoint = (beat: string, frame: AuthoredDeliveryFrame, capacity: number = frame.capacity) => ({
       accepted: acceptedOutcomes(frame),
-      awaitingAlice: awaitingAlice(frame),
       beat,
-      capacity: frame.capacity,
+      capacity,
       graph: establishedRevision(frame),
       held: heldTasks(frame),
-      process: "Present",
       retained: retainedTasks(frame)
     })
-    const exactHeld =
-      (expected: string) =>
-      (frame: AuthoredDeliveryFrame): boolean =>
-        heldTasks(frame) === expected
-    const g0 = (frame: AuthoredDeliveryFrame): boolean => establishedRevision(frame) === "delivery-story-G0"
-    const g1 = (frame: AuthoredDeliveryFrame): boolean => establishedRevision(frame) === "delivery-story-G1"
-    const g2 = (frame: AuthoredDeliveryFrame): boolean => establishedRevision(frame) === "delivery-story-G2"
-
-    const ds01 = exactFrame(run, "DS-01", (frame) => g0(frame) && heldTasks(frame) === "—")
-    const ds02 = exactFrame(run, "DS-02", (frame) => g0(frame) && heldTasks(frame) === "A+B+C")
-    const ds03 = exactFrame(run, "DS-03", (frame) => g1(frame) && heldTasks(frame) === "A+B+C")
-    const bSuspend = recordOf(
-      "B Suspend intent",
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorCommandIntended" &&
-        event.command === "Suspend" &&
-        event.plannedAttempt.attemptId === "attempt:B:1"
-    )
-    const ds04 = frameAfter("DS-04", bSuspend.position, (frame) => g1(frame) && exactHeld("A+B+C")(frame))
-    const ds05 = frameAfter("DS-05", bSafe.position, (frame) => g1(frame) && exactHeld("A+C")(frame))
-    const dExecuting = recordOf(
-      "D Executing",
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkReported" &&
-        event.report.correlation.attemptId === "attempt:D:3" &&
-        event.report._tag === "ExecutorWorkExecuting"
-    )
-    const ds06 = frameAfter("DS-06", dExecuting.position, (frame) => g1(frame) && exactHeld("A+C+D")(frame))
-    const capacityChanged = recordOf("capacity revision two", ({ event }) => event._tag === "TaskWorkCapacityChanged")
-    const ds07 = frameAfter(
-      "DS-07",
-      capacityChanged.position,
-      (frame) => g1(frame) && frame.capacity === 2 && exactHeld("A+C+D")(frame)
-    )
-    const occurrences = publicOccurrences(run)
-    const deathAt = occurrences.findIndex(({ _tag }) => _tag === "CoordinatorProcessDies")
-    if (deathAt < 0) return expect.fail("missing the public coordinator-process-death occurrence")
-    const deathMoment = run.observationMoments.find(
-      (moment) => moment._tag === "AuthoredStoryOccurrenceMoment" && moment.occurrence._tag === "CoordinatorProcessDies"
-    )
-    if (deathMoment?.deliveryFrame === null || deathMoment === undefined) {
-      return expect.fail("process death must retain its last public durable delivery view")
-    }
-    const restartActivation = Math.min(
-      ...run.deliveryFrames
-        .filter(({ activationOrdinal }) => activationOrdinal > ds07.activationOrdinal)
-        .map(({ activationOrdinal }) => activationOrdinal)
-    )
-    const ds09 = exactFrame(
-      run,
-      "DS-09",
-      (frame) =>
-        frame.activationOrdinal === restartActivation && g1(frame) && frame.capacity === 2 && exactHeld("A+C+D")(frame)
-    )
-    const cSuspend = recordOf(
-      "C Suspend intent",
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorCommandIntended" &&
-        event.command === "Suspend" &&
-        event.plannedAttempt.attemptId === "attempt:C:2"
-    )
-    const ds10 = frameAfter("DS-10", cSuspend.position, (frame) => g2(frame) && exactHeld("A+C+D")(frame))
-    const cSafe = recordOf(
-      "C Safe",
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkReported" &&
-        event.report.correlation.attemptId === "attempt:C:2" &&
-        event.report._tag === "ExecutorWorkSafelySuspended"
-    )
-    const ds11 = frameAfter("DS-11", cSafe.position, (frame) => g2(frame) && exactHeld("A+D")(frame))
-    const ds12 = frameAfter("DS-12", continueB.position, (frame) => g2(frame) && exactHeld("A+D")(frame))
-    const aAccepted = recordOf(
-      "A Accepted",
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkReported" &&
-        event.report.correlation.attemptId === "attempt:A:0" &&
-        event.report._tag === "ExecutorWorkTerminal" &&
-        event.report.result._tag === "Accepted"
-    )
-    const bResumed = recordOf(
-      "B resumed Executing",
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorWorkReported" &&
-        event.report.correlation.attemptId === "attempt:B:1" &&
-        event.report._tag === "ExecutorWorkExecuting" &&
-        event.ordinal === 3
-    )
-    const ds13 = frameAfter(
-      "DS-13",
-      Math.max(aAccepted.position, bResumed.position),
-      (frame) => g2(frame) && exactHeld("B+D")(frame)
-    )
-    if (ds01.graph._tag !== "Established") return expect.fail("DS-01 must have an established graph")
-    expect(ds01.graph.tasks.map(({ id, prerequisiteIds }) => ({ id, prerequisiteIds }))).toEqual(
+    if (frames.ds01.graph._tag !== "Established") return expect.fail("DS-01 must have an established graph")
+    expect(frames.ds01.graph.tasks.map(({ id, prerequisiteIds }) => ({ id, prerequisiteIds }))).toEqual(
       ["A", "B", "C", "D", "E"].map((id) => ({ id, prerequisiteIds: [] }))
     )
-    expect(ds01.frontier.map(({ standing, taskId }) => ({ standing, taskId }))).toEqual(
+    expect(frames.ds01.frontier.map(({ standing, taskId }) => ({ standing, taskId }))).toEqual(
       ["A", "B", "C", "D", "E"].map((taskId) => ({ standing: "Eligible", taskId }))
     )
+    expect(boundaries.ds08.occurrence._tag).toBe("CoordinatorProcessDies")
+    expect(boundaries.ds08.liveOwners).toEqual([])
+    const capacityChange = records.find(({ event }) => event._tag === "TaskWorkCapacityChanged")
+    expect(capacityChange?.event).toMatchObject({
+      _tag: "TaskWorkCapacityChanged",
+      capacity: 2,
+      previousRevision: 1,
+      revision: 2
+    })
     const checkpointTable = [
-      aliveCheckpoint("DS-01", ds01),
-      aliveCheckpoint("DS-02", ds02),
-      aliveCheckpoint("DS-03", ds03),
-      aliveCheckpoint("DS-04", ds04),
-      aliveCheckpoint("DS-05", ds05),
-      aliveCheckpoint("DS-06", ds06),
-      aliveCheckpoint("DS-07", ds07),
-      {
-        accepted: "—",
-        awaitingAlice: "—",
-        beat: "DS-08",
-        capacity: deathMoment.deliveryFrame.capacity,
-        graph: establishedRevision(deathMoment.deliveryFrame),
-        held: "—",
-        process: "Absent",
-        retained: "—"
-      },
-      aliveCheckpoint("DS-09", ds09),
-      aliveCheckpoint("DS-10", ds10),
-      aliveCheckpoint("DS-11", ds11),
-      aliveCheckpoint("DS-12", ds12),
-      aliveCheckpoint("DS-13", ds13)
+      checkpoint("DS-01", frames.ds01),
+      checkpoint("DS-02", frames.ds02),
+      checkpoint("DS-03", frames.ds03),
+      checkpoint("DS-04", frames.ds04),
+      checkpoint("DS-05", frames.ds05),
+      checkpoint("DS-06", frames.ds06),
+      checkpoint("DS-07", frames.ds07, 2),
+      checkpoint("DS-08", frames.ds08, 2),
+      checkpoint("DS-09", frames.ds09),
+      checkpoint("DS-10", frames.ds10),
+      checkpoint("DS-11", frames.ds11),
+      checkpoint("DS-12", frames.ds12),
+      checkpoint("DS-13", frames.ds13)
     ]
 
     expect(checkpointTable).toEqual([
-      {
-        accepted: "—",
-        awaitingAlice: "—",
-        beat: "DS-01",
-        capacity: 3,
-        graph: "delivery-story-G0",
-        held: "—",
-        process: "Present",
-        retained: "—"
-      },
-      {
-        accepted: "—",
-        awaitingAlice: "—",
-        beat: "DS-02",
-        capacity: 3,
-        graph: "delivery-story-G0",
-        held: "A+B+C",
-        process: "Present",
-        retained: "—"
-      },
-      {
-        accepted: "—",
-        awaitingAlice: "—",
-        beat: "DS-03",
-        capacity: 3,
-        graph: "delivery-story-G1",
-        held: "A+B+C",
-        process: "Present",
-        retained: "—"
-      },
-      {
-        accepted: "—",
-        awaitingAlice: "—",
-        beat: "DS-04",
-        capacity: 3,
-        graph: "delivery-story-G1",
-        held: "A+B+C",
-        process: "Present",
-        retained: "—"
-      },
-      {
-        accepted: "—",
-        awaitingAlice: "B",
-        beat: "DS-05",
-        capacity: 3,
-        graph: "delivery-story-G1",
-        held: "A+C",
-        process: "Present",
-        retained: "B"
-      },
-      {
-        accepted: "—",
-        awaitingAlice: "B",
-        beat: "DS-06",
-        capacity: 3,
-        graph: "delivery-story-G1",
-        held: "A+C+D",
-        process: "Present",
-        retained: "B"
-      },
-      {
-        accepted: "—",
-        awaitingAlice: "B",
-        beat: "DS-07",
-        capacity: 2,
-        graph: "delivery-story-G1",
-        held: "A+C+D",
-        process: "Present",
-        retained: "B"
-      },
-      {
-        accepted: "—",
-        awaitingAlice: "—",
-        beat: "DS-08",
-        capacity: 2,
-        graph: "delivery-story-G1",
-        held: "—",
-        process: "Absent",
-        retained: "—"
-      },
-      {
-        accepted: "—",
-        awaitingAlice: "B",
-        beat: "DS-09",
-        capacity: 2,
-        graph: "delivery-story-G1",
-        held: "A+C+D",
-        process: "Present",
-        retained: "B"
-      },
-      {
-        accepted: "—",
-        awaitingAlice: "B",
-        beat: "DS-10",
-        capacity: 2,
-        graph: "delivery-story-G2",
-        held: "A+C+D",
-        process: "Present",
-        retained: "B"
-      },
-      {
-        accepted: "—",
-        awaitingAlice: "B",
-        beat: "DS-11",
-        capacity: 2,
-        graph: "delivery-story-G2",
-        held: "A+D",
-        process: "Present",
-        retained: "B+C"
-      },
-      {
-        accepted: "—",
-        awaitingAlice: "—",
-        beat: "DS-12",
-        capacity: 2,
-        graph: "delivery-story-G2",
-        held: "A+D",
-        process: "Present",
-        retained: "B+C"
-      },
+      { accepted: "—", beat: "DS-01", capacity: 3, graph: "delivery-story-G0", held: "—", retained: "—" },
+      { accepted: "—", beat: "DS-02", capacity: 3, graph: "delivery-story-G0", held: "A+B+C", retained: "—" },
+      { accepted: "—", beat: "DS-03", capacity: 3, graph: "delivery-story-G1", held: "A+B+C", retained: "—" },
+      { accepted: "—", beat: "DS-04", capacity: 3, graph: "delivery-story-G1", held: "A+B+C", retained: "—" },
+      { accepted: "—", beat: "DS-05", capacity: 3, graph: "delivery-story-G1", held: "A+C", retained: "B" },
+      { accepted: "—", beat: "DS-06", capacity: 3, graph: "delivery-story-G1", held: "A+C+D", retained: "B" },
+      { accepted: "—", beat: "DS-07", capacity: 2, graph: "delivery-story-G1", held: "A+C+D", retained: "B" },
+      { accepted: "—", beat: "DS-08", capacity: 2, graph: "delivery-story-G1", held: "A+C+D", retained: "B" },
+      { accepted: "—", beat: "DS-09", capacity: 2, graph: "delivery-story-G1", held: "A+C+D", retained: "B" },
+      { accepted: "—", beat: "DS-10", capacity: 2, graph: "delivery-story-G2", held: "A+C+D", retained: "B" },
+      { accepted: "—", beat: "DS-11", capacity: 2, graph: "delivery-story-G2", held: "A+D", retained: "B+C" },
+      { accepted: "—", beat: "DS-12", capacity: 2, graph: "delivery-story-G2", held: "A+D", retained: "B+C" },
       {
         accepted: "A@aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        awaitingAlice: "—",
         beat: "DS-13",
         capacity: 2,
         graph: "delivery-story-G2",
         held: "B+D",
-        process: "Present",
         retained: "A+C"
       }
     ])
@@ -433,6 +402,7 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
 it.effect("retains exact Run attempt claim and resource identities across DS01 through DS13", () =>
   Effect.gen(function* () {
     const run = yield* capstoneRun
+    const { frames } = causalCapstoneCheckpoints(run)
     const plannedAttempts = run.records
       .flatMap(({ event }) => (event._tag === "TaskAttemptPlanned" ? [event.operation.plannedAttempt] : []))
       .toSorted((left, right) => left.taskId.localeCompare(right.taskId))
@@ -450,6 +420,24 @@ it.effect("retains exact Run attempt claim and resource identities across DS01 t
       ...executorCorrelationRunIds,
       ...run.deliveryFrames.flatMap(({ heldPositions }) => heldPositions.map(({ runId }) => runId))
     ]
+    const reconciliationIntents = run.records.flatMap(({ event, position }) =>
+      event._tag === "TaskWorktreeReconciliationIntended" ? [{ operation: event.operation, position }] : []
+    )
+    const readyWorktrees = reconciliationIntents.map(({ operation, position: intendedAt }) => {
+      const ready = run.records.find(
+        ({ event }) => event._tag === "TaskWorktreeReady" && event.operationId === operation.operationId
+      )
+      if (ready?.event._tag !== "TaskWorktreeReady") {
+        return expect.fail(`missing ready worktree for ${operation.plannedAttempt.attemptId}`)
+      }
+      return {
+        attemptId: operation.plannedAttempt.attemptId,
+        intendedAt,
+        plannedAttempt: operation.plannedAttempt,
+        proof: ready.event.proof,
+        readyAt: ready.position
+      }
+    })
 
     expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
     expect(new Set(publicRunIds)).toEqual(new Set([run.runId]))
@@ -466,6 +454,29 @@ it.effect("retains exact Run attempt claim and resource identities across DS01 t
     ).toBe(true)
     expect(new Set(acquiredClaims.map(({ token }) => token)).size).toBe(5)
     expect(
+      readyWorktrees
+        .map(({ attemptId, plannedAttempt, proof }) => ({
+          attemptId,
+          branch: proof.branch,
+          plannedBranch: plannedAttempt.branch,
+          baseSha: proof.baseSha,
+          plannedBaseSha: plannedAttempt.baseSha,
+          worktree: proof.worktree,
+          plannedWorktree: plannedAttempt.worktree
+        }))
+        .toSorted((left, right) => left.attemptId.localeCompare(right.attemptId))
+    ).toEqual(
+      expectedAttempts.map(({ attemptId, baseSha, branch, worktree }) => ({
+        attemptId,
+        branch,
+        plannedBranch: branch,
+        baseSha,
+        plannedBaseSha: baseSha,
+        worktree,
+        plannedWorktree: worktree
+      }))
+    )
+    expect(
       run.deliveryFrames
         .flatMap(({ heldPositions }) => heldPositions)
         .every(({ attemptId, runId, taskId }) => {
@@ -473,10 +484,214 @@ it.effect("retains exact Run attempt claim and resource identities across DS01 t
           return planned?.attemptId === attemptId && runId === run.runId
         })
     ).toBe(true)
+    expect(
+      [
+        { beat: "DS-05", frame: frames.ds05 },
+        { beat: "DS-09", frame: frames.ds09 },
+        { beat: "DS-11", frame: frames.ds11 },
+        { beat: "DS-13", frame: frames.ds13 }
+      ].map(({ beat, frame }) => {
+        if (frame.acceptedAt === null) {
+          return expect.fail(`${beat} lacks an accepted public delivery frame`)
+        }
+        const acceptedAt = frame.acceptedAt
+        const prefix = run.records.filter(({ position }) => position <= acceptedAt)
+        return {
+          beat,
+          claimReleases: prefix.filter(
+            ({ event }) => event._tag === "TaskClaimReleaseIntended" || event._tag === "TaskClaimReleased"
+          ).length,
+          replacements: prefix.filter(({ event }) => event._tag === "PlannedAttemptReplaced").length,
+          retained: retainedTasks(frame)
+        }
+      })
+    ).toEqual([
+      { beat: "DS-05", claimReleases: 0, replacements: 0, retained: "B" },
+      { beat: "DS-09", claimReleases: 0, replacements: 0, retained: "B" },
+      { beat: "DS-11", claimReleases: 0, replacements: 0, retained: "B+C" },
+      { beat: "DS-13", claimReleases: 0, replacements: 0, retained: "A+C" }
+    ])
+    const cSafeAt = run.records.find(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" &&
+        event.report.correlation.attemptId === "attempt:C:2" &&
+        event.report._tag === "ExecutorWorkSafelySuspended"
+    )?.position
+    const cBeganAt = run.records.find(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+        event.plannedAttempt.attemptId === "attempt:C:2"
+    )?.position
+    const cWorktree = readyWorktrees.find(({ attemptId }) => attemptId === "attempt:C:2")
+    const cClaim = acquiredClaims.find(({ taskId }) => taskId === "C")
+    expect({
+      beganBeforeWait: cBeganAt !== undefined && cSafeAt !== undefined && cBeganAt < cSafeAt,
+      claimRetained: cClaim !== undefined,
+      held: frames.ds11.heldPositions.some(({ taskId }) => taskId === "C"),
+      retained: retainedTasks(frames.ds11).split("+").includes("C"),
+      safeBeforeFrame: cSafeAt !== undefined && frames.ds11.acceptedAt !== null && cSafeAt <= frames.ds11.acceptedAt,
+      worktreeRetained:
+        cWorktree !== undefined &&
+        frames.ds11.acceptedAt !== null &&
+        cWorktree.intendedAt < cWorktree.readyAt &&
+        cWorktree.readyAt <= frames.ds11.acceptedAt
+    }).toEqual({
+      beganBeforeWait: true,
+      claimRetained: true,
+      held: false,
+      retained: true,
+      safeBeforeFrame: true,
+      worktreeRetained: true
+    })
   })
 )
 
-it.effect("records B's F1-to-F2 choice and one same-attempt Continue and Resume", () =>
+it.effect("publishes B F2 through one active refresh and one later stabilization before Safe release", () =>
+  Effect.gen(function* () {
+    const run = yield* capstoneRun
+    const { boundaries, frames } = causalCapstoneCheckpoints(run)
+    const activeGraphOperationId =
+      frames.ds03.graph._tag === "Established"
+        ? frames.ds03.graph.observation.operationId
+        : expect.fail("DS-03 must carry the active G1 graph observation")
+    const graphIntents = run.records.flatMap(({ event, position }) =>
+      event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
+        ? [{ operation: event.operation, position }]
+        : []
+    )
+    const activeGraphIntent = graphIntents.find(({ operation }) => operation.operationId === activeGraphOperationId)
+    if (activeGraphIntent === undefined) return expect.fail("missing the active G1 graph intent")
+    const activeGraphOutcome = run.records.find(
+      ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === activeGraphOperationId
+    )
+    if (activeGraphOutcome === undefined) return expect.fail("missing the active G1 graph result")
+    const bSpecifications = run.records.flatMap(({ event, position }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+      event.observation.factFamily.taskId === "B"
+        ? [{ fingerprint: event.observation.factFamily.fingerprint, position }]
+        : []
+    )
+    const bF2Observed = bSpecifications.find(
+      ({ fingerprint, position }) => fingerprint === bF2 && position > activeGraphOutcome.position
+    )
+    if (bF2Observed === undefined) return expect.fail("missing B F2 after the active G1 graph")
+    const priorBF1 = bSpecifications.filter(
+      ({ fingerprint, position }) => fingerprint === bF1 && position < bF2Observed.position
+    )
+    const bSuspendIntents = run.records.filter(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorCommandIntended" &&
+        event.command === "Suspend" &&
+        event.plannedAttempt.attemptId === "attempt:B:1"
+    )
+    const bSafeReports = run.records.filter(
+      ({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" &&
+        event.report.correlation.attemptId === "attempt:B:1" &&
+        event.report._tag === "ExecutorWorkSafelySuspended"
+    )
+    expect(bSuspendIntents).toHaveLength(1)
+    expect(bSafeReports).toHaveLength(1)
+    const bSuspend = bSuspendIntents[0]
+    const bSafe = bSafeReports[0]
+    if (bSuspend === undefined || bSafe === undefined) return
+    const stabilizations = graphIntents.filter(
+      ({ operation, position }) =>
+        position > bSafe.position &&
+        position <
+          (run.records.find(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorCommandIntended" &&
+              event.command === "Begin" &&
+              event.plannedAttempt.attemptId === "attempt:D:3"
+          )?.position ?? 0) &&
+        operation.cause._tag === "PostQuiescenceReconfirmation"
+    )
+    expect(stabilizations).toHaveLength(1)
+    const stabilization = stabilizations[0]
+    if (stabilization?.operation.cause._tag !== "PostQuiescenceReconfirmation") return
+    const stabilizationOutcome = run.records.find(
+      ({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" && event.operationId === stabilization.operation.operationId
+    )
+    if (stabilizationOutcome === undefined) return expect.fail("missing the post-Safe stabilization result")
+    const activeCut = run.records.filter(
+      ({ position }) => position > activeGraphOutcome.position && position < bSafe.position
+    )
+    const unchangedSubjects = ["attempt:A:0", "attempt:C:2"]
+
+    expect(boundaries.initialHints.occurrence).toMatchObject({
+      _tag: "CassetteOffersRunReactivationHints",
+      hints: ["TrackerNotification", "Timer", "TrackerNotification", "Timer"]
+    })
+    expect(
+      new Set(
+        run.observationMoments.flatMap((moment) =>
+          moment._tag === "DeliveryPublicationMoment" &&
+          moment.captureOrder > boundaries.initialHints.captureOrder &&
+          moment.captureOrder < boundaries.ds07.captureOrder
+            ? [moment.activationOrdinal]
+            : []
+        )
+      ).size
+    ).toBe(1)
+    expect(
+      run.observationMoments.filter(
+        (moment) =>
+          moment._tag === "AuthoredStoryOccurrenceMoment" &&
+          moment.captureOrder > boundaries.initialHints.captureOrder &&
+          moment.captureOrder < boundaries.ds07.captureOrder &&
+          moment.occurrence._tag === "CoordinatorActivationReturned"
+      )
+    ).toHaveLength(1)
+    expect(activeGraphIntent.operation.cause._tag).toBe("ExecutingWorkAuthorityCheck")
+    expect(priorBF1.length).toBeGreaterThan(0)
+    expect(Math.max(...priorBF1.map(({ position }) => position))).toBeLessThan(bF2Observed.position)
+    expect(activeGraphOutcome.position).toBeLessThan(bF2Observed.position)
+    expect(bF2Observed.position).toBeLessThan(bSuspend.position)
+    expect(bSuspend.position).toBeLessThan(bSafe.position)
+    expect(bSafe.position).toBeLessThan(stabilization.position)
+    expect(stabilization.position).toBeLessThan(stabilizationOutcome.position)
+    expect(stabilization.operation.cause.quiescentGraphOperationId).toBe(activeGraphOperationId)
+    expect(stabilization.operation.predecessorOperationIds).toContain(activeGraphOperationId)
+    expect(
+      activeCut.flatMap(({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" &&
+        event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+        event.observation.factFamily.taskId === "B"
+          ? [event.observation.factFamily.fingerprint]
+          : []
+      )
+    ).toEqual([bF2])
+    expect(
+      activeCut.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandIntended" &&
+          unchangedSubjects.includes(event.plannedAttempt.attemptId)
+      )
+    ).toEqual([])
+    expect(
+      activeCut.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          unchangedSubjects.includes(event.report.correlation.attemptId)
+      )
+    ).toEqual([])
+    expect(
+      activeCut.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorStateObserved" &&
+          unchangedSubjects.includes(event.plannedAttempt.attemptId)
+      )
+    ).toEqual([])
+    expect(heldTasks(frames.ds04)).toBe("A+B+C")
+    expect(heldTasks(frames.ds05)).toBe("A+C")
+    expect(retainedTasks(frames.ds05)).toBe("B")
+  })
+)
+
+it.effect("records B's F1-to-F2 transition and one same-attempt Continue and Resume", () =>
   Effect.gen(function* () {
     const run = yield* capstoneRun
     const bSpecificationFingerprints = run.records.flatMap(({ event }) =>
@@ -607,6 +822,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const run = yield* capstoneRun
+      const { frames } = causalCapstoneCheckpoints(run)
       const occurrences = publicOccurrences(run)
       const deathAt = occurrences.findIndex(({ _tag }) => _tag === "CoordinatorProcessDies")
       const returnOffset = occurrences
@@ -630,6 +846,14 @@ it.effect(
         return occurrence._tag
       })
       const firstAfterReturn = occurrences[returnAt + 1]
+      const capacityAt = run.records.find(({ event }) => event._tag === "TaskWorkCapacityChanged")?.position
+      if (capacityAt === undefined || frames.ds09.acceptedAt === null) {
+        return expect.fail("restart boundaries must carry accepted Journal positions")
+      }
+      const restartAcceptedAt = frames.ds09.acceptedAt
+      const restartRecords = run.records.filter(
+        ({ position }) => position > capacityAt && position <= restartAcceptedAt
+      )
 
       expect(run.reactivationOwnerProcessGenerationCount).toBe(2)
       expect(occurrences.filter(({ _tag }) => _tag === "CoordinatorProcessDies")).toHaveLength(1)
@@ -659,6 +883,23 @@ it.effect(
               occurrence._tag === "PlannedAttemptExecutorWorkReported"
           )
       ).toBe(false)
+      expect(
+        restartRecords.filter(
+          ({ event }) =>
+            event._tag === "PlannedAttemptExecutorCommandIntended" &&
+            (event.command === "Begin" || event.command === "Resume")
+        )
+      ).toEqual([])
+      expect(
+        restartRecords.filter(
+          ({ event }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTrackerGraph" &&
+            event.operation.cause._tag === "ExecutingWorkAuthorityCheck"
+        )
+      ).toEqual([])
+      expect(restart.some((step) => step === "CassetteOffersRunReactivationHints")).toBe(false)
+      expect(restart.some((step) => step === "ConcurrentInteractionGroup")).toBe(false)
     })
 )
 

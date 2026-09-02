@@ -77,7 +77,10 @@ const topologyTest = capstoneTest("consumes a staggered graph while restart-adde
 const restartTest = capstoneTest("preserves the double-diamond middle positions across coordinator restart")
 const checkpointTest = capstoneTest("emits the exact DS01 through DS13 delivery checkpoint table")
 const identityTest = capstoneTest("retains exact Run attempt claim and resource identities across DS01 through DS13")
-const bChoiceTest = capstoneTest("records B's F1-to-F2 choice and one same-attempt Continue and Resume")
+const activeRefreshTest = capstoneTest(
+  "publishes B F2 through one active refresh and one later stabilization before Safe release"
+)
+const bContinuationTest = capstoneTest("records B's F1-to-F2 transition and one same-attempt Continue and Resume")
 const capacityTest = capstoneTest("observes reduced capacity revision two before the authored restart cut")
 const cSafeTest = capstoneTest("records exactly one C2 Safe ordinal before Continue B")
 const reconstructedRestartTest = capstoneTest(
@@ -117,18 +120,21 @@ export const deliveryStoryManifest = {
   sourceDocument: "docs/DELIVERY-STORY.md" as const,
   beats: [
     slice("DS-01", autonomousCapstoneKey, checkpointTest, identityTest),
-    slice("DS-02", autonomousCapstoneKey, checkpointTest, identityTest, bChoiceTest),
-    slice("DS-03", autonomousCapstoneKey, checkpointTest, bChoiceTest, authorityGroupTest),
-    slice("DS-04", autonomousCapstoneKey, checkpointTest, authorityGroupTest),
-    slice("DS-05", autonomousCapstoneKey, checkpointTest, bChoiceTest, authorityGroupTest),
+    slice("DS-02", autonomousCapstoneKey, checkpointTest, identityTest),
+    slice("DS-03", autonomousCapstoneKey, checkpointTest, activeRefreshTest, authorityGroupTest),
+    slice("DS-04", autonomousCapstoneKey, checkpointTest, activeRefreshTest, authorityGroupTest),
+    missing(
+      "DS-05",
+      "The capstone proves B Safe, position release, retained claim/attempt/worktree/work, and ordered F1/F2, but no public production view lists Continue, Restart, and Stop as three simultaneously available choices for Alice."
+    ),
     slice("DS-06", autonomousCapstoneKey, checkpointTest, admissionPriorityTest),
     slice("DS-07", autonomousCapstoneKey, checkpointTest, capacityTest),
     slice("DS-08", autonomousCapstoneKey, checkpointTest, capacityTest, reconstructedRestartTest),
-    slice("DS-09", autonomousCapstoneKey, checkpointTest, reconstructedRestartTest),
+    slice("DS-09", autonomousCapstoneKey, checkpointTest, identityTest, reconstructedRestartTest),
     slice("DS-10", autonomousCapstoneKey, checkpointTest, authorityGroupTest),
-    slice("DS-11", autonomousCapstoneKey, checkpointTest, cSafeTest),
-    slice("DS-12", autonomousCapstoneKey, checkpointTest, cSafeTest, bChoiceTest),
-    slice("DS-13", autonomousCapstoneKey, checkpointTest, admissionPriorityTest, bChoiceTest),
+    slice("DS-11", autonomousCapstoneKey, checkpointTest, identityTest, cSafeTest),
+    slice("DS-12", autonomousCapstoneKey, checkpointTest, cSafeTest, bContinuationTest),
+    slice("DS-13", autonomousCapstoneKey, checkpointTest, identityTest, admissionPriorityTest, bContinuationTest),
     slice(
       "DS-14",
       ["authored:acceptedResultRestartsIntoIntegration"],
