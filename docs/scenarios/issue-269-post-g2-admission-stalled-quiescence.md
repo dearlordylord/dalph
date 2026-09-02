@@ -183,6 +183,20 @@ timer, polling loop, or unbounded drain.
 
 ## Exact negative cases and failures
 
+The September 2026 two-judge review disagreed about making all delivery phases
+validate every executor/proposal identity. The main review favored that broad
+defense; the independent production-architecture review rejected changing the
+contract of unrelated phases without their own scenarios. Therefore the
+runtime globally retains only the identities it owns directly (the requested
+Run versus the accepted-publication Run, and the completing proposal versus
+the published result proposal). The route/planned-attempt, executor report,
+admission correlation, proposal order, and task-work position checks apply
+only while forming this post-G2 successful-outcome witness. A mismatch names
+the expected and observed source identities, forms no witness or stall, and
+releases the exact reservation through the existing failed-completion cleanup.
+A universal injected-executor defense remains outside this amendment and needs
+a separate compatibility scenario before changing other phases.
+
 | Starting difference | Required result |
 |---|---|
 | One full-capacity position belongs to an attempt outside the current exact G2 responsibility/admission basis | It cannot prove post-G2 exact-capacity stall. This is a current identity mismatch, not a historical-provenance test; delivery does not return merely because some unrelated position exists. |
@@ -231,7 +245,7 @@ cannot substitute for these direct production-boundary proofs.
 |---|---|
 | B Safe leaves A/C held; complete G2 admits and binds D; D's exact successful outcome is applied; exact E is actually denied at A/C/D capacity three; no owner remains | `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts` — `applies D success and current E capacity denial after B releases post-G2 capacity` |
 | The distinct post-G2 result retains exact held A/C/D and the non-empty exact E frontier; it is never generic `TrackerReconfirmationQuiescence` with empty proposals | Same file — `returns typed post-G2 admission-stalled quiescence retaining E` |
-| A prior offered evaluation/completion/conflict/failure is applied before the cut; unrelated current holder, partial capacity, empty/non-ReserveOrReuse frontier, missing/currently mismatched D success or denial, live owner, and non-capacity denial each reject the classifier | Same file — `rejects post-G2 admission-stalled quiescence outside its complete current causal basis`, `invalidates a post-G2 cut whose complete predicate changed before acknowledgement`, `continues waiting after G2 while an in-flight action can free retained capacity`, and the existing typed conflict/relation-failure tests |
+| A prior offered evaluation/completion/conflict/failure is applied before the cut; unrelated current holder, partial capacity, empty/non-ReserveOrReuse frontier, missing/currently mismatched D success or denial, live owner, and non-capacity denial each reject the classifier | Same file — `rejects post-G2 admission-stalled quiescence outside its complete current causal basis`, `invalidates a post-G2 cut whose complete predicate changed before acknowledgement`, `applies a post-G2 ownership conflict offered before the cut marker`, `applies a post-G2 relation failure offered before the cut marker`, and `continues waiting after G2 while an in-flight action can free retained capacity` |
 | A causally prior Pause/control callback and accepted capacity-policy publication use the existing generation/trailing obligation; Pause preserves the exact nonterminal result, stops the timer, and begins no later activation until Unpause | `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts` — `preserves a paused nonterminal post-G2 return in the existing activation generation` |
 | A branded activation-local token and Deferred acknowledgement prove the bounded Queue cut without a scheduler race, relation revision, parallel reactivation revision, per-event ledger, or persisted witness | Same file — `acknowledges the bounded post-G2 event cut without relation version authority` |
 | Stabilization maps the accepted post-G2 stall to `RunMustRemainActive(UnsettledResponsibility)` and performs no G3 read | `packages/orchestrator/src/coordination/run/run-stabilization.test.ts` — `returns unsettled responsibility for exact post-G2 capacity stall without another tracker read` |

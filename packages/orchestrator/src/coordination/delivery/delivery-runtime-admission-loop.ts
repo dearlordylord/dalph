@@ -1,12 +1,20 @@
 import { Effect, Option, Ref, Schema } from "effect"
+import { samePlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import type { Semaphore } from "effect"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import type { DeliverySemanticTraceEvent } from "./delivery-action-executor.js"
-import type { DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
+import {
+  deliveryTaskWorkAdmissionBasisOf,
+  type DeliveryRuntimeAdmissionController
+} from "./delivery-runtime-admission.js"
 import { DeliveryProposalId, type DeliveryActionProposal } from "./delivery-action-proposal.js"
 import type { DeliveryRuntimeLiveOwnerSource } from "./delivery-runtime-observation.js"
 import { liveActionKeyOf, liveActionIsPresent, proposalIsAvailable } from "./live-delivery-action.js"
-import type { DeliveryProposalFrontier, DeliveryRuntimeEvaluation } from "./relations.js"
+import type {
+  DeliveryProposalFrontier,
+  DeliveryRuntimeEvaluation,
+  DeliveryTaskWorkAdmissionBasis
+} from "./relations.js"
 import type { DeliveryRuntimeLocalDeferral } from "./delivery-runtime-local-deferral.js"
 
 /** Two lower relations claim the same proposal identity, so no action is authorized. */
@@ -25,6 +33,7 @@ type DeliveryRuntimeReservationResult =
 
 type DeliveryRuntimeAdmissionLoopState = {
   readonly admission: DeliveryRuntimeAdmissionController
+  readonly deferNewPositionUntilLiveOwnersSettle: boolean
   readonly localDeferrals: Ref.Ref<ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>>
   readonly latest: Ref.Ref<Option.Option<DeliveryRuntimeEvaluation>>
   readonly owners: Ref.Ref<ReadonlyMap<DeliveryProposalId, LiveOwner>>
@@ -44,6 +53,24 @@ type DeliveryRuntimeAdmissionLoopDependencies = DeliveryRuntimeAdmissionLoopStat
 interface DeliveryRuntimeAdmissionDeferral {
   readonly proposalId: DeliveryProposalId
   readonly reason: DeferredAdmissionResult["reason"]
+}
+
+/** A live owner may still settle or roll back its position, so a new exact position request waits instead of denying early. */
+const proposalWaitsForLiveOwnerToSettleAtFullCapacity = (
+  proposal: DeliveryActionProposal,
+  taskWork: DeliveryTaskWorkAdmissionBasis,
+  liveOwnerCount: number
+): boolean => {
+  const position = proposal.admission.taskWorkPosition
+  const protocol = proposal.admission.plannedAttemptProtocol
+  return (
+    liveOwnerCount > 0 &&
+    taskWork.held.length >= Number(taskWork.capacity) &&
+    position._tag === "TaskWorkPositionRequired" &&
+    position.mode === "ReserveOrReuse" &&
+    protocol._tag === "PlannedAttemptProtocolRequired" &&
+    !taskWork.held.some(({ correlation }) => samePlannedAttemptExecutorCorrelation(correlation, protocol.correlation))
+  )
 }
 
 export interface DeliveryRuntimeAdmissionPassResult {
@@ -70,6 +97,7 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
 ) => {
   const {
     admission,
+    deferNewPositionUntilLiveOwnersSettle,
     emit,
     latest,
     localDeferrals,
@@ -78,12 +106,12 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
     reserveAndStart,
     selectionGate
   } = dependencies
-
   const admitPass = Effect.fn("DeliveryRuntimeAdmissionLoop.admitPass")(function* () {
     return yield* selectionGate.withPermit(
       Effect.gen(function* () {
         const current = Option.getOrThrow(yield* Ref.get(latest))
         yield* admission.synchronize(current.taskWork)
+        const taskWorkBasis = deliveryTaskWorkAdmissionBasisOf(yield* admission.snapshot)
         const proposedActions = current.proposedActions
         if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
           return yield* new DeliveryRuntimeProposalOwnershipConflict({
@@ -99,6 +127,12 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
         let deferrals: ReadonlyArray<DeliveryRuntimeAdmissionDeferral> = []
         for (const proposal of proposedActions.proposals) {
           if (!proposalIsAvailable(proposal, live, liveActionKeys, liveOperationIds, deferred, current.acceptedAt)) {
+            continue
+          }
+          if (
+            deferNewPositionUntilLiveOwnersSettle &&
+            proposalWaitsForLiveOwnerToSettleAtFullCapacity(proposal, taskWorkBasis, live.size)
+          ) {
             continue
           }
           const reservation = yield* reserveAndStart(proposal)

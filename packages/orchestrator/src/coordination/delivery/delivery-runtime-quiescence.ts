@@ -83,28 +83,64 @@ export interface PostG2TaskWorkAdmissionStalledRuntimeQuiescence {
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
 }
 
-const sameHeldPosition = (
+const sameHeldTaskWorkPosition = (
   left: DeliveryTaskWorkAdmissionBasis["held"][number],
   right: DeliveryTaskWorkAdmissionBasis["held"][number]
 ): boolean => left.taskId === right.taskId && samePlannedAttemptExecutorCorrelation(left.correlation, right.correlation)
 
-const sameSubjectSet = (
+/** Compares exact Run/attempt pairs as a duplicate-free structural set without inventing a string identity. */
+export const sameExactPlannedAttemptCorrelationSet = (
   left: ReadonlyArray<ActiveRefreshPreG2Subject>,
   right: ReadonlyArray<ActiveRefreshPreG2Subject>
 ): boolean =>
   left.length === right.length &&
   left.every((subject) => right.some((candidate) => samePlannedAttemptExecutorCorrelation(subject, candidate))) &&
-  new Set(left.map(({ attemptId, runId }) => `${runId}:${attemptId}`)).size === left.length &&
-  new Set(right.map(({ attemptId, runId }) => `${runId}:${attemptId}`)).size === right.length
+  left.every(
+    (subject, index) =>
+      left.findIndex((candidate) => samePlannedAttemptExecutorCorrelation(subject, candidate)) === index
+  ) &&
+  right.every(
+    (subject, index) =>
+      right.findIndex((candidate) => samePlannedAttemptExecutorCorrelation(subject, candidate)) === index
+  )
+
+const exactCorrelationSetIsUnique = (subjects: ReadonlyArray<ActiveRefreshPreG2Subject>): boolean =>
+  subjects.every(
+    (subject, index) =>
+      subjects.findIndex((candidate) => samePlannedAttemptExecutorCorrelation(subject, candidate)) === index
+  )
+
+const exactCorrelationSetContains = (
+  containing: ReadonlyArray<ActiveRefreshPreG2Subject>,
+  contained: ReadonlyArray<ActiveRefreshPreG2Subject>
+): boolean =>
+  exactCorrelationSetIsUnique(containing) &&
+  exactCorrelationSetIsUnique(contained) &&
+  contained.every((subject) =>
+    containing.some((candidate) => samePlannedAttemptExecutorCorrelation(subject, candidate))
+  )
+
+/** Compares the complete effective task-work capacity basis used by one admission decision. */
+export const sameDeliveryTaskWorkAdmissionBasis = (
+  left: DeliveryTaskWorkAdmissionBasis,
+  right: DeliveryTaskWorkAdmissionBasis
+): boolean =>
+  left.capacity === right.capacity &&
+  left.held.length === right.held.length &&
+  left.held.every((position) => right.held.some((candidate) => sameHeldTaskWorkPosition(position, candidate))) &&
+  left.held.every(
+    (position, index) => left.held.findIndex((candidate) => sameHeldTaskWorkPosition(position, candidate)) === index
+  ) &&
+  right.held.every(
+    (position, index) => right.held.findIndex((candidate) => sameHeldTaskWorkPosition(position, candidate)) === index
+  )
 
 const heldPositionBelongsToCurrentPostG2Basis = (
-  current: DeliveryRuntimeEvaluation,
+  phaseSubjects: ReadonlyArray<ActiveRefreshPreG2Subject>,
   held: DeliveryTaskWorkAdmissionBasis["held"][number],
   appliedTaskWorkOutcomes: ReadonlyArray<AppliedPostG2TaskWorkOutcome>
 ): boolean =>
-  current.activeRefreshBoundary?.reconciledAttempts.some((subject) =>
-    samePlannedAttemptExecutorCorrelation(subject, held.correlation)
-  ) === true ||
+  phaseSubjects.some((subject) => samePlannedAttemptExecutorCorrelation(subject, held.correlation)) ||
   appliedTaskWorkOutcomes.some(
     (outcome) =>
       outcome.taskId === held.taskId && samePlannedAttemptExecutorCorrelation(outcome.correlation, held.correlation)
@@ -143,7 +179,7 @@ const exactPostG2ContextIsPresent = (
     boundary.runId === expectedRunId,
     phaseSubjects.every(({ runId }) => runId === expectedRunId),
     boundary.reconciledAttempts.every(({ runId }) => runId === expectedRunId),
-    sameSubjectSet(phaseSubjects, boundary.reconciledAttempts),
+    exactCorrelationSetContains(phaseSubjects, boundary.reconciledAttempts),
     current.current.trackerGraph._tag === "GraphEstablished",
     current.quiescence._tag === "TrackerReconfirmationAllowed"
   ]
@@ -158,6 +194,7 @@ const isPostG2ClassifiableEvaluation = (current: DeliveryRuntimeEvaluation): cur
 
 const exactHeldPostG2BasisIsPresent = (
   expectedRunId: RunId,
+  phaseSubjects: ReadonlyArray<ActiveRefreshPreG2Subject>,
   current: DeliveryRuntimeEvaluation,
   taskWork: DeliveryTaskWorkAdmissionBasis,
   appliedTaskWorkOutcomes: ReadonlyArray<AppliedPostG2TaskWorkOutcome>
@@ -168,8 +205,8 @@ const exactHeldPostG2BasisIsPresent = (
     taskWork.held.every(({ correlation }) => correlation.runId === expectedRunId),
     taskWork.held.every(
       (held) =>
-        current.taskWork.held.some((currentHeld) => sameHeldPosition(held, currentHeld)) &&
-        heldPositionBelongsToCurrentPostG2Basis(current, held, appliedTaskWorkOutcomes)
+        current.taskWork.held.some((currentHeld) => sameHeldTaskWorkPosition(held, currentHeld)) &&
+        heldPositionBelongsToCurrentPostG2Basis(phaseSubjects, held, appliedTaskWorkOutcomes)
     )
   ]
   return checks.every(Boolean)
@@ -196,16 +233,14 @@ const everyRetainedProposalHasCurrentCapacityDenial = (
 
 const newlyAppliedOutcomeStillHoldsPosition = (
   expectedRunId: RunId,
-  boundary: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]>,
+  phaseSubjects: ReadonlyArray<ActiveRefreshPreG2Subject>,
   taskWork: DeliveryTaskWorkAdmissionBasis,
   outcomes: ReadonlyArray<AppliedPostG2TaskWorkOutcome>
 ): boolean =>
   outcomes.some(
     (outcome) =>
       outcome.correlation.runId === expectedRunId &&
-      !boundary.reconciledAttempts.some((subject) =>
-        samePlannedAttemptExecutorCorrelation(subject, outcome.correlation)
-      ) &&
+      !phaseSubjects.some((subject) => samePlannedAttemptExecutorCorrelation(subject, outcome.correlation)) &&
       taskWork.held.some(
         (held) =>
           held.taskId === outcome.taskId && samePlannedAttemptExecutorCorrelation(held.correlation, outcome.correlation)
@@ -227,7 +262,7 @@ export const classifyPostG2TaskWorkAdmissionStalledRuntimeQuiescence = (
     first === undefined ||
     !isPostG2ClassifiableEvaluation(current) ||
     !exactPostG2ContextIsPresent(expectedRunId, phaseSubjects, current) ||
-    !exactHeldPostG2BasisIsPresent(expectedRunId, current, taskWork, appliedTaskWorkOutcomes)
+    !exactHeldPostG2BasisIsPresent(expectedRunId, phaseSubjects, current, taskWork, appliedTaskWorkOutcomes)
   ) {
     return Option.none()
   }
@@ -241,7 +276,7 @@ export const classifyPostG2TaskWorkAdmissionStalledRuntimeQuiescence = (
   )
   const aNewlyAppliedOutcomeStillHoldsItsExactPosition = newlyAppliedOutcomeStillHoldsPosition(
     expectedRunId,
-    activeRefreshBoundary,
+    phaseSubjects,
     taskWork,
     appliedTaskWorkOutcomes
   )

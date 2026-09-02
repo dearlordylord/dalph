@@ -1785,12 +1785,20 @@ effectIt.effect("reconstructs after post-G2 capacity stall without persisted adm
       controlPolicy: Option.some({ ...coveragePolicy, revision: initialRunPolicyRevision }),
       graphKnowledge: { taskTrackerFacts: [graphEvent.observation] }
     }
-    const resources = yield* makeIntegrationTargetResourceController()
-    const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
+    const beforeCrashResources = yield* makeIntegrationTargetResourceController()
+    const beforeCrash = yield* makeRunRecoveryProjection(coverageRunId, undefined, beforeCrashResources).pipe(
       Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, reconstructed))
     )
+    const beforeCrashProjection = yield* beforeCrash.readDeliveryProjection
 
-    const projection = yield* recovery.readDeliveryProjection
+    // A process crash discards the delivery runtime, its admission positions, and its post-G2 cut. A separately
+    // constructed recovery owner receives only the same durable Journal reduction and therefore has no stall witness
+    // to resume or retry; it reconstructs the ordinary D observation and E graph responsibility afresh.
+    const restartedResources = yield* makeIntegrationTargetResourceController()
+    const restarted = yield* makeRunRecoveryProjection(coverageRunId, undefined, restartedResources).pipe(
+      Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, reconstructed))
+    )
+    const projection = yield* restarted.readDeliveryProjection
 
     expect(projection.evidence).toMatchObject({
       _tag: "AvailableDeliveryProjectionEvidence",
@@ -1808,7 +1816,19 @@ effectIt.effect("reconstructs after post-G2 capacity stall without persisted adm
         plannedAttempt: coverageAttempt
       })
     )
+    expect(projection).toEqual(beforeCrashProjection)
     expect(JSON.stringify(graphEvent.observation)).toContain(pendingTaskId)
+    expect(records.map(({ event }) => event._tag)).toEqual([
+      "WorkflowRunBegan",
+      "TaskClaimAcquisitionIntended",
+      "TaskClaimAcquired",
+      "TaskAttemptPlanned",
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorWorkReported",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved"
+    ])
+    expect(JSON.stringify(records)).not.toMatch(/PostG2|AdmissionStall|TaskWorkPosition/)
     expect(Object.keys(reconstructed).toSorted()).toEqual([
       "appliedThrough",
       "cancellation",

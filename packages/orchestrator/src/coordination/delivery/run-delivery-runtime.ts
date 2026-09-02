@@ -53,7 +53,9 @@ import {
   type AvailableProposalFrontier,
   type DeliveryRuntimeQuiescence,
   type EmptyProposalFrontier,
-  type PostG2TaskWorkAdmissionStalledRuntimeQuiescence
+  type PostG2TaskWorkAdmissionStalledRuntimeQuiescence,
+  sameDeliveryTaskWorkAdmissionBasis,
+  sameExactPlannedAttemptCorrelationSet
 } from "./delivery-runtime-quiescence.js"
 import type { DeliveryRuntimeAdmissionPassResult } from "./delivery-runtime-admission-loop.js"
 import {
@@ -86,22 +88,29 @@ export class DeliveryActionCompletionPublicationMismatch extends Schema.TaggedEr
   {
     expectedProposalId: DeliveryProposalId,
     expectedRunId: RunId,
+    publicationRunId: RunId,
+    resultProposalId: DeliveryProposalId
+  }
+) {}
+
+/** A post-G2 successful-outcome witness combines identities from incompatible proposal/result sources. */
+export class PostG2TaskWorkOutcomeIdentityMismatch extends Schema.TaggedError<PostG2TaskWorkOutcomeIdentityMismatch>()(
+  "PostG2TaskWorkOutcomeIdentityMismatch",
+  {
     expectedAttemptId: Schema.NullOr(AttemptId),
+    expectedRunId: RunId,
     expectedTaskId: Schema.NullOr(TaskId),
     observedAttemptId: Schema.NullOr(AttemptId),
+    observedRunId: Schema.NullOr(RunId),
     observedTaskId: Schema.NullOr(TaskId),
-    publicationRunId: RunId,
-    resultProposalId: DeliveryProposalId,
-    reason: Schema.Literals([
-      "PublicationRunMismatch",
-      "ProposalMismatch",
-      "ExecutorResultRunMismatch",
-      "ExecutorResultAttemptMismatch",
-      "ExecutorResultTaskMismatch",
-      "ExecutorReportCorrelationMismatch",
-      "ProposalAdmissionCorrelationMismatch",
-      "ProposalRouteCorrelationMismatch",
-      "ProposalTaskMismatch"
+    proposalId: DeliveryProposalId,
+    source: Schema.Literals([
+      "ProposalRoute",
+      "ExecutorResult",
+      "ExecutorReport",
+      "ProposalAdmission",
+      "ProposalOrder",
+      "TaskWorkPosition"
     ])
   }
 ) {}
@@ -136,6 +145,7 @@ type PendingPostG2AdmissionStallCut =
   | {
       readonly _tag: "Offered"
       readonly acknowledged: Deferred.Deferred<PostG2AdmissionStallCutAcknowledgement>
+      readonly admissionPass: DeliveryRuntimeAdmissionPassResult
       readonly candidate: Option.Option<PostG2TaskWorkAdmissionStalledRuntimeQuiescence>
       readonly token: PostG2AdmissionStallCutToken
     }
@@ -153,102 +163,160 @@ const isMatchingOfferedPostG2AdmissionStallCut = (
 ): pending is OfferedPostG2AdmissionStallCut =>
   pending._tag === "Offered" && pending.token === event.token && pending.acknowledged === event.acknowledged
 
-type DeliveryCompletionIdentityMismatchReason = DeliveryActionCompletionPublicationMismatch["reason"]
+type ExactPostG2OutcomeSources = {
+  readonly position: Extract<
+    DeliveryActionProposal["admission"]["taskWorkPosition"],
+    { readonly _tag: "TaskWorkPositionRequired"; readonly mode: "ReserveOrReuse" }
+  >
+  readonly protocol: Extract<
+    DeliveryActionProposal["admission"]["plannedAttemptProtocol"],
+    { readonly _tag: "PlannedAttemptProtocolRequired" }
+  >
+  readonly result: Extract<DeliveryActionResult, { readonly _tag: "ExecutorReportPublished" }> & {
+    readonly report: Extract<
+      Extract<DeliveryActionResult, { readonly _tag: "ExecutorReportPublished" }>["report"],
+      { readonly _tag: "ExecutorWorkExecuting" }
+    >
+  }
+}
 
-const executorCompletionIdentityMismatchReason = (
+const exactPostG2OutcomeSourcesOf = (
+  result: DeliveryActionResult,
+  proposal: DeliveryActionProposal
+): Option.Option<ExactPostG2OutcomeSources> => {
+  const position = proposal.admission.taskWorkPosition
+  const protocol = proposal.admission.plannedAttemptProtocol
+  if (
+    result._tag !== "ExecutorReportPublished" ||
+    result.report._tag !== "ExecutorWorkExecuting" ||
+    position._tag !== "TaskWorkPositionRequired" ||
+    position.mode !== "ReserveOrReuse" ||
+    protocol._tag !== "PlannedAttemptProtocolRequired"
+  ) {
+    return Option.none()
+  }
+  return Option.some({ position, protocol, result: { ...result, report: result.report } })
+}
+
+type PostG2IdentityContext = {
+  readonly expectedRunId: RunId
+  readonly proposal: DeliveryActionProposal
+  readonly routeSubject: ReturnType<typeof deliveryProposalPlannedAttemptSubject>
+  readonly sources: ExactPostG2OutcomeSources
+}
+
+const postG2IdentityMismatch = (
+  context: PostG2IdentityContext,
+  source: PostG2TaskWorkOutcomeIdentityMismatch["source"],
+  observed: { readonly attemptId: AttemptId | null; readonly runId: RunId | null; readonly taskId: TaskId | null }
+): Option.Option<PostG2TaskWorkOutcomeIdentityMismatch> => {
+  const expected = context.routeSubject ?? { attemptId: null, runId: context.expectedRunId, taskId: null }
+  return Option.some(
+    new PostG2TaskWorkOutcomeIdentityMismatch({
+      expectedAttemptId: expected.attemptId,
+      expectedRunId: context.expectedRunId,
+      expectedTaskId: expected.taskId,
+      observedAttemptId: observed.attemptId,
+      observedRunId: observed.runId,
+      observedTaskId: observed.taskId,
+      proposalId: context.proposal.id,
+      source
+    })
+  )
+}
+
+const postG2ResultIdentityMismatchOf = (
+  context: PostG2IdentityContext
+): Option.Option<PostG2TaskWorkOutcomeIdentityMismatch> => {
+  const route = context.routeSubject
+  if (route === undefined) {
+    return postG2IdentityMismatch(context, "ProposalRoute", { attemptId: null, runId: null, taskId: null })
+  }
+  if (route.runId !== context.expectedRunId) return postG2IdentityMismatch(context, "ProposalRoute", route)
+  const planned = context.sources.result.plannedAttempt
+  if (!samePlannedAttemptExecutorCorrelation(route, planned) || route.taskId !== planned.taskId) {
+    return postG2IdentityMismatch(context, "ExecutorResult", planned)
+  }
+  const report = context.sources.result.report.correlation
+  return !samePlannedAttemptExecutorCorrelation(route, report)
+    ? postG2IdentityMismatch(context, "ExecutorReport", { ...report, taskId: route.taskId })
+    : Option.none()
+}
+
+const postG2ProposalIdentityMismatchOf = (
+  context: PostG2IdentityContext
+): Option.Option<PostG2TaskWorkOutcomeIdentityMismatch> => {
+  const route = context.routeSubject
+  if (route === undefined) return Option.none()
+  const protocol = context.sources.protocol.correlation
+  if (!samePlannedAttemptExecutorCorrelation(route, protocol)) {
+    return postG2IdentityMismatch(context, "ProposalAdmission", { ...protocol, taskId: route.taskId })
+  }
+  const orderTaskId = deliveryProposalOrderTaskId(context.proposal.order)
+  if (orderTaskId !== route.taskId) {
+    return postG2IdentityMismatch(context, "ProposalOrder", { ...route, taskId: orderTaskId })
+  }
+  return context.sources.position.taskId !== route.taskId
+    ? postG2IdentityMismatch(context, "TaskWorkPosition", { ...route, taskId: context.sources.position.taskId })
+    : Option.none()
+}
+
+const postG2TaskWorkOutcomeIdentityMismatchOf = (
   expectedRunId: RunId,
   proposal: DeliveryActionProposal,
   result: Extract<DeliveryActionResult, { readonly _tag: "ExecutorReportPublished" }>
-): DeliveryCompletionIdentityMismatchReason | undefined => {
-  const planned = plannedAttemptExecutorCorrelation(result.plannedAttempt)
-  const routeSubject = deliveryProposalPlannedAttemptSubject(proposal)
-  const protocol = proposal.admission.plannedAttemptProtocol
-  const position = proposal.admission.taskWorkPosition
-  const orderTaskId = deliveryProposalOrderTaskId(proposal.order)
-  const admissionMatches =
-    protocol._tag === "PlannedAttemptProtocolRequired" &&
-    samePlannedAttemptExecutorCorrelation(protocol.correlation, planned)
-  const routeMatches = routeSubject !== undefined && samePlannedAttemptExecutorCorrelation(routeSubject, planned)
-  const positionTaskId = position._tag === "TaskWorkPositionRequired" ? position.taskId : result.plannedAttempt.taskId
-  const checks: ReadonlyArray<readonly [boolean, DeliveryCompletionIdentityMismatchReason]> = [
-    [result.plannedAttempt.runId !== expectedRunId, "ExecutorResultRunMismatch"],
-    [result.report.correlation.runId !== expectedRunId, "ExecutorReportCorrelationMismatch"],
-    [result.report.correlation.attemptId !== result.plannedAttempt.attemptId, "ExecutorResultAttemptMismatch"],
-    [!samePlannedAttemptExecutorCorrelation(result.report.correlation, planned), "ExecutorReportCorrelationMismatch"],
-    [!admissionMatches, "ProposalAdmissionCorrelationMismatch"],
-    [!routeMatches, "ProposalRouteCorrelationMismatch"],
-    [routeSubject?.taskId !== result.plannedAttempt.taskId, "ExecutorResultTaskMismatch"],
-    [orderTaskId !== result.plannedAttempt.taskId, "ProposalTaskMismatch"],
-    [positionTaskId !== result.plannedAttempt.taskId, "ProposalTaskMismatch"]
-  ]
-  return checks.find(([mismatched]) => mismatched)?.[1]
-}
-
-const completionIdentityMismatchReason = (
-  expectedRunId: RunId,
-  completion: Completion,
-  proposal: DeliveryActionProposal,
-  published: PublishedDeliveryActionResult
-): DeliveryCompletionIdentityMismatchReason | undefined => {
-  if (expectedRunId !== published.publicationThrough.runId) return "PublicationRunMismatch"
-  if (completion.proposalId !== published.result.proposalId) return "ProposalMismatch"
-  return published.result._tag === "ExecutorReportPublished"
-    ? executorCompletionIdentityMismatchReason(expectedRunId, proposal, published.result)
-    : undefined
+): Option.Option<PostG2TaskWorkOutcomeIdentityMismatch> => {
+  const sources = exactPostG2OutcomeSourcesOf(result, proposal)
+  if (Option.isNone(sources)) return Option.none()
+  const context = {
+    expectedRunId,
+    proposal,
+    routeSubject: deliveryProposalPlannedAttemptSubject(proposal),
+    sources: sources.value
+  }
+  return Option.orElse(postG2ResultIdentityMismatchOf(context), () => postG2ProposalIdentityMismatchOf(context))
 }
 
 const completionPublicationMismatchOf = (
   expectedRunId: RunId,
   completion: Completion,
-  proposal: DeliveryActionProposal,
   published: PublishedDeliveryActionResult
 ): Option.Option<DeliveryActionCompletionPublicationMismatch> => {
-  const reason = completionIdentityMismatchReason(expectedRunId, completion, proposal, published)
-  if (reason === undefined) return Option.none()
-  const resultAttempt =
-    published.result._tag === "ExecutorReportPublished" ? published.result.plannedAttempt : undefined
-  const routeSubject = deliveryProposalPlannedAttemptSubject(proposal)
+  if (expectedRunId === published.publicationThrough.runId && completion.proposalId === published.result.proposalId) {
+    return Option.none()
+  }
   return Option.some(
     new DeliveryActionCompletionPublicationMismatch({
-      expectedAttemptId: routeSubject === undefined ? null : routeSubject.attemptId,
       expectedProposalId: completion.proposalId,
       expectedRunId,
-      expectedTaskId: deliveryProposalOrderTaskId(proposal.order),
-      observedAttemptId: resultAttempt === undefined ? null : resultAttempt.attemptId,
-      observedTaskId: resultAttempt === undefined ? null : resultAttempt.taskId,
       publicationRunId: published.publicationThrough.runId,
-      reason,
       resultProposalId: published.result.proposalId
     })
   )
 }
 
+const isFreshBeginExecutorRoute = (proposal: DeliveryActionProposal): boolean =>
+  proposal.route._tag === "FreshExecutorWorkflowRoute" && proposal.route.step._tag === "BeginPlannedAttemptExecutorWork"
+
 const appliedPostG2TaskWorkOutcomeOf = (
   result: DeliveryActionResult,
   proposal: DeliveryActionProposal
 ): Option.Option<AppliedPostG2TaskWorkOutcome> => {
-  const taskWorkPosition = proposal.admission.taskWorkPosition
-  const protocol = proposal.admission.plannedAttemptProtocol
-  if (
-    result._tag !== "ExecutorReportPublished" ||
-    result.report._tag !== "ExecutorWorkExecuting" ||
-    taskWorkPosition._tag !== "TaskWorkPositionRequired" ||
-    taskWorkPosition.mode !== "ReserveOrReuse" ||
-    protocol._tag !== "PlannedAttemptProtocolRequired"
-  ) {
+  const sources = exactPostG2OutcomeSourcesOf(result, proposal)
+  if (Option.isNone(sources) || !isFreshBeginExecutorRoute(proposal)) {
     return Option.none()
   }
-  const plannedCorrelation = plannedAttemptExecutorCorrelation(result.plannedAttempt)
+  const plannedCorrelation = plannedAttemptExecutorCorrelation(sources.value.result.plannedAttempt)
   if (
-    !samePlannedAttemptExecutorCorrelation(result.report.correlation, plannedCorrelation) ||
-    !samePlannedAttemptExecutorCorrelation(protocol.correlation, plannedCorrelation)
+    !samePlannedAttemptExecutorCorrelation(sources.value.result.report.correlation, plannedCorrelation) ||
+    !samePlannedAttemptExecutorCorrelation(sources.value.protocol.correlation, plannedCorrelation)
   ) {
     return Option.none()
   }
   return Option.some({
     correlation: plannedCorrelation,
-    proposalId: result.proposalId,
-    taskId: result.plannedAttempt.taskId
+    proposalId: sources.value.result.proposalId,
+    taskId: sources.value.result.plannedAttempt.taskId
   })
 }
 
@@ -288,6 +356,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
   | DeliveryActionExecutionError
   | DeliveryRuntimeProposalOwnershipConflict
   | DeliveryRuntimeReconfirmationStateInvalid
+  | PostG2TaskWorkOutcomeIdentityMismatch
   | PlannedTaskAttemptError,
   | DeliveryActionExecutor
   | DeliveryAcceptedFactPublication
@@ -436,6 +505,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
 
       const admissionLoop = yield* makeDeliveryRuntimeAdmissionLoop({
         admission,
+        deferNewPositionUntilLiveOwnersSettle: phase._tag === "ActiveRefreshPostG2RuntimePhase",
         localDeferrals,
         emit,
         latest,
@@ -480,8 +550,12 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         proposal: DeliveryActionProposal,
         published: PublishedDeliveryActionResult
       ) {
-        const mismatch = completionPublicationMismatchOf(expectedRunId, completion, proposal, published)
+        const mismatch = completionPublicationMismatchOf(expectedRunId, completion, published)
         if (Option.isSome(mismatch)) return yield* mismatch.value
+        if (phase._tag === "ActiveRefreshPostG2RuntimePhase" && published.result._tag === "ExecutorReportPublished") {
+          const postG2Mismatch = postG2TaskWorkOutcomeIdentityMismatchOf(expectedRunId, proposal, published.result)
+          if (Option.isSome(postG2Mismatch)) return yield* postG2Mismatch.value
+        }
       })
 
       const successfulCompletionMustRemainPending = (
@@ -682,30 +756,18 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         right: PostG2TaskWorkAdmissionStalledRuntimeQuiescence
       ): boolean => {
         const sameBoundary =
+          left.acceptedAt === right.acceptedAt &&
           left.activeRefreshBoundary.runId === right.activeRefreshBoundary.runId &&
-          left.activeRefreshBoundary.reconciledAttempts.length ===
-            right.activeRefreshBoundary.reconciledAttempts.length &&
-          left.activeRefreshBoundary.reconciledAttempts.every((subject) =>
-            right.activeRefreshBoundary.reconciledAttempts.some((candidate) =>
-              samePlannedAttemptExecutorCorrelation(subject, candidate)
-            )
-          )
-        const sameHeld =
-          left.taskWork.capacity === right.taskWork.capacity &&
-          left.taskWork.held.length === right.taskWork.held.length &&
-          left.taskWork.held.every((position) =>
-            right.taskWork.held.some(
-              (candidate) =>
-                position.taskId === candidate.taskId &&
-                samePlannedAttemptExecutorCorrelation(position.correlation, candidate.correlation)
-            )
+          sameExactPlannedAttemptCorrelationSet(
+            left.activeRefreshBoundary.reconciledAttempts,
+            right.activeRefreshBoundary.reconciledAttempts
           )
         const sameProposals =
           left.proposedActions.proposals.length === right.proposedActions.proposals.length &&
           left.proposedActions.proposals.every((proposal) =>
             right.proposedActions.proposals.some((candidate) => candidate.id === proposal.id)
           )
-        return sameBoundary && sameHeld && sameProposals
+        return sameBoundary && sameDeliveryTaskWorkAdmissionBasis(left.taskWork, right.taskWork) && sameProposals
       }
 
       const runtimeQuiescence = Effect.fn("DeliveryRuntime.quiescence")(function* () {
@@ -784,10 +846,9 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           yield* Deferred.succeed(event.acknowledged, "Invalidated")
           return
         }
-        const admissionPass = yield* admissionLoop.admitPass()
-        const rechecked = admissionPass.started
+        const rechecked = offered.value.admissionPass.started
           ? Option.none<PostG2TaskWorkAdmissionStalledRuntimeQuiescence>()
-          : yield* postG2AdmissionStallCandidate(admissionPass)
+          : yield* postG2AdmissionStallCandidate(offered.value.admissionPass)
         const applied =
           Option.isSome(offered.value.candidate) &&
           Option.isSome(rechecked) &&
@@ -851,6 +912,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             Option.some<PendingPostG2AdmissionStallCut>({
               _tag: "Offered",
               acknowledged: offeredAcknowledgement,
+              admissionPass,
               candidate: postG2Candidate,
               token
             })
@@ -893,6 +955,10 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         if (Option.isSome(pendingCut) && pendingCut.value._tag === "Applied") {
           yield* publishRuntimeObservation()
           return pendingCut.value.candidate
+        }
+        if (Option.isSome(pendingCut) && pendingCut.value._tag === "Offered") {
+          yield* applyRuntimeEvent(yield* Queue.take(events))
+          continue
         }
         yield* offerPostG2AdmissionStallCut(yield* runAdmissionPasses())
         const quiescence = yield* quiescenceWithoutPendingCut()

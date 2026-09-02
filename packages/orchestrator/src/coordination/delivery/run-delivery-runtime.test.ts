@@ -26,7 +26,7 @@ import { ActiveTaskClaim, UnclaimedTask } from "../../authorities/task-tracker/c
 import { TaskLifecycle, type Task } from "../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
-import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
+import { initialRunPolicyRevision, RunControlPolicy, RunPolicyRevision } from "../../control/policy.js"
 import { IntegratorBoundaryUnavailable } from "./integrator-boundary.js"
 import {
   deterministicOperationIdAllocatorLayer,
@@ -96,6 +96,7 @@ import {
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import {
   DeliveryActionCompletionPublicationMismatch,
+  PostG2TaskWorkOutcomeIdentityMismatch,
   DeliveryRuntimeProposalOwnershipConflict,
   DeliveryRuntimeReconfirmationStateInvalid,
   DeliveryRuntimePhase,
@@ -2992,17 +2993,10 @@ it.effect("settles pending completions in their publication arrival order when o
 it.effect("preserves post-G2 stall boundary failures without retry or fabricated quiescence", () =>
   Effect.forEach(
     [
-      { name: "publication Run", reason: "PublicationRunMismatch" },
-      { name: "result proposal", reason: "ProposalMismatch" },
-      { name: "executor Run", reason: "ExecutorResultRunMismatch" },
-      { name: "executor attempt", reason: "ExecutorResultAttemptMismatch" },
-      { name: "executor task", reason: "ExecutorResultTaskMismatch" },
-      { name: "executor report", reason: "ExecutorReportCorrelationMismatch" },
-      { name: "proposal admission", reason: "ProposalAdmissionCorrelationMismatch" },
-      { name: "proposal route", reason: "ProposalRouteCorrelationMismatch" },
-      { name: "proposal task", reason: "ProposalTaskMismatch" }
+      { name: "publication Run", mismatch: "PublicationRun" },
+      { name: "result proposal", mismatch: "ResultProposal" }
     ] as const,
-    ({ name, reason }) =>
+    ({ mismatch, name }) =>
       Effect.scoped(
         Effect.gen(function* () {
           const base = yield* baseEvaluation
@@ -3017,71 +3011,14 @@ it.effect("preserves post-G2 stall boundary failures without retry or fabricated
           ) {
             return yield* Effect.die("the completion identity fixture must be one exact prepared Begin proposal")
           }
-          const exactProtocol = exact.admission.plannedAttemptProtocol
-          const exactPosition = exact.admission.taskWorkPosition
           const unexpectedProposalId = DeliveryProposalId.make(`publication-mismatch-unexpected-${name}`)
           const foreignRunId = RunId.make(`publication-mismatch-foreign-${name}`)
-          const foreignAttemptId = AttemptId.make(`publication-mismatch-foreign-${name}`)
-          const foreignTaskId = TaskId.make(`publication-mismatch-foreign-${name}`)
           const exactCorrelation = plannedAttemptExecutorCorrelation(fixture.attempt)
-          const foreignCorrelation = { attemptId: foreignAttemptId, runId }
-          let offered: DeliveryActionProposal = exact
-          let resultPlannedAttempt = fixture.attempt
-          let reportCorrelation = exactCorrelation
-          let publicationRunId = runId
-          let resultProposalId = exact.id
-          if (reason === "PublicationRunMismatch") publicationRunId = foreignRunId
-          if (reason === "ProposalMismatch") resultProposalId = unexpectedProposalId
-          if (reason === "ExecutorResultRunMismatch") {
-            resultPlannedAttempt = PlannedTaskAttempt.make({ ...fixture.attempt, runId: foreignRunId })
-            reportCorrelation = plannedAttemptExecutorCorrelation(resultPlannedAttempt)
-          }
-          if (reason === "ExecutorResultAttemptMismatch") {
-            resultPlannedAttempt = PlannedTaskAttempt.make({ ...fixture.attempt, attemptId: foreignAttemptId })
-          }
-          if (reason === "ExecutorResultTaskMismatch") {
-            resultPlannedAttempt = PlannedTaskAttempt.make({ ...fixture.attempt, taskId: foreignTaskId })
-          }
-          if (reason === "ExecutorReportCorrelationMismatch") {
-            reportCorrelation = { attemptId: fixture.attempt.attemptId, runId: foreignRunId }
-          }
-          if (reason === "ProposalAdmissionCorrelationMismatch") {
-            offered = {
-              ...exact,
-              admission: {
-                integrationTarget: exact.admission.integrationTarget,
-                plannedAttemptProtocol: { ...exactProtocol, correlation: foreignCorrelation },
-                taskWorkPosition: exactPosition
-              }
-            }
-          }
-          if (reason === "ProposalRouteCorrelationMismatch") {
-            // DeliveryActionProposal's typed composer makes this state impossible; bypass it only here to prove the
-            // runtime completion validator still fails closed if a future composer/parser violates that boundary.
-            offered = {
-              ...exact,
-              route: {
-                ...exact.route,
-                step: {
-                  ...exact.route.step,
-                  plannedAttempt: PlannedTaskAttempt.make({ ...fixture.attempt, attemptId: foreignAttemptId })
-                }
-              }
-            } as DeliveryActionProposal
-          }
-          if (reason === "ProposalTaskMismatch") {
-            offered = {
-              ...exact,
-              admission: {
-                integrationTarget: exact.admission.integrationTarget,
-                plannedAttemptProtocol: exactProtocol,
-                taskWorkPosition: { ...exactPosition, taskId: foreignTaskId }
-              }
-            }
-          }
+          const publicationRunId = mismatch === "PublicationRun" ? foreignRunId : runId
+          const resultProposalId = mismatch === "ResultProposal" ? unexpectedProposalId : exact.id
           const acceptedThrough = JournalPosition.make(30)
           const initial = {
-            ...withProposals(base, [offered], 1),
+            ...withProposals(base, [exact], 1),
             acceptedAt: acceptedThrough,
             current: { ...base.current, runId }
           } satisfies DeliveryRuntimeEvaluation
@@ -3101,10 +3038,10 @@ it.effect("preserves post-G2 stall boundary failures without retry or fabricated
                 Effect.as({
                   _tag: "ExecutorReportPublished" as const,
                   acceptedFacts: "Changed" as const,
-                  plannedAttempt: resultPlannedAttempt,
+                  plannedAttempt: fixture.attempt,
                   proposalId: resultProposalId,
                   report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-                    correlation: reportCorrelation
+                    correlation: exactCorrelation
                   })
                 } satisfies DeliveryActionResult)
               )
@@ -3136,13 +3073,181 @@ it.effect("preserves post-G2 stall boundary failures without retry or fabricated
           if (!(failure instanceof DeliveryActionCompletionPublicationMismatch)) {
             return expect.fail("expected the completion publication mismatch")
           }
-          expect(failure.reason).toBe(reason)
-          expect(failure.expectedProposalId).toBe(exact.id)
-          expect(failure.expectedRunId).toBe(runId)
+          expect(failure).toEqual(
+            new DeliveryActionCompletionPublicationMismatch({
+              expectedProposalId: exact.id,
+              expectedRunId: runId,
+              publicationRunId,
+              resultProposalId
+            })
+          )
           expect(yield* Ref.get(executions)).toBe(1)
           expect(yield* Ref.get(outcomes)).toEqual([])
         })
       ),
+    { discard: true }
+  )
+)
+
+it.effect("rejects each mismatched post-G2 D witness identity with its complete source payload", () =>
+  Effect.forEach(
+    [
+      "ProposalRoute",
+      "ExecutorResultRun",
+      "ExecutorResultAttempt",
+      "ExecutorResultTask",
+      "ExecutorReport",
+      "ProposalAdmission",
+      "ProposalOrder",
+      "TaskWorkPosition"
+    ] as const,
+    (kind) =>
+      Effect.gen(function* () {
+        const base = yield* baseEvaluation
+        const fixture = preparedAttemptFixture(`post-g2-witness-${kind}`)
+        const [exact] = preparedBeginProposalsOf([fixture])
+        if (
+          exact === undefined ||
+          exact.route._tag !== "FreshExecutorWorkflowRoute" ||
+          exact.order._tag !== "FreshWorkflowOrder" ||
+          exact.admission.plannedAttemptProtocol._tag !== "PlannedAttemptProtocolRequired" ||
+          exact.admission.taskWorkPosition._tag !== "TaskWorkPositionRequired"
+        ) {
+          return yield* Effect.die("the post-G2 witness fixture must be one exact prepared Begin proposal")
+        }
+        const exactProtocol = exact.admission.plannedAttemptProtocol
+        const exactPosition = exact.admission.taskWorkPosition
+        const foreignRunId = RunId.make(`post-g2-witness-foreign-run-${kind}`)
+        const foreignAttemptId = AttemptId.make(`post-g2-witness-foreign-attempt-${kind}`)
+        const foreignTaskId = TaskId.make(`post-g2-witness-foreign-task-${kind}`)
+        const exactCorrelation = plannedAttemptExecutorCorrelation(fixture.attempt)
+        let offered: DeliveryActionProposal = exact
+        let resultAttempt = fixture.attempt
+        let reportCorrelation = exactCorrelation
+        if (kind === "ProposalRoute") {
+          // The proposal composer makes this impossible. This adversarial cast exercises the runtime validator
+          // guarding a future parser/composer violation at the post-G2 witness boundary; production has no cast.
+          offered = {
+            ...exact,
+            route: {
+              ...exact.route,
+              step: {
+                ...exact.route.step,
+                plannedAttempt: PlannedTaskAttempt.make({ ...fixture.attempt, runId: foreignRunId })
+              }
+            }
+          } as DeliveryActionProposal
+        } else if (kind === "ExecutorResultRun") {
+          resultAttempt = PlannedTaskAttempt.make({ ...fixture.attempt, runId: foreignRunId })
+        } else if (kind === "ExecutorResultAttempt") {
+          resultAttempt = PlannedTaskAttempt.make({ ...fixture.attempt, attemptId: foreignAttemptId })
+        } else if (kind === "ExecutorResultTask") {
+          resultAttempt = PlannedTaskAttempt.make({ ...fixture.attempt, taskId: foreignTaskId })
+        } else if (kind === "ExecutorReport") {
+          reportCorrelation = { attemptId: foreignAttemptId, runId }
+        } else if (kind === "ProposalAdmission") {
+          offered = {
+            ...exact,
+            admission: {
+              ...exact.admission,
+              plannedAttemptProtocol: { ...exactProtocol, correlation: { attemptId: foreignAttemptId, runId } },
+              taskWorkPosition: exactPosition
+            }
+          }
+        } else if (kind === "ProposalOrder") {
+          offered = { ...exact, order: { ...exact.order, taskId: foreignTaskId } }
+        } else {
+          offered = {
+            ...exact,
+            admission: {
+              ...exact.admission,
+              plannedAttemptProtocol: exactProtocol,
+              taskWorkPosition: { ...exactPosition, taskId: foreignTaskId }
+            }
+          }
+        }
+        const acceptedThrough = JournalPosition.make(31)
+        const relation = yield* dynamicEvaluationSignal({
+          ...withProposals(base, [offered], 1),
+          acceptedAt: acceptedThrough,
+          current: { ...base.current, runId }
+        })
+        const admissionCreated = yield* Deferred.make<DeliveryRuntimeAdmissionController>()
+        const integrationTargets = yield* makeIntegrationTargetResourceController()
+        const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
+        const resources = {
+          ...capabilities.resources,
+          makeAdmissionController: (basis: Parameters<typeof capabilities.resources.makeAdmissionController>[0]) =>
+            capabilities.resources
+              .makeAdmissionController(basis)
+              .pipe(Effect.tap((controller) => Deferred.succeed(admissionCreated, controller)))
+        }
+        const failure = yield* runDeliveryRuntimePhase(
+          runId,
+          relation,
+          DeliveryRuntimePhase.ActiveRefreshPostG2([])
+        ).pipe(
+          Effect.provide(plannerLayer),
+          Effect.provide(deterministicOperationIdAllocatorLayer(`post-g2-witness-${kind}`)),
+          Effect.provide(plannedAttemptProtocolControllerLayer),
+          Effect.provide(deliveryRuntimeResourceCapabilitiesLayer({ ...capabilities, resources })),
+          Effect.provideService(
+            DeliveryActionExecutor,
+            DeliveryActionExecutor.of({
+              execute: () =>
+                Effect.succeed({
+                  _tag: "ExecutorReportPublished",
+                  acceptedFacts: "Changed",
+                  plannedAttempt: resultAttempt,
+                  proposalId: exact.id,
+                  report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                    correlation: reportCorrelation
+                  })
+                })
+            })
+          ),
+          Effect.provideService(
+            DeliveryAcceptedFactPublication,
+            DeliveryAcceptedFactPublication.of({
+              awaitCurrent: Effect.succeed({ _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId })
+            })
+          ),
+          Effect.flip
+        )
+
+        const source: PostG2TaskWorkOutcomeIdentityMismatch["source"] =
+          kind === "ExecutorResultRun" || kind === "ExecutorResultAttempt" || kind === "ExecutorResultTask"
+            ? "ExecutorResult"
+            : kind
+        const observed =
+          source === "ProposalRoute"
+            ? { attemptId: fixture.attempt.attemptId, runId: foreignRunId, taskId: fixture.attempt.taskId }
+            : source === "ExecutorResult"
+              ? {
+                  attemptId: kind === "ExecutorResultAttempt" ? foreignAttemptId : fixture.attempt.attemptId,
+                  runId: kind === "ExecutorResultRun" ? foreignRunId : runId,
+                  taskId: kind === "ExecutorResultTask" ? foreignTaskId : fixture.attempt.taskId
+                }
+              : source === "ExecutorReport" || source === "ProposalAdmission"
+                ? { attemptId: foreignAttemptId, runId, taskId: fixture.attempt.taskId }
+                : { attemptId: fixture.attempt.attemptId, runId, taskId: foreignTaskId }
+        expect(failure).toEqual(
+          new PostG2TaskWorkOutcomeIdentityMismatch({
+            expectedAttemptId: fixture.attempt.attemptId,
+            expectedRunId: runId,
+            expectedTaskId: fixture.attempt.taskId,
+            observedAttemptId: observed.attemptId,
+            observedRunId: observed.runId,
+            observedTaskId: observed.taskId,
+            proposalId: exact.id,
+            source
+          })
+        )
+        const admission = yield* Deferred.await(admissionCreated)
+        expect((yield* admission.snapshot).positions.size).toBe(0)
+        const observation = yield* capabilities.resources.runtimeObservation.get
+        expect(observation._tag === "Ready" ? observation.liveOwners : []).toEqual([])
+      }),
     { discard: true }
   )
 )
@@ -3754,7 +3859,12 @@ it.effect("does not classify a historical retained active position as an applied
 )
 
 const runExactPostG2AdmissionStallScenario = Effect.fn("Test.runExactPostG2AdmissionStallScenario")(
-  (onCandidateReady: () => Effect.Effect<void> = () => Effect.void, invalidateBeforeCut = false) =>
+  (
+    onCandidateReady: () => Effect.Effect<void> = () => Effect.void,
+    invalidateBeforeCut = false,
+    conflictBeforeCut = false,
+    failureBeforeCut = false
+  ) =>
     Effect.scoped(
       Effect.gen(function* () {
         const base = yield* baseEvaluation
@@ -3791,8 +3901,9 @@ const runExactPostG2AdmissionStallScenario = Effect.fn("Test.runExactPostG2Admis
         const boundary = {
           _tag: "ActiveRefreshRuntimeBoundary" as const,
           runId,
-          reconciledAttempts: [a, b, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
+          reconciledAttempts: [plannedAttemptExecutorCorrelation(b.attempt)]
         }
+        const phaseSubjects = [a, b, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
         const initial = {
           ...withProposals(
             {
@@ -3829,26 +3940,82 @@ const runExactPostG2AdmissionStallScenario = Effect.fn("Test.runExactPostG2Admis
         const afterPriorEvaluation = {
           ...afterD,
           acceptedAt: afterPriorEvaluationAt,
-          ...(invalidateBeforeCut
-            ? { proposedActions: { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [] } }
-            : {})
-        }
-        const relation = yield* dynamicEvaluationSignal(initial)
+          ...(conflictBeforeCut
+            ? {
+                proposedActions: {
+                  _tag: "DeliveryProposalOwnershipConflict" as const,
+                  conflicts: [
+                    {
+                      id: blockedE.id,
+                      order: blockedE.order,
+                      owners: ["TrackerGraph" as const, "TicketDelivery" as const]
+                    }
+                  ]
+                }
+              }
+            : invalidateBeforeCut
+              ? { proposedActions: { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [] } }
+              : {})
+        } satisfies DeliveryRuntimeEvaluation
+        const relationSource = yield* dynamicEvaluationSignal(initial)
+        const releaseRelationFailure = yield* Deferred.make<void>()
+        const relationFailure = { _tag: "PostG2RelationFailure" as const }
+        const failureChanges = Stream.fromEffect(
+          Deferred.await(releaseRelationFailure).pipe(Effect.andThen(Effect.fail(relationFailure)))
+        )
+        const relation = failureBeforeCut
+          ? {
+              ...relationSource,
+              attach: relationSource.attach.pipe(
+                Effect.map(({ changes, current }) => ({ current, changes: Stream.merge(changes, failureChanges) }))
+              ),
+              changes: Stream.merge(relationSource.changes, failureChanges)
+            }
+          : relationSource
         const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+        const admissionCalls = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+        const causalAdmission = yield* Ref.make<ReadonlyArray<"D admitted" | "D completion applied" | "E denied">>([])
         const cutApplied = yield* Deferred.make<unknown>()
         const cutCandidate = yield* Deferred.make<unknown>()
         const priorEvaluationOffered = yield* Deferred.make<void>()
+        const priorRelationFailureOffered = yield* Deferred.make<void>()
         const trace = DeliverySemanticTrace.of({
           emit: (event) => {
+            if (event._tag === "ProposalAdmitted" || event._tag === "ProposalDeferred") {
+              return Ref.update(admissionCalls, (current) => [...current, event.proposalId]).pipe(
+                Effect.andThen(
+                  event.proposalId === beginD.id && event._tag === "ProposalAdmitted"
+                    ? Ref.update(causalAdmission, (current) => [...current, "D admitted" as const])
+                    : event.proposalId === blockedE.id && event._tag === "ProposalDeferred"
+                      ? Ref.update(causalAdmission, (current) => [...current, "E denied" as const])
+                      : Effect.void
+                )
+              )
+            }
+            if (event._tag === "ActionOutcome" && event.result.proposalId === beginD.id) {
+              return Ref.update(causalAdmission, (current) => [...current, "D completion applied" as const])
+            }
             if (event._tag === "PostG2AdmissionStallCandidateReady") {
               return Deferred.succeed(cutCandidate, event.token).pipe(
                 Effect.andThen(onCandidateReady()),
-                Effect.andThen(relation.publish(afterPriorEvaluation)),
-                Effect.andThen(Deferred.await(priorEvaluationOffered))
+                Effect.andThen(
+                  failureBeforeCut
+                    ? Deferred.succeed(releaseRelationFailure, undefined).pipe(
+                        Effect.andThen(Deferred.await(priorRelationFailureOffered))
+                      )
+                    : invalidateBeforeCut || conflictBeforeCut
+                      ? relationSource
+                          .publish(afterPriorEvaluation)
+                          .pipe(Effect.andThen(Deferred.await(priorEvaluationOffered)))
+                      : Effect.void
+                )
               )
             }
             if (event._tag === "RuntimeEvaluationOffered" && event.acceptedAt === afterPriorEvaluationAt) {
               return Deferred.succeed(priorEvaluationOffered, undefined)
+            }
+            if (event._tag === "RuntimeRelationFailureOffered") {
+              return Deferred.succeed(priorRelationFailureOffered, undefined)
             }
             return event._tag === "PostG2AdmissionStallCutApplied"
               ? Deferred.succeed(cutApplied, event.token)
@@ -3872,10 +4039,10 @@ const runExactPostG2AdmissionStallScenario = Effect.fn("Test.runExactPostG2Admis
               } satisfies DeliveryActionResult
             })
         })
-        const result = yield* runDeliveryRuntimePhase(
+        const execute = runDeliveryRuntimePhase(
           runId,
           relation,
-          DeliveryRuntimePhase.ActiveRefreshPostG2(boundary.reconciledAttempts)
+          DeliveryRuntimePhase.ActiveRefreshPostG2(phaseSubjects)
         ).pipe(
           Effect.provide(identityLayers),
           Effect.provideService(DeliveryActionExecutor, executor),
@@ -3892,20 +4059,42 @@ const runExactPostG2AdmissionStallScenario = Effect.fn("Test.runExactPostG2Admis
           Effect.provideService(DeliverySemanticTrace, trace)
         )
 
+        if (conflictBeforeCut || failureBeforeCut) {
+          const failure = yield* Effect.flip(execute)
+          if (conflictBeforeCut) {
+            expect(failure).toBeInstanceOf(DeliveryRuntimeProposalOwnershipConflict)
+            if (failure instanceof DeliveryRuntimeProposalOwnershipConflict) {
+              expect(failure.proposalIds).toEqual([blockedE.id])
+            }
+          } else {
+            expect(failure).toBe(relationFailure)
+          }
+          expect(yield* Deferred.isDone(cutApplied)).toBe(false)
+          expect(yield* Ref.get(admissionCalls)).toEqual([beginD.id, blockedE.id])
+          expect(yield* Ref.get(causalAdmission)).toEqual(["D admitted", "D completion applied", "E denied"])
+          return
+        }
+        const result = yield* execute
+
         if (invalidateBeforeCut) {
           expect(yield* Deferred.isDone(cutApplied)).toBe(false)
           expect(result._tag).toBe("TrackerReconfirmationQuiescence")
           expect(yield* Ref.get(executed)).toEqual([beginD.id])
+          expect(yield* Ref.get(admissionCalls)).toEqual([beginD.id, blockedE.id])
+          expect(yield* Ref.get(causalAdmission)).toEqual(["D admitted", "D completion applied", "E denied"])
           return
         }
         expect(yield* Deferred.await(cutApplied)).toBe(yield* Deferred.await(cutCandidate))
         expect(result).toMatchObject({
           _tag: "PostG2TaskWorkAdmissionStalledRuntimeQuiescence",
-          acceptedAt: afterPriorEvaluationAt,
+          acceptedAt: afterDAt,
           activeRefreshBoundary: boundary,
           proposedActions: { _tag: "DeliveryProposalsAvailable", proposals: [blockedE] }
         })
         expect(yield* Ref.get(executed)).toEqual([beginD.id])
+        // The FIFO marker rechecks E's denial at the same accepted evaluation; any later evaluation invalidates it.
+        expect(yield* Ref.get(admissionCalls)).toEqual([beginD.id, blockedE.id])
+        expect(yield* Ref.get(causalAdmission)).toEqual(["D admitted", "D completion applied", "E denied"])
         if (result._tag !== "PostG2TaskWorkAdmissionStalledRuntimeQuiescence") {
           return yield* Effect.die("the exact post-G2 stall must retain its typed result")
         }
@@ -3932,6 +4121,14 @@ it.effect("invalidates a post-G2 cut whose complete predicate changed before ack
   runExactPostG2AdmissionStallScenario(() => Effect.void, true)
 )
 
+it.effect("applies a post-G2 ownership conflict offered before the cut marker", () =>
+  runExactPostG2AdmissionStallScenario(() => Effect.void, false, true)
+)
+
+it.effect("applies a post-G2 relation failure offered before the cut marker", () =>
+  runExactPostG2AdmissionStallScenario(() => Effect.void, false, false, true)
+)
+
 it.effect("preserves a paused nonterminal post-G2 return in the existing activation generation", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -3955,8 +4152,9 @@ it.effect("preserves a paused nonterminal post-G2 return in the existing activat
       const candidateReady = yield* Deferred.make<void>()
       const releaseCandidate = yield* Deferred.make<void>()
       const pausedTrailingRetained = yield* Deferred.make<number>()
-      const ordinaryActivations = yield* Queue.unbounded<void>()
+      const ordinaryActivations = yield* Queue.unbounded<RunPolicyRevision>()
       const activeCalls = yield* Ref.make(0)
+      const currentPolicyRevision = yield* Ref.make(initialRunPolicyRevision)
       const timerStates = yield* Ref.make<ReadonlyArray<"Started" | "Stopped">>([])
       const decision = RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
       const ownerLayer = runReactivationOwnerLayer({
@@ -3964,7 +4162,11 @@ it.effect("preserves a paused nonterminal post-G2 return in the existing activat
         activationInterval: "1 hour",
         failureCooldown: "1 second",
         readControl: Effect.succeed("RunUnpaused" as const),
-        activate: () => Queue.offer(ordinaryActivations, undefined).pipe(Effect.as(decision)),
+        activate: () =>
+          Ref.get(currentPolicyRevision).pipe(
+            Effect.flatMap((revision) => Queue.offer(ordinaryActivations, revision)),
+            Effect.as(decision)
+          ),
         activateActiveWorkAuthorityRefresh: () =>
           Ref.update(activeCalls, (count) => count + 1).pipe(
             Effect.andThen(
@@ -3983,19 +4185,22 @@ it.effect("preserves a paused nonterminal post-G2 return in the existing activat
 
       yield* Effect.gen(function* () {
         const owner = yield* RunReactivationOwner
-        yield* Queue.take(ordinaryActivations)
+        expect(yield* Queue.take(ordinaryActivations)).toBe(initialRunPolicyRevision)
         const installed = yield* Deferred.await(observers)
         yield* owner.hint(RunReactivationHint.TrackerNotification())
         yield* Deferred.await(candidateReady)
+        const revisedPolicy = RunPolicyRevision.make(Number(initialRunPolicyRevision) + 1)
+        yield* Ref.set(currentPolicyRevision, revisedPolicy)
         yield* installed.acceptedFactPublication
         yield* installed.control("Pause")
         yield* Deferred.succeed(releaseCandidate, undefined)
         expect(yield* Deferred.await(pausedTrailingRetained)).toBeGreaterThanOrEqual(0)
         expect(yield* Ref.get(activeCalls)).toBe(1)
         expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped"])
+        expect(yield* Queue.size(ordinaryActivations)).toBe(0)
 
         yield* installed.control("Unpause")
-        yield* Queue.take(ordinaryActivations)
+        expect(yield* Queue.take(ordinaryActivations)).toBe(revisedPolicy)
         expect(yield* Ref.get(activeCalls)).toBe(1)
         expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped", "Started"])
       }).pipe(Effect.provide(ownerLayer))
@@ -4006,12 +4211,23 @@ it.effect("preserves a paused nonterminal post-G2 return in the existing activat
 it.effect("rejects post-G2 admission-stalled quiescence outside its complete current causal basis", () =>
   Effect.gen(function* () {
     const base = yield* baseEvaluation
-    const [a, c, d, e, unrelated] = ["cut-A", "cut-C", "cut-D", "cut-E", "cut-unrelated"].map(preparedAttemptFixture)
-    if (a === undefined || c === undefined || d === undefined || e === undefined || unrelated === undefined) {
-      return yield* Effect.die("the classifier controls require five exact fixtures")
+    const [a, c, d, e, f, unrelated] = ["cut-A", "cut-C", "cut-D", "cut-E", "cut-F", "cut-unrelated"].map(
+      preparedAttemptFixture
+    )
+    if (
+      a === undefined ||
+      c === undefined ||
+      d === undefined ||
+      e === undefined ||
+      f === undefined ||
+      unrelated === undefined
+    ) {
+      return yield* Effect.die("the classifier controls require six exact fixtures")
     }
-    const [blockedE] = preparedBeginProposalsOf([e])
-    if (blockedE === undefined) return yield* Effect.die("E must produce one exact Begin proposal")
+    const [blockedE, blockedF] = preparedBeginProposalsOf([e, f])
+    if (blockedE === undefined || blockedF === undefined) {
+      return yield* Effect.die("E and F must produce exact Begin proposals")
+    }
     if (
       blockedE.admission.taskWorkPosition._tag !== "TaskWorkPositionRequired" ||
       blockedE.admission.plannedAttemptProtocol._tag !== "PlannedAttemptProtocolRequired"
@@ -4021,7 +4237,7 @@ it.effect("rejects post-G2 admission-stalled quiescence outside its complete cur
     const acceptedAt = JournalPosition.make(21)
     const graphProjection = projectTrackerSnapshot({
       revision: "post-g2-classifier-controls",
-      tasks: [a, c, d, e, unrelated].map(({ attempt }) => ({
+      tasks: [a, c, d, e, f, unrelated].map(({ attempt }) => ({
         id: attempt.taskId,
         lifecycle: { _tag: "Open" as const },
         parentTaskId: null,
@@ -4089,6 +4305,18 @@ it.effect("rejects post-G2 admission-stalled quiescence outside its complete cur
 
     expect(Option.isSome(classify(current))).toBe(true)
 
+    const multiProposalFrontier = { ...frontier, proposals: [blockedE, blockedF] } satisfies AvailableProposalFrontier
+    expect(
+      Option.isSome(
+        classify(
+          { ...current, proposedActions: multiProposalFrontier },
+          taskWork,
+          multiProposalFrontier,
+          new Set([blockedE.id, blockedF.id])
+        )
+      )
+    ).toBe(true)
+
     const unrelatedHeld = [
       held[0],
       held[1],
@@ -4115,6 +4343,21 @@ it.effect("rejects post-G2 admission-stalled quiescence outside its complete cur
       ...outcome,
       correlation: plannedAttemptExecutorCorrelation(unrelated.attempt)
     } satisfies AppliedPostG2TaskWorkOutcome
+    const mismatchedProposalCorrelation = {
+      ...blockedE,
+      admission: {
+        ...blockedE.admission,
+        plannedAttemptProtocol: {
+          ...blockedE.admission.plannedAttemptProtocol,
+          correlation: plannedAttemptExecutorCorrelation(unrelated.attempt)
+        },
+        taskWorkPosition: blockedE.admission.taskWorkPosition
+      }
+    } satisfies DeliveryActionProposal
+    const mismatchedProposalFrontier = {
+      ...frontier,
+      proposals: [mismatchedProposalCorrelation]
+    } satisfies AvailableProposalFrontier
 
     const controls = [
       classify({ ...current, taskWork: { ...taskWork, held: unrelatedHeld } }, { ...taskWork, held: unrelatedHeld }),
@@ -4134,7 +4377,29 @@ it.effect("rejects post-G2 admission-stalled quiescence outside its complete cur
       classify(current, taskWork, frontier, denied, [outcome], RunId.make("post-g2-foreign-expected-run")),
       classify(current, taskWork, frontier, denied, [outcome], runId, [
         plannedAttemptExecutorCorrelation(unrelated.attempt)
-      ])
+      ]),
+      classify(current, taskWork, frontier, denied, [outcome], runId, [
+        ...boundary.reconciledAttempts,
+        ...boundary.reconciledAttempts
+      ]),
+      classify(
+        { ...current, proposedActions: multiProposalFrontier },
+        taskWork,
+        multiProposalFrontier,
+        new Set([blockedE.id])
+      ),
+      classify(
+        { ...current, proposedActions: multiProposalFrontier },
+        taskWork,
+        multiProposalFrontier,
+        new Set([DeliveryProposalId.make("stale-post-g2-denial"), blockedF.id])
+      ),
+      classify(
+        { ...current, proposedActions: mismatchedProposalFrontier },
+        taskWork,
+        mismatchedProposalFrontier,
+        new Set([mismatchedProposalCorrelation.id])
+      )
     ]
     expect(controls.map(Option.isNone)).toEqual(controls.map(() => true))
   })
