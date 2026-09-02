@@ -4,14 +4,25 @@ Owning issue: [#268](https://github.com/dearlordylord/dalph/issues/268)
 
 Recovery control: [#314](https://github.com/dearlordylord/dalph/issues/314)
 
-Status: draft recovery specification awaiting maintainer acceptance. This
-documentation-only change does not change Dalph runtime behavior. No #268
-implementation or cassette adjustment is authorized until the maintainer
-accepts this exact chronology and denominator.
+Status: behavioral recovery specification accepted by the maintainer on
+2026-09-02 with this condition: do not freeze a guessed cassette sequence and
+then change production to reproduce it. First freeze the required behavior,
+observe the unchanged production workflow under explicit test controls, and
+only then ask the maintainer to freeze the observed cassette order. This
+documentation-only change does not change Dalph runtime behavior. Acceptance
+freezes the thirteen behavioral outcomes, required causal edges, scope, and
+stop rules. It does not freeze the provisional O001--O094 order or authorize
+production changes to make that order pass.
 
 The implementation base for this recovery is exact commit
 `e79f64e3a97eb02a63aad050b442a178ecab6bf3`. A later commit may carry this
 document, but it must not silently change the production base being proved.
+
+The latest stopped convergence candidate is the clean, pushed worktree
+`/workspace/typescript/dalph-worktrees/issue-268-convergence-validation` at
+exact commit `b1f52b30573e84207f737541e23fc2ff722de956`. It is high-viability
+evidence of where the previous attempt stopped, but it remains forensic input,
+not the recovery base or an implementation source.
 
 ## Decision and scope
 
@@ -23,10 +34,25 @@ same complete occurrence order is consumed on every run. They do not change
 which work is eligible, add an ordering queue, serialize production, or make
 production imitate a cassette.
 
-Changing the authored expected sequence to the sequence produced by these
-accepted controls is a **cassette adjustment**. It is allowed only after this
-scenario is accepted. Changing production scheduling, authority, capacity, or
-lifecycle semantics to satisfy the authored sequence is outside this recovery.
+Changing the authored expected sequence to the sequence produced by accepted
+test-only controls is a **cassette adjustment**. Before a strict cassette is
+written, one cassette-free characterization must run the fixed-base production
+workflow with only those controls and record its complete occurrence order.
+The maintainer reviews that observed order before it becomes the strict
+cassette oracle. Changing production scheduling, authority, capacity, or
+lifecycle semantics to satisfy either the provisional or observed sequence is
+outside this recovery.
+
+This creates two acceptance cuts:
+
+1. **Behavior accepted:** this document now authorizes C0/C1 verification and
+   test-only characterization controls. It does not authorize a production
+   correction or strict cassette.
+2. **Observed order accepted:** after cassette-free characterization, the
+   recorded complete order replaces the provisional O inventory. Only then may
+   C3 implement the strict cassette. A changed required causal edge returns to
+   its owning scenario; a different order among independent operations changes
+   only the cassette adjustment.
 
 The following work is deliberately outside #268:
 
@@ -303,23 +329,27 @@ Claim 31 classifies the later, separate act of applying already-arrived results
 through the publication owner. No response-readiness edge is counted again as
 a publication edge.
 
-The strict cassette asserts this one complete order. The production workflow
-remains free to produce a different valid order when the controlled readiness
-gates are absent. Supporting every such order would be #309's different test
-contract, not a condition for closing #268.
+After the observed-order acceptance cut, the strict cassette asserts that one
+complete controlled order. The production workflow remains free to produce a
+different valid order when the controlled readiness gates are absent.
+Supporting every such order would be #309's different test contract, not a
+condition for closing #268.
 
-## Occurrence inventory and denominator
+## Provisional occurrence hypothesis and stable denominator
 
-The authored cassette must name and consume every occurrence in this inventory
-once. Each `O` identifier is a **semantic occurrence group**, not a claim about
+O001--O094 is a provisional, source-derived characterization checklist. It is
+not yet the strict cassette oracle or a progress denominator. The cassette-free
+characterization must confirm, remove, add, and reorder these groups without
+changing production. Its observed complete inventory becomes authoritative
+only at the second acceptance cut.
+
+Each `O` identifier is a **semantic occurrence hypothesis**, not a claim about
 the number of raw Journal records. A slash joins the intent/call/observation
-records of one boundary operation; those records remain separately asserted in
-the executable cassette even though the denominator groups them for
-readability. `read/publication` always occupies two consecutive groups. For a
-task's four focused facts, the order is specification, claim, planned worktree,
-then Git lineage. The executable story must label every raw expected item with
-one of these `O` identifiers, so the grouping is mechanically enumerable rather
-than a prose estimate.
+records of one boundary operation. `read/publication` currently occupies two
+consecutive hypotheses. For a task's four focused facts, the proposed order is
+specification, claim, planned worktree, then Git lineage. The characterization
+report maps every raw observed item to a hypothesis, identifies every missing
+or extra item, and publishes the resulting exact order for review.
 
 Within DS-02, O003--O008 belong to A, O009--O014 to B, and O015--O020
 to C, using the six operations listed in that row. DS-06 uses the same six
@@ -346,28 +376,30 @@ and O087 to the waiting projection.
 | DS-13 | O088--O094 | A1 terminal projection; terminal Journal record; terminal publication; A1 position release; B1 position binding; Resume intent/call/Executing response; held-position publication | 7 |
 | **Total** | **Thirteen beats** | **94** |
 
-This is the recovery denominator:
+The stable recovery denominator accepted now is:
 
 - 13 delivery-story beats, all required and none after DS-13;
-- 94 capstone occurrence groups, with no unconsumed or unexpected cassette
-  occurrence;
-- 12 capstone readiness gates plus companion stabilization gate R12;
+- one complete cassette-free occurrence inventory, whose exact count and total
+  order remain unknown until the observed-order acceptance cut;
+- 12 proposed capstone readiness controls plus companion stabilization control
+  R12, each retained only if characterization proves it selects an already
+  legal order;
 - 31 classified ordering claims: 20 required happens-before, ten controlled
   readiness, and one serialized-after-arrival;
 - 13 scenario-state assertions, one after each beat;
 - seven production-correction verdict rows: six fixed-base retained groups and
   one active-refresh replay candidate;
 - six recovery checkpoints, C0 through C5;
-- 20 consecutive complete runs with the identical 94-group consumed order;
+- 20 consecutive complete runs with the identical accepted observed order;
 - one focused package gate, then `pnpm check:all`, then the final
   `pnpm check:quint` required by the accepted recovery control.
 - one binary completion event on one exact clean committed SHA; no partial
   substitute closes #268.
 
-No completion percentage may be reported against a smaller denominator.
-“Almost done” means all 13 state assertions pass and only explicitly named
-final gates remain. A hang, timeout, or partial trace is zero complete capstone
-runs, not partial completion.
+Before the observed-order acceptance cut, the occurrence count and remaining
+implementation count are unknown; O094 is not a numerator or denominator. No
+completion percentage may be reported. After that cut, a hang, timeout, or
+partial trace is zero complete capstone runs, not partial completion.
 
 ## Crash, retry, and ambiguity
 
@@ -406,8 +438,9 @@ Dalph must not:
 - turn B1 into replacement B2, reuse another attempt's position, duplicate a
   claim/worktree/Begin/Resume, or infer success from C's closure;
 - accept a graph revision beyond G2 or claim that the Run is terminal;
-- accept an incomplete trace, an unconsumed expected occurrence, an unexpected
-  occurrence, or a different 94-group order as a passing strict cassette.
+- after the observed-order acceptance cut, accept an incomplete trace, an
+  unconsumed expected occurrence, an unexpected occurrence, or a different
+  order as a passing strict cassette.
 
 As stated in the delivery story, this capstone depends on but does not
 independently demonstrate I9 (an executor report matches the attempt that asked
@@ -454,14 +487,18 @@ failure cannot interrupt and falsely fail unrelated assertions:
 - `resumes retained B1 after A1 accepts and does not create B2`;
 - `rejects each required issue 268 edge reversal`;
 - `keeps active-work refresh before quiescence and stabilization after it`;
-- `consumes exactly the accepted 94 occurrence groups`;
+- `records the complete cassette-free controlled issue 268 occurrence order`;
+- after the second acceptance cut, `consumes exactly the accepted issue 268
+  occurrence inventory`;
 - `repeats the complete issue 268 cassette twenty times with one identical
   order`.
 
-The implementation plan must use that exact file and catalog seam or amend
-this accepted scenario before code changes. It must also list the existing
-focused predecessor tests from #264--#269 that remain green; aggregate package
-totals do not substitute for these thirteen rows.
+The characterization and later cassette plan must use that exact file and
+catalog seam or amend this accepted behavioral scenario before code changes.
+It must first run without strict cursor expectations and publish the observed
+order. It must also list the existing focused predecessor tests from #264--#269
+that remain green; aggregate package totals do not substitute for these
+thirteen rows.
 
 Only after the new evidence is green may implementation update the
 `DELIVERY-STORY.md` manifest rows DS-01--DS-13 from `NotImplemented` to the
@@ -475,10 +512,10 @@ named test remains `NotImplemented`.
 | Checkpoint | Measurable result | Maximum | On breach |
 |---|---|---:|---|
 | C0 — clean start | Clean worktree at the fixed base; focused smoke tests green | 2 hours | Diagnose only the environment; do not expand scope. |
-| C1 — replay verdicts | All seven production-correction ledger rows and the DS-05 choice characterization have cassette-free accept/reject results | 1.5 working days total; 0.5 day per group | Move an unproved group to its owning issue. |
-| C2 — frozen chronology | Maintainer accepts this exact scenario, R0--R12, 94 capstone occurrence groups, 31 ordering claims, and 13-row test map | 1 working day including review | A second rejected draft triggers scope review; no cassette code. |
-| C3 — narrow cassette | One capstone cassette with only R0--R11 consumes O001--O094 once; the separate distinction test uses R12 | 1.5 working days | Classify the first mismatch before editing; any production edit invokes the production-proof rule. |
-| C4 — repeatability | Twenty consecutive uncached full runs consume the identical O001--O094 order and pass all 13 rows | 0.5 working day | One readiness-control reconsideration is allowed; another divergence freezes the lane. |
+| C1 — replay verdicts | All seven production-correction ledger rows and the DS-05 choice characterization have cassette-free accept/reject results; a candidate patch may be evaluated only in an isolated comparison and is not integrated | 1.5 working days total; 0.5 day per group | Move an unproved group to its owning issue. |
+| C2 — two acceptance cuts | C2a: the maintainer accepts the 13 outcomes, causal classifications, scope, and stop rules. C2b: a cassette-free controlled run publishes its complete observed order and the maintainer accepts that order as the cassette oracle | 1 working day for characterization plus review | A second rejected order triggers scope review; no strict cassette code and no production change to fit the order. |
+| C3 — narrow cassette | One capstone cassette with only the accepted characterization controls consumes the accepted observed inventory once; the separate distinction test uses its accepted companion control | 1.5 working days | Classify the first mismatch before editing; any production edit invokes the production-proof rule. |
+| C4 — repeatability | Twenty consecutive uncached full runs consume the identical accepted observed order and pass all 13 rows | 0.5 working day | One readiness-control reconsideration is allowed; another divergence freezes the lane. |
 | C5 — completion | Focused predecessor/#268 tests, `pnpm check:all`, final `pnpm check:quint`, and fixed-base reviews are green on one exact clean SHA | 1 working day | Return to the owning checkpoint; do not call it a final small fix. |
 
 At C3, a production workflow that cannot reach DS-13 without the strict
