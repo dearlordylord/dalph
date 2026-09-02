@@ -363,6 +363,28 @@ second C2 Safe or ordinal three. Continue B remains independently authorized by
 B1's exact F1/F2 facts and request identity; C2 supplies chronology, not B
 authority.
 
+### Choice availability remains a derived runtime projection
+
+After C2 Safe settles, the Operator or a future #260 status/CLI consumer may
+ask what can happen next for B1. Dalph does not answer that question by adding
+`AttemptChoiceControl.readAvailable(RunId, AttemptId)`. The one current source
+is the existing
+`DeliveryRuntimeResources.runtimeObservation -> current.ticketDeliveries ->
+PlannedAttemptExecutorFreshFacts -> TaskSpecificationChangeConstraint`
+projection. `AttemptChoiceControl.read` remains the lookup for one already-
+applied request identity, and `AttemptChoiceControl.apply` still revalidates an
+exact proposed request at its owning boundary. A restart reconstructs and
+rederives the runtime observation; it does not persist an available-choice
+record or introduce another choice authority. A future #260 status/CLI may
+thinly filter or present that observation without changing its ownership.
+
+The repository owner recommended adding the new read API, while the independent
+reviewer rejected it because it would duplicate a derived availability fact
+behind a second control-shaped surface. Under the standing expert-rejection
+rule, that named objection blocks the API. This decision changes no runtime
+behavior in #268; it records the forbidden duplicate so the cassette chronology
+cannot be mistaken for new choice authority.
+
 ### Failure, interruption, replay, and visible result
 
 An exact existing report-protocol validation, append, contradiction, or
@@ -467,6 +489,7 @@ assertions. Aggregate cassette totals do not substitute for these proofs.
 | Named applicable direct-Suspend and passive-publication failure representatives preserve exact tag/payload, call Suspend at most once, advance neither Safe nor Continue, and perform zero retry; committed ordinal-two ambiguity reconciles the exact Run/C2 correlation without another Suspend, Safe report, or ordinal before exact Continue B is exposed | `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `preserves named C2 Safe failure families and reconciles a committed lost response without retry` |
 | A valid C2 Suspend proposal requires and receives its matching planned-attempt protocol admission; the no-admission lease remains a separate fail-closed invariant check | `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts` — `admits an independently proposed suspension after one unchanged passive observation`; `packages/orchestrator/src/coordination/delivery/delivery-runtime-observation.test.ts` — `rejects protocol work when the admitted action owns no planned-attempt permit` |
 | The completed run has C2 Executing ordinal one and exactly one Safe ordinal two, with no ordinal three | `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `records exactly one C2 Safe ordinal before Continue B` |
+| Available Continue choices remain the derived runtime-observation projection; applied-request lookup and apply-time validation remain separate, and restart persists no availability fact | Documentation-only decision in [Choice availability remains a derived runtime projection](#choice-availability-remains-a-derived-runtime-projection); existing runtime-observation, frontier, and attempt-choice tests retain their separate authorities, so #268 adds no behavior test |
 | The executing restart reconstructs real journal facts, completes strict `startup graph -> P_A -> P_C -> P_D -> next graph` with three exact unchanged Executing projections and no A/C/D specification, claim, worktree, lineage, or executor command calls, then returns exact UnsettledResponsibility | Committed characterization `bb40c4c8c`, `packages/dalph/test/scenarios/production.test.ts` — `completes the startup graph read then serially reattaches A C and D before the next graph read`; `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `runs reconstructed ordinary activation through strict exact projections before returning unsettled responsibility` |
 | Before the actual activation/finality result, failure/interruption settles no return and exposes no hint | `packages/dalph/test/cassettes/authored-reactivation-return.test.ts` — `keeps restart hints unavailable before the production finality result` |
 | After the actual decision, interruption blocked on cursor permit/publication is delayed; the return settles once before hints and duplicate/wrong returns fail exact mismatch | `packages/dalph/test/cassettes/authored-reactivation-return.test.ts` — `settles the reconstructed restart return once before delayed interruption and later hints` |
