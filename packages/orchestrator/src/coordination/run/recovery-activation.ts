@@ -3116,11 +3116,11 @@ const unsettledExecutorCommandFor = (
  * Suspend intent. A later activation may reconsider the still-live constraint
  * once this projection is before its new read boundary.
  */
-const isExecutingCommandProjectionAfter =
+const isExecutingCommandSettlementAfter =
   (activationBaselinePosition: Option.Option<JournalPosition>) =>
   (candidate: ReturnType<typeof plannedAttemptExecutorEvidence>[number]): boolean =>
     [
-      candidate.source._tag === "CommandProjection",
+      candidate.source._tag === "BoundaryCommandResponse" || candidate.source._tag === "CommandProjection",
       candidate.report._tag === "ExecutorWorkExecuting",
       positionIsAfter(candidate.observedAt, activationBaselinePosition)
     ].every(Boolean)
@@ -3133,44 +3133,36 @@ const suspensionWasReconciledToExecutingDuringActiveRefresh = (
   plannedAttempt: PlannedTaskAttempt,
   activationBaselinePosition: Option.Option<JournalPosition>
 ): boolean => {
-  const currentEvidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
-  if (currentEvidence === undefined || currentEvidence.report._tag !== "ExecutorWorkExecuting") {
+  // A later accepted lifecycle report can supersede this exact command
+  // response or projection. The activation-local boundary still needs its
+  // historical provenance after Safe or Terminal.
+  const evidence = plannedAttemptExecutorEvidence(records, plannedAttempt).findLast(
+    isExecutingCommandSettlementAfter(activationBaselinePosition)
+  )
+  if (
+    evidence === undefined ||
+    (evidence.source._tag !== "BoundaryCommandResponse" && evidence.source._tag !== "CommandProjection")
+  ) {
     return false
   }
-  // `latestPlannedAttemptExecutorEvidence` intentionally prefers an accepted
-  // lifecycle report when a newer projection repeats the same report. The
-  // refresh boundary needs the projection's provenance even in that unchanged
-  // case, so select the newest exact command projection explicitly.
-  const evidence = plannedAttemptExecutorEvidence(records, plannedAttempt).findLast(
-    isExecutingCommandProjectionAfter(activationBaselinePosition)
-  )
-  if (evidence === undefined || evidence.source._tag !== "CommandProjection") return false
-  const { commandOrdinal, projectionOrdinal } = evidence.source
-  const projection = records.findLast(
-    ({ event, position }) =>
-      position === evidence.observedAt &&
-      event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-      event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
-      event.commandOrdinal === commandOrdinal &&
-      event.projectionOrdinal === projectionOrdinal
-  )
-  if (projection?.event._tag !== "PlannedAttemptExecutorCommandProjectionObserved") return false
-  const { commandOrdinal: projectionCommandOrdinal } = projection.event
+  const { commandOrdinal } = evidence.source
   const intent = records.findLast(
     ({ event, position }) =>
-      position < projection.position &&
+      position < evidence.observedAt &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      event.plannedAttempt.runId === plannedAttempt.runId &&
       event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
-      Number(event.ordinal) === Number(projectionCommandOrdinal)
+      Number(event.ordinal) === Number(commandOrdinal)
   )
   return isSuspendCommandIntent(intent)
 }
 
 /**
- * The process-local boundary reached when every reconstructed executing attempt
- * has reconciled a persisted Suspend intent to an exact executing report. The
- * runtime uses this typed fact to admit no further transition until the
- * enclosing stabilization performs its mandatory complete G2 read.
+ * The process-local boundary contains either the exact active-refresh
+ * opportunity subjects with a qualifying post-baseline Suspend-to-Executing
+ * reconciliation, retained through a later Safe or Terminal report until G2,
+ * or every captured active subject while replaying an already-journaled pending
+ * G2 intent.
  */
 export type ActiveRefreshRuntimeBoundary = {
   readonly _tag: "ActiveRefreshRuntimeBoundary"
@@ -3222,24 +3214,29 @@ const belongsToActiveRefreshBoundary = (
 }
 
 const activeRefreshRuntimeBoundaryFor = (
-  runState: Pick<ReconstructedRunState, "runId" | "responsibility" | "workflowHistory">,
+  runState: Pick<ReconstructedRunState, "runId" | "workflowHistory">,
   baseline: Option.Option<JournalPosition>,
   opportunity: RunActivationOpportunity
 ): ActiveRefreshRuntimeBoundary | undefined => {
   if (opportunity._tag !== "ActiveWorkAuthorityRefresh") return undefined
   const records = runState.workflowHistory.records
-  /** Only the reducer's unfinished entries may become active subjects; historical plans are not responsibilities. */
-  const plannedAttempts = runState.responsibility.entries
-    .flatMap((entry) => (entry._tag === "PlannedAttemptExecutorWorkResponsibility" ? [entry.plannedAttempt] : []))
+  /**
+   * The immutable opportunity can retain an exact subject after Safe or
+   * Terminal changes its current executor disposition. Reconstruct only
+   * attempts with durable responsibility history; unrelated historical plans
+   * never become boundary subjects.
+   */
+  const activeAttempts = records
+    .flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+      isActiveRefreshSubject(runState.runId, event.plannedAttempt, opportunity)
+        ? [event.plannedAttempt]
+        : []
+    )
     .filter(
       (plannedAttempt, index, all) =>
         all.findIndex((candidate) => plannedTaskAttemptEquivalence(candidate, plannedAttempt)) === index
     )
-  const runningAttempts = plannedAttempts.filter(
-    (plannedAttempt) =>
-      isActiveRefreshSubject(runState.runId, plannedAttempt, opportunity) &&
-      latestPlannedAttemptExecutorEvidence(records, plannedAttempt)?.report._tag === "ExecutorWorkExecuting"
-  )
   const currentGraph = currentCompleteGraphObservationAfter(records, Option.none())
   const pendingG2Operation =
     currentGraph === undefined
@@ -3248,19 +3245,10 @@ const activeRefreshRuntimeBoundaryFor = (
           operationId: currentGraph.event.operationId,
           recordedAt: currentGraph.position
         })
-  const reconciledAttempts = runningAttempts.filter((plannedAttempt) =>
+  const reconciledAttempts = activeAttempts.filter((plannedAttempt) =>
     suspensionWasReconciledToExecutingDuringActiveRefresh(records, plannedAttempt, baseline)
   )
-  if (
-    runningAttempts.length === 0 ||
-    (pendingG2Operation === undefined &&
-      !runningAttempts.every((plannedAttempt) =>
-        reconciledAttempts.some((reconciled) => plannedTaskAttemptEquivalence(reconciled, plannedAttempt))
-      ))
-  ) {
-    return undefined
-  }
-  const boundaryAttempts = pendingG2Operation === undefined ? reconciledAttempts : runningAttempts
+  const boundaryAttempts = pendingG2Operation === undefined ? reconciledAttempts : activeAttempts
   const runId = boundaryAttempts[0]?.runId
   if (runId === undefined) return undefined
   return {
@@ -4139,10 +4127,11 @@ export const frontierForActivationOpportunity = (
   if (opportunity._tag === "OrdinaryRunEntry") return frontier
 
   /**
-   * Once every executing subject has reconciled its persisted Suspend intent
-   * to executing, suppress only those exact subjects until the enclosing
-   * stabilization performs its mandatory G2. Independent task transitions
-   * remain visible to the ordinary runtime phase after G2.
+   * Once an exact subject has reconciled its persisted Suspend intent to
+   * Executing, the activation-local boundary retains that subject through a
+   * later Safe or Terminal report until the enclosing stabilization performs
+   * its mandatory G2. Independent task transitions remain visible to the
+   * ordinary runtime phase after G2.
    */
   if (activeRefreshBoundary !== undefined) {
     return {
@@ -4156,13 +4145,6 @@ export const frontierForActivationOpportunity = (
   return {
     ...frontier,
     transitions: frontier.transitions.filter((transition) => {
-      if (
-        "plannedAttempt" in transition &&
-        isActiveRefreshSubject(transition.plannedAttempt.runId, transition.plannedAttempt, opportunity) &&
-        suspensionWasReconciledToExecutingDuringActiveRefresh(records, transition.plannedAttempt, baseline)
-      ) {
-        return false
-      }
       if (transition._tag !== "SuspendPlannedAttemptExecutorWork") return true
       if (
         latestPlannedAttemptExecutorEvidence(records, transition.plannedAttempt)?.report._tag !==
