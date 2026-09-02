@@ -18,7 +18,10 @@ interface AuthoredRuntimeEvaluationCaptureOptions<Correlation> {
   readonly correlateEvaluation: () => Effect.Effect<Correlation>
 }
 
-/** Internal cassette observer: every callback captures its evaluation; only owner changes capture owner state. */
+/**
+ * Internal cassette observer. Owner correlation is sampled at callback entry,
+ * every callback captures its evaluation, and only owner changes capture owner state.
+ */
 export const makeAuthoredRuntimeObservationCaptureObserver = Effect.fn(
   "AuthoredCassette.makeRuntimeObservationCaptureObserver"
 )(function* <OwnerCorrelation, EvaluationCorrelation>(
@@ -29,6 +32,7 @@ export const makeAuthoredRuntimeObservationCaptureObserver = Effect.fn(
   return {
     observe: (observation) =>
       Effect.gen(function* () {
+        const ownerCorrelation = yield* ownerOptions.correlateOwners()
         if (evaluationOptions !== undefined) {
           const correlation = yield* evaluationOptions.correlateEvaluation()
           yield* evaluationOptions.captureEvaluation(observation.evaluation, correlation)
@@ -38,8 +42,7 @@ export const makeAuthoredRuntimeObservationCaptureObserver = Effect.fn(
         if (previous === identity) return
         yield* Ref.set(lastRuntimeOwners, identity)
         if (previous === null && observation.liveOwners.length === 0) return
-        const correlation = yield* ownerOptions.correlateOwners()
-        yield* ownerOptions.captureOwners(observation.liveOwners, correlation)
+        yield* ownerOptions.captureOwners(observation.liveOwners, ownerCorrelation)
       })
   } satisfies { readonly observe: (observation: DeliveryRuntimeReadyObservation) => Effect.Effect<void> }
 })

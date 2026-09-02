@@ -1,5 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node"
-import { Effect } from "effect"
+import { Deferred, Effect, Fiber } from "effect"
 import { expect, it } from "vitest"
 import type * as PublicCassettes from "../../src/cassettes/index.js"
 import {
@@ -154,7 +154,7 @@ it("keeps every runtime evaluation callback in the source-local evidence seam", 
     makeAuthoredRuntimeObservationCaptureObserver(
       {
         captureOwners: (liveOwners) => Effect.sync(() => explicitlyCapturedOwners.push(liveOwners)),
-        correlateOwners: () => Effect.die("identical empty owners must not be captured")
+        correlateOwners: () => Effect.void
       },
       {
         captureEvaluation: (captured, correlation) =>
@@ -173,4 +173,65 @@ it("keeps every runtime evaluation callback in the source-local evidence seam", 
   expect(explicitlyCaptured.map(({ correlation }) => correlation)).toEqual([1, 2, 3])
   expect(explicitlyCaptured.map(({ evaluation }) => evaluation)).toEqual([evaluation, evaluation, evaluation])
   expect(explicitlyCapturedOwners).toEqual([])
+})
+
+it("samples owner correlation before evaluation capture can advance the authored cursor", async () => {
+  const run = await Effect.runPromise(
+    runAuthoredScenarioCassetteWithRuntimeEvaluations(
+      maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration
+    ).pipe(Effect.provide(NodeCrypto.layer))
+  )
+  const evaluation = run.runtimeEvaluationCaptures[0]?.evaluation
+  const owners = run.observationCaptures.find(
+    (capture) => capture._tag === "DeliveryRuntimeOwnersCaptured" && capture.liveOwners.length > 0
+  )
+  if (evaluation === undefined || owners?._tag !== "DeliveryRuntimeOwnersCaptured") {
+    return expect.fail("expected one evaluation and one non-empty owner snapshot")
+  }
+
+  const result = await Effect.runPromise(
+    Effect.gen(function* () {
+      const evaluationCaptureStarted = yield* Deferred.make<void>()
+      const releaseEvaluationCapture = yield* Deferred.make<void>()
+      const ownerCorrelations: Array<number> = []
+      const ownerSamples: Array<number> = []
+      const evaluationCorrelations: Array<number> = []
+      let cursorPosition = 11
+      const observer = yield* makeAuthoredRuntimeObservationCaptureObserver(
+        {
+          captureOwners: (_liveOwners, correlation) =>
+            Effect.sync(() => {
+              ownerCorrelations.push(correlation)
+            }),
+          correlateOwners: () =>
+            Effect.sync(() => {
+              ownerSamples.push(cursorPosition)
+              return cursorPosition
+            })
+        },
+        {
+          captureEvaluation: (_evaluation, correlation) =>
+            Effect.gen(function* () {
+              evaluationCorrelations.push(correlation)
+              if (evaluationCorrelations.length !== 1) return
+              yield* Deferred.succeed(evaluationCaptureStarted, undefined)
+              yield* Deferred.await(releaseEvaluationCapture)
+            }),
+          correlateEvaluation: () => Effect.sync(() => cursorPosition)
+        }
+      )
+      const firstCallback = yield* observer
+        .observe({ _tag: "Ready", evaluation, liveOwners: owners.liveOwners })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(evaluationCaptureStarted)
+      cursorPosition = 12
+      yield* Deferred.succeed(releaseEvaluationCapture, undefined)
+      yield* Fiber.join(firstCallback)
+      cursorPosition = 13
+      yield* observer.observe({ _tag: "Ready", evaluation, liveOwners: owners.liveOwners })
+      return { evaluationCorrelations, ownerCorrelations, ownerSamples }
+    })
+  )
+
+  expect(result).toEqual({ evaluationCorrelations: [11, 13], ownerCorrelations: [11], ownerSamples: [11, 13] })
 })
