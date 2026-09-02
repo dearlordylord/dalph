@@ -7,6 +7,7 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -17,7 +18,7 @@ import {
   WorktreeLocator,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Stream, SubscriptionRef } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Ref, Stream, SubscriptionRef } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -90,6 +91,7 @@ import {
   type DeliveryProposalFrontier,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
+  DeliveryRelationReconciliationError,
   deliveryFinalityOf,
   TrackerGraphState
 } from "./relations.js"
@@ -3089,6 +3091,185 @@ it.effect("preserves post-G2 stall boundary failures without retry or fabricated
   )
 )
 
+it.effect("preserves exact post-G2 publication and executor failures with no E retry", () =>
+  Effect.forEach(
+    ["AcceptedPublication", "Executor"] as const,
+    (boundary) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const base = yield* baseEvaluation
+          const [d, e] = ["boundary-failure-D", "boundary-failure-E"].map(preparedAttemptFixture)
+          if (d === undefined || e === undefined) return yield* Effect.die("D and E failure fixtures must exist")
+          const [beginD, blockedE] = preparedBeginProposalsOf([d, e])
+          if (beginD === undefined || blockedE === undefined) {
+            return yield* Effect.die("D and E failure fixtures must each produce an exact Begin proposal")
+          }
+          const acceptedThrough = JournalPosition.make(30)
+          const relation = yield* dynamicEvaluationSignal({
+            ...withProposals(base, [beginD, blockedE], 1),
+            acceptedAt: acceptedThrough,
+            current: { ...base.current, runId }
+          })
+          const executions = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+          const publicationFailure = new DeliveryRelationReconciliationError({
+            cause: Cause.fail({ _tag: "PostG2AcceptedPublicationFailure", acceptedThrough })
+          })
+          const executorFailure = new PlannedAttemptExecutorCommandFailure({
+            command: "Begin",
+            correlation: plannedAttemptExecutorCorrelation(d.attempt),
+            detail: "post-G2 D executor boundary unavailable"
+          })
+          const admissionCreated = yield* Deferred.make<DeliveryRuntimeAdmissionController>()
+          const integrationTargets = yield* makeIntegrationTargetResourceController()
+          const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
+          const resources = {
+            ...capabilities.resources,
+            makeAdmissionController: (basis: Parameters<typeof capabilities.resources.makeAdmissionController>[0]) =>
+              capabilities.resources
+                .makeAdmissionController(basis)
+                .pipe(Effect.tap((controller) => Deferred.succeed(admissionCreated, controller)))
+          }
+          const failure = yield* runDeliveryRuntimePhase(
+            runId,
+            relation,
+            DeliveryRuntimePhase.ActiveRefreshPostG2([])
+          ).pipe(
+            Effect.provide(plannerLayer),
+            Effect.provide(deterministicOperationIdAllocatorLayer(`post-g2-${boundary}-failure`)),
+            Effect.provide(plannedAttemptProtocolControllerLayer),
+            Effect.provide(deliveryRuntimeResourceCapabilitiesLayer({ ...capabilities, resources })),
+            Effect.provideService(
+              DeliveryActionExecutor,
+              DeliveryActionExecutor.of({
+                execute: ({ proposal: action }) =>
+                  Ref.update(executions, (current) => [...current, action.id]).pipe(
+                    Effect.andThen(
+                      boundary === "Executor"
+                        ? Effect.fail(executorFailure)
+                        : Effect.succeed({
+                            _tag: "ExecutorReportPublished" as const,
+                            acceptedFacts: "Changed" as const,
+                            plannedAttempt: d.attempt,
+                            proposalId: beginD.id,
+                            report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                              correlation: plannedAttemptExecutorCorrelation(d.attempt)
+                            })
+                          })
+                    )
+                  )
+              })
+            ),
+            Effect.provideService(
+              DeliveryAcceptedFactPublication,
+              DeliveryAcceptedFactPublication.of({
+                awaitCurrent:
+                  boundary === "AcceptedPublication"
+                    ? Effect.fail(publicationFailure)
+                    : Effect.die("executor failure must not reach accepted publication")
+              })
+            ),
+            Effect.flip
+          )
+
+          expect(failure).toEqual(boundary === "AcceptedPublication" ? publicationFailure : executorFailure)
+          expect(yield* Ref.get(executions)).toEqual([beginD.id])
+          expect(yield* Ref.get(executions)).not.toContain(blockedE.id)
+          expect((yield* (yield* Deferred.await(admissionCreated)).snapshot).positions.size).toBe(0)
+          const observation = yield* capabilities.resources.runtimeObservation.get
+          expect(observation._tag).toBe("Ready")
+          expect(observation._tag === "Ready" ? observation.liveOwners : []).toEqual([])
+        })
+      ),
+    { discard: true }
+  )
+)
+
+it.effect("interrupts post-G2 D and releases its exact position without starting E", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const [d, e] = ["interrupted-D", "interrupted-E"].map(preparedAttemptFixture)
+      if (d === undefined || e === undefined) return yield* Effect.die("D and E interruption fixtures must exist")
+      const [beginD, blockedE] = preparedBeginProposalsOf([d, e])
+      if (beginD === undefined || blockedE === undefined) {
+        return yield* Effect.die("D and E interruption fixtures must each produce an exact Begin proposal")
+      }
+      const relation = yield* dynamicEvaluationSignal({
+        ...withProposals(base, [beginD, blockedE], 1),
+        acceptedAt: JournalPosition.make(31),
+        current: { ...base.current, runId }
+      })
+      const dStarted = yield* Deferred.make<void>()
+      const interruptD = yield* Deferred.make<never>()
+      const completionOffered = yield* Deferred.make<void>()
+      const executions = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const admissionCreated = yield* Deferred.make<DeliveryRuntimeAdmissionController>()
+      const integrationTargets = yield* makeIntegrationTargetResourceController()
+      const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
+      const resources = {
+        ...capabilities.resources,
+        makeAdmissionController: (basis: Parameters<typeof capabilities.resources.makeAdmissionController>[0]) =>
+          capabilities.resources
+            .makeAdmissionController(basis)
+            .pipe(Effect.tap((controller) => Deferred.succeed(admissionCreated, controller)))
+      }
+      const runtime = yield* runDeliveryRuntimePhase(
+        runId,
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPostG2([])
+      ).pipe(
+        Effect.provide(plannerLayer),
+        Effect.provide(deterministicOperationIdAllocatorLayer("post-g2-D-interrupted")),
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provide(deliveryRuntimeResourceCapabilitiesLayer({ ...capabilities, resources })),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: ({ proposal: action }) =>
+              Ref.update(executions, (current) => [...current, action.id]).pipe(
+                Effect.andThen(Deferred.succeed(dStarted, undefined)),
+                Effect.andThen(Deferred.await(interruptD))
+              )
+          })
+        ),
+        Effect.provideService(
+          DeliverySemanticTrace,
+          DeliverySemanticTrace.of({
+            emit: (event) =>
+              event._tag === "RuntimeCompletionOffered" && event.proposalId === beginD.id
+                ? Deferred.succeed(completionOffered, undefined)
+                : Effect.void
+          })
+        ),
+        Effect.provideService(
+          DeliveryAcceptedFactPublication,
+          DeliveryAcceptedFactPublication.of({
+            awaitCurrent: Effect.die("interrupted D must not publish accepted facts")
+          })
+        ),
+        Effect.forkChild
+      )
+
+      const startedOrExited = yield* Effect.race(
+        Deferred.await(dStarted).pipe(Effect.as({ _tag: "Started" as const })),
+        Fiber.await(runtime).pipe(Effect.map((exit) => ({ _tag: "Exited" as const, exit })))
+      )
+      expect(startedOrExited._tag).toBe("Started")
+      if (startedOrExited._tag === "Exited") return yield* Effect.die(startedOrExited.exit)
+      expect(yield* Deferred.interrupt(interruptD)).toBe(true)
+      yield* Deferred.await(completionOffered)
+      const exit = yield* Fiber.await(runtime)
+      expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true)
+      expect(yield* Ref.get(executions)).toEqual([beginD.id])
+      expect(yield* Ref.get(executions)).not.toContain(blockedE.id)
+      expect((yield* (yield* Deferred.await(admissionCreated)).snapshot).positions.size).toBe(0)
+      const observation = yield* capabilities.resources.runtimeObservation.get
+      expect(observation._tag).toBe("Ready")
+      expect(observation._tag === "Ready" ? observation.liveOwners : []).toEqual([])
+    })
+  )
+)
+
 it.effect("rejects each mismatched post-G2 D witness identity with its complete source payload", () =>
   Effect.forEach(
     [
@@ -5754,6 +5935,7 @@ it.effect("continues waiting after G2 while an in-flight action can free retaine
       } satisfies DeliveryRuntimeEvaluation
       const relation = yield* dynamicEvaluationSignal(initial)
       const activeStarted = yield* Deferred.make<void>()
+      const fullCapacityObserved = yield* Deferred.make<void>()
       const independentStarted = yield* Deferred.make<void>()
       const finishActive = yield* Deferred.make<void>()
       const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
@@ -5791,14 +5973,26 @@ it.effect("continues waiting after G2 while an in-flight action can free retaine
             return { _tag: "ActionCompleted", proposalId: independent.id } satisfies DeliveryActionResult
           })
       })
+      const observer = DeliveryRuntimeObservationObserver.of({
+        observe: ({ evaluation, liveOwners }) =>
+          evaluation.acceptedAt === JournalPosition.make(11) &&
+          liveOwners.some(({ proposal: liveProposal }) => liveProposal.id === active.id)
+            ? Deferred.succeed(fullCapacityObserved, undefined)
+            : Effect.void
+      })
       const runtime = yield* runDeliveryRuntimePhase(
         runId,
         relation,
         DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
-      ).pipe(Effect.provide(identityLayers), Effect.provideService(DeliveryActionExecutor, executor), Effect.forkChild)
+      ).pipe(
+        Effect.provide(identityLayers),
+        Effect.provideService(DeliveryActionExecutor, executor),
+        Effect.provideService(DeliveryRuntimeObservationObserver, observer),
+        Effect.forkChild
+      )
 
       yield* Deferred.await(activeStarted)
-      yield* Effect.yieldNow
+      yield* Deferred.await(fullCapacityObserved)
       expect(yield* Deferred.isDone(independentStarted)).toBe(false)
       expect(yield* Ref.get(executed)).toEqual([active.id])
       yield* Deferred.succeed(finishActive, undefined)

@@ -19,6 +19,7 @@ import { Deferred, Effect, Fiber, Layer, Ref, SubscriptionRef } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot, type TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
+import { TrackerReadError } from "../../authorities/task-tracker/graph-reader.js"
 import type { TaskLifecycle } from "../../authorities/task-tracker/task.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { OperationId } from "../../workflow/identity.js"
@@ -29,7 +30,7 @@ import {
 } from "../../workflow/interpretation/interpreter.js"
 import { makeTrackerGraphObservationOperation, type TrackerGraphReadCause } from "../../workflow/registry/operation.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
-import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import { InRunJournal, JournalStorageUnavailable, type JournalRecord } from "../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
@@ -552,6 +553,159 @@ it.effect("returns unsettled responsibility for exact post-G2 capacity stall wit
         decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
       })
     })
+  )
+)
+
+it.effect("preserves exact Journal and finality read failures before post-G2 admission without starting E", () =>
+  Effect.forEach(
+    ["JournalRead", "JournalAppend", "FinalityTrackerRead"] as const,
+    (boundary) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const base = yield* baseEvaluation
+          const [d, e] = ["stabilization-boundary-D", "stabilization-boundary-E"].map((name) =>
+            makePreparedBeginFixture(activeVerticalAttempt, "stabilization-boundary-failure", name)
+          )
+          if (d === undefined || e === undefined) {
+            return yield* Effect.die("D and E boundary fixtures must be present")
+          }
+          const g1 = graph(
+            `stabilization-${boundary}-G1`,
+            1,
+            snapshot(
+              `stabilization-${boundary}-G1`,
+              [d, e].map(({ task }) => ({
+                id: task.id,
+                lifecycle: { _tag: "Open" as const },
+                parentTaskId: null,
+                prerequisiteIds: []
+              }))
+            ),
+            { _tag: "ExecutingWorkAuthorityCheck" }
+          )
+          const subject = plannedAttemptExecutorCorrelation(activeVerticalAttempt)
+          const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
+            ...withRunFacts(evaluation(base, g1), false),
+            activeRefreshBoundary: { _tag: "ActiveRefreshRuntimeBoundary", reconciledAttempts: [subject], runId }
+          })
+          const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+          const journalReads = yield* Ref.make(0)
+          const journalAppends = yield* Ref.make(0)
+          const providerReads = yield* Ref.make(0)
+          const executions = yield* Ref.make<ReadonlyArray<string>>([])
+          const journalReadFailure = new JournalStorageUnavailable({
+            detail: "post-G2 stabilization Journal read unavailable",
+            operation: "JournalStore.read"
+          })
+          const journalAppendFailure = new JournalStorageUnavailable({
+            detail: "post-G2 stabilization Journal append unavailable",
+            operation: "JournalStore.append"
+          })
+          const finalityReadFailure = new TrackerReadError({
+            detail: "post-quiescence finality tracker read unavailable",
+            operation: "TrackerGraphReader.parse"
+          })
+          const backingJournal = appendableJournalFor(records)
+          const journal = InRunJournal.of({
+            append: (requestedRunId, key, event) =>
+              Ref.update(journalAppends, (count) => count + 1).pipe(
+                Effect.andThen(
+                  boundary === "JournalAppend"
+                    ? Effect.fail(journalAppendFailure)
+                    : backingJournal.append(requestedRunId, key, event)
+                )
+              ),
+            read: (requestedRunId) =>
+              Ref.update(journalReads, (count) => count + 1).pipe(
+                Effect.andThen(
+                  boundary === "JournalRead" ? Effect.fail(journalReadFailure) : backingJournal.read(requestedRunId)
+                )
+              )
+          })
+          const provider = Layer.mock(WorkflowInterpreter, {
+            readTrackerGraph: () =>
+              Ref.update(providerReads, (count) => count + 1).pipe(Effect.andThen(Effect.fail(finalityReadFailure)))
+          })
+          const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(
+            Layer.provide(Layer.succeed(InRunJournal, journal))
+          )
+          const lifecycle = yield* makeApplicationExitLifecycle()
+          const integrationTargets = yield* makeIntegrationTargetResourceController()
+          const retainedResponsibility = {
+            integrationTarget: IntegrationTarget.make({
+              repository: GitRepositoryLocator.make(`/stabilization-${boundary}.git`),
+              ref: IntegrationTargetRef.make("refs/heads/main")
+            }),
+            queuedAt: JournalPosition.make(40)
+          }
+          yield* integrationTargets.acquire(retainedResponsibility)
+          yield* integrationTargets.publishAcceptedOwnership(retainedResponsibility)
+          const resources = deliveryRuntimeResourceCapabilitiesLayer(
+            yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets, lifecycle.admission)
+          )
+
+          const failure = yield* runStabilizedDelivery(
+            target,
+            runId,
+            signalOf(state),
+            activeWorkAuthorityRefreshForOwner("Timer", activeWorkAuthorityRefreshSubjectsFor([subject]))
+          ).pipe(
+            Effect.provide(supportWithoutAllocator),
+            Effect.provide(deterministicOperationIdAllocatorLayer(`stabilization-${boundary}`)),
+            Effect.provide(resources),
+            Effect.provide(journaled),
+            Effect.provideService(InRunJournal, journal),
+            Effect.provideService(
+              DeliveryActionExecutor,
+              DeliveryActionExecutor.of({
+                execute: ({ proposal }) =>
+                  Ref.update(executions, (current) => [...current, proposal.id]).pipe(
+                    Effect.andThen(Effect.die("D or E must not execute before the failed G2 boundary"))
+                  )
+              })
+            ),
+            Effect.flip
+          )
+
+          expect(failure).toEqual(
+            boundary === "JournalRead"
+              ? journalReadFailure
+              : boundary === "JournalAppend"
+                ? journalAppendFailure
+                : finalityReadFailure
+          )
+          expect(yield* Ref.get(executions)).toEqual([])
+          expect(yield* Ref.get(providerReads)).toBe(boundary === "FinalityTrackerRead" ? 1 : 0)
+          expect(yield* Ref.get(journalReads)).toBe(
+            boundary === "JournalRead" ? 1 : boundary === "JournalAppend" ? 2 : 3
+          )
+          expect(yield* Ref.get(journalAppends)).toBe(
+            boundary === "JournalRead" ? 0 : boundary === "JournalAppend" ? 1 : 2
+          )
+          const durableRecords = yield* Ref.get(records)
+          if (boundary === "FinalityTrackerRead") {
+            expect(durableRecords).toHaveLength(2)
+            expect(durableRecords[0]?.event).toMatchObject({
+              _tag: "TaskTrackerReadIntentRecorded",
+              operation: { cause: { _tag: "PostQuiescenceReconfirmation" } }
+            })
+            expect(durableRecords[1]?.event).toMatchObject({
+              _tag: "TaskTrackerFactsObserved",
+              observation: {
+                _tag: "TaskTrackerFactsReadFailed",
+                failure: { _tag: "TrackerReadError", detail: finalityReadFailure.detail }
+              }
+            })
+          } else {
+            expect(durableRecords).toEqual([])
+          }
+          expect(yield* integrationTargets.snapshot).toEqual({
+            activeResponsibilityPositions: new Set(),
+            heldResponsibilityPositions: new Set()
+          })
+        })
+      ),
+    { discard: true }
   )
 )
 
