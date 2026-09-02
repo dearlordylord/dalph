@@ -109,15 +109,18 @@ type ReservableStoryItem =
 const reservedStoryPositionsThroughFollowingProcessDeath = 2
 
 /** One process-local authored item held behind its production result boundary. */
-interface AuthoredCursorReservation {
-  /** The Safe append committed, then this exact process death cut off its ordinary accepted-fact publication. */
-  readonly followingProcessDeath?: {
-    readonly index: number
-    readonly item: typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type
-  }
-  readonly index: number
-  readonly item: ReservableStoryItem
-}
+type AuthoredCursorReservation =
+  | { readonly _tag: "ReservedItem"; readonly index: number; readonly item: ReservableStoryItem }
+  | {
+      /** The Safe append committed, then this exact process death cut off its ordinary accepted-fact publication. */
+      readonly _tag: "ReservedSafeThroughProcessDeath"
+      readonly followingProcessDeath: {
+        readonly index: number
+        readonly item: typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type
+      }
+      readonly index: number
+      readonly item: AuthoredSafelySuspendedExecutorReportItem
+    }
 
 type ExecutorProjectionOrReservedSafeClaim =
   | { readonly _tag: "None" }
@@ -128,8 +131,7 @@ type ExecutorProjectionOrReservedSafeClaim =
   | { readonly _tag: "ReservedSafe"; readonly item: AuthoredSafelySuspendedExecutorReportItem }
 
 const storyPositionAfterReservation = (reservation: AuthoredCursorReservation): number =>
-  reservation.index +
-  (reservation.followingProcessDeath === undefined ? 1 : reservedStoryPositionsThroughFollowingProcessDeath)
+  reservation.index + (reservation._tag === "ReservedItem" ? 1 : reservedStoryPositionsThroughFollowingProcessDeath)
 
 interface ConcurrentInteractionGroupState {
   readonly consumedRoles: ReadonlySet<AuthoredConcurrentInteractionNode["role"]>
@@ -1317,7 +1319,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         const item = story[index]
         const active = yield* Ref.get(reservation)
         if (active !== undefined || !predicate(item)) return { _tag: "Mismatch" as const, index, item }
-        yield* Ref.set(reservation, { index, item })
+        yield* Ref.set(reservation, { _tag: "ReservedItem", index, item })
         return { _tag: "Claimed" as const, index, item }
       })
     )
@@ -1830,7 +1832,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     Effect.gen(function* () {
       const claimed = yield* claimNext(
         (item): item is typeof AuthoredCassetteStoryItem.cases.PlannedAttemptExecutorProjectionReturned.Type =>
-          item?._tag === "PlannedAttemptExecutorProjectionReturned" && item.report.attemptId === attemptId,
+          authoredExecutorProjectionMatches(item, attemptId),
         { throughTransition: true }
       )
       if (claimed._tag === "Mismatch") return Option.none()
@@ -2306,16 +2308,21 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         const active = yield* Ref.get(reservation)
         if (
           active === undefined ||
+          active._tag !== "ReservedItem" ||
           !isAuthoredSafelySuspendedExecutorReport(active.item) ||
-          active.followingProcessDeath !== undefined
+          story[active.index + 1]?._tag !== "CoordinatorProcessDies"
         ) {
           return Option.none<typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type>()
         }
         const item = story[active.index + 1]
-        if (item?._tag !== "CoordinatorProcessDies") {
-          return Option.none<typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type>()
-        }
-        yield* Ref.set(reservation, { ...active, followingProcessDeath: { index: active.index + 1, item } })
+        /* v8 ignore next -- @preserve The guard above narrows this exact authored successor. */
+        if (item?._tag !== "CoordinatorProcessDies") return Option.none()
+        yield* Ref.set(reservation, {
+          _tag: "ReservedSafeThroughProcessDeath",
+          followingProcessDeath: { index: active.index + 1, item },
+          index: active.index,
+          item: active.item
+        })
         return Option.some(item)
       })
     )

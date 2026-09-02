@@ -4,19 +4,41 @@ import { Cause, Deferred, Effect, Exit, Fiber, Option, Ref, Schema, Stream } fro
 import { expect } from "vitest"
 import {
   AttemptId,
+  GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorReport,
+  PlannedTaskAttempt,
   RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
   TaskId,
+  TaskRevision,
+  WorktreeLocator,
   passiveLifecycleObservationPurpose,
   plannedAttemptExecutorCorrelationKey
 } from "@dalph/contracts"
 import {
   FixtureTarget,
+  JournalDataCorruption,
+  JournalHistoryCorruption,
+  JournalPartitionContradiction,
+  JournalPosition,
+  JournalSchemaIncompatible,
+  JournalSchemaVersion,
+  JournalStorageAccessDenied,
+  JournalStorageCapacityExhausted,
+  JournalStorageLocked,
+  JournalStorageUnavailable,
+  type JournalStore,
+  plannedAttemptExecutorWorkReportedRecordKey,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
   OperationId,
   TraceOutputError,
   TrackerRevision,
+  workflowJournalEventVersion,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
 } from "@dalph/orchestrator"
@@ -44,6 +66,7 @@ import {
   maintainedAuthoredCassetteCatalog,
   runAuthoredScenarioCassette
 } from "../../src/cassettes/index.js"
+import { settleAuthoredSafelySuspendedPublication } from "../../src/cassettes/authored-runner.js"
 import { runUnpauseAfterSafeSuspensionAuthoredCassette } from "../../src/cassettes/catalog.js"
 
 const taskB = TaskId.make("B")
@@ -121,10 +144,15 @@ it.effect("keeps Continue B unavailable before the production C2 Safe publicatio
     }).pipe(Effect.forkChild)
 
     yield* Deferred.await(providerReturned)
-    const earlyContinue = yield* cursor.consumeAttemptChoice.pipe(Effect.forkChild)
-    yield* Effect.yieldNow
-    const continueUnavailable = earlyContinue.pollUnsafe() === undefined
-    expect(continueUnavailable).toBe(true)
+    const continueAttempted = yield* Deferred.make<void>()
+    const continueFinished = yield* Deferred.make<void>()
+    const earlyContinue = yield* Deferred.succeed(continueAttempted, undefined).pipe(
+      Effect.andThen(cursor.consumeAttemptChoice),
+      Effect.tap(() => Deferred.succeed(continueFinished, undefined)),
+      Effect.forkChild({ startImmediately: true })
+    )
+    yield* Deferred.await(continueAttempted)
+    expect(yield* Deferred.isDone(continueFinished)).toBe(false)
     expect(yield* cursor.storyPosition).toBe(0)
     yield* Fiber.interrupt(earlyContinue)
     yield* Fiber.interrupt(production)
@@ -151,16 +179,13 @@ it.effect("settles exact C2 Safe once before delayed interruption and Continue B
     ) {
       return yield* Effect.die("the capstone does not contain the exact C2 Safe/Continue B cut")
     }
-    const publicationEntered = yield* Deferred.make<void>()
-    const releasePublication = yield* Deferred.make<void>()
+    const journalReadEntered = yield* Deferred.make<void>()
+    const releaseJournalRead = yield* Deferred.make<void>()
     const occurrenceCount = yield* Ref.make(0)
     const cursor = yield* makeStoryCursor([safe, continued], {
       onOccurrence: ({ item }) =>
         item._tag === "PlannedAttemptExecutorWorkReported"
-          ? Ref.update(occurrenceCount, (count) => count + 1).pipe(
-              Effect.andThen(Deferred.succeed(publicationEntered, undefined)),
-              Effect.andThen(Deferred.await(releasePublication))
-            )
+          ? Ref.update(occurrenceCount, (count) => count + 1)
           : Effect.void
     })
     const reserved = yield* cursor.consumeExecutorReportFor("Suspend", safe.report.attemptId)
@@ -168,22 +193,56 @@ it.effect("settles exact C2 Safe once before delayed interruption and Continue B
       return yield* Effect.die("the exact C2 Safe item was not reserved")
     }
 
-    const settlement = yield* cursor.settleSafelySuspendedExecutorReport(reserved).pipe(Effect.forkScoped)
-    yield* Deferred.await(publicationEntered)
-    const interrupted = yield* Fiber.interrupt(settlement).pipe(Effect.forkScoped)
-    const nextChoice = yield* cursor.consumeAttemptChoice.pipe(Effect.forkScoped)
-    yield* Effect.yieldNow
-    const interruptionDelayed = interrupted.pollUnsafe() === undefined
-    const continueUnavailable = nextChoice.pollUnsafe() === undefined
+    const runId = RunId.make("authored-c2-safe-settlement")
+    const acceptedThrough = JournalPosition.make(2)
+    const correlation = { attemptId: safe.report.attemptId, runId }
+    const ordinal = PlannedAttemptExecutorReportOrdinal.make(2)
+    const report = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+    const record = {
+      event: PlannedAttemptExecutorWorkReportedEvent.make({ ordinal, report, version: workflowJournalEventVersion }),
+      key: plannedAttemptExecutorWorkReportedRecordKey(correlation.attemptId, ordinal),
+      position: acceptedThrough,
+      runId
+    }
+    const acceptedSafeReport = yield* Ref.make(Option.some(reserved))
+    const settlement = yield* settleAuthoredSafelySuspendedPublication({
+      acceptedSafeReport,
+      acceptedThrough,
+      cursor,
+      readJournal: () =>
+        Deferred.succeed(journalReadEntered, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseJournalRead)),
+          Effect.as([record])
+        ),
+      runId
+    }).pipe(Effect.forkScoped({ startImmediately: true }))
+    yield* Deferred.await(journalReadEntered)
+    const interruptionRequested = yield* Deferred.make<void>()
+    const interruptionFinished = yield* Deferred.make<void>()
+    const interrupted = yield* Deferred.succeed(interruptionRequested, undefined).pipe(
+      Effect.andThen(Fiber.interrupt(settlement)),
+      Effect.tap(() => Deferred.succeed(interruptionFinished, undefined)),
+      Effect.forkScoped({ startImmediately: true })
+    )
+    yield* Deferred.await(interruptionRequested)
+    const continueAttempted = yield* Deferred.make<void>()
+    const continueFinished = yield* Deferred.make<void>()
+    const nextChoice = yield* Deferred.succeed(continueAttempted, undefined).pipe(
+      Effect.andThen(cursor.consumeAttemptChoice),
+      Effect.tap(() => Deferred.succeed(continueFinished, undefined)),
+      Effect.forkScoped({ startImmediately: true })
+    )
+    yield* Deferred.await(continueAttempted)
+    expect(yield* Deferred.isDone(interruptionFinished)).toBe(false)
+    expect(yield* Deferred.isDone(continueFinished)).toBe(false)
+    expect(yield* cursor.storyPosition).toBe(0)
 
-    yield* Deferred.succeed(releasePublication, undefined)
+    yield* Deferred.succeed(releaseJournalRead, undefined)
     yield* Fiber.join(interrupted)
     expect(Exit.isFailure(yield* Fiber.await(settlement))).toBe(true)
     expect(yield* Fiber.join(nextChoice)).toEqual(Option.some(continued))
     expect(yield* Ref.get(occurrenceCount)).toBe(1)
     expect(yield* cursor.storyPosition).toBe(2)
-    expect(interruptionDelayed).toBe(true)
-    expect(continueUnavailable).toBe(true)
 
     const duplicate = yield* cursor.settleSafelySuspendedExecutorReport(reserved).pipe(Effect.exit)
     expect(Exit.isFailure(duplicate)).toBe(true)
@@ -390,14 +449,15 @@ const observeThroughControlledExecutor = (
   cursor: StoryCursor,
   runId: RunId,
   correlation: { readonly attemptId: AttemptId; readonly runId: RunId },
-  reports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>
+  reports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
+  beforeExecutorReport: Parameters<typeof controlledExecutorLayer>[2] = () => Effect.void
 ) =>
   Effect.gen(function* () {
     const unresolved = yield* Ref.make<ReadonlySet<string>>(new Set())
     return yield* Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
       return yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
-    }).pipe(Effect.provide(controlledExecutorLayer(cursor, runId, () => Effect.void, reports, unresolved)))
+    }).pipe(Effect.provide(controlledExecutorLayer(cursor, runId, beforeExecutorReport, reports, unresolved)))
   })
 
 const attachThroughControlledExecutor = (
@@ -413,6 +473,36 @@ const attachThroughControlledExecutor = (
       return yield* lifecycle.attach(correlation)
     }).pipe(Effect.provide(controlledExecutorLayer(cursor, runId, () => Effect.void, reports, unresolved)))
   })
+
+type C2JournalReadFailure = Effect.Error<ReturnType<JournalStore["Service"]["read"]>>
+type C2JournalReadFailureFixtures = {
+  readonly [Tag in C2JournalReadFailure["_tag"]]: Extract<C2JournalReadFailure, { readonly _tag: Tag }>
+}
+
+const c2JournalReadFailureFixtures = (runId: RunId): C2JournalReadFailureFixtures => {
+  const operation = "JournalStore.read" as const
+  return {
+    JournalDataCorruption: new JournalDataCorruption({ detail: "invalid C2 bytes", operation }),
+    JournalHistoryCorruption: new JournalHistoryCorruption({
+      detail: "invalid C2 history",
+      operation,
+      partition: "Hot",
+      runId
+    }),
+    JournalPartitionContradiction: new JournalPartitionContradiction({ runId }),
+    JournalSchemaIncompatible: new JournalSchemaIncompatible({
+      found: JournalSchemaVersion.make(2),
+      supported: JournalSchemaVersion.make(1)
+    }),
+    JournalStorageAccessDenied: new JournalStorageAccessDenied({ detail: "C2 read denied", operation }),
+    JournalStorageCapacityExhausted: new JournalStorageCapacityExhausted({
+      detail: "C2 read capacity exhausted",
+      operation
+    }),
+    JournalStorageLocked: new JournalStorageLocked({ detail: "C2 read locked", operation }),
+    JournalStorageUnavailable: new JournalStorageUnavailable({ detail: "C2 read unavailable", operation })
+  }
+}
 
 it.effect("reobserves B1 executing without advancing or manufacturing another report", () =>
   Effect.gen(function* () {
@@ -451,15 +541,10 @@ it.effect("reobserves an exact committed Safe report while its authored publicat
       new Map([[plannedAttemptExecutorCorrelationKey(correlation), committed]])
     )
 
-    const observing = yield* observeThroughControlledExecutor(cursor, runId, correlation, reports).pipe(
-      Effect.forkChild
-    )
-    yield* Effect.yieldNow
-
-    const exit = observing.pollUnsafe()
-    expect(exit).toBeDefined()
-    if (exit === undefined) return
-    expect(yield* Fiber.join(observing)).toEqual({ _tag: "Exact", report: committed })
+    expect(yield* observeThroughControlledExecutor(cursor, runId, correlation, reports)).toEqual({
+      _tag: "Exact",
+      report: committed
+    })
     expect(yield* cursor.storyPosition).toBe(0)
   })
 )
@@ -529,6 +614,203 @@ it.effect("fails exact reserved Safe reconciliation for missing, wrong, or unres
         )
       }
     }
+  })
+)
+
+it.effect("preserves named C2 Safe failure families and reconciles a committed lost response without retry", () =>
+  Effect.gen(function* () {
+    const capstone = maintainedAuthoredCassetteCatalog.autonomousExecutorDeliveryCapstone
+    const safeIndex = capstone.story.findIndex(
+      (item) =>
+        item._tag === "PlannedAttemptExecutorWorkReported" &&
+        item.request === "Suspend" &&
+        item.report._tag === "ExecutorWorkSafelySuspended" &&
+        item.report.attemptId === "attempt:C:2"
+    )
+    const safe = capstone.story[safeIndex]
+    const continued = capstone.story[safeIndex + 1]
+    if (
+      safe?._tag !== "PlannedAttemptExecutorWorkReported" ||
+      safe.request !== "Suspend" ||
+      safe.report._tag !== "ExecutorWorkSafelySuspended" ||
+      continued?._tag !== "OperatorContinuesAttempt" ||
+      continued.attemptId !== "attempt:B:1"
+    ) {
+      return yield* Effect.die("the capstone does not contain the exact C2 Safe to Continue B identity cut")
+    }
+
+    const runId = RunId.make("authored-c2-failure-and-reconciliation")
+    const correlation = { attemptId: safe.report.attemptId, runId }
+    const acceptedThrough = JournalPosition.make(2)
+    const ordinal = PlannedAttemptExecutorReportOrdinal.make(2)
+    const committed = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+    const record = {
+      event: PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal,
+        report: committed,
+        version: workflowJournalEventVersion
+      }),
+      key: plannedAttemptExecutorWorkReportedRecordKey(correlation.attemptId, ordinal),
+      position: acceptedThrough,
+      runId
+    }
+
+    const directSuspendCursor = yield* makeStoryCursor([safe, continued])
+    const directSuspendCalls = yield* Ref.make(0)
+    const directSuspendFailure = new PlannedAttemptExecutorCommandFailure({
+      command: "Suspend",
+      correlation,
+      detail: "the exact C2 Suspend provider failed before returning a report"
+    })
+    const plannedAttempt = PlannedTaskAttempt.make({
+      attemptId: correlation.attemptId,
+      baseSha: GitCommitSha.make("c".repeat(40)),
+      branch: TaskBranchRef.make("refs/heads/dalph/c2-safe-failure"),
+      executor: TaskExecutorLocator.make("executor:c2-safe-failure"),
+      runId,
+      taskId: TaskId.make("C"),
+      taskRevision: TaskRevision.make("C2-safe-failure-revision"),
+      worktree: WorktreeLocator.make("/dalph/cassettes/c2-safe-failure")
+    })
+    const directSuspendReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
+    const directSuspendUnresolved = yield* Ref.make<ReadonlySet<string>>(new Set())
+    expect(
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        return yield* executor.requestSuspension(plannedAttempt)
+      }).pipe(
+        Effect.provide(
+          controlledExecutorLayer(
+            directSuspendCursor,
+            runId,
+            () =>
+              Ref.update(directSuspendCalls, (count) => count + 1).pipe(
+                Effect.andThen(Effect.fail(directSuspendFailure as never))
+              ),
+            directSuspendReports,
+            directSuspendUnresolved
+          )
+        ),
+        Effect.flip
+      )
+    ).toBe(directSuspendFailure)
+    expect(yield* Ref.get(directSuspendCalls)).toBe(1)
+    expect(yield* Ref.get(directSuspendReports)).toEqual(new Map())
+    expect(yield* directSuspendCursor.storyPosition).toBe(0)
+    expect((yield* directSuspendCursor.currentStoryItem)?._tag).toBe("PlannedAttemptExecutorWorkReported")
+
+    for (const failure of Object.values(c2JournalReadFailureFixtures(runId))) {
+      const cursor = yield* makeStoryCursor([safe, continued])
+      const reserved = yield* cursor.consumeExecutorReportFor("Suspend", correlation.attemptId)
+      if (!isSafelySuspendedExecutorReport(reserved)) return yield* Effect.die("C2 Safe was not reserved")
+      const acceptedSafeReport = yield* Ref.make(Option.some(reserved))
+      const reads = yield* Ref.make(0)
+
+      expect(
+        yield* settleAuthoredSafelySuspendedPublication({
+          acceptedSafeReport,
+          acceptedThrough,
+          cursor,
+          readJournal: () => Ref.update(reads, (count) => count + 1).pipe(Effect.andThen(Effect.fail(failure))),
+          runId
+        }).pipe(Effect.flip)
+      ).toBe(failure)
+      expect(yield* Ref.get(reads)).toBe(1)
+      expect(yield* cursor.storyPosition).toBe(0)
+      expect((yield* cursor.currentStoryItem)?._tag).toBe("PlannedAttemptExecutorWorkReported")
+    }
+
+    const mismatchedRecords = [
+      [
+        {
+          ...record,
+          event: PlannedAttemptExecutorWorkReportedEvent.make({
+            ordinal,
+            report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+              correlation: { ...correlation, runId: RunId.make("foreign-C2-run") }
+            }),
+            version: workflowJournalEventVersion
+          })
+        }
+      ],
+      [
+        {
+          ...record,
+          event: PlannedAttemptExecutorWorkReportedEvent.make({
+            ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+            report: committed,
+            version: workflowJournalEventVersion
+          })
+        }
+      ],
+      [{ ...record, position: JournalPosition.make(1) }],
+      [record, { ...record, position: JournalPosition.make(1) }]
+    ]
+    for (const records of mismatchedRecords) {
+      const cursor = yield* makeStoryCursor([safe, continued])
+      const reserved = yield* cursor.consumeExecutorReportFor("Suspend", correlation.attemptId)
+      if (!isSafelySuspendedExecutorReport(reserved)) return yield* Effect.die("C2 Safe was not reserved")
+      const acceptedSafeReport = yield* Ref.make(Option.some(reserved))
+      const failure = yield* settleAuthoredSafelySuspendedPublication({
+        acceptedSafeReport,
+        acceptedThrough,
+        cursor,
+        readJournal: () => Effect.succeed(records),
+        runId
+      }).pipe(Effect.flip)
+
+      expect(failure).toMatchObject({
+        _tag: "AuthoredCassetteInteractionMismatch",
+        expected: "one accepted Safe report at ordinal 2 and the published position",
+        storyPosition: 0
+      })
+      expect(yield* cursor.storyPosition).toBe(0)
+    }
+
+    const settledSafeOccurrences = yield* Ref.make(0)
+    const cursor = yield* makeStoryCursor(
+      [safe, AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.make({}), continued],
+      {
+        onOccurrence: ({ item }) =>
+          item._tag === "PlannedAttemptExecutorWorkReported"
+            ? Ref.update(settledSafeOccurrences, (count) => count + 1)
+            : Effect.void
+      }
+    )
+    const reserved = yield* cursor.consumeExecutorReportFor("Suspend", correlation.attemptId)
+    if (!isSafelySuspendedExecutorReport(reserved)) return yield* Effect.die("C2 Safe was not reserved")
+    const processDeath = yield* cursor.pauseAtCoordinatorProcessDeath.pipe(Effect.exit)
+    expect(Exit.isFailure(processDeath)).toBe(true)
+    expect(yield* cursor.storyPosition).toBe(0)
+
+    const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(
+      new Map([[plannedAttemptExecutorCorrelationKey(correlation), committed]])
+    )
+    const reconciliationSuspendCalls = yield* Ref.make(0)
+    expect(
+      yield* observeThroughControlledExecutor(cursor, runId, correlation, reports, () =>
+        Ref.update(reconciliationSuspendCalls, (count) => count + 1)
+      )
+    ).toEqual({ _tag: "Exact", report: committed })
+    expect(yield* Ref.get(reconciliationSuspendCalls)).toBe(0)
+    const acceptedSafeReport = yield* Ref.make(Option.some(reserved))
+    const reads = yield* Ref.make(0)
+    expect(
+      yield* settleAuthoredSafelySuspendedPublication({
+        acceptedSafeReport,
+        acceptedThrough,
+        cursor,
+        readJournal: () => Ref.update(reads, (count) => count + 1).pipe(Effect.as([record])),
+        runId
+      })
+    ).toBe(true)
+    expect(yield* Ref.get(reads)).toBe(1)
+    expect(yield* Ref.get(settledSafeOccurrences)).toBe(1)
+    expect(yield* cursor.storyPosition).toBe(2)
+    expect(yield* cursor.consumeAttemptChoice).toEqual(Option.some(continued))
+    expect(yield* cursor.storyPosition).toBe(3)
+    expect([record].filter(({ event }) => event.ordinal === 2)).toHaveLength(1)
+    expect([record].filter(({ event }) => event.ordinal === 3)).toHaveLength(0)
   })
 )
 

@@ -154,6 +154,113 @@ import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js
 
 const acceptedSafeReportOrdinal = 2
 
+type AuthoredCapacityOperatorControl = Pick<
+  JournaledRunBootstrap["Service"]["operatorControl"],
+  "readTaskWorkCapacity" | "setTaskWorkCapacity"
+>
+
+/** Runs the exact public capacity read/apply/reconcile boundary before publishing its authored occurrence. */
+export const driveAuthoredTaskWorkCapacityChange = Effect.fn("AuthoredCassette.driveTaskWorkCapacityChange")(
+  function* (request: {
+    readonly cursor: StoryCursor
+    readonly operatorControl: AuthoredCapacityOperatorControl
+    readonly runId: RunId
+  }) {
+    const change = yield* request.cursor.consumeCapacityChange
+    /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
+    if (Option.isNone(change)) return
+    /* v8 ignore stop */
+    const current = yield* request.operatorControl.readTaskWorkCapacity(request.runId)
+    const appliedRevision = RunPolicyRevision.make(initialRunPolicyRevision + 1)
+    const expectedPolicy = { revision: appliedRevision, taskExecutionCapacity: change.value.capacity }
+    const currentMatches =
+      current.revision === expectedPolicy.revision &&
+      current.taskExecutionCapacity === expectedPolicy.taskExecutionCapacity
+    if (currentMatches) {
+      yield* request.cursor.settleCapacityChange(change.value)
+      return
+    }
+    if (current.revision !== initialRunPolicyRevision) {
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: JSON.stringify(current),
+        expected: JSON.stringify(expectedPolicy),
+        storyPosition: yield* request.cursor.storyPosition
+      })
+    }
+    const applied = yield* request.operatorControl.setTaskWorkCapacity({
+      capacity: change.value.capacity,
+      expectedRevision: current.revision,
+      runId: request.runId
+    })
+    if (
+      applied.revision !== expectedPolicy.revision ||
+      applied.taskExecutionCapacity !== expectedPolicy.taskExecutionCapacity
+    ) {
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: JSON.stringify(applied),
+        expected: JSON.stringify(expectedPolicy),
+        storyPosition: yield* request.cursor.storyPosition
+      })
+    }
+    yield* request.cursor.settleCapacityChange(change.value)
+  }
+)
+
+/**
+ * After ordinary delivery publishes one exact position, rereads that durable prefix and settles the
+ * reserved Safe occurrence as one uninterruptible handoff.
+ */
+export const settleAuthoredSafelySuspendedPublication = Effect.fn("AuthoredCassette.settleSafelySuspendedPublication")(
+  function* (request: {
+    readonly acceptedSafeReport: Ref.Ref<Option.Option<AuthoredSafelySuspendedExecutorReportItem>>
+    readonly acceptedThrough: JournalPosition | null
+    readonly cursor: StoryCursor
+    readonly readJournal: JournalStore["Service"]["read"]
+    readonly runId: RunId
+  }) {
+    return yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const reserved = yield* Ref.get(request.acceptedSafeReport)
+        if (Option.isNone(reserved) || request.acceptedThrough === null) return false
+        const acceptedThrough = request.acceptedThrough
+        const records = yield* request.readJournal(request.runId)
+        const publishedSafeRecords = records.flatMap(({ event, position }) =>
+          position <= acceptedThrough &&
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report._tag === "ExecutorWorkSafelySuspended"
+            ? [{ event, position }]
+            : []
+        )
+        const acceptedSafeRecords = publishedSafeRecords.filter(
+          ({ event }) =>
+            event.report.correlation.runId === request.runId &&
+            event.report.correlation.attemptId === reserved.value.report.attemptId
+        )
+        if (publishedSafeRecords.length === 0) return false
+        const exact = acceptedSafeRecords.filter(
+          ({ event, position }) => event.ordinal === acceptedSafeReportOrdinal && position === acceptedThrough
+        )
+        if (acceptedSafeRecords.length !== 1 || exact.length !== 1) {
+          return yield* new AuthoredCassetteInteractionMismatch({
+            actual: JSON.stringify(
+              publishedSafeRecords.map(({ event, position }) => ({
+                correlation: event.report.correlation,
+                ordinal: event.ordinal,
+                position
+              }))
+            ),
+            expected: "one accepted Safe report at ordinal 2 and the published position",
+            storyPosition: yield* request.cursor.storyPosition
+          })
+        }
+        yield* request.cursor.settleSafelySuspendedExecutorReport(reserved.value)
+        yield* Ref.set(request.acceptedSafeReport, Option.none())
+        return true
+      })
+    )
+  }
+)
+
 export interface AuthoredScenarioCassetteRun {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
   readonly cassette: ScenarioCassette
@@ -1503,37 +1610,14 @@ const runAuthoredScenarioCassetteWith = (request: {
       const publicationObserver = DeliveryRelationPublicationObserver.of({
         observe: (bundle) =>
           Effect.gen(function* () {
-            const reserved = yield* Ref.get(acceptedSafeReport)
             const acceptedThrough = bundle.actionInputs.runtimeFacts.acceptedAt
-            if (Option.isSome(reserved) && acceptedThrough !== null) {
-              const records = yield* sharedJournal.read(runId)
-              yield* Effect.uninterruptible(
-                Effect.gen(function* () {
-                  const acceptedSafeRecords = records.flatMap(({ event, position }) =>
-                    position <= acceptedThrough &&
-                    event._tag === "PlannedAttemptExecutorWorkReported" &&
-                    event.report._tag === "ExecutorWorkSafelySuspended" &&
-                    event.report.correlation.attemptId === reserved.value.report.attemptId
-                      ? [{ event, position }]
-                      : []
-                  )
-                  if (acceptedSafeRecords.length > 0) {
-                    const exact = acceptedSafeRecords.filter(({ event }) => event.ordinal === acceptedSafeReportOrdinal)
-                    if (acceptedSafeRecords.length !== 1 || exact.length !== 1) {
-                      return yield* new AuthoredCassetteInteractionMismatch({
-                        actual: JSON.stringify(
-                          acceptedSafeRecords.map(({ event, position }) => ({ ordinal: event.ordinal, position }))
-                        ),
-                        expected: "one accepted Safe report at ordinal 2",
-                        storyPosition: yield* cursor.storyPosition
-                      })
-                    }
-                    yield* cursor.settleSafelySuspendedExecutorReport(reserved.value)
-                    yield* Ref.set(acceptedSafeReport, Option.none())
-                  }
-                })
-              )
-            }
+            yield* settleAuthoredSafelySuspendedPublication({
+              acceptedSafeReport,
+              acceptedThrough,
+              cursor,
+              readJournal: sharedJournal.read,
+              runId
+            })
             const activationOrdinal = yield* Ref.get(activeDeliveryActivation)
             const storyPosition = yield* cursor.storyPosition
             const publication = { activationOrdinal, storyPosition: AuthoredStoryPosition.make(storyPosition), bundle }
@@ -2218,44 +2302,10 @@ const runAuthoredScenarioCassetteWith = (request: {
               /* v8 ignore stop -- @preserve */
             })
 
-            const driveCapacityChange = Effect.gen(function* () {
-              const change = yield* cursor.consumeCapacityChange
-              /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
-              if (Option.isNone(change)) return
-              /* v8 ignore stop */
-              const current = yield* bootstrap.operatorControl.readTaskWorkCapacity(runId)
-              const appliedRevision = RunPolicyRevision.make(initialRunPolicyRevision + 1)
-              const expectedPolicy = { revision: appliedRevision, taskExecutionCapacity: change.value.capacity }
-              const currentMatches =
-                current.revision === expectedPolicy.revision &&
-                current.taskExecutionCapacity === expectedPolicy.taskExecutionCapacity
-              if (currentMatches) {
-                yield* cursor.settleCapacityChange(change.value)
-                return
-              }
-              if (current.revision !== initialRunPolicyRevision) {
-                return yield* new AuthoredCassetteInteractionMismatch({
-                  actual: JSON.stringify(current),
-                  expected: JSON.stringify(expectedPolicy),
-                  storyPosition: yield* cursor.storyPosition
-                })
-              }
-              const applied = yield* bootstrap.operatorControl.setTaskWorkCapacity({
-                capacity: change.value.capacity,
-                expectedRevision: current.revision,
-                runId
-              })
-              if (
-                applied.revision !== expectedPolicy.revision ||
-                applied.taskExecutionCapacity !== expectedPolicy.taskExecutionCapacity
-              ) {
-                return yield* new AuthoredCassetteInteractionMismatch({
-                  actual: JSON.stringify(applied),
-                  expected: JSON.stringify(expectedPolicy),
-                  storyPosition: yield* cursor.storyPosition
-                })
-              }
-              yield* cursor.settleCapacityChange(change.value)
+            const driveCapacityChange = driveAuthoredTaskWorkCapacityChange({
+              cursor,
+              operatorControl: bootstrap.operatorControl,
+              runId
             })
             const driveRunReactivationHints = Effect.gen(function* () {
               const authored = yield* cursor.consumeRunReactivationHints

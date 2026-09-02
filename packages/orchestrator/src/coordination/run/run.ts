@@ -248,6 +248,7 @@ export interface JournaledRunBootstrapService {
       input: unknown
     ) => Effect.Effect<
       Effect.Success<ReturnType<TaskWorkCapacityControl["Service"]["apply"]>>,
+      | Schema.SchemaError
       | Effect.Error<ReturnType<TaskWorkCapacityControl["Service"]["apply"]>>
       | ApplicationExiting
       | JournaledRunIdentityMismatch

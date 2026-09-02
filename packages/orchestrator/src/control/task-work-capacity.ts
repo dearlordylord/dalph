@@ -33,21 +33,17 @@ type InvalidWorkflowJournalHistory = Extract<
 
 interface TaskWorkCapacityControlService {
   readonly apply: (
-    input: unknown
+    request: SetTaskWorkCapacityRequest
   ) => Effect.Effect<
     RunControlPolicy,
-    | InvalidWorkflowJournalHistory
-    | JournalAppendError
-    | Schema.SchemaError
-    | TaskWorkCapacityPolicyRevisionConflict
-    | WorkflowRunNotBegan
+    InvalidWorkflowJournalHistory | JournalAppendError | TaskWorkCapacityPolicyRevisionConflict | WorkflowRunNotBegan
   >
   readonly read: (
     runId: RunId
   ) => Effect.Effect<RunControlPolicy, InvalidWorkflowJournalHistory | JournalReadError | WorkflowRunNotBegan>
 }
 
-/** Decodes, journals, and reconstructs one Run's Operator-applied task-work capacity. */
+/** Journals and reconstructs one already-decoded Operator-applied task-work capacity. */
 export class TaskWorkCapacityControl extends Context.Service<TaskWorkCapacityControl, TaskWorkCapacityControlService>()(
   "@dalph/TaskWorkCapacityControl"
 ) {}
@@ -71,8 +67,7 @@ export const taskWorkCapacityControlLayer = Layer.effect(
     const read = Effect.fn("TaskWorkCapacityControl.read")(function* (runId: RunId) {
       return yield* reconstructTaskWorkCapacityPolicy(runId, yield* journal.read(runId))
     })
-    const apply = Effect.fn("TaskWorkCapacityControl.apply")(function* (input: unknown) {
-      const request = yield* Schema.decodeUnknownEffect(SetTaskWorkCapacityRequest)(input)
+    const apply = Effect.fn("TaskWorkCapacityControl.apply")(function* (request: SetTaskWorkCapacityRequest) {
       const current = yield* read(request.runId)
       if (current.revision !== request.expectedRevision) {
         return yield* new TaskWorkCapacityPolicyRevisionConflict({

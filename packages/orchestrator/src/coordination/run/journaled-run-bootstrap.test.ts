@@ -48,7 +48,7 @@ import {
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
 import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
-import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
+import { TaskWorkCapacityControl, taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import { Journal } from "../delivery/journal.js"
@@ -2958,7 +2958,7 @@ it.effect("reads and changes one inactive task-work capacity through the process
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
-it.effect("excludes activation while inactive task-work capacity is reading the process Journal", () =>
+it.effect("keeps activation out of inactive capacity read and apply until each Journal boundary releases", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const target = FixtureTarget.make("journaled-bootstrap-inactive-capacity-activation-exclusion")
@@ -2968,9 +2968,25 @@ it.effect("excludes activation while inactive task-work capacity is reading the 
       yield* delegate.beginRun(runId, target, initialPolicy)
       const firstReadStarted = yield* Deferred.make<void>()
       const releaseFirstRead = yield* Deferred.make<void>()
+      const capacityAppendStarted = yield* Deferred.make<void>()
+      const releaseCapacityAppend = yield* Deferred.make<void>()
+      const blockCapacityAppend = yield* Ref.make(false)
       const reads = yield* Ref.make(0)
       const storage = JournalStore.of({
         ...delegate,
+        append: (requestedRunId, key, event) =>
+          event._tag === "TaskWorkCapacityChanged"
+            ? Ref.get(blockCapacityAppend).pipe(
+                Effect.flatMap((blocked) =>
+                  blocked
+                    ? Deferred.succeed(capacityAppendStarted, undefined).pipe(
+                        Effect.andThen(Deferred.await(releaseCapacityAppend)),
+                        Effect.andThen(delegate.append(requestedRunId, key, event))
+                      )
+                    : delegate.append(requestedRunId, key, event)
+                )
+              )
+            : delegate.append(requestedRunId, key, event),
         read: (requestedRunId) =>
           Ref.getAndUpdate(reads, (count) => count + 1).pipe(
             Effect.flatMap((count) =>
@@ -3000,7 +3016,6 @@ it.effect("excludes activation while inactive task-work capacity is reading the 
           )
         )
         .pipe(Effect.forkChild)
-      yield* Effect.yieldNow
 
       expect(yield* Deferred.isDone(activationEntered)).toBe(false)
       yield* Deferred.succeed(releaseFirstRead, undefined)
@@ -3008,11 +3023,39 @@ it.effect("excludes activation while inactive task-work capacity is reading the 
       yield* Deferred.await(activationEntered)
       yield* Deferred.succeed(releaseActivation, undefined)
       expect(yield* Fiber.join(activating)).toMatchObject({ _tag: "RunMustRemainActive" })
+
+      yield* Ref.set(blockCapacityAppend, true)
+      const applying = yield* bootstrap.operatorControl
+        .setTaskWorkCapacity({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
+        .pipe(Effect.forkChild({ startImmediately: true }))
+      yield* Deferred.await(capacityAppendStarted)
+      const appliedActivationEntered = yield* Deferred.make<RunControlPolicy>()
+      const releaseAppliedActivation = yield* Deferred.make<void>()
+      const activatingAfterApply = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.gen(function* () {
+            const policy = yield* (yield* TaskWorkCapacityControl).read(runId)
+            yield* Deferred.succeed(appliedActivationEntered, policy)
+            yield* Deferred.await(releaseAppliedActivation)
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          })
+        )
+        .pipe(Effect.forkChild({ startImmediately: true }))
+
+      expect(yield* Deferred.isDone(appliedActivationEntered)).toBe(false)
+      yield* Deferred.succeed(releaseCapacityAppend, undefined)
+      expect(yield* Fiber.join(applying)).toEqual({ revision: 2, taskExecutionCapacity: 1 })
+      expect(yield* Deferred.await(appliedActivationEntered)).toEqual({ revision: 2, taskExecutionCapacity: 1 })
+      yield* Deferred.succeed(releaseAppliedActivation, undefined)
+      expect(yield* Fiber.join(activatingAfterApply)).toMatchObject({ _tag: "RunMustRemainActive" })
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
-it.effect("rejects a foreign public capacity Run identity before reading or appending raw Journal storage", () =>
+it.effect("rejects a foreign capacity Run before active or inactive runtime and Journal control", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const target = FixtureTarget.make("journaled-bootstrap-capacity-foreign-run")
@@ -3044,6 +3087,52 @@ it.effect("rejects a foreign public capacity Run identity before reading or appe
       ).toMatchObject({ _tag: "JournaledRunIdentityMismatch", expectedRunId: runId, requestedRunId: foreignRunId })
       expect(yield* Ref.get(reads)).toBe(0)
       expect(yield* Ref.get(appends)).toBe(0)
+
+      const activeJournalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const activeDelegate = Context.get(activeJournalContext, JournalStore)
+      yield* activeDelegate.beginRun(runId, target, initialPolicy)
+      const activeReads = yield* Ref.make(0)
+      const activeAppends = yield* Ref.make(0)
+      const activeStorage = JournalStore.of({
+        ...activeDelegate,
+        append: (...input) =>
+          Ref.update(activeAppends, (count) => count + 1).pipe(Effect.andThen(activeDelegate.append(...input))),
+        read: (requestedRunId) =>
+          Ref.update(activeReads, (count) => count + 1).pipe(Effect.andThen(activeDelegate.read(requestedRunId)))
+      })
+      const activeBootstrap = yield* buildBootstrap(runId, activeStorage)
+
+      const activationEntered = yield* Deferred.make<void>()
+      const releaseActivation = yield* Deferred.make<void>()
+      const activating = yield* activeBootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Deferred.succeed(activationEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseActivation)),
+            Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+          )
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(activationEntered)
+      yield* activeDelegate.beginRun(foreignRunId, target, initialPolicy)
+      const activeReadsBefore = yield* Ref.get(activeReads)
+      const activeAppendsBefore = yield* Ref.get(activeAppends)
+
+      expect(yield* activeBootstrap.operatorControl.readTaskWorkCapacity(foreignRunId).pipe(Effect.flip)).toMatchObject(
+        { _tag: "JournaledRunIdentityMismatch", expectedRunId: runId, requestedRunId: foreignRunId }
+      )
+      expect(
+        yield* activeBootstrap.operatorControl
+          .setTaskWorkCapacity({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId: foreignRunId })
+          .pipe(Effect.flip)
+      ).toMatchObject({ _tag: "JournaledRunIdentityMismatch", expectedRunId: runId, requestedRunId: foreignRunId })
+      expect(yield* Ref.get(activeReads)).toBe(activeReadsBefore)
+      expect(yield* Ref.get(activeAppends)).toBe(activeAppendsBefore)
+
+      yield* Deferred.succeed(releaseActivation, undefined)
+      expect(yield* Fiber.join(activating)).toMatchObject({ _tag: "RunMustRemainActive" })
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
@@ -3074,7 +3163,19 @@ it.effect("interrupts inactive task-work capacity before append without changing
       yield* Deferred.await(appendStarted)
       yield* Fiber.interrupt(applying)
 
-      expect(yield* bootstrap.operatorControl.readTaskWorkCapacity(runId)).toEqual({
+      const activationPolicy = yield* Deferred.make<RunControlPolicy>()
+      expect(
+        yield* bootstrap.activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.gen(function* () {
+            yield* Deferred.succeed(activationPolicy, yield* (yield* TaskWorkCapacityControl).read(runId))
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          })
+        )
+      ).toMatchObject({ _tag: "RunMustRemainActive" })
+      expect(yield* Deferred.await(activationPolicy)).toEqual({
         revision: initialRunPolicyRevision,
         taskExecutionCapacity: 2
       })
@@ -3117,6 +3218,19 @@ it.effect("reconciles an inactive capacity append that committed before its resp
         revision: 2,
         taskExecutionCapacity: 1
       })
+      const activationPolicy = yield* Deferred.make<RunControlPolicy>()
+      expect(
+        yield* bootstrap.activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.gen(function* () {
+            yield* Deferred.succeed(activationPolicy, yield* (yield* TaskWorkCapacityControl).read(runId))
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          })
+        )
+      ).toMatchObject({ _tag: "RunMustRemainActive" })
+      expect(yield* Deferred.await(activationPolicy)).toEqual({ revision: 2, taskExecutionCapacity: 1 })
       expect(
         yield* bootstrap.operatorControl
           .setTaskWorkCapacity({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
