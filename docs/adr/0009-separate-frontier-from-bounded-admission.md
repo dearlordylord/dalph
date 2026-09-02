@@ -9,6 +9,12 @@ workflow responsibility; recording the exact first operation intent commits a
 fresh choice. This separation prevents tracker observation, scheduler choice,
 capacity, and responsibility from collapsing into one state.
 
+For an ordinary fresh task, the first commitment-producing operation is
+`TaskClaimAcquisitionIntended` under `TaskSelectionAuthority`. An earlier
+authorized current-graph read creates no durable admission commitment. The
+commitment is admission accounting derived from Journal history, not a second
+cross-operation workflow responsibility and not a task-work position.
+
 ## Consequences
 
 Existing ready responsibility is admitted before fresh work and is ordered by
@@ -18,11 +24,16 @@ tie-breaker. Fresh tasks use normalized task identity as their stable order.
 External response and completion timing may change the state seen by a later
 decision, but the admission set is deterministic for one exact derived state.
 
-One process-local capacity controller stores at most one position for each
-task. Dalph decides whether a workflow transition needs zero or one task-work
-position; the executor does not request, acquire, declare, or release it.
-Generic orchestration applies that requirement to the executor's complete work
-for one planned task attempt, identified by its `RunId` and `AttemptId`.
+One process-local capacity controller stores at most one admission occupancy
+for each task. Before the first fresh-task claim intent, that occupancy is an
+exact live entry reservation. After the intent, it is a journal-derived
+fresh-task admission commitment until the exact executor-work responsibility
+begins or a matching pre-ownership claim rejection ends the commitment. Dalph
+separately decides whether a workflow transition needs zero or one exact
+attempt-held task-work position; the executor does not request, acquire,
+declare, or release it. Generic orchestration applies that requirement to the
+executor's complete work for one planned task attempt, identified by its
+`RunId` and `AttemptId`.
 
 After admission, task A keeps its position until the executor returns a
 terminal result for that complete planned attempt or proves the complete
@@ -32,9 +43,11 @@ cannot release or multiply the position. A completed executor attempt does not
 prove the task tracker marks task A completed.
 
 Journal reconstruction must reject two unfinished planned-attempt executor
-responsibilities for one task before frontier derivation. Capacity positions
-and frontier values are recomputed after restart and are never journal
-authority.
+responsibilities for one task before frontier derivation. Task-work positions,
+fresh-task admission commitments, and frontier values are recomputed after
+restart and are never journal authority. The commitments are derived from
+ordinary Journal facts; Dalph does not append a queue, placement, position, or
+commitment event.
 
 When the process-local controller's snapshot changes so future admission may be
 possible—including after a complete planned attempt becomes terminal, becomes

@@ -701,6 +701,15 @@ may clear when accepted facts change. The two outcomes are not interchangeable.
 
 ## Accepted graph progress cannot strand the next task-specification reads
 
+> **Issue #315 admission amendment:** this relation-handoff scenario can use
+> five already-recorded claims only as an explicit synthetic or grandfathered
+> starting prefix. It does not authorize production to create claims, plans, or
+> worktrees for A through E while capacity three is already occupied or
+> committed by A/B/C. The former downstream sentence saying #268 takes all five
+> tasks through post-claim specification reads is superseded. Issue #315 owns
+> which fresh tasks can reach this relation boundary; this section continues to
+> own only lossless delivery of already-accepted publications.
+
 ### Governing behavior
 
 [Issue #193's persistent live-request scenario](issue-193-run-reactive-delivery-actions.md#one-persistent-github-claim-proposal-starts-one-live-request)
@@ -771,14 +780,11 @@ opens a fresh current-first subscription from durable Journal facts.
   advances a production-shaped coherent signal through the previously blocked
   Journal position and one later publication, then proves that graph and
   action planning stay paired and arrive in order without queue starvation.
-- Downstream #268 blocking edge: `emits the exact DS01 through DS13 delivery
-  checkpoint table` in
-  `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`
-  is pending on the #268 composition and is not claimed as passing evidence on
-  this repair branch. Once composed, it supplies the vertical five-task
-  chronology: all post-claim graph reads settle, A through E reach their
-  specification reads, and the story continues through the remaining delivery
-  checkpoints.
+- The synthetic five-claim fixture proves only that all five already-accepted
+  post-claim publications reach their specification reads. It is not a
+  downstream #268 admission expectation. The #268 capstone must obtain A/B/C
+  through #315 admission first and must not prepare D/E until later accepted
+  capacity release.
 
 ## An action owner remains live until its accepted successor frontier reaches the runtime
 
