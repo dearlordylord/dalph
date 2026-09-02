@@ -90,7 +90,7 @@ const topologyTest = capstoneTest("consumes a staggered graph while restart-adde
 const restartTest = capstoneTest("preserves the double-diamond middle positions across coordinator restart")
 const checkpointTest = capstoneTest("emits the exact DS01 through DS13 delivery checkpoint table")
 const choiceProjectionTest = capstoneTest(
-  "projects B's exact F1 F2 choices from the production runtime evaluation until Continue"
+  "captures B's exact F1 F2 choices from each production runtime observation through Continue"
 )
 const identityTest = capstoneTest("retains exact Run attempt claim and resource identities across DS01 through DS13")
 const activeRefreshTest = capstoneTest(
@@ -100,9 +100,9 @@ const timerFallbackOwnerTest = maintainedTest(
   "packages/orchestrator/src/coordination/run/run-reactivation-owner.test.ts",
   "rechecks after a lost notification when TestClock fires, with no Run read per timer"
 )
-const timerFallbackAuthorityTest = maintainedTest(
+const timerSpecificationRefreshTest = maintainedTest(
   "packages/dalph/src/application/production-reactivation.test.ts",
-  "lost or pre-subscription tracker notification is recovered by the ordinary timer and executes an active authority read"
+  "accepted B F2 refresh suspends only B1 while A1 and C1 continue executing"
 )
 const runtimeObservationTest = maintainedTest(
   "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts",
@@ -155,7 +155,7 @@ export const deliveryStoryManifest = {
       checkpointTest,
       activeRefreshTest,
       timerFallbackOwnerTest,
-      timerFallbackAuthorityTest,
+      timerSpecificationRefreshTest,
       authorityGroupTest
     ),
     slice(

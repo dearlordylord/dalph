@@ -1,5 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
+import { deriveRunnableFrontier, WorkflowResponsibilityState } from "@dalph/orchestrator"
 import { Effect, Option } from "effect"
 import { expect } from "vitest"
 import {
@@ -800,14 +801,32 @@ it.effect("emits the exact DS01 through DS13 delivery checkpoint table", () =>
   })
 )
 
-it.effect("projects B's exact F1 F2 choices from the production runtime evaluation until Continue", () =>
+it.effect("captures B's exact F1 F2 choices from each production runtime observation through Continue", () =>
   Effect.gen(function* () {
     const run = yield* capstoneRun
     const { frames } = causalCapstoneCheckpoints(run)
-    const specificationConstraint = (frame: AuthoredDeliveryFrame) =>
-      frame.deliveries
+    const runtimeObservationCaptures = run.observationCaptures.filter(
+      (capture) => capture._tag === "DeliveryRuntimeObservationCaptured"
+    )
+    const specificationConstraint = (capture: (typeof runtimeObservationCaptures)[number]) => {
+      const facts = capture.observation.evaluation.current.ticketDeliveries.deliveries
         .find(({ taskId }) => taskId === "B")
-        ?.standings.find(({ kind }) => kind === "PlannedAttemptTaskSpecificationChangeConstraint")
+        ?.standings.flatMap((standing) =>
+          standing._tag === "ResponsibilitySituation" &&
+          standing.facts._tag === "PlannedAttemptExecutorFreshFacts" &&
+          standing.facts.disposition._tag === "TaskSpecificationChangeConstraint"
+            ? [standing.facts]
+            : []
+        )[0]
+      if (facts === undefined) return undefined
+      const frontier = deriveRunnableFrontier({
+        freshEligibleTasks: [],
+        responsibility: WorkflowResponsibilityState.make({ entries: [facts.responsibility] }),
+        responsibilityFacts: [facts]
+      })
+      expect(frontier.transitions).toEqual([])
+      return frontier.explanations[0]
+    }
     const expected = {
       _tag: "PlannedAttemptTaskSpecificationChangeConstraint",
       availableResolutions: ["ContinueExistingAttempt", "RestartTaskImplementation", "StopTaskImplementation"],
@@ -818,13 +837,46 @@ it.effect("projects B's exact F1 F2 choices from the production runtime evaluati
       wakeCondition: "TaskResolutionApplied"
     }
 
-    for (const frame of [frames.ds05, frames.ds06, frames.ds07, frames.ds08, frames.ds09, frames.ds10, frames.ds11]) {
-      const constraint = specificationConstraint(frame)
-      if (constraint === undefined) return expect.fail("B must remain awaiting Alice through DS-11")
-      expect(JSON.parse(constraint.exact)).toEqual(expected)
-    }
-    expect(specificationConstraint(frames.ds12)).toBeUndefined()
-    expect(specificationConstraint(frames.ds13)).toBeUndefined()
+    const relevantCaptures = (
+      [
+        ["DS-05", frames.ds05],
+        ["DS-06", frames.ds06],
+        ["DS-07", frames.ds07],
+        ["DS-08", frames.ds08],
+        ["DS-09", frames.ds09],
+        ["DS-10", frames.ds10],
+        ["DS-11", frames.ds11]
+      ] as const satisfies ReadonlyArray<readonly [string, AuthoredDeliveryFrame]>
+    ).map(([beat, frame]) => {
+      const captures = runtimeObservationCaptures.filter(
+        (capture) =>
+          capture.activationOrdinal === frame.activationOrdinal &&
+          capture.storyPosition === frame.storyPosition &&
+          capture.observation.evaluation.acceptedAt === frame.acceptedAt
+      )
+      expect(captures, `${beat} production evaluation capture`).toHaveLength(1)
+      const capture = captures[0]
+      if (capture === undefined) return expect.fail(`${beat} lacks its exact production runtime observation`)
+      expect(specificationConstraint(capture), beat).toEqual(expected)
+      return {
+        acceptedAt: frame.acceptedAt,
+        activationOrdinal: capture.activationOrdinal,
+        beat,
+        captureCount: captures.length,
+        captureOrder: capture.captureOrder,
+        storyPosition: capture.storyPosition
+      }
+    })
+
+    expect(relevantCaptures.map(({ beat, captureCount }) => ({ beat, captureCount }))).toEqual([
+      { beat: "DS-05", captureCount: 1 },
+      { beat: "DS-06", captureCount: 1 },
+      { beat: "DS-07", captureCount: 1 },
+      { beat: "DS-08", captureCount: 1 },
+      { beat: "DS-09", captureCount: 1 },
+      { beat: "DS-10", captureCount: 1 },
+      { beat: "DS-11", captureCount: 1 }
+    ])
   })
 )
 

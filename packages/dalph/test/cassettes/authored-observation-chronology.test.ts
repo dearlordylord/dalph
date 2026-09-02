@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import { expect, it } from "vitest"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 
-it("captures delivery publications and live runtime owners in one authored observation order", async () => {
+it("captures runtime evaluations, delivery publications, and live owners in one authored observation order", async () => {
   const run = await Effect.runPromise(
     runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.acceptedResultRestartsIntoIntegration).pipe(
       Effect.provide(NodeCrypto.layer)
@@ -36,6 +36,18 @@ it("captures delivery publications and live runtime owners in one authored obser
   }
   expect(run.observationMoments.some(({ _tag }) => _tag === "AuthoredStoryOccurrenceMoment")).toBe(true)
   expect(run.observationMoments.some(({ _tag }) => _tag === "DeliveryPublicationMoment")).toBe(true)
+  const runtimeEvaluationCaptures = run.observationCaptures.filter(
+    (capture) => capture._tag === "DeliveryRuntimeObservationCaptured"
+  )
+  expect(runtimeEvaluationCaptures.length).toBeGreaterThan(0)
+  expect(new Set(runtimeEvaluationCaptures.map(({ observation }) => observation.evaluation)).size).toBe(
+    runtimeEvaluationCaptures.length
+  )
+  for (const capture of runtimeEvaluationCaptures) {
+    const moment = run.observationMoments.find(({ captureOrder }) => captureOrder === capture.captureOrder)
+    expect(moment?._tag).toBe("DeliveryRuntimeObservationMoment")
+    if (moment?._tag === "DeliveryRuntimeObservationMoment") expect(moment.observation).toBe(capture.observation)
+  }
   expect(
     run.observationMoments.some(
       (moment) =>

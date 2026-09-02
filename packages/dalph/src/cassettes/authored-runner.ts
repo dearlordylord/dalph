@@ -49,6 +49,7 @@ import {
   type BoundedTicketRank,
   DeliveryRelationPublicationObserver,
   DeliveryRuntimeObservationObserver,
+  type DeliveryRuntimeReadyObservation,
   evaluateDeliveryRelationAndRuntimeInputBundle,
   type DeliveryConsequences,
   type DeliveryRelationInputBundle,
@@ -234,6 +235,7 @@ export type AuthoredObservationCapture = AuthoredObservationCorrelation &
   (
     | { readonly _tag: "AuthoredStoryOccurrenceCaptured"; readonly occurrence: AuthoredCassetteStoryItem }
     | { readonly _tag: "DeliveryPublicationCaptured"; readonly publication: AuthoredDeliveryPublication }
+    | { readonly _tag: "DeliveryRuntimeObservationCaptured"; readonly observation: DeliveryRuntimeReadyObservation }
     | {
         readonly _tag: "DeliveryRuntimeOwnersCaptured"
         readonly liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
@@ -243,6 +245,7 @@ export type AuthoredObservationCapture = AuthoredObservationCorrelation &
 type AuthoredObservationCaptureInput =
   | { readonly _tag: "AuthoredStoryOccurrenceCaptured"; readonly occurrence: AuthoredCassetteStoryItem }
   | { readonly _tag: "DeliveryPublicationCaptured"; readonly publication: AuthoredDeliveryPublication }
+  | { readonly _tag: "DeliveryRuntimeObservationCaptured"; readonly observation: DeliveryRuntimeReadyObservation }
   | {
       readonly _tag: "DeliveryRuntimeOwnersCaptured"
       readonly liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
@@ -260,6 +263,7 @@ export type AuthoredObservationMoment = AuthoredObservationMomentContext &
   (
     | { readonly _tag: "AuthoredStoryOccurrenceMoment"; readonly occurrence: AuthoredCassetteStoryItem }
     | { readonly _tag: "DeliveryPublicationMoment"; readonly deliveryFrame: AuthoredDeliveryFrame }
+    | { readonly _tag: "DeliveryRuntimeObservationMoment"; readonly observation: DeliveryRuntimeReadyObservation }
     | { readonly _tag: "DeliveryRuntimeOwnersMoment" }
   )
 
@@ -1176,6 +1180,15 @@ export const evaluateAuthoredObservationCapture: (
         liveOwners: capture.liveOwners
       } satisfies AuthoredObservationMoment
     }
+    if (capture._tag === "DeliveryRuntimeObservationCaptured") {
+      return {
+        _tag: "DeliveryRuntimeObservationMoment",
+        ...correlation,
+        deliveryFrame,
+        liveOwners,
+        observation: capture.observation
+      } satisfies AuthoredObservationMoment
+    }
     return {
       _tag: "AuthoredStoryOccurrenceMoment",
       ...correlation,
@@ -1436,12 +1449,14 @@ const runAuthoredScenarioCassetteWith = (request: {
             captureOrder: AuthoredObservationCaptureOrder.make(nextOrder),
             storyPosition
           }
-          const captured: AuthoredObservationCapture =
-            observation._tag === "AuthoredStoryOccurrenceCaptured"
-              ? { ...correlation, _tag: observation._tag, occurrence: observation.occurrence }
-              : observation._tag === "DeliveryPublicationCaptured"
-                ? { ...correlation, _tag: observation._tag, publication: observation.publication }
-                : { ...correlation, _tag: observation._tag, liveOwners: observation.liveOwners }
+          const captured: AuthoredObservationCapture = Match.value(observation).pipe(
+            Match.tagsExhaustive({
+              AuthoredStoryOccurrenceCaptured: ({ _tag, occurrence }) => ({ ...correlation, _tag, occurrence }),
+              DeliveryPublicationCaptured: ({ _tag, publication }) => ({ ...correlation, _tag, publication }),
+              DeliveryRuntimeObservationCaptured: ({ _tag, observation }) => ({ ...correlation, _tag, observation }),
+              DeliveryRuntimeOwnersCaptured: ({ _tag, liveOwners }) => ({ ...correlation, _tag, liveOwners })
+            })
+          )
           return [captured, { captures: [...captures, captured], nextOrder: nextOrder + 1 }]
         })
         yield* Effect.exit(Effect.sync(() => options.onObservationCapture?.(capture)))
@@ -1469,6 +1484,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       )
       const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<AuthoredDeliveryPublication>>([])
       const deliveryPublicationSignals = yield* Queue.unbounded<AuthoredDeliveryPublication>()
+      const lastCapturedRuntimeEvaluation = yield* Ref.make<DeliveryRuntimeEvaluation | null>(null)
       const lastRuntimeOwners = yield* Ref.make<string | null>(null)
       const plannedSuspensionExecutorBoundaryGate = yield* Ref.make<
         Option.Option<{
@@ -1501,17 +1517,20 @@ const runAuthoredScenarioCassetteWith = (request: {
           })
       })
       const runtimeObservationObserver = DeliveryRuntimeObservationObserver.of({
-        observe: ({ liveOwners }) =>
+        observe: (observation) =>
           Effect.gen(function* () {
+            const { liveOwners } = observation
+            const storyPosition = AuthoredStoryPosition.make(yield* cursor.storyPosition)
+            const previousEvaluation = yield* Ref.getAndSet(lastCapturedRuntimeEvaluation, observation.evaluation)
+            if (previousEvaluation !== observation.evaluation) {
+              yield* appendObservation({ _tag: "DeliveryRuntimeObservationCaptured", observation }, storyPosition)
+            }
             const identity = JSON.stringify(liveOwners)
             const previous = yield* Ref.get(lastRuntimeOwners)
             if (previous === identity) return
             yield* Ref.set(lastRuntimeOwners, identity)
             if (previous === null && liveOwners.length === 0) return
-            yield* appendObservation(
-              { _tag: "DeliveryRuntimeOwnersCaptured", liveOwners },
-              AuthoredStoryPosition.make(yield* cursor.storyPosition)
-            )
+            yield* appendObservation({ _tag: "DeliveryRuntimeOwnersCaptured", liveOwners }, storyPosition)
           })
       })
       const admittedContinuationChoiceApplied = yield* Deferred.make<void>()
