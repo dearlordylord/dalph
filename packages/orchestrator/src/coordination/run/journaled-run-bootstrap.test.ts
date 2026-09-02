@@ -513,6 +513,65 @@ it.effect("preserves exact reconstructed activation failures at the real bootstr
         ).toEqual(["WorkflowRunBegan"])
       }
 
+      const recordedTarget = FixtureTarget.make("journaled-bootstrap-reconstructed-recorded-target")
+      const requestedTarget = FixtureTarget.make("journaled-bootstrap-reconstructed-requested-target")
+      const targetMismatchRunId = yield* freshWorkflowRunId(recordedTarget)
+      const targetMismatchContext = yield* Layer.build(memoryJournalStoreLayer)
+      const targetMismatchDelegate = Context.get(targetMismatchContext, JournalStore)
+      yield* targetMismatchDelegate.beginRun(targetMismatchRunId, recordedTarget, initialPolicy)
+      const scanCalls = yield* Ref.make(0)
+      const recoveryReadCalls = yield* Ref.make(0)
+      const rawReadCalls = yield* Ref.make(0)
+      const beginCalls = yield* Ref.make(0)
+      const appendCalls = yield* Ref.make(0)
+      const targetMismatchStorage = JournalStore.of({
+        ...targetMismatchDelegate,
+        append: (...input) =>
+          Ref.update(appendCalls, (count) => count + 1).pipe(Effect.andThen(targetMismatchDelegate.append(...input))),
+        beginRun: (...input) =>
+          Ref.update(beginCalls, (count) => count + 1).pipe(Effect.andThen(targetMismatchDelegate.beginRun(...input))),
+        read: (requestedRunId) =>
+          Ref.update(rawReadCalls, (count) => count + 1).pipe(
+            Effect.andThen(targetMismatchDelegate.read(requestedRunId))
+          ),
+        readRunForRecovery: (...input) =>
+          Ref.update(recoveryReadCalls, (count) => count + 1).pipe(
+            Effect.andThen(targetMismatchDelegate.readRunForRecovery(...input))
+          ),
+        scanHot: () =>
+          Ref.update(scanCalls, (count) => count + 1).pipe(Effect.andThen(targetMismatchDelegate.scanHot()))
+      })
+      const targetMismatchBootstrap = yield* buildBootstrap(targetMismatchRunId, targetMismatchStorage)
+      const initialPolicyCalls = yield* Ref.make(0)
+      const targetMismatchProgramCalls = yield* Ref.make(0)
+      const expectedTargetMismatch = new WorkflowRunTargetMismatch({
+        recordedTarget,
+        requestedTarget,
+        runId: targetMismatchRunId
+      })
+      expect(
+        yield* targetMismatchBootstrap
+          .activate(
+            requestedTarget,
+            Ref.update(initialPolicyCalls, (count) => count + 1).pipe(Effect.as(initialPolicy)),
+            targetMismatchRunId,
+            Ref.update(targetMismatchProgramCalls, (count) => count + 1).pipe(
+              Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })))
+            )
+          )
+          .pipe(Effect.flip)
+      ).toEqual(expectedTargetMismatch)
+      expect(yield* Ref.get(scanCalls)).toBe(1)
+      expect(yield* Ref.get(recoveryReadCalls)).toBe(1)
+      expect(yield* Ref.get(rawReadCalls)).toBe(0)
+      expect(yield* Ref.get(beginCalls)).toBe(0)
+      expect(yield* Ref.get(appendCalls)).toBe(0)
+      expect(yield* Ref.get(initialPolicyCalls)).toBe(0)
+      expect(yield* Ref.get(targetMismatchProgramCalls)).toBe(0)
+      expect((yield* targetMismatchDelegate.read(targetMismatchRunId)).map(({ event }) => event._tag)).toEqual([
+        "WorkflowRunBegan"
+      ])
+
       const expectedRunId = yield* freshWorkflowRunId(FixtureTarget.make("journaled-bootstrap-expected-run"))
       const foreignRunId = yield* freshWorkflowRunId(FixtureTarget.make("journaled-bootstrap-foreign-run"))
       const identityContext = yield* Layer.build(memoryJournalStoreLayer)
