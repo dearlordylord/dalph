@@ -8,7 +8,7 @@ import {
 } from "./delivery-runtime-local-deferral.js"
 import { liveActionKeyOf as stableLiveActionKeyOf, type LiveDeliveryActionKey } from "./live-delivery-action-key.js"
 
-export { LiveDeliveryActionKey, liveActionKeyOf } from "./live-delivery-action-key.js"
+export { liveActionKeyOf } from "./live-delivery-action-key.js"
 
 export const proposalIsAvailable = (
   proposal: DeliveryActionProposal,

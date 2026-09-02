@@ -705,6 +705,14 @@ Accepted outcome then follows ordinary integration admission, but the report
 remains neither tracker completion nor replacement authority.
 _Avoid_: Run completion, empty target, polling permission, finality proof
 
+**Post-G2 exact-capacity stall**:
+The process-local condition after the accepted post-quiescence graph read in which exact unfinished attempts hold every task-work position and every retained exact proposal was just denied for lack of a position. It retains that non-empty proposal frontier for a later activation and is neither Run finality nor a persisted fact.
+_Avoid_: Generic quiescence, empty frontier, persisted capacity state
+
+**Post-G2 admission-stall cut token**:
+The branded activation-local identity correlating one queued post-G2 exact-capacity-stall marker with its acknowledgement after earlier queued events are applied and the complete stall basis is checked again. It is not a graph, journal, policy, relation, or scheduling revision and disappears with the activation.
+_Avoid_: Relation revision, journal position, capacity revision, retry token
+
 **Delivery settlement**:
 An established terminal delivery fact backed by the accepted integration and
 exact resource-disposition protocols. A terminal executor report, accepted

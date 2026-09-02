@@ -386,8 +386,7 @@ it("removes process revisions and general invalidation from runtime assembly", (
   expect(sources.join("\n")).not.toMatch(/DeliveryRelationRevision|currentRevision|withStableRevision|invalidate/)
 })
 
-it("acknowledges the bounded post-G2 event cut without relation version authority", () => {
-  const runtime = readFileSync(fileURLToPath(new URL("./run-delivery-runtime.ts", import.meta.url)), "utf8")
+it("keeps the bounded post-G2 event cut outside relation and journal authority", () => {
   const relation = readFileSync(fileURLToPath(new URL("./relations.ts", import.meta.url)), "utf8")
   const quiescence = readFileSync(fileURLToPath(new URL("./delivery-runtime-quiescence.ts", import.meta.url)), "utf8")
   const journalEvents = readFileSync(
@@ -395,8 +394,6 @@ it("acknowledges the bounded post-G2 event cut without relation version authorit
     "utf8"
   )
 
-  expect(runtime).toContain('Queue.offer(events, { _tag: "PostG2AdmissionStallCut", token: offeredToken.value })')
-  expect(runtime).toContain('emit({ _tag: "PostG2AdmissionStallCutApplied", token: event.token })')
   expect(quiescence).toContain('Schema.brand("PostG2AdmissionStallCutToken")')
   expect([relation, journalEvents].join("\n")).not.toMatch(
     /PostG2AdmissionStallCutToken|PostG2AdmissionStallCut|DeliveryRelationRevision/

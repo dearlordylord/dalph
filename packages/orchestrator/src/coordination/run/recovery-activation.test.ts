@@ -1748,6 +1748,80 @@ it.each([
   )
 )
 
+effectIt.effect("reconstructs after post-G2 capacity stall without persisted admission state", () =>
+  Effect.gen(function* () {
+    const pendingTaskId = TaskId.make("recovery-post-g2-pending-E")
+    const graphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("recovery-post-g2-current-graph"),
+      coverageTarget,
+      [coveragePlanOperation.operationId],
+      [coverageAttempt.taskId, pendingTaskId]
+    )
+    const graph = validSnapshot({
+      revision: "recovery-post-g2-current-graph",
+      tasks: [coverageAttempt.taskId, pendingTaskId].map((id) => ({
+        id,
+        lifecycle: { _tag: "Open" as const },
+        parentTaskId: null,
+        prerequisiteIds: []
+      }))
+    })
+    const graphEvent = taskTrackerFactsObservedEvent(
+      graphOperation.operationId,
+      makeCompleteTaskTrackerFactsObserved(graphOperation, graph)
+    )
+    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+      correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+    })
+    const records = coverageRecordsWithBeginning([
+      ...coveragePlanRecords(),
+      executorReport(5, executing),
+      coverageRecord(6, taskTrackerReadIntent(graphOperation)),
+      coverageRecord(7, graphEvent)
+    ])
+    const reconstructed: ReconstructedRunState = {
+      ...coverageRunState(records, [coverageResponsibilityAfterBeginning]),
+      controlPolicy: Option.some({ ...coveragePolicy, revision: initialRunPolicyRevision }),
+      graphKnowledge: { taskTrackerFacts: [graphEvent.observation] }
+    }
+    const resources = yield* makeIntegrationTargetResourceController()
+    const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
+      Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, reconstructed))
+    )
+
+    const projection = yield* recovery.readDeliveryProjection
+
+    expect(projection.evidence).toMatchObject({
+      _tag: "AvailableDeliveryProjectionEvidence",
+      facts: [
+        {
+          _tag: "PlannedAttemptExecutorFreshFacts",
+          disposition: { _tag: "Ready" },
+          responsibility: { plannedAttempt: coverageAttempt }
+        }
+      ]
+    })
+    expect(projection.frontier.transitions).toContainEqual(
+      RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+        acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(5) },
+        plannedAttempt: coverageAttempt
+      })
+    )
+    expect(JSON.stringify(graphEvent.observation)).toContain(pendingTaskId)
+    expect(Object.keys(reconstructed).toSorted()).toEqual([
+      "appliedThrough",
+      "cancellation",
+      "controlPolicy",
+      "graphKnowledge",
+      "pause",
+      "responsibility",
+      "runId",
+      "workflowHistory"
+    ])
+  })
+)
+
 it("reconciles one unsettled command when its prior activation recorded a non-exact projection", () =>
   Effect.runPromise(
     Effect.gen(function* () {

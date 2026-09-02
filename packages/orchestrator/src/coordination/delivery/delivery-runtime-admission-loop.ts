@@ -41,7 +41,7 @@ type DeliveryRuntimeAdmissionLoopActions = {
 
 type DeliveryRuntimeAdmissionLoopDependencies = DeliveryRuntimeAdmissionLoopState & DeliveryRuntimeAdmissionLoopActions
 
-export interface DeliveryRuntimeAdmissionDeferral {
+interface DeliveryRuntimeAdmissionDeferral {
   readonly proposalId: DeliveryProposalId
   readonly reason: DeferredAdmissionResult["reason"]
 }
@@ -96,7 +96,7 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
         const liveOperationIds = new Set(
           (yield* Effect.forEach(live.values(), ({ operationId }) => operationId)).flatMap(Option.toArray)
         )
-        const deferrals: Array<DeliveryRuntimeAdmissionDeferral> = []
+        let deferrals: ReadonlyArray<DeliveryRuntimeAdmissionDeferral> = []
         for (const proposal of proposedActions.proposals) {
           if (!proposalIsAvailable(proposal, live, liveActionKeys, liveOperationIds, deferred, current.acceptedAt)) {
             continue
@@ -106,7 +106,7 @@ export const makeDeliveryRuntimeAdmissionLoop = Effect.fn("DeliveryRuntimeAdmiss
             return { deferrals, started: reservation.started } satisfies DeliveryRuntimeAdmissionPassResult
           }
           const deferral = { proposalId: proposal.id, reason: reservation.reason }
-          deferrals.push(deferral)
+          deferrals = [...deferrals, deferral]
           yield* emit({ _tag: "ProposalDeferred", ...deferral })
         }
         return { deferrals, started: false } satisfies DeliveryRuntimeAdmissionPassResult

@@ -65,7 +65,7 @@ import {
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { taskClaimReacquisitionOperationId } from "../../workflow/protocols/task-claim-reacquisition/plan.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
-import { RunnableFrontierTransition } from "../frontier/frontier.js"
+import { RunFinalityDecision, RunnableFrontierTransition } from "../frontier/frontier.js"
 import { ResponsibilityDisposition } from "../frontier/fresh-facts.js"
 import {
   acceptedWorkflowTransitionOperationId,
@@ -110,6 +110,7 @@ import {
   deliveryRuntimeResourcesLayer
 } from "./delivery-runtime-resources.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
+import { ApplicationExitShell, type ApplicationExitShellService } from "../application-exit/application-shell.js"
 import {
   DeliveryRuntimeObservationObserver,
   type DeliveryRuntimeObservationState
@@ -142,6 +143,8 @@ import {
 import { deliveryRuntimeLocalDeferralAfter, DeliveryRuntimeLocalDeferral } from "./delivery-runtime-local-deferral.js"
 import { reconcileDeliveryRuntimeLocalDeferrals } from "./delivery-runtime-local-deferral-reconciliation.js"
 import { executeFreshPlannedAttempt } from "./planned-attempt-delivery-action-adapter.js"
+import { RunReactivationHint, RunReactivationOwner, runReactivationOwnerLayer } from "../run/run-reactivation-owner.js"
+import type { AcceptedRunControlObserver } from "../run/run.js"
 import {
   PassivePlannedAttemptObserver,
   PassivePlannedAttemptProjectionPublication
@@ -2986,43 +2989,137 @@ it.effect("settles pending completions in their publication arrival order when o
   )
 )
 
-it.effect("fails closed when an action completion proof differs from the exact activation Run or proposal", () =>
+it.effect("preserves post-G2 stall boundary failures without retry or fabricated quiescence", () =>
   Effect.forEach(
-    ["Run", "RunWithoutSnapshot", "ResultProposal"] as const,
-    (mismatch) =>
+    [
+      { name: "publication Run", reason: "PublicationRunMismatch" },
+      { name: "result proposal", reason: "ProposalMismatch" },
+      { name: "executor Run", reason: "ExecutorResultRunMismatch" },
+      { name: "executor attempt", reason: "ExecutorResultAttemptMismatch" },
+      { name: "executor task", reason: "ExecutorResultTaskMismatch" },
+      { name: "executor report", reason: "ExecutorReportCorrelationMismatch" },
+      { name: "proposal admission", reason: "ProposalAdmissionCorrelationMismatch" },
+      { name: "proposal route", reason: "ProposalRouteCorrelationMismatch" },
+      { name: "proposal task", reason: "ProposalTaskMismatch" }
+    ] as const,
+    ({ name, reason }) =>
       Effect.scoped(
         Effect.gen(function* () {
           const base = yield* baseEvaluation
-          const expected = proposal(0, TaskId.make(`publication-mismatch-${mismatch}`))
+          const fixture = preparedAttemptFixture(`publication-mismatch-${name.replaceAll(" ", "-")}`)
+          const [exact] = preparedBeginProposalsOf([fixture])
+          if (
+            exact === undefined ||
+            exact.actionIdentity._tag !== "NoWorkflowOperationIdentity" ||
+            exact.route._tag !== "FreshExecutorWorkflowRoute" ||
+            exact.admission.plannedAttemptProtocol._tag !== "PlannedAttemptProtocolRequired" ||
+            exact.admission.taskWorkPosition._tag !== "TaskWorkPositionRequired"
+          ) {
+            return yield* Effect.die("the completion identity fixture must be one exact prepared Begin proposal")
+          }
+          const exactProtocol = exact.admission.plannedAttemptProtocol
+          const exactPosition = exact.admission.taskWorkPosition
+          const unexpectedProposalId = DeliveryProposalId.make(`publication-mismatch-unexpected-${name}`)
+          const foreignRunId = RunId.make(`publication-mismatch-foreign-${name}`)
+          const foreignAttemptId = AttemptId.make(`publication-mismatch-foreign-${name}`)
+          const foreignTaskId = TaskId.make(`publication-mismatch-foreign-${name}`)
+          const exactCorrelation = plannedAttemptExecutorCorrelation(fixture.attempt)
+          const foreignCorrelation = { attemptId: foreignAttemptId, runId }
+          let offered: DeliveryActionProposal = exact
+          let resultPlannedAttempt = fixture.attempt
+          let reportCorrelation = exactCorrelation
+          let publicationRunId = runId
+          let resultProposalId = exact.id
+          if (reason === "PublicationRunMismatch") publicationRunId = foreignRunId
+          if (reason === "ProposalMismatch") resultProposalId = unexpectedProposalId
+          if (reason === "ExecutorResultRunMismatch") {
+            resultPlannedAttempt = PlannedTaskAttempt.make({ ...fixture.attempt, runId: foreignRunId })
+            reportCorrelation = plannedAttemptExecutorCorrelation(resultPlannedAttempt)
+          }
+          if (reason === "ExecutorResultAttemptMismatch") {
+            resultPlannedAttempt = PlannedTaskAttempt.make({ ...fixture.attempt, attemptId: foreignAttemptId })
+          }
+          if (reason === "ExecutorResultTaskMismatch") {
+            resultPlannedAttempt = PlannedTaskAttempt.make({ ...fixture.attempt, taskId: foreignTaskId })
+          }
+          if (reason === "ExecutorReportCorrelationMismatch") {
+            reportCorrelation = { attemptId: fixture.attempt.attemptId, runId: foreignRunId }
+          }
+          if (reason === "ProposalAdmissionCorrelationMismatch") {
+            offered = {
+              ...exact,
+              admission: {
+                integrationTarget: exact.admission.integrationTarget,
+                plannedAttemptProtocol: { ...exactProtocol, correlation: foreignCorrelation },
+                taskWorkPosition: exactPosition
+              }
+            }
+          }
+          if (reason === "ProposalRouteCorrelationMismatch") {
+            // DeliveryActionProposal's typed composer makes this state impossible; bypass it only here to prove the
+            // runtime completion validator still fails closed if a future composer/parser violates that boundary.
+            offered = {
+              ...exact,
+              route: {
+                ...exact.route,
+                step: {
+                  ...exact.route.step,
+                  plannedAttempt: PlannedTaskAttempt.make({ ...fixture.attempt, attemptId: foreignAttemptId })
+                }
+              }
+            } as DeliveryActionProposal
+          }
+          if (reason === "ProposalTaskMismatch") {
+            offered = {
+              ...exact,
+              admission: {
+                integrationTarget: exact.admission.integrationTarget,
+                plannedAttemptProtocol: exactProtocol,
+                taskWorkPosition: { ...exactPosition, taskId: foreignTaskId }
+              }
+            }
+          }
           const acceptedThrough = JournalPosition.make(30)
           const initial = {
-            ...withProposals(base, [expected], 1),
+            ...withProposals(base, [offered], 1),
             acceptedAt: acceptedThrough,
-            current: mismatch === "RunWithoutSnapshot" ? base.current : { ...base.current, runId }
+            current: { ...base.current, runId }
           } satisfies DeliveryRuntimeEvaluation
           const relation = yield* dynamicEvaluationSignal(initial)
           const outcomes = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
-          const unexpectedProposalId = DeliveryProposalId.make(`publication-mismatch-unexpected-${mismatch}`)
+          const executions = yield* Ref.make(0)
           const publication = DeliveryAcceptedFactPublication.of({
             awaitCurrent: Effect.succeed({
               _tag: "DeliveryAcceptedPublicationBoundary",
               acceptedThrough,
-              runId: mismatch === "ResultProposal" ? runId : RunId.make("publication-mismatch-foreign-run")
+              runId: publicationRunId
             })
           })
           const executor = DeliveryActionExecutor.of({
             execute: () =>
-              Effect.succeed({
-                _tag: "ActionCompleted",
-                proposalId: mismatch === "ResultProposal" ? unexpectedProposalId : expected.id
-              })
+              Ref.update(executions, (count) => count + 1).pipe(
+                Effect.as({
+                  _tag: "ExecutorReportPublished" as const,
+                  acceptedFacts: "Changed" as const,
+                  plannedAttempt: resultPlannedAttempt,
+                  proposalId: resultProposalId,
+                  report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                    correlation: reportCorrelation
+                  })
+                } satisfies DeliveryActionResult)
+              )
           })
-          const failure = yield* runDeliveryRuntimeQuiescence(relation, publication).pipe(
+          const failure = yield* runDeliveryRuntimePhase(
+            runId,
+            relation,
+            DeliveryRuntimePhase.ActiveRefreshPostG2([])
+          ).pipe(
             Effect.provide(plannerLayer),
-            Effect.provide(deterministicOperationIdAllocatorLayer(`runtime-publication-mismatch-${mismatch}`)),
+            Effect.provide(deterministicOperationIdAllocatorLayer(`runtime-publication-mismatch-${name}`)),
             Effect.provide(testDeliveryRuntimeResourcesLayer),
             Effect.provide(plannedAttemptProtocolControllerLayer),
             Effect.provideService(DeliveryActionExecutor, executor),
+            Effect.provideService(DeliveryAcceptedFactPublication, publication),
             Effect.provideService(
               DeliverySemanticTrace,
               DeliverySemanticTrace.of({
@@ -3039,8 +3136,10 @@ it.effect("fails closed when an action completion proof differs from the exact a
           if (!(failure instanceof DeliveryActionCompletionPublicationMismatch)) {
             return expect.fail("expected the completion publication mismatch")
           }
-          expect(failure.expectedProposalId).toBe(expected.id)
+          expect(failure.reason).toBe(reason)
+          expect(failure.expectedProposalId).toBe(exact.id)
           expect(failure.expectedRunId).toBe(runId)
+          expect(yield* Ref.get(executions)).toBe(1)
           expect(yield* Ref.get(outcomes)).toEqual([])
         })
       ),
@@ -3654,151 +3753,252 @@ it.effect("does not classify a historical retained active position as an applied
   )
 )
 
+const runExactPostG2AdmissionStallScenario = Effect.fn("Test.runExactPostG2AdmissionStallScenario")(
+  (onCandidateReady: () => Effect.Effect<void> = () => Effect.void, invalidateBeforeCut = false) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const base = yield* baseEvaluation
+        const [a, b, c, d, e] = ["post-g2-A", "post-g2-B", "post-g2-C", "post-g2-D", "post-g2-E"].map(
+          preparedAttemptFixture
+        )
+        if (a === undefined || b === undefined || c === undefined || d === undefined || e === undefined) {
+          return yield* Effect.die("the post-G2 fixture must contain A through E")
+        }
+        const [beginD, blockedE] = preparedBeginProposalsOf([d, e])
+        if (beginD === undefined || blockedE === undefined) {
+          return yield* Effect.die("D and E must each produce one exact Begin proposal")
+        }
+        const acceptedAt = JournalPosition.make(10)
+        const afterDAt = JournalPosition.make(11)
+        const afterPriorEvaluationAt = JournalPosition.make(12)
+        const graphProjection = projectTrackerSnapshot({
+          revision: "post-g2-admission-stall",
+          tasks: [a, b, c, d, e].map(({ attempt }) => ({
+            id: attempt.taskId,
+            lifecycle: { _tag: "Open" as const },
+            parentTaskId: null,
+            prerequisiteIds: []
+          }))
+        })
+        if (graphProjection._tag === "Invalid") return yield* Effect.die("the post-G2 graph must be valid")
+        const graph = TrackerGraphState.cases.GraphEstablished.make({
+          observation: makeTestJournaledTrackerGraphObservation({
+            operationId: OperationId.make("post-g2-admission-stall-graph"),
+            recordedAt: acceptedAt,
+            snapshot: graphProjection.snapshot
+          })
+        })
+        const boundary = {
+          _tag: "ActiveRefreshRuntimeBoundary" as const,
+          runId,
+          reconciledAttempts: [a, b, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
+        }
+        const initial = {
+          ...withProposals(
+            {
+              ...base,
+              acceptedAt,
+              current: { ...base.current, runId, trackerGraph: graph },
+              quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
+            },
+            [beginD, blockedE],
+            3
+          ),
+          activeRefreshBoundary: boundary,
+          quiescence: { _tag: "TrackerReconfirmationAllowed" as const },
+          taskWork: {
+            capacity: TaskWorkCapacity.make(3),
+            held: [a, c].map(({ attempt }) => ({
+              correlation: plannedAttemptExecutorCorrelation(attempt),
+              taskId: attempt.taskId
+            }))
+          }
+        } satisfies DeliveryRuntimeEvaluation
+        const afterD = {
+          ...initial,
+          acceptedAt: afterDAt,
+          proposedActions: { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [blockedE] },
+          taskWork: {
+            capacity: TaskWorkCapacity.make(3),
+            held: [a, c, d].map(({ attempt }) => ({
+              correlation: plannedAttemptExecutorCorrelation(attempt),
+              taskId: attempt.taskId
+            }))
+          }
+        } satisfies DeliveryRuntimeEvaluation
+        const afterPriorEvaluation = {
+          ...afterD,
+          acceptedAt: afterPriorEvaluationAt,
+          ...(invalidateBeforeCut
+            ? { proposedActions: { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [] } }
+            : {})
+        }
+        const relation = yield* dynamicEvaluationSignal(initial)
+        const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+        const cutApplied = yield* Deferred.make<unknown>()
+        const cutCandidate = yield* Deferred.make<unknown>()
+        const priorEvaluationOffered = yield* Deferred.make<void>()
+        const trace = DeliverySemanticTrace.of({
+          emit: (event) => {
+            if (event._tag === "PostG2AdmissionStallCandidateReady") {
+              return Deferred.succeed(cutCandidate, event.token).pipe(
+                Effect.andThen(onCandidateReady()),
+                Effect.andThen(relation.publish(afterPriorEvaluation)),
+                Effect.andThen(Deferred.await(priorEvaluationOffered))
+              )
+            }
+            if (event._tag === "RuntimeEvaluationOffered" && event.acceptedAt === afterPriorEvaluationAt) {
+              return Deferred.succeed(priorEvaluationOffered, undefined)
+            }
+            return event._tag === "PostG2AdmissionStallCutApplied"
+              ? Deferred.succeed(cutApplied, event.token)
+              : Effect.void
+          }
+        })
+        const executor = DeliveryActionExecutor.of({
+          execute: ({ proposal: action }) =>
+            Effect.gen(function* () {
+              if (action.id !== beginD.id) return yield* Effect.die("capacity-blocked E must not execute")
+              yield* Ref.update(executed, (current) => [...current, action.id])
+              yield* relation.publish(afterD)
+              return {
+                _tag: "ExecutorReportPublished",
+                acceptedFacts: "Changed",
+                plannedAttempt: d.attempt,
+                proposalId: action.id,
+                report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                  correlation: plannedAttemptExecutorCorrelation(d.attempt)
+                })
+              } satisfies DeliveryActionResult
+            })
+        })
+        const result = yield* runDeliveryRuntimePhase(
+          runId,
+          relation,
+          DeliveryRuntimePhase.ActiveRefreshPostG2(boundary.reconciledAttempts)
+        ).pipe(
+          Effect.provide(identityLayers),
+          Effect.provideService(DeliveryActionExecutor, executor),
+          Effect.provideService(
+            DeliveryAcceptedFactPublication,
+            DeliveryAcceptedFactPublication.of({
+              awaitCurrent: Effect.succeed({
+                _tag: "DeliveryAcceptedPublicationBoundary",
+                acceptedThrough: afterDAt,
+                runId
+              })
+            })
+          ),
+          Effect.provideService(DeliverySemanticTrace, trace)
+        )
+
+        if (invalidateBeforeCut) {
+          expect(yield* Deferred.isDone(cutApplied)).toBe(false)
+          expect(result._tag).toBe("TrackerReconfirmationQuiescence")
+          expect(yield* Ref.get(executed)).toEqual([beginD.id])
+          return
+        }
+        expect(yield* Deferred.await(cutApplied)).toBe(yield* Deferred.await(cutCandidate))
+        expect(result).toMatchObject({
+          _tag: "PostG2TaskWorkAdmissionStalledRuntimeQuiescence",
+          acceptedAt: afterPriorEvaluationAt,
+          activeRefreshBoundary: boundary,
+          proposedActions: { _tag: "DeliveryProposalsAvailable", proposals: [blockedE] }
+        })
+        expect(yield* Ref.get(executed)).toEqual([beginD.id])
+        if (result._tag !== "PostG2TaskWorkAdmissionStalledRuntimeQuiescence") {
+          return yield* Effect.die("the exact post-G2 stall must retain its typed result")
+        }
+        expect(result.taskWork.held.map(({ correlation }) => correlation)).toEqual(
+          [a, c, d].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
+        )
+      })
+    )
+)
+
+it.effect("applies D success and current E capacity denial after B releases post-G2 capacity", () =>
+  runExactPostG2AdmissionStallScenario()
+)
+
 it.effect("returns typed post-G2 admission-stalled quiescence retaining E", () =>
+  runExactPostG2AdmissionStallScenario()
+)
+
+it.effect("acknowledges the bounded post-G2 event cut without relation version authority", () =>
+  runExactPostG2AdmissionStallScenario()
+)
+
+it.effect("invalidates a post-G2 cut whose complete predicate changed before acknowledgement", () =>
+  runExactPostG2AdmissionStallScenario(() => Effect.void, true)
+)
+
+it.effect("preserves a paused nonterminal post-G2 return in the existing activation generation", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const base = yield* baseEvaluation
-      const [a, b, c, d, e] = ["post-g2-A", "post-g2-B", "post-g2-C", "post-g2-D", "post-g2-E"].map(
-        preparedAttemptFixture
-      )
-      if (a === undefined || b === undefined || c === undefined || d === undefined || e === undefined) {
-        return yield* Effect.die("the post-G2 fixture must contain A through E")
-      }
-      const [beginD, blockedE] = preparedBeginProposalsOf([d, e])
-      if (beginD === undefined || blockedE === undefined) {
-        return yield* Effect.die("D and E must each produce one exact Begin proposal")
-      }
-      const acceptedAt = JournalPosition.make(10)
-      const afterDAt = JournalPosition.make(11)
-      const afterPriorEvaluationAt = JournalPosition.make(12)
-      const graphProjection = projectTrackerSnapshot({
-        revision: "post-g2-admission-stall",
-        tasks: [a, b, c, d, e].map(({ attempt }) => ({
-          id: attempt.taskId,
-          lifecycle: { _tag: "Open" as const },
-          parentTaskId: null,
-          prerequisiteIds: []
-        }))
-      })
-      if (graphProjection._tag === "Invalid") return yield* Effect.die("the post-G2 graph must be valid")
-      const graph = TrackerGraphState.cases.GraphEstablished.make({
-        observation: makeTestJournaledTrackerGraphObservation({
-          operationId: OperationId.make("post-g2-admission-stall-graph"),
-          recordedAt: acceptedAt,
-          snapshot: graphProjection.snapshot
-        })
-      })
-      const boundary = {
-        _tag: "ActiveRefreshRuntimeBoundary" as const,
+      const shell = ApplicationExitShell.of({
+        admission: {
+          prepareForwardOwner: () =>
+            Effect.succeed({ cancel: Effect.void, register: Effect.die("unused startup registration") }),
+          acquireForwardOwner: () => Effect.die("unused forward owner"),
+          snapshot: Effect.succeed({ cutoffClosed: false, preparingOwnerCount: 0, registeredOwnerCount: 0 })
+        },
+        awaitExitRequested: Effect.never,
+        awaitExecutorDrains: Effect.void,
+        registerExecutorDrain: () => Effect.void,
+        registerProcessLocalDrain: () => Effect.void,
+        requestBoundary: { requestExit: Effect.never }
+      } satisfies ApplicationExitShellService)
+      const observers = yield* Deferred.make<{
+        readonly acceptedFactPublication: Effect.Effect<void>
+        readonly control: AcceptedRunControlObserver
+      }>()
+      const candidateReady = yield* Deferred.make<void>()
+      const releaseCandidate = yield* Deferred.make<void>()
+      const pausedTrailingRetained = yield* Deferred.make<number>()
+      const ordinaryActivations = yield* Queue.unbounded<void>()
+      const activeCalls = yield* Ref.make(0)
+      const timerStates = yield* Ref.make<ReadonlyArray<"Started" | "Stopped">>([])
+      const decision = RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+      const ownerLayer = runReactivationOwnerLayer({
         runId,
-        reconciledAttempts: [a, b, c].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
-      }
-      const initial = {
-        ...withProposals(
-          {
-            ...base,
-            acceptedAt,
-            current: { ...base.current, runId, trackerGraph: graph },
-            quiescence: { _tag: "TrackerReconfirmationAllowed" as const }
-          },
-          [beginD, blockedE],
-          3
-        ),
-        activeRefreshBoundary: boundary,
-        quiescence: { _tag: "TrackerReconfirmationAllowed" as const },
-        taskWork: {
-          capacity: TaskWorkCapacity.make(3),
-          held: [a, c].map(({ attempt }) => ({
-            correlation: plannedAttemptExecutorCorrelation(attempt),
-            taskId: attempt.taskId
-          }))
-        }
-      } satisfies DeliveryRuntimeEvaluation
-      const afterD = {
-        ...initial,
-        acceptedAt: afterDAt,
-        proposedActions: { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [blockedE] },
-        taskWork: {
-          capacity: TaskWorkCapacity.make(3),
-          held: [a, c, d].map(({ attempt }) => ({
-            correlation: plannedAttemptExecutorCorrelation(attempt),
-            taskId: attempt.taskId
-          }))
-        }
-      } satisfies DeliveryRuntimeEvaluation
-      const afterPriorEvaluation = { ...afterD, acceptedAt: afterPriorEvaluationAt }
-      const relation = yield* dynamicEvaluationSignal(initial)
-      const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
-      const cutApplied = yield* Deferred.make<unknown>()
-      const cutCandidate = yield* Deferred.make<unknown>()
-      const priorEvaluationOffered = yield* Deferred.make<void>()
-      const trace = DeliverySemanticTrace.of({
-        emit: (event) => {
-          if (event._tag === "PostG2AdmissionStallCandidateReady") {
-            return Deferred.succeed(cutCandidate, event.token).pipe(
-              Effect.andThen(relation.publish(afterPriorEvaluation)),
-              Effect.andThen(Deferred.await(priorEvaluationOffered))
-            )
-          }
-          if (event._tag === "RuntimeEvaluationOffered" && event.acceptedAt === afterPriorEvaluationAt) {
-            return Deferred.succeed(priorEvaluationOffered, undefined)
-          }
-          return event._tag === "PostG2AdmissionStallCutApplied"
-            ? Deferred.succeed(cutApplied, event.token)
-            : Effect.void
-        }
-      })
-      const executor = DeliveryActionExecutor.of({
-        execute: ({ proposal: action }) =>
-          Effect.gen(function* () {
-            if (action.id !== beginD.id) return yield* Effect.die("capacity-blocked E must not execute")
-            yield* Ref.update(executed, (current) => [...current, action.id])
-            yield* relation.publish(afterD)
-            return {
-              _tag: "ExecutorReportPublished",
-              acceptedFacts: "Changed",
-              plannedAttempt: d.attempt,
-              proposalId: action.id,
-              report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-                correlation: plannedAttemptExecutorCorrelation(d.attempt)
-              })
-            } satisfies DeliveryActionResult
-          })
-      })
-      const result = yield* runDeliveryRuntimePhase(
-        runId,
-        relation,
-        DeliveryRuntimePhase.ActiveRefreshPostG2(boundary.reconciledAttempts)
-      ).pipe(
-        Effect.provide(identityLayers),
-        Effect.provideService(DeliveryActionExecutor, executor),
-        Effect.provideService(
-          DeliveryAcceptedFactPublication,
-          DeliveryAcceptedFactPublication.of({
-            awaitCurrent: Effect.succeed({
-              _tag: "DeliveryAcceptedPublicationBoundary",
-              acceptedThrough: afterDAt,
-              runId
-            })
-          })
-        ),
-        Effect.provideService(DeliverySemanticTrace, trace)
-      )
+        activationInterval: "1 hour",
+        failureCooldown: "1 second",
+        readControl: Effect.succeed("RunUnpaused" as const),
+        activate: () => Queue.offer(ordinaryActivations, undefined).pipe(Effect.as(decision)),
+        activateActiveWorkAuthorityRefresh: () =>
+          Ref.update(activeCalls, (count) => count + 1).pipe(
+            Effect.andThen(
+              runExactPostG2AdmissionStallScenario(() =>
+                Deferred.succeed(candidateReady, undefined).pipe(Effect.andThen(Deferred.await(releaseCandidate)))
+              )
+            ),
+            Effect.as(decision)
+          ),
+        isTerminationFailure: () => false,
+        installAcceptedRunReactivationObservers: (installed) => Deferred.succeed(observers, installed),
+        onFailure: () => Effect.void,
+        onPausedTrailingActivationRetained: (generation) => Deferred.succeed(pausedTrailingRetained, generation),
+        onTimerStateChange: (state) => Ref.update(timerStates, (current) => [...current, state])
+      }).pipe(Layer.provide(Layer.succeed(ApplicationExitShell, shell)))
 
-      expect(yield* Deferred.await(cutApplied)).toBe(yield* Deferred.await(cutCandidate))
-      expect(result).toMatchObject({
-        _tag: "PostG2TaskWorkAdmissionStalledRuntimeQuiescence",
-        acceptedAt: afterPriorEvaluationAt,
-        activeRefreshBoundary: boundary,
-        proposedActions: { _tag: "DeliveryProposalsAvailable", proposals: [blockedE] }
-      })
-      expect(yield* Ref.get(executed)).toEqual([beginD.id])
-      if (result._tag !== "PostG2TaskWorkAdmissionStalledRuntimeQuiescence") {
-        return yield* Effect.die("the exact post-G2 stall must retain its typed result")
-      }
-      expect(result.taskWork.held.map(({ correlation }) => correlation)).toEqual(
-        [a, c, d].map(({ attempt }) => plannedAttemptExecutorCorrelation(attempt))
-      )
+      yield* Effect.gen(function* () {
+        const owner = yield* RunReactivationOwner
+        yield* Queue.take(ordinaryActivations)
+        const installed = yield* Deferred.await(observers)
+        yield* owner.hint(RunReactivationHint.TrackerNotification())
+        yield* Deferred.await(candidateReady)
+        yield* installed.acceptedFactPublication
+        yield* installed.control("Pause")
+        yield* Deferred.succeed(releaseCandidate, undefined)
+        expect(yield* Deferred.await(pausedTrailingRetained)).toBeGreaterThanOrEqual(0)
+        expect(yield* Ref.get(activeCalls)).toBe(1)
+        expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped"])
+
+        yield* installed.control("Unpause")
+        yield* Queue.take(ordinaryActivations)
+        expect(yield* Ref.get(activeCalls)).toBe(1)
+        expect(yield* Ref.get(timerStates)).toEqual(["Started", "Stopped", "Started"])
+      }).pipe(Effect.provide(ownerLayer))
     })
   )
 )
@@ -3873,9 +4073,13 @@ it.effect("rejects post-G2 admission-stalled quiescence outside its complete cur
       effectiveTaskWork = taskWork,
       proposals = frontier,
       deniedProposalIds: ReadonlySet<DeliveryProposalId> = denied,
-      outcomes: ReadonlyArray<AppliedPostG2TaskWorkOutcome> = [outcome]
+      outcomes: ReadonlyArray<AppliedPostG2TaskWorkOutcome> = [outcome],
+      expectedRunId = runId,
+      phaseSubjects = boundary.reconciledAttempts
     ) =>
       classifyPostG2TaskWorkAdmissionStalledRuntimeQuiescence(
+        expectedRunId,
+        phaseSubjects,
         evaluation,
         effectiveTaskWork,
         proposals,
@@ -3905,6 +4109,8 @@ it.effect("rejects post-G2 admission-stalled quiescence outside its complete cur
       }
     } satisfies DeliveryActionProposal
     const existingFrontier = { ...frontier, proposals: [existingE] } satisfies AvailableProposalFrontier
+    const noTaskWork = trackerGraphReadProposalOf({ acceptedAt, purpose: "EstablishCurrentGraph", runId, target })
+    const noTaskWorkFrontier = { ...frontier, proposals: [noTaskWork] } satisfies AvailableProposalFrontier
     const mismatchedOutcome = {
       ...outcome,
       correlation: plannedAttemptExecutorCorrelation(unrelated.attempt)
@@ -3913,13 +4119,24 @@ it.effect("rejects post-G2 admission-stalled quiescence outside its complete cur
     const controls = [
       classify({ ...current, taskWork: { ...taskWork, held: unrelatedHeld } }, { ...taskWork, held: unrelatedHeld }),
       classify({ ...current, taskWork: partial }, partial),
+      classify(current, { capacity: TaskWorkCapacity.make(2), held }),
       classify({ ...current, proposedActions: empty }, taskWork, empty),
       classify({ ...current, proposedActions: existingFrontier }, taskWork, existingFrontier),
+      classify({ ...current, proposedActions: noTaskWorkFrontier }, taskWork, noTaskWorkFrontier),
+      classify({ ...current, current: { ...current.current, runId: RunId.make("post-g2-foreign-current-run") } }),
+      classify({
+        ...current,
+        activeRefreshBoundary: { ...boundary, runId: RunId.make("post-g2-foreign-boundary-run") }
+      }),
       classify(current, taskWork, frontier, denied, [mismatchedOutcome]),
       classify(current, taskWork, frontier, denied, []),
-      classify(current, taskWork, frontier, new Set())
+      classify(current, taskWork, frontier, new Set()),
+      classify(current, taskWork, frontier, denied, [outcome], RunId.make("post-g2-foreign-expected-run")),
+      classify(current, taskWork, frontier, denied, [outcome], runId, [
+        plannedAttemptExecutorCorrelation(unrelated.attempt)
+      ])
     ]
-    expect(controls.every(Option.isNone)).toBe(true)
+    expect(controls.map(Option.isNone)).toEqual(controls.map(() => true))
   })
 )
 

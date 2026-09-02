@@ -1,5 +1,11 @@
 /* eslint-disable max-lines -- One gated event loop owns admission, evaluations, completion publication, and quiescence. */
-import { plannedAttemptExecutorCorrelation, RunId, samePlannedAttemptExecutorCorrelation } from "@dalph/contracts"
+import {
+  AttemptId,
+  plannedAttemptExecutorCorrelation,
+  RunId,
+  samePlannedAttemptExecutorCorrelation,
+  TaskId
+} from "@dalph/contracts"
 import { Context, Deferred, Effect, Exit, Option, Queue, Ref, Schema, Semaphore, Stream } from "effect"
 import type * as Cause from "effect/Cause"
 import {
@@ -15,7 +21,11 @@ import {
   type DeliveryActionResult,
   type DeliverySemanticTraceEvent
 } from "./delivery-action-executor.js"
-import { DeliveryProposalId, type DeliveryActionProposal } from "./delivery-action-proposal.js"
+import {
+  deliveryProposalOrderTaskId,
+  DeliveryProposalId,
+  type DeliveryActionProposal
+} from "./delivery-action-proposal.js"
 import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
 import { deliveryTaskWorkAdmissionBasisOf, type DeliveryAdmissionReservation } from "./delivery-runtime-admission.js"
 import {
@@ -31,6 +41,7 @@ import { liveActionIsPresent, proposalIsPresent, proposalsForLiveAction } from "
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
 import {
   DeliveryRuntimePhase,
+  deliveryProposalPlannedAttemptSubject,
   evaluationForPhase,
   type DeliveryRuntimePhase as DeliveryRuntimePhaseType
 } from "./delivery-runtime-phase.js"
@@ -75,12 +86,30 @@ export class DeliveryActionCompletionPublicationMismatch extends Schema.TaggedEr
   {
     expectedProposalId: DeliveryProposalId,
     expectedRunId: RunId,
+    expectedAttemptId: Schema.NullOr(AttemptId),
+    expectedTaskId: Schema.NullOr(TaskId),
+    observedAttemptId: Schema.NullOr(AttemptId),
+    observedTaskId: Schema.NullOr(TaskId),
     publicationRunId: RunId,
-    resultProposalId: DeliveryProposalId
+    resultProposalId: DeliveryProposalId,
+    reason: Schema.Literals([
+      "PublicationRunMismatch",
+      "ProposalMismatch",
+      "ExecutorResultRunMismatch",
+      "ExecutorResultAttemptMismatch",
+      "ExecutorResultTaskMismatch",
+      "ExecutorReportCorrelationMismatch",
+      "ProposalAdmissionCorrelationMismatch",
+      "ProposalRouteCorrelationMismatch",
+      "ProposalTaskMismatch"
+    ])
   }
 ) {}
 
 type LiveOwner = RuntimeObservation.DeliveryRuntimeLiveOwnerSource
+
+/** Consumer result after every causally prior event and the current stall predicate have been applied. */
+type PostG2AdmissionStallCutAcknowledgement = "Applied" | "Invalidated"
 
 interface PublishedDeliveryActionResult {
   readonly publicationThrough: DeliveryAcceptedPublicationBoundary
@@ -97,11 +126,16 @@ type RuntimeEvent<E> =
   | { readonly _tag: "ActionCompleted"; readonly completion: Completion }
   | { readonly _tag: "EvaluationChanged"; readonly evaluation: DeliveryRuntimeEvaluation }
   | { readonly _tag: "RelationFailed"; readonly cause: Cause.Cause<E> }
-  | { readonly _tag: "PostG2AdmissionStallCut"; readonly token: PostG2AdmissionStallCutToken }
+  | {
+      readonly _tag: "PostG2AdmissionStallCut"
+      readonly acknowledged: Deferred.Deferred<PostG2AdmissionStallCutAcknowledgement>
+      readonly token: PostG2AdmissionStallCutToken
+    }
 
 type PendingPostG2AdmissionStallCut =
   | {
       readonly _tag: "Offered"
+      readonly acknowledged: Deferred.Deferred<PostG2AdmissionStallCutAcknowledgement>
       readonly candidate: Option.Option<PostG2TaskWorkAdmissionStalledRuntimeQuiescence>
       readonly token: PostG2AdmissionStallCutToken
     }
@@ -110,6 +144,84 @@ type PendingPostG2AdmissionStallCut =
       readonly candidate: PostG2TaskWorkAdmissionStalledRuntimeQuiescence
       readonly token: PostG2AdmissionStallCutToken
     }
+
+type OfferedPostG2AdmissionStallCut = Extract<PendingPostG2AdmissionStallCut, { readonly _tag: "Offered" }>
+
+const isMatchingOfferedPostG2AdmissionStallCut = (
+  pending: PendingPostG2AdmissionStallCut,
+  event: Extract<RuntimeEvent<unknown>, { readonly _tag: "PostG2AdmissionStallCut" }>
+): pending is OfferedPostG2AdmissionStallCut =>
+  pending._tag === "Offered" && pending.token === event.token && pending.acknowledged === event.acknowledged
+
+type DeliveryCompletionIdentityMismatchReason = DeliveryActionCompletionPublicationMismatch["reason"]
+
+const executorCompletionIdentityMismatchReason = (
+  expectedRunId: RunId,
+  proposal: DeliveryActionProposal,
+  result: Extract<DeliveryActionResult, { readonly _tag: "ExecutorReportPublished" }>
+): DeliveryCompletionIdentityMismatchReason | undefined => {
+  const planned = plannedAttemptExecutorCorrelation(result.plannedAttempt)
+  const routeSubject = deliveryProposalPlannedAttemptSubject(proposal)
+  const protocol = proposal.admission.plannedAttemptProtocol
+  const position = proposal.admission.taskWorkPosition
+  const orderTaskId = deliveryProposalOrderTaskId(proposal.order)
+  const admissionMatches =
+    protocol._tag === "PlannedAttemptProtocolRequired" &&
+    samePlannedAttemptExecutorCorrelation(protocol.correlation, planned)
+  const routeMatches = routeSubject !== undefined && samePlannedAttemptExecutorCorrelation(routeSubject, planned)
+  const positionTaskId = position._tag === "TaskWorkPositionRequired" ? position.taskId : result.plannedAttempt.taskId
+  const checks: ReadonlyArray<readonly [boolean, DeliveryCompletionIdentityMismatchReason]> = [
+    [result.plannedAttempt.runId !== expectedRunId, "ExecutorResultRunMismatch"],
+    [result.report.correlation.runId !== expectedRunId, "ExecutorReportCorrelationMismatch"],
+    [result.report.correlation.attemptId !== result.plannedAttempt.attemptId, "ExecutorResultAttemptMismatch"],
+    [!samePlannedAttemptExecutorCorrelation(result.report.correlation, planned), "ExecutorReportCorrelationMismatch"],
+    [!admissionMatches, "ProposalAdmissionCorrelationMismatch"],
+    [!routeMatches, "ProposalRouteCorrelationMismatch"],
+    [routeSubject?.taskId !== result.plannedAttempt.taskId, "ExecutorResultTaskMismatch"],
+    [orderTaskId !== result.plannedAttempt.taskId, "ProposalTaskMismatch"],
+    [positionTaskId !== result.plannedAttempt.taskId, "ProposalTaskMismatch"]
+  ]
+  return checks.find(([mismatched]) => mismatched)?.[1]
+}
+
+const completionIdentityMismatchReason = (
+  expectedRunId: RunId,
+  completion: Completion,
+  proposal: DeliveryActionProposal,
+  published: PublishedDeliveryActionResult
+): DeliveryCompletionIdentityMismatchReason | undefined => {
+  if (expectedRunId !== published.publicationThrough.runId) return "PublicationRunMismatch"
+  if (completion.proposalId !== published.result.proposalId) return "ProposalMismatch"
+  return published.result._tag === "ExecutorReportPublished"
+    ? executorCompletionIdentityMismatchReason(expectedRunId, proposal, published.result)
+    : undefined
+}
+
+const completionPublicationMismatchOf = (
+  expectedRunId: RunId,
+  completion: Completion,
+  proposal: DeliveryActionProposal,
+  published: PublishedDeliveryActionResult
+): Option.Option<DeliveryActionCompletionPublicationMismatch> => {
+  const reason = completionIdentityMismatchReason(expectedRunId, completion, proposal, published)
+  if (reason === undefined) return Option.none()
+  const resultAttempt =
+    published.result._tag === "ExecutorReportPublished" ? published.result.plannedAttempt : undefined
+  const routeSubject = deliveryProposalPlannedAttemptSubject(proposal)
+  return Option.some(
+    new DeliveryActionCompletionPublicationMismatch({
+      expectedAttemptId: routeSubject === undefined ? null : routeSubject.attemptId,
+      expectedProposalId: completion.proposalId,
+      expectedRunId,
+      expectedTaskId: deliveryProposalOrderTaskId(proposal.order),
+      observedAttemptId: resultAttempt === undefined ? null : resultAttempt.attemptId,
+      observedTaskId: resultAttempt === undefined ? null : resultAttempt.taskId,
+      publicationRunId: published.publicationThrough.runId,
+      reason,
+      resultProposalId: published.result.proposalId
+    })
+  )
+}
 
 const appliedPostG2TaskWorkOutcomeOf = (
   result: DeliveryActionResult,
@@ -365,19 +477,11 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
 
       const validatePublishedCompletion = Effect.fn("DeliveryRuntime.validatePublishedCompletion")(function* (
         completion: Completion,
+        proposal: DeliveryActionProposal,
         published: PublishedDeliveryActionResult
       ) {
-        if (
-          expectedRunId !== published.publicationThrough.runId ||
-          completion.proposalId !== published.result.proposalId
-        ) {
-          return yield* new DeliveryActionCompletionPublicationMismatch({
-            expectedProposalId: completion.proposalId,
-            expectedRunId,
-            publicationRunId: published.publicationThrough.runId,
-            resultProposalId: published.result.proposalId
-          })
-        }
+        const mismatch = completionPublicationMismatchOf(expectedRunId, completion, proposal, published)
+        if (Option.isSome(mismatch)) return yield* mismatch.value
       })
 
       const successfulCompletionMustRemainPending = (
@@ -490,7 +594,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               : Option.none<DeliveryRuntimeLocalDeferral>()
             if (Exit.isSuccess(completion.exit)) {
               const published = completion.exit.value
-              yield* validatePublishedCompletion(completion, published)
+              yield* validatePublishedCompletion(completion, owner.proposal, published)
               if (successfulCompletionMustRemainPending(current, completion, published, localDeferral)) {
                 yield* retainPendingCompletion(completion, published)
                 return Option.none<
@@ -551,14 +655,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           Effect.gen(function* () {
             const current = Option.getOrThrow(yield* Ref.get(latest))
             const live = yield* Ref.get(owners)
-            const boundary = current.activeRefreshBoundary
-            const phaseSubjectsMatchBoundary =
-              boundary !== undefined &&
-              boundary.reconciledAttempts.length === phase.subjects.length &&
-              boundary.reconciledAttempts.every((boundarySubject) =>
-                phase.subjects.some((subject) => samePlannedAttemptExecutorCorrelation(subject, boundarySubject))
-              )
-            if (live.size !== 0 || !phaseSubjectsMatchBoundary) {
+            if (live.size !== 0) {
               return Option.none<PostG2TaskWorkAdmissionStalledRuntimeQuiescence>()
             }
             const proposedActions = yield* locallyRunnableFrontierInsideGate(current)
@@ -568,6 +665,8 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                 .map(({ proposalId }) => proposalId)
             )
             return classifyPostG2TaskWorkAdmissionStalledRuntimeQuiescence(
+              expectedRunId,
+              phase.subjects,
               current,
               deliveryTaskWorkAdmissionBasisOf(yield* admission.snapshot),
               proposedActions,
@@ -577,6 +676,37 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           })
         )
       })
+
+      const samePostG2AdmissionStallBasis = (
+        left: PostG2TaskWorkAdmissionStalledRuntimeQuiescence,
+        right: PostG2TaskWorkAdmissionStalledRuntimeQuiescence
+      ): boolean => {
+        const sameBoundary =
+          left.activeRefreshBoundary.runId === right.activeRefreshBoundary.runId &&
+          left.activeRefreshBoundary.reconciledAttempts.length ===
+            right.activeRefreshBoundary.reconciledAttempts.length &&
+          left.activeRefreshBoundary.reconciledAttempts.every((subject) =>
+            right.activeRefreshBoundary.reconciledAttempts.some((candidate) =>
+              samePlannedAttemptExecutorCorrelation(subject, candidate)
+            )
+          )
+        const sameHeld =
+          left.taskWork.capacity === right.taskWork.capacity &&
+          left.taskWork.held.length === right.taskWork.held.length &&
+          left.taskWork.held.every((position) =>
+            right.taskWork.held.some(
+              (candidate) =>
+                position.taskId === candidate.taskId &&
+                samePlannedAttemptExecutorCorrelation(position.correlation, candidate.correlation)
+            )
+          )
+        const sameProposals =
+          left.proposedActions.proposals.length === right.proposedActions.proposals.length &&
+          left.proposedActions.proposals.every((proposal) =>
+            right.proposedActions.proposals.some((candidate) => candidate.id === proposal.id)
+          )
+        return sameBoundary && sameHeld && sameProposals
+      }
 
       const runtimeQuiescence = Effect.fn("DeliveryRuntime.quiescence")(function* () {
         return yield* selectionGate.withPermit(
@@ -643,6 +773,35 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         )
       })
 
+      const applyPostG2AdmissionStallCut = Effect.fn("DeliveryRuntime.applyPostG2AdmissionStallCut")(function* (
+        event: Extract<RuntimeEvent<E>, { readonly _tag: "PostG2AdmissionStallCut" }>
+      ) {
+        const pending = yield* Ref.get(pendingPostG2AdmissionStallCut)
+        const offered = Option.filter(pending, (candidate) =>
+          isMatchingOfferedPostG2AdmissionStallCut(candidate, event)
+        )
+        if (Option.isNone(offered)) {
+          yield* Deferred.succeed(event.acknowledged, "Invalidated")
+          return
+        }
+        const admissionPass = yield* admissionLoop.admitPass()
+        const rechecked = admissionPass.started
+          ? Option.none<PostG2TaskWorkAdmissionStalledRuntimeQuiescence>()
+          : yield* postG2AdmissionStallCandidate(admissionPass)
+        const applied =
+          Option.isSome(offered.value.candidate) &&
+          Option.isSome(rechecked) &&
+          samePostG2AdmissionStallBasis(offered.value.candidate.value, rechecked.value)
+            ? Option.some<PendingPostG2AdmissionStallCut>({
+                _tag: "Applied",
+                candidate: rechecked.value,
+                token: event.token
+              })
+            : Option.none<PendingPostG2AdmissionStallCut>()
+        yield* Ref.set(pendingPostG2AdmissionStallCut, applied)
+        yield* Deferred.succeed(event.acknowledged, Option.isSome(applied) ? "Applied" : "Invalidated")
+      })
+
       const applyRuntimeEvent = Effect.fn("DeliveryRuntime.applyEvent")(function* (event: RuntimeEvent<E>) {
         if (event._tag === "RelationFailed") return yield* Effect.failCause(event.cause)
         if (event._tag === "EvaluationChanged") {
@@ -651,45 +810,32 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           return
         }
         if (event._tag === "PostG2AdmissionStallCut") {
-          const acknowledged = yield* Ref.modify(pendingPostG2AdmissionStallCut, (pending) => {
-            if (Option.isNone(pending) || pending.value._tag !== "Offered" || pending.value.token !== event.token) {
-              return [false, pending]
-            }
-            return Option.match(pending.value.candidate, {
-              onNone: () => [true, Option.none<PendingPostG2AdmissionStallCut>()] as const,
-              onSome: (candidate) =>
-                [
-                  true,
-                  Option.some<PendingPostG2AdmissionStallCut>({ _tag: "Applied", candidate, token: event.token })
-                ] as const
-            })
-          })
-          if (acknowledged) yield* emit({ _tag: "PostG2AdmissionStallCutApplied", token: event.token })
+          yield* applyPostG2AdmissionStallCut(event)
           return
         }
         const exit = yield* applyCompletion(event.completion)
         if (Option.isSome(exit) && Exit.isFailure(exit.value)) return yield* Effect.failCause(exit.value.cause)
       })
 
-      for (;;) {
-        const pendingCut = yield* Ref.get(pendingPostG2AdmissionStallCut)
-        if (Option.isSome(pendingCut) && pendingCut.value._tag === "Applied") {
-          yield* publishRuntimeObservation()
-          return pendingCut.value.candidate
-        }
+      const runAdmissionPasses = Effect.fn("DeliveryRuntime.runAdmissionPasses")(function* () {
         const current = Option.getOrThrow(yield* Ref.get(latest))
         const activeRefreshG2Pending =
           phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
         let admissionPass: DeliveryRuntimeAdmissionPassResult = { deferrals: [], started: false }
-        if (!activeRefreshG2Pending) {
+        if (activeRefreshG2Pending) return admissionPass
+        admissionPass = yield* admissionLoop.admitPass()
+        while (admissionPass.started) {
+          yield* Effect.yieldNow
           admissionPass = yield* admissionLoop.admitPass()
-          while (admissionPass.started) {
-            yield* Effect.yieldNow
-            admissionPass = yield* admissionLoop.admitPass()
-          }
         }
+        return admissionPass
+      })
 
+      const offerPostG2AdmissionStallCut = Effect.fn("DeliveryRuntime.offerPostG2AdmissionStallCut")(function* (
+        admissionPass: DeliveryRuntimeAdmissionPassResult
+      ) {
         const postG2Candidate = yield* postG2AdmissionStallCandidate(admissionPass)
+        const offeredAcknowledgement = yield* Deferred.make<PostG2AdmissionStallCutAcknowledgement>()
         const offeredToken = yield* Ref.modify(pendingPostG2AdmissionStallCut, (pending) => {
           if (Option.isSome(pending) && pending.value._tag === "Offered") {
             return [
@@ -702,21 +848,57 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           const token = PostG2AdmissionStallCutToken.make(nextPostG2AdmissionStallCutToken)
           return [
             Option.some(token),
-            Option.some<PendingPostG2AdmissionStallCut>({ _tag: "Offered", candidate: postG2Candidate, token })
+            Option.some<PendingPostG2AdmissionStallCut>({
+              _tag: "Offered",
+              acknowledged: offeredAcknowledgement,
+              candidate: postG2Candidate,
+              token
+            })
           ]
         })
         if (Option.isSome(offeredToken)) {
           yield* emit({ _tag: "PostG2AdmissionStallCandidateReady", token: offeredToken.value })
-          yield* Queue.offer(events, { _tag: "PostG2AdmissionStallCut", token: offeredToken.value })
-          yield* emit({ _tag: "PostG2AdmissionStallCutOffered", token: offeredToken.value })
-        }
-
-        if (Option.isNone(yield* Ref.get(pendingPostG2AdmissionStallCut))) {
-          const quiescence = yield* runtimeQuiescence()
-          if (Option.isSome(quiescence)) {
-            yield* publishRuntimeObservation()
-            return quiescence.value
+          const pending = yield* Ref.get(pendingPostG2AdmissionStallCut)
+          if (
+            Option.isSome(pending) &&
+            pending.value._tag === "Offered" &&
+            pending.value.token === offeredToken.value
+          ) {
+            const offered = pending.value
+            yield* Effect.gen(function* () {
+              yield* Queue.offer(events, {
+                _tag: "PostG2AdmissionStallCut",
+                acknowledged: offered.acknowledged,
+                token: offeredToken.value
+              })
+              yield* emit({ _tag: "PostG2AdmissionStallCutOffered", token: offeredToken.value })
+              const acknowledgement = yield* Deferred.await(offered.acknowledged)
+              if (acknowledgement === "Applied") {
+                yield* emit({ _tag: "PostG2AdmissionStallCutApplied", token: offeredToken.value })
+              }
+            }).pipe(Effect.forkIn(scope))
           }
+        }
+      })
+
+      const quiescenceWithoutPendingCut = Effect.fn("DeliveryRuntime.quiescenceWithoutPendingCut")(function* () {
+        if (Option.isSome(yield* Ref.get(pendingPostG2AdmissionStallCut))) {
+          return Option.none<DeliveryRuntimeQuiescence>()
+        }
+        return yield* runtimeQuiescence()
+      })
+
+      for (;;) {
+        const pendingCut = yield* Ref.get(pendingPostG2AdmissionStallCut)
+        if (Option.isSome(pendingCut) && pendingCut.value._tag === "Applied") {
+          yield* publishRuntimeObservation()
+          return pendingCut.value.candidate
+        }
+        yield* offerPostG2AdmissionStallCut(yield* runAdmissionPasses())
+        const quiescence = yield* quiescenceWithoutPendingCut()
+        if (Option.isSome(quiescence)) {
+          yield* publishRuntimeObservation()
+          return quiescence.value
         }
         yield* applyRuntimeEvent(yield* Queue.take(events))
       }

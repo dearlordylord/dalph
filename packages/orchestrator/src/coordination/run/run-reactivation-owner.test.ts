@@ -968,7 +968,7 @@ it.effect("accepted Pause suppresses active refresh until Unpause completes its 
   )
 )
 
-it.effect("preserves a paused nonterminal post-G2 return in the existing activation generation", () =>
+it.effect("retains a trailing active refresh while Pause holds a nonterminal activation result", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const shell = yield* makeTestExitShell
