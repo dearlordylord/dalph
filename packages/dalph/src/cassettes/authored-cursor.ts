@@ -519,6 +519,8 @@ export interface StoryCursor {
   readonly currentStoryItem: Effect.Effect<StoryItem | undefined>
   /** Waits until the current authored boundary has been consumed by its production adapter. */
   readonly awaitCurrentStoryAdvance: Effect.Effect<void>
+  /** Waits for one observed current item, returning immediately if another adapter already advanced it. */
+  readonly awaitStoryItemAdvance: (item: StoryItem) => Effect.Effect<void>
   readonly atTerminalAssertions: Effect.Effect<boolean>
   readonly awaitTerminalAssertions: Effect.Effect<void>
   readonly consumeCoordinatorActivationReturned: Effect.Effect<
@@ -526,9 +528,15 @@ export interface StoryCursor {
     CursorFailure
   >
   /** Settle only the exact production finality decision currently authored at the activation boundary. */
-  readonly consumeCoordinatorActivationReturnedFor: (
-    decision: CoordinatorActivationDecision
-  ) => Effect.Effect<typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type, CursorFailure>
+  readonly consumeCoordinatorActivationReturnedFor: (decision: CoordinatorActivationDecision) => Effect.Effect<
+    {
+      readonly item: typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type
+      /** Exact immutable successor captured under the same transition permit as the return. */
+      readonly successor: StoryItem | undefined
+      readonly successorPosition: number | undefined
+    },
+    CursorFailure
+  >
   readonly consumeCompletionClaimDeletionApplied: Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.CompletionClaimDeletionApplied.Type,
     CursorFailure
@@ -1672,7 +1680,11 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   )(function* (decision) {
     const grouped = yield* claimConcurrentCoordinatorReturn(decision)
     if (Option.isSome(grouped)) {
-      return AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.make({ decision: grouped.value.decision })
+      return {
+        item: AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.make({ decision: grouped.value.decision }),
+        successor: undefined,
+        successorPosition: undefined
+      }
     }
     const claimed = yield* claimNextPublishedThroughTransition(
       (item): item is typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type =>
@@ -1688,9 +1700,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
         storyPosition: claimed.index
       })
     }
-    return yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned)(
+    const item = yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned)(
       claimed.item
     ).pipe(Effect.orDie)
+    return { item, successor: story[claimed.index + 1], successorPosition: claimed.index + 1 }
   })
   const consumeAdmittedContinuationExecutorIntentHold = Effect.gen(function* () {
     const claimed = yield* claimNext(
@@ -2767,6 +2780,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     awaitCurrentStoryAdvance: SubscriptionRef.get(position).pipe(
       Effect.flatMap((index) => awaitsLaterStoryItem(position, index))
     ),
+    awaitStoryItemAdvance: (item) =>
+      SubscriptionRef.get(position).pipe(
+        Effect.flatMap((index) => (story[index] === item ? awaitsLaterStoryItem(position, index) : Effect.void))
+      ),
     atTerminalAssertions,
     awaitInFlightOperatorItems,
     awaitTerminalAssertions: Deferred.await(terminalAssertionsReached),

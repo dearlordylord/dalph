@@ -116,6 +116,10 @@ const cSafeTest = capstoneTest("records exactly one C2 Safe ordinal before Conti
 const authorityGroupTest = capstoneTest(
   "preserves the post-hint A D authority group without weakening the thirteen-beat story"
 )
+const restartReturnTest = capstoneTest(
+  "returns RunnableTransition after strict restart projections before the queued G1 refresh"
+)
+const queuedG1AuthorityTest = capstoneTest("represents queued G1 as three independent A C D authority lanes before G2")
 const admissionPriorityTest = capstoneTest("admits retained B ahead of unstarted E after A releases its position")
 const autonomousCapstoneKey = ["authored:autonomousExecutorDeliveryCapstone"] as const
 
@@ -200,6 +204,8 @@ export const deliveryStoryManifest = {
       checkpointTest,
       choiceProjectionTest,
       identityTest,
+      queuedG1AuthorityTest,
+      restartReturnTest,
       runtimeObservationTest,
       runtimeProjectionBridgeTest
     ),
@@ -209,6 +215,8 @@ export const deliveryStoryManifest = {
       checkpointTest,
       choiceProjectionTest,
       identityTest,
+      queuedG1AuthorityTest,
+      restartReturnTest,
       runtimeObservationTest,
       runtimeProjectionBridgeTest
     ),

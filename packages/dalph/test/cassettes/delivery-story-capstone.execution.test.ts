@@ -220,15 +220,21 @@ const causalCapstoneCheckpoints = (run: AuthoredScenarioCassetteRun) => {
   )
   const restartHints = storyMomentAfter(
     run,
-    "post-restart reactivation hints",
+    "post-restart queued-refresh hints",
     ds09Boundary.captureOrder,
     ({ _tag }) => _tag === "CassetteOffersRunReactivationHints"
+  )
+  const queuedRefreshGraph = storyMomentAfter(
+    run,
+    "queued-refresh G1 graph result",
+    restartHints.captureOrder,
+    (occurrence) => occurrence._tag === "TrackerGraphReadReturned" && occurrence.graph.revision === "delivery-story-G1"
   )
   const ds10Boundary = storyMomentAfter(
     run,
     "DS-10 G2 graph result",
-    restartHints.captureOrder,
-    ({ _tag }) => _tag === "TrackerGraphReadReturned"
+    queuedRefreshGraph.captureOrder,
+    (occurrence) => occurrence._tag === "TrackerGraphReadReturned" && occurrence.graph.revision === "delivery-story-G2"
   )
   const ds11Boundary = storyMomentAfter(
     run,
@@ -299,6 +305,7 @@ const causalCapstoneCheckpoints = (run: AuthoredScenarioCassetteRun) => {
       ds12: ds12Boundary,
       ds13: ds13Boundary,
       initialHints,
+      queuedRefreshGraph,
       restartHints
     },
     frames: {
@@ -1474,97 +1481,205 @@ it.effect("records exactly one C2 Safe ordinal before Continue B", () =>
   })
 )
 
-it.effect(
-  "runs reconstructed ordinary activation through strict exact projections before returning unsettled responsibility",
-  () =>
-    Effect.gen(function* () {
-      const run = yield* capstoneRun
-      const { frames } = causalCapstoneCheckpoints(run)
-      const occurrences = publicOccurrences(run)
-      const deathAt = occurrences.findIndex(({ _tag }) => _tag === "CoordinatorProcessDies")
-      const returnOffset = occurrences
-        .slice(deathAt + 1)
-        .findIndex(({ _tag }) => _tag === "CoordinatorActivationReturned")
-      if (deathAt < 0 || returnOffset < 0) return expect.fail("missing the accepted restart cut")
-      const returnAt = deathAt + 1 + returnOffset
-      const reconstructedReturnCapture = run.observationCaptures.find(
-        (capture) =>
-          capture._tag === "AuthoredStoryOccurrenceCaptured" &&
-          capture.activationOrdinal === 2 &&
-          capture.occurrence._tag === "CoordinatorActivationReturned"
-      )
-      const restart = occurrences.slice(deathAt + 1, returnAt + 1).map((occurrence): string => {
-        if (occurrence._tag === "DalphSelects" && occurrence.operation._tag === "ReadTrackerGraph") {
-          return "tracker-graph:selected"
-        }
-        if (occurrence._tag === "TrackerGraphReadReturned") return `tracker-graph:${occurrence.graph.revision}`
-        if (occurrence._tag === "PlannedAttemptExecutorProjectionReturned") {
-          return `executor-projection:${occurrence.report.attemptId}:${occurrence.report._tag}`
-        }
-        if (occurrence._tag === "CoordinatorActivationReturned") {
-          return occurrence.decision._tag === "RunMustRemainActive"
-            ? `activation-return:${occurrence.decision._tag}:${occurrence.decision.reason}`
-            : `activation-return:${occurrence.decision._tag}`
-        }
-        return occurrence._tag
-      })
-      const firstAfterReturn = occurrences[returnAt + 1]
-      const capacityAt = run.records.find(({ event }) => event._tag === "TaskWorkCapacityChanged")?.position
-      if (capacityAt === undefined || frames.ds09.acceptedAt === null) {
-        return expect.fail("restart boundaries must carry accepted Journal positions")
+it.effect("returns RunnableTransition after strict restart projections before the queued G1 refresh", () =>
+  Effect.gen(function* () {
+    const run = yield* capstoneRun
+    const { frames } = causalCapstoneCheckpoints(run)
+    const occurrences = publicOccurrences(run)
+    const deathAt = occurrences.findIndex(({ _tag }) => _tag === "CoordinatorProcessDies")
+    const returnOffset = occurrences
+      .slice(deathAt + 1)
+      .findIndex(({ _tag }) => _tag === "CoordinatorActivationReturned")
+    if (deathAt < 0 || returnOffset < 0) return expect.fail("missing the accepted restart cut")
+    const returnAt = deathAt + 1 + returnOffset
+    const reconstructedReturnCapture = run.observationCaptures.find(
+      (capture) =>
+        capture._tag === "AuthoredStoryOccurrenceCaptured" &&
+        capture.activationOrdinal === 2 &&
+        capture.occurrence._tag === "CoordinatorActivationReturned"
+    )
+    const restart = occurrences.slice(deathAt + 1, returnAt + 1).map((occurrence): string => {
+      if (occurrence._tag === "DalphSelects" && occurrence.operation._tag === "ReadTrackerGraph") {
+        return "tracker-graph:selected"
       }
-      const restartAcceptedAt = frames.ds09.acceptedAt
-      const restartRecords = run.records.filter(
-        ({ position }) => position > capacityAt && position <= restartAcceptedAt
-      )
-
-      expect(run.reactivationOwnerProcessGenerationCount).toBe(2)
-      expect(reconstructedReturnCapture?.activationOrdinal).toBe(2)
-      expect(occurrences.filter(({ _tag }) => _tag === "CoordinatorProcessDies")).toHaveLength(1)
-      expect(restart).toEqual([
-        "tracker-graph:selected",
-        "tracker-graph:delivery-story-G1",
-        "executor-projection:attempt:A:0:ExecutorWorkExecuting",
-        "executor-projection:attempt:C:2:ExecutorWorkExecuting",
-        "executor-projection:attempt:D:3:ExecutorWorkExecuting",
-        "tracker-graph:selected",
-        "tracker-graph:delivery-story-G1",
-        "activation-return:RunMustRemainActive:UnsettledResponsibility"
-      ])
-      expect(firstAfterReturn).toEqual({
-        _tag: "CassetteOffersRunReactivationHints",
-        hints: ["TrackerNotification", "Timer"]
-      })
-      expect(
-        occurrences
-          .slice(deathAt + 1, returnAt)
-          .some(
-            (occurrence) =>
-              (occurrence._tag === "DalphSelects" &&
-                ["ReadTaskWorkSpecification", "ReadTaskClaim", "ReadTaskWorktree", "ReadTargetLineage"].includes(
-                  occurrence.operation._tag
-                )) ||
-              occurrence._tag === "PlannedAttemptExecutorWorkReported"
-          )
-      ).toBe(false)
-      expect(
-        restartRecords.filter(
-          ({ event }) =>
-            event._tag === "PlannedAttemptExecutorCommandIntended" &&
-            (event.command === "Begin" || event.command === "Resume")
-        )
-      ).toEqual([])
-      expect(
-        restartRecords.filter(
-          ({ event }) =>
-            event._tag === "TaskTrackerReadIntentRecorded" &&
-            event.operation._tag === "ReadTrackerGraph" &&
-            event.operation.cause._tag === "ExecutingWorkAuthorityCheck"
-        )
-      ).toEqual([])
-      expect(restart.some((step) => step === "CassetteOffersRunReactivationHints")).toBe(false)
-      expect(restart.some((step) => step === "ConcurrentInteractionGroup")).toBe(false)
+      if (occurrence._tag === "TrackerGraphReadReturned") return `tracker-graph:${occurrence.graph.revision}`
+      if (occurrence._tag === "PlannedAttemptExecutorProjectionReturned") {
+        return `executor-projection:${occurrence.report.attemptId}:${occurrence.report._tag}`
+      }
+      if (occurrence._tag === "CoordinatorActivationReturned") {
+        return occurrence.decision._tag === "RunMustRemainActive"
+          ? `activation-return:${occurrence.decision._tag}:${occurrence.decision.reason}`
+          : `activation-return:${occurrence.decision._tag}`
+      }
+      return occurrence._tag
     })
+    const firstAfterReturn = occurrences[returnAt + 1]
+    const queuedG1At = occurrences.findIndex(
+      (occurrence, index) =>
+        index > returnAt &&
+        occurrence._tag === "TrackerGraphReadReturned" &&
+        occurrence.graph.revision === "delivery-story-G1"
+    )
+    const g2At = occurrences.findIndex(
+      (occurrence, index) =>
+        index > queuedG1At &&
+        occurrence._tag === "TrackerGraphReadReturned" &&
+        occurrence.graph.revision === "delivery-story-G2"
+    )
+    const capacityAt = run.records.find(({ event }) => event._tag === "TaskWorkCapacityChanged")?.position
+    if (capacityAt === undefined || frames.ds09.acceptedAt === null) {
+      return expect.fail("restart boundaries must carry accepted Journal positions")
+    }
+    const restartAcceptedAt = frames.ds09.acceptedAt
+    const restartRecords = run.records.filter(({ position }) => position > capacityAt && position <= restartAcceptedAt)
+
+    expect(run.reactivationOwnerProcessGenerationCount).toBe(2)
+    expect(reconstructedReturnCapture?.activationOrdinal).toBe(2)
+    expect(occurrences.filter(({ _tag }) => _tag === "CoordinatorProcessDies")).toHaveLength(1)
+    expect(restart).toEqual([
+      "tracker-graph:selected",
+      "tracker-graph:delivery-story-G1",
+      "executor-projection:attempt:A:0:ExecutorWorkExecuting",
+      "executor-projection:attempt:C:2:ExecutorWorkExecuting",
+      "executor-projection:attempt:D:3:ExecutorWorkExecuting",
+      "activation-return:RunMustRemainActive:RunnableTransition"
+    ])
+    expect(firstAfterReturn).toEqual({
+      _tag: "CassetteOffersRunReactivationHints",
+      hints: ["TrackerNotification", "Timer"]
+    })
+    expect(queuedG1At).toBeGreaterThan(returnAt + 1)
+    expect(g2At).toBeGreaterThan(queuedG1At)
+    expect(
+      occurrences
+        .slice(returnAt + 1, g2At + 1)
+        .map((occurrence): string | undefined =>
+          occurrence._tag === "TrackerGraphReadReturned"
+            ? occurrence.graph.revision
+            : occurrence._tag === "CoordinatorActivationReturned" && occurrence.decision._tag === "RunMustRemainActive"
+              ? occurrence.decision.reason
+              : occurrence._tag === "CassetteOffersRunReactivationHints"
+                ? occurrence._tag
+                : undefined
+        )
+        .filter((value): value is string => value !== undefined)
+    ).toEqual(["CassetteOffersRunReactivationHints", "delivery-story-G1", "delivery-story-G2"])
+    expect(
+      occurrences
+        .slice(deathAt + 1, returnAt)
+        .some(
+          (occurrence) =>
+            (occurrence._tag === "DalphSelects" &&
+              ["ReadTaskWorkSpecification", "ReadTaskClaim", "ReadTaskWorktree", "ReadTargetLineage"].includes(
+                occurrence.operation._tag
+              )) ||
+            occurrence._tag === "PlannedAttemptExecutorWorkReported"
+        )
+    ).toBe(false)
+    expect(
+      restartRecords.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandIntended" &&
+          (event.command === "Begin" || event.command === "Resume")
+      )
+    ).toEqual([])
+    expect(
+      restartRecords.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.cause._tag === "ExecutingWorkAuthorityCheck"
+      )
+    ).toEqual([])
+    expect(restart.some((step) => step === "CassetteOffersRunReactivationHints")).toBe(false)
+    expect(restart.some((step) => step === "ConcurrentInteractionGroup")).toBe(false)
+  })
+)
+
+it.effect("represents queued G1 as three independent A C D authority lanes before G2", () =>
+  Effect.gen(function* () {
+    const run = yield* capstoneRun
+    const occurrences = publicOccurrences(run)
+    const deathAt = occurrences.findIndex(({ _tag }) => _tag === "CoordinatorProcessDies")
+    const queuedG1At = occurrences.findIndex(
+      (occurrence, index) =>
+        index > deathAt &&
+        occurrence._tag === "TrackerGraphReadReturned" &&
+        occurrence.graph.revision === "delivery-story-G1"
+    )
+    const groupAt = occurrences.findIndex(
+      (occurrence, index) =>
+        index > queuedG1At &&
+        occurrence._tag === "ConcurrentInteractionGroup" &&
+        ["S_A", "S_C", "S_D"].every((role) => occurrence.members.some((member) => member.role === role))
+    )
+    const group = occurrences[groupAt]
+    if (group?._tag !== "ConcurrentInteractionGroup") return expect.fail("missing queued G1 A C D authority group")
+    const g2SelectionAt = occurrences.findIndex(
+      (occurrence, index) =>
+        index > groupAt && occurrence._tag === "DalphSelects" && occurrence.operation._tag === "ReadTrackerGraph"
+    )
+    const g2At = occurrences.findIndex(
+      (occurrence, index) =>
+        index > g2SelectionAt &&
+        occurrence._tag === "TrackerGraphReadReturned" &&
+        occurrence.graph.revision === "delivery-story-G2"
+    )
+    const laterGroupAt = occurrences.findIndex(
+      (occurrence, index) =>
+        index > g2At &&
+        occurrence._tag === "ConcurrentInteractionGroup" &&
+        ["S_A", "S_D"].every((role) => occurrence.members.some((member) => member.role === role)) &&
+        !occurrence.members.some(({ role }) => role === "S_C")
+    )
+    const cSafeAt = occurrences.findIndex(
+      (occurrence, index) =>
+        index > laterGroupAt &&
+        occurrence._tag === "PlannedAttemptExecutorWorkReported" &&
+        occurrence.request === "Suspend" &&
+        occurrence.report._tag === "ExecutorWorkSafelySuspended" &&
+        occurrence.report.attemptId === "attempt:C:2"
+    )
+    const returnedAt = occurrences.findIndex(
+      (occurrence, index) =>
+        index > cSafeAt &&
+        occurrence._tag === "CoordinatorActivationReturned" &&
+        occurrence.decision._tag === "RunMustRemainActive" &&
+        occurrence.decision.reason === "UnsettledResponsibility"
+    )
+
+    expect(group.members.map(({ predecessorRoles, role }) => ({ predecessorRoles, role }))).toEqual([
+      { predecessorRoles: [], role: "S_A" },
+      { predecessorRoles: ["S_A"], role: "T_A" },
+      { predecessorRoles: ["T_A"], role: "Q_A" },
+      { predecessorRoles: ["Q_A"], role: "R_A" },
+      { predecessorRoles: ["R_A"], role: "W_A" },
+      { predecessorRoles: ["W_A"], role: "L_A" },
+      { predecessorRoles: [], role: "S_C" },
+      { predecessorRoles: ["S_C"], role: "T_C" },
+      { predecessorRoles: ["T_C"], role: "Q_C" },
+      { predecessorRoles: ["Q_C"], role: "R_C" },
+      { predecessorRoles: ["R_C"], role: "W_C" },
+      { predecessorRoles: ["W_C"], role: "L_C" },
+      { predecessorRoles: [], role: "S_D" },
+      { predecessorRoles: ["S_D"], role: "T_D" },
+      { predecessorRoles: ["T_D"], role: "Q_D" },
+      { predecessorRoles: ["Q_D"], role: "R_D" },
+      { predecessorRoles: ["R_D"], role: "W_D" },
+      { predecessorRoles: ["W_D"], role: "L_D" }
+    ])
+    expect(group.members.some(({ role }) => role.endsWith("_B") || role.endsWith("_E"))).toBe(false)
+    expect(group.members.some(({ interaction }) => interaction._tag === "PlannedAttemptExecutorWorkReported")).toBe(
+      false
+    )
+    expect([g2SelectionAt, g2At, laterGroupAt, cSafeAt, returnedAt]).toEqual([
+      groupAt + 1,
+      groupAt + 2,
+      groupAt + 3,
+      groupAt + 4,
+      groupAt + 5
+    ])
+  })
 )
 
 it.effect("preserves the post-hint A D authority group without weakening the thirteen-beat story", () =>

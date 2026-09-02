@@ -79,6 +79,13 @@ review. It changes no Dalph runtime behavior.
   Standards and Spec reviews, but neither review is owner acceptance. Explicit
   repository-owner acceptance of both proposed texts is the current gate for
   behavior-changing implementation.
+- The 2026-09-02 #268 convergence milestone now proves the accepted restart
+  return, exact hint-delivery handoff, queued G1 A/C/D authority group, and G2
+  read result through authored story position 70. The filtered capstone remains
+  red at the default 10-second bound before the post-G2 A/D group at position
+  71, so #268 is not complete. No diagnostic or widened timeout remains. The
+  next semantic work requires a separate audit of that post-G2 boundary rather
+  than another unreviewed interpreter expansion.
 - The separate [determinism discussion handoff](DETERMINISM-DISCUSSION-HANDOFF.md)
   records the #268 cassette-order evidence and open Effect/Journal questions.
   It is not an accepted decision or a #268 blocking edge; this lane continues
@@ -420,12 +427,20 @@ executor boundaries does this plan use `P_A`, `P_C`, and `P_D` as shorthand.
    fourteen roles. Only then is strict B1 Suspend available. There is no
    cross-task edge.
 2. Executing restart is strict, not a concurrent authority group:
-   `startup graph → P_A → P_C → P_D → next graph →
-   CoordinatorActivationReturned(RunMustRemainActive(UnsettledResponsibility))`.
+   `startup graph → P_A → P_C → P_D →
+   CoordinatorActivationReturned(RunMustRemainActive(RunnableTransition))`.
    It performs three unchanged Executing projections and zero specification,
    claim, worktree, lineage, Begin, Resume, or Suspend calls. The return settles
-   before TrackerNotification or Timer hints become available.
-3. After those hints and the later active graph result, A and D each perform an
+   before TrackerNotification or Timer hints become available. One queued-
+   refresh hint burst then admits G1. Exact executing A, C, and D each perform
+   an independent six-node `S → T → Q → R → W → L` chain. This
+   existing group shape has eighteen nodes, fifteen same-lane direct edges, and
+   no cross-task edge. After all three chains settle, the same activation
+   performs its post-quiescence G2 read. The capstone
+   checks exact members, edges, exclusions, and cross-lane incomparability; it
+   does not enumerate all 17,153,136 schedules already governed by the generic
+   matcher laws.
+3. After that post-quiescence G2 result, A and D each perform an
    independent six-node `S → T → Q → R → W → L` chain. This
    bounded group has twelve nodes, ten direct edges, and exactly
    `12! / (6! * 6!) = 924` legal schedules. It publishes once after all twelve
@@ -460,10 +475,14 @@ cursor handoff. It performs no automatic retry.
   `OperatorContinuesAttempt(B1)` is exposed. A provider return, early
   interruption, or ambiguous committed result is not enough; reconciliation
   must not issue another Suspend or create ordinal three.
-- The reconstructed ordinary activation and finality result
-  `RunMustRemainActive(UnsettledResponsibility)` must settle exactly once after
-  the strict restart prefix and before reactivation hints are exposed. A wrong,
-  failed, interrupted, or duplicate return cannot fabricate settlement.
+- The reconstructed ordinary activation result
+  `RunMustRemainActive(RunnableTransition)` must settle exactly once after the
+  strict restart prefix and before queued-refresh hints are exposed. That
+  queued refresh must complete its exact A/C/D authority group before the
+  post-quiescence G2 read. After the later A/D authority group and exact C2 Safe
+  result, its separate `RunMustRemainActive(UnsettledResponsibility)` return
+  settles before Continue B. A wrong, failed, interrupted, or duplicate return
+  cannot fabricate either settlement.
 
 Two baseline focused-suite defects reproduced identically at exact pre-#309
 base `4cf7b7708280ed9e17176ac014589e2449e297aa` and the current #309 tip:
@@ -499,7 +518,7 @@ agent; it must not choose a behavior or conflict resolution.
    Dispatch one Sol implementation agent in the #309 worktree to make the
    proposed direct tests fail for the intended reason and then implement the
    narrow closed four-case member union, exact result/projection correlation,
-   two bounded groups, and strict restart support.
+   three bounded groups, and strict restart support.
 2. Dispatch independent Sol Standards and Spec review agents against the exact
    #309 diff. Return every reasonable finding to the implementation agent and
    repeat the implementation/review loop until both reviews are clean. Run the
@@ -529,11 +548,13 @@ Scenario-to-test mapping after acceptance:
   `partitions all 84084 active-refresh orders by three canonical lane
   positions` and `consumes every active-refresh specification-to-lineage order
   before B Suspend`, backed by probe `5578b8daa8778e98a14f9a61e93dd2cf393d69ce`.
-- Strict restart graph/projection/graph/return cut with zero authority lanes →
-  probe `bb40c4c8c`, `completes the startup graph read then serially reattaches A
-  C and D before the next graph read`, plus #268 `runs reconstructed ordinary
-  activation through strict exact projections before returning unsettled
-  responsibility`.
+- Strict restart graph/projection/RunnableTransition cut with zero authority
+  lanes, followed by queued hints/G1, the exact eighteen-member A/C/D group,
+  then the post-quiescence G2 read → probe `bb40c4c8c`,
+  `completes the startup graph read then serially reattaches A C and D before
+  the next graph read`, plus #268 `returns RunnableTransition after strict
+  restart projections before the queued G1 refresh` and `represents queued G1
+  as three independent A C D authority lanes before G2`.
 - Later twelve-node A/D cut → #309 `partitions and consumes all 924 post-hint
   A D authority orders before C Suspend`, backed by probe
   `c305b3543f94014967831562abd8e429d053515e`.
@@ -546,17 +567,22 @@ Scenario-to-test mapping after acceptance:
   production C2 Safe publication`, `settles exact C2 Safe once before delayed
   interruption and Continue B`, and `preserves named C2 Safe failure families
   and reconciles a committed lost response without retry`.
-- Restart return before hints → #268 `keeps restart hints unavailable before
-  the production finality result` and `settles the reconstructed restart return
-  once before delayed interruption and later hints`.
+- Restart return before its hints and active-refresh return after C2 Safe → #268
+  `keeps restart hints unavailable before the production finality result`,
+  `settles the reconstructed restart return once before delayed interruption
+  and later hints`, `returns RunnableTransition after strict restart projections
+  before the queued G1 refresh`, and `represents queued G1 as three independent
+  A C D authority lanes before G2`.
 - DS-01 through DS-13 → #268 `emits the exact DS01 through DS13 delivery
   checkpoint table`, retaining exact Run, attempt, Base SHA, claim, worktree,
   capacity, held, retained, fingerprint, and accepted-outcome identities.
 
-Trade-offs: the two closed group shapes cost more schema and exhaustive-test
-work than a flat batch, but preserve the production-proved independent lanes
-without creating a generic workflow DAG. Enumerating 84,084 and 924 schedules
-costs more than sampling, but proves each complete finite partial order. The
+Trade-offs: the three exact group shapes cost more fixture and assertion work
+than a flat batch, but preserve the production-proved independent lanes without
+creating another workflow DAG. Existing exhaustive 84,084- and 924-schedule
+proofs remain; the eighteen-member A/C/D fixture uses exact structural and
+representative incomparability checks rather than enumerating 17,153,136
+schedules because the generic matcher laws already own that mechanism. The
 short uninterruptible settlement handoff can delay interruption, but avoids a
 durable success with no matching occurrence; production I/O remains
 interruptible. Waiting for explicit owner acceptance keeps reviewed proposals

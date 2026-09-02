@@ -246,15 +246,20 @@ export const deliveryStoryCapstoneAuthoredCassette: ScenarioCassette = Schema.de
     executorProjection(attempts.a),
     executorProjection(attempts.c),
     executorProjection(attempts.d),
+    { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActive", reason: "RunnableTransition" } },
+    { _tag: "CassetteOffersRunReactivationHints", hints: ["TrackerNotification", "Timer"] },
     ...graphRead(graphG1),
+    {
+      _tag: "ConcurrentInteractionGroup",
+      members: [...authorityLane(attempts.a), ...authorityLane(attempts.c), ...authorityLane(attempts.d)]
+    },
+    ...graphRead(graphG2),
+    { _tag: "ConcurrentInteractionGroup", members: [...authorityLane(attempts.a), ...authorityLane(attempts.d)] },
+    executorReport(attempts.c, "Suspend", "Safe"),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
     },
-    { _tag: "CassetteOffersRunReactivationHints", hints: ["TrackerNotification", "Timer"] },
-    ...graphRead(graphG2),
-    { _tag: "ConcurrentInteractionGroup", members: [...authorityLane(attempts.a), ...authorityLane(attempts.d)] },
-    executorReport(attempts.c, "Suspend", "Safe"),
     {
       _tag: "OperatorContinuesAttempt",
       attemptId: attempts.b.attemptId,

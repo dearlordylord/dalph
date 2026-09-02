@@ -26,6 +26,13 @@ projection assertion was migrated to the accepted exact-`AttemptId`, no-neighbor
 consumption result. The downstream #268 composition remains pending and is not
 included on this branch.
 
+On 2026-09-02 the repository owner directed the downstream #268 chronology
+correction and continuation to a committed milestone. The main-agent audit and
+an independent unbiased review agreed that queued post-restart G1 selects exact
+executing A, C, and D. Downstream #268 therefore reuses this already-accepted
+group member language for one eighteen-member, fifteen-edge fixture; it changes
+neither #309's schema/cursor implementation nor production behavior.
+
 This change affects only the controlled authored-cassette harness. It does not
 change production workflow semantics, provider requests, delivery scheduling,
 or Journal history. It lets one maintained cassette preserve real bounded
@@ -584,7 +591,7 @@ of the characterization, the hook was blocked only by the unchanged known
 capstone dprint baseline. This is committed characterization evidence, not
 accepted #309 implementation evidence or a passing #268 capstone.
 
-### Executing restart is one strict projection-and-return prefix
+### Executing restart has one strict projection prefix before admission-stalled return
 
 After D begins, the existing strict story records D's current executor
 projection, reads G1 again, returns the activation, applies capacity two, and
@@ -596,12 +603,13 @@ existing authority.
 
 Committed production probe `bb40c4c8c`, exact test `completes the startup graph
 read then serially reattaches A C and D before the next graph read` in
-`packages/dalph/test/scenarios/production.test.ts`, proves this exact executing-
-restart chronology:
+`packages/dalph/test/scenarios/production.test.ts`, proves the strict startup
+graph and executing-projection prefix under that probe's capacity facts. In the
+composed capacity-two story, accepted #269 governs the next boundary instead:
 
 ```text
-startup graph -> P_A -> P_C -> P_D -> next graph
-  -> CoordinatorActivationReturned(RunMustRemainActive(UnsettledResponsibility))
+startup graph -> P_A -> P_C -> P_D
+  -> CoordinatorActivationReturned(RunMustRemainActive(RunnableTransition))
 ```
 
 The first tracker graph read completes before any projection. The existing
@@ -613,8 +621,11 @@ strict top-level
 branded AttemptId (`attempt:A:0`, `attempt:C:2`, or `attempt:D:3`). The probe
 observed exactly three projection calls, zero Begin, Resume, or Suspend
 commands, and zero S/T/Q/R/W/L specification, claim, worktree, or lineage
-selections. There is therefore no restart `ConcurrentInteractionGroup`, no
-restart member graph, and no restart group occurrence to publish.
+selections. The composed story's over-capacity retained frontier must return
+before another graph read; the probe's later graph observation does not
+override those different accepted #269 facts. There is therefore no restart
+`ConcurrentInteractionGroup`, no restart member graph, and no restart group
+occurrence to publish.
 
 Strict projection matching still replaces the argumentless
 `consumeExecutorProjection` plus `currentStoryItem` peek with cassette-only
@@ -637,10 +648,18 @@ This retains the inherited
 [#265 exact restart reattachment](issue-265-passive-executor-observation-through-restart.md#a-later-dalph-process-reattaches-to-the-exact-codex-attempt):
 the later process reads each exact attempt's current projection without another
 Begin, and unavailable or contradictory evidence cannot manufacture progress.
-After the next exact graph result, issue #268 owns the strict activation return
-with exact `RunMustRemainActive(UnsettledResponsibility)`. Only after that return
-settles may the strict `CassetteOffersRunReactivationHints` item expose
-TrackerNotification and Timer. A missing projection, graph result, or activation
+After the third exact projection, issue #269 owns the strict activation return
+with exact `RunMustRemainActive(RunnableTransition)` and forbids another graph
+read in that activation. Only after that return settles may the first strict
+`CassetteOffersRunReactivationHints` item expose TrackerNotification and Timer.
+That queued refresh performs the ordinary G1 read, then exact A, C, and D each
+consume their independent `S -> T -> Q -> R -> W -> L` chain: eighteen
+members and fifteen same-lane edges with no cross-task edge. B is Safe and E is
+unstarted, so neither appears in this group and no executor command follows it.
+The same activation then performs the post-quiescence G2 read and the A/D group
+below, accepts C2 Safe, and publishes its distinct
+`RunMustRemainActive(UnsettledResponsibility)` return before Continue B. A
+missing projection or activation
 return leaves its own strict boundary current; restart does not infer it from
 process age or another attempt.
 
@@ -963,10 +982,13 @@ or publication.
 On success, the maintainer sees the fourteen initial active roles consume in any order
 allowed by their three lanes, one group occurrence publish, and B Suspend
 become the next exact strict item. After restart, the maintainer sees the
-startup graph, exact strict P_A, P_C, and P_D, the next graph, and the exact
-#268-owned
-`CoordinatorActivationReturned(RunMustRemainActive(UnsettledResponsibility))`.
-Only then do reactivation hints become current. On the later refresh, the
+startup graph, exact strict P_A, P_C, and P_D, then the #269-owned
+`CoordinatorActivationReturned(RunMustRemainActive(RunnableTransition))` with
+no intervening graph read. Its queued-refresh hints then expose G1 and all
+eighteen A/C/D authority members. The same activation proceeds to G2, its A/D
+group, C2 Safe, and the distinct UnsettledResponsibility return. The
+exact group structure demonstrates cross-lane incomparability without
+re-enumerating all 17,153,136 topological orders. On that post-quiescence G2 cut, the
 maintainer sees all twelve A/D roles consume in one of 924 valid orders and one
 group occurrence publish, then sees the one strict constrained C Suspend.
 
@@ -1125,18 +1147,18 @@ not claimed as #309 implementation evidence.
 | The later post-hint cut is exactly two independent six-node A/D chains, twelve nodes and ten edges; all 924 canonical fingerprints are unique and execute before strict C Suspend | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `partitions and consumes all 924 post-hint A D authority orders before C Suspend` |
 | Dropping one required edge makes the expected-edge/early-successor property fail, while generated duplicate roles and dangling predecessors fail schema decoding for the fourteen- and twelve-node fixtures | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.property.test.ts` — `detects every missing direct edge and the newly early successor in the initial A B C authority cut`; `detects every missing direct edge and the newly early successor in the later A D authority cut`; `rejects generated duplicate roles in the initial A B C authority cut`; `rejects generated invalid predecessors in the initial A B C authority cut`; `rejects generated duplicate roles in the later A D authority cut`; `rejects generated invalid predecessors in the later A D authority cut` |
 | T-before-S, Q-before-T, R-before-Q, W-before-R, and L-before-W each fail typed without mutation and succeed after retry in the initial A/C and later A/D lanes; foreign and duplicate exact TaskId claims do the same | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `rejects and retries every predecessor edge in both active-refresh groups`; `rejects foreign and duplicate exact result identities without mutation` |
-| Startup graph then strict P_A, P_C, P_D then next graph then UnsettledResponsibility is the exact restart; blocking A blocks the suffix, with exactly three Executing projections, no Begin/Resume/Suspend, and zero S/T/Q/R/W/L selections | Commit `bb40c4c8c`, `packages/dalph/test/scenarios/production.test.ts` — `completes the startup graph read then serially reattaches A C and D before the next graph read` |
+| Startup graph then strict P_A, P_C, P_D is the exact restart projection prefix; the composed #269 facts then return RunnableTransition with no intervening graph, exactly three Executing projections, no Begin/Resume/Suspend, and zero S/T/Q/R/W/L selections | Commit `bb40c4c8c`, `packages/dalph/test/scenarios/production.test.ts` — `completes the startup graph read then serially reattaches A C and D before the next graph read`; downstream #268 `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `returns RunnableTransition after strict restart projections before the queued G1 refresh` |
 | `consumeExecutorProjectionFor(attemptId)` atomically returns the current exact strict projection; a foreign, early, or duplicate exact AttemptId returns `Option.none` without consuming a neighbor. The controlled optional observer returns `NoReport` for absent state, may return a previously cached exact report, and keeps the existing explicit failure for an unresolved required or lost response. | `packages/dalph/test/cassettes/scenario.test.ts` — `matches the strict A C D restart projection chain by exact AttemptId without command calls` proves foreign and duplicate cursor `Option.none`; `fails closed at cursor and executor-projection boundaries` proves absent-state `NoReport` and the explicit unresolved-return failure; `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `reobserves B1 executing without advancing or manufacturing another report` proves cached exact fallback; `keeps requested executor projections ordered even in a causal tracker story` proves a foreign absent-state `NoReport` does not consume the exact neighbor |
 | Simultaneously enabled S/Q and later cross-lane members consume once through the existing cursor permit; each active group's final member publishes once and advances once before its proved strict successor | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `serializes simultaneously enabled authority lanes and publishes each bounded join once` |
 | Foreign, duplicate, premature B Suspend, premature restart hint, or premature C Suspend claims fail typed without mutation; non-arrival adds no timeout; scope replacement restores every group role and strict position | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `rejects foreign duplicate and downstream claims for both active cuts`; `keeps incomplete active cuts current without timeout`; `recreates every authority role after cursor scope replacement`; `packages/dalph/test/cassettes/authored-reactivation-return.test.ts` — `keeps restart hints unavailable before the production finality result` |
 | Presentation renders the initial eleven and later ten direct edges, distinguishes same-lane transitive truth, presents every cross-lane pair as incomparable, and keeps exactly one cursor owner with exhaustive matches | `packages/dalph/test/cassettes/authored-presentation.test.ts` — `renders one causal interaction group without inventing claim order`; `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `partitions all 84084 active-refresh orders by three canonical lane positions`; `partitions all 924 post-hint A D authority orders by two canonical lane positions`; `packages/dalph/test/cassettes/authored-coverage.test.ts` — `registers the concurrent interaction group with exactly one cursor owner` |
 | The accepted nine-node group still executes 22,680 schedules, and `ConcurrentTrackerReadBatch` still pairs reverse-completing reads and drains only its unchanged true-batch uses | `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `partitions all 22680 causal orders exactly once by their first enabled root`; `executes every causal order whose first enabled root is P_D`; `executes every causal order whose first enabled root is P_E`; `executes every causal order whose first enabled root is W_B`; `executes every causal order whose first enabled root is W_C`; `executes every causal order whose first enabled root is X_A`; `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `selects F1 then F2 and pairs reverse-completing reads with their exact initiating operations`; `drains repeatedly forked exact read operations without resetting the story position` |
 | The later A/D production overlap stays executable independently of cassette matching | Commit `c305b3543`, `packages/dalph/src/application/production-reactivation.test.ts` — `allows one restart authority lane to reach claim while independent specification reads remain in flight`; `allows one active-refresh authority lane to reach claim while independent specification reads remain in flight` |
-| After the strict restart graph/projection prefix, exact `CoordinatorActivationReturned(RunMustRemainActive(UnsettledResponsibility))` settles before TrackerNotification or Timer hints; wrong, duplicate, early, failed, or interrupted returns do not fabricate settlement | `packages/dalph/test/cassettes/authored-reactivation-return.test.ts` — `keeps restart hints unavailable before the production finality result`; `settles the reconstructed restart return once before delayed interruption and later hints` |
+| After the strict restart graph/projection prefix, exact `CoordinatorActivationReturned(RunMustRemainActive(RunnableTransition))` settles before the first hints; those hints admit G1, the exact eighteen-member A/C/D group, G2, the twelve-member A/D group, and C2 Safe before UnsettledResponsibility settles ahead of Continue B; wrong, duplicate, early, failed, or interrupted returns do not fabricate settlement | `packages/dalph/test/cassettes/authored-reactivation-return.test.ts` — `keeps restart hints unavailable before the production finality result`; `settles the reconstructed restart return once before delayed interruption and later hints`; downstream #268 `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `returns RunnableTransition after strict restart projections before the queued G1 refresh`; `represents queued G1 as three independent A C D authority lanes before G2` |
 | The role-generic production rule suppresses constrained C Suspend while either healthy A/D authority lane remains and exposes it exactly once after both settle | Commit `5578b8daa8778e98a14f9a61e93dd2cf393d69ce`, `packages/orchestrator/src/coordination/run/active-work-authority-refresh.acceptance.test.ts` — `settles A then C lineage before exposing exactly one constrained B F2 suspension`; `packages/dalph/test/cassettes/authored-concurrent-interaction-group.test.ts` — `partitions and consumes all 924 post-hint A D authority orders before C Suspend` |
-| Capacity revision two must settle before process death, including the committed-but-unacknowledged counterexample; this remains a #268 blocker | No current executable test on this branch; downstream #268 owns this blocker. |
-| Exact accepted and published C2 Safe ordinal two must settle before Continue B, including committed ambiguity without another Suspend; this remains a #268 blocker | No current executable test on this branch; downstream #268 owns this blocker. |
-| After the nine-node prerequisite is composed, #268 uses the fourteen-node initial group then strict B Suspend, the strict executing-restart graph/projection/graph/return prefix with no authority group, and the later twelve-node A/D group then strict C Suspend; DS01–DS13 remain unchanged | Current downstream baseline: `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `emits the exact DS01 through DS13 delivery checkpoint table`. No current executable test on this branch proves the pending #268 composition in this row. |
+| Capacity revision two settles before process death, including the committed-but-unacknowledged counterexample | Downstream #268 `packages/dalph/test/cassettes/cassette-residuals.test.ts` — `keeps authored process death unavailable before the production capacity result`; `settles one production capacity revision before delayed interruption and process death`; `distinguishes pre-commit interruption from a committed lost capacity response using only the reduced policy` |
+| Exact accepted and published C2 Safe ordinal two settles before Continue B, including committed ambiguity without another Suspend | Downstream #268 `packages/dalph/test/cassettes/authored-active-work-causal-sync.test.ts` — `keeps Continue B unavailable before the production C2 Safe publication`; `settles exact C2 Safe once before delayed interruption and Continue B`; `preserves named C2 Safe failure families and reconciles a committed lost response without retry` |
+| After the nine-node prerequisite is composed, #268 uses the fourteen-node initial group then strict B Suspend, the strict executing-restart graph/projection/RunnableTransition prefix with no restart group, and one queued activation containing G1, the eighteen-node A/C/D group, G2, the twelve-node A/D group, C2 Suspend/Safe, and UnsettledResponsibility before Continue B; DS01–DS13 remain unchanged | Downstream #268 `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `emits the exact DS01 through DS13 delivery checkpoint table`; `returns RunnableTransition after strict restart projections before the queued G1 refresh`; `represents queued G1 as three independent A C D authority lanes before G2` |
 
 The accepted direct #309 tests own only the new member schema, exact
 specification/claim/projection correlation, truthful claim-adapter sequencing,

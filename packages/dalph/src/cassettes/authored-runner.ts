@@ -168,6 +168,63 @@ type AuthoredCapacityOperatorControl = Pick<
   "readTaskWorkCapacity" | "setTaskWorkCapacity"
 >
 
+type DirectlyDrivenStoryItem = Extract<
+  AuthoredCassetteStoryItem,
+  {
+    readonly _tag:
+      | "OperatorAppliesControlDirection"
+      | "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
+      | "OperatorAppliesRunCancellation"
+      | "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary"
+      | "CassetteOffersRunReactivationHints"
+      | "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"
+      | "CassetteReleasesHeldPlannedAttemptSuspension"
+      | "CassetteReleasesHeldPlannedAttemptContinuation"
+      | "CassetteReleasesHeldTargetPromotionReconciliationRead"
+      | "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary"
+      | "CassetteReleasesHeldTaskWorkSpecificationRead"
+      | "OperatorContinuesAttempt"
+      | "OperatorDirectsTaskClaimReacquisition"
+      | "OperatorRacesContinueAndStop"
+      | "OperatorRestartsAttempt"
+      | "OperatorAwaitsPauseProgress"
+      | "OperatorStartsPauseObservation"
+      | "OperatorSubscribesToPauseObservation"
+      | "OperatorStopsAttempt"
+      | "PauseProgressObserved"
+      | "PauseProgressObservedCancelledAndReconnected"
+      | "SetTaskExecutionCapacity"
+  }
+>
+
+const directlyDrivenTags: ReadonlySet<AuthoredCassetteStoryItem["_tag"]> = new Set([
+  "OperatorAppliesControlDirection",
+  "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
+  "OperatorAppliesRunCancellation",
+  "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
+  "CassetteOffersRunReactivationHints",
+  "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
+  "CassetteReleasesHeldPlannedAttemptSuspension",
+  "CassetteReleasesHeldPlannedAttemptContinuation",
+  "CassetteReleasesHeldTargetPromotionReconciliationRead",
+  "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
+  "CassetteReleasesHeldTaskWorkSpecificationRead",
+  "OperatorContinuesAttempt",
+  "OperatorDirectsTaskClaimReacquisition",
+  "OperatorRacesContinueAndStop",
+  "OperatorRestartsAttempt",
+  "OperatorAwaitsPauseProgress",
+  "OperatorStartsPauseObservation",
+  "OperatorSubscribesToPauseObservation",
+  "OperatorStopsAttempt",
+  "PauseProgressObserved",
+  "PauseProgressObservedCancelledAndReconnected",
+  "SetTaskExecutionCapacity"
+])
+
+const isDirectlyDrivenStoryItem = (item: AuthoredCassetteStoryItem | undefined): item is DirectlyDrivenStoryItem =>
+  item !== undefined && directlyDrivenTags.has(item._tag)
+
 /** Runs the exact public capacity read/apply/reconcile boundary before publishing its authored occurrence. */
 export const driveAuthoredTaskWorkCapacityChange = Effect.fn("AuthoredCassette.driveTaskWorkCapacityChange")(
   function* (request: {
@@ -333,10 +390,59 @@ type AuthoredIntegrationOrderResponsibility = AuthoredIntegrationOrderResponsibi
   )
 
 /** Zero-based count of authored interactions consumed when a production delivery publication was captured. */
-const AuthoredStoryPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
+export const AuthoredStoryPosition = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
   Schema.brand("AuthoredStoryPosition")
 )
 type AuthoredStoryPosition = typeof AuthoredStoryPosition.Type
+
+/** One scenario-local, replayable rendezvous keyed by the exact authored hint item position. */
+export const makeAuthoredHintDeliveryRendezvous = Effect.fn("AuthoredCassette.makeHintDeliveryRendezvous")(
+  function* () {
+    const deliveries = yield* Ref.make<ReadonlyMap<AuthoredStoryPosition, Deferred.Deferred<void>>>(new Map())
+    const deliveryAt = Effect.fn("AuthoredCassette.hintDeliveryAt")(function* (storyPosition: AuthoredStoryPosition) {
+      const candidate = yield* Deferred.make<void>()
+      return yield* Ref.modify(deliveries, (current) => {
+        const existing = current.get(storyPosition)
+        return existing === undefined
+          ? ([candidate, new Map(current).set(storyPosition, candidate)] as const)
+          : ([existing, current] as const)
+      })
+    })
+    const awaitAt = Effect.fn("AuthoredCassette.awaitHintDeliveryAt")(function* (storyPosition: AuthoredStoryPosition) {
+      const delivery = yield* deliveryAt(storyPosition)
+      yield* Deferred.await(delivery).pipe(
+        Effect.ensuring(
+          Ref.update(deliveries, (current) => {
+            if (current.get(storyPosition) !== delivery) return current
+            return new Map([...current].filter(([position]) => position !== storyPosition))
+          })
+        )
+      )
+    })
+    const completeAt = Effect.fn("AuthoredCassette.completeHintDeliveryAt")(function* (
+      storyPosition: AuthoredStoryPosition
+    ) {
+      const delivery = yield* deliveryAt(storyPosition)
+      yield* Deferred.succeed(delivery, undefined)
+    })
+    return { awaitAt, completeAt }
+  }
+)
+
+/** Delivers every hint before completing the exact return-to-hints rendezvous. */
+export const deliverAuthoredRunReactivationHints = Effect.fn("AuthoredCassette.deliverRunReactivationHints")(function* <
+  EOffer,
+  ROffer,
+  EComplete,
+  RComplete
+>(request: {
+  readonly complete: Effect.Effect<void, EComplete, RComplete>
+  readonly hints: ReadonlyArray<"TrackerNotification" | "Timer">
+  readonly offer: (hint: "TrackerNotification" | "Timer") => Effect.Effect<void, EOffer, ROffer>
+}) {
+  yield* Effect.forEach(request.hints, request.offer, { discard: true })
+  yield* request.complete
+})
 
 /** One-based order assigned when the Lab passively receives an observation during a cassette run. */
 export const AuthoredObservationCaptureOrder = Schema.Int.check(Schema.isGreaterThan(0)).pipe(
@@ -1449,7 +1555,7 @@ export const settleCoordinatorActivationReturn = <E>(
 ) =>
   Effect.gen(function* () {
     if (Exit.isFailure(exit)) return yield* Effect.failCause(exit.cause)
-    yield* cursor.consumeCoordinatorActivationReturnedFor(exit.value)
+    return yield* cursor.consumeCoordinatorActivationReturnedFor(exit.value)
   })
 
 /** Internal cassette policy correlating a real reactivation callback return with its authored boundary. */
@@ -1459,16 +1565,16 @@ export const settleAuthoredReactivationOwnerReturn = (
   decision: CoordinatorFinalityDecision
 ) =>
   lifecycle?._tag === "ReactivationOwnerProcessGenerations"
-    ? settleCoordinatorActivationReturn(cursor, Exit.succeed(decision))
+    ? settleCoordinatorActivationReturn(cursor, Exit.succeed(decision)).pipe(Effect.map(Option.some))
     : lifecycle?._tag === "CurrentFirstReactivationAfterProcessDeath"
       ? cursor.currentStoryItem.pipe(
           Effect.flatMap((item) =>
             item?._tag === "CoordinatorActivationReturned"
-              ? settleCoordinatorActivationReturn(cursor, Exit.succeed(decision))
-              : Effect.void
+              ? settleCoordinatorActivationReturn(cursor, Exit.succeed(decision)).pipe(Effect.map(Option.some))
+              : Effect.succeed(Option.none())
           )
         )
-      : Effect.void
+      : Effect.succeed(Option.none())
 
 /** The authored death control is a typed defect, never a production failure. */
 const isAuthoredCoordinatorProcessDeath = (exit: Exit.Exit<unknown, unknown>): boolean =>
@@ -1476,6 +1582,62 @@ const isAuthoredCoordinatorProcessDeath = (exit: Exit.Exit<unknown, unknown>): b
   exit.cause.reasons.some(
     (reason) => Cause.isDieReason(reason) && reason.defect instanceof AuthoredCoordinatorProcessDies
   )
+
+type AuthoredActivationReturnSignal = {
+  readonly acknowledgement: Deferred.Deferred<void>
+  readonly successor:
+    | { readonly _tag: "HintDelivery"; readonly awaitDelivery: Effect.Effect<void> }
+    | { readonly _tag: "StoryItem"; readonly item: AuthoredCassetteStoryItem | undefined }
+}
+
+/**
+ * Converts one exact returned callback followed by immediate authored death, or by the accepted single
+ * capacity-change prelude and death, into the process-level death signal. Any immediate non-death item
+ * acknowledges the callback untouched. Once the accepted capacity prelude begins, any successor other than
+ * death is a typed authored mismatch.
+ */
+export const awaitAuthoredProcessDeathAfterActivationReturn = Effect.fn(
+  "AuthoredCassette.awaitProcessDeathAfterActivationReturn"
+)(function* (request: {
+  readonly awaitActivationReturn: Effect.Effect<AuthoredActivationReturnSignal>
+  readonly cursor: Pick<
+    StoryCursor,
+    "awaitStoryItemAdvance" | "currentStoryItem" | "pauseAtCoordinatorProcessDeath" | "storyPosition"
+  >
+  readonly onProcessDeath: Effect.Effect<void>
+}) {
+  const signal = yield* request.awaitActivationReturn
+  if (signal.successor._tag === "HintDelivery") {
+    yield* signal.successor.awaitDelivery
+    yield* Deferred.succeed(signal.acknowledgement, undefined)
+    return
+  }
+  let current = signal.successor.item
+  const capacityPreludeStarted = current?._tag === "SetTaskExecutionCapacity"
+  if (current?._tag === "SetTaskExecutionCapacity") {
+    yield* request.cursor.awaitStoryItemAdvance(current)
+    current = yield* request.cursor.currentStoryItem
+  }
+  if (current?._tag !== "CoordinatorProcessDies") {
+    if (capacityPreludeStarted) {
+      return yield* new AuthoredCassetteInteractionMismatch({
+        actual: current?._tag ?? "end of story",
+        expected: "CoordinatorProcessDies after SetTaskExecutionCapacity",
+        storyPosition: yield* request.cursor.storyPosition
+      })
+    }
+    yield* Deferred.succeed(signal.acknowledgement, undefined)
+    return
+  }
+  const death = yield* Effect.exit(request.cursor.pauseAtCoordinatorProcessDeath)
+  if (!isAuthoredCoordinatorProcessDeath(death)) {
+    return yield* Exit.match(death, {
+      onFailure: Effect.failCause,
+      onSuccess: () => Effect.die("authored process death disappeared")
+    })
+  }
+  yield* request.onProcessDeath
+})
 
 /** Extracts a typed authored-correlation failure captured inside a journal append callback. */
 export const authoredInteractionMismatchFrom = (
@@ -1623,6 +1785,7 @@ const runAuthoredScenarioCassetteWith = (
       const offerRunReactivationHint = yield* Ref.make<(hint: "TrackerNotification" | "Timer") => Effect.Effect<void>>(
         () => Effect.die("the authored Run reactivation owner is not active")
       )
+      const authoredHintDelivery = yield* makeAuthoredHintDeliveryRendezvous()
       const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<AuthoredDeliveryPublication>>([])
       const deliveryPublicationSignals = yield* Queue.unbounded<AuthoredDeliveryPublication>()
       const plannedSuspensionExecutorBoundaryGate = yield* Ref.make<
@@ -2411,11 +2574,16 @@ const runAuthoredScenarioCassetteWith = (
               runId
             })
             const driveRunReactivationHints = Effect.gen(function* () {
+              const storyPosition = AuthoredStoryPosition.make(yield* cursor.storyPosition)
               const authored = yield* cursor.consumeRunReactivationHints
               /* v8 ignore next -- @preserve The tag-selected driver consumes only the current hint burst. */
               if (Option.isNone(authored)) return
               const offer = yield* Ref.get(offerRunReactivationHint)
-              yield* Effect.forEach(authored.value.hints, offer, { discard: true })
+              yield* deliverAuthoredRunReactivationHints({
+                complete: authoredHintDelivery.completeAt(storyPosition),
+                hints: authored.value.hints,
+                offer
+              })
             }).pipe(Effect.orDie)
             const requirePlannedAttempt = Effect.fn("AuthoredCassette.requirePlannedAttempt")(function* (item: {
               readonly attemptId: AuthoredAttemptChoiceItem["attemptId"]
@@ -2837,61 +3005,6 @@ const runAuthoredScenarioCassetteWith = (
             )
             const driveTaskWorkSpecificationReadBoundaryRelease =
               cursor.consumeTaskWorkSpecificationReadBoundaryRelease.pipe(Effect.asVoid, Effect.orDie)
-            type DirectlyDrivenStoryItem = Extract<
-              AuthoredCassetteStoryItem,
-              {
-                readonly _tag:
-                  | "OperatorAppliesControlDirection"
-                  | "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
-                  | "OperatorAppliesRunCancellation"
-                  | "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary"
-                  | "CassetteOffersRunReactivationHints"
-                  | "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"
-                  | "CassetteReleasesHeldPlannedAttemptSuspension"
-                  | "CassetteReleasesHeldPlannedAttemptContinuation"
-                  | "CassetteReleasesHeldTargetPromotionReconciliationRead"
-                  | "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary"
-                  | "CassetteReleasesHeldTaskWorkSpecificationRead"
-                  | "OperatorContinuesAttempt"
-                  | "OperatorDirectsTaskClaimReacquisition"
-                  | "OperatorRacesContinueAndStop"
-                  | "OperatorRestartsAttempt"
-                  | "OperatorAwaitsPauseProgress"
-                  | "OperatorStartsPauseObservation"
-                  | "OperatorSubscribesToPauseObservation"
-                  | "OperatorStopsAttempt"
-                  | "PauseProgressObserved"
-                  | "PauseProgressObservedCancelledAndReconnected"
-                  | "SetTaskExecutionCapacity"
-              }
-            >
-            const directlyDrivenTags: ReadonlySet<AuthoredCassetteStoryItem["_tag"]> = new Set([
-              "OperatorAppliesControlDirection",
-              "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
-              "OperatorAppliesRunCancellation",
-              "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
-              "CassetteOffersRunReactivationHints",
-              "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
-              "CassetteReleasesHeldPlannedAttemptSuspension",
-              "CassetteReleasesHeldPlannedAttemptContinuation",
-              "CassetteReleasesHeldTargetPromotionReconciliationRead",
-              "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
-              "CassetteReleasesHeldTaskWorkSpecificationRead",
-              "OperatorContinuesAttempt",
-              "OperatorDirectsTaskClaimReacquisition",
-              "OperatorRacesContinueAndStop",
-              "OperatorRestartsAttempt",
-              "OperatorAwaitsPauseProgress",
-              "OperatorStartsPauseObservation",
-              "OperatorSubscribesToPauseObservation",
-              "OperatorStopsAttempt",
-              "PauseProgressObserved",
-              "PauseProgressObservedCancelledAndReconnected",
-              "SetTaskExecutionCapacity"
-            ])
-            const isDirectlyDrivenStoryItem = (
-              item: AuthoredCassetteStoryItem | undefined
-            ): item is DirectlyDrivenStoryItem => item !== undefined && directlyDrivenTags.has(item._tag)
             const driveAuthoredOperatorItem = (item: DirectlyDrivenStoryItem) =>
               Match.valueTags(item, {
                 OperatorAppliesControlDirection: (item) => driveControlDirection(item),
@@ -3080,6 +3193,7 @@ const runAuthoredScenarioCassetteWith = (
           const applicationContext = yield* Layer.build(application)
           const bootstrap = Context.get(applicationContext, JournaledRunBootstrap)
           const failure = yield* Deferred.make<unknown>()
+          const activationReturns = yield* Queue.unbounded<AuthoredActivationReturnSignal>()
           const quietInterval = Duration.hours(1)
           const trackerNotificationSource = {
             attach: Effect.gen(function* () {
@@ -3093,8 +3207,25 @@ const runAuthoredScenarioCassetteWith = (
               }
             }),
             changes: Stream.empty,
-            get: Effect.succeed(undefined)
+            get: Effect.void
           }
+          const coordinateActivationReturn = Effect.fn("AuthoredCassette.coordinateActivationReturn")(function* (
+            decision: CoordinatorFinalityDecision
+          ) {
+            const settled = yield* settleReactivationOwnerReturn(decision)
+            if (Option.isNone(settled)) return
+            const acknowledgement = yield* Deferred.make<void>()
+            const { successor, successorPosition } = settled.value
+            const correlatedSuccessor =
+              successor?._tag === "CassetteOffersRunReactivationHints" && successorPosition !== undefined
+                ? {
+                    _tag: "HintDelivery" as const,
+                    awaitDelivery: authoredHintDelivery.awaitAt(AuthoredStoryPosition.make(successorPosition))
+                  }
+                : { _tag: "StoryItem" as const, item: successor }
+            yield* Queue.offer(activationReturns, { acknowledgement, successor: correlatedSuccessor })
+            yield* Deferred.await(acknowledgement)
+          })
           const ownerLayer = runReactivationOwnerLayer({
             activate: (opportunity) =>
               Ref.get(latestRuntimeActivationOrdinal).pipe(
@@ -3111,7 +3242,7 @@ const runAuthoredScenarioCassetteWith = (
                   ).pipe(
                     Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
                     Effect.provideService(JournaledRunBootstrap, bootstrap),
-                    Effect.tap(settleReactivationOwnerReturn)
+                    Effect.tap(coordinateActivationReturn)
                   )
                 )
               ),
@@ -3130,7 +3261,7 @@ const runAuthoredScenarioCassetteWith = (
                   ).pipe(
                     Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
                     Effect.provideService(JournaledRunBootstrap, bootstrap),
-                    Effect.tap(settleReactivationOwnerReturn)
+                    Effect.tap(coordinateActivationReturn)
                   )
                 )
               ),
@@ -3145,7 +3276,7 @@ const runAuthoredScenarioCassetteWith = (
             onFailure: (cause) => Deferred.succeed(failure, cause).pipe(Effect.asVoid),
             readControl: bootstrap.readRunReactivationControl(command.target, runId),
             runId,
-            trackerNotificationSource
+            ...(trackerSource._tag === "CurrentFirst" ? { trackerNotificationSource } : {})
           }).pipe(Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)))
           const ownerContext = yield* Layer.build(ownerLayer)
           const processContext = Context.merge(applicationContext, ownerContext)
@@ -3153,6 +3284,18 @@ const runAuthoredScenarioCassetteWith = (
             bootstrap,
             Effect.gen(function* () {
               const owner = yield* RunReactivationOwner
+              yield* Queue.take(activationReturns).pipe(
+                Effect.flatMap((signal) =>
+                  awaitAuthoredProcessDeathAfterActivationReturn({
+                    awaitActivationReturn: Effect.succeed(signal),
+                    cursor,
+                    onProcessDeath: Queue.offer(authoredCoordinatorProcessDeaths, undefined).pipe(Effect.asVoid)
+                  })
+                ),
+                Effect.forever,
+                Effect.catchCause((cause) => Deferred.succeed(failure, cause).pipe(Effect.asVoid)),
+                Effect.forkScoped
+              )
               yield* Ref.set(offerRunReactivationHint, (hint) =>
                 owner.hint(
                   hint === "TrackerNotification"
