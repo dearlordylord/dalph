@@ -37,12 +37,27 @@ import {
   memoryJournalTestLayer,
   observePlannedAttemptExecutorState,
   plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptProtocolControllerLayer,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandReconciliationRequired,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
+  PlannedAttemptExecutorCorrelationMismatch,
+  PlannedAttemptExecutorInitializationCorrelationContradiction,
+  PlannedAttemptExecutorInitialReportCausalityContradiction,
+  PlannedAttemptExecutorProjectionCorrelationMismatch,
+  PlannedAttemptExecutorProjectionNoCurrentReport,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorResponsibilityContradiction,
+  PlannedAttemptExecutorResponsibilityMissing,
+  PlannedAttemptExecutorStateNoCurrentReport,
+  PlannedAttemptExecutorSuspensionLimit,
+  PlannedAttemptExecutorSuspensionLimitReached,
+  PlannedAttemptExecutorSuspensionNotAuthorized,
+  PlannedAttemptExecutorWorkAlreadyTerminal,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   requestPlannedAttemptExecutorSuspension,
@@ -61,7 +76,7 @@ import {
   AuthoredScenarioCassette
 } from "../../src/cassettes/authored-domain.js"
 import {
-  type AuthoredCassetteInteractionMismatch,
+  AuthoredCassetteInteractionMismatch,
   AuthoredCausalSelectionFailure,
   type AuthoredOperationCausalContext,
   type AuthoredSafelySuspendedExecutorReportItem,
@@ -634,16 +649,17 @@ it.effect("fails exact reserved Safe reconciliation for missing, wrong, or unres
 
       expect(Exit.isFailure(exit)).toBe(true)
       const failure = yield* Ref.get(captured)
-      expect(failure).toMatchObject({
-        _tag: "AuthoredCassetteInteractionMismatch",
-        actual: JSON.stringify({
-          correlation: fixture.report?.correlation ?? null,
-          report: fixture.report?._tag ?? "NoReport",
-          unresolved: fixture.unresolved
-        }),
-        expected: "committed ExecutorWorkSafelySuspended for attempt:C:2",
-        storyPosition: 0
-      })
+      expect(failure).toEqual(
+        new AuthoredCassetteInteractionMismatch({
+          actual: JSON.stringify({
+            correlation: fixture.report?.correlation ?? null,
+            report: fixture.report?._tag ?? "NoReport",
+            unresolved: fixture.unresolved
+          }),
+          expected: "committed ExecutorWorkSafelySuspended for attempt:C:2",
+          storyPosition: 0
+        })
+      )
       if (Exit.isFailure(exit)) {
         expect(exit.cause.reasons.flatMap((reason) => (Cause.isDieReason(reason) ? [reason.defect] : []))).toContain(
           failure
@@ -691,13 +707,6 @@ it.effect("preserves named C2 Safe failure families and reconciles a committed l
       runId
     }
 
-    const directSuspendCursor = yield* makeStoryCursor([safe, continued])
-    const directSuspendCalls = yield* Ref.make(0)
-    const directSuspendFailure = new PlannedAttemptExecutorCommandFailure({
-      command: "Suspend",
-      correlation,
-      detail: "the exact C2 Suspend provider failed before returning a report"
-    })
     const plannedAttempt = PlannedTaskAttempt.make({
       attemptId: correlation.attemptId,
       baseSha: GitCommitSha.make("c".repeat(40)),
@@ -752,36 +761,75 @@ it.effect("preserves named C2 Safe failure families and reconciles a committed l
         })
       )
     })
-    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
-    const safeReport = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
-    const unusedExecutor = PlannedAttemptExecutor.of({
-      begin: () => Effect.die("C2 failure fixture must not begin"),
-      observe: () => Effect.die("C2 failure fixture must not observe"),
-      requestSuspension: () => Effect.die("C2 failure fixture must not suspend"),
-      resume: () => Effect.die("C2 failure fixture must not resume")
+    const appendSettledSuspendHistory = Effect.gen(function* () {
+      const journal = yield* JournalStore
+      for (const value of [1, 2, 3]) {
+        const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(value)
+        yield* journal.append(
+          plannedAttempt.runId,
+          plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+          PlannedAttemptExecutorCommandIntendedEvent.make({
+            command: "Suspend",
+            initiatedBy: { _tag: "DalphCoordinator" },
+            occurrenceClassification: "InitiatedAction",
+            ordinal: commandOrdinal,
+            plannedAttempt,
+            version: workflowJournalEventVersion
+          })
+        )
+        yield* journal.append(
+          plannedAttempt.runId,
+          plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+          PlannedAttemptExecutorCommandResponseObservedEvent.make({
+            commandOrdinal,
+            occurrenceClassification: "NonActionOccurrence",
+            plannedAttempt,
+            report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }),
+            version: workflowJournalEventVersion
+          })
+        )
+      }
     })
-    const assertProtocolFailure = <E, Expected extends { readonly _tag: string }>(
-      operation: Effect.Effect<unknown, E>,
-      expected: Expected
+    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    const withCursorExecutor = <A, E, R>(
+      cursor: StoryCursor,
+      reservations: Ref.Ref<number>,
+      operation: (executor: PlannedAttemptExecutor["Service"]) => Effect.Effect<A, E, R>
     ) =>
       Effect.gen(function* () {
-        const failureCursor = yield* makeStoryCursor([safe, continued])
-        const failure = yield* operation.pipe(
-          Effect.tap(() =>
-            Effect.gen(function* () {
-              const reserved = yield* failureCursor.consumeExecutorReportFor("Suspend", correlation.attemptId)
-              if (!isSafelySuspendedExecutorReport(reserved)) {
-                return yield* Effect.die("a successful C2 protocol result must reserve exact Safe before settlement")
-              }
-              yield* failureCursor.settleSafelySuspendedExecutorReport(reserved)
+        const survivingReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
+        const unresolvedLostResponses = yield* Ref.make<ReadonlySet<string>>(new Set())
+        return yield* Effect.gen(function* () {
+          const executor = yield* PlannedAttemptExecutor
+          return yield* operation(executor)
+        }).pipe(
+          Effect.provide(
+            controlledExecutorLayer({
+              cursor,
+              runId,
+              beforeExecutorReport: () => Effect.void,
+              survivingReports,
+              unresolvedLostResponses,
+              reserveAcceptedSafeReport: () => Ref.update(reservations, (count) => count + 1)
             })
-          ),
-          Effect.flip
+          )
         )
-        expect(failure).toMatchObject(expected)
-        expect(yield* failureCursor.storyPosition).toBe(0)
-        expect(Option.isNone(yield* failureCursor.consumeAttemptChoice)).toBe(true)
-        expect((yield* failureCursor.currentStoryItem)?._tag).toBe("PlannedAttemptExecutorWorkReported")
+      })
+    const assertProtocolFailure = <E, Expected extends { readonly _tag: string }>(
+      operation: (cursor: StoryCursor, reservations: Ref.Ref<number>) => Effect.Effect<unknown, E>,
+      expected: Expected,
+      expectedReservations = 0
+    ) =>
+      Effect.gen(function* () {
+        const settledOccurrences = yield* Ref.make(0)
+        const reservations = yield* Ref.make(0)
+        const failureCursor = yield* makeStoryCursor([safe, continued], {
+          onOccurrence: () => Ref.update(settledOccurrences, (count) => count + 1)
+        })
+        const failure = yield* operation(failureCursor, reservations).pipe(Effect.flip)
+        expect(failure).toEqual(expected)
+        expect(yield* Ref.get(reservations)).toBe(expectedReservations)
+        expect(yield* Ref.get(settledOccurrences)).toBe(0)
       })
 
     const readFailure = new JournalStorageUnavailable({
@@ -791,20 +839,23 @@ it.effect("preserves named C2 Safe failure families and reconciles a committed l
     const readCalls = yield* Ref.make(0)
     const readAppendCalls = yield* Ref.make(0)
     yield* assertProtocolFailure(
-      requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
-        Effect.provideService(PlannedAttemptExecutor, unusedExecutor),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(
-          Layer.succeed(
-            InRunJournal,
-            InRunJournal.of({
-              append: () =>
-                Ref.update(readAppendCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("unused"))),
-              read: () => Ref.update(readCalls, (count) => count + 1).pipe(Effect.andThen(Effect.fail(readFailure)))
-            })
+      (cursor, reservations) =>
+        withCursorExecutor(cursor, reservations, (executor) =>
+          requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+            Effect.provideService(PlannedAttemptExecutor, executor),
+            Effect.provide(plannedAttemptProtocolControllerLayer),
+            Effect.provide(
+              Layer.succeed(
+                InRunJournal,
+                InRunJournal.of({
+                  append: () =>
+                    Ref.update(readAppendCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("unused"))),
+                  read: () => Ref.update(readCalls, (count) => count + 1).pipe(Effect.andThen(Effect.fail(readFailure)))
+                })
+              )
+            )
           )
-        )
-      ),
+        ),
       readFailure
     )
     expect(yield* Ref.get(readCalls)).toBe(1)
@@ -817,20 +868,23 @@ it.effect("preserves named C2 Safe failure families and reconciles a committed l
     const appendReadCalls = yield* Ref.make(0)
     const appendCalls = yield* Ref.make(0)
     yield* assertProtocolFailure(
-      requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
-        Effect.provideService(PlannedAttemptExecutor, unusedExecutor),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(
-          Layer.succeed(
-            InRunJournal,
-            InRunJournal.of({
-              append: () =>
-                Ref.update(appendCalls, (count) => count + 1).pipe(Effect.andThen(Effect.fail(appendFailure))),
-              read: () => Ref.update(appendReadCalls, (count) => count + 1).pipe(Effect.as([]))
-            })
+      (cursor, reservations) =>
+        withCursorExecutor(cursor, reservations, (executor) =>
+          requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+            Effect.provideService(PlannedAttemptExecutor, executor),
+            Effect.provide(plannedAttemptProtocolControllerLayer),
+            Effect.provide(
+              Layer.succeed(
+                InRunJournal,
+                InRunJournal.of({
+                  append: () =>
+                    Ref.update(appendCalls, (count) => count + 1).pipe(Effect.andThen(Effect.fail(appendFailure))),
+                  read: () => Ref.update(appendReadCalls, (count) => count + 1).pipe(Effect.as([]))
+                })
+              )
+            )
           )
-        )
-      ),
+        ),
       appendFailure
     )
     expect(yield* Ref.get(appendReadCalls)).toBe(1)
@@ -843,19 +897,29 @@ it.effect("preserves named C2 Safe failure families and reconciles a committed l
       detail: "the exact C2 Suspend provider failed"
     })
     yield* assertProtocolFailure(
-      Effect.gen(function* () {
-        yield* appendResponsibility()
-        yield* appendReport(executing)
-        return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
-      }).pipe(
-        Effect.provideService(PlannedAttemptExecutor, {
-          ...unusedExecutor,
-          requestSuspension: () =>
-            Ref.update(commandCalls, (count) => count + 1).pipe(Effect.andThen(Effect.fail(commandFailure)))
-        }),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(memoryJournalTestLayer)
-      ),
+      (cursor) =>
+        Effect.gen(function* () {
+          yield* appendResponsibility()
+          yield* appendReport(executing)
+          return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+            Effect.provideService(
+              PlannedAttemptExecutor,
+              PlannedAttemptExecutor.of({
+                begin: () => Effect.die("the C2 command failure fixture must not begin"),
+                observe: () => Effect.die("the C2 command failure fixture must not observe"),
+                requestSuspension: (requested) =>
+                  cursor
+                    .beginExecutorReportRequest("Suspend", requested.attemptId)
+                    .pipe(
+                      Effect.andThen(Ref.update(commandCalls, (count) => count + 1)),
+                      Effect.andThen(Effect.fail(commandFailure)),
+                      Effect.ensuring(cursor.endExecutorReportRequest("Suspend", requested.attemptId))
+                    ),
+                resume: () => Effect.die("the C2 command failure fixture must not resume")
+              })
+            )
+          )
+        }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer)),
       commandFailure
     )
     expect(yield* Ref.get(commandCalls)).toBe(1)
@@ -863,24 +927,37 @@ it.effect("preserves named C2 Safe failure families and reconciles a committed l
     const foreignCorrelation = { attemptId: AttemptId.make("attempt:C:foreign"), runId }
     const correlationCalls = yield* Ref.make(0)
     yield* assertProtocolFailure(
-      Effect.gen(function* () {
-        yield* appendResponsibility()
-        yield* appendReport(executing)
-        return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
-      }).pipe(
-        Effect.provideService(PlannedAttemptExecutor, {
-          ...unusedExecutor,
-          requestSuspension: () =>
-            Ref.update(correlationCalls, (count) => count + 1).pipe(
-              Effect.as(
-                PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation: foreignCorrelation })
-              )
+      (cursor, reservations) =>
+        Effect.gen(function* () {
+          const survivingReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
+          const unresolvedLostResponses = yield* Ref.make<ReadonlySet<string>>(new Set())
+          return yield* Effect.gen(function* () {
+            yield* appendResponsibility()
+            yield* appendReport(executing)
+            return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
+          }).pipe(
+            Effect.provide(plannedAttemptProtocolControllerLayer),
+            Effect.provide(memoryJournalTestLayer),
+            Effect.provide(
+              controlledExecutorLayer({
+                cursor,
+                runId,
+                beforeExecutorReport: () => Ref.update(correlationCalls, (count) => count + 1),
+                prepareReport: () =>
+                  Effect.succeed(
+                    PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+                      correlation: foreignCorrelation
+                    })
+                  ),
+                survivingReports,
+                unresolvedLostResponses,
+                reserveAcceptedSafeReport: () => Ref.update(reservations, (count) => count + 1)
+              })
             )
+          )
         }),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(memoryJournalTestLayer)
-      ),
-      { _tag: "PlannedAttemptExecutorCorrelationMismatch", expected: correlation, observed: foreignCorrelation }
+      new PlannedAttemptExecutorCorrelationMismatch({ expected: correlation, observed: foreignCorrelation }),
+      1
     )
     expect(yield* Ref.get(correlationCalls)).toBe(1)
 
@@ -890,59 +967,88 @@ it.effect("preserves named C2 Safe failure families and reconciles a committed l
     })
     const responsibilityCalls = yield* Ref.make(0)
     yield* assertProtocolFailure(
-      Effect.gen(function* () {
-        yield* appendResponsibility(contradictoryAttempt)
-        return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
-      }).pipe(
-        Effect.provideService(PlannedAttemptExecutor, {
-          ...unusedExecutor,
-          requestSuspension: () => Ref.update(responsibilityCalls, (count) => count + 1).pipe(Effect.as(safeReport))
-        }),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(memoryJournalTestLayer)
-      ),
-      {
-        _tag: "PlannedAttemptExecutorResponsibilityContradiction",
+      (cursor, reservations) =>
+        withCursorExecutor(cursor, reservations, (executor) =>
+          Effect.gen(function* () {
+            yield* appendResponsibility(contradictoryAttempt)
+            return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+              Effect.provideService(
+                PlannedAttemptExecutor,
+                PlannedAttemptExecutor.of({
+                  ...executor,
+                  requestSuspension: (requested) =>
+                    Ref.update(responsibilityCalls, (count) => count + 1).pipe(
+                      Effect.andThen(executor.requestSuspension(requested))
+                    )
+                })
+              )
+            )
+          }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+        ),
+      new PlannedAttemptExecutorResponsibilityContradiction({
         accepted: contradictoryAttempt,
         requested: plannedAttempt
-      }
+      })
     )
     expect(yield* Ref.get(responsibilityCalls)).toBe(0)
 
     const unauthorizedCalls = yield* Ref.make(0)
     yield* assertProtocolFailure(
-      requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
-        Effect.provideService(PlannedAttemptExecutor, {
-          ...unusedExecutor,
-          requestSuspension: () => Ref.update(unauthorizedCalls, (count) => count + 1).pipe(Effect.as(safeReport))
-        }),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(memoryJournalTestLayer)
-      ),
-      { _tag: "PlannedAttemptExecutorSuspensionNotAuthorized", correlation }
+      (cursor, reservations) =>
+        withCursorExecutor(cursor, reservations, (executor) =>
+          requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+            Effect.provideService(
+              PlannedAttemptExecutor,
+              PlannedAttemptExecutor.of({
+                ...executor,
+                requestSuspension: (requested) =>
+                  Ref.update(unauthorizedCalls, (count) => count + 1).pipe(
+                    Effect.andThen(executor.requestSuspension(requested))
+                  )
+              })
+            ),
+            Effect.provide(plannedAttemptProtocolControllerLayer),
+            Effect.provide(memoryJournalTestLayer)
+          )
+        ),
+      new PlannedAttemptExecutorSuspensionNotAuthorized({ correlation })
     )
     expect(yield* Ref.get(unauthorizedCalls)).toBe(0)
 
-    const limitCalls = yield* Ref.make(0)
+    const limitProtocolCalls = yield* Ref.make(0)
+    const limitExecutorCalls = yield* Ref.make(0)
     yield* assertProtocolFailure(
-      Effect.gen(function* () {
-        yield* appendResponsibility()
-        yield* appendReport(executing)
-        yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
-        yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
-        yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
-        return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
-      }).pipe(
-        Effect.provideService(PlannedAttemptExecutor, {
-          ...unusedExecutor,
-          requestSuspension: () => Ref.update(limitCalls, (count) => count + 1).pipe(Effect.as(executing))
-        }),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(memoryJournalTestLayer)
-      ),
-      { _tag: "PlannedAttemptExecutorSuspensionLimitReached", correlation, limit: 3 }
+      (cursor, reservations) =>
+        withCursorExecutor(cursor, reservations, (executor) =>
+          Effect.gen(function* () {
+            yield* appendResponsibility()
+            yield* appendReport(executing)
+            yield* appendSettledSuspendHistory
+            return yield* Ref.update(limitProtocolCalls, (count) => count + 1).pipe(
+              Effect.andThen(
+                requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+                  Effect.provideService(
+                    PlannedAttemptExecutor,
+                    PlannedAttemptExecutor.of({
+                      ...executor,
+                      requestSuspension: (requested) =>
+                        Ref.update(limitExecutorCalls, (count) => count + 1).pipe(
+                          Effect.andThen(executor.requestSuspension(requested))
+                        )
+                    })
+                  )
+                )
+              )
+            )
+          }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+        ),
+      new PlannedAttemptExecutorSuspensionLimitReached({
+        correlation,
+        limit: PlannedAttemptExecutorSuspensionLimit.make(3)
+      })
     )
-    expect(yield* Ref.get(limitCalls)).toBe(3)
+    expect(yield* Ref.get(limitProtocolCalls)).toBe(1)
+    expect(yield* Ref.get(limitExecutorCalls)).toBe(0)
 
     const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
       correlation,
@@ -950,213 +1056,233 @@ it.effect("preserves named C2 Safe failure families and reconciles a committed l
     })
     const terminalCalls = yield* Ref.make(0)
     yield* assertProtocolFailure(
-      Effect.gen(function* () {
-        yield* appendResponsibility()
-        yield* appendReport(terminal)
-        return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
-      }).pipe(
-        Effect.provideService(PlannedAttemptExecutor, {
-          ...unusedExecutor,
-          requestSuspension: () => Ref.update(terminalCalls, (count) => count + 1).pipe(Effect.as(safeReport))
-        }),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(memoryJournalTestLayer)
-      ),
-      { _tag: "PlannedAttemptExecutorWorkAlreadyTerminal", correlation }
+      (cursor, reservations) =>
+        withCursorExecutor(cursor, reservations, (executor) =>
+          Effect.gen(function* () {
+            yield* appendResponsibility()
+            yield* appendReport(terminal)
+            return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+              Effect.provideService(
+                PlannedAttemptExecutor,
+                PlannedAttemptExecutor.of({
+                  ...executor,
+                  requestSuspension: (requested) =>
+                    Ref.update(terminalCalls, (count) => count + 1).pipe(
+                      Effect.andThen(executor.requestSuspension(requested))
+                    )
+                })
+              )
+            )
+          }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+        ),
+      new PlannedAttemptExecutorWorkAlreadyTerminal({ correlation })
     )
     expect(yield* Ref.get(terminalCalls)).toBe(0)
 
     const reconcileObserveCalls = yield* Ref.make(0)
     const reconcileSuspendCalls = yield* Ref.make(0)
     yield* assertProtocolFailure(
-      Effect.gen(function* () {
-        yield* appendResponsibility()
-        yield* appendReport(executing)
-        yield* appendUnsettledSuspend
-        return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
-      }).pipe(
-        Effect.provideService(PlannedAttemptExecutor, {
-          ...unusedExecutor,
-          observe: () =>
-            Ref.update(reconcileObserveCalls, (count) => count + 1).pipe(
-              Effect.as(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }))
-            ),
-          requestSuspension: () => Ref.update(reconcileSuspendCalls, (count) => count + 1).pipe(Effect.as(safeReport))
-        }),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(memoryJournalTestLayer)
-      ),
-      { _tag: "PlannedAttemptExecutorProjectionNoCurrentReport", commandOrdinal: 1, correlation }
+      (cursor, reservations) =>
+        withCursorExecutor(cursor, reservations, (executor) =>
+          Effect.gen(function* () {
+            yield* appendResponsibility()
+            yield* appendReport(executing)
+            yield* appendUnsettledSuspend
+            return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+              Effect.provideService(
+                PlannedAttemptExecutor,
+                PlannedAttemptExecutor.of({
+                  ...executor,
+                  observe: (requested, purpose) =>
+                    Ref.update(reconcileObserveCalls, (count) => count + 1).pipe(
+                      Effect.andThen(executor.observe(requested, purpose))
+                    ),
+                  requestSuspension: (requested) =>
+                    Ref.update(reconcileSuspendCalls, (count) => count + 1).pipe(
+                      Effect.andThen(executor.requestSuspension(requested))
+                    )
+                })
+              )
+            )
+          }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+        ),
+      new PlannedAttemptExecutorProjectionNoCurrentReport({
+        commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+        correlation
+      })
     )
     expect(yield* Ref.get(reconcileObserveCalls)).toBe(1)
     expect(yield* Ref.get(reconcileSuspendCalls)).toBe(0)
 
     const projectionCorrelationCalls = yield* Ref.make(0)
     yield* assertProtocolFailure(
-      Effect.gen(function* () {
-        yield* appendResponsibility()
-        yield* appendReport(executing)
-        yield* appendUnsettledSuspend
-        return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
-      }).pipe(
-        Effect.provideService(PlannedAttemptExecutor, {
-          ...unusedExecutor,
-          observe: () =>
-            Ref.update(projectionCorrelationCalls, (count) => count + 1).pipe(
-              Effect.as(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation: foreignCorrelation }))
+      (cursor, reservations) =>
+        withCursorExecutor(cursor, reservations, (executor) =>
+          Effect.gen(function* () {
+            yield* appendResponsibility()
+            yield* appendReport(executing)
+            yield* appendUnsettledSuspend
+            return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+              Effect.provideService(
+                PlannedAttemptExecutor,
+                PlannedAttemptExecutor.of({
+                  ...executor,
+                  observe: (requested, purpose) =>
+                    Ref.update(projectionCorrelationCalls, (count) => count + 1).pipe(
+                      Effect.andThen(executor.observe(requested, purpose)),
+                      Effect.as(
+                        PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation: foreignCorrelation })
+                      )
+                    )
+                })
+              )
             )
-        }),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(memoryJournalTestLayer)
-      ),
-      {
-        _tag: "PlannedAttemptExecutorProjectionCorrelationMismatch",
-        expected: correlation,
-        observed: foreignCorrelation
-      }
+          }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+        ),
+      new PlannedAttemptExecutorProjectionCorrelationMismatch({ expected: correlation, observed: foreignCorrelation })
     )
     expect(yield* Ref.get(projectionCorrelationCalls)).toBe(1)
 
     const initializationCalls = yield* Ref.make(0)
+    const initializationDetail = "the C2 executor initialized a different process identity"
     yield* assertProtocolFailure(
-      Effect.gen(function* () {
-        yield* appendResponsibility()
-        yield* appendReport(executing)
-        yield* appendUnsettledSuspend
-        return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt)
-      }).pipe(
-        Effect.provideService(PlannedAttemptExecutor, {
-          ...unusedExecutor,
-          observe: () =>
-            Ref.update(initializationCalls, (count) => count + 1).pipe(
-              Effect.as(
-                PlannedAttemptExecutorProjection.cases.InitializationCorrelationContradiction.make({
-                  correlation,
-                  detail: "the C2 executor initialized a different process identity"
+      (cursor, reservations) =>
+        withCursorExecutor(cursor, reservations, (executor) =>
+          Effect.gen(function* () {
+            yield* appendResponsibility()
+            yield* appendReport(executing)
+            yield* appendUnsettledSuspend
+            return yield* requestPlannedAttemptExecutorSuspension(plannedAttempt).pipe(
+              Effect.provideService(
+                PlannedAttemptExecutor,
+                PlannedAttemptExecutor.of({
+                  ...executor,
+                  observe: (requested, purpose) =>
+                    Ref.update(initializationCalls, (count) => count + 1).pipe(
+                      Effect.andThen(executor.observe(requested, purpose)),
+                      Effect.as(
+                        PlannedAttemptExecutorProjection.cases.InitializationCorrelationContradiction.make({
+                          correlation,
+                          detail: initializationDetail
+                        })
+                      )
+                    )
                 })
               )
             )
-        }),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(memoryJournalTestLayer)
-      ),
-      {
-        _tag: "PlannedAttemptExecutorInitializationCorrelationContradiction",
-        correlation,
-        detail: "the C2 executor initialized a different process identity"
-      }
+          }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+        ),
+      new PlannedAttemptExecutorInitializationCorrelationContradiction({ correlation, detail: initializationDetail })
     )
     expect(yield* Ref.get(initializationCalls)).toBe(1)
 
     const initialCausalityCalls = yield* Ref.make(0)
     yield* assertProtocolFailure(
-      Effect.gen(function* () {
-        yield* appendResponsibility()
-        return yield* observePlannedAttemptExecutorState(plannedAttempt)
-      }).pipe(
-        Effect.provideService(PlannedAttemptExecutor, {
-          ...unusedExecutor,
-          observe: () =>
-            Ref.update(initialCausalityCalls, (count) => count + 1).pipe(
-              Effect.as(PlannedAttemptExecutorProjection.cases.Exact.make({ report: executing }))
+      (cursor, reservations) =>
+        withCursorExecutor(cursor, reservations, (executor) =>
+          Effect.gen(function* () {
+            yield* appendResponsibility()
+            return yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+              Effect.provideService(
+                PlannedAttemptExecutor,
+                PlannedAttemptExecutor.of({
+                  ...executor,
+                  observe: (requested, purpose) =>
+                    Ref.update(initialCausalityCalls, (count) => count + 1).pipe(
+                      Effect.andThen(executor.observe(requested, purpose)),
+                      Effect.as(PlannedAttemptExecutorProjection.cases.Exact.make({ report: executing }))
+                    )
+                })
+              )
             )
-        }),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(memoryJournalTestLayer)
-      ),
-      { _tag: "PlannedAttemptExecutorInitialReportCausalityContradiction", observed: executing }
+          }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+        ),
+      new PlannedAttemptExecutorInitialReportCausalityContradiction({ observed: executing })
     )
     expect(yield* Ref.get(initialCausalityCalls)).toBe(1)
 
     const responsibilityMissingCalls = yield* Ref.make(0)
     yield* assertProtocolFailure(
-      observePlannedAttemptExecutorState(plannedAttempt).pipe(
-        Effect.provideService(PlannedAttemptExecutor, {
-          ...unusedExecutor,
-          observe: () =>
-            Ref.update(responsibilityMissingCalls, (count) => count + 1).pipe(
-              Effect.as(PlannedAttemptExecutorProjection.cases.Exact.make({ report: executing }))
-            )
-        }),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(memoryJournalTestLayer)
-      ),
-      { _tag: "PlannedAttemptExecutorResponsibilityMissing", correlation }
+      (cursor, reservations) =>
+        withCursorExecutor(cursor, reservations, (executor) =>
+          observePlannedAttemptExecutorState(plannedAttempt).pipe(
+            Effect.provideService(
+              PlannedAttemptExecutor,
+              PlannedAttemptExecutor.of({
+                ...executor,
+                observe: (requested, purpose) =>
+                  Ref.update(responsibilityMissingCalls, (count) => count + 1).pipe(
+                    Effect.andThen(executor.observe(requested, purpose))
+                  )
+              })
+            ),
+            Effect.provide(plannedAttemptProtocolControllerLayer),
+            Effect.provide(memoryJournalTestLayer)
+          )
+        ),
+      new PlannedAttemptExecutorResponsibilityMissing({ correlation })
     )
     expect(yield* Ref.get(responsibilityMissingCalls)).toBe(0)
 
     const reconciliationRequiredCalls = yield* Ref.make(0)
     yield* assertProtocolFailure(
-      Effect.gen(function* () {
-        yield* appendResponsibility()
-        yield* appendReport(executing)
-        yield* appendUnsettledSuspend
-        return yield* observePlannedAttemptExecutorState(plannedAttempt)
-      }).pipe(
-        Effect.provideService(PlannedAttemptExecutor, {
-          ...unusedExecutor,
-          observe: () =>
-            Ref.update(reconciliationRequiredCalls, (count) => count + 1).pipe(
-              Effect.as(PlannedAttemptExecutorProjection.cases.Exact.make({ report: executing }))
+      (cursor, reservations) =>
+        withCursorExecutor(cursor, reservations, (executor) =>
+          Effect.gen(function* () {
+            yield* appendResponsibility()
+            yield* appendReport(executing)
+            yield* appendUnsettledSuspend
+            return yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+              Effect.provideService(
+                PlannedAttemptExecutor,
+                PlannedAttemptExecutor.of({
+                  ...executor,
+                  observe: (requested, purpose) =>
+                    Ref.update(reconciliationRequiredCalls, (count) => count + 1).pipe(
+                      Effect.andThen(executor.observe(requested, purpose))
+                    )
+                })
+              )
             )
-        }),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(memoryJournalTestLayer)
-      ),
-      { _tag: "PlannedAttemptExecutorCommandReconciliationRequired", commandOrdinal: 1, correlation }
+          }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+        ),
+      new PlannedAttemptExecutorCommandReconciliationRequired({
+        commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
+        correlation
+      })
     )
     expect(yield* Ref.get(reconciliationRequiredCalls)).toBe(0)
 
     const stateCalls = yield* Ref.make(0)
     yield* assertProtocolFailure(
-      Effect.gen(function* () {
-        yield* appendResponsibility()
-        yield* appendReport(executing)
-        return yield* observePlannedAttemptExecutorState(plannedAttempt)
-      }).pipe(
-        Effect.provideService(PlannedAttemptExecutor, {
-          ...unusedExecutor,
-          observe: () =>
-            Ref.update(stateCalls, (count) => count + 1).pipe(
-              Effect.as(PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }))
+      (cursor, reservations) =>
+        withCursorExecutor(cursor, reservations, (executor) =>
+          Effect.gen(function* () {
+            yield* appendResponsibility()
+            yield* appendReport(executing)
+            return yield* observePlannedAttemptExecutorState(plannedAttempt).pipe(
+              Effect.provideService(
+                PlannedAttemptExecutor,
+                PlannedAttemptExecutor.of({
+                  ...executor,
+                  observe: (requested, purpose) =>
+                    Ref.update(stateCalls, (count) => count + 1).pipe(
+                      Effect.andThen(executor.observe(requested, purpose))
+                    )
+                })
+              )
             )
-        }),
-        Effect.provide(plannedAttemptProtocolControllerLayer),
-        Effect.provide(memoryJournalTestLayer)
-      ),
-      { _tag: "PlannedAttemptExecutorStateNoCurrentReport", correlation }
+          }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+        ),
+      new PlannedAttemptExecutorStateNoCurrentReport({ correlation })
     )
     expect(yield* Ref.get(stateCalls)).toBe(1)
 
-    const directSuspendReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
-    const directSuspendUnresolved = yield* Ref.make<ReadonlySet<string>>(new Set())
-    expect(
-      yield* Effect.gen(function* () {
-        const executor = yield* PlannedAttemptExecutor
-        return yield* executor.requestSuspension(plannedAttempt)
-      }).pipe(
-        Effect.provide(
-          controlledExecutorLayer({
-            cursor: directSuspendCursor,
-            runId,
-            beforeExecutorReport: () =>
-              Ref.update(directSuspendCalls, (count) => count + 1).pipe(
-                Effect.andThen(Effect.fail(directSuspendFailure as never))
-              ),
-            survivingReports: directSuspendReports,
-            unresolvedLostResponses: directSuspendUnresolved
-          })
-        ),
-        Effect.flip
-      )
-    ).toBe(directSuspendFailure)
-    expect(yield* Ref.get(directSuspendCalls)).toBe(1)
-    expect(yield* Ref.get(directSuspendReports)).toEqual(new Map())
-    expect(yield* directSuspendCursor.storyPosition).toBe(0)
-    expect((yield* directSuspendCursor.currentStoryItem)?._tag).toBe("PlannedAttemptExecutorWorkReported")
-
     for (const failure of Object.values(c2JournalReadFailureFixtures(runId))) {
-      const cursor = yield* makeStoryCursor([safe, continued])
+      const settlements = yield* Ref.make(0)
+      const cursor = yield* makeStoryCursor([safe, continued], {
+        onOccurrence: () => Ref.update(settlements, (count) => count + 1)
+      })
       const reserved = yield* cursor.consumeExecutorReportFor("Suspend", correlation.attemptId)
       if (!isSafelySuspendedExecutorReport(reserved)) return yield* Effect.die("C2 Safe was not reserved")
       const acceptedSafeReport = yield* Ref.make(Option.some(reserved))
@@ -1172,8 +1298,11 @@ it.effect("preserves named C2 Safe failure families and reconciles a committed l
         }).pipe(Effect.flip)
       ).toBe(failure)
       expect(yield* Ref.get(reads)).toBe(1)
-      expect(yield* cursor.storyPosition).toBe(0)
-      expect((yield* cursor.currentStoryItem)?._tag).toBe("PlannedAttemptExecutorWorkReported")
+      expect(yield* Ref.get(settlements)).toBe(0)
+      expect(yield* cursor.consumeExecutorProjectionOrReservedSafeFor(correlation.attemptId)).toEqual({
+        _tag: "ReservedSafe",
+        item: reserved
+      })
     }
 
     const mismatchedRecords = [
@@ -1203,7 +1332,10 @@ it.effect("preserves named C2 Safe failure families and reconciles a committed l
       [record, { ...record, position: JournalPosition.make(1) }]
     ]
     for (const records of mismatchedRecords) {
-      const cursor = yield* makeStoryCursor([safe, continued])
+      const settlements = yield* Ref.make(0)
+      const cursor = yield* makeStoryCursor([safe, continued], {
+        onOccurrence: () => Ref.update(settlements, (count) => count + 1)
+      })
       const reserved = yield* cursor.consumeExecutorReportFor("Suspend", correlation.attemptId)
       if (!isSafelySuspendedExecutorReport(reserved)) return yield* Effect.die("C2 Safe was not reserved")
       const acceptedSafeReport = yield* Ref.make(Option.some(reserved))
@@ -1215,12 +1347,24 @@ it.effect("preserves named C2 Safe failure families and reconciles a committed l
         runId
       }).pipe(Effect.flip)
 
-      expect(failure).toMatchObject({
-        _tag: "AuthoredCassetteInteractionMismatch",
-        expected: "one accepted Safe report at ordinal 2 and the published position",
-        storyPosition: 0
+      expect(failure).toEqual(
+        new AuthoredCassetteInteractionMismatch({
+          actual: JSON.stringify(
+            records.flatMap(({ event, position }) =>
+              position <= acceptedThrough
+                ? [{ correlation: event.report.correlation, ordinal: event.ordinal, position }]
+                : []
+            )
+          ),
+          expected: "one accepted Safe report at ordinal 2 and the published position",
+          storyPosition: 0
+        })
+      )
+      expect(yield* Ref.get(settlements)).toBe(0)
+      expect(yield* cursor.consumeExecutorProjectionOrReservedSafeFor(correlation.attemptId)).toEqual({
+        _tag: "ReservedSafe",
+        item: reserved
       })
-      expect(yield* cursor.storyPosition).toBe(0)
     }
 
     const settledSafeOccurrences = yield* Ref.make(0)

@@ -1,8 +1,12 @@
 import {
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
   makeTaskWorkSpecification,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
@@ -18,6 +22,7 @@ import {
 import { it } from "@effect/vitest"
 import { NodeCrypto, NodeFileSystem, NodePath } from "@effect/platform-node"
 import {
+  Cause,
   Context,
   Deferred,
   Effect,
@@ -38,12 +43,13 @@ import { expect } from "vitest"
 import { TestClock } from "effect/testing"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
-import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
+import { GitTargetLineageReadFailure, TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import {
   TrackerAdapterReadContext,
   TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
-  TrackerGraphReader
+  TrackerGraphReader,
+  TrackerReadError
 } from "../../authorities/task-tracker/graph-reader.js"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
@@ -56,7 +62,13 @@ import { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runt
 import { DeliveryRelationPublicationObserver } from "../delivery/delivery-publication-observer.js"
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "../delivery/in-memory-relations.js"
-import { currentSignalOf, type DeliveryRelationInputBundle, TrackerGraphState } from "../delivery/relations.js"
+import {
+  currentSignalOf,
+  DeliveryRelationReconciliationError,
+  type DeliveryRelationInputBundle,
+  TrackerGraphState
+} from "../delivery/relations.js"
+import { IntegrationFinalityRuntimeUnavailable } from "../delivery/integration-finality-boundary.js"
 import { RunFinalityDecision, type RunFinalityProof } from "../frontier/frontier.js"
 import {
   activeWorkAuthorityRefreshSubjectsForRunState,
@@ -117,7 +129,7 @@ import {
 import { makeRunFinalityEvidence, runTerminationDispositionOf } from "../frontier/run-finality.js"
 import { AllocatedWorkflowRunId, freshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
-import { JournaledRunBootstrap, type AcceptedRunReactivationObservers } from "./run.js"
+import { JournaledRunBootstrap, JournaledRunIdentityMismatch, type AcceptedRunReactivationObservers } from "./run.js"
 import { journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
 import {
   PassivePlannedAttemptObserver,
@@ -139,7 +151,11 @@ import {
   type ApplicationProcessLifecycleService,
   makeApplicationExitShell
 } from "../application-exit/application-shell.js"
-import { ApplicationExitDiagnostic, ApplicationExitResult } from "../application-exit/lifecycle-decision.js"
+import {
+  ApplicationExiting,
+  ApplicationExitDiagnostic,
+  ApplicationExitResult
+} from "../application-exit/lifecycle-decision.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { controlDirectionApplicationLayer } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { attemptChoiceControlLayer } from "../../workflow/protocols/attempt-choice/control.js"
@@ -432,6 +448,124 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   const bootstrap = Context.get(yield* Layer.build(application), JournaledRunBootstrap)
   return { ...bootstrap, applicationExitRequestBoundary: sharedApplicationExit.requestBoundary }
 })
+
+it.effect("preserves exact reconstructed activation failures at the real bootstrap and finality boundary", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const baseSha = GitCommitSha.make("a".repeat(40))
+      const integrationTarget = IntegrationTarget.make({
+        ref: IntegrationTargetRef.make("refs/heads/main"),
+        repository: GitRepositoryLocator.make("/dalph/bootstrap/reconstructed-failure.git")
+      })
+      const openProgramFailures = [
+        () =>
+          new TrackerReadError({
+            detail: "the reconstructed startup graph could not be decoded",
+            operation: "TrackerGraphReader.decode"
+          }),
+        () =>
+          new GitTargetLineageReadFailure({
+            detail: "the reconstructed target lineage was unavailable",
+            plannedBaseSha: baseSha,
+            target: integrationTarget
+          }),
+        (runId: RunId) =>
+          new PlannedAttemptExecutorCommandFailure({
+            command: "Suspend",
+            correlation: { attemptId: AttemptId.make("attempt:A:reconstructed-failure"), runId },
+            detail: "the reconstructed executor boundary failed"
+          }),
+        () =>
+          new JournalStorageUnavailable({
+            detail: "the reconstructed Journal could not be read",
+            operation: "JournalStore.read"
+          }),
+        () =>
+          new DeliveryRelationReconciliationError({
+            cause: Cause.fail("the reconstructed delivery relation was incoherent")
+          }),
+        () => new IntegrationFinalityRuntimeUnavailable()
+      ] as const
+
+      for (const [index, makeFailure] of openProgramFailures.entries()) {
+        const target = FixtureTarget.make(`journaled-bootstrap-reconstructed-program-failure-${index}`)
+        const runId = yield* freshWorkflowRunId(target)
+        const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+        const storage = Context.get(journalContext, JournalStore)
+        yield* storage.beginRun(runId, target, initialPolicy)
+        const bootstrap = yield* buildBootstrap(runId, storage)
+        const programCalls = yield* Ref.make(0)
+        const expected = makeFailure(runId)
+        const observed = yield* bootstrap
+          .activate(
+            target,
+            Effect.succeed(initialPolicy),
+            runId,
+            Ref.update(programCalls, (count) => count + 1).pipe(Effect.andThen(Effect.fail(expected)))
+          )
+          .pipe(Effect.flip)
+
+        expect(observed, expected._tag).toBe(expected)
+        expect(yield* Ref.get(programCalls), expected._tag).toBe(1)
+        expect(
+          (yield* storage.read(runId)).map(({ event }) => event._tag),
+          expected._tag
+        ).toEqual(["WorkflowRunBegan"])
+      }
+
+      const expectedRunId = yield* freshWorkflowRunId(FixtureTarget.make("journaled-bootstrap-expected-run"))
+      const foreignRunId = yield* freshWorkflowRunId(FixtureTarget.make("journaled-bootstrap-foreign-run"))
+      const identityContext = yield* Layer.build(memoryJournalStoreLayer)
+      const identityStorage = Context.get(identityContext, JournalStore)
+      const identityBootstrap = yield* buildBootstrap(expectedRunId, identityStorage)
+      const identityProgramCalls = yield* Ref.make(0)
+      const identityFailure = new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: foreignRunId })
+      expect(
+        yield* identityBootstrap
+          .activate(
+            FixtureTarget.make("journaled-bootstrap-foreign-run-target"),
+            Effect.succeed(initialPolicy),
+            foreignRunId,
+            Ref.update(identityProgramCalls, (count) => count + 1).pipe(
+              Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+            )
+          )
+          .pipe(Effect.flip)
+      ).toEqual(identityFailure)
+      expect(yield* Ref.get(identityProgramCalls)).toBe(0)
+      expect(yield* identityStorage.read(expectedRunId)).toEqual([])
+      expect(yield* identityStorage.read(foreignRunId)).toEqual([])
+
+      const exitingTarget = FixtureTarget.make("journaled-bootstrap-reconstructed-application-exit")
+      const exitingRunId = yield* freshWorkflowRunId(exitingTarget)
+      const exitingContext = yield* Layer.build(memoryJournalStoreLayer)
+      const exitingStorage = Context.get(exitingContext, JournalStore)
+      const applicationExit = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+      const exitingBootstrap = yield* buildBootstrap(
+        exitingRunId,
+        exitingStorage,
+        defaultTrackerGraphReader,
+        applicationExit
+      )
+      yield* applicationExit.requestBoundary.requestExit
+      const exitingProgramCalls = yield* Ref.make(0)
+      expect(
+        yield* exitingBootstrap
+          .activate(
+            exitingTarget,
+            Effect.succeed(initialPolicy),
+            exitingRunId,
+            Ref.update(exitingProgramCalls, (count) => count + 1).pipe(
+              Effect.as(finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })))
+            )
+          )
+          .pipe(Effect.flip)
+      ).toEqual(new ApplicationExiting())
+      expect(yield* Ref.get(exitingProgramCalls)).toBe(0)
+      expect(yield* exitingStorage.read(exitingRunId)).toEqual([])
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
 
 const appendExecutorHistory = (
   journal: JournalStore["Service"],

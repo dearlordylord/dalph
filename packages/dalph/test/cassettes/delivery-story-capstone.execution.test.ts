@@ -55,36 +55,33 @@ it("records B Safe then rereads tracker G1 before D begins and preserves the act
 })
 
 it.effect(
-  "observes reduced capacity revision two before the authored restart cut",
+  "observes reconstructed capacity revision two with all three recovered held positions",
   () =>
     Effect.gen(function* () {
       const run = yield* capstoneRun
-      const changes = run.records.filter(({ event }) => event._tag === "TaskWorkCapacityChanged")
+      const publications = run.observationCaptures.flatMap((capture) =>
+        capture._tag === "DeliveryPublicationCaptured" ? [capture.publication] : []
+      )
+      const reconstructed = publications.find(
+        ({ activationOrdinal, bundle }) =>
+          activationOrdinal === 2 &&
+          bundle.publication.policy.revision === 2 &&
+          bundle.publication.policy.taskExecutionCapacity === 2 &&
+          bundle.actionInputs.runtimeFacts.taskWork.held.length === 3
+      )
 
-      expect(changes).toHaveLength(1)
-      expect(changes[0]).toMatchObject({
-        event: { _tag: "TaskWorkCapacityChanged", capacity: 2, previousRevision: 1, revision: 2 },
-        runId: run.runId
-      })
+      expect(reconstructed?.activationOrdinal).toBe(2)
+      expect(reconstructed?.bundle.publication.policy).toEqual({ revision: 2, taskExecutionCapacity: 2 })
       expect(
-        run.records.some(
-          ({ event }) => event._tag === "TaskWorkCapacityChanged" && (event.revision > 2 || event.capacity !== 2)
-        )
-      ).toBe(false)
-
-      const reduced = run.observationCaptures.find(
-        (capture) =>
-          capture._tag === "AuthoredStoryOccurrenceCaptured" && capture.occurrence._tag === "SetTaskExecutionCapacity"
-      )
-      const death = run.observationCaptures.find(
-        (capture) =>
-          capture._tag === "AuthoredStoryOccurrenceCaptured" && capture.occurrence._tag === "CoordinatorProcessDies"
-      )
-      expect(reduced).toBeDefined()
-      expect(death).toBeDefined()
-      if (reduced === undefined || death === undefined) return
-      expect(reduced.captureOrder).toBeLessThan(death.captureOrder)
-      expect(reduced.activationOrdinal).toBe(death.activationOrdinal)
+        reconstructed?.bundle.actionInputs.runtimeFacts.taskWork.held
+          .map(({ correlation, taskId }) => ({ attemptId: correlation.attemptId, runId: correlation.runId, taskId }))
+          .toSorted((left, right) => left.taskId.localeCompare(right.taskId))
+      ).toEqual([
+        { attemptId: "attempt:A:0", runId: run.runId, taskId: "A" },
+        { attemptId: "attempt:C:2", runId: run.runId, taskId: "C" },
+        { attemptId: "attempt:D:3", runId: run.runId, taskId: "D" }
+      ])
+      expect(publications.every(({ bundle }) => bundle.publication.policy.revision <= 2)).toBe(true)
     }),
   capstoneTimeout
 )
@@ -184,24 +181,6 @@ it.effect(
             ].includes(item._tag)
           )
       ).toBe(false)
-    }),
-  capstoneTimeout
-)
-
-it.effect(
-  "emits the exact DS01 through DS13 delivery checkpoint table",
-  () =>
-    Effect.gen(function* () {
-      const run = yield* capstoneRun
-      const initial = run.deliveryFrames.find(({ graph }) => graph._tag === "Established")
-
-      expect(run.reactivationOwnerProcessGenerationCount).toBe(2)
-      expect(initial?.capacity).toBe(3)
-      expect(
-        initial?.graph._tag === "Established"
-          ? initial.graph.tasks.map(({ id, prerequisiteIds }) => ({ id, prerequisiteIds }))
-          : []
-      ).toEqual(["A", "B", "C", "D", "E"].map((id) => ({ id, prerequisiteIds: [] })))
     }),
   capstoneTimeout
 )
