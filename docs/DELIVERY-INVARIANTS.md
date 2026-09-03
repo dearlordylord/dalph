@@ -78,7 +78,8 @@ projection remains unwriteable outside Alloy.
 deterministic graph order. Live positions are not an input to selection. This
 graph-policy placement is descriptive: it grants no runtime admission
 capability. A task described as `EligibleOutsideBound` can become the next
-fresh entrant only through D13a after earlier admission occupancy is released.
+fresh entrant only through D13a after a release or capacity expansion
+establishes free capacity.
 → `I1 (weakened: Quint checks `selected.size() <= capacity`, an upper bound, not the equality I1 states, and neither states graph order)`
 
 **D7 Order independence.** Selection is invariant under permutation of the
@@ -133,16 +134,22 @@ commitment continues across claim, post-claim graph, specification, plan, and
 worktree stages. Accepting
 `PlannedAttemptExecutorWorkResponsibilityBegan` atomically replaces it with the
 exact D12 attempt-held position. A matching pre-ownership
-`TaskClaimAcquisitionRejected` can instead end only that commitment. No action
-completion, provider failure, timeout, ambiguous outcome, capacity change, or
-process death creates a gap or releases either form.
+`TaskClaimAcquisitionRejected` can instead end only that commitment. Conclusive
+proof that the first claim-intent append was not accepted releases its exact
+live reservation because no durable commitment exists; an ambiguous append
+retains the reservation until the Journal proves acceptance or absence. A
+failed or ambiguous executor-responsibility append retains the pre-attempt
+commitment. No action completion, provider failure, timeout, other ambiguous
+outcome, capacity change, or process death creates a gap or releases either
+form.
 
 For each coherent admission decision, unique live entry reservations,
 fresh-task admission commitments, and exact held attempts consume the current
 ceiling. Existing ready responsibilities retain priority before fresh entry;
 only the first remaining entry-capable tasks in stable derived order can
-receive the free reservations. Graph placement and a delivery action proposal
-remain descriptions and grant no admission capability. Contraction can leave
+receive the free reservations. Graph placement remains descriptive and grants
+no admission capability. Only an admitted candidate can be materialized as a
+delivery action proposal. Contraction can leave
 occupancy above capacity but admits no new task. After Dalph owns a claim, a
 later task constraint retains the commitment until an accepted phase-specific
 disposition proves release; issue #316 owns that later liveness protocol.

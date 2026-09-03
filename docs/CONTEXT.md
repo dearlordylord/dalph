@@ -337,6 +337,30 @@ task A, retains it while A is executing, and requires none for a tracker-only
 read.
 _Avoid_: Executor-declared capacity, review capacity, operation-name capacity
 
+**Fresh-task candidate**:
+One graph-described task, with stable derived rank, that may be considered for
+new work. It is not a delivery action proposal and grants no permission to
+claim, read a focused specification, plan, prepare a worktree, or begin
+executor work. Admission may later materialize its first exact proposal.
+_Avoid_: Admitted task, bounded ticket as capability, queued action, proposal
+
+**Fresh-task admission commitment**:
+The one task-level capacity occupancy reconstructed after Dalph accepts the
+exact `TaskClaimAcquisitionIntended` record and retained through claim,
+post-claim graph, specification, plan, and worktree stages. It is neither a
+second workflow responsibility nor a task-work position. The exact
+executor-responsibility handoff atomically replaces it with the attempt-held
+position; only a conclusive pre-ownership rejection can end it earlier.
+_Avoid_: Persisted admission event, claim ownership, task-work position, queue token
+
+**Fresh-task admission basis**:
+The process-local result of one coherent evaluation of current graph
+candidates, Run policy, Journal-derived commitments, exact held attempts,
+existing ready responsibilities, and live entry reservations. It derives free
+capacity and the deterministic next candidates; no basis, queue, or capacity
+snapshot is persisted as authority.
+_Avoid_: Durable scheduler snapshot, tracker frontier, stored queue, semaphore authority
+
 **Initial control policy**:
 The schema-decoded values Dalph evaluates and records only when Run
 establishment finds no history for the exact Run. The current production slice

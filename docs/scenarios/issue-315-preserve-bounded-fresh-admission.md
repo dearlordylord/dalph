@@ -1,6 +1,6 @@
 # Issue 315: preserve bounded admission until executor-work handoff
 
-Status: accepted product invariant; scenario and formal type shape under review
+Status: accepted product invariant, operational scenario, and formal type shape
 
 ## Governing behavior
 
@@ -68,9 +68,9 @@ ready responsibilities.
 Under the runtime selection gate, repeated atomic evaluations can reserve one
 fresh entry each for A, B, and C. The gate counts every earlier reservation in
 the next evaluation. It does not reserve a persisted or fixed three-task batch.
-Existing ready responsibilities are considered before fresh entry. D and E can
-remain pure proposed actions, but runtime cannot admit, materialize, or perform
-them.
+Existing ready responsibilities are considered before fresh entry. D and E
+remain graph candidates only. Runtime cannot materialize a delivery action
+proposal or perform an operation for either task.
 
 For each admitted task, Dalph can first perform the already-authorized current
 graph read; that read creates no durable fresh-task admission commitment. Dalph
@@ -312,26 +312,29 @@ the first fresh-entry-capable tasks in stable derived order.
 
 These concepts are not tracker graph placement, persisted queue state,
 task-work positions, cross-operation workflow responsibilities, or delivery
-action proposals. A delivery action proposal remains a pure description. An
-opaque fresh-task admission decision is required before runtime can materialize
-an operation and establish delivery live action ownership.
+action proposals. An opaque fresh-task admission decision is required before
+runtime can materialize a delivery action proposal, then establish delivery
+live action ownership. A graph candidate outside the decision has no proposal.
 
 ## Acceptance-test mapping
 
-| Scenario | Concrete result | Required test seam |
-| --- | --- | --- |
-| Three enter; two remain outside | A/B/C may cross every pre-Begin boundary; D/E cross none | Production-algebra acceptance test over A-E at capacity three; proposal/admission unit tests |
-| Independent response order | Legal A/B/C completion permutations preserve the same admitted subjects | State-machine/property test with controlled response readiness |
-| Executor-responsibility handoff | C changes from pre-attempt commitment to exact held position without a capacity gap | Admission-controller test that observes no fourth authorization at the handoff |
-| Confirmed foreign claim | Exact rejection ends only A; D alone can enter; foreign claim is untouched | Journaled claim-conflict acceptance test plus admission projection test |
-| Ambiguous claim | Exact A retry/reconciliation retains occupancy; D/E remain denied | Existing claim-protocol fixtures composed with the admission controller |
-| Later ambiguous boundary | Failed reads/appends and ambiguous worktree creation retain A and create no duplicate | Prefix tests at graph/specification/plan/worktree boundaries |
-| Restart prefixes | Prefixes 1-6 reconstruct pre-attempt occupancy; prefix 7 reconstructs exact held occupancy | Table-driven Run-establishment/conformance test over all seven prefixes |
-| B releases | With no ready Resume responsibility, accepted Safe or Terminal evidence admits D alone | Production-algebra acceptance test while B remains tracker-open |
-| Contraction | Existing occupancy is retained; no entrant at or above the new ceiling | Generated capacity/admission property test |
-| Expansion | Exactly the next free-capacity prefix enters | Generated capacity/admission property test |
-| Invalid states | Outside authorization, overlap, duplicate occupancy, over-ranked entry, and gap handoff cannot be constructed | Schema/constructor tests and Quint invariants with negative controls |
-| End-to-end return | The cassette-free #268 C2b tracer passes DS-01/DS-02 without a strict cursor | Existing controlled tracer on the exact integrated candidate |
+| Scenario | Concrete result | Required production test seam | Formal evidence owner |
+| --- | --- | --- | --- |
+| Three enter; two remain outside | A/B/C may cross every pre-Begin boundary; D/E cross none | Production-algebra acceptance test over A-E at capacity three; proposal/admission unit tests | Five-task capacity/order projection, including outside-admission negative control |
+| Independent response order | Legal A/B/C completion permutations preserve the same admitted subjects | State-machine/property test with controlled response readiness | Canonical sampled model and production MBT; the capacity projection deliberately erases pipeline stage order |
+| Executor-responsibility handoff | C changes from pre-attempt commitment to exact held position without a capacity gap | Admission-controller test that observes no fourth authorization at the handoff | Continuity/handoff projection, including gap-handoff negative control |
+| Confirmed foreign claim | Exact rejection ends only A; D alone can enter; foreign claim is untouched | Journaled claim-conflict acceptance test plus admission projection test | Both projections: exact selected-task rejection and A-E next-task identity |
+| Ambiguous claim | Exact A retry/reconciliation retains occupancy; D/E remain denied | Existing claim-protocol fixtures composed with the admission controller | Continuity/handoff projection with blind-retry and ambiguity-release negative controls |
+| Later ambiguous boundary | Failed reads/appends and ambiguous worktree creation retain A and create no duplicate | Prefix tests at graph/specification/plan/worktree boundaries | Continuity/handoff projection; provider internals remain in their existing protocol tests |
+| First intent append cuts | Conclusive absence releases only the live reservation; ambiguity retains it; accepted intent replaces it with a durable commitment | Journal append negative controls composed with admission projection | Continuity/handoff projection over absent, present, and unknown Journal presence |
+| Responsibility append failure | Failed or ambiguous handoff retains the pre-attempt commitment and exposes no capacity gap | Admission-controller handoff negative control | Continuity/handoff projection over absent, present, and unknown Journal presence |
+| Post-ownership constraint | Closed, removed, blocked, foreign, unreadable, or failed current facts do not release the commitment automatically | Model and runtime negative control; #316 owns later disposition and release | Continuity/handoff projection; no liveness or cleanup claim |
+| Restart prefixes | Prefixes 1-6 reconstruct pre-attempt occupancy; prefix 7 reconstructs exact held occupancy | Table-driven Run-establishment/conformance test over all seven prefixes | Canonical prefix tests plus continuity/handoff repeated crash/recovery paths |
+| B releases | With no ready Resume responsibility, accepted Safe or Terminal evidence admits D alone | Production-algebra acceptance test while B remains tracker-open | Five-task capacity/order projection |
+| Contraction | Existing occupancy is retained; no entrant at or above the new ceiling | Generated capacity/admission property test | Five-task capacity/order projection with eviction negative control |
+| Expansion | Exactly the next free-capacity prefix enters | Generated capacity/admission property test | Five-task capacity/order projection with rank-inversion negative control |
+| Invalid states | Outside authorization, overlap, duplicate occupancy, over-ranked entry, and gap handoff cannot be constructed | Schema/constructor tests and Quint invariants with negative controls | Both projections' collected negative-test modules |
+| End-to-end return | The cassette-free #268 C2b tracer passes DS-01/DS-02 without a strict cursor | Existing controlled tracer on the exact integrated candidate | Production evidence only; neither projection models cassette order or Run return |
 
 Focused #54, #193, and #264 through #269 tests remain regression requirements.
 Aggregate test totals do not replace this mapping.
@@ -353,3 +356,141 @@ or Run termination. It consumes their typed observations only where they
 change admission occupancy. Post-ownership pre-Begin relinquishment is retained
 fail-closed and deferred to #316. It models independent boundary results as
 unordered choices unless an accepted causal rule requires an order.
+
+### Exhaustive proof projections
+
+The canonical five-task model retains the complete admission vocabulary and is
+the source for deterministic scenario tests, sampled invariants and witnesses,
+mutation analysis, and the production-backed conformance adapter. Its product
+of five task identities, every pipeline stage, boundary ambiguity, capacity
+change, and crash prefix did not finish inside the exhaustive gate budget. The
+exhaustive artifact therefore splits the same accepted behavior into two
+finite projections without weakening either property family.
+
+`freshTaskAdmissionCapacityProof` retains A through E as distinct, stably
+ranked subjects. Each is exactly one of candidate, occupied,
+retained-not-ready, ready-existing, existing-reserved, or foreign-blocked.
+`Occupied` collapses a process-local fresh reservation, every durable fresh
+commitment stage, and an exact held attempt only for capacity accounting. This
+projection owns bounded entry, A-E order, ready-existing priority, release of
+only the rejected task, contraction without eviction, and deterministic
+expansion. Keeping only an occupied count would be unsound because it could not
+state that D enters before E or that a foreign rejection affects A alone.
+
+`freshTaskAdmissionAmbiguityProof` retains one exact selected task and one
+outside-task sentinel. Its closed selected-task state distinguishes candidate,
+entry reservation, unknown or accepted claim-intent append, claim call and
+authority observation, retry authorization, owned claim, post-claim graph,
+focused specification, immutable plan lineage, worktree intent/call/authority
+observation and retry, ready exact worktree, unknown or accepted responsibility
+append, exact held attempt, post-ownership constraint, conclusive pre-ownership
+rejection, and exact release. Process Up/Down state permits repeated crash and
+recovery without a crash-count bound. This projection owns fail-closed
+ambiguity, reread-before-retry, exact-lineage continuity, no handoff gap, and
+the rule that the outside sentinel cannot be authorized while the selected
+task remains occupied.
+
+Both projections have their own typecheck, collected positive and negative
+tests, sampled invariant/witness run, and complete finite-state verification
+without an arbitrary depth token. They share the canonical model's maintainer,
+accepted scenario, gate, and future conformance seam. They are proof artifacts,
+not implementation inputs or alternate behavior sources.
+
+### Canonical state refinement
+
+The projection relation is explicit so a smaller state graph cannot silently
+change the subject being proved.
+
+| Canonical state or fact | Capacity/order projection | Continuity/handoff projection |
+| --- | --- | --- |
+| `Unoccupied`, graph-entry-capable, and no existing responsibility | The same A-E task is `Candidate` | The selected task is `Candidate`; other tasks are represented only by the outside sentinel |
+| `FreshEntryReserved` | The same task is `Occupied` | `EntryReserved` |
+| `FreshTaskCommitted(ClaimIntentRecorded)` | `Occupied` | `ClaimIntentRecorded`; accepted-but-unobserved append is the separate unknown state with Journal presence `Present` |
+| `FreshTaskCommitted(ClaimRequestCalled)` | `Occupied` | `ClaimRequestCalled`; a proof-only lost-response refinement enters `ClaimOutcomeUnknown` with exact, foreign, absent, or unreadable tracker authority |
+| `FreshTaskCommitted(ClaimOwned)` | `Occupied` | `ClaimOwned` |
+| `FreshTaskCommitted(PostClaimGraphKnown)` | `Occupied` | `PostClaimGraphKnown` |
+| `FreshTaskCommitted(SpecificationKnown)` | `Occupied` | `SpecificationKnown` |
+| `FreshTaskCommitted(AttemptPlanned)` | `Occupied` | `AttemptPlanned` with the exact immutable attempt and Base SHA lineage |
+| `FreshTaskCommitted(WorktreeIntentRecorded)` | `Occupied` | `WorktreeIntentRecorded` with exact lineage |
+| `FreshTaskCommitted(WorktreeRequestCalled)` | `Occupied` | `WorktreeRequestCalled`; a proof-only lost-response refinement enters `WorktreeOutcomeUnknown` and retry authorization with Git authority |
+| `FreshTaskCommitted(WorktreeReady)` plus `AcceptedExactWorktreeReady` evidence | `Occupied` | `WorktreeReady` with the same exact attempt, Base SHA, and locator lineage; an unknown responsibility append refines it with Journal presence |
+| `ExactAttemptHeld` | `Occupied` | `ExactAttemptHeld` with the same exact lineage |
+| `ExistingResponsibilityReserved` | `ExistingReserved`, which consumes capacity | Outside the selected fresh pipeline and therefore stutters |
+| Unoccupied `ReadyExistingResponsibility` | `ReadyExisting` | Outside the selected fresh pipeline and therefore stutters |
+| Unoccupied `RetainedNotReadyResponsibility` | `RetainedNotReady` | Outside the selected fresh pipeline and therefore stutters |
+| `ForeignClaimConstraint` after conclusive rejection before ownership | The same task is `ForeignBlocked`; `graphCandidate` remains descriptive | `PreOwnershipRejected` |
+| Primary or next exact claim-operation cycle | Erased after the foreign-blocked task returns to candidate | Preserved as a distinct new-cycle boundary; the rejected operation is never retried |
+| `PostOwnershipConstrained` continuation constraint | The task remains `Occupied` | `PostOwnershipConstrained`; only #316 may add a later exact disposition |
+| Capacity and stable task rank | Preserved exactly | Erased; the selected task plus sentinel checks only continuity-related outside authorization |
+| `ProcessUp` or `ProcessDown` and saturating process-loss evidence | Erased except where loss releases a process-local reservation | Preserved as Up/Down; witness flags record first and repeated loss without limiting later crash/recovery cycles |
+| Authoritative existing-responsibility order | Preserved as the exact relative ready order | Erased because existing-responsibility scheduling is outside this projection |
+| Trace flags and witness counters | Erased except write-only projected violation/witness flags | Erased except write-only projected violation/witness flags; they are evidence, never authority |
+
+### Canonical action refinement
+
+An entry below that says **stutter** means the action changes no fact visible to
+that projection; it does not mean that the canonical action is optional or
+that the projection has a generic no-op transition.
+
+| Canonical action | Capacity/order projection | Continuity/handoff projection |
+| --- | --- | --- |
+| `init` | Initialize capacity three and A-E as ordered candidates | Initialize the selected task as candidate, the outside sentinel unauthorized, and the process Up |
+| `reserveFreshEntry` | Reserve the same lowest-ranked candidate, subject to current capacity and ready priority | Reserve the selected candidate; authorizing the outside sentinel while occupied is a negative transition only |
+| `recordClaimIntent` | Stutter: the task remains occupied | Record the selected task's exact claim intent |
+| `loseClaimIntentAppendResponse`; `loseAcceptedClaimIntentAppendResponse` | Stutter: the reservation remains occupied | Enter unknown append outcome with Journal presence `Absent` or `Present` |
+| `observeClaimIntentPresent` | Stutter: occupied before and after | Reconcile to recorded intent |
+| `observeClaimIntentAbsent` | Release only that pre-intent reservation to candidate | Reconcile to conclusive pre-intent release |
+| `callClaimProvider` | Stutter | Record one exact claim request call in `ClaimRequestCalled` |
+| `acceptOwnedClaim` | Stutter | Accept exact owned claim authority |
+| `rejectForeignClaim` | Move only that task from occupied to foreign-blocked | Record conclusive pre-ownership rejection; the sentinel may become eligible only after release |
+| `observeForeignClaimCleared` | Move only that task from foreign-blocked back to candidate | Return the rejected selected task to candidate and select its distinct next claim-operation cycle after an authoritative clearing observation |
+| `acceptPostClaimGraph`; `readFocusedSpecification`; `recordAttemptPlan` | Stutter | Advance through the corresponding exact selected-task stages |
+| `observePostOwnershipConstraint` | Stutter: the task stays occupied | Enter post-ownership constrained state without release |
+| `recordWorktreeIntent`; `callWorktreeBoundary`; `acceptWorktreeReady` | Stutter | Advance through exact worktree intent, `WorktreeRequestCalled`, authority observation, and accepted exact ready-lineage stages |
+| Proof-only lost claim/worktree response, owning-system reread, and exact retry refinements | Stutter | Move through outcome-unknown and retry-authorized states; retry is disabled until an authoritative absent observation |
+| `loseExecutorResponsibilityAppendResponse`; `loseAcceptedExecutorResponsibilityAppendResponse` | Stutter: the task remains occupied | Enter unknown responsibility append with Journal presence `Absent` or `Present` |
+| `observeExecutorResponsibilityAppendPresent`; `handoffToExecutorResponsibility` | Stutter: commitment and held attempt are both occupied | Atomically enter `ExactAttemptHeld`; no unoccupied state exists between them |
+| `observeExecutorResponsibilityAppendAbsent` | Stutter: the pre-attempt commitment remains occupied | Return to ready exact worktree without releasing occupancy |
+| `releaseHeldPositionNotReady`; `releaseHeldPositionReady` | Move the same task from occupied to retained-not-ready or ready-existing | Enter exact held release; later ready scheduling is outside this projection |
+| `reserveReadyResponsibility`; `handoffReadyResponsibility` | Reserve and hand off the same earliest ready existing responsibility | Stutter: existing-responsibility scheduling is outside the selected fresh pipeline |
+| `contractCapacity`; `expandCapacity` | Change capacity without evicting occupancy; later reservations use the new value | Stutter: policy size is outside the one-selected-task continuity property |
+| `crash` before the first accepted intent | Release the process-local fresh reservation, or an existing-responsibility reservation back to its ready input | Change process to Down and erase only process-local ownership; no durable commitment is reconstructed |
+| `crash` after an accepted durable intent or responsibility | Stutter for capacity: the same task remains occupied | Change process to Down while retaining Journal/authority facts; recovery reconstructs the matching commitment or exact held attempt |
+| `recover` after process loss | Re-derive candidate/ready input or stutter for retained occupancy | Change process to Up and reconcile from the exact Journal and owning-system facts before retry |
+| `step` | Nondeterministic union of only the mapped capacity/order actions above | Nondeterministic union of only the mapped continuity/handoff actions above |
+
+The lost-response, owning-authority reread, and retry-authorized substates that
+the continuity proof makes explicit are refinement detail owned by the existing
+provider protocols, not new production stages. The canonical model now keeps
+the exact claim-request and worktree-request calls inside its closed commitment
+sum rather than consulting trace instrumentation as authority. Conversely, a
+capacity stutter deliberately hides claim/specification/plan/worktree progress
+because none changes occupancy.
+
+### Exact limitations
+
+- Neither projection proves its own correspondence to TypeScript. The
+  production-backed conformance adapter and scenario tests own that link.
+- The capacity/order projection proves task identity and admission policy but
+  not exact provider chronology, lineage, ambiguity, or crash reconstruction.
+- Foreign-claim clearing returns the task to candidate status as a new logical
+  cycle. The canonical model selects a distinct next claim-operation identity;
+  the proof records only that it is a new cycle. The claim protocol and the
+  production conformance test must prove the concrete generated identity is
+  fresh and that the rejected operation is never retried.
+- The continuity/handoff projection proves one selected task against one
+  outside authorization sentinel but not five-task ranking, concurrent
+  completion permutations, or aggregate capacity policy.
+- Tracker graph construction, provider retry bounds, Git worktree correctness,
+  executor Begin and later position lifetime, integration, finality, and Run
+  termination remain in their existing models and tests. The projections
+  consume only typed outcomes relevant to admission.
+- #315 proves safety, not eventual progress. A post-ownership constraint stays
+  occupied; #316 owns the future exact cleanup/relinquishment protocol and its
+  liveness evidence.
+- No formal artifact requires a strict total order for independent boundary
+  completions. The #268 controlled tracer must accept legal causal
+  interleavings and is not a model input.
+- The finite projections do not persist a queue, graph placement, capacity
+  snapshot, semaphore token, provider cache, or workflow authority. Their
+  collapsed states are verification-only observations.

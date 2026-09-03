@@ -4,6 +4,8 @@ import { applicationExitCheckRegistry } from "./application-exit-model-registry.
 import {
   acceptedResultIntegrationObligations,
   acceptedResultIntegrationQuarantineProofObligations,
+  freshTaskAdmissionObligations,
+  freshTaskAdmissionProofObligations,
   plannedAttemptExecutorObligations,
   plannedAttemptExecutorProofObligations,
   runCancellationObligations,
@@ -390,6 +392,87 @@ await run("Run activation exhaustive model", [
   "--verbosity",
   "1"
 ])
+
+const freshTaskAdmissionInvariants = freshTaskAdmissionObligations.invariants
+const freshTaskAdmissionWitnesses = freshTaskAdmissionObligations.witnesses
+
+await run("fresh-task admission model typecheck", ["typecheck", "specs/freshTaskAdmission.qnt"])
+await run("fresh-task admission deterministic tests", [
+  "test",
+  "specs/freshTaskAdmission_test.qnt",
+  "--main",
+  "freshTaskAdmissionTest"
+])
+await run("fresh-task admission negative mutation profile", [
+  "test",
+  "specs/freshTaskAdmission_negative_test.qnt",
+  "--main",
+  "freshTaskAdmissionNegativeTest"
+])
+await run("fresh-task admission sampled model", [
+  "run",
+  "specs/freshTaskAdmission.qnt",
+  "--invariants",
+  ...freshTaskAdmissionInvariants,
+  "--witnesses",
+  ...freshTaskAdmissionWitnesses,
+  "--max-steps",
+  "45",
+  "--max-samples",
+  "10000",
+  "--seed",
+  "315",
+  "--verbosity",
+  "1"
+])
+await run("fresh-task admission proof projection typecheck", [
+  "typecheck",
+  "specs/freshTaskAdmission_proof.qnt"
+])
+const freshTaskAdmissionProofs = [
+  {
+    key: "capacity",
+    title: "fresh-task admission capacity proof",
+    main: "freshTaskAdmissionCapacityProof",
+    testMain: "freshTaskAdmissionCapacityProofTest",
+    negativeTestMain: "freshTaskAdmissionCapacityProofNegativeTest",
+    maxSteps: "20",
+    seed: "3151"
+  },
+  {
+    key: "ambiguity",
+    title: "fresh-task admission ambiguity proof",
+    main: "freshTaskAdmissionAmbiguityProof",
+    testMain: "freshTaskAdmissionAmbiguityProofTest",
+    negativeTestMain: "freshTaskAdmissionAmbiguityProofNegativeTest",
+    maxSteps: "36",
+    seed: "3152"
+  }
+]
+for (const proof of freshTaskAdmissionProofs) {
+  const obligations = freshTaskAdmissionProofObligations[proof.key]
+  await run(`${proof.title} deterministic tests`, [
+    "test", "specs/freshTaskAdmission_proof_test.qnt", "--main", proof.testMain
+  ])
+  await run(`${proof.title} negative mutation profile`, [
+    "test", "specs/freshTaskAdmission_proof_negative_test.qnt",
+    "--main", proof.negativeTestMain
+  ])
+  await run(`${proof.title} sampled model`, [
+    "run", "specs/freshTaskAdmission_proof.qnt", "--main", proof.main,
+    "--invariants", ...obligations.invariants,
+    "--witnesses", ...obligations.witnesses,
+    "--max-steps", proof.maxSteps, "--max-samples", "5000",
+    "--seed", proof.seed, "--verbosity", "1"
+  ])
+  // TLC enumerates each complete finite projection graph without a depth
+  // token; the canonical five-task model retains the richer sampled behavior.
+  await run(`${proof.title} exhaustive model`, [
+    "verify", "specs/freshTaskAdmission_proof.qnt", "--main", proof.main,
+    "--backend", "tlc", "--invariants", ...obligations.invariants,
+    "--verbosity", "1"
+  ])
+}
 
 const runCancellationInvariants = runCancellationObligations.invariants
 const runCancellationWitnesses = runCancellationObligations.witnesses

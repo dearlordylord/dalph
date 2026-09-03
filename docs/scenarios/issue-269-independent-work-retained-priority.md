@@ -9,6 +9,15 @@ scenario's full-capacity handoff refinement below is accepted for repair on
 not add a durable queue, another capacity counter, or task-ID authority over an
 exact planned attempt.
 
+> **Issue #315 provenance rule for this whole document:** whenever a scenario
+> starts with prepared D/E attempts or D/E `ReserveOrReuse`/`Begin` proposals
+> while A/B/C already occupy capacity three, those D/E facts are an explicit
+> synthetic or grandfathered prefix used only to test #269's retained-work
+> handoff. They are not reachable through the corrected fresh-entry runtime and
+> do not authorize production to claim, plan, prepare, or propose D/E before
+> accepted capacity becomes free. New #268 evidence must admit A/B/C first and
+> materialize D/E proposals only after release or expansion under #315.
+
 ## Governing behavior
 
 [Issue #265's restart attachment](issue-265-passive-executor-observation-through-restart.md#a-later-dalph-process-reattaches-to-the-exact-codex-attempt)
@@ -898,9 +907,10 @@ activation; it does not convert missing publication into permission to settle.
 - Downstream #268 blocking edge: `emits the exact DS01 through DS13 delivery
   checkpoint table` in
   `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`
-  remains pending on composition. It will prove that this local ordering lets
-  the five accepted post-claim results expose A through E's specification reads
-  in the complete delivery story.
+  remains pending on composition. It will prove that this local ordering
+  preserves each accepted publication. Under #315, the complete delivery story
+  reaches A/B/C first and can expose D/E specification reads only after an
+  accepted release or capacity expansion admits those tasks.
 
 ## A same-position planning successor reaches the runtime exactly once
 

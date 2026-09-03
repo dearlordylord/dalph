@@ -27,6 +27,7 @@ import { promisify } from "node:util"
 import { applicationExitMutationRegistry } from "../../scripts/application-exit-model-registry.mjs"
 import {
   acceptedResultIntegrationObligations,
+  freshTaskAdmissionObligations,
   plannedAttemptExecutorObligations,
   runCancellationObligations,
   runActivationObligations,
@@ -58,6 +59,12 @@ const SPECS = [
     file: "specs/runActivation.qnt",
     invariants: runActivationObligations.invariants,
     witnesses: runActivationObligations.witnesses
+  },
+  {
+    name: "freshTaskAdmission",
+    file: "specs/freshTaskAdmission.qnt",
+    invariants: freshTaskAdmissionObligations.invariants,
+    witnesses: freshTaskAdmissionObligations.witnesses
   },
   {
     name: "runCancellation",
