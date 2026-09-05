@@ -19,7 +19,8 @@ import {
   runIssue268Ds06Characterization,
   runIssue268Ds07Characterization,
   runIssue268Ds08Characterization,
-  runIssue268Ds09Characterization
+  runIssue268Ds09Characterization,
+  runIssue268Ds10Characterization
 } from "../../test-support/issue-268-controlled-characterization.js"
 import { issue268ControlledDeliveryCharacterization as controlledScenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
 import { isIssue268RetainedBResponsibility } from "../../test-support/issue-268-controlled-ds06.js"
@@ -1256,6 +1257,170 @@ it.effect(
           admission.taskWorkPosition._tag === "TaskWorkPositionRequired" ? [admission.taskWorkPosition.taskId] : []
         )
       ).not.toContain(controlledScenario.taskIds.E)
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "refreshes closed C through the same owner and keeps its position",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runIssue268Ds10Characterization
+      const { ds09, ds10 } = run
+      const recordSuffix = ds10.after.records.slice(ds09.after.records.length)
+      const requestSuffix = ds10.after.requestedTargets.slice(ds09.after.requestedTargets.length)
+      const commandSuffix = ds10.after.commands.slice(ds09.after.commands.length)
+      const g2Facts = recordSuffix.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "CompleteTaskTrackerFacts" &&
+          event.observation.factFamilies.some(
+            ({ contentIdentity }) => contentIdentity === controlledScenario.graphs.G2.revision
+          )
+      )
+      const suspendIntent = recordSuffix.find(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandIntended" &&
+          event.command === "Suspend" &&
+          event.plannedAttempt.attemptId === controlledScenario.attempts.C1
+      )
+      const suspendResponse = recordSuffix.find(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandResponseObserved" &&
+          event.plannedAttempt.attemptId === controlledScenario.attempts.C1
+      )
+      const focusedTrackerRecords = recordSuffix.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          (event.observation._tag === "FocusedTaskWorkSpecificationFacts" ||
+            event.observation._tag === "FocusedTaskClaimFacts")
+      )
+      const focusedSpecificationTaskIds = focusedTrackerRecords.flatMap(({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+          ? [event.observation.factFamily.taskId]
+          : []
+      )
+      const focusedClaimTaskIds = focusedTrackerRecords.flatMap(({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskClaimFacts"
+          ? [event.observation.coverage.taskId]
+          : []
+      )
+      const focusedGitReads = recordSuffix.flatMap(({ event }) =>
+        event._tag === "GitReadIntentRecorded"
+          ? [{ operation: event.operation._tag, taskId: event.operation.plannedAttempt.taskId }]
+          : []
+      )
+      const gitIntentByOperationId = new Map(
+        recordSuffix.flatMap(({ event }) =>
+          event._tag === "GitReadIntentRecorded"
+            ? [
+                [
+                  event.operation.operationId,
+                  { operation: event.operation._tag, taskId: event.operation.plannedAttempt.taskId }
+                ] as const
+              ]
+            : []
+        )
+      )
+      const completedGitRecords = recordSuffix.filter(
+        ({ event }) => event._tag === "PlannedAttemptWorktreeObserved" || event._tag === "TargetLineageObserved"
+      )
+      const completedGitReads = completedGitRecords.flatMap(({ event }) => {
+        if (event._tag !== "PlannedAttemptWorktreeObserved" && event._tag !== "TargetLineageObserved") return []
+        const intent = gitIntentByOperationId.get(event.operationId)
+        return intent === undefined ? [] : [{ observation: event._tag, taskId: intent.taskId }]
+      })
+      const expectedFocusedTaskIds = [controlledScenario.taskIds.A, controlledScenario.taskIds.D]
+      const expectedHeldAttemptIds = [
+        controlledScenario.attempts.A1,
+        controlledScenario.attempts.C1,
+        controlledScenario.attempts.D1
+      ].toSorted()
+
+      expect(ds10.before).toEqual(ds09)
+      expect(ds10.notificationCount).toBe(1)
+      expect(ds10.activeRefreshCount).toBe(1)
+      expect(ds10.activeRefreshDecision).toBeUndefined()
+      expect(ds10.activeRefreshSources).toEqual(["TrackerNotification"])
+      expect(ds10.executorObserveCallCount).toBe(
+        ds09.beforeLoss.executorObserveCalls + ds09.executorObservations.length
+      )
+      expect(ds10.idleHandoffCount).toBe(1)
+      expect(ds10.trailingActivationCount).toBe(0)
+      expect(ds09.ordinaryOwnerActivationCount).toBe(1)
+      expect(requestSuffix).toEqual([controlledScenario.target, controlledScenario.target, controlledScenario.target])
+      expect(commandSuffix).toEqual([{ attemptId: controlledScenario.attempts.C1, command: "Suspend" }])
+      expect(ds10.after.claimRequests).toEqual(ds09.after.claimRequests)
+      expect(ds10.after.plans).toEqual(ds09.after.plans)
+      expect(ds10.after.worktreeCreateRequests).toEqual(ds09.after.worktreeCreateRequests)
+      expect(g2Facts).toHaveLength(1)
+      expect(focusedSpecificationTaskIds).toEqual(expectedFocusedTaskIds)
+      expect(focusedClaimTaskIds).toEqual(expectedFocusedTaskIds)
+      expect(focusedGitReads).toEqual([
+        { operation: "ReadTaskWorktree", taskId: controlledScenario.taskIds.A },
+        { operation: "ReadTaskWorktree", taskId: controlledScenario.taskIds.D },
+        { operation: "ReadTargetLineage", taskId: controlledScenario.taskIds.A },
+        { operation: "ReadTargetLineage", taskId: controlledScenario.taskIds.D }
+      ])
+      expect(completedGitReads).toEqual([
+        { observation: "PlannedAttemptWorktreeObserved", taskId: controlledScenario.taskIds.A },
+        { observation: "PlannedAttemptWorktreeObserved", taskId: controlledScenario.taskIds.D },
+        { observation: "TargetLineageObserved", taskId: controlledScenario.taskIds.A },
+        { observation: "TargetLineageObserved", taskId: controlledScenario.taskIds.D }
+      ])
+      expect(suspendIntent?.event).toMatchObject({
+        command: "Suspend",
+        ordinal: 2,
+        plannedAttempt: { attemptId: controlledScenario.attempts.C1, runId: controlledScenario.runId }
+      })
+      expect(suspendResponse?.event).toMatchObject({
+        commandOrdinal: 2,
+        report: {
+          _tag: "ExecutorWorkExecuting",
+          correlation: { attemptId: controlledScenario.attempts.C1, runId: controlledScenario.runId }
+        }
+      })
+      expect(suspendIntent?.position).toBeGreaterThan(g2Facts[0]?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(
+        focusedTrackerRecords.every(({ position }) => position < (suspendIntent?.position ?? Number.MIN_SAFE_INTEGER))
+      ).toBe(true)
+      expect(
+        completedGitRecords.every(({ position }) => position < (suspendIntent?.position ?? Number.MIN_SAFE_INTEGER))
+      ).toBe(true)
+      expect(suspendResponse?.position).toBeGreaterThan(suspendIntent?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(
+        ds10.checkpointPublication.actionInputs.runtimeFacts.taskWork.held
+          .map(({ correlation }) => ({ attemptId: correlation.attemptId, runId: correlation.runId }))
+          .toSorted((left, right) => left.attemptId.localeCompare(right.attemptId))
+      ).toEqual(expectedHeldAttemptIds.map((attemptId) => ({ attemptId, runId: controlledScenario.runId })))
+      expect(ds10.checkpointPublication.publication.policy).toEqual(ds09.beforeLoss.ds07.returned)
+      expect(ds10.checkpointPublication.publication.graph).toMatchObject({
+        _tag: "GraphEstablished",
+        observation: { snapshot: controlledScenario.graphs.G2 }
+      })
+      expect(
+        ds10.checkpointPublication.publication.exactEvidence.some(
+          (evidence) =>
+            evidence._tag === "ResponsibilityFacts" &&
+            evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+            evidence.facts.responsibility.plannedAttempt.attemptId === controlledScenario.attempts.C1 &&
+            evidence.facts.disposition._tag === "PlannedAttemptExecutorSuspensionRequested"
+        )
+      ).toBe(true)
+      expect(ds10.checkpointPublication.publication.exactEvidence.some(isIssue268RetainedBResponsibility)).toBe(true)
+      const runtime = yield* evaluateDeliveryRuntimeInputBundle(ds10.checkpointPublication)
+      expect(
+        runtime.current.ticketDeliveries.source.placements.find(({ taskId }) => taskId === controlledScenario.taskIds.E)
+          ?.placement
+      ).toMatchObject({ _tag: "EligibleOutsideBound" })
+      if (runtime.proposedActions._tag !== "DeliveryProposalsAvailable") {
+        return expect.fail("DS-10 must retain the capacity-blocked E candidate frontier")
+      }
+      expect(
+        runtime.proposedActions.proposals.filter(
+          ({ order }) => deliveryProposalOrderTaskId(order) === controlledScenario.taskIds.E
+        )
+      ).toEqual([])
     }),
   capstoneTimeout
 )

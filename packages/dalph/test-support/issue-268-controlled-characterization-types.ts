@@ -197,3 +197,21 @@ export interface Issue268Ds09Characterization {
 }
 
 export type Issue268Ds09StartupCharacterization = { readonly ds09: Issue268Ds09Characterization }
+
+export interface Issue268Ds10Characterization {
+  readonly activeRefreshCount: number
+  readonly activeRefreshDecision: undefined
+  readonly activeRefreshSources: ReadonlyArray<"TrackerNotification">
+  readonly after: Issue268Ds03BoundarySnapshot
+  readonly before: Issue268Ds09Characterization
+  readonly checkpointPublication: DeliveryRelationInputBundle
+  readonly executorObserveCallCount: number
+  readonly idleHandoffCount: number
+  readonly notificationCount: number
+  readonly trailingActivationCount: number
+}
+
+export interface Issue268Ds10StartupCharacterization {
+  readonly ds09: Issue268Ds09Characterization
+  readonly ds10: Issue268Ds10Characterization
+}
