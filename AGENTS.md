@@ -1,83 +1,63 @@
-## Package manager and branch
+## Working rules
 
-- Use pnpm, never npm.
-- Work on `master` unless a task explicitly requires an isolated task branch or
-  worktree.
+- Use pnpm, never npm. Work on `master` unless the task requires an isolated
+  branch or worktree.
+- Start explanations with the concrete actor, action, and boundary; introduce
+  domain shorthand afterward. Preserve accepted scenarios and blocking edges.
 
-## Operational scenario gate
+## Read by task
 
-- Read `docs/OPERATIONAL-SCENARIOS.md` before planning behavior-changing work.
-- Implementation must not begin until the accepted issue, specification, or a
-  file under `docs/scenarios/` explains the behavior as chronological
-  operational scenarios. Each scenario names the person affected when one
-  exists, the relevant systems, relevant starting
-  GitHub/Git/executor/journal facts, concrete trigger, boundary calls, visible
-  result, forbidden result, and acceptance test. For a person, boundary, crash,
-  or retry that does not apply, state the concrete reason instead of inventing
-  filler.
-- Start plans and explanations with those real events. Introduce canonical
-  terms only after the concrete behavior is understandable without them.
-- Every implementation plan and handoff must contain a scenario-to-test
-  mapping. Passing aggregate test or coverage totals is not a substitute.
-- Treat a missing or abstract scenario as blocked implementation work, not as a
-  documentation improvement to defer. A tooling-only or documentation-only
-  change may instead state why it changes no Dalph runtime behavior.
+Read the applicable owner below before that work; follow links for concrete
+questions. Reuse guidance already read unless it changed or scope changed.
 
-## Architecture
+| Task | Required guidance |
+| --- | --- |
+| Plan or change runtime behavior | [Operational scenarios](docs/OPERATIONAL-SCENARIOS.md), then the accepted issue/specification/scenario |
+| Change domain or architecture language | [Context](docs/CONTEXT.md) and [architecture](docs/ARCHITECTURE.md) |
+| Write or change a Quint model | [Quint guide](docs/QUINT-GUIDE.md) |
+| Review significant changes or repair findings | [Code review](docs/CODE_REVIEW.md) |
+| Develop, choose checks, or diagnose stalls | [Development workflow](docs/DEVELOPMENT.md#keeping-implementation-work-finite) and [commands](docs/DEVELOPMENT.md#commands) |
 
-- Read `docs/CONTEXT.md` and `docs/ARCHITECTURE.md` before changing domain or
-  architecture language.
-- Use Effect V4 features at its fullest. Be idiomatic.
-- The tracker owns task identity, lifecycle, dependencies, grouping, and
-  claims. Git owns lineage, refs, commits, worktrees, and integration facts.
-  The execution substrate owns session and process observations. Dalph's
-  journal owns only workflow-journal history.
-- Do not duplicate authority facts or persist derived frontier, resource, or UI
-  state.
-- During design and review, identify distinct domain phenomena, give them
-  canonical names, and materialize them as distinct domain types or events.
-  Document the phenomenon above each branded type and non-obvious domain event.
-- Make invalid states unrepresentable. Brand distinct identities, capacities,
-  revisions, ordinals, durations, positions, and resource locators at their
-  boundaries.
+## Implementation constraints
+
+- Behavior-changing implementation is blocked until accepted chronological
+  scenarios cover starting facts, trigger, boundary calls, visible and forbidden
+  results, applicable crashes/retries, and acceptance tests. Explain
+  inapplicable fields. Plans and handoffs map each scenario to tests; aggregate
+  totals do not substitute. Tooling/documentation changes instead explain why
+  Dalph runtime behavior cannot change.
+- Use idiomatic Effect V4. Name distinct domain phenomena with distinct types or
+  events; document branded types and non-obvious events. Make invalid states
+  unrepresentable; brand identities, capacities, revisions, ordinals, durations,
+  positions, and locators at boundaries.
+- Read task identity, lifecycle, dependencies, grouping, and claims from the
+  tracker; lineage, refs, commits, worktrees, and integration facts from Git;
+  session/process observations from the execution substrate. The Dalph journal
+  owns workflow history only. Do not duplicate these authorities or persist
+  derived frontier, resource, or UI state.
 
 ## Delivery invariants
 
-- One exact worktree and planned Base SHA per task attempt.
-- Bounded concurrent task execution
-- Intent before ambiguity-crossing effects, observation afterward, and
-  reconcile-before-retry after ambiguous outcomes.
+- One exact worktree and planned Base SHA per task attempt; bounded concurrency.
+- Record intent before effects with uncertain outcomes, then observation;
+  reconcile before retrying an ambiguous outcome.
 - Cleanup is disposition-typed, exact, recoverable, and fail-closed.
 - Dry-run, test, and production interpret one workflow algebra.
 
-## Verification and review
+## Verification and closure
 
-- Do not spam live providers: use minimal fixtures, prove bulk behavior with
-  controlled tests, and do not retry throttled mutations.
-- In explanations and reviews, state the concrete actor, action, and boundary
-  before using canonical shorthand. Prefer “try to create the claim up to
-  three times” over “bounded acquisition,” “check GitHub again” over
-  “perform an authoritative reread,” and “repository label used as the task
-  claim record” over “label-backed lock.” Introduce the canonical term after
-  the concrete behavior is clear or not at all
-- Use focused package tests while developing. Do not inherit target
-  repositories' application-specific typecheck, model-checking, or MBT gates
-  as Dalph implementation gates.
-- Before reporting a Playwright check as environment-blocked, try the browser
-  setup documented in `docs/DEVELOPMENT.md`; if privileges prevent setup,
-  report the exact unrun command and missing dependency.
-- Follow `docs/DEVELOPMENT.md` and `docs/CODE_REVIEW.md`. Run
-  `pnpm check:all` before implementation handoff.
-- Run `pnpm check:quint` once after the final relevant changes and before
-  integration. During development, run it only when changing a Quint model,
-  its executable conformance adapter, or behavior governed by that model;
-  `pnpm check:all` intentionally does not repeat exhaustive model checking.
-- Read `docs/QUINT-GUIDE.md` before writing or changing a Quint model. Quint
-  fails silently: uncollected tests, undefined behavior, and unreachable
-  actions all read as a passing gate, so treat a green model result as a claim
-  needing a negative control.
-- Every implementation ticket must preserve its declared acceptance scenarios
-  and blocking edges.
-- After significant changes, repeat domain/spec, architecture/connascence, and
-  code-review passes until no reasonable finding remains. Record a concrete
-  reason for any rejected finding.
+- Use minimal live-provider fixtures, controlled tests for bulk behavior, and
+  never retry throttled mutations.
+- Develop with focused checks. Target repositories' application-specific
+  typecheck, model-checking, and MBT gates are not Dalph implementation gates.
+- Before handoff, run `pnpm check:all`; review domain/spec,
+  architecture/connascence, and code correctness under the scoped closure rules
+  in [CODE_REVIEW.md](docs/CODE_REVIEW.md).
+- Run `pnpm check:quint` after final relevant changes and before integration.
+  During development, run it for model, conformance-adapter, or model-governed
+  behavior changes. It is separate from `check:all`. Uncollected tests,
+  undefined behavior, and unreachable actions can appear green: require a
+  negative control.
+- Before declaring Playwright environment-blocked, try the documented
+  [browser setup](docs/DEVELOPMENT.md#browser-and-real-host-setup); report the exact unrun command
+  and missing dependency if privileges block setup.
