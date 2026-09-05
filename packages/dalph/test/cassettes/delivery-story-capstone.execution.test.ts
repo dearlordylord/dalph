@@ -6,7 +6,8 @@ import { Effect } from "effect"
 import { expect } from "vitest"
 import {
   runIssue268Ds01Characterization,
-  runIssue268Ds02Characterization
+  runIssue268Ds02Characterization,
+  runIssue268Ds03Characterization
 } from "../../test-support/issue-268-controlled-characterization.js"
 import { issue268ControlledDeliveryCharacterization as controlledScenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
@@ -255,6 +256,47 @@ it.effect("DS-02 starts only A, B, and C through the production workflow algebra
         .toSorted()
     ).toEqual(["attempt:A:1", "attempt:B:1", "attempt:C:1"])
     expect(run.decision).toMatchObject({ _tag: "RunMustRemainActive" })
+  })
+)
+
+it.effect("DS-03 accepts Alice's B/F2 and G1 tracker edit without triggering Dalph work", () =>
+  Effect.gen(function* () {
+    const run = yield* runIssue268Ds03Characterization
+    const ds03 = run.ds03
+    const executingAttempts = ds03.before.records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkExecuting"
+        ? [event.report.correlation.attemptId]
+        : []
+    )
+    const heldAttempts = ds03.before.publications
+      .at(-1)
+      ?.actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId)
+      .toSorted()
+
+    expect(executingAttempts).toEqual(["attempt:A:1", "attempt:B:1", "attempt:C:1"])
+    expect(heldAttempts).toEqual(["attempt:A:1", "attempt:B:1", "attempt:C:1"])
+    expect(controlledScenario.specifications.F1.B.fingerprint).not.toBe(
+      controlledScenario.specifications.F2.B.fingerprint
+    )
+    expect(ds03.edit).toEqual({
+      graphRevision: controlledScenario.graphs.G1.revision,
+      nextFingerprint: controlledScenario.specifications.F2.B.fingerprint,
+      priorFingerprint: controlledScenario.specifications.F1.B.fingerprint,
+      taskId: "B"
+    })
+    expect(ds03.after).toEqual(ds03.before)
+    expect(
+      ds03.after.publications.some(
+        ({ publication }) =>
+          publication.graph._tag === "GraphEstablished" &&
+          publication.graph.observation.snapshot.revision === controlledScenario.graphs.G1.revision
+      )
+    ).toBe(false)
+    expect(ds03.after.commands).toEqual([
+      { attemptId: "attempt:A:1", command: "Begin" },
+      { attemptId: "attempt:B:1", command: "Begin" },
+      { attemptId: "attempt:C:1", command: "Begin" }
+    ])
   })
 )
 

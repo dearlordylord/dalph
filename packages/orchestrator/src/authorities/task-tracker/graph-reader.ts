@@ -1,6 +1,6 @@
 // @effect-diagnostics lazyEffect:off
 import { NodeFileSystem } from "@effect/platform-node"
-import { Context, Effect, FileSystem, Layer, Ref, Schema } from "effect"
+import { Context, Effect, FileSystem, Layer, Option, Ref, Schema } from "effect"
 import { makeTaskWorkSpecification, TaskId, type TaskWorkSpecification } from "@dalph/contracts"
 import { FixtureTarget } from "./fixture/target.js"
 import { type TrackerTarget } from "./target.js"
@@ -71,6 +71,13 @@ export class TrackerGraphReader extends Context.Service<TrackerGraphReader, Trac
 ) {}
 
 interface TestTrackerGraphReaderService extends TrackerGraphReaderService {
+  /** Inspects fixture state without recording a Dalph tracker read. */
+  readonly inspectTask: (
+    taskId: TaskId
+  ) => Effect.Effect<{
+    readonly snapshot: TaskDagSnapshot
+    readonly specification: Option.Option<TaskWorkSpecification>
+  }>
   readonly requestedTargets: () => Effect.Effect<ReadonlyArray<TrackerTarget>>
   readonly setSnapshot: (snapshot: TaskDagSnapshot) => Effect.Effect<void>
   readonly setTaskWorkSpecification: (specification: TaskWorkSpecification) => Effect.Effect<void>
@@ -92,6 +99,13 @@ export const trackerGraphReaderTestLayer = (
         new Map(initialTaskWorkSpecifications.map((specification) => [specification.taskId, specification]))
       )
       const service = TestTrackerGraphReader.of({
+        inspectTask: (taskId) =>
+          Effect.all({
+            snapshot: Ref.get(snapshot),
+            specification: Ref.get(taskWorkSpecifications).pipe(
+              Effect.map((specifications) => Option.fromUndefinedOr(specifications.get(taskId)))
+            )
+          }),
         read: Effect.fn("TrackerGraphReader.Test.read")(function* (target) {
           yield* Ref.update(targets, (current) => [...current, target])
           return yield* Ref.get(snapshot)

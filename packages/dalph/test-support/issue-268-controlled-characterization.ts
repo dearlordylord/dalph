@@ -47,6 +47,7 @@ import {
   type TaskClaimAcquisition,
   TargetLineageObservation,
   TestGitWorktree,
+  TestTrackerGraphReader,
   TrackerGraphReader,
   type TrackerTarget,
   trackerGraphReaderTestLayer,
@@ -56,32 +57,17 @@ import {
   WorkflowTrace,
   type DeliveryRelationInputBundle,
   type JournaledRuntimeLayerInput,
-  type JournalRecord,
   type RunFinalityDecision,
   type TraceItem
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Fiber, Layer, Queue, Ref } from "effect"
+import { Context, Deferred, Effect, Fiber, Layer, Option, Queue, Ref } from "effect"
 import { issue268ControlledDeliveryCharacterization as scenario } from "./issue-268-controlled-characterization-catalog.js"
+import type {
+  Issue268Ds03Characterization,
+  Issue268Ds03StartupCharacterization,
+  Issue268ExecutorCommandCapture
+} from "./issue-268-controlled-characterization-types.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "./controlled-synchronous-planned-attempt-executor.js"
-
-export interface Issue268ExecutorCommandCapture {
-  readonly attemptId: string
-  readonly command: "Begin" | "Resume" | "Suspend"
-}
-
-export interface Issue268StartupCharacterization {
-  readonly claimReleaseOrder: ReadonlyArray<string>
-  readonly claimRequests: ReadonlyArray<TaskClaimAcquisition>
-  readonly commands: ReadonlyArray<Issue268ExecutorCommandCapture>
-  readonly decision: RunFinalityDecision | undefined
-  readonly executedActions: ReadonlyArray<{ readonly stage: string; readonly taskId: string }>
-  readonly pendingClaimTaskIds: ReadonlyArray<string>
-  readonly plans: ReadonlyArray<PlannedTaskAttempt>
-  readonly publications: ReadonlyArray<DeliveryRelationInputBundle>
-  readonly records: ReadonlyArray<JournalRecord>
-  readonly trace: ReadonlyArray<TraceItem>
-  readonly worktreeCreateRequests: ReadonlyArray<PlannedTaskAttempt>
-}
 
 const attemptIdByTaskId = new Map([
   [scenario.taskIds.A, scenario.attempts.A1],
@@ -141,7 +127,7 @@ const actionStage = (action: MaterializedDeliveryAction) => {
   return "step" in route ? { stage: route.step._tag, taskId: route.step.task.id } : undefined
 }
 
-const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02") =>
+const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03") =>
   Effect.scoped(
     Effect.gen(function* () {
       const claimRequestQueue = yield* Queue.unbounded<TaskClaimAcquisition>()
@@ -215,7 +201,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02") =>
           Effect.gen(function* () {
             yield* Ref.update(claimRequests, (current) => [...current, acquisition])
             yield* Queue.offer(claimRequestQueue, acquisition)
-            if (mode === "DS02") {
+            if (mode !== "DS01") {
               const release = releaseFor(acquisition.taskId, claimReleases)
               if (release === undefined)
                 return yield* Effect.die(`outside-bound claim request for ${acquisition.taskId}`)
@@ -225,6 +211,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02") =>
           })
       })
       const trackerMutationLayer = Layer.succeed(TrackerMutation, controlledTrackerMutation)
+      const testTrackerGraphReader = Context.get(sharedContext, TestTrackerGraphReader)
       const gitWorktreeLayer = Layer.succeed(GitWorktree, Context.get(sharedContext, GitWorktree))
       const testGitWorktree = Context.get(sharedContext, TestGitWorktree)
       const gitTargetLineageLayer = Layer.succeed(GitTargetLineage, Context.get(sharedContext, GitTargetLineage))
@@ -353,7 +340,21 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02") =>
           )
         )
 
+      const ds03Snapshot = () =>
+        Effect.all({
+          claimRequests: Ref.get(claimRequests),
+          commands: Ref.get(commands),
+          executedActions: Ref.get(executedActions),
+          plans: Ref.get(plans),
+          publications: Ref.get(publications),
+          records: sharedJournal.read(scenario.runId),
+          requestedTargets: testTrackerGraphReader.requestedTargets(),
+          trace: Ref.get(traceItems),
+          worktreeCreateRequests: testGitWorktree.createRequests()
+        })
+
       let decision: RunFinalityDecision | undefined
+      let ds03: Issue268Ds03Characterization | undefined
       if (mode === "DS01") {
         const pending = yield* Effect.forEach(selectedTaskIds, () => takeWhileRuntimeActive(pendingClaimQueue))
         yield* requireExactlySelectedTaskIds("DS-01 pending claims", pending)
@@ -376,12 +377,38 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02") =>
           yield* awaitHeld(attemptId)
         }
         decision = yield* Fiber.join(fiber)
+        if (mode === "DS03") {
+          const before = yield* ds03Snapshot()
+          const trackerBefore = yield* testTrackerGraphReader.inspectTask(scenario.taskIds.B)
+          const priorSpecification = yield* Option.match(trackerBefore.specification, {
+            onNone: () => Effect.die("DS-03 tracker lacks B/F1 before Alice's edit"),
+            onSome: Effect.succeed
+          })
+          yield* testTrackerGraphReader.setTaskWorkSpecification(scenario.specifications.F2.B)
+          yield* testTrackerGraphReader.setSnapshot(scenario.graphs.G1)
+          const trackerAfter = yield* testTrackerGraphReader.inspectTask(scenario.taskIds.B)
+          const nextSpecification = yield* Option.match(trackerAfter.specification, {
+            onNone: () => Effect.die("DS-03 tracker lacks B/F2 after Alice's edit"),
+            onSome: Effect.succeed
+          })
+          ds03 = {
+            after: yield* ds03Snapshot(),
+            before,
+            edit: {
+              graphRevision: trackerAfter.snapshot.revision,
+              nextFingerprint: nextSpecification.fingerprint,
+              priorFingerprint: priorSpecification.fingerprint,
+              taskId: nextSpecification.taskId
+            }
+          }
+        }
       }
       return {
         claimReleaseOrder: yield* Ref.get(claimReleaseOrder),
         claimRequests: yield* Ref.get(claimRequests),
         commands: yield* Ref.get(commands),
         decision,
+        ds03,
         executedActions: yield* Ref.get(executedActions),
         pendingClaimTaskIds: yield* Ref.get(pendingClaimTaskIds),
         plans: yield* Ref.get(plans),
@@ -398,3 +425,13 @@ export const runIssue268Ds01Characterization = runIssue268StartupCharacterizatio
 
 /** Releases the three independently pending claim responses in explicit R1 order. */
 export const runIssue268Ds02Characterization = runIssue268StartupCharacterizationFor("DS02")
+
+/** Applies Alice's external F2/G1 tracker edit after DS-02 without triggering a Dalph refresh. */
+export const runIssue268Ds03Characterization = runIssue268StartupCharacterizationFor("DS03").pipe(
+  Effect.flatMap(
+    (run): Effect.Effect<Issue268Ds03StartupCharacterization> =>
+      run.ds03 === undefined
+        ? Effect.die("DS-03 runner completed without its required edit evidence")
+        : Effect.succeed({ ...run, ds03: run.ds03 })
+  )
+)
