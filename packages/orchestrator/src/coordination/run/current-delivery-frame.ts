@@ -1,3 +1,4 @@
+import type { RunId } from "@dalph/contracts"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { RunControlPolicy } from "../../control/policy.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -23,6 +24,7 @@ interface CurrentDeliveryFrameBase {
   readonly currentGraphOperationId: OperationId
   readonly pause: ReconstructedRunState["pause"]
   readonly responsibility: ReconstructedRunState["responsibility"]
+  readonly runId: RunId
   readonly runControlPolicy: RunControlPolicy
 }
 
@@ -56,6 +58,7 @@ export const journaledCurrentDeliveryFrameOf = (
           ? { ...journal.reconstructed.pause, run: { _tag: "RunPaused" as const } }
           : journal.reconstructed.pause,
       responsibility: journal.reconstructed.responsibility,
+      runId: journal.reconstructed.runId,
       runControlPolicy,
       workflowHistory: journal.reconstructed.workflowHistory
     }

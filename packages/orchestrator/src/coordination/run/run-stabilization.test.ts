@@ -49,15 +49,21 @@ import {
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
+import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
+import { FreshWorkflowStep } from "../delivery/fresh-workflow-step.js"
+import {
+  makeFreshTaskCandidateFrontierForTest,
+  makeFreshTaskGraphReadProposalForTest
+} from "../../../test/support/fresh-task-candidate.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import {
   DeliveryActionExecutor,
   DeliverySemanticTrace,
   type DeliveryActionExecutorService
 } from "../delivery/delivery-action-executor.js"
+import type { DeliveryActionProposal } from "../delivery/delivery-action-proposal.js"
 import { DeliveryAcceptedFactPublication } from "../delivery/delivery-accepted-fact-publication.js"
 import { deliveryProposalsOf } from "../delivery/delivery-proposal.js"
-import { FreshWorkflowStep } from "../delivery/fresh-workflow-step.js"
 import { frontierOf } from "../delivery/ticket-delivery-projection.js"
 import {
   deliveryRuntimeResourceCapabilitiesLayer,
@@ -91,7 +97,12 @@ import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journa
 import { makePreparedBeginFixture, preparedBeginProposalsOf } from "../../../test/support/prepared-begin-proposal.js"
 const runId = RunId.make("run-stabilization")
 const target = FixtureTarget.make("run-stabilization-target")
-const emptyFrontier = { _tag: "DeliveryProposalsAvailable" as const, isolatedIssues: [], proposals: [] }
+const emptyFrontier = {
+  _tag: "DeliveryProposalsAvailable" as const,
+  freshTaskCandidates: [],
+  isolatedIssues: [],
+  proposals: []
+}
 const capacity = TaskWorkCapacity.make(1)
 const policy = RunControlPolicy.make({ revision: initialRunPolicyRevision, taskExecutionCapacity: capacity })
 
@@ -147,6 +158,7 @@ const baseEvaluation = Effect.gen(function* () {
         ...deterministicDeliveryRuntimeSupport(policy),
         coherent: currentSignalOf({
           actionInputs: {
+            freshTaskCandidates: [],
             proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
             reflectionProposals: [],
             runtimeFacts: {
@@ -157,7 +169,7 @@ const baseEvaluation = Effect.gen(function* () {
                 applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
               },
               quiescence: { _tag: "TrackerReconfirmationAllowed" },
-              taskWork: { capacity, held: [] }
+              taskWork: makeFreshTaskAdmissionTestBasis({ capacity, runId })
             },
             trackerGraphProposals: []
           },
@@ -181,7 +193,8 @@ const evaluation = (
   pauseCoverage: base.pauseCoverage,
   proposedActions,
   quiescence: { _tag: "TrackerReconfirmationAllowed" },
-  taskWork: { capacity, held: [] }
+  runId,
+  taskWork: makeFreshTaskAdmissionTestBasis({ capacity, runId })
 })
 
 const supportWithoutResources = Layer.mergeAll(
@@ -265,27 +278,46 @@ const freshGraphReadProposal = (
 ) => {
   const task = trackerGraph.observation.snapshot.eligibleTasks().find(({ id }) => taskId === undefined || id === taskId)
   if (task === undefined) throw new Error("fixture graph must contain one eligible task")
-  const transition = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
-    operationId: trackerGraph.observation.operationId,
-    taskId: task.id
+  return makeFreshTaskGraphReadProposalForTest({
+    predecessorOperationId: trackerGraph.observation.operationId,
+    runId,
+    task
   })
-  const proposal = deliveryProposalsOf({
-    acceptedAt: trackerGraph.observation.recordedAt,
-    acceptedOperationIds: new Set(),
-    fresh: [
+}
+
+/**
+ * A fresh graph-read proposal is admitted through its opaque candidate
+ * frontier. Keeping the candidate and proposal together in these fixtures
+ * exercises the same admission boundary as the production relation.
+ */
+const freshGraphReadFrontier = (
+  trackerGraph: Extract<TrackerGraphState, { readonly _tag: "GraphEstablished" }>,
+  taskId?: TaskId
+) => {
+  const task = trackerGraph.observation.snapshot.eligibleTasks().find(({ id }) => taskId === undefined || id === taskId)
+  if (task === undefined) throw new Error("fixture graph must contain one eligible task")
+  const predecessorOperationId = trackerGraph.observation.operationId
+  return makeFreshTaskCandidateFrontierForTest({
+    decisions: [
       {
-        step: FreshWorkflowStep.ReadCurrentTaskGraph({
-          predecessorOperationId: trackerGraph.observation.operationId,
-          task
-        }),
-        transition
+        step: FreshWorkflowStep.ReadCurrentTaskGraph({ predecessorOperationId, task }),
+        transition: RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+          operationId: predecessorOperationId,
+          taskId: task.id
+        })
       }
     ],
-    runId,
-    transitions: [transition]
-  }).ticketDelivery[0]
-  if (proposal === undefined) throw new Error("fixture transition must derive one graph-read proposal")
-  return proposal
+    runId
+  })
+}
+
+const freshGraphReadFrontierWith = (
+  trackerGraph: Extract<TrackerGraphState, { readonly _tag: "GraphEstablished" }>,
+  taskId?: TaskId,
+  proposals: ReadonlyArray<DeliveryActionProposal> = [freshGraphReadProposal(trackerGraph, taskId)]
+): DeliveryRuntimeEvaluation["proposedActions"] => {
+  const frontier = freshGraphReadFrontier(trackerGraph, taskId)
+  return { ...emptyFrontier, freshTaskCandidateFrontier: frontier, freshTaskCandidates: frontier.candidates, proposals }
 }
 
 const activeVerticalTaskA = TaskId.make("active-vertical-A")
@@ -414,13 +446,11 @@ it.effect("returns RunMustRemainActive without G2 when task-work admission is st
       ])
       const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
         ...withRunFacts(evaluation(base, g1, { ...emptyFrontier, proposals: blocked }), false),
-        taskWork: {
+        taskWork: makeFreshTaskAdmissionTestBasis({
           capacity: TaskWorkCapacity.make(3),
-          held: [a, b, c].map(({ attempt }) => ({
-            taskId: attempt.taskId,
-            correlation: plannedAttemptExecutorCorrelation(attempt)
-          }))
-        }
+          held: [a.attempt, b.attempt, c.attempt],
+          runId
+        })
       })
       const reads = yield* Ref.make(0)
 
@@ -466,10 +496,9 @@ it.effect("records a stabilization read admitted before Exit but starts no phase
             Effect.andThen(Deferred.await(finishRead)),
             Effect.flatMap(() => {
               const g2 = graph(operation.operationId, 4, open)
-              return SubscriptionRef.set(
-                state,
-                evaluation(base, g2, { ...emptyFrontier, proposals: [freshGraphReadProposal(g2)] })
-              ).pipe(Effect.as(open))
+              return SubscriptionRef.set(state, evaluation(base, g2, freshGraphReadFrontierWith(g2))).pipe(
+                Effect.as(open)
+              )
             })
           )
       })
@@ -514,7 +543,9 @@ it.effect("requests accepted G2 only after G1 becomes quiescent", () =>
         ])
       )
       const action = freshGraphReadProposal(g1)
-      const state = yield* SubscriptionRef.make(evaluation(base, g1, { ...emptyFrontier, proposals: [action] }))
+      const state = yield* SubscriptionRef.make(
+        evaluation(base, g1, freshGraphReadFrontierWith(g1, undefined, [action]))
+      )
       const actionStarted = yield* Deferred.make<void>()
       const finishAction = yield* Deferred.make<void>()
       const reads = yield* Ref.make(0)
@@ -1003,7 +1034,11 @@ it.effect("reopens ordinary delivery only from exact settled executor lifecycle 
         const independentProposal = freshGraphReadProposal(currentGraph, activeVerticalTaskB)
         const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
           ...withRunFacts(
-            evaluation(base, currentGraph, { ...emptyFrontier, proposals: [independentProposal] }),
+            evaluation(
+              base,
+              currentGraph,
+              freshGraphReadFrontierWith(currentGraph, activeVerticalTaskB, [independentProposal])
+            ),
             false
           ),
           activeRefreshBoundary: { _tag: "ActiveRefreshRuntimeBoundary", reconciledAttempts: [correlation], runId }
@@ -1090,15 +1125,7 @@ it.effect("holds an actual independent fresh route until G2 after direct safe or
             evaluation(base, g1, { ...emptyFrontier, proposals: [activeProposal, preG2Independent] }),
             false
           ),
-          taskWork: {
-            capacity: capacityTwo,
-            held: [
-              {
-                taskId: activeVerticalAttempt.taskId,
-                correlation: { attemptId: activeVerticalAttempt.attemptId, runId }
-              }
-            ]
-          }
+          taskWork: makeFreshTaskAdmissionTestBasis({ capacity: capacityTwo, held: [activeVerticalAttempt], runId })
         } satisfies DeliveryRuntimeEvaluation
         const opportunity = activeWorkAuthorityRefreshForOwner(
           "Timer",
@@ -1125,9 +1152,12 @@ it.effect("holds an actual independent fresh route until G2 after direct safe or
               const postG2Independent = freshGraphReadProposal(g2, activeVerticalTaskB)
               expect(postG2Independent.route._tag).toBe("FreshWorkflowRoute")
               yield* SubscriptionRef.set(state, {
-                ...withRunFacts(evaluation(base, g2, { ...emptyFrontier, proposals: [postG2Independent] }), false),
+                ...withRunFacts(
+                  evaluation(base, g2, freshGraphReadFrontierWith(g2, activeVerticalTaskB, [postG2Independent])),
+                  false
+                ),
                 activeRefreshBoundary: boundary,
-                taskWork: { capacity: capacityTwo, held: [] }
+                taskWork: makeFreshTaskAdmissionTestBasis({ capacity: capacityTwo, runId })
               })
               return g2.observation.snapshot
             })
@@ -1206,6 +1236,16 @@ it.effect("runs independent work revealed by G2 while the active subject remains
       const base = yield* baseEvaluation
       const taskA = TaskId.make("A")
       const taskB = TaskId.make("B")
+      const heldTaskAAttempt = PlannedTaskAttempt.make({
+        attemptId: AttemptId.make("active-boundary-independent-held-A-attempt"),
+        baseSha: GitCommitSha.make("2".repeat(40)),
+        branch: TaskBranchRef.make("refs/heads/dalph/active-boundary-independent-held-A"),
+        executor: TaskExecutorLocator.make("executor:active-boundary-independent-held-A"),
+        runId,
+        taskId: taskA,
+        taskRevision: TaskRevision.make("active-boundary-independent-held-A-revision"),
+        worktree: WorktreeLocator.make("/stabilization/active-boundary-independent-held-A")
+      })
       const g1 = graph(
         "active-boundary-independent-G1",
         1,
@@ -1229,9 +1269,10 @@ it.effect("runs independent work revealed by G2 while the active subject remains
         reconciledAttempts: [{ runId, attemptId }]
       }
       const independentProposal = freshGraphReadProposal(g2, taskB)
+      const independentFrontier = freshGraphReadFrontierWith(g2, taskB, [independentProposal])
       const activePostG2Proposal = activeVerticalSuspensionProposal()
       const state = yield* SubscriptionRef.make<DeliveryRuntimeEvaluation>({
-        ...withRunFacts(evaluation(base, g1, { ...emptyFrontier, proposals: [independentProposal] }), false),
+        ...withRunFacts(evaluation(base, g1, independentFrontier), false),
         activeRefreshBoundary: boundary
       })
       const reads = yield* Ref.make(0)
@@ -1248,15 +1289,16 @@ it.effect("runs independent work revealed by G2 while the active subject remains
                     // G2 may leave the captured subject in the descriptive
                     // frontier. The post-G2 phase must suppress that stale
                     // active chain while retaining independent fresh work.
-                    proposals: [activePostG2Proposal, independentProposal]
+                    ...freshGraphReadFrontierWith(g2, taskB, [activePostG2Proposal, independentProposal])
                   }),
                   false
                 ),
                 activeRefreshBoundary: boundary,
-                taskWork: {
+                taskWork: makeFreshTaskAdmissionTestBasis({
                   capacity: TaskWorkCapacity.make(2),
-                  held: [{ taskId: taskA, correlation: { runId, attemptId } }]
-                }
+                  held: [heldTaskAAttempt],
+                  runId
+                })
               })
             ),
             Effect.as(g2.observation.snapshot)
@@ -1316,7 +1358,7 @@ it.effect("runs work published after G2 before phase two subscribes", () =>
                   state,
                   evaluation(base, current.current.trackerGraph, {
                     ...emptyFrontier,
-                    proposals: [freshGraphReadProposal(current.current.trackerGraph)]
+                    ...freshGraphReadFrontierWith(current.current.trackerGraph)
                   })
                 ).pipe(Effect.andThen(underlying.attach))
               })

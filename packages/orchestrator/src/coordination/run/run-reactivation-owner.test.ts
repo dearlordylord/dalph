@@ -1347,3 +1347,54 @@ it.effect("registers its drain before Exit can pass a blocking tracker-source at
     })
   )
 )
+
+it.effect("stops before consuming a wake queued at the idle handoff", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const shell = yield* makeTestExitShell
+      const ownerReady = yield* Deferred.make<RunReactivationOwnerService>()
+      const stoppedAtIdle = yield* Deferred.make<void>()
+      const activationStarted = yield* Deferred.make<void>()
+      const releaseActivation = yield* Deferred.make<void>()
+      const activations = yield* Ref.make(0)
+      yield* provideOwner(
+        shell.shell,
+        {
+          runId: RunId.make("test-run-stop-after-queued-wake"),
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: Effect.succeed("RunUnpaused" as const),
+          activate: () =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(activationStarted, undefined)
+              yield* Deferred.await(releaseActivation)
+              return yield* Ref.updateAndGet(activations, (current) => current + 1).pipe(
+                Effect.as(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+              )
+            }),
+          onActivationHandoffIdle: () =>
+            Effect.gen(function* () {
+              const owner = yield* Deferred.await(ownerReady)
+              yield* owner.hint(RunReactivationHint.OperatorWake())
+              const [drain] = yield* Ref.get(shell.drains)
+              if (drain === undefined) return yield* Effect.die("owner did not register its Exit drain")
+              yield* Effect.orDie(drain)
+              yield* Deferred.succeed(stoppedAtIdle, undefined)
+            }),
+          isTerminationFailure: () => false,
+          installAcceptedRunReactivationObservers: () => Effect.void,
+          onFailure: () => Effect.void
+        },
+        (owner) =>
+          Effect.gen(function* () {
+            yield* Deferred.await(activationStarted)
+            yield* Deferred.succeed(ownerReady, owner)
+            yield* Deferred.succeed(releaseActivation, undefined)
+            yield* Deferred.await(stoppedAtIdle)
+            yield* Effect.yieldNow
+            expect(yield* Ref.get(activations)).toBe(1)
+          })
+      )
+    })
+  )
+)

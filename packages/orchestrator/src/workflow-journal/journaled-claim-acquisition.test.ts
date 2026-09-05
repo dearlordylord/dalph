@@ -61,9 +61,10 @@ it.effect("records a foreign acquisition rejection as terminal and never reconst
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
     const interpreter = yield* WorkflowInterpreter
-    expect((yield* interpreter.acquireTaskClaim(operation).pipe(Effect.flip))._tag).toBe(
-      "TrackerMutation.TaskClaimConflict"
-    )
+    expect(yield* interpreter.acquireTaskClaim(operation)).toEqual({
+      _tag: "AuthoritativeTaskClaimAcquisitionRejected",
+      observed: foreign
+    })
 
     const records = yield* journal.read(runId)
     expect(records.map(({ event }) => event._tag)).toEqual([

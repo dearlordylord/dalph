@@ -37,6 +37,7 @@ import {
   ticketDeliveriesOf
 } from "./ticket-delivery-projection.js"
 import type { DeliveryProposalContributions } from "./delivery-proposal.js"
+import type { FreshTaskCandidate } from "./fresh-task-candidate.js"
 
 export interface DeliveryRelationsLayerInput {
   readonly publicationConsistency: {
@@ -188,11 +189,15 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
   const planningInputOf = (
     trackerProposals: ReadonlyArray<TrackerGraphActionProposal>,
     lowerContributions: DeliveryProposalContributions,
-    deliveryReflection: ReadonlyArray<DeliveryActionProposal>
+    deliveryReflection: ReadonlyArray<DeliveryActionProposal>,
+    freshTaskCandidates: ReadonlyArray<FreshTaskCandidate>,
+    freshTaskCandidateFrontier?: DeliveryRelationInputBundle["actionInputs"]["freshTaskCandidateFrontier"]
   ): DeliveryActionPlanningInput => {
     return {
       deliveryReflection,
       deliverySettlement: lowerContributions.deliverySettlement,
+      ...(freshTaskCandidateFrontier === undefined ? {} : { freshTaskCandidateFrontier }),
+      freshTaskCandidates,
       isolatedIssues: lowerContributions.issues,
       ticketDelivery: lowerContributions.ticketDelivery,
       trackerGraph: trackerProposals
@@ -216,14 +221,22 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
             zipCurrentSignals(proposalContributions, reflectionProposals)
           )
         ),
-        ([, [trackerProposals, [lowerContributions, deliveryReflection]]]) =>
-          planningInputOf(trackerProposals, lowerContributions, deliveryReflection)
+        ([bundle, [trackerProposals, [lowerContributions, deliveryReflection]]]) =>
+          planningInputOf(
+            trackerProposals,
+            lowerContributions,
+            deliveryReflection,
+            bundle.actionInputs.freshTaskCandidates,
+            bundle.actionInputs.freshTaskCandidateFrontier
+          )
       )
     : mapCurrentSignal(input.coherent, (bundle) =>
         planningInputOf(
           bundle.actionInputs.trackerGraphProposals,
           releaseEligibleContributions(bundle, bundle.actionInputs.proposalContributions),
-          bundle.actionInputs.reflectionProposals
+          bundle.actionInputs.reflectionProposals,
+          bundle.actionInputs.freshTaskCandidates,
+          bundle.actionInputs.freshTaskCandidateFrontier
         )
       )
   const actionPlanTrackerGraphProposals = mapCurrentSignal(planningInputs, ({ trackerGraph }) => trackerGraph)
@@ -313,26 +326,23 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
             facts: facts.get,
             proposedActions: proposedActions.getWithinStablePublication
           }).pipe(
-            Effect.map(
-              ({ current, facts, proposedActions }): DeliveryRuntimeEvaluation => ({
+            Effect.map(({ current, facts, proposedActions }): DeliveryRuntimeEvaluation => {
+              const runId = facts.runId ?? facts.taskWork.runId
+              return {
                 _tag: "DeliveryRuntimeEvaluation",
                 acceptedAt: facts.acceptedAt,
-                current: {
-                  ...current,
-                  cancellationApplied: facts.cancellationApplied,
-                  ...(facts.runId === undefined ? {} : { runId: facts.runId })
-                },
+                current: { ...current, cancellationApplied: facts.cancellationApplied, runId },
                 cancellationApplied: facts.cancellationApplied,
-                ...(facts.runId === undefined ? {} : { runId: facts.runId }),
                 pauseCoverage: facts.pauseCoverage,
                 proposedActions,
                 quiescence: facts.quiescence,
+                runId,
                 taskWork: facts.taskWork,
                 ...(facts.activeRefreshBoundary === undefined
                   ? {}
                   : { activeRefreshBoundary: facts.activeRefreshBoundary })
-              })
-            )
+              }
+            })
           )
         )
         const invalidations: Stream.Stream<void, E | DeliveryRelationSourceError> = Stream.scoped(

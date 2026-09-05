@@ -1,13 +1,13 @@
 /* eslint-disable max-lines -- One gated event loop owns admission, evaluations, completion publication, and quiescence. */
 import { RunId } from "@dalph/contracts"
-import { Context, Deferred, Effect, Exit, Option, Queue, Ref, Schema, Semaphore, Stream } from "effect"
-import type * as Cause from "effect/Cause"
+import { Cause, Context, Deferred, Effect, Exit, Option, Queue, Ref, Schema, Semaphore, Stream } from "effect"
 import {
   OperationIdAllocator,
   type PlannedTaskAttemptError,
   PlannedTaskAttemptPlanner
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import { journalAppendFailureDisposition } from "../../workflow-journal/store.js"
 import {
   DeliveryActionExecutor,
   type DeliveryActionExecutionError,
@@ -16,13 +16,22 @@ import {
   type DeliverySemanticTraceEvent
 } from "./delivery-action-executor.js"
 import { DeliveryProposalId, type DeliveryActionProposal } from "./delivery-action-proposal.js"
+import { deliveryProposalOfAcceptedFreshTask } from "./delivery-proposal.js"
+import {
+  type DeliveryAdmissionRollbackDisposition,
+  type DeliveryAdmissionReservation
+} from "./delivery-runtime-admission.js"
 import { materializeDeliveryAction, materializedOperationId } from "./delivery-action-materialization.js"
-import { deliveryTaskWorkAdmissionBasisOf, type DeliveryAdmissionReservation } from "./delivery-runtime-admission.js"
 import {
   makeDeliveryRuntimeAdmissionLoop,
   DeliveryRuntimeProposalOwnershipConflict
 } from "./delivery-runtime-admission-loop.js"
-import { attachCurrentSignal, type CurrentSignal, type DeliveryRuntimeEvaluation } from "./relations.js"
+import {
+  attachCurrentSignal,
+  freshTaskCandidateObservationOf,
+  type CurrentSignal,
+  type DeliveryRuntimeEvaluation
+} from "./relations.js"
 import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 import * as RuntimeObservation from "./delivery-runtime-observation.js"
 import type { PlannedAttemptProtocolController } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
@@ -50,6 +59,7 @@ import {
   DeliveryAcceptedFactPublication,
   type DeliveryAcceptedPublicationBoundary
 } from "./delivery-accepted-fact-publication.js"
+import type { FreshTaskCandidateFrontier } from "./fresh-task-candidate.js"
 
 export { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
 export * from "./delivery-runtime-phase.js"
@@ -62,6 +72,12 @@ export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedErro
     acceptedAt: Schema.NullOr(JournalPosition),
     graphState: Schema.Literals(["GraphEstablished", "GraphNotEstablished"])
   }
+) {}
+
+/** One coherent runtime evaluation carries authority for a different Run. */
+export class DeliveryRuntimeRunMismatch extends Schema.TaggedError<DeliveryRuntimeRunMismatch>()(
+  "DeliveryRuntimeRunMismatch",
+  { actualRunIds: Schema.Array(RunId), expectedRunId: RunId }
 ) {}
 
 /** A completion proof names a different Run, owner, or result, so no live action may settle from it. */
@@ -100,22 +116,44 @@ type RuntimeEvent<E> =
  */
 export type DeliveryRuntimeInput<E = never> = CurrentSignal<DeliveryRuntimeEvaluation, E>
 
+const runtimeEvaluationRunIds = (evaluation: DeliveryRuntimeEvaluation): ReadonlyArray<RunId> => {
+  const frontierRunIds =
+    evaluation.proposedActions._tag === "DeliveryProposalsAvailable" &&
+    evaluation.proposedActions.freshTaskCandidateFrontier !== undefined
+      ? [
+          evaluation.proposedActions.freshTaskCandidateFrontier.runId,
+          ...evaluation.proposedActions.freshTaskCandidateFrontier.candidates.map(({ runId }) => runId)
+        ]
+      : []
+  return [
+    evaluation.runId,
+    evaluation.taskWork.runId,
+    ...(evaluation.current.runId === undefined ? [] : [evaluation.current.runId]),
+    ...frontierRunIds
+  ]
+}
+
+const validateRuntimeEvaluationRun = (
+  expectedRunId: RunId,
+  evaluation: DeliveryRuntimeEvaluation
+): Effect.Effect<void, DeliveryRuntimeRunMismatch> => {
+  const actualRunIds = [...new Set(runtimeEvaluationRunIds(evaluation).filter((runId) => runId !== expectedRunId))]
+  return actualRunIds.length === 0
+    ? Effect.void
+    : Effect.fail(new DeliveryRuntimeRunMismatch({ actualRunIds, expectedRunId }))
+}
+
 /**
  * The sole runtime-coloured consumer of the descriptive delivery relation.
  * It owns subscriptions, admission, live actions, completion, and quiescence.
  * Its required Run identity comes from the activation, not the optional
  * reconstructed snapshot carried by an evaluation.
  *
- * TODO: this is the largest unmodelled state machine in the system. Every
- * property the delivery requirements rest on — restart mid-attempt, capacity
- * changed mid-run, operator pause, tickets added to the graph mid-run — is
- * decided in the loop below, across `owners`, the selection semaphore, and
- * forked fibers with interrupt handlers. No model covers any of it.
- * `research/verification-bakeoff/quint/deliveryCore.qnt` is an abstraction of
- * what this loop should do and is bound to no code;
- * `specs/plannedAttemptExecutor.qnt` binds to code and stops at the executor
- * boundary. Closing that gap means an MBT driver over this loop, which is the
- * single highest-value model in the study.
+ * The executable fresh-task-admission model covers bounded entry, durable
+ * commitment, and exact handoff through the production admission seams used
+ * by this loop. Other loop concerns — pause, quiescence, integration resource
+ * ownership, and the complete live-owner lifecycle — remain governed by their
+ * focused models and production tests rather than one whole-loop model.
  */
 export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(function* <E>(
   expectedRunId: RunId,
@@ -129,6 +167,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
   | DeliveryActionExecutionError
   | DeliveryRuntimeProposalOwnershipConflict
   | DeliveryRuntimeReconfirmationStateInvalid
+  | DeliveryRuntimeRunMismatch
   | PlannedTaskAttemptError,
   | DeliveryActionExecutor
   | DeliveryAcceptedFactPublication
@@ -159,10 +198,12 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const selectionGate = yield* Semaphore.make(1)
       const integrationTargets = resources.integrationTargets
       const attachment = yield* attachCurrentSignal(relation)
+      yield* validateRuntimeEvaluationRun(expectedRunId, attachment.current)
       const first = evaluationForPhase(phase, attachment.current)
       yield* Ref.set(latest, Option.some(first))
       yield* runtimeObservation.publish(first, [])
       const admission = yield* resources.makeAdmissionController(first.taskWork)
+      yield* admission.synchronize(first.taskWork, freshTaskCandidateObservationOf(first.proposedActions))
       const evaluationsSubscribed = yield* Deferred.make<void>()
 
       yield* Stream.concat(
@@ -188,6 +229,34 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         selectionGate.withPermit(publishRuntimeObservationInsideGate())
       )
 
+      const journalAppendMayHaveAccepted = (cause: Cause.Cause<unknown>): boolean =>
+        Option.match(Cause.findErrorOption(cause), {
+          onNone: () => false,
+          // A typed MayHaveCommitted result retains admission. Any non-journal
+          // failure can only occur after the intent callback has marked the
+          // owner, so `intentRecorded` below remains the primary proof.
+          onSome: (failure) => journalAppendFailureDisposition(failure) === "MayHaveCommitted"
+        })
+
+      const rollbackDispositionAfterClaim = (
+        intentRecorded: boolean,
+        failureCause: Cause.Cause<unknown> | undefined
+      ): DeliveryAdmissionRollbackDisposition =>
+        intentRecorded || (failureCause !== undefined && journalAppendMayHaveAccepted(failureCause))
+          ? "AfterDurableClaimIntentOrAmbiguity"
+          : "BeforeDurableClaimIntent"
+
+      const rollbackDispositionFor = (
+        reservation: DeliveryAdmissionReservation,
+        intentRecorded: boolean,
+        failureCause?: Cause.Cause<unknown>
+      ): DeliveryAdmissionRollbackDisposition => {
+        const candidateStep = reservation.freshTaskCandidate?.decision.step._tag
+        if (candidateStep === "ReadCurrentTaskGraph") return "BeforeDurableClaimIntent"
+        if (candidateStep === "AcquireTaskClaim") return rollbackDispositionAfterClaim(intentRecorded, failureCause)
+        return intentRecorded ? "AfterDurableClaimIntentOrAmbiguity" : "BeforeDurableClaimIntent"
+      }
+
       yield* publishRuntimeObservation()
 
       const start = Effect.fn("DeliveryRuntime.startProposal")(function* (reservation: DeliveryAdmissionReservation) {
@@ -202,8 +271,19 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             Effect.provideService(PlannedTaskAttemptPlanner, attemptPlanner)
           )
           const operationId = materializedOperationId(action)
-          if (operationId !== null) yield* owner.materialize(operationId)
-          yield* publishRuntimeObservation()
+          if (operationId !== null) {
+            yield* selectionGate.withPermit(
+              Effect.gen(function* () {
+                if (reservation.freshTaskCandidate?.decision.step._tag === "AcquireTaskClaim") {
+                  yield* admission.bindFreshTaskClaimOperation(reservation, operationId)
+                }
+                yield* owner.materialize(operationId)
+                yield* publishRuntimeObservationInsideGate()
+              })
+            )
+          } else {
+            yield* publishRuntimeObservation()
+          }
           return yield* executor.execute(
             action,
             RuntimeObservation.makeObservedDeliveryActionLease(
@@ -219,14 +299,15 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             Effect.flatMap((isSettled) =>
               isSettled
                 ? Effect.void
-                : admission
-                    .rollback(reservation, false)
-                    .pipe(
-                      Effect.andThen(
-                        Ref.update(owners, (current) => new Map([...current].filter(([id]) => id !== proposal.id)))
-                      ),
-                      Effect.andThen(publishRuntimeObservationInsideGate())
-                    )
+                : owner.intentRecorded.pipe(
+                    Effect.flatMap((intentRecorded) =>
+                      admission.rollback(reservation, rollbackDispositionFor(reservation, intentRecorded))
+                    ),
+                    Effect.andThen(
+                      Ref.update(owners, (current) => new Map([...current].filter(([id]) => id !== proposal.id)))
+                    ),
+                    Effect.andThen(publishRuntimeObservationInsideGate())
+                  )
             )
           )
         )
@@ -261,6 +342,18 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         )
       )
 
+      const reserveFreshAndStart = Effect.fn("DeliveryRuntime.reserveFreshAndStart")(
+        (frontier: FreshTaskCandidateFrontier) =>
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              const result = yield* admission.tryReserveFresh(frontier, deliveryProposalOfAcceptedFreshTask)
+              if (result._tag === "Deferred") return result
+              const started = yield* start(result.reservation)
+              return { _tag: "Started" as const, started }
+            })
+          )
+      )
+
       const admissionLoop = yield* makeDeliveryRuntimeAdmissionLoop({
         admission,
         localDeferrals,
@@ -269,12 +362,14 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         owners,
         publishRuntimeObservationInsideGate,
         reserveAndStart,
+        reserveFreshAndStart,
         selectionGate
       })
 
       const applyEvaluation = Effect.fn("DeliveryRuntime.applyEvaluation")(function* (
         evaluation: DeliveryRuntimeEvaluation
       ) {
+        yield* validateRuntimeEvaluationRun(expectedRunId, evaluation)
         const phaseEvaluation = evaluationForPhase(phase, evaluation)
         yield* selectionGate.withPermit(
           Effect.gen(function* () {
@@ -295,7 +390,10 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                 phaseEvaluation.acceptedAt
               )
             )
-            yield* admission.synchronize(phaseEvaluation.taskWork)
+            yield* admission.synchronize(
+              phaseEvaluation.taskWork,
+              freshTaskCandidateObservationOf(phaseEvaluation.proposedActions)
+            )
             yield* admissionLoop.pruneSettledOwners(phaseEvaluation.proposedActions)
             yield* publishRuntimeObservationInsideGate()
           })
@@ -389,7 +487,10 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       ) {
         const intentRecorded = yield* owner.intentRecorded
         if (Exit.isFailure(completion.exit)) {
-          yield* admission.rollback(owner.reservation, intentRecorded)
+          yield* admission.rollback(
+            owner.reservation,
+            rollbackDispositionFor(owner.reservation, intentRecorded, completion.exit.cause)
+          )
           yield* owner.settle
           yield* publishRuntimeObservationInsideGate()
           yield* removeOwnerInsideGate(completion.proposalId)
@@ -404,7 +505,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         // Sample the accepted signal before deciding whether this owner coalesces with the next proposal.
         const current = Option.getOrThrow(yield* Ref.get(latest))
         yield* Ref.set(latest, Option.some(current))
-        yield* admission.synchronize(current.taskWork)
+        yield* admission.synchronize(current.taskWork, freshTaskCandidateObservationOf(current.proposedActions))
         if (Option.isSome(localDeferral)) {
           yield* installLocalDeferral(current, owner, completion.proposalId, localDeferral.value)
           yield* removeOwnerInsideGate(completion.proposalId)
@@ -477,7 +578,8 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
               ...proposedActions,
               proposals: locallyRunnableProposals
             }
-            const everyProposalIsLocallyDeferred = locallyRunnableProposals.length === 0
+            const everyProposalIsLocallyDeferred =
+              locallyRunnableProposals.length === 0 && proposedActions.freshTaskCandidates.length === 0
             const activeRefreshG2Pending =
               phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
             /**
@@ -506,10 +608,10 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             if (live.size !== 0) return Option.none<DeliveryRuntimeQuiescence>()
             const ordinaryTaskWorkAdmissionStalled =
               phase._tag === "OrdinaryDeliveryRuntimePhase"
-                ? classifyTaskWorkAdmissionStalledRuntimeQuiescence(
-                    current,
-                    deliveryTaskWorkAdmissionBasisOf(yield* admission.snapshot),
-                    locallyRunnableFrontier
+                ? yield* admission.snapshot.pipe(
+                    Effect.map((snapshot) =>
+                      classifyTaskWorkAdmissionStalledRuntimeQuiescence(current, snapshot, locallyRunnableFrontier)
+                    )
                   )
                 : Option.none()
             if (
@@ -523,7 +625,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             if (Option.isSome(ordinaryTaskWorkAdmissionStalled)) {
               return Option.some<DeliveryRuntimeQuiescence>(ordinaryTaskWorkAdmissionStalled.value)
             }
-            const empty: EmptyProposalFrontier = { ...locallyRunnableFrontier, proposals: [] }
+            const empty: EmptyProposalFrontier = { ...locallyRunnableFrontier, freshTaskCandidates: [], proposals: [] }
             if (current.quiescence._tag === "QuiescencePassive") {
               const quiescence: DeliveryRuntimeQuiescence = {
                 _tag: "PassiveRuntimeQuiescence",

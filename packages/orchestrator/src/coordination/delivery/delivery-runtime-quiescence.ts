@@ -3,17 +3,25 @@ import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
   DeliveryProposalFrontier,
   DeliveryQuiescenceDisposition,
-  DeliveryTaskWorkAdmissionBasis,
   DeliveryRuntimeEvaluation,
   DeliveryRuntimeSnapshot,
   TrackerGraphState
 } from "./relations.js"
+import {
+  deliveryRuntimeTaskWorkSnapshotOf,
+  deliveryTaskWorkAdmissionOccupiedCountOf,
+  type DeliveryRuntimeAdmissionSnapshot,
+  type DeliveryRuntimeTaskWorkSnapshot
+} from "./delivery-runtime-admission.js"
 
 export type AvailableProposalFrontier = Extract<
   DeliveryProposalFrontier,
   { readonly _tag: "DeliveryProposalsAvailable" }
 >
-export type EmptyProposalFrontier = Omit<AvailableProposalFrontier, "proposals"> & { readonly proposals: readonly [] }
+export type EmptyProposalFrontier = Omit<AvailableProposalFrontier, "freshTaskCandidates" | "proposals"> & {
+  readonly freshTaskCandidates: readonly []
+  readonly proposals: readonly []
+}
 type EstablishedTrackerGraph = Extract<TrackerGraphState, { readonly _tag: "GraphEstablished" }>
 type EstablishedRuntimeSnapshot = Omit<DeliveryRuntimeSnapshot, "trackerGraph"> & {
   readonly trackerGraph: EstablishedTrackerGraph
@@ -31,18 +39,20 @@ interface TaskWorkAdmissionStalledRuntimeQuiescence {
   readonly current: DeliveryRuntimeSnapshot
   readonly disposition: DeliveryQuiescenceDisposition
   readonly proposedActions: AvailableProposalFrontier
-  readonly taskWork: DeliveryRuntimeEvaluation["taskWork"]
+  readonly taskWork: DeliveryRuntimeTaskWorkSnapshot
 }
 
 /** Classifies only exact prepared attempts that cannot reuse any currently held position. */
 export const classifyTaskWorkAdmissionStalledRuntimeQuiescence = (
   current: DeliveryRuntimeEvaluation,
-  taskWork: DeliveryTaskWorkAdmissionBasis,
+  admission: DeliveryRuntimeAdmissionSnapshot,
   proposedActions: AvailableProposalFrontier
 ): Option.Option<TaskWorkAdmissionStalledRuntimeQuiescence> => {
+  const taskWork = deliveryRuntimeTaskWorkSnapshotOf(admission)
+  const occupiedCount = deliveryTaskWorkAdmissionOccupiedCountOf(admission)
   const stalled =
-    taskWork.held.length >= Number(taskWork.capacity) &&
-    proposedActions.proposals.length > 0 &&
+    occupiedCount >= Number(taskWork.capacity) &&
+    (proposedActions.freshTaskCandidates.length > 0 || proposedActions.proposals.length > 0) &&
     proposedActions.proposals.every(({ admission }) => {
       if (
         admission.taskWorkPosition._tag !== "TaskWorkPositionRequired" ||

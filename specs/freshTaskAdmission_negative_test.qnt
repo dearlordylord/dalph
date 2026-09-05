@@ -162,6 +162,10 @@ module freshTaskAdmissionNegativeTest {
     state' = { ...state, admission: state.admission.put(TaskA, ExactAttemptHeld(AttemptE)) },
   }
 
+  action leaveFiniteCapacityRange: bool = all {
+    state' = { ...state, capacity: 4 },
+  }
+
   run overCapacityEntryTurnsInvariantRedTest = {
     init
       .then(reserveFreshEntry).then(recordClaimIntent)
@@ -225,7 +229,10 @@ module freshTaskAdmissionNegativeTest {
       .then(callClaimProvider).then(acceptOwnedClaim)
       .then(observePostOwnershipConstraint)
       .then(releaseAfterPostOwnershipConstraint)
-      .expect(not(durableCommitmentHasExactDisposition))
+      .expect(and {
+        not(durableCommitmentHasExactDisposition),
+        not(postOwnershipConstraintRetainsOccupancy),
+      })
   }
 
   run foreignClaimConstraintEntryTurnsInvariantRedTest = {
@@ -312,5 +319,10 @@ module freshTaskAdmissionNegativeTest {
         not(currentOccupancyHasOneClosedRepresentation),
         not(existingResponsibilityInputIsExactlyCorrelated),
       })
+  }
+
+
+  run outOfRangeCapacityTurnsInvariantRedTest = {
+    init.then(leaveFiniteCapacityRange).expect(not(modelStateIsFiniteAndClosed))
   }
 }

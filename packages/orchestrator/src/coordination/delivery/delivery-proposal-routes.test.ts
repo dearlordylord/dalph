@@ -26,7 +26,7 @@ import {
 } from "@dalph/contracts"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { it as effectIt } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Result, Stream } from "effect"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { GraphProjectionError, projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -48,6 +48,10 @@ import {
 import { TaskLifecycle, type Task, TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import {
+  makeFreshTaskAdmissionTestBasis,
+  makeFreshTaskCommitmentForTest
+} from "../../../test/support/fresh-task-admission.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
@@ -86,6 +90,8 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
@@ -112,6 +118,7 @@ import {
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
   makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTaskWorktreeObservationOperation,
   makeTrackerGraphObservationOperation,
   TaskClaimReleaseAuthority
@@ -132,7 +139,7 @@ import { PlannedAttemptContinuationAuthorizedEvent } from "../../workflow/protoc
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { RunnableFrontierTransition, type RunnableFrontierTransition as Transition } from "../frontier/frontier.js"
-import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import { deliveryProposalsOf, freshContinuationDecisionsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import { executeAcceptedWorkflowAction, executeNewRecoveredAction } from "./recovered-delivery-action-adapter.js"
 import { DeliveryActionExecutor, type DeliveryActionExecutionLease } from "./delivery-action-executor.js"
@@ -601,12 +608,36 @@ effectIt.effect("executes cancellation settlement through suspension, relinquish
       },
       predecessorOperationIds: []
     })
+    const postClaimGraphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("route-matrix-cancellation-chronology-post-claim-graph"),
+      target,
+      [activeClaim.operationId],
+      [taskId]
+    )
+    const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("route-matrix-cancellation-chronology-specification"),
+      target,
+      taskId,
+      [postClaimGraphOperation.operationId]
+    )
     const planOperation = makeTaskAttemptPlanOperation({
       operationId: OperationId.make("route-matrix-cancellation-chronology-plan"),
       plannedAttempt,
-      predecessorOperationIds: [activeClaim.operationId]
+      predecessorOperationIds: [specificationOperation.operationId]
     })
-    const cancellationPosition = JournalPosition.make(9)
+    const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+      operationId: OperationId.make("route-matrix-cancellation-chronology-worktree"),
+      plannedAttempt,
+      predecessorOperationIds: [planOperation.operationId]
+    })
+    const worktreeProof = PlannedWorktreeReady.make({
+      baseSha: plannedAttempt.baseSha,
+      branch: plannedAttempt.branch,
+      headSha: plannedAttempt.baseSha,
+      worktree: plannedAttempt.worktree
+    })
+    const cancellationPosition = JournalPosition.make(15)
     const cancellation: JournalRecord = {
       event: RunCancellationAppliedEvent.make({
         initiatedBy: { _tag: "Operator" },
@@ -644,9 +675,58 @@ effectIt.effect("executes cancellation settlement through suspension, relinquish
         runId
       },
       {
+        event: taskTrackerReadIntent(postClaimGraphOperation),
+        key: intentRecordKey(postClaimGraphOperation.operationId),
+        position: JournalPosition.make(4),
+        runId
+      },
+      {
+        event: taskTrackerGraphFactsObserved(postClaimGraphOperation, {
+          revision: TrackerRevision.make("route-matrix-cancellation-chronology-graph"),
+          taskIds: [taskId]
+        }),
+        key: outcomeRecordKey(postClaimGraphOperation.operationId),
+        position: JournalPosition.make(5),
+        runId
+      },
+      {
+        event: taskTrackerReadIntent(specificationOperation),
+        key: intentRecordKey(specificationOperation.operationId),
+        position: JournalPosition.make(6),
+        runId
+      },
+      {
+        event: taskTrackerFactsObservedEvent(
+          specificationOperation.operationId,
+          makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification)
+        ),
+        key: outcomeRecordKey(specificationOperation.operationId),
+        position: JournalPosition.make(7),
+        runId
+      },
+      {
         event: TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion }),
         key: attemptPlanRecordKey(plannedAttempt.attemptId),
-        position: JournalPosition.make(4),
+        position: JournalPosition.make(8),
+        runId
+      },
+      {
+        event: TaskWorktreeReconciliationIntendedEvent.make({
+          operation: worktreeOperation,
+          version: workflowJournalEventVersion
+        }),
+        key: intentRecordKey(worktreeOperation.operationId),
+        position: JournalPosition.make(9),
+        runId
+      },
+      {
+        event: TaskWorktreeReadyEvent.make({
+          operationId: worktreeOperation.operationId,
+          proof: worktreeProof,
+          version: workflowJournalEventVersion
+        }),
+        key: outcomeRecordKey(worktreeOperation.operationId),
+        position: JournalPosition.make(10),
         runId
       },
       {
@@ -655,7 +735,7 @@ effectIt.effect("executes cancellation settlement through suspension, relinquish
           version: workflowJournalEventVersion
         }),
         key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-        position: JournalPosition.make(5),
+        position: JournalPosition.make(11),
         runId
       },
       {
@@ -668,7 +748,7 @@ effectIt.effect("executes cancellation settlement through suspension, relinquish
           version: workflowJournalEventVersion
         }),
         key: plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, initialCommandOrdinal),
-        position: JournalPosition.make(6),
+        position: JournalPosition.make(12),
         runId
       },
       {
@@ -680,7 +760,7 @@ effectIt.effect("executes cancellation settlement through suspension, relinquish
           version: workflowJournalEventVersion
         }),
         key: plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, initialCommandOrdinal),
-        position: JournalPosition.make(7),
+        position: JournalPosition.make(13),
         runId
       },
       {
@@ -690,7 +770,7 @@ effectIt.effect("executes cancellation settlement through suspension, relinquish
           version: workflowJournalEventVersion
         }),
         key: plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, initialReportOrdinal),
-        position: JournalPosition.make(8),
+        position: JournalPosition.make(14),
         runId
       },
       cancellation
@@ -1539,10 +1619,20 @@ describe("delivery proposal route matrix", () => {
 
   it("requires fresh provenance for all three fresh-only transition tags", () => {
     const beginTransition = RunnableFrontierTransition.BeginPlannedAttemptExecutorWork({ plannedAttempt })
-    const step = FreshWorkflowStep.BeginPlannedAttemptExecutorWork({ plannedAttempt, specification, task })
+    const step = FreshWorkflowStep.BeginPlannedAttemptExecutorWork({
+      claimOperationId: OperationId.make("fresh-begin-claim"),
+      plannedAttempt,
+      specification,
+      task
+    })
     const [proposal] = deliveryProposalsOf({
       acceptedOperationIds: new Set(),
-      fresh: [{ step, transition: beginTransition }],
+      fresh: Result.getOrThrow(
+        freshContinuationDecisionsOf(
+          [{ step, transition: beginTransition }],
+          [makeFreshTaskCommitmentForTest(taskId, step.claimOperationId, runId)]
+        )
+      ),
       runId,
       transitions: [beginTransition]
     }).ticketDelivery
@@ -2963,7 +3053,12 @@ describe("delivery proposal route matrix", () => {
       })
       const proposal = deliveryProposalsOf({
         acceptedOperationIds: new Set<OperationId>(),
-        fresh: [{ step, transition }],
+        fresh: Result.getOrThrow(
+          freshContinuationDecisionsOf(
+            [{ step, transition }],
+            [makeFreshTaskCommitmentForTest(taskId, claimOperation.acquisition.operationId, runId)]
+          )
+        ),
         runId,
         transitions: [transition]
       }).ticketDelivery[0]
@@ -3007,6 +3102,91 @@ describe("delivery proposal route matrix", () => {
 
       expect(result).toEqual({ _tag: "ActionCompleted", proposalId: proposal.id })
       expect(yield* Ref.get(traceTags)).not.toContain("TrackerExecutionAdmitted")
+    })
+  )
+
+  effectIt.effect("rereads a rejected task claim without consuming a task-work position", () =>
+    Effect.gen(function* () {
+      const rejectedClaimOperationId = OperationId.make("rejected-fresh-claim")
+      const graphObservationOperationId = OperationId.make("rejected-fresh-claim-graph-wake")
+      const step = FreshWorkflowStep.ReadRejectedTaskClaim({
+        predecessorOperationId: graphObservationOperationId,
+        rejectedClaimOperationId,
+        task
+      })
+      const transition = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+        operationId: graphObservationOperationId,
+        taskId
+      })
+      const proposal = deliveryProposalsOf({
+        acceptedOperationIds: new Set<OperationId>(),
+        fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [])),
+        runId,
+        transitions: [transition]
+      }).ticketDelivery[0]
+      if (
+        proposal === undefined ||
+        !isFreshOperationProposal(proposal) ||
+        proposal.route._tag !== "FreshWorkflowRoute"
+      ) {
+        return yield* Effect.die("a rejected-claim observation route must be derivable")
+      }
+      expect(proposal.admission.taskWorkPosition).toEqual({ _tag: "NoTaskWorkPosition" })
+
+      const observedOperations = yield* Ref.make<
+        ReadonlyArray<{
+          readonly operationId: OperationId
+          readonly predecessorOperationIds: ReadonlyArray<OperationId>
+          readonly taskId: TaskId
+        }>
+      >([])
+      const foreign = ActiveTaskClaim.make({
+        operationId: OperationId.make("rejected-fresh-claim-foreign"),
+        owner: ClaimOwner.make("rejected-fresh-claim-foreign-owner"),
+        taskId,
+        token: ClaimToken.make("rejected-fresh-claim-foreign-token")
+      })
+      const actionOperationId = OperationId.make("rejected-fresh-claim-focused-read")
+      const result = yield* executeFreshWorkflowOperation(
+        { _tag: "FreshOperationAction", operationId: actionOperationId, proposal },
+        proposal.route,
+        inertLease,
+        target
+      ).pipe(
+        Effect.provideService(
+          WorkflowInterpreter,
+          WorkflowInterpreter.of({
+            acquireTaskClaim: () => Effect.die("unused claim acquisition"),
+            readTaskClaim: (operation) =>
+              Ref.update(observedOperations, (operations) => [...operations, operation]).pipe(
+                Effect.as({ _tag: "AuthoritativeTaskClaimObserved" as const, observation: foreign })
+              ),
+            readTaskWorktree: () => Effect.die("unused worktree read"),
+            readTargetLineage: () => Effect.die("unused lineage read"),
+            readTrackerGraph: () => Effect.die("unused graph read"),
+            readTaskWorkSpecification: () => Effect.die("unused specification read"),
+            reconcileTaskWorktree: () => Effect.die("unused worktree reconciliation"),
+            recordTaskAttemptPlan: () => Effect.die("unused attempt planning"),
+            releaseTaskClaim: () => Effect.die("unused claim release")
+          })
+        ),
+        Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
+        Effect.provideService(
+          TaskClaimAcquisitionPlanner,
+          TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("unused claim planning") })
+        )
+      )
+
+      expect(result).toEqual({ _tag: "ActionCompleted", proposalId: proposal.id })
+      expect(yield* Ref.get(observedOperations)).toEqual([
+        {
+          _tag: "ReadTaskClaim",
+          operationId: actionOperationId,
+          predecessorOperationIds: [graphObservationOperationId, rejectedClaimOperationId].toSorted(),
+          target,
+          taskId
+        }
+      ])
     })
   )
 
@@ -3246,13 +3426,10 @@ describe("delivery proposal route matrix", () => {
         const journal = appendableJournalFor(records)
         const protocolController = yield* makePlannedAttemptProtocolController()
         const admission = yield* makeDeliveryRuntimeAdmissionController(
-          {
+          makeFreshTaskAdmissionTestBasis({
             capacity: TaskWorkCapacity.make(2),
-            held: [
-              { correlation, taskId: plannedAttempt.taskId },
-              { correlation: foreignCorrelation, taskId: foreignAttempt.taskId }
-            ]
-          },
+            held: [plannedAttempt, foreignAttempt]
+          }),
           yield* makeIntegrationTargetResourceController(),
           (yield* makeApplicationExitLifecycle()).admission
         ).pipe(Effect.provideService(PlannedAttemptProtocolController, protocolController))
@@ -3330,17 +3507,34 @@ describe("delivery proposal route matrix", () => {
         expect(yield* Ref.get(suspensionCalls)).toBe(1)
         expect(yield* Ref.get(attachments)).toBe(1)
         expect(yield* Ref.get(boundaryCalls)).toEqual(["Suspend", "Attach"])
-        expect((yield* admission.snapshot).positions.get(plannedAttempt.taskId)).toMatchObject({ correlation })
-        expect((yield* admission.snapshot).positions.get(foreignAttempt.taskId)).toMatchObject({
-          correlation: foreignCorrelation
+        const heldPositions = yield* admission.snapshot
+        const plannedPosition = heldPositions.positions.get(plannedAttempt.taskId)
+        const foreignHeldPosition = heldPositions.positions.get(foreignAttempt.taskId)
+        expect(plannedPosition).toMatchObject({
+          _tag: "ExactAttemptHeld",
+          plannedAttempt: { attemptId: correlation.attemptId, runId: correlation.runId, taskId: plannedAttempt.taskId }
+        })
+        expect(foreignHeldPosition).toMatchObject({
+          _tag: "ExactAttemptHeld",
+          plannedAttempt: {
+            attemptId: foreignCorrelation.attemptId,
+            runId: foreignCorrelation.runId,
+            taskId: foreignAttempt.taskId
+          }
         })
 
         yield* Queue.offer(lifecycleChanges, PlannedAttemptExecutorProjection.cases.Exact.make({ report: safe }))
         yield* Deferred.await(changePublished)
 
         expect((yield* admission.snapshot).positions.has(plannedAttempt.taskId)).toBe(false)
-        expect((yield* admission.snapshot).positions.get(foreignAttempt.taskId)).toMatchObject({
-          correlation: foreignCorrelation
+        const foreignPosition = (yield* admission.snapshot).positions.get(foreignAttempt.taskId)
+        expect(foreignPosition).toMatchObject({
+          _tag: "ExactAttemptHeld",
+          plannedAttempt: {
+            attemptId: foreignCorrelation.attemptId,
+            runId: foreignCorrelation.runId,
+            taskId: foreignAttempt.taskId
+          }
         })
         expect(
           (yield* Ref.get(records)).flatMap(({ event }) =>
@@ -3413,7 +3607,7 @@ describe("delivery proposal route matrix", () => {
       const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
       const protocolController = yield* makePlannedAttemptProtocolController()
       const admission = yield* makeDeliveryRuntimeAdmissionController(
-        { capacity: TaskWorkCapacity.make(1), held: [{ correlation, taskId: plannedAttempt.taskId }] },
+        makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [plannedAttempt] }),
         yield* makeIntegrationTargetResourceController(),
         (yield* makeApplicationExitLifecycle()).admission
       ).pipe(Effect.provideService(PlannedAttemptProtocolController, protocolController))
@@ -3527,7 +3721,7 @@ describe("delivery proposal route matrix", () => {
         const executorCalls = yield* Ref.make(0)
         const protocolController = yield* makePlannedAttemptProtocolController()
         const admission = yield* makeDeliveryRuntimeAdmissionController(
-          { capacity: TaskWorkCapacity.make(1), held: [{ correlation, taskId: plannedAttempt.taskId }] },
+          makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [plannedAttempt] }),
           yield* makeIntegrationTargetResourceController(),
           (yield* makeApplicationExitLifecycle()).admission
         ).pipe(Effect.provideService(PlannedAttemptProtocolController, protocolController))

@@ -28,6 +28,7 @@ import {
   makeTargetLineageObservationOperation
 } from "../../workflow/registry/operation.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
@@ -110,6 +111,7 @@ const samePositionProposals = (
 
 const bundle = (graph: DeliveryRelationInputBundle["publication"]["graph"]): DeliveryRelationInputBundle => ({
   actionInputs: {
+    freshTaskCandidates: [],
     proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
     reflectionProposals: [],
     runtimeFacts: {
@@ -120,7 +122,7 @@ const bundle = (graph: DeliveryRelationInputBundle["publication"]["graph"]): Del
         applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
       },
       quiescence: { _tag: "TrackerReconfirmationAllowed" },
-      taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+      taskWork: makeFreshTaskAdmissionTestBasis({ capacity: policy.taskExecutionCapacity })
     },
     trackerGraphProposals: graph._tag === "GraphNotEstablished" ? [proposal] : []
   },
@@ -163,7 +165,12 @@ it.effect("publishes graph and planned frontier as one coherent runtime evaluati
         applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
       })
       expect(after?.current.trackerGraph).toEqual(established)
-      expect(after?.proposedActions).toEqual({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] })
+      expect(after?.proposedActions).toEqual({
+        _tag: "DeliveryProposalsAvailable",
+        freshTaskCandidates: [],
+        isolatedIssues: [],
+        proposals: []
+      })
     })
   )
 )

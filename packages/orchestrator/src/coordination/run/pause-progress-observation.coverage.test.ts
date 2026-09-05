@@ -26,6 +26,7 @@ import { OperationId } from "../../workflow/identity.js"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import { makeTestJournaledTrackerGraphObservation } from "../../../test/journaled-graph-observation.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import {
   DeliveryProposalId,
@@ -151,9 +152,10 @@ const evaluation = (
       observedAt: JournalPosition.make(5),
       snapshot: projected.snapshot
     },
-    proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals },
+    proposedActions: { _tag: "DeliveryProposalsAvailable", freshTaskCandidates: [], isolatedIssues: [], proposals },
     quiescence: { _tag: "QuiescencePassive", reason: "RunPaused" },
-    taskWork: { capacity: policy.taskExecutionCapacity, held: [] }
+    runId,
+    taskWork: makeFreshTaskAdmissionTestBasis({ capacity: policy.taskExecutionCapacity })
   }
 }
 
@@ -471,7 +473,12 @@ it.effect("ignores an available tracker-graph action because it names no Pause-c
       DeliveryRuntimeObservationState.Ready({
         evaluation: {
           ...base,
-          proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [graphProposal] }
+          proposedActions: {
+            _tag: "DeliveryProposalsAvailable",
+            freshTaskCandidates: [],
+            isolatedIssues: [],
+            proposals: [graphProposal]
+          }
         },
         liveOwners: []
       }),

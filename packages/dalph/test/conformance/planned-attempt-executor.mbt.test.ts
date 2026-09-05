@@ -22,7 +22,6 @@ import {
   type JournalRecord,
   JournalStore,
   journalStoreCapabilities,
-  unpublishedInRunJournalTestLayer,
   JournalPosition,
   makePlannedAttemptProtocolController,
   makeApplicationExitLifecycle,
@@ -34,6 +33,11 @@ import {
   TaskWorkCapacity
 } from "../../../orchestrator/src/index.js"
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
+import { ActiveTaskClaim } from "../../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../../orchestrator/src/authorities/task-tracker/claim.js"
+import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
+import { PlannedWorktreeReady } from "../../../orchestrator/src/authorities/git/worktree.js"
+import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import {
   makeDeliveryRuntimeAdmissionController,
   type DeliveryRuntimeAdmissionController
@@ -43,7 +47,35 @@ import {
   trackerGraphReadProposalOf
 } from "../../../orchestrator/src/coordination/delivery/delivery-proposal.js"
 import { makeIntegrationTargetResourceController } from "../../../orchestrator/src/coordination/admission/integration-target-resource.js"
+import { makeFreshTaskAdmissionBasis } from "../../../orchestrator/src/coordination/admission/fresh-task-admission.js"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
+import {
+  makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../../orchestrator/src/workflow/registry/operation.js"
+import { OperationId } from "../../../orchestrator/src/workflow/identity.js"
+import {
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
+  taskTrackerReadIntent
+} from "../../../orchestrator/src/workflow/registry/event.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
+import { InRunJournal } from "../../../orchestrator/src/workflow-journal/store.js"
+import {
+  intentRecordKey,
+  outcomeRecordKey,
+  attemptPlanRecordKey
+} from "../../../orchestrator/src/workflow-journal/record-key.js"
+import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
 
 const specification = makeTaskWorkSpecification({
   body: "Complete the model task.",
@@ -61,16 +93,28 @@ const plannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/model-attempt")
 })
 const correlation = { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+const freshAttemptPrefixAcceptedAt = JournalPosition.make(9)
+const plannedAttemptGraph = (() => {
+  const projected = projectTrackerSnapshot({
+    revision: "planned-attempt-executor-model-graph",
+    tasks: [
+      { id: plannedAttempt.taskId, lifecycle: { _tag: "Open" as const }, parentTaskId: null, prerequisiteIds: [] }
+    ]
+  })
+  if (projected._tag !== "Valid")
+    return Effect.runSync(Effect.die(`invalid planned-attempt graph fixture: ${JSON.stringify(projected.issues)}`))
+  return projected.snapshot
+})()
 const continuationProposal = {
   ...trackerGraphReadProposalOf({
-    acceptedAt: JournalPosition.make(1),
+    acceptedAt: freshAttemptPrefixAcceptedAt,
     purpose: "EstablishCurrentGraph",
     runId: plannedAttempt.runId,
     target: FixtureTarget.make("planned-attempt-executor-model")
   }),
   admission: {
     integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
-    plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+    plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired" as const, correlation },
     taskWorkPosition: {
       _tag: "TaskWorkPositionRequired" as const,
       mode: "ReserveOrReuse" as const,
@@ -186,6 +230,12 @@ const executorConformanceDriver = defineDriver(
             runId: eventRunId
           } satisfies JournalRecord
           records = [...records, record]
+          const reduction = reduceWorkflowJournalHistory(eventRunId, records)
+          if (reduction._tag === "InvalidWorkflowJournalHistory") {
+            return yield* Effect.die(
+              `planned-attempt executor MBT constructed invalid history: ${JSON.stringify(reduction.issues)}`
+            )
+          }
           if (pauseCommandIntent && event._tag === "PlannedAttemptExecutorCommandIntended") {
             pauseCommandIntent = false
             yield* Deferred.succeed(commandIntentSignal, undefined)
@@ -217,8 +267,111 @@ const executorConformanceDriver = defineDriver(
         Effect.succeed({ _tag: "AlreadyRetired", partition: "Cold", runId: eventRunId } as const),
       terminateRun: () => Effect.die("executor model never terminates its Run")
     })
-    const journalLayer = unpublishedInRunJournalTestLayer.pipe(
-      Layer.provideMerge(journalStoreCapabilities(Layer.succeed(JournalStore, journal)))
+    const reducerValidInMemoryJournal = InRunJournal.of({ append: journal.append, read: journal.read })
+    const appendExactFreshAttemptPrefix = Effect.fn("ExecutorModel.appendExactFreshAttemptPrefix")(function* () {
+      const claimOperation = makeTaskClaimAcquisitionOperation({
+        acquisition: {
+          operationId: OperationId.make("planned-attempt-executor-model-claim"),
+          owner: ClaimOwner.make("dalph"),
+          taskId: plannedAttempt.taskId,
+          token: ClaimToken.make("planned-attempt-executor-model-claim-token")
+        },
+        predecessorOperationIds: []
+      })
+      yield* journal.append(
+        plannedAttempt.runId,
+        intentRecordKey(claimOperation.acquisition.operationId),
+        TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+      )
+      yield* journal.append(
+        plannedAttempt.runId,
+        outcomeRecordKey(claimOperation.acquisition.operationId),
+        TaskClaimAcquiredEvent.make({
+          claim: ActiveTaskClaim.make(claimOperation.acquisition),
+          version: workflowJournalEventVersion
+        })
+      )
+      const postClaimGraphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("planned-attempt-executor-model-post-claim-graph"),
+        FixtureTarget.make("planned-attempt-executor-model"),
+        [claimOperation.acquisition.operationId],
+        [plannedAttempt.taskId]
+      )
+      yield* journal.append(
+        plannedAttempt.runId,
+        intentRecordKey(postClaimGraphOperation.operationId),
+        taskTrackerReadIntent(postClaimGraphOperation)
+      )
+      yield* journal.append(
+        plannedAttempt.runId,
+        outcomeRecordKey(postClaimGraphOperation.operationId),
+        taskTrackerFactsObservedEvent(
+          postClaimGraphOperation.operationId,
+          makeCompleteTaskTrackerFactsObserved(postClaimGraphOperation, plannedAttemptGraph)
+        )
+      )
+      const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("planned-attempt-executor-model-specification"),
+        FixtureTarget.make("planned-attempt-executor-model"),
+        plannedAttempt.taskId,
+        [postClaimGraphOperation.operationId]
+      )
+      yield* journal.append(
+        plannedAttempt.runId,
+        intentRecordKey(specificationOperation.operationId),
+        taskTrackerReadIntent(specificationOperation)
+      )
+      yield* journal.append(
+        plannedAttempt.runId,
+        outcomeRecordKey(specificationOperation.operationId),
+        taskTrackerFactsObservedEvent(
+          specificationOperation.operationId,
+          makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification)
+        )
+      )
+      const planOperation = {
+        _tag: "RecordTaskAttemptPlan" as const,
+        operationId: OperationId.make("planned-attempt-executor-model-plan"),
+        plannedAttempt,
+        predecessorOperationIds: [specificationOperation.operationId]
+      }
+      yield* journal.append(
+        plannedAttempt.runId,
+        attemptPlanRecordKey(plannedAttempt.attemptId),
+        TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
+      )
+      const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+        operationId: OperationId.make("planned-attempt-executor-model-worktree"),
+        plannedAttempt,
+        predecessorOperationIds: [planOperation.operationId]
+      })
+      yield* journal.append(
+        plannedAttempt.runId,
+        intentRecordKey(worktreeOperation.operationId),
+        TaskWorktreeReconciliationIntendedEvent.make({
+          operation: worktreeOperation,
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        plannedAttempt.runId,
+        outcomeRecordKey(worktreeOperation.operationId),
+        TaskWorktreeReadyEvent.make({
+          operationId: worktreeOperation.operationId,
+          proof: PlannedWorktreeReady.make({
+            baseSha: plannedAttempt.baseSha,
+            branch: plannedAttempt.branch,
+            headSha: plannedAttempt.baseSha,
+            worktree: plannedAttempt.worktree
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+    })
+    const journalLayer = Layer.merge(
+      Layer.succeed(InRunJournal, reducerValidInMemoryJournal),
+      journalStoreCapabilities(Layer.succeed(JournalStore, journal))
     )
     const executor = PlannedAttemptExecutor.of({
       observe: () =>
@@ -279,7 +432,9 @@ const executorConformanceDriver = defineDriver(
       if (!snapshot.positions.has(plannedAttempt.taskId)) {
         const decision = yield* admission.tryReserve(continuationProposal)
         if (decision._tag === "Deferred") return yield* Effect.die("planned attempt must be admitted")
-        yield* admission.bindPlannedAttemptPosition(plannedAttempt.taskId, correlation)
+        const acceptedResponsibility = yield* provideWorkflow(beginPlannedAttemptExecutorResponsibility(plannedAttempt))
+        yield* admission.bindPlannedAttemptPosition(decision.reservation, plannedAttempt, acceptedResponsibility)
+        yield* admission.complete(decision.reservation)
       }
     })
     const releasePosition = Effect.fn("ExecutorModel.releasePosition")(function* () {
@@ -423,20 +578,21 @@ const executorConformanceDriver = defineDriver(
           pendingCommand = undefined
           pendingProjection = undefined
           pendingState = undefined
+          yield* appendExactFreshAttemptPrefix()
           const freshProtocolController = yield* makePlannedAttemptProtocolController()
           protocolController = freshProtocolController
           controller = yield* makeDeliveryRuntimeAdmissionController(
-            { capacity: TaskWorkCapacity.make(1), held: [] },
+            yield* makeFreshTaskAdmissionBasis({
+              acceptedAt: freshAttemptPrefixAcceptedAt,
+              capacity: TaskWorkCapacity.make(1),
+              entries: [],
+              runId: plannedAttempt.runId
+            }),
             yield* makeIntegrationTargetResourceController(),
             (yield* makeApplicationExitLifecycle()).admission
           ).pipe(Effect.provideService(PlannedAttemptProtocolController, freshProtocolController))
         }),
-      beginResponsibility: () =>
-        reservePosition().pipe(
-          Effect.andThen(provideWorkflow(beginPlannedAttemptExecutorResponsibility(plannedAttempt))),
-          Effect.orDie,
-          Effect.asVoid
-        ),
+      beginResponsibility: () => reservePosition().pipe(Effect.orDie, Effect.asVoid),
       recordBeginIntent: () => reservePosition().pipe(Effect.andThen(recordIntent("Begin")), Effect.orDie),
       recordResumeIntent: () => reservePosition().pipe(Effect.andThen(recordIntent("Resume")), Effect.orDie),
       recordSuspendIntent: () => recordIntent("Suspend").pipe(Effect.orDie),

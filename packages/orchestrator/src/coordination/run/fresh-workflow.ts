@@ -1,6 +1,15 @@
+/* eslint-disable max-lines -- Fresh selection reconstructs one journaled workflow and its complete eligibility relation together. */
 import { Option } from "effect"
-import { TaskWorkSpecification, type AttemptId, type PlannedTaskAttempt, type TaskId } from "@dalph/contracts"
+import {
+  TaskWorkSpecification,
+  plannedTaskAttemptEquivalence,
+  type AttemptId,
+  type PlannedTaskAttempt,
+  type RunId,
+  type TaskId
+} from "@dalph/contracts"
 import type { Task } from "../../authorities/task-tracker/task.js"
+import { ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
@@ -15,7 +24,17 @@ import {
   latestPlannedAttemptExecutorEvidence,
   latestPlannedAttemptExecutorProjectionIssue
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import { journalPrefixPredecessorOf } from "../../workflow-journal/prefix-lineage.js"
+import { causalPredecessorOperationIds } from "../../workflow/causal-history.js"
+import { rejectedFreshTaskClaimDisposition as rejectedClaim } from "./rejected-fresh-task-claim.js"
+import { projectFreshTaskCommitments } from "../admission/fresh-task-admission-projection.js"
+import { acceptedFreshAttemptLineage } from "../admission/fresh-attempt-lineage.js"
+import {
+  authorizeReplacementContinuationStep,
+  replacementContinuationAuthorityFrom,
+  type ReplacementContinuationStep
+} from "../delivery/replacement-continuation-authority.js"
 
 const postClaimGraphRank = 0
 const claimRank = 1
@@ -108,12 +127,14 @@ const completeGraphObservationIds = (records: ReadonlyArray<JournalRecord>): Rea
 const plannedSpecificationFor = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
-  immutableRunTargetKey: string
+  immutableRunTargetKey: string,
+  operationId?: OperationId
 ) => {
   const specification = records.findLast(
     ({ event }) =>
       event._tag === "TaskTrackerFactsObserved" &&
       event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+      (operationId === undefined || event.operationId === operationId) &&
       taskTrackerTargetKey(event.observation.target) === immutableRunTargetKey &&
       event.observation.factFamily.taskId === plannedAttempt.taskId &&
       event.observation.factFamily.fingerprint === plannedAttempt.taskRevision
@@ -132,12 +153,16 @@ const plannedSpecificationFor = (
 // eslint-disable-next-line complexity -- Closed journal occurrence families route to one next workflow operation.
 const journaledStepFor = (
   task: Task,
+  runId: RunId,
   records: ReadonlyArray<JournalRecord>,
   recoveredAttemptIds: ReadonlySet<AttemptId>,
   observed: ReadonlySet<OperationId>,
   completeGraphObserved: ReadonlySet<OperationId>,
   immutableRunTargetKey: string
-): FreshWorkflowStepType => {
+): FreshWorkflowStepType | undefined => {
+  const commitment = projectFreshTaskCommitments(runId, records).find(
+    (candidate) => candidate.commitment.operation.acquisition.taskId === task.id
+  )?.commitment
   const executorResponsibility = records.findLast(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" && event.plannedAttempt.taskId === task.id
@@ -171,27 +196,92 @@ const journaledStepFor = (
     .filter(({ plannedAttempt }) => plannedAttempt.taskId === task.id)
     .at(lastElementOffset)
   if (plan !== undefined) {
-    const worktree = records.findLast(
+    const ordinaryPlanWasRecorded = records.some(
       ({ event }) =>
-        event._tag === "TaskWorktreeReconciliationIntended" &&
-        event.operation.plannedAttempt.attemptId === plan.plannedAttempt.attemptId
-    )?.event
-    const specification = plannedSpecificationFor(records, plan.plannedAttempt, immutableRunTargetKey)
-    if (worktree?._tag === "TaskWorktreeReconciliationIntended" && observed.has(worktree.operation.operationId)) {
-      if (specification !== undefined) {
+        event._tag === "TaskAttemptPlanned" &&
+        event.operation.operationId === plan.operationId &&
+        plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plan.plannedAttempt)
+    )
+    if (ordinaryPlanWasRecorded) {
+      const lineage = acceptedFreshAttemptLineage(records, plan.plannedAttempt, "Plan")
+      if (
+        lineage === undefined ||
+        commitment === undefined ||
+        commitment.operation.acquisition.operationId !== lineage.claimOperationId
+      ) {
+        return undefined
+      }
+      const specification = plannedSpecificationFor(
+        records,
+        plan.plannedAttempt,
+        immutableRunTargetKey,
+        lineage.specificationOperationId
+      )
+      if (specification === undefined) return undefined
+      const worktree = records.findLast(
+        ({ event }) =>
+          event._tag === "TaskWorktreeReconciliationIntended" &&
+          plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plan.plannedAttempt) &&
+          causalPredecessorOperationIds(records, event.operation).has(lineage.planOperationId)
+      )?.event
+      const readyLineage = acceptedFreshAttemptLineage(records, plan.plannedAttempt, "WorktreeReady")
+      if (readyLineage !== undefined) {
         return FreshWorkflowStep.BeginPlannedAttemptExecutorWork({
+          claimOperationId: lineage.claimOperationId,
           plannedAttempt: plan.plannedAttempt,
           specification,
           task
         })
       }
-      return FreshWorkflowStep.ReadTaskWorkSpecification({ predecessorOperationId: plan.operationId, task })
+      if (worktree?._tag === "TaskWorktreeReconciliationIntended" && observed.has(worktree.operation.operationId)) {
+        return undefined
+      }
+      return FreshWorkflowStep.ReconcileTaskWorktree({
+        claimOperationId: lineage.claimOperationId,
+        plannedAttempt: plan.plannedAttempt,
+        predecessorOperationId: lineage.planOperationId,
+        task
+      })
     }
-    return FreshWorkflowStep.ReconcileTaskWorktree({
-      plannedAttempt: plan.plannedAttempt,
-      predecessorOperationId: plan.operationId,
-      task
-    })
+
+    // Replacement attempts retain their dedicated F2/K1/W1/H2 authority path.
+    const replacementAuthority = replacementContinuationAuthorityFrom(
+      records,
+      runId,
+      plan.plannedAttempt,
+      plan.operationId
+    )
+    // No plan-stage continuation may cross Git, tracker, or executor boundaries
+    // unless the exact acquired claim is in the plan's causal history.
+    if (replacementAuthority === undefined) {
+      return undefined
+    }
+    const replacementStep = <Step extends ReplacementContinuationStep>(step: Step): Step | undefined =>
+      authorizeReplacementContinuationStep(replacementAuthority, step)
+    const worktree = records.findLast(
+      ({ event }) =>
+        event._tag === "TaskWorktreeReconciliationIntended" &&
+        plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plan.plannedAttempt) &&
+        causalPredecessorOperationIds(records, event.operation).has(plan.operationId)
+    )?.event
+    if (worktree?._tag === "TaskWorktreeReconciliationIntended" && observed.has(worktree.operation.operationId)) {
+      return replacementStep(
+        FreshWorkflowStep.BeginPlannedAttemptExecutorWork({
+          claimOperationId: replacementAuthority.claim.operationId,
+          plannedAttempt: plan.plannedAttempt,
+          specification: replacementAuthority.specification,
+          task
+        })
+      )
+    }
+    return replacementStep(
+      FreshWorkflowStep.ReconcileTaskWorktree({
+        claimOperationId: replacementAuthority.claim.operationId,
+        plannedAttempt: plan.plannedAttempt,
+        predecessorOperationId: plan.operationId,
+        task
+      })
+    )
   }
 
   const specification = records.findLast(
@@ -205,7 +295,23 @@ const journaledStepFor = (
     specification?._tag === "TaskTrackerFactsObserved" &&
     specification.observation._tag === "FocusedTaskWorkSpecificationFacts"
   ) {
+    if (commitment === undefined) return undefined
+    const specificationIntent = records.find(
+      ({ event }) =>
+        event._tag === "TaskTrackerReadIntentRecorded" &&
+        event.operation._tag === "ReadTaskWorkSpecification" &&
+        event.operation.operationId === specification.operationId
+    )?.event
+    if (
+      specificationIntent?._tag !== "TaskTrackerReadIntentRecorded" ||
+      !causalPredecessorOperationIds(records, specificationIntent.operation).has(
+        commitment.operation.acquisition.operationId
+      )
+    ) {
+      return undefined
+    }
     return FreshWorkflowStep.RecordTaskAttemptPlan({
+      claimOperationId: commitment.operation.acquisition.operationId,
       predecessorOperationId: specification.operationId,
       specification: {
         body: specification.observation.factFamily.body,
@@ -218,13 +324,23 @@ const journaledStepFor = (
   }
 
   const claimIntentRecord = records.findLast(
-    ({ event }) => event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === task.id
+    ({ event, key }) =>
+      event._tag === "TaskClaimAcquisitionIntended" &&
+      event.operation.authority._tag === "TaskSelectionAuthority" &&
+      event.operation.acquisition.taskId === task.id &&
+      key === intentRecordKey(event.operation.acquisition.operationId)
   )
   if (claimIntentRecord?.event._tag === "TaskClaimAcquisitionIntended") {
-    const claimOperationId = claimIntentRecord.event.operation.acquisition.operationId
+    const acquisition = claimIntentRecord.event.operation.acquisition
+    const claimOperationId = acquisition.operationId
+    const expectedClaim = ActiveTaskClaim.make(acquisition)
     const acquired = records.some(
-      ({ event, position }) =>
-        position > claimIntentRecord.position && event._tag === "TaskClaimAcquired" && event.claim.taskId === task.id
+      ({ event, key, position, runId }) =>
+        runId === claimIntentRecord.runId &&
+        position > claimIntentRecord.position &&
+        key === outcomeRecordKey(claimOperationId) &&
+        event._tag === "TaskClaimAcquired" &&
+        isExactTaskClaim(event.claim, expectedClaim)
     )
     /* v8 ignore start -- Maintained fresh stories acquire here; rejection is retried from a new current-task read. */
     if (acquired) {
@@ -238,6 +354,7 @@ const journaledStepFor = (
       )?.event
       if (postClaimGraph?._tag === "TaskTrackerReadIntentRecorded") {
         return FreshWorkflowStep.ReadTaskWorkSpecification({
+          claimOperationId,
           predecessorOperationId: postClaimGraph.operation.operationId,
           task
         })
@@ -249,6 +366,10 @@ const journaledStepFor = (
       })
     }
     /* v8 ignore stop */
+
+    const rejection = rejectedClaim(records, task, claimIntentRecord, completeGraphObserved, immutableRunTargetKey)
+    if (rejection._tag === "ObserveConstraint") return rejection.step
+    if (rejection._tag === "ConstraintRetained") return undefined
   }
 
   const currentTaskGraph = records.findLast(
@@ -334,6 +455,63 @@ export const responsibilityStillOwnsTask = (
   )
 }
 
+/**
+ * Tasks that the complete current tracker graph still permits to enter fresh work.
+ *
+ * This is deliberately independent of the particular next workflow action that
+ * happens to be proposed for a task. Runtime admission may retire an idle
+ * pre-intent reservation only when this complete set omits the task.
+ */
+export const deriveFreshWorkflowEntryCapableTaskIds = (
+  frame: CurrentDeliveryFrame,
+  immutableRunTarget: TrackerTarget,
+  recoveredAttemptIds: ReadonlySet<AttemptId> = new Set()
+): ReadonlySet<TaskId> => {
+  if (frame.pause.run._tag === "RunPaused") return new Set()
+  const { completeGraphObserved, immutableRunTargetKey, pauseCoveredTaskIds, records, responsibleTaskIds } =
+    freshWorkflowEligibilityContext(frame, recoveredAttemptIds, immutableRunTarget)
+  return new Set(
+    frame.currentGraph
+      .eligibleTasks()
+      .filter((task) => {
+        const taskId = task.id
+        if (responsibleTaskIds.has(taskId) || pauseCoveredTaskIds.has(taskId)) return false
+        const latestClaimIntent = records.findLast(
+          ({ event }) =>
+            event._tag === "TaskClaimAcquisitionIntended" &&
+            event.operation.authority._tag === "TaskSelectionAuthority" &&
+            event.operation.acquisition.taskId === taskId
+        )
+        if (latestClaimIntent === undefined) return true
+        const rejection = rejectedClaim(records, task, latestClaimIntent, completeGraphObserved, immutableRunTargetKey)
+        return rejection._tag === "ConstraintAbsent" || rejection._tag === "ConstraintCleared"
+      })
+      .map(({ id }) => id)
+  )
+}
+
+const freshWorkflowEligibilityContext = (
+  frame: CurrentDeliveryFrame,
+  recoveredAttemptIds: ReadonlySet<AttemptId>,
+  immutableRunTarget: TrackerTarget
+) => {
+  const records = frame.workflowHistory.records
+  return {
+    completeGraphObserved: completeGraphObservationIds(records),
+    immutableRunTargetKey: taskTrackerTargetKey(immutableRunTarget),
+    pauseCoveredTaskIds:
+      frame.pause.tasks._tag === "NoTaskPauses"
+        ? new Set<TaskId>()
+        : new Set(frame.pause.tasks.taskIds.flatMap((taskId) => frame.currentGraph.groupingSubtreeOf(taskId))),
+    records,
+    responsibleTaskIds: new Set(
+      frame.responsibility.entries
+        .filter((responsibility) => responsibilityStillOwnsTask(responsibility, records, recoveredAttemptIds))
+        .map(responsibilityTaskId)
+    )
+  }
+}
+
 /** Derives fresh work only for eligible tasks with no reconstructed responsibility. */
 // eslint-disable-next-line complexity -- Delivery selection combines the accepted pause, responsibility, graph, and source variants.
 export const deriveFreshWorkflowDecisions = (
@@ -342,19 +520,9 @@ export const deriveFreshWorkflowDecisions = (
   immutableRunTarget: TrackerTarget
 ): ReadonlyArray<FreshWorkflowDecision> => {
   if (frame.pause.run._tag === "RunPaused") return []
-  const records = frame.workflowHistory.records
-  const immutableRunTargetKey = taskTrackerTargetKey(immutableRunTarget)
-  const responsibleTaskIds = new Set(
-    frame.responsibility.entries
-      .filter((responsibility) => responsibilityStillOwnsTask(responsibility, records, recoveredAttemptIds))
-      .map(responsibilityTaskId)
-  )
-  const pauseCoveredTaskIds =
-    frame.pause.tasks._tag === "NoTaskPauses"
-      ? new Set<TaskId>()
-      : new Set(frame.pause.tasks.taskIds.flatMap((taskId) => frame.currentGraph.groupingSubtreeOf(taskId)))
+  const { completeGraphObserved, immutableRunTargetKey, pauseCoveredTaskIds, records, responsibleTaskIds } =
+    freshWorkflowEligibilityContext(frame, recoveredAttemptIds, immutableRunTarget)
   const observed = observedOperationIds(records)
-  const completeGraphObserved = completeGraphObservationIds(records)
   const latestGlobalGraphRead = records.findLast(
     ({ event }) =>
       event._tag === "TaskTrackerReadIntentRecorded" &&
@@ -396,14 +564,18 @@ export const deriveFreshWorkflowDecisions = (
   const decisions = candidateGraph
     .eligibleTasks()
     .filter(({ id }) => currentlyEligibleTaskIds.has(id) && !responsibleTaskIds.has(id) && !pauseCoveredTaskIds.has(id))
-    .map((task) =>
-      decisionFor(
-        journaledStepFor(task, records, recoveredAttemptIds, observed, completeGraphObserved, immutableRunTargetKey)
+    .flatMap((task) => {
+      const step = journaledStepFor(
+        task,
+        frame.runId,
+        records,
+        recoveredAttemptIds,
+        observed,
+        completeGraphObserved,
+        immutableRunTargetKey
       )
-    )
-  if (decisions.some(({ step }) => step._tag === "ReadCurrentTaskGraph")) {
-    return decisions.filter(({ step }) => step._tag === "ReadCurrentTaskGraph")
-  }
+      return step === undefined ? [] : [decisionFor(step)]
+    })
   const rank = (step: FreshWorkflowStepType): number =>
     step._tag === "ReadPostClaimGraph"
       ? postClaimGraphRank

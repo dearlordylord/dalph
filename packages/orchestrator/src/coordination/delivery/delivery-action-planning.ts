@@ -1,5 +1,6 @@
 import { Context, Effect, Stream } from "effect"
 import type { DeliveryProposalDerivationIssue } from "./delivery-action-proposal.js"
+import type { FreshTaskCandidate, FreshTaskCandidateFrontier } from "./fresh-task-candidate.js"
 import {
   deliveryProposalFrontierOf,
   currentSignalFromCurrentFirstStream,
@@ -18,6 +19,8 @@ export interface DeliveryActionPlanningInput {
   readonly deliveryReflection: ReadonlyArray<DeliveryActionProposal>
   readonly deliverySettlement: ReadonlyArray<DeliveryActionProposal>
   readonly isolatedIssues: ReadonlyArray<DeliveryProposalDerivationIssue>
+  readonly freshTaskCandidateFrontier?: FreshTaskCandidateFrontier
+  readonly freshTaskCandidates: ReadonlyArray<FreshTaskCandidate>
   readonly ticketDelivery: ReadonlyArray<DeliveryActionProposal>
   readonly trackerGraph: ReadonlyArray<TrackerGraphActionProposal>
 }
@@ -63,7 +66,9 @@ const frontierOf = (delivery: DeliveryConsequences, input: DeliveryActionPlannin
       input.deliverySettlement,
       input.deliveryReflection
     ],
-    input.isolatedIssues
+    input.isolatedIssues,
+    input.freshTaskCandidates,
+    input.freshTaskCandidateFrontier
   )
 
 /**

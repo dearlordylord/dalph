@@ -154,6 +154,50 @@ module freshTaskAdmissionTest {
       })
   }
 
+  run acceptedClaimIntentObservationSettlesAmbiguityTest = {
+    init
+      .then(reserveFreshEntry)
+      .then(loseAcceptedClaimIntentAppendResponse)
+      .then(observeClaimIntentPresent)
+      .expect(and {
+        state.admission.get(TaskA) == exactClaimIntent(TaskA),
+        not(state.ambiguousClaimIntentAppend.get(TaskA)),
+        occupiedCount(state) == 1,
+      })
+  }
+
+  run acceptedExecutorResponsibilityObservationSettlesToHeldTest = {
+    init
+      .then(reserveFreshEntry).then(recordClaimIntent)
+      .then(callClaimProvider).then(acceptOwnedClaim)
+      .then(acceptPostClaimGraph).then(readFocusedSpecification)
+      .then(recordAttemptPlan).then(recordWorktreeIntent)
+      .then(callWorktreeBoundary).then(acceptWorktreeReady)
+      .then(loseAcceptedExecutorResponsibilityAppendResponse)
+      .then(observeExecutorResponsibilityAppendPresent)
+      .expect(and {
+        state.admission.get(TaskA) == ExactAttemptHeld(AttemptA),
+        not(state.ambiguousResponsibilityAppend.get(TaskA)),
+        occupiedCount(state) == 1,
+      })
+  }
+
+  run absentExecutorResponsibilityObservationRetainsCommitmentTest = {
+    init
+      .then(reserveFreshEntry).then(recordClaimIntent)
+      .then(callClaimProvider).then(acceptOwnedClaim)
+      .then(acceptPostClaimGraph).then(readFocusedSpecification)
+      .then(recordAttemptPlan).then(recordWorktreeIntent)
+      .then(callWorktreeBoundary).then(acceptWorktreeReady)
+      .then(loseExecutorResponsibilityAppendResponse)
+      .then(observeExecutorResponsibilityAppendAbsent)
+      .expect(and {
+        state.admission.get(TaskA) == exactWorktreeReady(TaskA),
+        not(state.ambiguousResponsibilityAppend.get(TaskA)),
+        occupiedCount(state) == 1,
+      })
+  }
+
   run processLossBeforeIntentDropsOnlyLiveReservationTest = {
     init
       .then(reserveFreshEntry)
@@ -248,6 +292,25 @@ module freshTaskAdmissionTest {
         not(state.trace.entered.get(TaskB)),
         readyResponsibilityReservedReached,
         retainedReadyResponsibilityBlocksFreshEntry,
+      })
+  }
+
+  run readyResponsibilityHandoffRestoresHeldPositionTest = {
+    init
+      .then(contractCapacity).then(contractCapacity)
+      .then(reserveFreshEntry).then(recordClaimIntent)
+      .then(callClaimProvider).then(acceptOwnedClaim)
+      .then(acceptPostClaimGraph).then(readFocusedSpecification)
+      .then(recordAttemptPlan).then(recordWorktreeIntent)
+      .then(callWorktreeBoundary).then(acceptWorktreeReady)
+      .then(handoffToExecutorResponsibility)
+      .then(releaseHeldPositionReady)
+      .then(reserveReadyResponsibility)
+      .then(handoffReadyResponsibility)
+      .expect(and {
+        state.admission.get(TaskA) == ExactAttemptHeld(AttemptA),
+        state.existingResponsibility.get(TaskA) == RetainedNotReadyResponsibility(AttemptA),
+        occupiedCount(state) == 1,
       })
   }
 

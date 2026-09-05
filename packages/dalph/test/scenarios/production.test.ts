@@ -35,6 +35,8 @@ import {
   ActiveTaskClaim,
   AllocatedWorkflowRunId,
   attemptPlanRecordKey,
+  attemptChoiceAppliedRecordKey,
+  AttemptChoiceAppliedEvent,
   ClaimOwner,
   ClaimToken,
   controlledTrackerMutationLayer,
@@ -44,6 +46,7 @@ import {
   freshWorkflowRunId,
   GitCommand,
   GitCommonDirectoryTarget,
+  GitReadIntentRecordedEvent,
   GithubGraphqlClient,
   GithubIssueNodeId,
   GithubIssueNumber,
@@ -67,10 +70,14 @@ import {
   IntegratorSessionCorrelation,
   IntegratorSessionId,
   IntegratorBoundaryUnavailable,
+  makeFocusedTaskClaimFactsObserved,
+  makeTargetLineageObservationOperation,
+  makeTaskClaimObservationOperation,
   TargetLineageObservation,
   appendCandidateProvenance,
   appendCurrentQuarantineProvenance,
-  appendReplacementProvenance,
+  makeTaskWorktreeObservationOperation,
+  replacementProvenanceFor,
   integratorSuccessorCorrelationFor,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
@@ -81,6 +88,7 @@ import {
   OperationId,
   OperationIdAllocator,
   outcomeRecordKey,
+  plannedAttemptReplacedRecordKey,
   PlannedAttemptExecutorCommandIntendedEvent,
   plannedAttemptExecutorCommandIntendedRecordKey,
   PlannedAttemptExecutorCommandResponseObservedEvent,
@@ -95,6 +103,8 @@ import {
   plannedAttemptExecutorWorkReportedRecordKey,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
+  PlannedAttemptWorktreeObservedEvent,
+  PlannedAttemptReplacedEvent,
   PlannedWorktreeReady,
   PlannedTaskAttemptPlanner,
   PlannedAttemptExecutorCorrelationMismatch,
@@ -114,6 +124,8 @@ import {
   TaskClaimAcquisitionPlanner,
   TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent,
+  TargetLineageObservedEvent,
+  taskTrackerFactsObservedEvent,
   TrackerGraphReader,
   TrackerAdapterReadContext,
   TrackerAdapterReadError,
@@ -830,6 +842,249 @@ const appendAcceptedTerminalExecutorHistory = Effect.fn("ProductionScenario.appe
   }
 )
 
+/**
+ * Seeds one StartupValid Restart suffix on the already complete public-run
+ * attempt prefix. The shared disposition helper intentionally builds a
+ * compact pre-feature plan, so this scenario keeps its own exact fresh-plan
+ * lineage while retaining the same Restart and cleanup chronology.
+ */
+const appendStartupValidReplacementProvenance = Effect.fn("ProductionScenario.appendStartupValidReplacementProvenance")(
+  function* (fixture: PublicRunFixture, successor: PlannedTaskAttempt) {
+    const journal = yield* JournalStore
+    const began = (yield* journal.read(fixture.runId)).find(({ event }) => event._tag === "WorkflowRunBegan")
+    if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("replacement fixture requires a begun Run")
+    const claimRecord = (yield* journal.read(fixture.runId)).find(
+      ({ event }) => event._tag === "TaskClaimAcquired" && event.claim.taskId === fixture.attempt.taskId
+    )
+    if (claimRecord?.event._tag !== "TaskClaimAcquired") {
+      return yield* Effect.die("replacement fixture requires the exact prior claim")
+    }
+
+    const replacement = replacementProvenanceFor(
+      fixture.attempt,
+      successor,
+      PlannedAttemptExecutorReportOrdinal.make(2)
+    )
+    const witness = { ...replacement.witness, expectedClaim: claimRecord.event.claim }
+    const successorPlan = {
+      ...replacement.successorPlan,
+      predecessorOperationIds: [
+        witness.expectedClaim.operationId,
+        witness.claimObservationOperationId,
+        witness.graphObservationOperationId,
+        witness.oldWorktreeObservationOperationId,
+        witness.specificationObservationOperationId,
+        witness.targetLineageObservationOperationId
+      ]
+    }
+    const replacementEvent = PlannedAttemptReplacedEvent.make({ ...replacement, successorPlan, witness })
+
+    const specification = makeTaskWorkSpecification({
+      body: "cleanup provenance witness",
+      taskId: fixture.attempt.taskId,
+      title: "cleanup provenance witness"
+    })
+
+    // Restart authority reads before the applied choice are distinct from the
+    // replacement witness reads after it.
+    const choiceGraphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make(`${replacement.witness.graphObservationOperationId}:choice-authority`),
+      began.event.target,
+      [],
+      [fixture.attempt.taskId]
+    )
+    const choiceSpecificationOperation = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make(`${replacement.witness.specificationObservationOperationId}:choice-authority`),
+      began.event.target,
+      fixture.attempt.taskId,
+      [choiceGraphOperation.operationId]
+    )
+    yield* journal.append(
+      fixture.runId,
+      intentRecordKey(choiceGraphOperation.operationId),
+      taskTrackerReadIntent(choiceGraphOperation)
+    )
+    yield* journal.append(
+      fixture.runId,
+      outcomeRecordKey(choiceGraphOperation.operationId),
+      taskTrackerGraphFactsObserved(choiceGraphOperation, {
+        revision: TrackerRevision.make("cleanup-provenance-graph"),
+        taskIds: [fixture.attempt.taskId]
+      })
+    )
+    yield* journal.append(
+      fixture.runId,
+      intentRecordKey(choiceSpecificationOperation.operationId),
+      taskTrackerReadIntent(choiceSpecificationOperation)
+    )
+    yield* journal.append(
+      fixture.runId,
+      outcomeRecordKey(choiceSpecificationOperation.operationId),
+      taskTrackerWorkSpecificationFactsObserved(choiceSpecificationOperation, specification)
+    )
+
+    yield* appendAcceptedExecutingExecutorHistory(fixture)
+    yield* appendPendingSuspendExecutorCommandIntent(fixture)
+    const suspendOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
+    const safelySuspended = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+      correlation: plannedAttemptExecutorCorrelation(fixture.attempt)
+    })
+    yield* journal.append(
+      fixture.runId,
+      plannedAttemptExecutorCommandResponseObservedRecordKey(fixture.attempt.attemptId, suspendOrdinal),
+      PlannedAttemptExecutorCommandResponseObservedEvent.make({
+        commandOrdinal: suspendOrdinal,
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt: fixture.attempt,
+        report: safelySuspended,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      fixture.runId,
+      plannedAttemptExecutorWorkReportedRecordKey(
+        fixture.attempt.attemptId,
+        PlannedAttemptExecutorReportOrdinal.make(2)
+      ),
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+        report: safelySuspended,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      fixture.runId,
+      attemptChoiceAppliedRecordKey(replacementEvent.requestId),
+      AttemptChoiceAppliedEvent.make({
+        choice: "RestartTaskImplementation",
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        requestId: replacementEvent.requestId,
+        subject: replacementEvent.subject,
+        version: workflowJournalEventVersion
+      })
+    )
+
+    const graphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      replacement.witness.graphObservationOperationId,
+      began.event.target,
+      [],
+      [fixture.attempt.taskId]
+    )
+    const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+      replacement.witness.specificationObservationOperationId,
+      began.event.target,
+      fixture.attempt.taskId,
+      [graphOperation.operationId]
+    )
+    const claimObservationOperation = makeTaskClaimObservationOperation(
+      replacement.witness.claimObservationOperationId,
+      began.event.target,
+      fixture.attempt.taskId,
+      [graphOperation.operationId, specificationOperation.operationId]
+    )
+    const worktreeObservationOperation = makeTaskWorktreeObservationOperation({
+      operationId: replacement.witness.oldWorktreeObservationOperationId,
+      plannedAttempt: fixture.attempt,
+      predecessorOperationIds: [
+        graphOperation.operationId,
+        specificationOperation.operationId,
+        claimObservationOperation.operationId
+      ]
+    })
+    const targetLineageOperation = makeTargetLineageObservationOperation({
+      integrationTarget: productionIntegrationTarget(`${fixture.repository}/.git`),
+      operationId: replacement.witness.targetLineageObservationOperationId,
+      plannedAttempt: fixture.attempt,
+      predecessorOperationIds: [worktreeObservationOperation.operationId]
+    })
+    yield* journal.append(
+      fixture.runId,
+      intentRecordKey(graphOperation.operationId),
+      taskTrackerReadIntent(graphOperation)
+    )
+    yield* journal.append(
+      fixture.runId,
+      outcomeRecordKey(graphOperation.operationId),
+      taskTrackerGraphFactsObserved(graphOperation, {
+        revision: TrackerRevision.make("cleanup-provenance-graph"),
+        taskIds: [fixture.attempt.taskId]
+      })
+    )
+    yield* journal.append(
+      fixture.runId,
+      intentRecordKey(specificationOperation.operationId),
+      taskTrackerReadIntent(specificationOperation)
+    )
+    yield* journal.append(
+      fixture.runId,
+      outcomeRecordKey(specificationOperation.operationId),
+      taskTrackerWorkSpecificationFactsObserved(specificationOperation, specification)
+    )
+    yield* journal.append(
+      fixture.runId,
+      intentRecordKey(claimObservationOperation.operationId),
+      taskTrackerReadIntent(claimObservationOperation)
+    )
+    yield* journal.append(
+      fixture.runId,
+      outcomeRecordKey(claimObservationOperation.operationId),
+      taskTrackerFactsObservedEvent(
+        claimObservationOperation.operationId,
+        makeFocusedTaskClaimFactsObserved(claimObservationOperation, witness.expectedClaim)
+      )
+    )
+    yield* journal.append(
+      fixture.runId,
+      intentRecordKey(worktreeObservationOperation.operationId),
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: worktreeObservationOperation,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      fixture.runId,
+      outcomeRecordKey(worktreeObservationOperation.operationId),
+      PlannedAttemptWorktreeObservedEvent.make({
+        observation: witness.oldWorktreeProof,
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: worktreeObservationOperation.operationId,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      fixture.runId,
+      intentRecordKey(targetLineageOperation.operationId),
+      GitReadIntentRecordedEvent.make({
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        operation: targetLineageOperation,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      fixture.runId,
+      outcomeRecordKey(targetLineageOperation.operationId),
+      TargetLineageObservedEvent.make({
+        observation: {
+          plannedBaseIsAncestorOfTargetHead: true,
+          plannedBaseSha: fixture.attempt.baseSha,
+          targetHeadSha: witness.targetHeadSha
+        },
+        occurrenceClassification: "NonActionOccurrence",
+        operationId: targetLineageOperation.operationId,
+        plannedAttempt: fixture.attempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(fixture.runId, plannedAttemptReplacedRecordKey(fixture.attempt.attemptId), replacementEvent)
+  }
+)
+
 it.effect("ordinary production Run activation sends FullRerun cleanup through the provider authority", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -1026,7 +1281,7 @@ it.effect("ordinary production Run activation leaves a current quarantine untouc
 it.effect("ordinary production Run activation derives W1 then B1 cleanup and preserves unrelated P2", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const fixture = yield* makePublicRunFixture(() => [], { beginSucceeds: true, seedExecutorFacts: false })
+      const fixture = yield* makePublicRunFixture(() => [], { beginSucceeds: true })
       const fileSystem = yield* FileSystem.FileSystem
       const git = yield* GitCommand
       const p2Worktree = WorktreeLocator.make(`${fixture.repository}/worktree-p2`)
@@ -1051,9 +1306,9 @@ it.effect("ordinary production Run activation derives W1 then B1 cleanup and pre
         taskRevision: replacementSpecification.fingerprint,
         worktree: p2Worktree
       })
-      yield* Effect.gen(function* () {
-        yield* appendReplacementProvenance(fixture.attempt, successor, "StartupValid")
-      }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename })))
+      yield* appendStartupValidReplacementProvenance(fixture, successor).pipe(
+        Effect.provide(sqliteJournalTestLayer({ filename: fixture.journalFilename }))
+      )
 
       const activation = yield* Effect.exit(fixture.activate())
       expect(activation._tag).toBe("Success")
@@ -2234,10 +2489,23 @@ it.effect("ticket delivery reads Git after ambiguous worktree creation and prese
         acquisition,
         predecessorOperationIds: [graphRead.operationId]
       })
+      const postClaimGraphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("production-ambiguous-worktree-post-claim-graph"),
+        target,
+        [claimOperation.acquisition.operationId],
+        [plannedAttempt.taskId]
+      )
+      const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("production-ambiguous-worktree-specification"),
+        target,
+        plannedAttempt.taskId,
+        [postClaimGraphOperation.operationId]
+      )
       const plan = makeTaskAttemptPlanOperation({
         operationId: OperationId.make("production-ambiguous-worktree-plan"),
         plannedAttempt,
-        predecessorOperationIds: [claimOperation.acquisition.operationId]
+        predecessorOperationIds: [specificationOperation.operationId]
       })
       const worktree = makeTaskWorktreeReconciliationOperation({
         operationId: OperationId.make("production-ambiguous-worktree-operation"),
@@ -2269,6 +2537,29 @@ it.effect("ticket delivery reads Git after ambiguous worktree creation and prese
           runId,
           outcomeRecordKey(acquisition.operationId),
           TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+        )
+        yield* journal.append(
+          runId,
+          intentRecordKey(postClaimGraphOperation.operationId),
+          taskTrackerReadIntent(postClaimGraphOperation)
+        )
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(postClaimGraphOperation.operationId),
+          taskTrackerGraphFactsObserved(postClaimGraphOperation, {
+            revision: TrackerRevision.make("production-ambiguous-worktree-post-claim"),
+            taskIds: [plannedAttempt.taskId]
+          })
+        )
+        yield* journal.append(
+          runId,
+          intentRecordKey(specificationOperation.operationId),
+          taskTrackerReadIntent(specificationOperation)
+        )
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(specificationOperation.operationId),
+          taskTrackerWorkSpecificationFactsObserved(specificationOperation, specification)
         )
         yield* journal.append(
           runId,

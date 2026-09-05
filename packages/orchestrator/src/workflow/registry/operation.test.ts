@@ -6,6 +6,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { ActiveTaskClaim, TaskClaimRelease } from "../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { OperationId } from "../identity.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
 import { makeTrackerGraphObservationOperation, TaskClaimReleaseAuthority, WorkflowOperation } from "./operation.js"
 import { AttemptChoiceRequestId } from "../protocols/attempt-choice/events.js"
 import {
@@ -70,6 +71,35 @@ it.effect("requires a stopped-attempt claim release to name its focused claim ob
         release
       })
     ).toMatchObject({ authority: stoppedAuthority })
+  })
+)
+
+it.effect("requires a cancelled-attempt claim release to name its focused claim observation", () =>
+  Effect.gen(function* () {
+    const decode = Schema.decodeUnknownEffect(WorkflowOperation)
+    const observationOperationId = OperationId.make("operation-test-cancelled-claim-read")
+    const cancelledAuthority = TaskClaimReleaseAuthority.cases.CancelledAttemptClaimReleaseAuthority.make({
+      cancellationAppliedAt: JournalPosition.make(3),
+      implementationRelinquishedAt: JournalPosition.make(4),
+      observationOperationId
+    })
+
+    expect(
+      (yield* decode({
+        _tag: "ReleaseTaskClaim",
+        authority: cancelledAuthority,
+        predecessorOperationIds: [claim.operationId],
+        release
+      }).pipe(Effect.flip))._tag
+    ).toBe("SchemaError")
+    expect(
+      yield* decode({
+        _tag: "ReleaseTaskClaim",
+        authority: cancelledAuthority,
+        predecessorOperationIds: [claim.operationId, observationOperationId],
+        release
+      })
+    ).toMatchObject({ authority: cancelledAuthority })
   })
 )
 

@@ -46,11 +46,16 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent
 } from "../../registry/event.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { PlannedAttemptProtocolController, plannedAttemptProtocolControllerLayer } from "./protocol-controller.js"
-import { publishPlannedAttemptExecutorProjectionResultWithPermit } from "./protocol.js"
+import {
+  acceptPendingPlannedAttemptExecutorObservationWithPermit,
+  publishPlannedAttemptExecutorProjectionResultWithPermit
+} from "./protocol.js"
 import { makeRunRecoveryProjection } from "../../../coordination/run/recovery-activation.js"
 import { requiredPlannedAttemptPositionsOf } from "../../../coordination/run/required-planned-attempt-positions.js"
 import {
@@ -81,7 +86,9 @@ import { makeSelectedTransitionIdentity } from "../../../coordination/activation
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
-  makeTaskWorkSpecificationObservationOperation
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
+  makeTrackerGraphObservationOperation
 } from "../../registry/operation.js"
 import {
   AuthoritativePlannedAttemptWorktreeObserved,
@@ -99,6 +106,7 @@ import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 import {
   TaskTrackerFactsObservedEvent,
+  makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved
 } from "../../task-tracker-facts/observation.js"
 
@@ -153,6 +161,108 @@ const appendTaskClaim = Effect.gen(function* () {
     plannedAttempt.runId,
     outcomeRecordKey(taskClaim.operationId),
     TaskClaimAcquiredEvent.make({ claim: taskClaim, version: workflowJournalEventVersion })
+  )
+})
+const appendAcceptedTaskLineage = Effect.gen(function* () {
+  const journal = yield* JournalStore
+  const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("planned-attempt-executor-post-claim-graph"),
+    recoveryTarget,
+    [taskClaim.operationId],
+    [plannedAttempt.taskId]
+  )
+  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("planned-attempt-executor-post-claim-specification"),
+    recoveryTarget,
+    plannedAttempt.taskId,
+    [graphOperation.operationId]
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(graphOperation.operationId),
+    taskTrackerReadIntent(graphOperation)
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(graphOperation.operationId),
+    TaskTrackerFactsObservedEvent.make({
+      observation: makeCompleteTaskTrackerFactsObserved(graphOperation, currentGraph),
+      operationId: graphOperation.operationId,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(specificationOperation.operationId),
+    taskTrackerReadIntent(specificationOperation)
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(specificationOperation.operationId),
+    TaskTrackerFactsObservedEvent.make({
+      observation: makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, currentSpecification),
+      operationId: specificationOperation.operationId,
+      version: workflowJournalEventVersion
+    })
+  )
+  return specificationOperation
+})
+const appendTaskWorktreeReady = (planOperation: ReturnType<typeof makeTaskAttemptPlanOperation>) =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+      operationId: OperationId.make(`planned-attempt-executor-worktree-${planOperation.operationId}`),
+      plannedAttempt,
+      predecessorOperationIds: [planOperation.operationId]
+    })
+    yield* journal.append(
+      plannedAttempt.runId,
+      intentRecordKey(worktreeOperation.operationId),
+      TaskWorktreeReconciliationIntendedEvent.make({
+        operation: worktreeOperation,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      plannedAttempt.runId,
+      outcomeRecordKey(worktreeOperation.operationId),
+      TaskWorktreeReadyEvent.make({
+        operationId: worktreeOperation.operationId,
+        proof: PlannedWorktreeReady.make({
+          baseSha: plannedAttempt.baseSha,
+          branch: plannedAttempt.branch,
+          headSha: plannedAttempt.baseSha,
+          worktree: plannedAttempt.worktree
+        }),
+        version: workflowJournalEventVersion
+      })
+    )
+  })
+const appendValidPlannedAttemptResponsibility = Effect.gen(function* () {
+  const journal = yield* JournalStore
+  yield* journal.beginRun(
+    plannedAttempt.runId,
+    recoveryTarget,
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  )
+  yield* appendTaskClaim
+  const specificationOperation = yield* appendAcceptedTaskLineage
+  const planOperation = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make("direct-protocol-valid-plan"),
+    plannedAttempt,
+    predecessorOperationIds: [specificationOperation.operationId]
+  })
+  yield* journal.append(
+    plannedAttempt.runId,
+    attemptPlanRecordKey(plannedAttempt.attemptId),
+    TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
+  )
+  yield* appendTaskWorktreeReady(planOperation)
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
   )
 })
 const appendTaskWorkSpecification = (specification = currentSpecification, suffix = "planned-attempt-executor") =>
@@ -556,19 +666,19 @@ it.effect("journals a contradictory executor response and reconciles its exact c
 
 it.effect("continues an exact planned attempt through the executor protocol", () =>
   Effect.gen(function* () {
-    yield* appendTaskWorkSpecification()
+    yield* appendTaskClaim
+    const specificationOperation = yield* appendAcceptedTaskLineage
+    const planOperation = makeTaskAttemptPlanOperation({
+      operationId: OperationId.make("direct-recovered-plan"),
+      plannedAttempt,
+      predecessorOperationIds: [specificationOperation.operationId]
+    })
     yield* (yield* JournalStore).append(
       plannedAttempt.runId,
       attemptPlanRecordKey(plannedAttempt.attemptId),
-      TaskAttemptPlannedEvent.make({
-        operation: makeTaskAttemptPlanOperation({
-          operationId: OperationId.make("direct-recovered-plan"),
-          plannedAttempt,
-          predecessorOperationIds: []
-        }),
-        version: workflowJournalEventVersion
-      })
+      TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
     )
+    yield* appendTaskWorktreeReady(planOperation)
     expect(yield* beginPlannedAttemptExecutorWork(plannedAttempt)).toEqual(
       PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
     )
@@ -2300,20 +2410,19 @@ it.effect("frees the exact task-work position after a terminal report", () =>
       recoveryTarget,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
-    yield* appendTaskWorkSpecification()
     yield* appendTaskClaim
+    const specificationOperation = yield* appendAcceptedTaskLineage
+    const planOperation = makeTaskAttemptPlanOperation({
+      operationId: OperationId.make("plan-before-completion"),
+      plannedAttempt,
+      predecessorOperationIds: [specificationOperation.operationId]
+    })
     yield* journal.append(
       plannedAttempt.runId,
       attemptPlanRecordKey(plannedAttempt.attemptId),
-      TaskAttemptPlannedEvent.make({
-        operation: makeTaskAttemptPlanOperation({
-          operationId: OperationId.make("plan-before-completion"),
-          plannedAttempt,
-          predecessorOperationIds: [taskClaim.operationId]
-        }),
-        version: workflowJournalEventVersion
-      })
+      TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
     )
+    yield* appendTaskWorktreeReady(planOperation)
     yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(
       Effect.provide(
         makeControlledFakePlannedAttemptExecutorLayer([
@@ -2359,17 +2468,19 @@ it.effect("releases capacity only after the planned attempt is safely suspended"
       recoveryTarget,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
-    yield* appendTaskWorkSpecification()
+    yield* appendTaskClaim
+    const specificationOperation = yield* appendAcceptedTaskLineage
     const planOperation = makeTaskAttemptPlanOperation({
       operationId: OperationId.make("plan-before-suspension"),
       plannedAttempt,
-      predecessorOperationIds: []
+      predecessorOperationIds: [specificationOperation.operationId]
     })
     yield* journal.append(
       plannedAttempt.runId,
       attemptPlanRecordKey(plannedAttempt.attemptId),
       TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
     )
+    yield* appendTaskWorktreeReady(planOperation)
     yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(
       Effect.provide(
         makeControlledFakePlannedAttemptExecutorLayer([
@@ -2435,20 +2546,19 @@ it.effect("resumes the same planned attempt after unpause", () =>
       recoveryTarget,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
-    yield* appendTaskWorkSpecification()
     yield* appendTaskClaim
+    const specificationOperation = yield* appendAcceptedTaskLineage
+    const planOperation = makeTaskAttemptPlanOperation({
+      operationId: OperationId.make("plan-before-resume"),
+      plannedAttempt,
+      predecessorOperationIds: [specificationOperation.operationId]
+    })
     yield* journal.append(
       plannedAttempt.runId,
       attemptPlanRecordKey(plannedAttempt.attemptId),
-      TaskAttemptPlannedEvent.make({
-        operation: makeTaskAttemptPlanOperation({
-          operationId: OperationId.make("plan-before-resume"),
-          plannedAttempt,
-          predecessorOperationIds: [taskClaim.operationId]
-        }),
-        version: workflowJournalEventVersion
-      })
+      TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
     )
+    yield* appendTaskWorktreeReady(planOperation)
     yield* beginPlannedAttemptExecutorWork(plannedAttempt).pipe(
       Effect.provide(
         makeControlledFakePlannedAttemptExecutorLayer([
@@ -2556,18 +2666,19 @@ it.effect("one recovered transition continues reconstructed work through the con
       recoveryTarget,
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
-    yield* appendTaskWorkSpecification()
     yield* appendTaskClaim
+    const specificationOperation = yield* appendAcceptedTaskLineage
     const planOperation = makeTaskAttemptPlanOperation({
       operationId: OperationId.make("plan-attempt-A-3"),
       plannedAttempt,
-      predecessorOperationIds: [taskClaim.operationId]
+      predecessorOperationIds: [specificationOperation.operationId]
     })
     yield* journal.append(
       plannedAttempt.runId,
       attemptPlanRecordKey(plannedAttempt.attemptId),
       TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
     )
+    yield* appendTaskWorktreeReady(planOperation)
     yield* journal.append(
       plannedAttempt.runId,
       plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
@@ -2594,4 +2705,122 @@ it.effect("one recovered transition continues reconstructed work through the con
     Effect.provide(plannedAttemptProtocolControllerLayer),
     Effect.provide(memoryJournalTestLayer)
   )
+)
+
+it.effect("keeps direct permit publication fail-closed across missing, divergent, and unsettled journal facts", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const controller = yield* PlannedAttemptProtocolController
+    const publish = (attempt: PlannedTaskAttempt, projection: PlannedAttemptExecutorProjection) =>
+      controller.withPermit(plannedAttemptExecutorCorrelation(attempt), (permit) =>
+        publishPlannedAttemptExecutorProjectionResultWithPermit(permit, attempt, projection)
+      )
+    const acceptPending = (attempt: PlannedTaskAttempt) =>
+      controller.withPermit(plannedAttemptExecutorCorrelation(attempt), (permit) =>
+        acceptPendingPlannedAttemptExecutorObservationWithPermit(permit, attempt)
+      )
+
+    const missingPublication = yield* publish(plannedAttempt, noReport()).pipe(Effect.flip)
+    expect(missingPublication._tag).toBe("PlannedAttemptExecutorResponsibilityMissing")
+    const missingPending = yield* acceptPending(plannedAttempt).pipe(Effect.flip)
+    expect(missingPending._tag).toBe("PlannedAttemptExecutorResponsibilityMissing")
+
+    yield* appendValidPlannedAttemptResponsibility
+    expect(reduceWorkflowJournalHistory(plannedAttempt.runId, yield* journal.read(plannedAttempt.runId))._tag).toBe(
+      "ValidWorkflowJournalHistory"
+    )
+    const divergent = PlannedTaskAttempt.make({ ...plannedAttempt, baseSha: GitCommitSha.make("9".repeat(40)) })
+    const divergentPublication = yield* publish(divergent, noReport()).pipe(Effect.flip)
+    expect(divergentPublication._tag).toBe("PlannedAttemptExecutorResponsibilityContradiction")
+    const divergentPending = yield* acceptPending(divergent).pipe(Effect.flip)
+    expect(divergentPending._tag).toBe("PlannedAttemptExecutorResponsibilityContradiction")
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("accepts one pending direct executor response after a valid planned-attempt prefix", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const controller = yield* PlannedAttemptProtocolController
+    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    yield* appendValidPlannedAttemptResponsibility
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Begin",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: commandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+      PlannedAttemptExecutorCommandResponseObservedEvent.make({
+        commandOrdinal,
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt,
+        report: executing,
+        version: workflowJournalEventVersion
+      })
+    )
+    const pending = yield* controller.withPermit(correlation, (permit) =>
+      acceptPendingPlannedAttemptExecutorObservationWithPermit(permit, plannedAttempt)
+    )
+    expect(pending).toEqual({ acceptedFacts: "Changed", report: executing })
+    const reports = (yield* journal.read(plannedAttempt.runId)).flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkReported" ? [event] : []
+    )
+    expect(reports).toEqual([
+      expect.objectContaining({ ordinal: PlannedAttemptExecutorReportOrdinal.make(1), report: executing })
+    ])
+    expect(reduceWorkflowJournalHistory(plannedAttempt.runId, yield* journal.read(plannedAttempt.runId))._tag).toBe(
+      "ValidWorkflowJournalHistory"
+    )
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("requires command reconciliation before either direct permit path", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const controller = yield* PlannedAttemptProtocolController
+    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+    yield* appendValidPlannedAttemptResponsibility
+
+    const pendingBeforeCommand = yield* controller.withPermit(correlation, (permit) =>
+      acceptPendingPlannedAttemptExecutorObservationWithPermit(permit, plannedAttempt)
+    )
+    expect(pendingBeforeCommand).toBeUndefined()
+
+    yield* journal.append(
+      plannedAttempt.runId,
+      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Begin",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: commandOrdinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+    expect(reduceWorkflowJournalHistory(plannedAttempt.runId, yield* journal.read(plannedAttempt.runId))._tag).toBe(
+      "ValidWorkflowJournalHistory"
+    )
+    const publishFailure = yield* controller
+      .withPermit(correlation, (permit) =>
+        publishPlannedAttemptExecutorProjectionResultWithPermit(permit, plannedAttempt, noReport())
+      )
+      .pipe(Effect.flip)
+    expect(publishFailure._tag).toBe("PlannedAttemptExecutorCommandReconciliationRequired")
+    const pendingFailure = yield* controller
+      .withPermit(correlation, (permit) =>
+        acceptPendingPlannedAttemptExecutorObservationWithPermit(permit, plannedAttempt)
+      )
+      .pipe(Effect.flip)
+    expect(pendingFailure._tag).toBe("PlannedAttemptExecutorCommandReconciliationRequired")
+  }).pipe(Effect.provide(plannedAttemptProtocolControllerLayer), Effect.provide(memoryJournalTestLayer))
 )

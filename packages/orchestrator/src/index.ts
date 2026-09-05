@@ -770,14 +770,31 @@ export {
 } from "./coordination/delivery/journal.js"
 export { delivery } from "./coordination/delivery/delivery.js"
 export { deliveryActionPlanning } from "./coordination/delivery/delivery-action-planning.js"
-export { DeliveryProposalId, deliveryProposalOrderTaskId } from "./coordination/delivery/delivery-action-proposal.js"
+export {
+  DeliveryProposalId,
+  deliveryProposalOrderTaskId,
+  FreshDecisionPartitionInvalid
+} from "./coordination/delivery/delivery-action-proposal.js"
+export {
+  FreshTaskAdmissionBasisInvalid,
+  FreshTaskAdmissionBasisRunMismatch,
+  FreshTaskAdmissionCommitmentAuthorityInvalid,
+  FreshTaskAdmissionProjectionInvalid,
+  FreshTaskAdmissionReleaseAuthorityInvalid
+} from "./coordination/admission/fresh-task-admission.js"
+export {
+  FreshTaskCandidateFrontierInvalid,
+  FreshTaskCandidateRunMismatch
+} from "./coordination/delivery/fresh-task-candidate.js"
 export { deliveryRuntime } from "./coordination/delivery/delivery-runtime-adapter.js"
 export {
   DeliveryActionExecutor,
   DeliveryActionProtocolAdmissionMissing,
+  type DeliveryActionExecutionError,
   type DeliveryActionExecutorService,
   type MaterializedDeliveryAction
 } from "./coordination/delivery/delivery-action-executor.js"
+export { PlannedAttemptExecutorResponsibilityLineageMissing } from "./workflow/protocols/planned-attempt-executor-work/errors.js"
 export { makeLiveDeliveryActionExecutor } from "./coordination/delivery/live-delivery-action-executor.js"
 export { DeliveryAcceptedFactPublication } from "./coordination/delivery/delivery-accepted-fact-publication.js"
 export {
@@ -821,6 +838,7 @@ export {
   DeliveryActionCompletionPublicationMismatch,
   DeliveryRuntimeProposalOwnershipConflict,
   DeliveryRuntimeReconfirmationStateInvalid,
+  DeliveryRuntimeRunMismatch,
   runDeliveryRuntime
 } from "./coordination/delivery/run-delivery-runtime.js"
 export { runStabilizedDelivery } from "./coordination/run/run-stabilization.js"
@@ -871,6 +889,7 @@ export {
   AuthoritativePlannedAttemptWorktreeObserved,
   AuthoritativeTargetLineageObserved,
   AuthoritativeTaskClaimAcquired,
+  AuthoritativeTaskClaimAcquisitionRejected,
   CompletionClaimCleanupBoundaryCall,
   CompletionClaimCleanupBoundaryCallId,
   CompletionClaimCleanupSequenceId,
@@ -878,6 +897,7 @@ export {
   observePlannedAttemptWorktreeThrough,
   observeTargetLineageThrough,
   TraceItem,
+  type TaskClaimAcquisitionResult,
   WorkflowInterpreter,
   WorkflowTrace
 } from "./workflow/interpretation/interpreter.js"

@@ -1,6 +1,7 @@
 import {
   AttemptId,
   GitCommitSha,
+  makeTaskWorkSpecification,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorReport,
@@ -18,6 +19,8 @@ import { it } from "@effect/vitest"
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref, SubscriptionRef } from "effect"
 import { expect } from "vitest"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
+import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
+import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
@@ -26,7 +29,7 @@ import { OperationId } from "../../workflow/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
-import { attemptPlanRecordKey } from "../../workflow-journal/record-key.js"
+import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import {
   InRunJournal,
   JournalStore,
@@ -41,25 +44,51 @@ import {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
-import { TaskAttemptPlannedEvent } from "../../workflow/registry/event.js"
-import { makeTaskAttemptPlanOperation } from "../../workflow/registry/operation.js"
+import {
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
+  taskTrackerReadIntent
+} from "../../workflow/registry/event.js"
+import {
+  makeTaskAttemptPlanOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../workflow/registry/operation.js"
+import {
+  TaskTrackerFactsObservedEvent,
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved
+} from "../../workflow/task-tracker-facts/observation.js"
 import { DispositionCleanupActivation } from "../../workflow/protocols/disposition-cleanup/loop.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import {
+  makeFreshTaskAdmissionBasis,
+  projectFreshTaskAdmission,
+  type FreshTaskAdmissionBasis,
+  TaskAdmissionOccupancy
+} from "../admission/fresh-task-admission.js"
 import { makeApplicationExitShell } from "../application-exit/application-shell.js"
 import { DeliveryAcceptedFactPublication } from "../delivery/delivery-accepted-fact-publication.js"
 import { DeliveryActionExecutor } from "../delivery/delivery-action-executor.js"
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
+import {
+  makeFreshTaskAdmissionTestBasis,
+  makeFreshTaskCommitmentForTest
+} from "../../../test/support/fresh-task-admission.js"
 import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from "../delivery/in-memory-relations.js"
 import { executeFreshPlannedAttempt } from "../delivery/planned-attempt-delivery-action-adapter.js"
 import {
   currentSignalFromCurrentFirstStream,
   type DeliveryRelationInputBundle,
-  type DeliveryRuntimeEvaluation,
   TrackerGraphState
 } from "../delivery/relations.js"
 import type { RunFinalityProof } from "../frontier/frontier.js"
-import { JournalPosition } from "../../workflow-journal/identity.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
 import { noopJournalMaintenanceObservation } from "../../workflow-journal/maintenance.js"
 import { makePreparedBeginFixture, preparedBeginProposalsOf } from "../../../test/support/prepared-begin-proposal.js"
 import { freshWorkflowRunId } from "./fresh-run-identity.js"
@@ -71,6 +100,7 @@ import {
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import { JournaledRunBootstrap } from "./run.js"
 import { runStabilizedDelivery } from "./run-stabilization.js"
+import { validSnapshot } from "../../../test/task-dag.js"
 
 const target = FixtureTarget.make("admission-stalled-bootstrap-teardown")
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(3) })
@@ -119,11 +149,15 @@ const baseAttempt = (runId: RunId) =>
   })
 
 const bundle = (
+  runId: RunId,
   acceptedAt: JournalPosition,
   proposals: DeliveryRelationInputBundle["actionInputs"]["proposalContributions"]["ticketDelivery"],
-  held: DeliveryRuntimeEvaluation["taskWork"]["held"]
+  held: ReadonlyArray<PlannedTaskAttempt>,
+  committed?: ReturnType<typeof makeFreshTaskCommitmentForTest>,
+  acceptedBasis?: FreshTaskAdmissionBasis
 ): DeliveryRelationInputBundle => ({
   actionInputs: {
+    freshTaskCandidates: [],
     proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: proposals },
     reflectionProposals: [],
     runtimeFacts: {
@@ -134,7 +168,16 @@ const bundle = (
         applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
       },
       quiescence: { _tag: "TrackerReconfirmationAllowed" },
-      taskWork: { capacity: runtimePolicy.taskExecutionCapacity, held }
+      taskWork:
+        acceptedBasis ??
+        makeFreshTaskAdmissionTestBasis({
+          acceptedAt,
+          capacity: runtimePolicy.taskExecutionCapacity,
+          entries:
+            committed === undefined ? [] : [TaskAdmissionOccupancy.FreshTaskCommitted({ commitment: committed })],
+          held,
+          runId
+        })
     },
     trackerGraphProposals: []
   },
@@ -191,11 +234,11 @@ it.effect("returns admission-stalled finality through production bootstrap teard
         return yield* Effect.die("C, D, and E must each produce one production Begin proposal")
       }
       const blocked = [blockedD, blockedE] as const
-      const heldAB = [a, b].map(({ attempt }) => ({
-        correlation: plannedAttemptExecutorCorrelation(attempt),
-        taskId: attempt.taskId
-      }))
-      const bundles = yield* SubscriptionRef.make(bundle(JournalPosition.make(1), [beginC, ...blocked], heldAB))
+      const heldAB = [a.attempt, b.attempt]
+      const cCommitment = makeFreshTaskCommitmentForTest(c.task.id, c.fresh.step.claimOperationId, runId)
+      const bundles = yield* SubscriptionRef.make(
+        bundle(runId, cCommitment.acceptedIntentPosition, [beginC, ...blocked], heldAB, cCommitment)
+      )
       const coherent = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(bundles))
       const counts = yield* Ref.make(noBoundaryCounts)
       const phaseCompleted = yield* Deferred.make<{
@@ -243,17 +286,116 @@ it.effect("returns admission-stalled finality through production bootstrap teard
       const memory = Context.get(yield* Layer.build(memoryJournalStoreLayer), JournalStore)
       const storage = countingJournalStore(memory, counts)
       yield* storage.beginRun(runId, target, initialPolicy)
+      const claimOperation = cCommitment.operation
+      const claim = ActiveTaskClaim.make(claimOperation.acquisition)
+      yield* storage.append(
+        runId,
+        intentRecordKey(claim.operationId),
+        TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+      )
+      yield* storage.append(
+        runId,
+        outcomeRecordKey(claim.operationId),
+        TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+      )
+      const graphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("admission-stalled-bootstrap-graph-C"),
+        target,
+        [claim.operationId],
+        [c.attempt.taskId]
+      )
+      yield* storage.append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
+      yield* storage.append(
+        runId,
+        outcomeRecordKey(graphOperation.operationId),
+        TaskTrackerFactsObservedEvent.make({
+          observation: makeCompleteTaskTrackerFactsObserved(
+            graphOperation,
+            validSnapshot({
+              revision: "admission-stalled-bootstrap-graph-C",
+              rootTaskId: c.attempt.taskId,
+              tasks: [{ id: c.attempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+            })
+          ),
+          operationId: graphOperation.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
+      const specification = makeTaskWorkSpecification({ body: "C body", taskId: c.attempt.taskId, title: "C title" })
+      const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("admission-stalled-bootstrap-specification-C"),
+        target,
+        c.attempt.taskId,
+        [graphOperation.operationId]
+      )
+      yield* storage.append(
+        runId,
+        intentRecordKey(specificationOperation.operationId),
+        taskTrackerReadIntent(specificationOperation)
+      )
+      yield* storage.append(
+        runId,
+        outcomeRecordKey(specificationOperation.operationId),
+        TaskTrackerFactsObservedEvent.make({
+          observation: makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification),
+          operationId: specificationOperation.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
       const cPlan = makeTaskAttemptPlanOperation({
         operationId: OperationId.make("admission-stalled-bootstrap-plan-C"),
         plannedAttempt: c.attempt,
-        predecessorOperationIds: []
+        predecessorOperationIds: [specificationOperation.operationId]
       })
-      const planned = yield* storage.append(
+      yield* storage.append(
         runId,
         attemptPlanRecordKey(c.attempt.attemptId),
         TaskAttemptPlannedEvent.make({ operation: cPlan, version: workflowJournalEventVersion })
       )
-      yield* SubscriptionRef.set(bundles, bundle(planned.position, [beginC, ...blocked], heldAB))
+      const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+        operationId: OperationId.make("admission-stalled-bootstrap-worktree-C"),
+        plannedAttempt: c.attempt,
+        predecessorOperationIds: [cPlan.operationId]
+      })
+      yield* storage.append(
+        runId,
+        intentRecordKey(worktreeOperation.operationId),
+        TaskWorktreeReconciliationIntendedEvent.make({
+          operation: worktreeOperation,
+          version: workflowJournalEventVersion
+        })
+      )
+      const worktreeReady = yield* storage.append(
+        runId,
+        outcomeRecordKey(worktreeOperation.operationId),
+        TaskWorktreeReadyEvent.make({
+          operationId: worktreeOperation.operationId,
+          proof: PlannedWorktreeReady.make({
+            baseSha: c.attempt.baseSha,
+            branch: c.attempt.branch,
+            headSha: c.attempt.baseSha,
+            worktree: c.attempt.worktree
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      const acceptedRecords = yield* storage.read(runId)
+      const acceptedProjection = projectFreshTaskAdmission(runId, acceptedRecords)
+      if (acceptedProjection._tag === "FreshTaskAdmissionProjectionInvalid") {
+        return yield* Effect.die(`accepted C admission projection was invalid: ${acceptedProjection.issues.join("; ")}`)
+      }
+      const acceptedBasis = yield* makeFreshTaskAdmissionBasis({
+        acceptedAt: worktreeReady.position,
+        capacity: runtimePolicy.taskExecutionCapacity,
+        entries: heldAB.map((plannedAttempt) => TaskAdmissionOccupancy.ExactAttemptHeld({ plannedAttempt })),
+        projection: acceptedProjection,
+        runId
+      })
+      yield* SubscriptionRef.set(
+        bundles,
+        bundle(runId, worktreeReady.position, [beginC, ...blocked], heldAB, undefined, acceptedBasis)
+      )
       const journalCapabilities = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, storage)))
       const bootstrapLayer = journaledRunBootstrapLayer(
         runId,
@@ -326,7 +468,7 @@ it.effect("returns admission-stalled finality through production bootstrap teard
             const records = yield* journal.read(runId).pipe(Effect.orDie)
             const acceptedThrough = records.at(-1)?.position
             if (acceptedThrough === undefined) return yield* Effect.die("C must publish one accepted Journal prefix")
-            yield* SubscriptionRef.set(bundles, bundle(acceptedThrough, blocked, heldAB))
+            yield* SubscriptionRef.set(bundles, bundle(runId, acceptedThrough, blocked, [...heldAB, c.attempt]))
             return { _tag: "DeliveryAcceptedPublicationBoundary" as const, acceptedThrough, runId }
           })
         })

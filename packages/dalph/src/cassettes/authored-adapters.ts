@@ -34,6 +34,7 @@ import {
   type AuthoredCassetteStoryItem
 } from "./authored-domain.js"
 import type { StoryCursor } from "./authored-cursor.js"
+import { awaitTraceSelectionBoundaries } from "./authored-trace-boundaries.js"
 import { trackerReadFailure } from "./authored-tracker-read-results.js"
 
 const evidenceDigestHexLength = 64
@@ -211,40 +212,46 @@ const awaitTraceBoundaries = (
     yield* awaitTraceOperatorControlGraphReadBoundary(item, options)
   })
 
+const emitControlledDecision = (
+  cursor: StoryCursor,
+  item: Extract<TraceItem, { readonly _tag: "OperationSelected" }>,
+  actual: CassetteDecision,
+  options: ControlledTraceOptions
+): Effect.Effect<void, TraceOutputError> =>
+  Effect.gen(function* () {
+    yield* awaitTraceBoundaries(cursor, item, actual, options)
+    const expected = yield* cursor
+      .consumeDalphSelectionFor(actual, {
+        operationId: workflowOperationId(item.operation),
+        predecessorOperationIds: item.operation.predecessorOperationIds
+      })
+      .pipe(
+        Effect.mapError(
+          (failure) =>
+            new TraceOutputError({
+              detail:
+                `${failure._tag} at story position ${failure.storyPosition}: ` +
+                `${failure._tag === "AuthoredCassetteInteractionMismatch" ? `expected ${failure.expected}, received ${failure.actual}` : failure.detail} ` +
+                `while emitting ${encodedDecision(actual)}`
+            })
+        )
+      )
+    if (encodedDecision(actual) !== encodedDecision(expected.operation)) {
+      const storyPosition = (yield* cursor.storyPosition) - 1
+      return yield* new TraceOutputError({
+        detail: `at story position ${storyPosition}: expected ${encodedDecision(expected.operation)}, received ${encodedDecision(actual)}`
+      })
+    }
+  })
+
 export const controlledTrace = (cursor: StoryCursor, options: ControlledTraceOptions = {}): WorkflowTrace["Service"] =>
   WorkflowTrace.of({
     emit: Effect.fn("AuthoredCassette.WorkflowTrace.emit")(function* (item) {
-      // Stabilization performs its final tracker read outside the delivery
-      // action executor. Its operation-selection trace is the remaining
-      // same-fiber action boundary for a lifecycle control.
-      if (item._tag === "OperationSelected") yield* cursor.pauseAtCoordinatorProcessDeath
+      yield* awaitTraceSelectionBoundaries(cursor, item)
       const actual = actualDecision(item)
-      if (actual === undefined) return
       /* v8 ignore next -- @preserve A cassette decision is derived only from an OperationSelected trace item. */
-      if (item._tag !== "OperationSelected") return
-      yield* awaitTraceBoundaries(cursor, item, actual, options)
-      const expected = yield* cursor
-        .consumeDalphSelectionFor(actual, {
-          operationId: workflowOperationId(item.operation),
-          predecessorOperationIds: item.operation.predecessorOperationIds
-        })
-        .pipe(
-          Effect.mapError(
-            (failure) =>
-              new TraceOutputError({
-                detail:
-                  `${failure._tag} at story position ${failure.storyPosition}: ` +
-                  `${failure._tag === "AuthoredCassetteInteractionMismatch" ? `expected ${failure.expected}, received ${failure.actual}` : failure.detail} ` +
-                  `while emitting ${encodedDecision(actual)}`
-              })
-          )
-        )
-      if (encodedDecision(actual) !== encodedDecision(expected.operation)) {
-        const storyPosition = (yield* cursor.storyPosition) - 1
-        return yield* new TraceOutputError({
-          detail: `at story position ${storyPosition}: expected ${encodedDecision(expected.operation)}, received ${encodedDecision(actual)}`
-        })
-      }
+      if (actual === undefined || item._tag !== "OperationSelected") return
+      yield* emitControlledDecision(cursor, item, actual, options)
     })
   })
 

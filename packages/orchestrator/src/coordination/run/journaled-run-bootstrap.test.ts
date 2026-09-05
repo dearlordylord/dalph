@@ -37,6 +37,9 @@ import { sqliteJournalTestLayer } from "../../workflow-journal/adapters/sqlite-s
 import { expect } from "vitest"
 import { TestClock } from "effect/testing"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
+import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
+import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
+import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import {
@@ -46,11 +49,13 @@ import {
   TrackerGraphReader
 } from "../../authorities/task-tracker/graph-reader.js"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
+import { validSnapshot } from "../../../test/task-dag.js"
 import { TrackerRevision, TrackerSnapshot } from "../../authorities/task-tracker/task.js"
 import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
+import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import { Journal } from "../delivery/journal.js"
 import { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runtime-observation.js"
 import { DeliveryRelationPublicationObserver } from "../delivery/delivery-publication-observer.js"
@@ -92,14 +97,25 @@ import {
 import {
   TargetLineageObservedEvent,
   TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
 import { projectWorkflowOccurrences } from "../../workflow/registry/occurrence-projection.js"
 import {
   makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
   makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
+import {
+  TaskTrackerFactsObservedEvent,
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved
+} from "../../workflow/task-tracker-facts/observation.js"
 import {
   attemptPlanRecordKey,
   integrationQuarantinedRecordKey,
@@ -128,10 +144,6 @@ import {
   beginPlannedAttemptExecutorWorkWithPermit,
   requestPlannedAttemptExecutorSuspensionWithPermit
 } from "../../workflow/protocols/planned-attempt-executor-work/suspension-commands.js"
-import {
-  makeFocusedTaskWorkSpecificationFactsObserved,
-  TaskTrackerFactsObservedEvent
-} from "../../workflow/task-tracker-facts/observation.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { requiredPlannedAttemptPositionsOf } from "./required-planned-attempt-positions.js"
 import {
@@ -207,15 +219,15 @@ const defaultTrackerGraphReader = TrackerGraphReader.of({
 
 const nodeFileSystemAndPath = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 
-const completedFinalityProof = (runId: RunId, target: ReturnType<typeof FixtureTarget.make>) =>
+const completedFinalityProof = (
+  runId: RunId,
+  target: ReturnType<typeof FixtureTarget.make>,
+  operationId = OperationId.make(`finality:${runId}`)
+) =>
   Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter
     const journal = yield* InRunJournal
-    const operation = makeTrackerGraphObservationOperation(
-      { _tag: "WorkflowEstablishment" },
-      OperationId.make(`finality:${runId}`),
-      target
-    )
+    const operation = makeTrackerGraphObservationOperation({ _tag: "WorkflowEstablishment" }, operationId, target)
     const snapshot = yield* interpreter.readTrackerGraph(operation)
     const observation = (yield* journal.read(runId)).findLast(
       ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
@@ -288,41 +300,44 @@ it.effect("fails closed when a terminal proof does not name its established grap
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
-const unpausedRuntimeEvaluation = Effect.gen(function* () {
-  const runtime = yield* deliveryRuntime.pipe(
-    Effect.provide(
-      makeDeliveryRelationsLayer({
-        ...deterministicDeliveryRuntimeSupport(runtimePolicy),
-        coherent: currentSignalOf({
-          actionInputs: {
-            proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
-            reflectionProposals: [],
-            runtimeFacts: {
-              acceptedAt: null,
-              cancellationApplied: false,
-              pauseCoverage: {
-                _tag: "PauseCoverageGraphNotEstablished",
-                applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
+const unpausedRuntimeEvaluation = (runId: RunId) =>
+  Effect.gen(function* () {
+    const runtime = yield* deliveryRuntime.pipe(
+      Effect.provide(
+        makeDeliveryRelationsLayer({
+          ...deterministicDeliveryRuntimeSupport(runtimePolicy),
+          coherent: currentSignalOf({
+            actionInputs: {
+              freshTaskCandidates: [],
+              proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
+              reflectionProposals: [],
+              runtimeFacts: {
+                acceptedAt: null,
+                cancellationApplied: false,
+                pauseCoverage: {
+                  _tag: "PauseCoverageGraphNotEstablished",
+                  applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
+                },
+                quiescence: { _tag: "TrackerReconfirmationAllowed" },
+                taskWork: makeFreshTaskAdmissionTestBasis({ capacity: runtimePolicy.taskExecutionCapacity, runId })
               },
-              quiescence: { _tag: "TrackerReconfirmationAllowed" },
-              taskWork: { capacity: runtimePolicy.taskExecutionCapacity, held: [] }
+              trackerGraphProposals: []
             },
-            trackerGraphProposals: []
-          },
-          publication: {
-            exactEvidence: [],
-            graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
-            policy: runtimePolicy
-          }
-        } satisfies DeliveryRelationInputBundle)
-      })
+            publication: {
+              exactEvidence: [],
+              graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
+              policy: runtimePolicy
+            }
+          } satisfies DeliveryRelationInputBundle)
+        })
+      )
     )
-  )
-  return yield* runtime.get
-})
+    return yield* runtime.get
+  })
 
-const publicationBundle: DeliveryRelationInputBundle = {
+const publicationBundle = (runId: RunId): DeliveryRelationInputBundle => ({
   actionInputs: {
+    freshTaskCandidates: [],
     proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
     reflectionProposals: [],
     runtimeFacts: {
@@ -333,12 +348,12 @@ const publicationBundle: DeliveryRelationInputBundle = {
         applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
       },
       quiescence: { _tag: "TrackerReconfirmationAllowed" },
-      taskWork: { capacity: runtimePolicy.taskExecutionCapacity, held: [] }
+      taskWork: makeFreshTaskAdmissionTestBasis({ capacity: runtimePolicy.taskExecutionCapacity, runId })
     },
     trackerGraphProposals: []
   },
   publication: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy: runtimePolicy }
-}
+})
 
 const runtimeLayer = (
   runId: RunId,
@@ -354,7 +369,7 @@ const runtimeLayer = (
           Effect.gen(function* () {
             const observer = yield* DeliveryRelationPublicationObserver
             const first = yield* Ref.modify(publicationCount, (count) => [count === 0, count + 1] as const)
-            if (first) yield* observer.observe(publicationBundle)
+            if (first) yield* observer.observe(publicationBundle(runId))
           })
         ),
     passivePublicationCapture === undefined
@@ -433,6 +448,9 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   return { ...bootstrap, applicationExitRequestBoundary: sharedApplicationExit.requestBoundary }
 })
 
+const captureTestSpecification = (taskId: TaskId) =>
+  makeTaskWorkSpecification({ body: `Implement bootstrap task ${taskId}.`, taskId, title: `Bootstrap task ${taskId}` })
+
 const appendExecutorHistory = (
   journal: JournalStore["Service"],
   runId: RunId,
@@ -441,15 +459,109 @@ const appendExecutorHistory = (
   acceptInitialReport = true
 ) =>
   Effect.gen(function* () {
+    const claim = ActiveTaskClaim.make({
+      operationId: OperationId.make(`bootstrap-capture-claim:${plannedAttempt.attemptId}`),
+      owner: ClaimOwner.make("journaled-run-bootstrap-test"),
+      taskId: plannedAttempt.taskId,
+      token: ClaimToken.make(`bootstrap-capture-token:${plannedAttempt.attemptId}`)
+    })
+    const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+    yield* journal.append(
+      runId,
+      intentRecordKey(claim.operationId),
+      TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(claim.operationId),
+      TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+    )
+    const runRecords = yield* journal.read(runId)
+    const runBegan = runRecords.find(({ event }) => event._tag === "WorkflowRunBegan")
+    if (runBegan?.event._tag !== "WorkflowRunBegan") {
+      return yield* Effect.die("bootstrap history fixture requires a begun run")
+    }
+    const graphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make(`bootstrap-capture-graph:${plannedAttempt.attemptId}`),
+      runBegan.event.target,
+      [claim.operationId],
+      [plannedAttempt.taskId]
+    )
+    const specification = captureTestSpecification(plannedAttempt.taskId)
+    const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make(`bootstrap-capture-specification:${plannedAttempt.attemptId}`),
+      runBegan.event.target,
+      plannedAttempt.taskId,
+      [graphOperation.operationId]
+    )
+    yield* journal.append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(graphOperation.operationId),
+      TaskTrackerFactsObservedEvent.make({
+        observation: makeCompleteTaskTrackerFactsObserved(
+          graphOperation,
+          validSnapshot({
+            revision: `bootstrap-capture-graph:${plannedAttempt.attemptId}`,
+            rootTaskId: plannedAttempt.taskId,
+            tasks: [{ id: plannedAttempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+          })
+        ),
+        operationId: graphOperation.operationId,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      intentRecordKey(specificationOperation.operationId),
+      taskTrackerReadIntent(specificationOperation)
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(specificationOperation.operationId),
+      TaskTrackerFactsObservedEvent.make({
+        observation: makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification),
+        operationId: specificationOperation.operationId,
+        version: workflowJournalEventVersion
+      })
+    )
     const plan = makeTaskAttemptPlanOperation({
       operationId: OperationId.make(`bootstrap-capture-plan:${plannedAttempt.attemptId}`),
       plannedAttempt,
-      predecessorOperationIds: []
+      predecessorOperationIds: [specificationOperation.operationId]
+    })
+    const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+      operationId: OperationId.make(`bootstrap-capture-worktree:${plannedAttempt.attemptId}`),
+      plannedAttempt,
+      predecessorOperationIds: [plan.operationId]
     })
     yield* journal.append(
       runId,
       attemptPlanRecordKey(plannedAttempt.attemptId),
       TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      intentRecordKey(worktreeOperation.operationId),
+      TaskWorktreeReconciliationIntendedEvent.make({
+        operation: worktreeOperation,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(worktreeOperation.operationId),
+      TaskWorktreeReadyEvent.make({
+        operationId: worktreeOperation.operationId,
+        proof: PlannedWorktreeReady.make({
+          baseSha: plannedAttempt.baseSha,
+          branch: plannedAttempt.branch,
+          headSha: plannedAttempt.baseSha,
+          worktree: plannedAttempt.worktree
+        }),
+        version: workflowJournalEventVersion
+      })
     )
     yield* journal.append(
       runId,
@@ -534,17 +646,20 @@ const appendExecutorHistory = (
     )
   })
 
-const captureTestAttempt = (runId: RunId, suffix: string, taskSuffix: string) =>
-  PlannedTaskAttempt.make({
+const captureTestAttempt = (runId: RunId, suffix: string, taskSuffix: string) => {
+  const taskId = TaskId.make(`bootstrap-capture-task-${taskSuffix}`)
+  const specification = captureTestSpecification(taskId)
+  return PlannedTaskAttempt.make({
     attemptId: AttemptId.make(`bootstrap-capture-attempt-${suffix}`),
     baseSha: GitCommitSha.make("a".repeat(40)),
     branch: TaskBranchRef.make(`refs/heads/dalph/bootstrap-capture-${suffix}`),
     executor: TaskExecutorLocator.make("executor:bootstrap-capture"),
     runId,
-    taskId: TaskId.make(`bootstrap-capture-task-${taskSuffix}`),
-    taskRevision: TaskRevision.make(`bootstrap-capture-revision-${suffix}`),
+    taskId,
+    taskRevision: TaskRevision.make(specification.fingerprint),
     worktree: WorktreeLocator.make(`/worktrees/bootstrap-capture-${suffix}`)
   })
+}
 
 it.effect("selects an active subject only from a current accepted Executing lifecycle report", () =>
   Effect.scoped(
@@ -903,6 +1018,57 @@ it.effect("returns the existing terminal result when cancellation loses the Run-
         terminatedAt: 4
       })
       expect((yield* storage.read(runId)).map(({ event }) => event._tag)).not.toContain("RunCancellationApplied")
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("requires a new complete graph after cancellation wins over a computed terminal proof", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-cancel-after-terminal-proof")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const proofComputed = yield* Deferred.make<void>()
+      const allowProofReturn = yield* Deferred.make<void>()
+      const staleProof = completedFinalityProof(runId, target).pipe(
+        Effect.tap(() => Deferred.succeed(proofComputed, undefined)),
+        Effect.tap(() => Deferred.await(allowProofReturn)),
+        Effect.flatMap((proof) =>
+          InRunJournal.pipe(
+            Effect.flatMap((journal) => journal.read(runId)),
+            Effect.map((records) => ({ ...proof, acceptedAt: records.at(-1)?.position ?? proof.acceptedAt }))
+          )
+        )
+      )
+      const running = yield* bootstrap
+        .activate(target, Effect.succeed(initialPolicy), runId, staleProof)
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(proofComputed)
+
+      expect(yield* bootstrap.operatorControl.applyRunCancellation({ runId })).toMatchObject({
+        _tag: "RunCancellationApplied"
+      })
+      yield* Deferred.succeed(allowProofReturn, undefined)
+
+      expect(yield* Fiber.join(running)).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
+      expect((yield* storage.read(runId)).map(({ event }) => event._tag)).not.toContain("WorkflowRunTerminated")
+
+      expect(
+        yield* bootstrap.activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          completedFinalityProof(runId, target, OperationId.make(`post-cancellation-finality:${runId}`))
+        )
+      ).toEqual({ _tag: "RunMayTerminate" })
+      const records = yield* storage.read(runId)
+      const cancellation = records.find(({ event }) => event._tag === "RunCancellationApplied")
+      const termination = records.find(({ event }) => event._tag === "WorkflowRunTerminated")
+      expect(termination?.event).toMatchObject({ _tag: "WorkflowRunTerminated", disposition: "Completed" })
+      if (termination?.event._tag !== "WorkflowRunTerminated" || cancellation === undefined) return
+      expect(termination.event.evidence.observedAt).toBeGreaterThan(cancellation.position)
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
@@ -2217,7 +2383,7 @@ it.effect("tells Alice that her exact Run Pause is not applied", () =>
             const observation = yield* DeliveryRuntimeObservationPublication
             const journal = yield* Journal
             const acceptedAt = (yield* journal.state.get).position
-            yield* observation.publish({ ...(yield* unpausedRuntimeEvaluation), acceptedAt }, [])
+            yield* observation.publish({ ...(yield* unpausedRuntimeEvaluation(runId)), acceptedAt }, [])
             yield* Deferred.succeed(ready, undefined)
             yield* Deferred.await(finish)
             return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
@@ -3004,11 +3170,52 @@ it.effect("observes live terminal executor change once and releases the exact po
         target,
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
       )
+      const claim = ActiveTaskClaim.make({
+        operationId: OperationId.make("journaled-bootstrap-passive-terminal-claim"),
+        owner: ClaimOwner.make("journaled-run-bootstrap-test"),
+        taskId,
+        token: ClaimToken.make("journaled-bootstrap-passive-terminal-token")
+      })
+      const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+      yield* storage.append(
+        runId,
+        intentRecordKey(claim.operationId),
+        TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+      )
+      yield* storage.append(
+        runId,
+        outcomeRecordKey(claim.operationId),
+        TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+      )
+      const graphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("journaled-bootstrap-passive-terminal-graph"),
+        target,
+        [claim.operationId],
+        [taskId]
+      )
+      yield* storage.append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
+      yield* storage.append(
+        runId,
+        outcomeRecordKey(graphOperation.operationId),
+        TaskTrackerFactsObservedEvent.make({
+          observation: makeCompleteTaskTrackerFactsObserved(
+            graphOperation,
+            validSnapshot({
+              revision: "journaled-bootstrap-passive-terminal-graph",
+              rootTaskId: taskId,
+              tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+            })
+          ),
+          operationId: graphOperation.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
       const specificationOperation = makeTaskWorkSpecificationObservationOperation(
         OperationId.make("journaled-bootstrap-passive-terminal-specification"),
         target,
         taskId,
-        []
+        [graphOperation.operationId]
       )
       yield* storage.append(
         runId,
@@ -3033,6 +3240,33 @@ it.effect("observes live terminal executor change once and releases the exact po
         runId,
         attemptPlanRecordKey(plannedAttempt.attemptId),
         TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+      )
+      const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+        operationId: OperationId.make("journaled-bootstrap-passive-terminal-worktree"),
+        plannedAttempt,
+        predecessorOperationIds: [plan.operationId]
+      })
+      yield* storage.append(
+        runId,
+        intentRecordKey(worktreeOperation.operationId),
+        TaskWorktreeReconciliationIntendedEvent.make({
+          operation: worktreeOperation,
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* storage.append(
+        runId,
+        outcomeRecordKey(worktreeOperation.operationId),
+        TaskWorktreeReadyEvent.make({
+          operationId: worktreeOperation.operationId,
+          proof: PlannedWorktreeReady.make({
+            baseSha: plannedAttempt.baseSha,
+            branch: plannedAttempt.branch,
+            headSha: plannedAttempt.baseSha,
+            worktree: plannedAttempt.worktree
+          }),
+          version: workflowJournalEventVersion
+        })
       )
 
       const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
@@ -3086,7 +3320,9 @@ it.effect("observes live terminal executor change once and releases the exact po
           Effect.gen(function* () {
             const resources = yield* DeliveryRuntimeResources
             const observer = yield* PassivePlannedAttemptObserver
-            const admission = yield* resources.makeAdmissionController({ capacity: TaskWorkCapacity.make(1), held: [] })
+            const admission = yield* resources.makeAdmissionController(
+              makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), runId })
+            )
             const protocol = yield* PlannedAttemptProtocolController
             const publication = yield* PassivePlannedAttemptProjectionPublication
             yield* protocol.withPermit(correlation, (permit) =>
@@ -3097,7 +3333,9 @@ it.effect("observes live terminal executor change once and releases the exact po
                   specification
                 )
                 expect(beginReport).toEqual(executing)
-                yield* admission.synchronize({ capacity: TaskWorkCapacity.make(1), held: [{ correlation, taskId }] })
+                yield* admission.synchronize(
+                  makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [plannedAttempt], runId })
+                )
                 yield* observer.attach({
                   plannedAttempt,
                   publishCurrent: (projection) => publication.publishWithPermit(permit, plannedAttempt, projection),
@@ -3116,7 +3354,11 @@ it.effect("observes live terminal executor change once and releases the exact po
       ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
 
       const admission = yield* Deferred.await(admissionCapture)
-      expect((yield* admission.snapshot).positions.get(taskId)).toMatchObject({ correlation })
+      const position = (yield* admission.snapshot).positions.get(taskId)
+      expect(position).toMatchObject({
+        _tag: "ExactAttemptHeld",
+        plannedAttempt: { attemptId: correlation.attemptId, runId: correlation.runId, taskId }
+      })
       yield* Queue.offer(changes, terminal)
       yield* Deferred.await(terminalAccepted)
 
@@ -3161,11 +3403,52 @@ it.effect("observes safe suspension only after exact suspend intent and releases
         target,
         InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
       )
+      const claim = ActiveTaskClaim.make({
+        operationId: OperationId.make("journaled-bootstrap-passive-safe-claim"),
+        owner: ClaimOwner.make("journaled-run-bootstrap-test"),
+        taskId,
+        token: ClaimToken.make("journaled-bootstrap-passive-safe-token")
+      })
+      const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+      yield* storage.append(
+        runId,
+        intentRecordKey(claim.operationId),
+        TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+      )
+      yield* storage.append(
+        runId,
+        outcomeRecordKey(claim.operationId),
+        TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+      )
+      const graphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("journaled-bootstrap-passive-safe-graph"),
+        target,
+        [claim.operationId],
+        [taskId]
+      )
+      yield* storage.append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
+      yield* storage.append(
+        runId,
+        outcomeRecordKey(graphOperation.operationId),
+        TaskTrackerFactsObservedEvent.make({
+          observation: makeCompleteTaskTrackerFactsObserved(
+            graphOperation,
+            validSnapshot({
+              revision: "journaled-bootstrap-passive-safe-graph",
+              rootTaskId: taskId,
+              tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+            })
+          ),
+          operationId: graphOperation.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
       const specificationOperation = makeTaskWorkSpecificationObservationOperation(
         OperationId.make("journaled-bootstrap-passive-safe-specification"),
         target,
         taskId,
-        []
+        [graphOperation.operationId]
       )
       yield* storage.append(
         runId,
@@ -3190,6 +3473,33 @@ it.effect("observes safe suspension only after exact suspend intent and releases
         runId,
         attemptPlanRecordKey(plannedAttempt.attemptId),
         TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+      )
+      const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+        operationId: OperationId.make("journaled-bootstrap-passive-safe-worktree"),
+        plannedAttempt,
+        predecessorOperationIds: [plan.operationId]
+      })
+      yield* storage.append(
+        runId,
+        intentRecordKey(worktreeOperation.operationId),
+        TaskWorktreeReconciliationIntendedEvent.make({
+          operation: worktreeOperation,
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* storage.append(
+        runId,
+        outcomeRecordKey(worktreeOperation.operationId),
+        TaskWorktreeReadyEvent.make({
+          operationId: worktreeOperation.operationId,
+          proof: PlannedWorktreeReady.make({
+            baseSha: plannedAttempt.baseSha,
+            branch: plannedAttempt.branch,
+            headSha: plannedAttempt.baseSha,
+            worktree: plannedAttempt.worktree
+          }),
+          version: workflowJournalEventVersion
+        })
       )
 
       const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
@@ -3241,20 +3551,22 @@ it.effect("observes safe suspension only after exact suspend intent and releases
           Effect.gen(function* () {
             const resources = yield* DeliveryRuntimeResources
             const observer = yield* PassivePlannedAttemptObserver
-            const admission = yield* resources.makeAdmissionController({ capacity: TaskWorkCapacity.make(2), held: [] })
+            const admission = yield* resources.makeAdmissionController(
+              makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(2), runId })
+            )
             const protocol = yield* PlannedAttemptProtocolController
             const publication = yield* PassivePlannedAttemptProjectionPublication
             yield* protocol.withPermit(correlation, (permit) =>
               Effect.gen(function* () {
                 yield* beginPlannedAttemptExecutorWorkWithPermit(permit, plannedAttempt, specification)
                 yield* requestPlannedAttemptExecutorSuspensionWithPermit(permit, plannedAttempt)
-                yield* admission.synchronize({
-                  capacity: TaskWorkCapacity.make(2),
-                  held: [
-                    { correlation, taskId },
-                    { correlation: independentCorrelation, taskId: independentAttempt.taskId }
-                  ]
-                })
+                yield* admission.synchronize(
+                  makeFreshTaskAdmissionTestBasis({
+                    capacity: TaskWorkCapacity.make(2),
+                    held: [plannedAttempt, independentAttempt],
+                    runId
+                  })
+                )
                 yield* observer.attach({
                   plannedAttempt,
                   publishCurrent: (projection) => publication.publishWithPermit(permit, plannedAttempt, projection),
@@ -3273,7 +3585,11 @@ it.effect("observes safe suspension only after exact suspend intent and releases
       ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
 
       const admission = yield* Deferred.await(admissionCapture)
-      expect((yield* admission.snapshot).positions.get(taskId)).toMatchObject({ correlation })
+      const position = (yield* admission.snapshot).positions.get(taskId)
+      expect(position).toMatchObject({
+        _tag: "ExactAttemptHeld",
+        plannedAttempt: { attemptId: correlation.attemptId, runId: correlation.runId, taskId }
+      })
       yield* Queue.offer(changes, safe)
       yield* Deferred.await(safeAccepted)
 
@@ -3294,7 +3610,15 @@ it.effect("observes safe suspension only after exact suspend intent and releases
       const snapshot = yield* admission.snapshot
       expect(snapshot.positions.size).toBe(1)
       expect(snapshot.positions.get(taskId)).toBeUndefined()
-      expect(snapshot.positions.get(independentAttempt.taskId)).toMatchObject({ correlation: independentCorrelation })
+      const independentPosition = snapshot.positions.get(independentAttempt.taskId)
+      expect(independentPosition).toMatchObject({
+        _tag: "ExactAttemptHeld",
+        plannedAttempt: {
+          attemptId: independentCorrelation.attemptId,
+          runId: independentCorrelation.runId,
+          taskId: independentAttempt.taskId
+        }
+      })
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
@@ -3363,10 +3687,9 @@ it.effect("bootstrap composition can reconstruct and manually attach the exact e
         Effect.gen(function* () {
           const resources = yield* DeliveryRuntimeResources
           const observer = yield* PassivePlannedAttemptObserver
-          const admission = yield* resources.makeAdmissionController({
-            capacity: TaskWorkCapacity.make(1),
-            held: positions.map(({ attemptId, runId, taskId }) => ({ correlation: { attemptId, runId }, taskId }))
-          })
+          const admission = yield* resources.makeAdmissionController(
+            makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [plannedAttempt], runId })
+          )
           const protocol = yield* PlannedAttemptProtocolController
           const publication = yield* PassivePlannedAttemptProjectionPublication
           yield* protocol.withPermit(correlation, (permit) =>
@@ -3383,9 +3706,11 @@ it.effect("bootstrap composition can reconstruct and manually attach the exact e
 
       expect(yield* Ref.get(attachments)).toBe(1)
       expect(yield* Ref.get(beginCalls)).toBe(0)
-      expect(
-        (yield* (yield* Deferred.await(admissionCapture)).snapshot).positions.get(plannedAttempt.taskId)
-      ).toMatchObject({ correlation })
+      const position = (yield* (yield* Deferred.await(admissionCapture)).snapshot).positions.get(plannedAttempt.taskId)
+      expect(position).toMatchObject({
+        _tag: "ExactAttemptHeld",
+        plannedAttempt: { attemptId: correlation.attemptId, runId: correlation.runId, taskId: plannedAttempt.taskId }
+      })
       expect(yield* storage.read(runId)).toHaveLength(recordsBeforeRestart.length)
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
@@ -3410,7 +3735,6 @@ it.effect("recovers process death before terminal publication by reprojecting an
       if (reconstruction._tag === "InvalidWorkflowJournalHistory") {
         return yield* Effect.die("the controlled shared Journal prefix must reconstruct")
       }
-      const positions = requiredPlannedAttemptPositionsOf(reconstruction.runState)
       const terminal = PlannedAttemptExecutorProjection.cases.Exact.make({
         report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
           correlation,
@@ -3456,10 +3780,9 @@ it.effect("recovers process death before terminal publication by reprojecting an
         Effect.gen(function* () {
           const resources = yield* DeliveryRuntimeResources
           const observer = yield* PassivePlannedAttemptObserver
-          const admission = yield* resources.makeAdmissionController({
-            capacity: TaskWorkCapacity.make(1),
-            held: positions.map(({ attemptId, runId, taskId }) => ({ correlation: { attemptId, runId }, taskId }))
-          })
+          const admission = yield* resources.makeAdmissionController(
+            makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [plannedAttempt], runId })
+          )
           const protocol = yield* PlannedAttemptProtocolController
           const publication = yield* PassivePlannedAttemptProjectionPublication
           const observed = yield* protocol.withPermit(correlation, (permit) =>
@@ -3576,10 +3899,9 @@ it.effect("retains responsibility and position for absent unavailable unreadable
           Effect.gen(function* () {
             const resources = yield* DeliveryRuntimeResources
             const observer = yield* PassivePlannedAttemptObserver
-            const admission = yield* resources.makeAdmissionController({
-              capacity: TaskWorkCapacity.make(1),
-              held: [{ correlation, taskId: plannedAttempt.taskId }]
-            })
+            const admission = yield* resources.makeAdmissionController(
+              makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [plannedAttempt], runId })
+            )
             const protocol = yield* PlannedAttemptProtocolController
             const publication = yield* PassivePlannedAttemptProjectionPublication
             const failure = yield* protocol.withPermit(correlation, (permit) =>
@@ -3603,7 +3925,11 @@ it.effect("retains responsibility and position for absent unavailable unreadable
           closes: 1
         })
         const admission = yield* Deferred.await(admissionCapture)
-        expect((yield* admission.snapshot).positions.get(plannedAttempt.taskId)).toMatchObject({ correlation })
+        const position = (yield* admission.snapshot).positions.get(plannedAttempt.taskId)
+        expect(position).toMatchObject({
+          _tag: "ExactAttemptHeld",
+          plannedAttempt: { attemptId: correlation.attemptId, runId: correlation.runId, taskId: plannedAttempt.taskId }
+        })
         const records = yield* storage.read(runId)
         expect(
           records.flatMap(({ event }) =>
@@ -3669,10 +3995,9 @@ it.effect(
           runId,
           Effect.gen(function* () {
             const resources = yield* DeliveryRuntimeResources
-            const admission = yield* resources.makeAdmissionController({
-              capacity: TaskWorkCapacity.make(1),
-              held: [{ correlation: plannedAttemptExecutorCorrelation(plannedAttempt), taskId: plannedAttempt.taskId }]
-            })
+            const admission = yield* resources.makeAdmissionController(
+              makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [plannedAttempt], runId })
+            )
             yield* Deferred.succeed(admissionCapture, admission)
             return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
           })

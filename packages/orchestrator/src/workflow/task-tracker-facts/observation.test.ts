@@ -493,6 +493,14 @@ it("a fresh unchanged read records later freshness compactly and restart reuses 
       ...encodedReconfirmation,
       observation: {
         ...encodedReconfirmation.observation,
+        rootTaskId: TaskId.make("outside-reconfirmed-graph"),
+        factFamilies: reconfirmedFamilies.map((family) => ({ ...family }))
+      }
+    },
+    {
+      ...encodedReconfirmation,
+      observation: {
+        ...encodedReconfirmation.observation,
         factFamilies: reconfirmedFamilies.map((family) =>
           family._tag === "TaskGroupingsReconfirmed"
             ? {

@@ -77,6 +77,16 @@ describe("authored delivery landmarks", () => {
     )
   })
 
+  it("states when an active-return reason is intentionally outside the authored claim", () => {
+    const item = AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.make({
+      decision: { _tag: "RunMustRemainActiveReasonUnasserted" }
+    })
+
+    expect(renderAuthoredStoryItemLyric(item)).toBe(
+      "The coordinator activation returns RunMustRemainActive at this authored lifecycle boundary; this scenario does not assert the diagnostic reason."
+    )
+  })
+
   it("renders control, Integrator, and protocol variants at the presentation boundary", () => {
     const unpause = Object.values(maintainedAuthoredCassetteCatalog)
       .flatMap(({ story }) => story)

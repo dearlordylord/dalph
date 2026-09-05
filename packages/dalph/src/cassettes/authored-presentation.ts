@@ -45,6 +45,11 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       CassetteKillsCoordinatorAtTargetPromotionReconciliationRead: noLandmark,
       CassetteReleasesHeldTargetPromotionReconciliationRead: noLandmark,
       CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: noLandmark,
+      CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion: noLandmark,
+      CassetteReleasesHeldTaskWorktreeSelection: noLandmark,
+      CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins: noLandmark,
+      CassetteReleasesHeldPromotedTaskCompletionClaimRead: noLandmark,
+      CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions: noLandmark,
       CassetteOffersRunReactivationHints: noLandmark,
       CassettePublishesCurrentTrackerNotification: noLandmark,
       CassetteReleasesHeldTaskWorkSpecificationRead: noLandmark,
@@ -430,6 +435,16 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         "The cassette releases the exact held target-promotion reconciliation read.",
       CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: (item) =>
         `The cassette holds task ${item.taskId}'s specification read before its boundary.`,
+      CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion: (item) =>
+        `The cassette holds task ${item.taskId} attempt ${item.attemptId}'s worktree selection until the exact promotion boundary succeeds.`,
+      CassetteReleasesHeldTaskWorktreeSelection: (item) =>
+        `The cassette releases task ${item.taskId} attempt ${item.attemptId}'s held worktree selection after successful promotion.`,
+      CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins: (item) =>
+        `The cassette parks completion-claim reading for promoted task ${item.promotedTaskId} attempt ${item.promotedAttemptId} until task ${item.releasedByTaskId} attempt ${item.releasedByAttemptId} begins.`,
+      CassetteReleasesHeldPromotedTaskCompletionClaimRead: (item) =>
+        `The cassette releases completion-claim reading for promoted task ${item.promotedTaskId} after task ${item.releasedByTaskId} attempt ${item.releasedByAttemptId} begins.`,
+      CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions: (item) =>
+        `The cassette parks fresh task-claim selections for ${item.taskIds.join(", ")} until terminal assertions.`,
       CassetteOffersRunReactivationHints: (item) =>
         `The cassette offers ${item.hints.length} tracker-notification or timer hints while active refresh is already running.`,
       CassettePublishesCurrentTrackerNotification: () =>
@@ -507,7 +522,9 @@ export const renderAuthoredStoryItemLyric = (item: AuthoredCassetteStoryItem): s
   if (item._tag === "CoordinatorActivationReturned") {
     return item.decision._tag === "RunMayTerminate"
       ? "The coordinator activation returns RunMayTerminate at this authored lifecycle boundary."
-      : `The coordinator activation returns RunMustRemainActive because ${item.decision.reason} at this authored lifecycle boundary.`
+      : item.decision._tag === "RunMustRemainActiveReasonUnasserted"
+        ? "The coordinator activation returns RunMustRemainActive at this authored lifecycle boundary; this scenario does not assert the diagnostic reason."
+        : `The coordinator activation returns RunMustRemainActive because ${item.decision.reason} at this authored lifecycle boundary.`
   }
   if (item._tag === "CoordinatorProcessDies") {
     return "The coordinator process and its same-process executor session die; durable and authority facts remain."

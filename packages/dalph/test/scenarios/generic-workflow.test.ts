@@ -2,6 +2,7 @@ import { it } from "@effect/vitest"
 import {
   AttemptId,
   GitCommitSha,
+  makeTaskWorkSpecification,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -17,32 +18,46 @@ import {
   AuthoritativeTaskWorktreeReady,
   ClaimOwner,
   ClaimToken,
+  FixtureTarget,
   JournalPosition,
   JournalStore,
   journaledWorkflowInterpreterLayer,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeReconciliationOperation,
+  makeTrackerGraphObservationOperation,
   memoryJournalTestLayer,
   OperationId,
   PlannedWorktreeReady,
+  projectTrackerSnapshot,
   requireAcknowledgedPlan,
   TaskAttemptPlannedEvent,
   workflowJournalEventVersion,
   WorkflowInterpreter
 } from "@dalph/orchestrator"
-import { Effect, Layer } from "effect"
+import { Effect, Layer, Option } from "effect"
 import { expect } from "vitest"
 
 const runId = RunId.make("generic-workflow-run")
+const target = FixtureTarget.make("generic-workflow-target")
+const taskId = TaskId.make("A")
+const taskSpecification = makeTaskWorkSpecification({ body: "Implement A.", taskId, title: "Task A" })
+const taskGraphProjection = projectTrackerSnapshot({
+  revision: "generic-workflow-graph",
+  tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+})
+const taskGraph = Option.getOrThrow(
+  Option.fromUndefinedOr(taskGraphProjection._tag === "Valid" ? taskGraphProjection.snapshot : undefined)
+)
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("attempt-A"),
   baseSha: GitCommitSha.make("1".repeat(40)),
   branch: TaskBranchRef.make("refs/heads/dalph/attempt-A"),
   executor: TaskExecutorLocator.make("executor:controlled-fake"),
   runId,
-  taskId: TaskId.make("A"),
-  taskRevision: TaskRevision.make("revision-A"),
+  taskId,
+  taskRevision: TaskRevision.make(taskSpecification.fingerprint),
   worktree: WorktreeLocator.make("/worktrees/attempt-A")
 })
 
@@ -59,8 +74,21 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
   const planOperation = makeTaskAttemptPlanOperation({
     operationId: OperationId.make("plan-A"),
     plannedAttempt,
-    predecessorOperationIds: [claimOperation.acquisition.operationId]
+    predecessorOperationIds: [OperationId.make("specification-A")]
   })
+  const postClaimGraphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("post-claim-graph-A"),
+    target,
+    [claimOperation.acquisition.operationId],
+    [plannedAttempt.taskId]
+  )
+  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("specification-A"),
+    target,
+    plannedAttempt.taskId,
+    [postClaimGraphOperation.operationId]
+  )
   const worktreeOperation = makeTaskWorktreeReconciliationOperation({
     operationId: OperationId.make("worktree-A"),
     plannedAttempt,
@@ -74,8 +102,8 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
       readTaskClaim: () => Effect.die("unexpected task claim read"),
       readTaskWorktree: () => Effect.die("unused worktree observation"),
       readTargetLineage: () => Effect.die("unused target-lineage observation"),
-      readTrackerGraph: () => Effect.die("unused"),
-      readTaskWorkSpecification: () => Effect.die("unused"),
+      readTrackerGraph: () => Effect.succeed(taskGraph),
+      readTaskWorkSpecification: () => Effect.succeed(taskSpecification),
       reconcileTaskWorktree: () =>
         Effect.succeed(
           AuthoritativeTaskWorktreeReady.make({
@@ -109,12 +137,18 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
         )
         .pipe(Effect.flip))._tag
     ).toBe("TaskAttemptPlanRunContradiction")
+    yield* interpreter.readTrackerGraph(postClaimGraphOperation)
+    yield* interpreter.readTaskWorkSpecification(specificationOperation)
     yield* interpreter.recordTaskAttemptPlan(planOperation)
     yield* interpreter.reconcileTaskWorktree(worktreeOperation)
     const records = yield* (yield* JournalStore).read(runId)
     expect(records.map(({ event }) => event._tag)).toEqual([
       "TaskClaimAcquisitionIntended",
       "TaskClaimAcquired",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
       "TaskAttemptPlanned",
       "TaskWorktreeReconciliationIntended",
       "TaskWorktreeReady"

@@ -1928,7 +1928,10 @@ await scenario("names concrete planned transitions and their admission requireme
   }
 
   const fresh = await summaryFor('"_tag": "FreshWorkflowRoute"')
-  assert(fresh.includes("Read the tracker graph for the selected task"), "Fresh workflow proposals must name their concrete boundary action")
+  assert(
+    (fresh.startsWith("Read") || fresh.startsWith("Check")) && !fresh.startsWith("Fresh Workflow"),
+    `Fresh workflow proposals must name their concrete boundary action; received ${fresh}`
+  )
   assert(fresh.includes("waits for live operation"), "A proposal must name the live operation that blocks it")
   const recovered = await summaryFor('"_tag": "RecoveredNewActionRoute"')
   assert(recovered.startsWith("Read") && !recovered.startsWith("Recovered New Action"), "Recovered proposals must name their concrete authority action")

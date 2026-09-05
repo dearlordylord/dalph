@@ -3,6 +3,7 @@ import { Context, Effect, Match, Option, Schema } from "effect"
 import {
   TaskWorkSpecification,
   type IntegrationTarget,
+  type PlannedAttemptExecutorReport,
   type PlannedTaskAttempt,
   plannedTaskAttemptEquivalence,
   RunId,
@@ -1385,6 +1386,19 @@ type WorkflowOperationResponsibility = Exclude<
 >
 
 /** Derives which journaled responsibilities are still unfinished. */
+const anyAttemptDispositionApplied = (
+  dispositions: ReadonlyArray<PlannedAttemptExecutorDisposition | undefined>
+): boolean => dispositions.some((disposition) => disposition !== undefined)
+
+const terminalTaskStateDisposition = (
+  report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "ExecutorWorkTerminal" }>,
+  explicitAttemptDispositionApplied: boolean,
+  externalSuccess: PlannedAttemptExecutorDisposition | undefined
+): PlannedAttemptExecutorDisposition =>
+  explicitAttemptDispositionApplied || report.result._tag === "Accepted" || externalSuccess === undefined
+    ? ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({ report })
+    : externalSuccess
+
 export const deriveJournalResponsibilityFacts = (
   runState: ReconstructedRunState,
   activationBaselinePosition: Option.Option<JournalPosition> = Option.none(),
@@ -1778,8 +1792,15 @@ export const deriveJournalResponsibilityFacts = (
       return undefined
     }
     const gitConstraint = deriveGitConstraint()
+    const acquiredClaimWasSettledByIntegration =
+      acquiredClaim?._tag === "TaskClaimAcquired" &&
+      records.some(
+        ({ event }) =>
+          event._tag === "IntegrationFinalitySettled" &&
+          isExactTaskClaim(event.claim.originalClaim, acquiredClaim.claim)
+      )
     const deriveExternalSuccessRelease = () =>
-      acquiredClaim?._tag === "TaskClaimAcquired"
+      acquiredClaim?._tag === "TaskClaimAcquired" && !acquiredClaimWasSettledByIntegration
         ? makeTaskClaimReleaseOperation({
             authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
             predecessorOperationIds: [acquiredClaim.claim.operationId],
@@ -1834,9 +1855,15 @@ export const deriveJournalResponsibilityFacts = (
       immutableRunTarget
     )
     const suspensionRequested = () => ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
+    const executorWorkStopped = safelySuspended || report?.report._tag === "ExecutorWorkTerminal"
+    const explicitAttemptDispositionApplied = anyAttemptDispositionApplied([
+      restartDisposition,
+      stopDisposition,
+      cancellationDisposition
+    ])
     const externalSuccessDisposition = (): PlannedAttemptExecutorDisposition | undefined => {
       if (!taskCompletedSuccessfully(responsibility.plannedAttempt.taskId, attemptTaskGraph)) return undefined
-      if (!safelySuspended) return suspensionRequested()
+      if (!executorWorkStopped) return suspensionRequested()
       if (externalSuccessRelease === undefined || externalSuccessReleaseSettled()) {
         return ResponsibilityDisposition.TaskExternalSuccessSettled()
       }
@@ -1866,7 +1893,11 @@ export const deriveJournalResponsibilityFacts = (
     }
     const taskStateDisposition = (): PlannedAttemptExecutorDisposition | undefined => {
       if (report?.report._tag === "ExecutorWorkTerminal") {
-        return ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({ report: report.report })
+        return terminalTaskStateDisposition(
+          report.report,
+          explicitAttemptDispositionApplied,
+          externalSuccessDisposition()
+        )
       }
       if (restartDisposition !== undefined) return restartDisposition
       if (stopDisposition !== undefined) return stopDisposition
@@ -3110,25 +3141,24 @@ const unsettledExecutorCommandFor = (
 }
 
 /**
- * A restart may reconcile a persisted Suspend intent to an exact executing
- * report. The same active refresh performs one later stabilization pass; that
- * pass must retain the executing responsibility instead of appending a second
- * Suspend intent. A later activation may reconsider the still-live constraint
- * once this projection is before its new read boundary.
+ * A restart may reconcile a persisted Suspend intent to an exact Executing,
+ * Safe, or Terminal report. The same active refresh performs one later
+ * stabilization pass before admitting independent work. A later activation
+ * may reconsider any still-live constraint once this projection is before its
+ * new read boundary.
  */
-const isExecutingCommandBoundaryEvidenceAfter =
+const isExactCommandBoundaryEvidenceAfter =
   (activationBaselinePosition: Option.Option<JournalPosition>) =>
   (candidate: ReturnType<typeof plannedAttemptExecutorEvidence>[number]): boolean =>
     [
       candidate.source._tag === "BoundaryCommandResponse" || candidate.source._tag === "CommandProjection",
-      candidate.report._tag === "ExecutorWorkExecuting",
       positionIsAfter(candidate.observedAt, activationBaselinePosition)
     ].every(Boolean)
 
 const isSuspendCommandIntent = (record: JournalRecord | undefined): boolean =>
   record?.event._tag === "PlannedAttemptExecutorCommandIntended" && record.event.command === "Suspend"
 
-const suspensionWasReconciledToExecutingDuringActiveRefresh = (
+const suspensionWasReconciledDuringActiveRefresh = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
   activationBaselinePosition: Option.Option<JournalPosition>
@@ -3137,7 +3167,7 @@ const suspensionWasReconciledToExecutingDuringActiveRefresh = (
   // response or projection. The activation-local boundary still needs its
   // historical provenance after Safe or Terminal.
   const evidence = plannedAttemptExecutorEvidence(records, plannedAttempt).findLast(
-    isExecutingCommandBoundaryEvidenceAfter(activationBaselinePosition)
+    isExactCommandBoundaryEvidenceAfter(activationBaselinePosition)
   )
   if (
     evidence === undefined ||
@@ -3159,8 +3189,8 @@ const suspensionWasReconciledToExecutingDuringActiveRefresh = (
 
 /**
  * The process-local boundary contains either the exact active-refresh
- * opportunity subjects with a qualifying post-baseline Suspend-to-Executing
- * reconciliation, retained through a later Safe or Terminal report until G2,
+ * opportunity subjects with a qualifying post-baseline exact Suspend
+ * reconciliation, retained until G2,
  * or every captured active subject while replaying an already-journaled pending
  * G2 intent.
  */
@@ -3246,7 +3276,7 @@ const activeRefreshRuntimeBoundaryFor = (
           recordedAt: currentGraph.position
         })
   const reconciledAttempts = activeAttempts.filter((plannedAttempt) =>
-    suspensionWasReconciledToExecutingDuringActiveRefresh(records, plannedAttempt, baseline)
+    suspensionWasReconciledDuringActiveRefresh(records, plannedAttempt, baseline)
   )
   const boundaryAttempts = pendingG2Operation === undefined ? reconciledAttempts : activeAttempts
   const runId = boundaryAttempts[0]?.runId

@@ -505,6 +505,21 @@ describe("#181 graph and bounded projections", () => {
       { placement: { _tag: "EligibleOutsideBound", rank: 2 }, taskId: "C" }
     ])
   })
+
+  it("uses stable code-unit order for mixed-case and punctuation task IDs", () => {
+    const ids = ["a", "A", "a.", "a-", "A!"]
+    const expected = ["A", "A!", "a", "a-", "a."]
+    const currentGraph = graph(
+      ids.map((id) => task(id)),
+      "mixed-case-punctuation"
+    )
+    const currentPublication = publication(currentGraph, policy(ids.length))
+    const frontier = frontierOf(currentPublication)
+    const tickets = boundedParallelTicketsOf(frontier)
+
+    expect(frontier.standings.map(({ taskId }) => taskId)).toEqual(expected)
+    expect(ticketDeliveriesOf(tickets, []).deliveries.map(({ taskId }) => taskId)).toEqual(expected)
+  })
 })
 
 describe("#181 ticket-delivery positive and negative space", () => {

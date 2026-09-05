@@ -205,6 +205,12 @@ const terminalProofMatchesGraphRead = (
   )
 }
 
+/** Alice's accepted cancellation makes an older terminal graph non-current even when later bookkeeping advanced the activation. */
+const cancellationSupersedesTerminalEvidence = (proof: TerminalRunFinalityProof, state: JournalState): boolean =>
+  state.records.some(
+    ({ event, position }) => event._tag === "RunCancellationApplied" && proof.evidence.observedAt <= position
+  )
+
 const validateRun = Effect.fn("JournaledRunBootstrap.validateRun")(function* (
   runId: RunId,
   records: Parameters<typeof reduceWorkflowJournalHistory>[1]
@@ -509,6 +515,9 @@ export const journaledRunBootstrapLayer = (
           return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
         }
         const terminalProof = proof
+        if (cancellationSupersedesTerminalEvidence(terminalProof, state)) {
+          return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+        }
         const graphRead = terminalGraphReadFor(terminalProof, state)
         if (!terminalProofMatchesGraphRead(terminalProof, runId, target, graphRead)) {
           return RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })

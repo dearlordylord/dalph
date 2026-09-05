@@ -2,7 +2,7 @@
 import { Effect, Layer, Option } from "effect"
 import { type RunId } from "@dalph/contracts"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
-import { InRunJournal } from "./store.js"
+import { InRunJournal, type JournalAppendError } from "./store.js"
 import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
@@ -18,9 +18,11 @@ import {
 import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "./record-key.js"
 import { requireAcknowledgedPlan } from "../workflow/protocols/task-attempt-planning/journal-evidence.js"
 import {
+  TaskAttemptPlanHistoryContradiction,
   TaskAttemptPlanRecordAcknowledged,
   TaskAttemptPlanRunContradiction
 } from "../workflow/protocols/task-attempt-planning/record.js"
+import { freshAttemptPlanPredecessorLineageWasAccepted } from "../coordination/admission/fresh-attempt-lineage.js"
 import {
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskClaimFactsUnreadable,
@@ -33,10 +35,12 @@ import {
 } from "../coordination/reconstruction/graph-knowledge.js"
 import {
   AuthoritativePlannedAttemptWorktreeObserved,
+  AuthoritativeTaskClaimAcquisitionRejected,
   AuthoritativeTargetLineageObserved,
   InterruptibleWorkflowBoundaryIntent,
   runInterruptibleBoundary,
   WorkflowInterpreter,
+  type TaskClaimAcquisitionResult,
   type InterruptibleWorkflowBoundaryExecution
 } from "../workflow/interpretation/interpreter.js"
 import type { WorkflowOperation } from "../workflow/registry/operation.js"
@@ -88,12 +92,16 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
             operationId: operation.acquisition.operationId
           }),
           interpreter.acquireTaskClaim(operation).pipe(
-            Effect.map((result) => ({ _tag: "Acquired" as const, result })),
+            Effect.map((result) =>
+              result._tag === "AuthoritativeTaskClaimAcquired"
+                ? { _tag: "Acquired" as const, result }
+                : { _tag: "Rejected" as const, observed: result.observed }
+            ),
             Effect.catchTag("TrackerMutation.TaskClaimConflict", (failure) =>
-              Effect.succeed({ _tag: "Rejected" as const, failure })
+              Effect.succeed({ _tag: "Rejected" as const, observed: failure.observed })
             )
           ),
-          (outcome) =>
+          (outcome): Effect.Effect<TaskClaimAcquisitionResult, JournalAppendError> =>
             outcome._tag === "Acquired"
               ? journal
                   .append(
@@ -107,13 +115,13 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
                     runId,
                     outcomeRecordKey(operation.acquisition.operationId),
                     TaskClaimAcquisitionRejectedEvent.make({
-                      observed: outcome.failure.observed,
+                      observed: outcome.observed,
                       operationId: operation.acquisition.operationId,
                       reason: "ForeignClaim",
                       version: workflowJournalEventVersion
                     })
                   )
-                  .pipe(Effect.andThen(Effect.fail(outcome.failure)))
+                  .pipe(Effect.as(AuthoritativeTaskClaimAcquisitionRejected.make({ observed: outcome.observed })))
         )
       })
 
@@ -336,6 +344,14 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
             journalRunId: runId,
             operationId: operation.operationId,
             plannedAttemptRunId: operation.plannedAttempt.runId
+          })
+        }
+        const records = yield* journal.read(runId)
+        if (!freshAttemptPlanPredecessorLineageWasAccepted(records, operation)) {
+          return yield* new TaskAttemptPlanHistoryContradiction({
+            attemptId: operation.plannedAttempt.attemptId,
+            operationId: operation.operationId,
+            reason: "CausalPredecessorMissing"
           })
         }
         yield* journal.append(

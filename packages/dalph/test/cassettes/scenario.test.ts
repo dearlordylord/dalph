@@ -1271,8 +1271,8 @@ it.effect("pauses A and its grouping child while recording only A's direction", 
         event._tag === "ControlDirectionApplied" ? [{ direction: event.direction, subject: event.subject }] : []
       )
     ).toEqual([{ direction: "Pause", subject: { _tag: "Task", runId: run.runId, taskId: "A" } }])
-    expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A"])
-    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A"), TaskId.make("B")])
+    expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A", "B"])
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A")])
     expect(waiting).toEqual({
       _tag: "PauseProgressObserved",
       result: {
@@ -1296,9 +1296,43 @@ it.effect("pauses A and its grouping child while recording only A's direction", 
             responsibility: {
               _tag: "PlannedAttemptExecutorWork",
               attemptId: "attempt:A:0",
-              beganAt: 26,
+              beganAt: 17,
               coverage: { _tag: "ExactTaskPauseCoverage" },
               taskId: "A"
+            }
+          },
+          {
+            blockers: [
+              { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:B:1" },
+              {
+                _tag: "ProposedDeliveryAction",
+                proposal: {
+                  _tag: "IdentityFreeWorkflowRoute",
+                  correlation: { _tag: "PlannedAttempt", attemptId: "attempt:B:1" },
+                  proposalId:
+                    '["IdentityFreeWorkflowRoute","SuspendPlannedAttemptExecutorWork","attempt:B:1",null,"B"]',
+                  taskId: "B"
+                }
+              },
+              {
+                _tag: "LiveDeliveryAction",
+                owner: {
+                  _tag: "AdmittedDeliveryAction",
+                  proposal: {
+                    _tag: "FreshExecutorWorkflowRoute",
+                    attemptId: "attempt:B:1",
+                    proposalId: '["FreshExecutorWorkflowRoute","BeginPlannedAttemptExecutorWork","attempt:B:1","B"]',
+                    taskId: "B"
+                  }
+                }
+              }
+            ],
+            responsibility: {
+              _tag: "PlannedAttemptExecutorWork",
+              attemptId: "attempt:B:1",
+              beganAt: 30,
+              coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 35, pausedTaskId: "A" },
+              taskId: "B"
             }
           }
         ]
@@ -1446,16 +1480,38 @@ it.effect("stops before the next forward operation after Alice pauses the Run", 
     const afterPause = run.records.slice(pauseAt + 1)
 
     expect(pauseAt).toBeGreaterThan(0)
-    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A"), TaskId.make("B")])
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A")])
     expect(
-      run.records.some(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(
+      afterPause.some(
         ({ event }) => event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.taskId === TaskId.make("B")
       )
-    ).toBe(true)
+    ).toBe(false)
     expect(
-      run.records.some(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "TaskWorktreeReconciliationIntended" &&
+          event.operation.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(afterPause.some(({ event }) => event._tag === "TaskWorktreeReady")).toBe(false)
+    expect(
+      afterPause.some(
         ({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          event.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandIntended" &&
+          event.command === "Begin" &&
           event.plannedAttempt.taskId === TaskId.make("B")
       )
     ).toBe(false)
@@ -1525,7 +1581,7 @@ it.effect("Alice unpauses task A before its Pause observation confirms", () =>
     expect(taskPauseObservationUnpausedAuthoredCassette.name).toBe(
       "Alice unpauses task A before its Pause observation confirms"
     )
-    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A"), TaskId.make("B")])
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A")])
     expect(
       run.records
         .filter(({ event }) => event._tag === "ControlDirectionApplied")
@@ -1595,7 +1651,41 @@ it.effect("restarts a confirmed paused Run without selecting new forward progres
 
     expect(run.activationOrdinals).toEqual([1, 2])
     expect(pauseAt).toBeGreaterThan(0)
-    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A"), TaskId.make("B")])
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A")])
+    expect(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(
+      afterPause.some(
+        ({ event }) => event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "TaskWorktreeReconciliationIntended" &&
+          event.operation.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(afterPause.some(({ event }) => event._tag === "TaskWorktreeReady")).toBe(false)
+    expect(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          event.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandIntended" &&
+          event.command === "Begin" &&
+          event.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
     expect(afterPause.some(({ event }) => event._tag === "TaskTrackerFactsObserved")).toBe(false)
     expect(
       afterPause.flatMap(({ event }) =>
@@ -1810,7 +1900,7 @@ it.effect("A tracker client changes A while Dalph's completion request is pendin
         event.observation.purpose._tag === "Confirmation" &&
         event.observation.facts.lifecycle === "TerminalWithoutSuccess"
     )
-    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A"), TaskId.make("C")])
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A")])
     expect(rejection).toBeDefined()
     expect(terminalRead).toBeDefined()
     expect(run.records.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toHaveLength(1)
@@ -1870,7 +1960,7 @@ it.effect("A tracker client changes A while Dalph's completion request is pendin
       run.records.some(
         ({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" &&
-          event.report.correlation.attemptId === AttemptId.make("attempt:C:1") &&
+          event.report.correlation.attemptId === AttemptId.make("attempt:C:0") &&
           event.report._tag === "ExecutorWorkTerminal" &&
           event.report.result._tag === "Completed"
       )
@@ -2906,18 +2996,32 @@ it.effect(
         ({ event }) =>
           event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("B")
       )
-      const currentGraphSubjectsBeforeB = run.records
-        .slice(aSettledAt + 1, bClaimAt)
-        .flatMap(({ event }) =>
+      const eClaimAt = run.records.findIndex(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("E")
+      )
+      const eSpecificationAt = run.records.findIndex(
+        ({ event }) =>
           event._tag === "TaskTrackerReadIntentRecorded" &&
-          event.operation._tag === "ReadTrackerGraph" &&
-          event.operation.cause._tag === "WorkflowEstablishment"
-            ? [event.operation.readShape.explicitlyCoveredTaskIds]
-            : []
-        )
+          event.operation._tag === "ReadTaskWorkSpecification" &&
+          event.operation.taskId === TaskId.make("E")
+      )
+      const eGraphReads = run.records.flatMap(({ event }, position) =>
+        event._tag === "TaskTrackerReadIntentRecorded" &&
+        event.operation._tag === "ReadTrackerGraph" &&
+        event.operation.cause._tag === "WorkflowEstablishment" &&
+        event.operation.readShape.explicitlyCoveredTaskIds.length === 1 &&
+        event.operation.readShape.explicitlyCoveredTaskIds[0] === TaskId.make("E")
+          ? [position]
+          : []
+      )
 
       expect([...settledAt.keys()]).toEqual(["A", "B", "C", "E", "D"])
-      expect(currentGraphSubjectsBeforeB).toEqual([[], ["B"], ["C"], ["E"]])
+      expect(bClaimAt).toBeGreaterThan(aSettledAt)
+      expect(eGraphReads).toHaveLength(2)
+      expect(eGraphReads[0]).toBeLessThan(eClaimAt)
+      expect(eGraphReads[1]).toBeGreaterThan(eClaimAt)
+      expect(eGraphReads[1]).toBeLessThan(eSpecificationAt)
       expect(beganAt.get(TaskId.make("D"))).toBeGreaterThan(settledAt.get(TaskId.make("B")) ?? Number.POSITIVE_INFINITY)
       expect(beganAt.get(TaskId.make("D"))).toBeGreaterThan(settledAt.get(TaskId.make("C")) ?? Number.POSITIVE_INFINITY)
       expect(beganAt.get(TaskId.make("D"))).toBeGreaterThan(settledAt.get(TaskId.make("E")) ?? Number.POSITIVE_INFINITY)
@@ -4008,7 +4112,6 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
         },
         ...read(initialGraph),
         ...read(initialGraph),
-        ...read(membershipChangedGraph),
         { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
         ...read(membershipChangedGraph),
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
@@ -4032,6 +4135,7 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
         { _tag: "TaskWorkSpecificationReadReturned", body: "Complete D.", taskId: "D", title: "Complete D" },
         { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:D:1", taskId: "D" } },
         { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:D:1", taskId: "D" } },
+        { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
         {
           _tag: "PlannedAttemptExecutorWorkReported",
           report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:D:1" },
@@ -7371,7 +7475,7 @@ it.effect("has no recording for an empty unidentified journal", () =>
 )
 
 it.effect(
-  "detects responsibility and ExecutorWorkExecuting before worktree readiness even when final operational state converges",
+  "rejects responsibility and ExecutorWorkExecuting before worktree readiness even when later entries match",
   () =>
     Effect.gen(function* () {
       const run = yield* runAuthoredScenarioCassette(singleton)
@@ -7418,8 +7522,8 @@ it.effect(
       const checkpoints = compareRecordedCassetteCheckpoints(expected, actual)
 
       expect(foldRecordedCassette(expected)._tag).toBe("ValidWorkflowJournalHistory")
-      expect(foldRecordedCassette(actual)._tag).toBe("ValidWorkflowJournalHistory")
-      expect(checkpoints.at(-1)?.operationalStateEquivalent).toBe(true)
+      expect(foldRecordedCassette(actual)._tag).toBe("InvalidWorkflowJournalHistory")
+      expect(checkpoints.at(-1)?.operationalStateEquivalent).toBe(false)
       expect(checkpoints.at(-1)?.workflowHistoryEquivalent).toBe(false)
       expect(checkpoints.some((checkpoint) => !checkpoint.pureSelectionEquivalent)).toBe(true)
     })

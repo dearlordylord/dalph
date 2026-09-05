@@ -3,6 +3,7 @@ import { Deferred, Effect, Option, Ref, Schema, Semaphore, Stream, SubscriptionR
 import type { AttemptId, GitCommitSha, GitRepositoryLocator, TaskId } from "@dalph/contracts"
 import {
   IntegratorSessionCorrelation,
+  type TargetPromotionGitRequest,
   type IntegratorCandidateText,
   type OperationId,
   type TrackerTarget
@@ -14,7 +15,13 @@ import {
   type AuthoredConcurrentTrackerReadResult,
   AuthoredCassetteStoryItem,
   type AuthoredCassetteStoryItem as StoryItem,
-  AuthoredTrackerGraphReadResult
+  AuthoredTrackerGraphReadResult,
+  freshTaskClaimSelectionHoldPlacementIssue,
+  promotedCompletionReadHoldClosureIssue,
+  promotedCompletionReadHoldKey,
+  targetPromotionGitRequestAliasIssue,
+  taskWorktreeSelectionHoldKey,
+  taskWorktreeSelectionHoldClosureIssue
 } from "./authored-domain.js"
 import {
   AuthoredAttemptChoiceItem,
@@ -86,16 +93,29 @@ type AuthoredExecutorRequest = "Begin" | "Resume" | "Suspend"
 type ActiveExecutorReportRequest = { readonly attemptId: AttemptId; readonly request: AuthoredExecutorRequest }
 type ExecutorRequestPublicationHold =
   typeof AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.Type
+type TaskWorktreeSelectionHold =
+  typeof AuthoredCassetteStoryItem.cases.CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion.Type
+type PromotedCompletionReadHold =
+  typeof AuthoredCassetteStoryItem.cases.CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins.Type
 type GitRequestCorrelation = { readonly candidateCommit: GitCommitSha; readonly repository: GitRepositoryLocator }
 type PromotionGitStoryItem =
   | typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadFailed.Type
   | typeof AuthoredCassetteStoryItem.cases.TargetPromotionGitReadReturned.Type
+type TargetPromotionCompareAndSetStoryItem =
+  | typeof AuthoredCassetteStoryItem.cases.TargetPromotionCompareAndSetReturned.Type
+  | typeof AuthoredCassetteStoryItem.cases.TargetPromotionCompareAndSetResponseLost.Type
 
 const gitRequestMatches = (
   request: GitRequestCorrelation,
   repository: GitRepositoryLocator,
   candidateCommit: GitCommitSha
 ): boolean => request.repository === repository && request.candidateCommit === candidateCommit
+
+const targetPromotionGitRequestMatches = (left: TargetPromotionGitRequest, right: TargetPromotionGitRequest): boolean =>
+  left.candidateCommit === right.candidateCommit &&
+  left.expectedTargetHead === right.expectedTargetHead &&
+  left.integrationTarget.repository === right.integrationTarget.repository &&
+  left.integrationTarget.ref === right.integrationTarget.ref
 
 const promotionGitStoryItem = (item: StoryItem | undefined): PromotionGitStoryItem | null =>
   item?._tag === "TargetPromotionGitReadFailed" || item?._tag === "TargetPromotionGitReadReturned" ? item : null
@@ -287,6 +307,34 @@ export interface StoryCursor {
     Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldTaskWorkSpecificationRead.Type>
   >
   readonly awaitTaskWorkSpecificationReadBoundary: (taskId: TaskId) => Effect.Effect<void>
+  /** Consume the exact pre-armed worktree-selection hold marker. */
+  readonly consumeTaskWorktreeSelectionHold: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion.Type>
+  >
+  /** Consume and resolve the exact worktree-selection hold after its Applied promotion CAS. */
+  readonly consumeTaskWorktreeSelectionRelease: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldTaskWorktreeSelection.Type>
+  >
+  /** Park the exact ReconcileTaskWorktree selection while its cassette hold is active. */
+  readonly awaitTaskWorktreeSelectionHold: (taskId: TaskId, attemptId: AttemptId) => Effect.Effect<void>
+  readonly consumePromotedCompletionReadHold: Effect.Effect<
+    Option.Option<
+      typeof AuthoredCassetteStoryItem.cases.CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins.Type
+    >
+  >
+  readonly consumePromotedCompletionReadRelease: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldPromotedTaskCompletionClaimRead.Type>
+  >
+  /** Park only the exact promoted task's completion-claim read until its authored release. */
+  readonly awaitPromotedCompletionClaimRead: (taskId: TaskId) => Effect.Effect<void>
+  /** Consume the exact fresh task-claim selection hold marker and advance past it. */
+  readonly consumeFreshTaskClaimSelectionHold: Effect.Effect<
+    Option.Option<
+      typeof AuthoredCassetteStoryItem.cases.CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions.Type
+    >
+  >
+  /** Park a fresh TaskSelectionAuthority claim until its controlled activation is interrupted at terminal assertions. */
+  readonly awaitFreshTaskClaimSelectionHold: (taskId: TaskId) => Effect.Effect<void>
   readonly consumeExecutorRequestPublicationHold: (
     taskId: TaskId,
     attemptId: AttemptId,
@@ -370,7 +418,10 @@ export interface StoryCursor {
     typeof AuthoredCassetteStoryItem.cases.IntegratorGitObservationReturned.Type,
     CursorFailure | AuthoredIntegratorGitObservationFailure
   >
-  readonly consumeTargetPromotionCompareAndSet: Effect.Effect<
+  /** Consume the exact target-promotion CAS response for the Git request now in flight. */
+  readonly consumeTargetPromotionCompareAndSet: (
+    request: TargetPromotionGitRequest
+  ) => Effect.Effect<
     typeof AuthoredCassetteStoryItem.cases.TargetPromotionCompareAndSetReturned.Type,
     CursorFailure | AuthoredTargetPromotionCompareAndSetFailure
   >
@@ -490,6 +541,53 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
   story: ReadonlyArray<StoryItem>,
   options: StoryCursorOptions = {}
 ): Effect.fn.Return<StoryCursor> {
+  const freshTaskClaimSelectionHoldItems = story.filter(
+    (item) => item._tag === "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions"
+  )
+  if (freshTaskClaimSelectionHoldItems.length > 1) {
+    return yield* Effect.die("an authored cassette may arm at most one fresh task-claim selection hold")
+  }
+  const freshTaskClaimSelectionHoldPlacement = freshTaskClaimSelectionHoldPlacementIssue(story)
+  if (freshTaskClaimSelectionHoldPlacement !== undefined) {
+    return yield* Effect.die(freshTaskClaimSelectionHoldPlacement)
+  }
+  const taskWorktreeSelectionHoldClosure = taskWorktreeSelectionHoldClosureIssue(story)
+  if (taskWorktreeSelectionHoldClosure !== undefined) {
+    return yield* Effect.die(taskWorktreeSelectionHoldClosure)
+  }
+  const promotedCompletionReadHoldClosure = promotedCompletionReadHoldClosureIssue(story)
+  if (promotedCompletionReadHoldClosure !== undefined) {
+    return yield* Effect.die(promotedCompletionReadHoldClosure)
+  }
+  const targetPromotionGitRequestAlias = targetPromotionGitRequestAliasIssue(story)
+  if (targetPromotionGitRequestAlias !== undefined) {
+    return yield* Effect.die(targetPromotionGitRequestAlias)
+  }
+  const taskWorktreeSelectionHoldItems = story.filter(
+    (item): item is TaskWorktreeSelectionHold => item._tag === "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion"
+  )
+  const taskWorktreeSelectionHolds = yield* Effect.forEach(taskWorktreeSelectionHoldItems, (item) =>
+    Deferred.make<void>().pipe(
+      Effect.map((release) => [taskWorktreeSelectionHoldKey(item.taskId, item.attemptId), { item, release }] as const)
+    )
+  )
+  const promotedCompletionReadHoldItems = story.filter(
+    (item): item is PromotedCompletionReadHold =>
+      item._tag === "CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins"
+  )
+  const promotedCompletionReadHolds = yield* Effect.forEach(promotedCompletionReadHoldItems, (item) =>
+    Deferred.make<void>().pipe(
+      Effect.map((release) => [promotedCompletionReadHoldKey(item), { item, release }] as const)
+    )
+  )
+  const freshTaskClaimSelectionHold =
+    freshTaskClaimSelectionHoldItems[0] === undefined
+      ? Option.none()
+      : Option.some(
+          yield* Schema.decodeUnknownEffect(
+            AuthoredCassetteStoryItem.cases.CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions
+          )(freshTaskClaimSelectionHoldItems[0]).pipe(Effect.orDie)
+        )
   const exactCausalStory = story.some(
     (item) =>
       item._tag === "ConcurrentTrackerReadBatch" ||
@@ -521,11 +619,29 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     Option.none()
   )
   const terminalAssertionsReached = yield* Deferred.make<void>()
+  // The marker is armed at cursor construction so a matching fresh claim
+  // cannot cross the trace seam while the sequential harness driver is still
+  // scheduling the marker consumer. Its story occurrence is consumed by that
+  // driver, but all listed task IDs share the same terminal interruption.
+  const armedFreshTaskClaimSelectionHold = yield* SubscriptionRef.make(freshTaskClaimSelectionHold)
+  const activeFreshTaskClaimSelections = yield* SubscriptionRef.make<ReadonlyArray<TaskId>>([])
+  // Worktree-selection holds are pre-armed at cursor construction so a real
+  // ReconcileTaskWorktree selection cannot cross the trace seam before the
+  // direct driver has consumed the marker occurrence.
+  const armedTaskWorktreeSelectionHolds = yield* SubscriptionRef.make<
+    ReadonlyMap<string, { readonly item: TaskWorktreeSelectionHold; readonly release: Deferred.Deferred<void> }>
+  >(new Map(taskWorktreeSelectionHolds))
+  const armedPromotedCompletionReadHolds = yield* SubscriptionRef.make<
+    ReadonlyMap<string, { readonly item: PromotedCompletionReadHold; readonly release: Deferred.Deferred<void> }>
+  >(new Map(promotedCompletionReadHolds))
   const activeDalphSelections = yield* SubscriptionRef.make<ReadonlyArray<CassetteDecision>>([])
   const activeExecutorReportRequests = yield* SubscriptionRef.make<ReadonlyArray<ActiveExecutorReportRequest>>([])
   const activeIntegratorGitObservations = yield* SubscriptionRef.make<ReadonlyArray<IntegratorCandidateText>>([])
   const activeTargetPromotionGitRequests = yield* Ref.make<
     ReadonlyArray<{ readonly candidateCommit: GitCommitSha; readonly repository: GitRepositoryLocator }>
+  >([])
+  const activeTargetPromotionCompareAndSetRequests = yield* SubscriptionRef.make<
+    ReadonlyArray<TargetPromotionGitRequest>
   >([])
   const taskWorkSpecificationReadBoundaries = yield* SubscriptionRef.make<ReadonlyMap<TaskId, Deferred.Deferred<void>>>(
     new Map()
@@ -536,6 +652,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     "CassetteReleasesHeldTargetPromotionReconciliationRead",
     "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
     "CassetteReleasesHeldTaskWorkSpecificationRead",
+    "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion",
+    "CassetteReleasesHeldTaskWorktreeSelection",
+    "CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins",
+    "CassetteReleasesHeldPromotedTaskCompletionClaimRead",
     "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
     "OperatorAwaitsPauseProgress",
     "OperatorStartsPauseObservation",
@@ -978,6 +1098,26 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       return true
     }
   )
+  const awaitOwnedTargetPromotionCompareAndSetBeforeResponse = Effect.fn(
+    "AuthoredCassette.awaitOwnedTargetPromotionCompareAndSetBeforeResponse"
+  )(function* (item: StoryItem | undefined, index: number) {
+    if (
+      item?._tag !== "TargetPromotionCompareAndSetReturned" &&
+      item?._tag !== "TargetPromotionCompareAndSetResponseLost"
+    ) {
+      return false
+    }
+    const ownsCurrent = (active: ReadonlyArray<TargetPromotionGitRequest>) =>
+      active.some((candidate) => targetPromotionGitRequestMatches(candidate, item.request))
+    const ownership = SubscriptionRef.changes(activeTargetPromotionCompareAndSetRequests).pipe(
+      Stream.filter(ownsCurrent)
+    )
+    const isOwned = SubscriptionRef.get(activeTargetPromotionCompareAndSetRequests).pipe(Effect.map(ownsCurrent))
+    const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+    if (ownershipOrAdvance === "Unowned") return false
+    if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
+    return true
+  })
   const awaitOwnedExecutorRequestPublicationHoldBeforeSelection = Effect.fn(
     "AuthoredCassette.awaitOwnedExecutorRequestPublicationHoldBeforeSelection"
   )(function* (item: StoryItem | undefined, index: number) {
@@ -992,6 +1132,36 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     if (ownershipOrAdvance === "Unowned") return false
     if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
     return true
+  })
+  const awaitOwnedCurrentSelection = Effect.fn("AuthoredCassette.awaitOwnedCurrentSelection")(function* (
+    item: StoryItem | undefined,
+    index: number
+  ) {
+    if (item?._tag !== "DalphSelects") return false
+    const ownsCurrent = (active: ReadonlyArray<CassetteDecision>) =>
+      active.some((selection) => cassetteDecisionMatches(selection, item.operation))
+    const freshOwnsCurrent = (active: ReadonlyArray<TaskId>) =>
+      item.operation._tag === "AcquireTaskClaim" && active.includes(item.operation.taskId)
+    const ownership = Stream.merge(
+      SubscriptionRef.changes(activeDalphSelections).pipe(Stream.filter(ownsCurrent)),
+      SubscriptionRef.changes(activeFreshTaskClaimSelections).pipe(Stream.filter(freshOwnsCurrent))
+    )
+    const isOwned = Effect.zipWith(
+      SubscriptionRef.get(activeDalphSelections).pipe(Effect.map(ownsCurrent)),
+      SubscriptionRef.get(activeFreshTaskClaimSelections).pipe(Effect.map(freshOwnsCurrent)),
+      (selectionOwned, freshSelectionOwned) => selectionOwned || freshSelectionOwned
+    )
+    const ownershipOrAdvance = yield* awaitOwnershipOrAdvance(ownership, index, isOwned)
+    if (ownershipOrAdvance === "Unowned") return false
+    if (ownershipOrAdvance === "Owned") yield* awaitsLaterStoryItem(position, index)
+    return true
+  })
+  const awaitOwnedSelectionBoundary = Effect.fn("AuthoredCassette.awaitOwnedSelectionBoundary")(function* (
+    item: StoryItem | undefined,
+    index: number
+  ) {
+    if (yield* awaitOwnedExecutorRequestPublicationHoldBeforeSelection(item, index)) return true
+    return yield* awaitOwnedCurrentSelection(item, index)
   })
   const awaitOwnedStoryItemImmediatelyBeforeSelection = Effect.fn(
     "AuthoredCassette.awaitOwnedStoryItemImmediatelyBeforeSelection"
@@ -1037,7 +1207,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     }
     const claimed = yield* claimNext((item) => authoredDalphSelectionMatches(item, operation))
     if (claimed._tag === "Claimed") return claimed.item
-    if (yield* awaitOwnedExecutorRequestPublicationHoldBeforeSelection(claimed.item, claimed.index)) {
+    if (yield* awaitOwnedSelectionBoundary(claimed.item, claimed.index)) {
       return yield* consumeDalphSelectionForLoop(operation, context)
     }
     const activeRequests = yield* SubscriptionRef.get(activeExecutorReportRequests)
@@ -1187,6 +1357,126 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     yield* SubscriptionRef.set(taskWorkSpecificationReadBoundaries, remaining)
     return Option.some(claimed.item)
   })
+  const consumeTaskWorktreeSelectionHold = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is typeof AuthoredCassetteStoryItem.cases.CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion.Type =>
+        item?._tag === "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    const key = taskWorktreeSelectionHoldKey(claimed.item.taskId, claimed.item.attemptId)
+    const holds = yield* SubscriptionRef.get(armedTaskWorktreeSelectionHolds)
+    if (!holds.has(key)) return yield* Effect.die(`task worktree-selection hold ${key} was not pre-armed`)
+    return Option.some(claimed.item)
+  })
+  const consumeTaskWorktreeSelectionRelease = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldTaskWorktreeSelection.Type =>
+        item?._tag === "CassetteReleasesHeldTaskWorktreeSelection"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    const key = taskWorktreeSelectionHoldKey(claimed.item.taskId, claimed.item.attemptId)
+    const holds = yield* SubscriptionRef.get(armedTaskWorktreeSelectionHolds)
+    const hold = holds.get(key)
+    if (hold === undefined) return yield* Effect.die(`no held task worktree selection matches ${key}`)
+    if (!targetPromotionGitRequestMatches(hold.item.promotionRequest, claimed.item.promotionRequest)) {
+      return yield* Effect.die(`held task worktree selection ${key} has a different promotion request`)
+    }
+    yield* Deferred.succeed(hold.release, undefined)
+    yield* SubscriptionRef.set(
+      armedTaskWorktreeSelectionHolds,
+      new Map([...holds].filter(([candidate]) => candidate !== key))
+    )
+    return Option.some(claimed.item)
+  })
+  const awaitTaskWorktreeSelectionHold = (taskId: TaskId, attemptId: AttemptId) =>
+    SubscriptionRef.get(armedTaskWorktreeSelectionHolds).pipe(
+      Effect.flatMap((holds) => {
+        const key = taskWorktreeSelectionHoldKey(taskId, attemptId)
+        const hold = holds.get(key)
+        return hold === undefined ? Effect.void : Deferred.await(hold.release)
+      })
+    )
+  const consumePromotedCompletionReadHold = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is typeof AuthoredCassetteStoryItem.cases.CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins.Type =>
+        item?._tag === "CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    const holds = yield* SubscriptionRef.get(armedPromotedCompletionReadHolds)
+    const key = promotedCompletionReadHoldKey(claimed.item)
+    if (!holds.has(key)) return yield* Effect.die(`promoted completion-claim read hold ${key} was not pre-armed`)
+    return Option.some(claimed.item)
+  })
+  const consumePromotedCompletionReadRelease = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldPromotedTaskCompletionClaimRead.Type =>
+        item?._tag === "CassetteReleasesHeldPromotedTaskCompletionClaimRead"
+    )
+    if (claimed._tag === "Mismatch") return Option.none()
+    const holds = yield* SubscriptionRef.get(armedPromotedCompletionReadHolds)
+    const key = promotedCompletionReadHoldKey(claimed.item)
+    const hold = holds.get(key)
+    if (hold === undefined) return yield* Effect.die(`no promoted completion-claim read hold matches ${key}`)
+    yield* Deferred.succeed(hold.release, undefined)
+    yield* SubscriptionRef.set(
+      armedPromotedCompletionReadHolds,
+      new Map([...holds].filter(([candidate]) => candidate !== key))
+    )
+    return Option.some(claimed.item)
+  })
+  const awaitPromotedCompletionClaimRead = (taskId: TaskId) =>
+    SubscriptionRef.get(armedPromotedCompletionReadHolds).pipe(
+      Effect.flatMap((holds) => {
+        const matching = [...holds.values()].filter(({ item }) => item.promotedTaskId === taskId)
+        if (matching.length > 1) return Effect.die(`multiple promoted completion-claim read holds match ${taskId}`)
+        const hold = matching[0]
+        return hold === undefined ? Effect.void : Deferred.await(hold.release)
+      })
+    )
+  const consumeFreshTaskClaimSelectionHold = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (
+        item
+      ): item is typeof AuthoredCassetteStoryItem.cases.CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions.Type =>
+        item?._tag === "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions"
+    )
+    /* v8 ignore start -- @preserve The direct-item dispatcher consumes the one schema-validated marker; cursor construction rejects duplicates. */
+    if (claimed._tag === "Mismatch") return Option.none()
+    const armed = yield* SubscriptionRef.get(armedFreshTaskClaimSelectionHold)
+    if (Option.isNone(armed)) {
+      return yield* Effect.die("fresh task-claim selection hold marker was not armed")
+    }
+    /* v8 ignore stop -- @preserve */
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(
+        AuthoredCassetteStoryItem.cases.CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions
+      )(claimed.item).pipe(Effect.orDie)
+    )
+  })
+  const awaitFreshTaskClaimSelectionHold = (taskId: TaskId) =>
+    SubscriptionRef.get(armedFreshTaskClaimSelectionHold).pipe(
+      Effect.flatMap((hold) =>
+        Option.isSome(hold) && hold.value.taskIds.includes(taskId)
+          ? Effect.acquireUseRelease(
+              SubscriptionRef.update(activeFreshTaskClaimSelections, (active) => [...active, taskId]),
+              // There is intentionally no release item for this control. The
+              // runner races the coordinator against terminal assertions and
+              // interrupts the parked delivery fibers when that item becomes
+              // current.
+              () => Effect.never,
+              () =>
+                SubscriptionRef.update(activeFreshTaskClaimSelections, (active) => {
+                  const index = active.indexOf(taskId)
+                  return index < 0 ? active : [...active.slice(0, index), ...active.slice(index + 1)]
+                })
+            )
+          : Effect.void
+      )
+    )
   const consumeRunReactivationHints = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.CassetteOffersRunReactivationHints.Type =>
@@ -1447,19 +1737,21 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     )
   )
   /* v8 ignore start -- @preserve Maintained promotion cassettes cover returned, lost, and unreadable outcomes; generic authored-boundary mismatch projection is exercised by the shared cursor tests. */
-  const consumeTargetPromotionCompareAndSet = Effect.gen(function* () {
+  const consumeTargetPromotionCompareAndSetLoop: StoryCursor["consumeTargetPromotionCompareAndSet"] = Effect.fn(
+    "AuthoredCassette.consumeTargetPromotionCompareAndSetLoop"
+  )(function* (request) {
     const claimed = yield* claimNext(
-      (
-        item
-      ): item is
-        | typeof AuthoredCassetteStoryItem.cases.TargetPromotionCompareAndSetReturned.Type
-        | typeof AuthoredCassetteStoryItem.cases.TargetPromotionCompareAndSetResponseLost.Type =>
-        item?._tag === "TargetPromotionCompareAndSetReturned" ||
-        item?._tag === "TargetPromotionCompareAndSetResponseLost"
+      (item): item is TargetPromotionCompareAndSetStoryItem =>
+        (item?._tag === "TargetPromotionCompareAndSetReturned" ||
+          item?._tag === "TargetPromotionCompareAndSetResponseLost") &&
+        targetPromotionGitRequestMatches(item.request, request)
     )
     if (claimed._tag === "Mismatch") {
+      if (yield* awaitOwnedTargetPromotionCompareAndSetBeforeResponse(claimed.item, claimed.index)) {
+        return yield* consumeTargetPromotionCompareAndSetLoop(request)
+      }
       return yield* new AuthoredCassetteInteractionMismatch({
-        actual: "TargetPromotionCompareAndSetReturned | TargetPromotionCompareAndSetResponseLost",
+        actual: JSON.stringify(request),
         expected: claimed.item?._tag ?? "EndOfStory",
         storyPosition: claimed.index
       })
@@ -1472,6 +1764,30 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     }
     return claimed.item
   })
+  const consumeTargetPromotionCompareAndSet: StoryCursor["consumeTargetPromotionCompareAndSet"] = Effect.fn(
+    "AuthoredCassette.consumeTargetPromotionCompareAndSet"
+  )((request) =>
+    Effect.acquireUseRelease(
+      SubscriptionRef.modify(activeTargetPromotionCompareAndSetRequests, (current) => {
+        if (current.some((candidate) => targetPromotionGitRequestMatches(candidate, request))) {
+          return [false, current] as const
+        }
+        return [true, [...current, request]] as const
+      }).pipe(
+        Effect.flatMap((registered) =>
+          registered
+            ? Effect.void
+            : Effect.die(`target-promotion CAS request is already in flight: ${JSON.stringify(request)}`)
+        )
+      ),
+      () => consumeTargetPromotionCompareAndSetLoop(request),
+      () =>
+        SubscriptionRef.update(activeTargetPromotionCompareAndSetRequests, (current) => {
+          const index = current.findIndex((candidate) => targetPromotionGitRequestMatches(candidate, request))
+          return index < 0 ? current : [...current.slice(0, index), ...current.slice(index + 1)]
+        })
+    )
+  )
   const consumeTargetPromotionGitReadLoop: (
     repository: GitRepositoryLocator,
     candidateCommit: GitCommitSha
@@ -1948,6 +2264,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeTaskWorkSpecificationReadBoundaryHold,
     consumeTaskWorkSpecificationReadBoundaryRelease,
     awaitTaskWorkSpecificationReadBoundary,
+    consumeTaskWorktreeSelectionHold,
+    consumeTaskWorktreeSelectionRelease,
+    awaitTaskWorktreeSelectionHold,
+    consumePromotedCompletionReadHold,
+    consumePromotedCompletionReadRelease,
+    awaitPromotedCompletionClaimRead,
+    consumeFreshTaskClaimSelectionHold,
+    awaitFreshTaskClaimSelectionHold,
     consumeCoordinatorActivationReturned,
     consumeCompletionClaimDeletionApplied,
     consumeCompletionClaimReadReturned,

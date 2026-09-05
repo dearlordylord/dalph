@@ -85,12 +85,15 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent
 } from "../../registry/event.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation
@@ -136,6 +139,7 @@ const integrationTarget = IntegrationTarget.make({
 const plannedSpecification = makeTaskWorkSpecification({ body: "F1", taskId, title: "F1" })
 const changedSpecification = makeTaskWorkSpecification({ body: "F2", taskId, title: "F2" })
 const thirdSpecification = makeTaskWorkSpecification({ body: "F3", taskId, title: "F3" })
+const independentSpecification = makeTaskWorkSpecification({ body: "C", taskId: independentTaskId, title: "C" })
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("attempt-restart-P1"),
   baseSha,
@@ -163,7 +167,7 @@ const independentAttempt = PlannedTaskAttempt.make({
   executor: plannedAttempt.executor,
   runId,
   taskId: independentTaskId,
-  taskRevision: plannedSpecification.fingerprint,
+  taskRevision: independentSpecification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/attempt-restart-C-P1")
 })
 const exactClaim = ActiveTaskClaim.make({
@@ -178,6 +182,12 @@ const foreignClaim = ActiveTaskClaim.make({
   taskId,
   token: ClaimToken.make("attempt-restart-foreign-token")
 })
+const independentClaim = ActiveTaskClaim.make({
+  operationId: OperationId.make("attempt-restart-independent-claim"),
+  owner: ClaimOwner.make("dalph"),
+  taskId: independentTaskId,
+  token: ClaimToken.make("attempt-restart-independent-token")
+})
 const reacquisitionRequestId = TaskClaimReacquisitionRequestId.make("attempt-restart-post-choice-reacquisition")
 const reacquiredClaim = ActiveTaskClaim.make({
   operationId: taskClaimReacquisitionOperationId(reacquisitionRequestId),
@@ -186,10 +196,63 @@ const reacquiredClaim = ActiveTaskClaim.make({
   token: ClaimToken.make("attempt-restart-reacquired-token")
 })
 const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: exactClaim, predecessorOperationIds: [] })
+const plannedGraphOperation = makeTrackerGraphObservationOperation(
+  { _tag: "WorkflowEstablishment" },
+  OperationId.make("attempt-restart-planned-post-claim-graph"),
+  target,
+  [exactClaim.operationId],
+  [taskId]
+)
+const plannedSpecificationRead = makeTaskWorkSpecificationObservationOperation(
+  OperationId.make("attempt-restart-planned-F1"),
+  target,
+  taskId,
+  [plannedGraphOperation.operationId]
+)
 const planOperation = makeTaskAttemptPlanOperation({
   operationId: OperationId.make("attempt-restart-plan-P1"),
   plannedAttempt,
-  predecessorOperationIds: [exactClaim.operationId]
+  predecessorOperationIds: [
+    exactClaim.operationId,
+    plannedGraphOperation.operationId,
+    plannedSpecificationRead.operationId
+  ]
+})
+const plannedWorktreeOperation = makeTaskWorktreeReconciliationOperation({
+  operationId: OperationId.make("attempt-restart-planned-worktree-P1"),
+  plannedAttempt,
+  predecessorOperationIds: [planOperation.operationId]
+})
+const independentClaimOperation = makeTaskClaimAcquisitionOperation({
+  acquisition: independentClaim,
+  predecessorOperationIds: []
+})
+const independentGraphOperation = makeTrackerGraphObservationOperation(
+  { _tag: "WorkflowEstablishment" },
+  OperationId.make("attempt-restart-independent-post-claim-graph"),
+  target,
+  [independentClaim.operationId],
+  [independentTaskId]
+)
+const independentSpecificationRead = makeTaskWorkSpecificationObservationOperation(
+  OperationId.make("attempt-restart-independent-specification"),
+  target,
+  independentTaskId,
+  [independentGraphOperation.operationId]
+)
+const independentPlanOperation = makeTaskAttemptPlanOperation({
+  operationId: OperationId.make("attempt-restart-plan-C-P1"),
+  plannedAttempt: independentAttempt,
+  predecessorOperationIds: [
+    independentClaim.operationId,
+    independentGraphOperation.operationId,
+    independentSpecificationRead.operationId
+  ]
+})
+const independentWorktreeOperation = makeTaskWorktreeReconciliationOperation({
+  operationId: OperationId.make("attempt-restart-independent-worktree-C-P1"),
+  plannedAttempt: independentAttempt,
+  predecessorOperationIds: [independentPlanOperation.operationId]
 })
 const requestId = AttemptChoiceRequestId.make({ nonce: "attempt-restart-D1", runId })
 const subject = { observedTaskRevision: changedSpecification.fingerprint, plannedAttempt }
@@ -229,8 +292,56 @@ const appendExposedRestart = Effect.gen(function* () {
   )
   yield* journal.append(
     runId,
+    intentRecordKey(plannedGraphOperation.operationId),
+    taskTrackerReadIntent(plannedGraphOperation)
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(plannedGraphOperation.operationId),
+    taskTrackerGraphFactsObserved(plannedGraphOperation, {
+      revision: TrackerRevision.make("attempt-restart-planned-graph"),
+      taskIds: [taskId]
+    })
+  )
+  yield* journal.append(
+    runId,
+    intentRecordKey(plannedSpecificationRead.operationId),
+    taskTrackerReadIntent(plannedSpecificationRead)
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(plannedSpecificationRead.operationId),
+    taskTrackerFactsObservedEvent(
+      plannedSpecificationRead.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(plannedSpecificationRead, plannedSpecification)
+    )
+  )
+  yield* journal.append(
+    runId,
     attemptPlanRecordKey(plannedAttempt.attemptId),
     TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    runId,
+    intentRecordKey(plannedWorktreeOperation.operationId),
+    TaskWorktreeReconciliationIntendedEvent.make({
+      operation: plannedWorktreeOperation,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(plannedWorktreeOperation.operationId),
+    TaskWorktreeReadyEvent.make({
+      operationId: plannedWorktreeOperation.operationId,
+      proof: PlannedWorktreeReady.make({
+        baseSha: plannedAttempt.baseSha,
+        branch: plannedAttempt.branch,
+        headSha: plannedAttempt.baseSha,
+        worktree: plannedAttempt.worktree
+      }),
+      version: workflowJournalEventVersion
+    })
   )
   yield* appendAcceptedSafeExecutorHistory(plannedAttempt)
   const originalSpecificationRead = makeTaskWorkSpecificationObservationOperation(
@@ -388,15 +499,72 @@ const exerciseRestart = (options: RestartHarnessOptions) =>
       )
     }
     if (options.additionalRecordedAttempt === true) {
-      const additionalPlan = makeTaskAttemptPlanOperation({
-        operationId: OperationId.make("attempt-restart-plan-C-P1"),
-        plannedAttempt: independentAttempt,
-        predecessorOperationIds: []
-      })
-      yield* (yield* JournalStore).append(
+      const journal = yield* JournalStore
+      yield* journal.append(
+        runId,
+        intentRecordKey(independentClaim.operationId),
+        TaskClaimAcquisitionIntendedEvent.make({
+          operation: independentClaimOperation,
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(independentClaim.operationId),
+        TaskClaimAcquiredEvent.make({ claim: independentClaim, version: workflowJournalEventVersion })
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(independentGraphOperation.operationId),
+        taskTrackerReadIntent(independentGraphOperation)
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(independentGraphOperation.operationId),
+        taskTrackerGraphFactsObserved(independentGraphOperation, {
+          revision: TrackerRevision.make("attempt-restart-independent-graph"),
+          taskIds: [independentTaskId]
+        })
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(independentSpecificationRead.operationId),
+        taskTrackerReadIntent(independentSpecificationRead)
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(independentSpecificationRead.operationId),
+        taskTrackerFactsObservedEvent(
+          independentSpecificationRead.operationId,
+          makeFocusedTaskWorkSpecificationFactsObserved(independentSpecificationRead, independentSpecification)
+        )
+      )
+      yield* journal.append(
         runId,
         attemptPlanRecordKey(independentAttempt.attemptId),
-        TaskAttemptPlannedEvent.make({ operation: additionalPlan, version: workflowJournalEventVersion })
+        TaskAttemptPlannedEvent.make({ operation: independentPlanOperation, version: workflowJournalEventVersion })
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(independentWorktreeOperation.operationId),
+        TaskWorktreeReconciliationIntendedEvent.make({
+          operation: independentWorktreeOperation,
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(independentWorktreeOperation.operationId),
+        TaskWorktreeReadyEvent.make({
+          operationId: independentWorktreeOperation.operationId,
+          proof: PlannedWorktreeReady.make({
+            baseSha: independentAttempt.baseSha,
+            branch: independentAttempt.branch,
+            headSha: independentAttempt.baseSha,
+            worktree: independentAttempt.worktree
+          }),
+          version: workflowJournalEventVersion
+        })
       )
     }
     const plannerCalls = yield* Ref.make(0)
@@ -1003,7 +1171,7 @@ it.effect("atomically supersedes exact P1 with clean P2 from fresh F2 K1 W1 and 
     expect(yield* Ref.get(trackerReads)).toBe(2)
     expect(yield* Ref.get(gitReads)).toBe(2)
     expect(records.some(({ event }) => event._tag === "TaskClaimReleaseIntended")).toBe(false)
-    expect(records.some(({ event }) => event._tag === "TaskWorktreeReconciliationIntended")).toBe(false)
+    expect(records.filter(({ event }) => event._tag === "TaskWorktreeReconciliationIntended")).toHaveLength(1)
     expect(authorizedClaimForAttempt(records, successorAttempt)?.claim).toEqual(exactClaim)
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
     const replacementPosition = replacements[0]?.position
@@ -1690,7 +1858,7 @@ for (const fixture of nonAuthorizingCases) {
           expect(plannerCalls).toBe(0)
           expect(records.some(({ event }) => event._tag === "PlannedAttemptReplaced")).toBe(false)
           expect(records.some(({ event }) => event._tag === "TaskClaimReleaseIntended")).toBe(false)
-          expect(records.some(({ event }) => event._tag === "TaskWorktreeReconciliationIntended")).toBe(false)
+          expect(records.filter(({ event }) => event._tag === "TaskWorktreeReconciliationIntended")).toHaveLength(1)
           if (
             fixture.reason === "TaskFactsUnreadable" ||
             fixture.reason === "OldWorktreeUnreadable" ||

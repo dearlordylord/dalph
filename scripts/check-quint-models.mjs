@@ -12,7 +12,7 @@ import {
   runActivationObligations,
   taskFactReconciliationObligations
 } from "./quint-model-obligations.mjs"
-import { quintGateRegressionBudgetMilliseconds } from "./quint-gate-policy.mjs"
+import { quintGateRegressionBudgetMilliseconds, quintGateSafetyTimeoutMilliseconds } from "./quint-gate-policy.mjs"
 import {
   apalacheVersion,
   assertCleanTemporalVerdict,
@@ -29,34 +29,55 @@ if (pnpmEntryPoint === undefined) {
 }
 
 const startedAt = performance.now()
+const completedStageTimings = []
 
-const remainingBudgetMilliseconds = () =>
-  Math.max(1, quintGateRegressionBudgetMilliseconds - (performance.now() - startedAt))
+const remainingSafetyTimeoutMilliseconds = () =>
+  Math.max(1, quintGateSafetyTimeoutMilliseconds - (performance.now() - startedAt))
 
 const run = async (name, args, options = {}) => {
   process.stdout.write(`\n== ${name} ==\n`)
-  return runBoundedCommand({
+  const stageStartedAt = performance.now()
+  const result = await runBoundedCommand({
     args: [pnpmEntryPoint, "quint", ...args],
     executable: process.execPath,
     name,
-    timeoutMilliseconds: remainingBudgetMilliseconds(),
+    timeoutMilliseconds: remainingSafetyTimeoutMilliseconds(),
     ...options
   })
+  completedStageTimings.push({ elapsedMilliseconds: Number((performance.now() - stageStartedAt).toFixed(2)), name })
+  return result
 }
 
+// Collected tests are exact chronological examples or mutation witnesses.
+// Unconstrained random exploration belongs in a separately named sampled-test
+// stage with its own budget.
+const runCollectedTest = async (name, args, seed) => run(name, ["test", ...args, "--max-samples", "1", "--seed", seed])
+
+const canonicalCollectedTestSeeds = Object.freeze({
+  plannedAttemptExecutor: Object.freeze({ deterministic: "26401", negative: "26402" }),
+  applicationExit: Object.freeze({ deterministic: "20301", negative: "20302" }),
+  controlDirectionApplication: Object.freeze({ deterministic: "65001", negative: "65002" }),
+  runActivation: Object.freeze({ deterministic: "21801", negative: "21802" }),
+  freshTaskAdmission: Object.freeze({ deterministic: "31501", negative: "31502" }),
+  runCancellation: Object.freeze({ deterministic: "10201", negative: "10202" }),
+  taskFactReconciliation: Object.freeze({ deterministic: "13601", negative: "13602" }),
+  gitReconciliation: Object.freeze({ deterministic: "69001", negative: "69002" }),
+  acceptedResultIntegration: Object.freeze({ deterministic: "68001", negative: "68002" }),
+  acceptedResultIntegrationQuarantineProof: Object.freeze({ deterministic: "680101", negative: "680102" }),
+  integrationFinality: Object.freeze({ deterministic: "61001", negative: "61002" })
+})
+
 await run("planned-attempt executor model typecheck", ["typecheck", "specs/plannedAttemptExecutor.qnt"])
-await run("planned-attempt executor deterministic tests", [
-  "test",
-  "specs/plannedAttemptExecutor_test.qnt",
-  "--main",
-  "plannedAttemptExecutorTest"
-])
-await run("planned-attempt executor negative mutation profile", [
-  "test",
-  "specs/plannedAttemptExecutor_negative_test.qnt",
-  "--main",
-  "plannedAttemptExecutorNegativeTest"
-])
+await runCollectedTest(
+  "planned-attempt executor deterministic tests",
+  ["specs/plannedAttemptExecutor_test.qnt", "--main", "plannedAttemptExecutorTest"],
+  canonicalCollectedTestSeeds.plannedAttemptExecutor.deterministic
+)
+await runCollectedTest(
+  "planned-attempt executor negative mutation profile",
+  ["specs/plannedAttemptExecutor_negative_test.qnt", "--main", "plannedAttemptExecutorNegativeTest"],
+  canonicalCollectedTestSeeds.plannedAttemptExecutor.negative
+)
 const plannedAttemptExecutorInvariants = plannedAttemptExecutorObligations.invariants
 const plannedAttemptExecutorWitnesses = plannedAttemptExecutorObligations.witnesses
 await run("planned-attempt executor sampled model", [
@@ -170,18 +191,16 @@ await run("planned-attempt executor proof projection typecheck", [
   "specs/plannedAttemptExecutor_proof.qnt"
 ])
 for (const proof of plannedAttemptExecutorProofs) {
-  await run(`${proof.title} deterministic tests`, [
-    "test",
-    "specs/plannedAttemptExecutor_proof_test.qnt",
-    "--main",
-    proof.testMain
-  ])
-  await run(`${proof.title} negative mutation profile`, [
-    "test",
-    "specs/plannedAttemptExecutor_proof_negative_test.qnt",
-    "--main",
-    proof.negativeTestMain
-  ])
+  await runCollectedTest(
+    `${proof.title} deterministic tests`,
+    ["specs/plannedAttemptExecutor_proof_test.qnt", "--main", proof.testMain],
+    `${proof.seed}01`
+  )
+  await runCollectedTest(
+    `${proof.title} negative mutation profile`,
+    ["specs/plannedAttemptExecutor_proof_negative_test.qnt", "--main", proof.negativeTestMain],
+    `${proof.seed}02`
+  )
   await run(`${proof.title} sampled model`, [
     "run",
     "specs/plannedAttemptExecutor_proof.qnt",
@@ -220,18 +239,16 @@ for (const proof of plannedAttemptExecutorProofs) {
 const applicationExitCheck = applicationExitCheckRegistry.canonical
 
 await run("application Exit model typecheck", ["typecheck", applicationExitCheck.file])
-await run("application Exit deterministic tests", [
-  "test",
-  applicationExitCheck.testFile,
-  "--main",
-  applicationExitCheck.testMain
-])
-await run("application Exit negative mutation profile", [
-  "test",
-  applicationExitCheck.negativeTestFile,
-  "--main",
-  applicationExitCheck.negativeTestMain
-])
+await runCollectedTest(
+  "application Exit deterministic tests",
+  [applicationExitCheck.testFile, "--main", applicationExitCheck.testMain],
+  canonicalCollectedTestSeeds.applicationExit.deterministic
+)
+await runCollectedTest(
+  "application Exit negative mutation profile",
+  [applicationExitCheck.negativeTestFile, "--main", applicationExitCheck.negativeTestMain],
+  canonicalCollectedTestSeeds.applicationExit.negative
+)
 await run("application Exit sampled model", [
   "run",
   applicationExitCheck.file,
@@ -255,18 +272,16 @@ await run("application Exit sampled model", [
 // to own complete enumeration while the canonical model retains behavior.
 await run("application Exit proof projection typecheck", ["typecheck", applicationExitCheckRegistry.proofFile])
 for (const proof of applicationExitCheckRegistry.proofs) {
-  await run(`${proof.title} deterministic tests`, [
-    "test",
-    applicationExitCheckRegistry.proofTestFile,
-    "--main",
-    proof.testMain
-  ])
-  await run(`${proof.title} negative mutation profile`, [
-    "test",
-    applicationExitCheckRegistry.proofNegativeTestFile,
-    "--main",
-    proof.negativeTestMain
-  ])
+  await runCollectedTest(
+    `${proof.title} deterministic tests`,
+    [applicationExitCheckRegistry.proofTestFile, "--main", proof.testMain],
+    `${proof.seed}01`
+  )
+  await runCollectedTest(
+    `${proof.title} negative mutation profile`,
+    [applicationExitCheckRegistry.proofNegativeTestFile, "--main", proof.negativeTestMain],
+    `${proof.seed}02`
+  )
   await run(`${proof.title} sampled model`, [
     "run",
     applicationExitCheckRegistry.proofFile,
@@ -309,18 +324,16 @@ const controlDirectionApplicationInvariants = [
 ]
 
 await run("control-direction application model typecheck", ["typecheck", "specs/controlDirectionApplication.qnt"])
-await run("control-direction application deterministic tests", [
-  "test",
-  "specs/controlDirectionApplication_test.qnt",
-  "--main",
-  "controlDirectionApplicationTest"
-])
-await run("control-direction application negative mutation profile", [
-  "test",
-  "specs/controlDirectionApplication_negative_test.qnt",
-  "--main",
-  "controlDirectionApplicationNegativeTest"
-])
+await runCollectedTest(
+  "control-direction application deterministic tests",
+  ["specs/controlDirectionApplication_test.qnt", "--main", "controlDirectionApplicationTest"],
+  canonicalCollectedTestSeeds.controlDirectionApplication.deterministic
+)
+await runCollectedTest(
+  "control-direction application negative mutation profile",
+  ["specs/controlDirectionApplication_negative_test.qnt", "--main", "controlDirectionApplicationNegativeTest"],
+  canonicalCollectedTestSeeds.controlDirectionApplication.negative
+)
 await run("control-direction application sampled model", [
   "run",
   "specs/controlDirectionApplication.qnt",
@@ -358,13 +371,16 @@ const runActivationInvariants = runActivationObligations.invariants
 const runActivationWitnesses = runActivationObligations.witnesses
 
 await run("Run activation model typecheck", ["typecheck", "specs/runActivation.qnt"])
-await run("Run activation deterministic tests", ["test", "specs/runActivation_test.qnt", "--main", "runActivationTest"])
-await run("Run activation negative mutation profile", [
-  "test",
-  "specs/runActivation_negative_test.qnt",
-  "--main",
-  "runActivationNegativeTest"
-])
+await runCollectedTest(
+  "Run activation deterministic tests",
+  ["specs/runActivation_test.qnt", "--main", "runActivationTest"],
+  canonicalCollectedTestSeeds.runActivation.deterministic
+)
+await runCollectedTest(
+  "Run activation negative mutation profile",
+  ["specs/runActivation_negative_test.qnt", "--main", "runActivationNegativeTest"],
+  canonicalCollectedTestSeeds.runActivation.negative
+)
 await run("Run activation sampled model", [
   "run",
   "specs/runActivation.qnt",
@@ -397,18 +413,16 @@ const freshTaskAdmissionInvariants = freshTaskAdmissionObligations.invariants
 const freshTaskAdmissionWitnesses = freshTaskAdmissionObligations.witnesses
 
 await run("fresh-task admission model typecheck", ["typecheck", "specs/freshTaskAdmission.qnt"])
-await run("fresh-task admission deterministic tests", [
-  "test",
-  "specs/freshTaskAdmission_test.qnt",
-  "--main",
-  "freshTaskAdmissionTest"
-])
-await run("fresh-task admission negative mutation profile", [
-  "test",
-  "specs/freshTaskAdmission_negative_test.qnt",
-  "--main",
-  "freshTaskAdmissionNegativeTest"
-])
+await runCollectedTest(
+  "fresh-task admission deterministic tests",
+  ["specs/freshTaskAdmission_test.qnt", "--main", "freshTaskAdmissionTest"],
+  canonicalCollectedTestSeeds.freshTaskAdmission.deterministic
+)
+await runCollectedTest(
+  "fresh-task admission negative mutation profile",
+  ["specs/freshTaskAdmission_negative_test.qnt", "--main", "freshTaskAdmissionNegativeTest"],
+  canonicalCollectedTestSeeds.freshTaskAdmission.negative
+)
 await run("fresh-task admission sampled model", [
   "run",
   "specs/freshTaskAdmission.qnt",
@@ -425,10 +439,7 @@ await run("fresh-task admission sampled model", [
   "--verbosity",
   "1"
 ])
-await run("fresh-task admission proof projection typecheck", [
-  "typecheck",
-  "specs/freshTaskAdmission_proof.qnt"
-])
+await run("fresh-task admission proof projection typecheck", ["typecheck", "specs/freshTaskAdmission_proof.qnt"])
 const freshTaskAdmissionProofs = [
   {
     key: "capacity",
@@ -451,26 +462,47 @@ const freshTaskAdmissionProofs = [
 ]
 for (const proof of freshTaskAdmissionProofs) {
   const obligations = freshTaskAdmissionProofObligations[proof.key]
-  await run(`${proof.title} deterministic tests`, [
-    "test", "specs/freshTaskAdmission_proof_test.qnt", "--main", proof.testMain
-  ])
-  await run(`${proof.title} negative mutation profile`, [
-    "test", "specs/freshTaskAdmission_proof_negative_test.qnt",
-    "--main", proof.negativeTestMain
-  ])
+  await runCollectedTest(
+    `${proof.title} deterministic tests`,
+    ["specs/freshTaskAdmission_proof_test.qnt", "--main", proof.testMain],
+    `${proof.seed}01`
+  )
+  await runCollectedTest(
+    `${proof.title} negative mutation profile`,
+    ["specs/freshTaskAdmission_proof_negative_test.qnt", "--main", proof.negativeTestMain],
+    `${proof.seed}02`
+  )
   await run(`${proof.title} sampled model`, [
-    "run", "specs/freshTaskAdmission_proof.qnt", "--main", proof.main,
-    "--invariants", ...obligations.invariants,
-    "--witnesses", ...obligations.witnesses,
-    "--max-steps", proof.maxSteps, "--max-samples", "5000",
-    "--seed", proof.seed, "--verbosity", "1"
+    "run",
+    "specs/freshTaskAdmission_proof.qnt",
+    "--main",
+    proof.main,
+    "--invariants",
+    ...obligations.invariants,
+    "--witnesses",
+    ...obligations.witnesses,
+    "--max-steps",
+    proof.maxSteps,
+    "--max-samples",
+    "5000",
+    "--seed",
+    proof.seed,
+    "--verbosity",
+    "1"
   ])
   // TLC enumerates each complete finite projection graph without a depth
   // token; the canonical five-task model retains the richer sampled behavior.
   await run(`${proof.title} exhaustive model`, [
-    "verify", "specs/freshTaskAdmission_proof.qnt", "--main", proof.main,
-    "--backend", "tlc", "--invariants", ...obligations.invariants,
-    "--verbosity", "1"
+    "verify",
+    "specs/freshTaskAdmission_proof.qnt",
+    "--main",
+    proof.main,
+    "--backend",
+    "tlc",
+    "--invariants",
+    ...obligations.invariants,
+    "--verbosity",
+    "1"
   ])
 }
 
@@ -478,18 +510,16 @@ const runCancellationInvariants = runCancellationObligations.invariants
 const runCancellationWitnesses = runCancellationObligations.witnesses
 
 await run("Run cancellation model typecheck", ["typecheck", "specs/runCancellation.qnt"])
-await run("Run cancellation deterministic tests", [
-  "test",
-  "specs/runCancellation_test.qnt",
-  "--main",
-  "runCancellationTest"
-])
-await run("Run cancellation negative mutation profile", [
-  "test",
-  "specs/runCancellation_negative_test.qnt",
-  "--main",
-  "runCancellationNegativeTest"
-])
+await runCollectedTest(
+  "Run cancellation deterministic tests",
+  ["specs/runCancellation_test.qnt", "--main", "runCancellationTest"],
+  canonicalCollectedTestSeeds.runCancellation.deterministic
+)
+await runCollectedTest(
+  "Run cancellation negative mutation profile",
+  ["specs/runCancellation_negative_test.qnt", "--main", "runCancellationNegativeTest"],
+  canonicalCollectedTestSeeds.runCancellation.negative
+)
 await run("Run cancellation sampled model", [
   "run",
   "specs/runCancellation.qnt",
@@ -524,18 +554,16 @@ const taskFactReconciliationInvariants = taskFactReconciliationObligations.invar
 const taskFactReconciliationWitnesses = taskFactReconciliationObligations.witnesses
 
 await run("task-fact reconciliation model typecheck", ["typecheck", "specs/taskFactReconciliation.qnt"])
-await run("task-fact reconciliation deterministic tests", [
-  "test",
-  "specs/taskFactReconciliation_test.qnt",
-  "--main",
-  "taskFactReconciliationTest"
-])
-await run("task-fact reconciliation negative mutation profile", [
-  "test",
-  "specs/taskFactReconciliation_negative_test.qnt",
-  "--main",
-  "taskFactReconciliationNegativeTest"
-])
+await runCollectedTest(
+  "task-fact reconciliation deterministic tests",
+  ["specs/taskFactReconciliation_test.qnt", "--main", "taskFactReconciliationTest"],
+  canonicalCollectedTestSeeds.taskFactReconciliation.deterministic
+)
+await runCollectedTest(
+  "task-fact reconciliation negative mutation profile",
+  ["specs/taskFactReconciliation_negative_test.qnt", "--main", "taskFactReconciliationNegativeTest"],
+  canonicalCollectedTestSeeds.taskFactReconciliation.negative
+)
 await run("task-fact reconciliation sampled model", [
   "run",
   "specs/taskFactReconciliation.qnt",
@@ -670,18 +698,16 @@ const taskFactProofs = [
 
 await run("task-fact proof projection typecheck", ["typecheck", "specs/taskFactReconciliation_proof.qnt"])
 for (const proof of taskFactProofs) {
-  await run(`${proof.title} deterministic tests`, [
-    "test",
-    "specs/taskFactReconciliation_proof_test.qnt",
-    "--main",
-    proof.testMain
-  ])
-  await run(`${proof.title} negative mutation profile`, [
-    "test",
-    "specs/taskFactReconciliation_proof_negative_test.qnt",
-    "--main",
-    proof.negativeTestMain
-  ])
+  await runCollectedTest(
+    `${proof.title} deterministic tests`,
+    ["specs/taskFactReconciliation_proof_test.qnt", "--main", proof.testMain],
+    `${proof.seed}01`
+  )
+  await runCollectedTest(
+    `${proof.title} negative mutation profile`,
+    ["specs/taskFactReconciliation_proof_negative_test.qnt", "--main", proof.negativeTestMain],
+    `${proof.seed}02`
+  )
   await run(`${proof.title} sampled model`, [
     "run",
     "specs/taskFactReconciliation_proof.qnt",
@@ -744,18 +770,16 @@ const gitReconciliationInvariants = [
 ]
 
 await run("Git reconciliation model typecheck", ["typecheck", "specs/gitReconciliation.qnt"])
-await run("Git reconciliation deterministic tests", [
-  "test",
-  "specs/gitReconciliation_test.qnt",
-  "--main",
-  "gitReconciliationTest"
-])
-await run("Git reconciliation negative mutation profile", [
-  "test",
-  "specs/gitReconciliation_negative_test.qnt",
-  "--main",
-  "gitReconciliationNegativeTest"
-])
+await runCollectedTest(
+  "Git reconciliation deterministic tests",
+  ["specs/gitReconciliation_test.qnt", "--main", "gitReconciliationTest"],
+  canonicalCollectedTestSeeds.gitReconciliation.deterministic
+)
+await runCollectedTest(
+  "Git reconciliation negative mutation profile",
+  ["specs/gitReconciliation_negative_test.qnt", "--main", "gitReconciliationNegativeTest"],
+  canonicalCollectedTestSeeds.gitReconciliation.negative
+)
 await run("Git reconciliation sampled model", [
   "run",
   "specs/gitReconciliation.qnt",
@@ -820,18 +844,16 @@ const acceptedResultIntegrationQuarantineProofInvariants =
 const acceptedResultIntegrationQuarantineProofWitnesses = acceptedResultIntegrationQuarantineProofObligations.witnesses
 
 await run("accepted-result integration model typecheck", ["typecheck", "specs/acceptedResultIntegration.qnt"])
-await run("accepted-result integration deterministic tests", [
-  "test",
-  "specs/acceptedResultIntegration_test.qnt",
-  "--main",
-  "acceptedResultIntegrationTest"
-])
-await run("accepted-result integration negative mutation profile", [
-  "test",
-  "specs/acceptedResultIntegration_negative_test.qnt",
-  "--main",
-  "acceptedResultIntegrationNegativeTest"
-])
+await runCollectedTest(
+  "accepted-result integration deterministic tests",
+  ["specs/acceptedResultIntegration_test.qnt", "--main", "acceptedResultIntegrationTest"],
+  canonicalCollectedTestSeeds.acceptedResultIntegration.deterministic
+)
+await runCollectedTest(
+  "accepted-result integration negative mutation profile",
+  ["specs/acceptedResultIntegration_negative_test.qnt", "--main", "acceptedResultIntegrationNegativeTest"],
+  canonicalCollectedTestSeeds.acceptedResultIntegration.negative
+)
 await run("accepted-result integration sampled model", [
   "run",
   "specs/acceptedResultIntegration.qnt",
@@ -854,18 +876,20 @@ await run("accepted-result integration quarantine proof typecheck", [
   "typecheck",
   "specs/acceptedResultIntegration_proof.qnt"
 ])
-await run("accepted-result integration quarantine proof deterministic tests", [
-  "test",
-  "specs/acceptedResultIntegration_proof_test.qnt",
-  "--main",
-  "acceptedResultIntegrationQuarantineProofTest"
-])
-await run("accepted-result integration quarantine proof negative mutation profile", [
-  "test",
-  "specs/acceptedResultIntegration_proof_negative_test.qnt",
-  "--main",
-  "acceptedResultIntegrationQuarantineProofNegativeTest"
-])
+await runCollectedTest(
+  "accepted-result integration quarantine proof deterministic tests",
+  ["specs/acceptedResultIntegration_proof_test.qnt", "--main", "acceptedResultIntegrationQuarantineProofTest"],
+  canonicalCollectedTestSeeds.acceptedResultIntegrationQuarantineProof.deterministic
+)
+await runCollectedTest(
+  "accepted-result integration quarantine proof negative mutation profile",
+  [
+    "specs/acceptedResultIntegration_proof_negative_test.qnt",
+    "--main",
+    "acceptedResultIntegrationQuarantineProofNegativeTest"
+  ],
+  canonicalCollectedTestSeeds.acceptedResultIntegrationQuarantineProof.negative
+)
 await run("accepted-result integration quarantine proof sampled model", [
   "run",
   "specs/acceptedResultIntegration_proof.qnt",
@@ -934,18 +958,16 @@ const integrationFinalityInvariants = [
 ]
 
 await run("integration finality model typecheck", ["typecheck", "specs/integrationFinality.qnt"])
-await run("integration finality deterministic tests", [
-  "test",
-  "specs/integrationFinality_test.qnt",
-  "--main",
-  "integrationFinalityTest"
-])
-await run("integration finality negative mutation profile", [
-  "test",
-  "specs/integrationFinality_negative_test.qnt",
-  "--main",
-  "integrationFinalityNegativeTest"
-])
+await runCollectedTest(
+  "integration finality deterministic tests",
+  ["specs/integrationFinality_test.qnt", "--main", "integrationFinalityTest"],
+  canonicalCollectedTestSeeds.integrationFinality.deterministic
+)
+await runCollectedTest(
+  "integration finality negative mutation profile",
+  ["specs/integrationFinality_negative_test.qnt", "--main", "integrationFinalityNegativeTest"],
+  canonicalCollectedTestSeeds.integrationFinality.negative
+)
 await run("integration finality sampled model", [
   "run",
   "specs/integrationFinality.qnt",
@@ -1010,6 +1032,7 @@ await run("integration finality exhaustive model", [
 ])
 
 const elapsedMilliseconds = performance.now() - startedAt
+process.stdout.write(`\nCompleted Quint stage timings: ${JSON.stringify(completedStageTimings)}\n`)
 process.stdout.write(
   `\nComplete Quint model gate: ${(elapsedMilliseconds / 1000).toFixed(
     2

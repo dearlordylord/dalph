@@ -7,10 +7,13 @@ import {
   WorktreeLocator,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
+import { Result } from "effect"
 import { TaskLifecycle, type Task } from "../../src/authorities/task-tracker/task.js"
 import { FreshWorkflowStep } from "../../src/coordination/delivery/fresh-workflow-step.js"
-import { deliveryProposalsOf } from "../../src/coordination/delivery/delivery-proposal.js"
+import { deliveryProposalsOf, freshContinuationDecisionsOf } from "../../src/coordination/delivery/delivery-proposal.js"
 import { RunnableFrontierTransition } from "../../src/coordination/frontier/frontier.js"
+import { OperationId } from "../../src/workflow/identity.js"
+import { makeFreshTaskCommitmentForTest } from "./fresh-task-admission.js"
 
 /** Production-derived prepared Begin facts shared by vertical runtime tests. */
 export const makePreparedBeginFixture = (base: PlannedTaskAttempt, namespace: string, name: string) => {
@@ -31,10 +34,16 @@ export const makePreparedBeginFixture = (base: PlannedTaskAttempt, namespace: st
     worktree: WorktreeLocator.make(`/${namespace}/${name}`)
   })
   const transition = RunnableFrontierTransition.BeginPlannedAttemptExecutorWork({ plannedAttempt: attempt })
+  const claimOperationId = OperationId.make(`${namespace}-${name}-claim`)
   return {
     attempt,
     fresh: {
-      step: FreshWorkflowStep.BeginPlannedAttemptExecutorWork({ plannedAttempt: attempt, specification, task }),
+      step: FreshWorkflowStep.BeginPlannedAttemptExecutorWork({
+        claimOperationId,
+        plannedAttempt: attempt,
+        specification,
+        task
+      }),
       transition
     },
     task,
@@ -48,7 +57,18 @@ export const preparedBeginProposalsOf = (
 ) =>
   deliveryProposalsOf({
     acceptedOperationIds: new Set(),
-    fresh: fixtures.map(({ fresh }) => fresh),
+    fresh: Result.getOrThrow(
+      freshContinuationDecisionsOf(
+        fixtures.map(({ fresh }) => fresh),
+        fixtures.map(({ fresh }) =>
+          makeFreshTaskCommitmentForTest(
+            fresh.step.task.id,
+            fresh.step.claimOperationId,
+            fresh.step.plannedAttempt.runId
+          )
+        )
+      )
+    ),
     runId,
     transitions: fixtures.map(({ transition }) => transition)
   }).ticketDelivery

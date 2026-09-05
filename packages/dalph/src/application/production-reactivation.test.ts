@@ -871,16 +871,28 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               acquisition: peerAcquisition,
               predecessorOperationIds: []
             })
+            const peerGraphOperation = makeTrackerGraphObservationOperation(
+              { _tag: "WorkflowEstablishment" },
+              OperationId.make(`production-refresh-${peerAttempt.taskId}-graph`),
+              target,
+              [peerAcquisition.operationId],
+              graphTaskIds
+            )
             const peerSpecificationOperation = makeTaskWorkSpecificationObservationOperation(
               OperationId.make(`production-refresh-${peerAttempt.taskId}-specification`),
               target,
               peerAttempt.taskId,
-              []
+              [peerGraphOperation.operationId]
             )
             const peerPlanOperation = makeTaskAttemptPlanOperation({
               operationId: OperationId.make(`production-refresh-${peerAttempt.taskId}-plan`),
               plannedAttempt: peerAttempt,
-              predecessorOperationIds: [peerAcquisition.operationId, peerSpecificationOperation.operationId]
+              predecessorOperationIds: [peerSpecificationOperation.operationId]
+            })
+            const peerWorktreeOperation = makeTaskWorktreeReconciliationOperation({
+              operationId: OperationId.make(`production-refresh-${peerAttempt.taskId}-worktree`),
+              plannedAttempt: peerAttempt,
+              predecessorOperationIds: [peerPlanOperation.operationId]
             })
             yield* journal.append(
               runId,
@@ -900,6 +912,19 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             )
             yield* journal.append(
               runId,
+              intentRecordKey(peerGraphOperation.operationId),
+              taskTrackerReadIntent(peerGraphOperation)
+            )
+            yield* journal.append(
+              runId,
+              outcomeRecordKey(peerGraphOperation.operationId),
+              taskTrackerGraphFactsObserved(peerGraphOperation, {
+                revision: TrackerRevision.make(`production-refresh-${peerAttempt.taskId}-seed`),
+                taskIds: graphTaskIds
+              })
+            )
+            yield* journal.append(
+              runId,
               intentRecordKey(peerSpecificationOperation.operationId),
               taskTrackerReadIntent(peerSpecificationOperation)
             )
@@ -912,6 +937,28 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               runId,
               attemptPlanRecordKey(peerAttempt.attemptId),
               TaskAttemptPlannedEvent.make({ operation: peerPlanOperation, version: workflowJournalEventVersion })
+            )
+            yield* journal.append(
+              runId,
+              intentRecordKey(peerWorktreeOperation.operationId),
+              TaskWorktreeReconciliationIntendedEvent.make({
+                operation: peerWorktreeOperation,
+                version: workflowJournalEventVersion
+              })
+            )
+            yield* journal.append(
+              runId,
+              outcomeRecordKey(peerWorktreeOperation.operationId),
+              TaskWorktreeReadyEvent.make({
+                operationId: peerWorktreeOperation.operationId,
+                proof: PlannedWorktreeReady.make({
+                  baseSha: peerAttempt.baseSha,
+                  branch: peerAttempt.branch,
+                  headSha: peerAttempt.baseSha,
+                  worktree: peerAttempt.worktree
+                }),
+                version: workflowJournalEventVersion
+              })
             )
             yield* journal.append(
               runId,
@@ -1726,10 +1773,7 @@ it.effect("a later tracker edit waits for the next independent notification or t
     expect(beforeSecond.executorCalls).toEqual([])
     expect(result.activeActivationCount).toBe(2)
     expect(result.activeSources).toEqual(["TrackerNotification", "TrackerNotification"])
-    expect(result.executorCalls).toEqual([
-      { command: "Suspend", taskId: "A" },
-      { command: "observe", taskId: "A" }
-    ])
+    expect(result.executorCalls).toEqual([{ command: "Suspend", taskId: "A" }])
     expect(
       result.journalRecords.filter(
         ({ event }) =>
@@ -1834,10 +1878,7 @@ it.effect.each(completeAuthorityConstraintCases)(
         source: "Timer",
         threeExecuting: true
       })
-      expect(result.executorCalls).toEqual([
-        { command: "Suspend", taskId: "B" },
-        { command: "observe", taskId: "B" }
-      ])
+      expect(result.executorCalls).toEqual([{ command: "Suspend", taskId: "B" }])
       expect(result.executorCalls.filter(({ taskId }) => taskId === "A" || taskId === "C")).toEqual([])
       expectOneSuspensionAfterObservation(
         result.journalRecords,
@@ -2142,7 +2183,6 @@ it.effect("production refresh recovers a constraint observed before a crashed su
     }
     expect(result.executorCalls).toEqual([
       { command: "Suspend", taskId: "A" },
-      { command: "observe", taskId: "A" },
       { command: "Begin", taskId: "B" }
     ])
     if (constraint === undefined) {

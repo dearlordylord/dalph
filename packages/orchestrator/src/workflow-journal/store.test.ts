@@ -11,6 +11,7 @@ import {
   FixtureTarget,
   CoordinatorOwnership,
   InitialControlPolicy,
+  InRunJournalRunMismatch,
   JournalDatabaseLocator,
   JournalPosition,
   JournalRecordKey,
@@ -70,7 +71,7 @@ import { makeRunFinalityEvidence } from "../coordination/frontier/run-finality.j
 import { makeWorkflowRunBeganRecord, makeWorkflowRunTerminatedRecord } from "./run-lifecycle.js"
 import { memoryJournalTestLayerFromPartitionRecords } from "./adapters/memory-store.js"
 import { encodeJournalEvent } from "./event-codec.js"
-import type { JournalRecord } from "./store.js"
+import { journalAppendFailureDisposition, type JournalRecord } from "./store.js"
 import { makeTraceReader } from "../presentation/trace-reader.js"
 import {
   ControlDirectionApplicationOrdinal,
@@ -79,6 +80,21 @@ import {
 
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
 const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+
+it("classifies append ambiguity from typed journal failures without inspecting strings", () => {
+  const expectedRunId = RunId.make("append-disposition-run")
+  expect(
+    journalAppendFailureDisposition(
+      new InRunJournalRunMismatch({ expectedRunId, requestedRunId: RunId.make("append-disposition-other-run") })
+    )
+  ).toBe("DefinitelyAbsent")
+  expect(
+    journalAppendFailureDisposition(
+      new JournalStorageUnavailable({ detail: "the exact message is irrelevant", operation: "JournalStore.append" })
+    )
+  ).toBe("MayHaveCommitted")
+  expect(journalAppendFailureDisposition(new Error("JournalStorageUnavailable"))).toBe("NotJournalAppendFailure")
+})
 
 const withTemporaryDatabase = <A, E, R>(
   use: (filename: JournalDatabaseLocator, directory: string) => Effect.Effect<A, E, R>

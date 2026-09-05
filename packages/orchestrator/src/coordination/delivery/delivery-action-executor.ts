@@ -24,6 +24,7 @@ import type {
   PlannedAttemptExecutorProjectionNoCurrentReport,
   PlannedAttemptExecutorResponsibilityAbandoned,
   PlannedAttemptExecutorResponsibilityContradiction,
+  PlannedAttemptExecutorResponsibilityLineageMissing,
   PlannedAttemptExecutorResponsibilityMissing,
   PlannedAttemptExecutorResumeNotAuthorized,
   PlannedAttemptExecutorStateNoCurrentReport,
@@ -45,6 +46,7 @@ import type {
   PlannedAttemptExecutorWorkAlreadyTerminal
 } from "../../workflow/protocols/planned-attempt-executor-work/errors.js"
 import type { PlannedAttemptProtocolPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import type { AcceptedPlannedAttemptExecutorResponsibility } from "../../workflow/protocols/planned-attempt-executor-work/responsibility.js"
 import type {
   AcceptedResultEvidenceConflict,
   AcceptedResultEvidenceUnavailable,
@@ -127,7 +129,10 @@ export type DeliveryActionForwardBoundary =
 
 export interface DeliveryActionExecutionLease {
   readonly acceptIntegrationTargetOwnership: Effect.Effect<void>
-  readonly bindPlannedAttemptPosition: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<void>
+  readonly bindPlannedAttemptPosition: (
+    plannedAttempt: PlannedTaskAttempt,
+    acceptedResponsibility?: AcceptedPlannedAttemptExecutorResponsibility
+  ) => Effect.Effect<void>
   readonly forwardBoundary: DeliveryActionForwardBoundary
   readonly integrationTargets: IntegrationTargetResourceController
   readonly recordIntent: (operationId: OperationId) => Effect.Effect<void>
@@ -254,6 +259,7 @@ export type DeliveryActionExecutionError =
   | PlannedAttemptExecutorProjectionNoCurrentReport
   | PlannedAttemptExecutorResponsibilityAbandoned
   | PlannedAttemptExecutorResponsibilityContradiction
+  | PlannedAttemptExecutorResponsibilityLineageMissing
   | PlannedAttemptExecutorResponsibilityMissing
   | PlannedAttemptExecutorStateNoCurrentReport
   | PlannedAttemptExecutorStateTemporarilyUnavailable

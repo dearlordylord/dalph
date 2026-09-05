@@ -328,8 +328,7 @@ module freshTaskAdmission {
     }
   }
 
-  action reserveFreshEntry: bool = {
-    nondet task = TASKS.oneOf()
+  action reserveFreshEntryFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       freshEntryCapable(state, task),
@@ -351,8 +350,7 @@ module freshTaskAdmission {
     }
   }
 
-  action recordClaimIntent: bool = {
-    nondet task = TASKS.oneOf()
+  action recordClaimIntentFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == FreshEntryReserved,
@@ -373,8 +371,7 @@ module freshTaskAdmission {
     }
   }
 
-  action loseClaimIntentAppendResponse: bool = {
-    nondet task = TASKS.oneOf()
+  action loseClaimIntentAppendResponseFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == FreshEntryReserved,
@@ -383,8 +380,7 @@ module freshTaskAdmission {
     }
   }
 
-  action loseAcceptedClaimIntentAppendResponse: bool = {
-    nondet task = TASKS.oneOf()
+  action loseAcceptedClaimIntentAppendResponseFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == FreshEntryReserved,
@@ -398,8 +394,7 @@ module freshTaskAdmission {
     }
   }
 
-  action observeClaimIntentPresent: bool = {
-    nondet task = TASKS.oneOf()
+  action observeClaimIntentPresentFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == FreshEntryReserved,
@@ -413,8 +408,7 @@ module freshTaskAdmission {
     }
   }
 
-  action observeClaimIntentAbsent: bool = {
-    nondet task = TASKS.oneOf()
+  action observeClaimIntentAbsentFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == FreshEntryReserved,
@@ -428,8 +422,7 @@ module freshTaskAdmission {
     }
   }
 
-  action callClaimProvider: bool = {
-    nondet task = TASKS.oneOf()
+  action callClaimProviderFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == currentClaimIntent(state, task),
@@ -441,8 +434,7 @@ module freshTaskAdmission {
     }
   }
 
-  action acceptOwnedClaim: bool = {
-    nondet task = TASKS.oneOf()
+  action acceptOwnedClaimFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == currentClaimCalled(state, task),
@@ -454,8 +446,7 @@ module freshTaskAdmission {
     }
   }
 
-  action rejectForeignClaim: bool = {
-    nondet task = TASKS.oneOf()
+  action rejectForeignClaimFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == currentClaimCalled(state, task),
@@ -471,8 +462,7 @@ module freshTaskAdmission {
     }
   }
 
-  action observeForeignClaimCleared: bool = {
-    nondet task = TASKS.oneOf()
+  action observeForeignClaimClearedFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == Unoccupied,
@@ -486,16 +476,14 @@ module freshTaskAdmission {
     }
   }
 
-  action acceptPostClaimGraph: bool = {
-    nondet task = TASKS.oneOf()
+  action acceptPostClaimGraphFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == exactClaimOwned(task),
       state' = { ...state, admission: state.admission.put(task, exactPostClaimGraph(task)) },
     }
   }
-  action observePostOwnershipConstraint: bool = {
-    nondet task = TASKS.oneOf()
+  action observePostOwnershipConstraintFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       ownsClaim(state.admission.get(task)),
@@ -506,8 +494,7 @@ module freshTaskAdmission {
       },
     }
   }
-  action readFocusedSpecification: bool = {
-    nondet task = TASKS.oneOf()
+  action readFocusedSpecificationFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == exactPostClaimGraph(task),
@@ -517,8 +504,7 @@ module freshTaskAdmission {
       },
     }
   }
-  action recordAttemptPlan: bool = {
-    nondet task = TASKS.oneOf()
+  action recordAttemptPlanFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == exactSpecification(task),
@@ -528,16 +514,14 @@ module freshTaskAdmission {
       },
     }
   }
-  action recordWorktreeIntent: bool = {
-    nondet task = TASKS.oneOf()
+  action recordWorktreeIntentFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == exactPlan(task),
       state' = { ...state, admission: state.admission.put(task, exactWorktreeIntent(task)) },
     }
   }
-  action callWorktreeBoundary: bool = {
-    nondet task = TASKS.oneOf()
+  action callWorktreeBoundaryFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == exactWorktreeIntent(task),
@@ -548,8 +532,7 @@ module freshTaskAdmission {
       },
     }
   }
-  action acceptWorktreeReady: bool = {
-    nondet task = TASKS.oneOf()
+  action acceptWorktreeReadyFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == exactWorktreeCalled(task),
@@ -570,9 +553,52 @@ module freshTaskAdmission {
     }
   }
 
+  // The TypeScript MBT treats the already-accepted claim-through-worktree
+  // Journal prefix as one projection input. Provider chronology is exercised
+  // by production scenario tests, not represented as no-op adapter calls.
+  action projectAcceptedWorktreeReadyFor(task: TaskId): bool = {
+    all {
+      state.process == ProcessUp,
+      state.admission.get(task) == currentClaimIntent(state, task),
+      state' = {
+        ...state,
+        admission: state.admission.put(task, exactWorktreeReady(task)),
+        trace: {
+          ...state.trace,
+          claimCalled: state.trace.claimCalled.put(task, true),
+          claimOwned: state.trace.claimOwned.put(task, true),
+          specificationRead: state.trace.specificationRead.put(task, true),
+          planRecorded: state.trace.planRecorded.put(task, true),
+          worktreeCalled: state.trace.worktreeCalled.put(task, true),
+          worktreeReadyAccepted: state.trace.worktreeReadyAccepted.put(
+            task,
+            AcceptedExactWorktreeReady({
+              attemptId: attemptFor(task),
+              baseSha: baseFor(task),
+              locator: worktreeFor(task),
+            })
+          ),
+        },
+      },
+    }
+  }
+
+  action projectForeignClaimRejectionFor(task: TaskId): bool = {
+    all {
+      state.process == ProcessUp,
+      state.admission.get(task) == currentClaimIntent(state, task),
+      state' = {
+        ...state,
+        admission: state.admission.put(task, Unoccupied),
+        journalClaimIntentPresent: state.journalClaimIntentPresent.put(task, false),
+        freshEntryConstraint: state.freshEntryConstraint.put(task, ForeignClaimConstraint),
+        trace: { ...state.trace, preOwnershipRejected: state.trace.preOwnershipRejected.put(task, true) },
+      },
+    }
+  }
+
   // The accepted Journal event and exact position are one scheduling action.
-  action loseExecutorResponsibilityAppendResponse: bool = {
-    nondet task = TASKS.oneOf()
+  action loseExecutorResponsibilityAppendResponseFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == exactWorktreeReady(task),
@@ -584,8 +610,7 @@ module freshTaskAdmission {
     }
   }
 
-  action loseAcceptedExecutorResponsibilityAppendResponse: bool = {
-    nondet task = TASKS.oneOf()
+  action loseAcceptedExecutorResponsibilityAppendResponseFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == exactWorktreeReady(task),
@@ -604,8 +629,7 @@ module freshTaskAdmission {
     }
   }
 
-  action observeExecutorResponsibilityAppendPresent: bool = {
-    nondet task = TASKS.oneOf()
+  action observeExecutorResponsibilityAppendPresentFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == exactWorktreeReady(task),
@@ -621,8 +645,7 @@ module freshTaskAdmission {
     }
   }
 
-  action observeExecutorResponsibilityAppendAbsent: bool = {
-    nondet task = TASKS.oneOf()
+  action observeExecutorResponsibilityAppendAbsentFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == exactWorktreeReady(task),
@@ -635,8 +658,7 @@ module freshTaskAdmission {
     }
   }
 
-  action handoffToExecutorResponsibility: bool = {
-    nondet task = TASKS.oneOf()
+  action handoffToExecutorResponsibilityFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == exactWorktreeReady(task),
@@ -660,8 +682,7 @@ module freshTaskAdmission {
     }
   }
 
-  action releaseHeldPositionNotReady: bool = {
-    nondet task = TASKS.oneOf()
+  action releaseHeldPositionNotReadyFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == ExactAttemptHeld(attemptFor(task)),
@@ -675,8 +696,7 @@ module freshTaskAdmission {
       },
     }
   }
-  action releaseHeldPositionReady: bool = {
-    nondet task = TASKS.oneOf()
+  action releaseHeldPositionReadyFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == ExactAttemptHeld(attemptFor(task)),
@@ -690,8 +710,7 @@ module freshTaskAdmission {
       },
     }
   }
-  action reserveReadyResponsibility: bool = {
-    nondet task = TASKS.oneOf()
+  action reserveReadyResponsibilityFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == Unoccupied,
@@ -709,8 +728,7 @@ module freshTaskAdmission {
       },
     }
   }
-  action handoffReadyResponsibility: bool = {
-    nondet task = TASKS.oneOf()
+  action handoffReadyResponsibilityFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == ExistingResponsibilityReserved(attemptFor(task)),
@@ -758,6 +776,37 @@ module freshTaskAdmission {
       ambiguousResponsibilityAppend: flags(false),
     },
   }
+
+  // These exported wrappers retain the original nondeterministic action
+  // surface used by the proof and collected tests. The parameterized actions
+  // above are behavior-preserving MBT instrumentation: they expose the chosen
+  // task identity to the production driver without adding model authority.
+  action reserveFreshEntry: bool = { nondet task = TASKS.oneOf() reserveFreshEntryFor(task) }
+  action recordClaimIntent: bool = { nondet task = TASKS.oneOf() recordClaimIntentFor(task) }
+  action loseClaimIntentAppendResponse: bool = { nondet task = TASKS.oneOf() loseClaimIntentAppendResponseFor(task) }
+  action loseAcceptedClaimIntentAppendResponse: bool = { nondet task = TASKS.oneOf() loseAcceptedClaimIntentAppendResponseFor(task) }
+  action observeClaimIntentPresent: bool = { nondet task = TASKS.oneOf() observeClaimIntentPresentFor(task) }
+  action observeClaimIntentAbsent: bool = { nondet task = TASKS.oneOf() observeClaimIntentAbsentFor(task) }
+  action callClaimProvider: bool = { nondet task = TASKS.oneOf() callClaimProviderFor(task) }
+  action acceptOwnedClaim: bool = { nondet task = TASKS.oneOf() acceptOwnedClaimFor(task) }
+  action rejectForeignClaim: bool = { nondet task = TASKS.oneOf() rejectForeignClaimFor(task) }
+  action observeForeignClaimCleared: bool = { nondet task = TASKS.oneOf() observeForeignClaimClearedFor(task) }
+  action acceptPostClaimGraph: bool = { nondet task = TASKS.oneOf() acceptPostClaimGraphFor(task) }
+  action observePostOwnershipConstraint: bool = { nondet task = TASKS.oneOf() observePostOwnershipConstraintFor(task) }
+  action readFocusedSpecification: bool = { nondet task = TASKS.oneOf() readFocusedSpecificationFor(task) }
+  action recordAttemptPlan: bool = { nondet task = TASKS.oneOf() recordAttemptPlanFor(task) }
+  action recordWorktreeIntent: bool = { nondet task = TASKS.oneOf() recordWorktreeIntentFor(task) }
+  action callWorktreeBoundary: bool = { nondet task = TASKS.oneOf() callWorktreeBoundaryFor(task) }
+  action acceptWorktreeReady: bool = { nondet task = TASKS.oneOf() acceptWorktreeReadyFor(task) }
+  action loseExecutorResponsibilityAppendResponse: bool = { nondet task = TASKS.oneOf() loseExecutorResponsibilityAppendResponseFor(task) }
+  action loseAcceptedExecutorResponsibilityAppendResponse: bool = { nondet task = TASKS.oneOf() loseAcceptedExecutorResponsibilityAppendResponseFor(task) }
+  action observeExecutorResponsibilityAppendPresent: bool = { nondet task = TASKS.oneOf() observeExecutorResponsibilityAppendPresentFor(task) }
+  action observeExecutorResponsibilityAppendAbsent: bool = { nondet task = TASKS.oneOf() observeExecutorResponsibilityAppendAbsentFor(task) }
+  action handoffToExecutorResponsibility: bool = { nondet task = TASKS.oneOf() handoffToExecutorResponsibilityFor(task) }
+  action releaseHeldPositionNotReady: bool = { nondet task = TASKS.oneOf() releaseHeldPositionNotReadyFor(task) }
+  action releaseHeldPositionReady: bool = { nondet task = TASKS.oneOf() releaseHeldPositionReadyFor(task) }
+  action reserveReadyResponsibility: bool = { nondet task = TASKS.oneOf() reserveReadyResponsibilityFor(task) }
+  action handoffReadyResponsibility: bool = { nondet task = TASKS.oneOf() handoffReadyResponsibilityFor(task) }
 
   // These restate the requirements rather than calling scheduling guards.
   val everyEntryWasWithinItsObservedCapacity = TASKS.forall(task =>
@@ -928,4 +977,79 @@ module freshTaskAdmission {
     releaseHeldPositionReady, reserveReadyResponsibility, handoffReadyResponsibility,
     contractCapacity, expandCapacity, crash, recover,
   }
+
+  // Executable conformance uses the same transition relations as `step`, but
+  // reports the chosen task as an action argument. Its surface contains only
+  // production admission/controller operations and accepted-Journal projection;
+  // the full provider chronology remains in `step` and production scenarios.
+  action acceptedClaimRecoveryMbtStep: bool = {
+    nondet task = Set(TaskA).oneOf()
+    any {
+      reserveFreshEntryFor(task),
+      loseAcceptedClaimIntentAppendResponseFor(task),
+      observeClaimIntentPresentFor(task),
+    }
+  }
+
+  action acceptedResponsibilityRecoveryMbtStep: bool = {
+    nondet task = Set(TaskA).oneOf()
+    any {
+      reserveFreshEntryFor(task), recordClaimIntentFor(task),
+      projectAcceptedWorktreeReadyFor(task),
+      loseAcceptedExecutorResponsibilityAppendResponseFor(task),
+      observeExecutorResponsibilityAppendPresentFor(task),
+    }
+  }
+
+  action absentResponsibilityRecoveryMbtStep: bool = {
+    nondet task = Set(TaskA).oneOf()
+    any {
+      reserveFreshEntryFor(task), recordClaimIntentFor(task),
+      projectAcceptedWorktreeReadyFor(task),
+      loseExecutorResponsibilityAppendResponseFor(task),
+      observeExecutorResponsibilityAppendAbsentFor(task),
+    }
+  }
+
+  action notReadyReleaseMbtStep: bool = {
+    nondet task = Set(TaskA).oneOf()
+    any {
+      reserveFreshEntryFor(task), recordClaimIntentFor(task),
+      projectAcceptedWorktreeReadyFor(task), handoffToExecutorResponsibilityFor(task),
+      releaseHeldPositionNotReadyFor(task),
+    }
+  }
+
+  action readyResponsibilityHandoffMbtStep: bool = {
+    nondet task = Set(TaskA).oneOf()
+    any {
+      reserveFreshEntryFor(task), recordClaimIntentFor(task),
+      projectAcceptedWorktreeReadyFor(task), handoffToExecutorResponsibilityFor(task),
+      releaseHeldPositionReadyFor(task), reserveReadyResponsibilityFor(task),
+      handoffReadyResponsibilityFor(task),
+    }
+  }
+
+  action mbtStep: bool = {
+    nondet task = TASKS.oneOf()
+    if (TASKS.exists(candidate =>
+      state.ambiguousClaimIntentAppend.get(candidate) or state.ambiguousResponsibilityAppend.get(candidate))) {
+      any {
+        observeClaimIntentPresentFor(task),
+        observeExecutorResponsibilityAppendPresentFor(task),
+        crash,
+      }
+    } else {
+      any {
+        reserveFreshEntryFor(task), recordClaimIntentFor(task),
+        loseAcceptedClaimIntentAppendResponseFor(task),
+        projectForeignClaimRejectionFor(task), observeForeignClaimClearedFor(task),
+        projectAcceptedWorktreeReadyFor(task), loseAcceptedExecutorResponsibilityAppendResponseFor(task),
+        handoffToExecutorResponsibilityFor(task), releaseHeldPositionNotReadyFor(task),
+        releaseHeldPositionReadyFor(task), reserveReadyResponsibilityFor(task), handoffReadyResponsibilityFor(task),
+        contractCapacity, expandCapacity, crash, recover,
+      }
+    }
+  }
+
 }

@@ -75,6 +75,7 @@ import {
 import { validateCancelledAttemptHistory } from "./cancelled-attempt-history.js"
 import { appliedTerminalChoiceFor } from "../../workflow/protocols/attempt-choice/terminal-choice-authority.js"
 import { plannedAttemptExecutorLifecycleTransitionError } from "../../workflow/protocols/planned-attempt-executor-work/report-acceptance.js"
+import { acceptedFreshAttemptLineage } from "../admission/fresh-attempt-lineage.js"
 
 const finalArrayElementOffset = -1
 
@@ -1680,6 +1681,7 @@ const validatePlannedAttemptReplacement = (
 const validatePlan = (
   record: JournalRecord,
   runId: RunId,
+  recordsThroughPlan: ReadonlyArray<JournalRecord>,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
 ): FoldIndexes => {
@@ -1688,6 +1690,16 @@ const validatePlan = (
     record.event._tag === "TaskAttemptPlanned"
       ? record.event.operation.plannedAttempt
       : record.event.successorPlan.plannedAttempt
+  if (record.event._tag === "TaskAttemptPlanned") {
+    if (acceptedFreshAttemptLineage(recordsThroughPlan, plannedAttempt, "Plan") === undefined) {
+      semanticIssue(
+        issues,
+        runId,
+        record.position,
+        `planned attempt ${plannedAttempt.attemptId} requires exact claim, post-claim graph, and focused specification lineage`
+      )
+    }
+  }
   const prior = mapGet(indexes.plans, plannedAttempt.attemptId)
   if (prior !== undefined) {
     semanticIssue(
@@ -2496,6 +2508,28 @@ const validateExecutorEvent = (
           `executor work for attempt ${attemptId} has no prior matching planned task attempt`
         )
       }
+      const ordinaryPlanWasAccepted = records.some(
+        (candidate) =>
+          candidate.runId === runId &&
+          candidate.position < record.position &&
+          candidate.event._tag === "TaskAttemptPlanned" &&
+          plannedTaskAttemptEquivalence(candidate.event.operation.plannedAttempt, event.plannedAttempt)
+      )
+      if (
+        ordinaryPlanWasAccepted &&
+        acceptedFreshAttemptLineage(
+          records.filter((candidate) => candidate.runId === runId && candidate.position <= record.position),
+          event.plannedAttempt,
+          "WorktreeReady"
+        ) === undefined
+      ) {
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor work for attempt ${attemptId} requires its exact accepted worktree-ready lineage`
+        )
+      }
       const priorResponsibility = mapGet(next.executorResponsibilitiesBegan, attemptId)
       if (priorResponsibility !== undefined) {
         issues.push(
@@ -3207,7 +3241,7 @@ const validateRecord = (
   validateAttemptRestartAuthorityReadFailure(record, runId, records, issues)
   next = validatePlannedAttemptReplacement(record, runId, records, next, issues)
   validateContinuationAuthorization(record, runId, records, issues)
-  next = validatePlan(record, runId, next, issues)
+  next = validatePlan(record, runId, records.slice(0, index + 1), next, issues)
   validateClaimReacquisitionIntent(record, runId, records, issues)
   validateClaim(record, runId, records, issues)
   validateClaimRejection(record, runId, records, issues)

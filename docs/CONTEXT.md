@@ -826,6 +826,16 @@ token currently own the task. It does not prove that the task remains open or
 inside the Run's current Run task graph.
 _Avoid_: Claim request acknowledged, claimed task eligibility observed
 
+**Rejected fresh-task claim constraint**:
+The task-local constraint established when the tracker conclusively reports a
+different exact active claim for one fresh-entry acquisition intent and Dalph
+durably accepts that rejection. It ends that task's admission without changing
+the foreign claim and prevents another acquisition while the constraint
+remains. A later complete graph observation may wake one focused claim read,
+but only a focused authoritative `UnclaimedTask` observation clears the
+constraint.
+_Avoid_: Provider failure, acquisition retry, graph-observed claim, foreign-claim cleanup
+
 **Task-tracker mutation throttled**:
 The typed boundary failure returned when the task tracker conclusively refuses
 one acknowledged exact claim, completion-claim, completion, or cleanup mutation

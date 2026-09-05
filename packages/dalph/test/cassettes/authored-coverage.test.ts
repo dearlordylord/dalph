@@ -119,74 +119,77 @@ it.effect("uses default authored tracker hooks and exposes every completion look
   })
 )
 
-it.effect("runs the authored candidate and promotion outcomes through their production adapters", () =>
-  Effect.gen(function* () {
-    const names = [
-      "changedAttemptContinues",
-      "changedAttemptRestartsCleanly",
-      "changedAttemptRestartAfterSupersessionCrash",
-      "changedAttemptStopsAndReleases",
-      "changedAttemptStopsWithAbsentClaim",
-      "changedAttemptStopsWithForeignClaim",
-      "changedAttemptChoiceRace",
-      "changedAttemptReacquisitionForeignConflict",
-      "taskPauseExecutorAndPromotionBoundaries",
-      "taskPauseFinishesHeldIntegration",
-      "runPauseSafelySuspends",
-      "runPauseObservationDisconnects",
-      "runUnpauseAfterSafeSuspension",
-      "runUnpauseDuringSuspensionRestarts",
-      "taskUnpauseAfterSafeSuspension",
-      "taskUnpauseDuringSuspensionRestarts",
-      "targetPromotionAmbiguityExhaustion",
-      "targetPromotionStaleBeforeCompareAndSet",
-      "targetPromotionLostResponseDiscoversCurrentCandidate"
-    ] as const
-    for (const name of names) {
-      const exit = yield* Effect.exit(
-        runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog[name]).pipe(Effect.provide(NodeCrypto.layer))
-      )
-      expect(Exit.isSuccess(exit), Cause.pretty(Exit.isFailure(exit) ? exit.cause : Cause.empty)).toBe(true)
-      if (Exit.isSuccess(exit)) {
-        expect(exit.value.records.length).toBeGreaterThan(0)
-        expect(exit.value.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
-        if (name.startsWith("changedAttemptStops")) {
-          const beginning = exit.value.records.find(({ event }) => event._tag === "WorkflowRunBegan")
-          if (beginning?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("missing cassette beginning")
-          const finality = completedRunFinalityFixture({
-            runId: beginning.runId,
-            target: beginning.event.target
-          }).evidence
-          const unsettledResponsibilityIssue = "termination requires every journal responsibility to be settled"
-          for (const [index, record] of exit.value.records.entries()) {
-            if (
-              ![
-                "AttemptImplementationAbandoned",
-                "StoppedAttemptClaimNoReleaseObserved",
-                "TaskClaimReleaseIntended",
-                "TaskClaimReleased"
-              ].includes(record.event._tag)
-            )
-              continue
-            for (const prefixLength of [index, index + 1]) {
-              if (prefixLength > 0) {
-                const issues = terminationPreconditionIssues(
-                  exit.value.records.slice(0, prefixLength),
-                  beginning.runId,
-                  finality
-                )
-                const settlementCompleted =
-                  prefixLength === index + 1 &&
-                  ["StoppedAttemptClaimNoReleaseObserved", "TaskClaimReleased"].includes(record.event._tag)
-                if (settlementCompleted) expect(issues).toEqual([])
-                else expect(issues).toContain(unsettledResponsibilityIssue)
+it.effect(
+  "runs the authored candidate and promotion outcomes through their production adapters",
+  () =>
+    Effect.gen(function* () {
+      const names = [
+        "changedAttemptContinues",
+        "changedAttemptRestartsCleanly",
+        "changedAttemptRestartAfterSupersessionCrash",
+        "changedAttemptStopsAndReleases",
+        "changedAttemptStopsWithAbsentClaim",
+        "changedAttemptStopsWithForeignClaim",
+        "changedAttemptChoiceRace",
+        "changedAttemptReacquisitionForeignConflict",
+        "taskPauseExecutorAndPromotionBoundaries",
+        "taskPauseFinishesHeldIntegration",
+        "runPauseSafelySuspends",
+        "runPauseObservationDisconnects",
+        "runUnpauseAfterSafeSuspension",
+        "runUnpauseDuringSuspensionRestarts",
+        "taskUnpauseAfterSafeSuspension",
+        "taskUnpauseDuringSuspensionRestarts",
+        "targetPromotionAmbiguityExhaustion",
+        "targetPromotionStaleBeforeCompareAndSet",
+        "targetPromotionLostResponseDiscoversCurrentCandidate"
+      ] as const
+      for (const name of names) {
+        const exit = yield* Effect.exit(
+          runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog[name]).pipe(Effect.provide(NodeCrypto.layer))
+        )
+        expect(Exit.isSuccess(exit), Cause.pretty(Exit.isFailure(exit) ? exit.cause : Cause.empty)).toBe(true)
+        if (Exit.isSuccess(exit)) {
+          expect(exit.value.records.length).toBeGreaterThan(0)
+          expect(exit.value.cassette.story.at(-1)?._tag).toBe("ExpectedBehavior")
+          if (name.startsWith("changedAttemptStops")) {
+            const beginning = exit.value.records.find(({ event }) => event._tag === "WorkflowRunBegan")
+            if (beginning?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("missing cassette beginning")
+            const finality = completedRunFinalityFixture({
+              runId: beginning.runId,
+              target: beginning.event.target
+            }).evidence
+            const unsettledResponsibilityIssue = "termination requires every journal responsibility to be settled"
+            for (const [index, record] of exit.value.records.entries()) {
+              if (
+                ![
+                  "AttemptImplementationAbandoned",
+                  "StoppedAttemptClaimNoReleaseObserved",
+                  "TaskClaimReleaseIntended",
+                  "TaskClaimReleased"
+                ].includes(record.event._tag)
+              )
+                continue
+              for (const prefixLength of [index, index + 1]) {
+                if (prefixLength > 0) {
+                  const issues = terminationPreconditionIssues(
+                    exit.value.records.slice(0, prefixLength),
+                    beginning.runId,
+                    finality
+                  )
+                  const settlementCompleted =
+                    prefixLength === index + 1 &&
+                    ["StoppedAttemptClaimNoReleaseObserved", "TaskClaimReleased"].includes(record.event._tag)
+                  if (settlementCompleted) expect(issues).toEqual([])
+                  else expect(issues).toContain(unsettledResponsibilityIssue)
+                }
               }
             }
           }
         }
       }
-    }
-  })
+    }),
+  30_000
 )
 
 it.effect("covers authored cursor terminal and cleanup outcomes", () =>

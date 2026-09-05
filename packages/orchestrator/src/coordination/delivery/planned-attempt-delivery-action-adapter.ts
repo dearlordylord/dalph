@@ -28,6 +28,7 @@ import {
   resumePlannedAttemptExecutorWorkWithPermit,
   requestPlannedAttemptExecutorSuspensionWithPermit
 } from "../../workflow/protocols/planned-attempt-executor-work/suspension-commands.js"
+import { beginPlannedAttemptExecutorResponsibility } from "../../workflow/protocols/planned-attempt-executor-work/responsibility.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 import { authorizePlannedAttemptContinuationWithPermit } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
 import {
@@ -333,7 +334,7 @@ const executeExecutorTransition = Effect.fn("DeliveryAction.executeExecutorTrans
 ) {
   const correlation = plannedAttemptExecutorCorrelation(transition.plannedAttempt)
   if (transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts") {
-    yield* lease.bindPlannedAttemptPosition(correlation)
+    yield* lease.bindPlannedAttemptPosition(transition.plannedAttempt)
   }
   const result = yield* executorReportFor(transition, correlation, lease)
   const report = result.report
@@ -350,7 +351,11 @@ export const executeFreshPlannedAttempt = Effect.fn("DeliveryAction.executeFresh
 ) {
   const plannedAttempt = route.step.plannedAttempt
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-  yield* lease.bindPlannedAttemptPosition(correlation)
+  const acceptedResponsibility =
+    route.step._tag === "BeginPlannedAttemptExecutorWork"
+      ? yield* beginPlannedAttemptExecutorResponsibility(plannedAttempt)
+      : undefined
+  yield* lease.bindPlannedAttemptPosition(plannedAttempt, acceptedResponsibility)
   const result = yield* lease.withPlannedAttemptProtocol(correlation, (permit) =>
     Effect.gen(function* () {
       return route.step._tag === "BeginPlannedAttemptExecutorWork"

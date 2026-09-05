@@ -1,6 +1,13 @@
 module freshTaskAdmissionCapacityProofNegativeTest {
   import freshTaskAdmissionCapacityProof.* from "./freshTaskAdmission_proof"
 
+  // Deliberately leave the finite capacity-proof domain. This negative
+  // control makes the proof's type-bound invariant fail for an otherwise
+  // unchanged initialized state.
+  action leaveCapacityProofDomain: bool = all {
+    state' = { ...state, capacity: 4 },
+  }
+
   action overCapacityFourth: bool = all {
     occupiedCount(state) == 3,
     state' = {
@@ -100,6 +107,9 @@ module freshTaskAdmissionCapacityProofNegativeTest {
       .then(contract).then(contract).then(reserveExistingPastCapacity)
       .expect(not(existingEntryRespectsCapacityAtDecision))
   }
+
+  run capacityProofTypeViolationTurnsInvariantRedTest =
+    init.then(leaveCapacityProofDomain).expect(not(capacityProofTypeOk))
 }
 
 module freshTaskAdmissionAmbiguityProofNegativeTest {

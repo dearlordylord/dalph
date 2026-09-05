@@ -15,7 +15,7 @@ import {
   WorktreeLocator,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { Effect } from "effect"
+import { Effect, Result } from "effect"
 import { describe, expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
@@ -36,9 +36,18 @@ import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
-import { deliveryProposalsOf } from "./delivery-proposal.js"
+import {
+  authorizeFreshContinuationProposal,
+  deliveryProposalsOf,
+  freshContinuationCommitmentRequirementOf,
+  freshContinuationDecisionsOf,
+  freshContinuationDecisionOf,
+  trackerGraphReadProposalOf,
+  type FreshContinuationDecision
+} from "./delivery-proposal.js"
 import { deliveryProposalFrontierOf } from "./relations.js"
 import { materializeDeliveryAction } from "./delivery-action-materialization.js"
+import { makeFreshTaskCommitmentForTest } from "../../../test/support/fresh-task-admission.js"
 
 const runId = RunId.make("proposal-run")
 const taskId = TaskId.make("A")
@@ -76,7 +85,7 @@ describe("deliveryProposalsOf", () => {
     expect(afterTerminal?.route).toMatchObject({ transition: { acceptedProgress: { ordinal: 2 } } })
   })
 
-  it("derives one stable fresh claim proposal without allocating its operation identity", () => {
+  it("rejects an unaccepted fresh claim entry from ordinary proposal derivation", () => {
     const step = FreshWorkflowStep.AcquireTaskClaim({
       predecessorOperationId: OperationId.make("journaled-graph-read"),
       task
@@ -87,7 +96,10 @@ describe("deliveryProposalsOf", () => {
     })
     const input = {
       acceptedOperationIds: new Set<OperationId>(),
-      fresh: [{ step, transition }],
+      // Deliberately bypass the opaque continuation boundary to prove that
+      // ordinary derivation remains fail-closed for a fresh entry.
+      // oxlint-disable-next-line dalph/no-double-type-assertion -- Adversarial runtime input proves a cast cannot mint the private continuation capability.
+      fresh: [{ step, transition }] as unknown as ReadonlyArray<FreshContinuationDecision>,
       runId,
       transitions: [transition]
     }
@@ -96,22 +108,17 @@ describe("deliveryProposalsOf", () => {
     const second = deliveryProposalsOf(input)
 
     expect(second).toEqual(first)
-    expect(first.ticketDelivery).toHaveLength(1)
+    expect(freshContinuationDecisionOf({ step, transition }, [])).toBeUndefined()
+    expect(first.ticketDelivery).toEqual([])
     expect(first.deliverySettlement).toEqual([])
-    expect(first.ticketDelivery[0]).toMatchObject({
-      actionIdentity: { _tag: "FreshOperationIdRequired" },
-      admission: {
-        integrationTarget: { _tag: "NoIntegrationTargetResource" },
-        taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId }
-      },
-      owner: "TicketDelivery",
-      route: { _tag: "FreshWorkflowRoute", step }
-    })
+    expect(first.issues).toEqual([{ _tag: "FreshRouteProvenanceMissing", taskId, transition: transition._tag }])
   })
 
   it("keeps the hidden fresh plan step and declares both identities for post-admission allocation", () => {
     const predecessorOperationId = OperationId.make("accepted-specification-read")
+    const claimOperationId = OperationId.make("accepted-plan-claim")
     const step = FreshWorkflowStep.RecordTaskAttemptPlan({
+      claimOperationId,
       predecessorOperationId,
       specification: makeTaskWorkSpecification({ body: "Implement A", taskId, title: "A" }),
       task
@@ -123,7 +130,12 @@ describe("deliveryProposalsOf", () => {
 
     const [proposal] = deliveryProposalsOf({
       acceptedOperationIds: new Set([predecessorOperationId]),
-      fresh: [{ step, transition }],
+      fresh: Result.getOrThrow(
+        freshContinuationDecisionsOf(
+          [{ step, transition }],
+          [makeFreshTaskCommitmentForTest(taskId, claimOperationId, runId)]
+        )
+      ),
       runId,
       transitions: [transition]
     }).ticketDelivery
@@ -132,6 +144,274 @@ describe("deliveryProposalsOf", () => {
       actionIdentity: { _tag: "FreshOperationAndAttemptIdsRequired" },
       route: { _tag: "FreshWorkflowRoute", step: { _tag: "RecordTaskAttemptPlan" } }
     })
+    if (proposal === undefined) return expect.fail("the accepted plan continuation must produce one proposal")
+    expect(freshContinuationCommitmentRequirementOf({ ...proposal })).toEqual({
+      _tag: "FreshContinuationCommitmentMissing"
+    })
+  })
+
+  it("requires the exact accepted claim cycle for every commitment-bound continuation category", () => {
+    const claimOperationId = OperationId.make("all-continuation-categories-claim")
+    const commitment = makeFreshTaskCommitmentForTest(taskId, claimOperationId, runId)
+    const specification = makeTaskWorkSpecification({ body: "Implement A", taskId, title: "A" })
+    const continuation = (step: FreshWorkflowStep) => ({
+      step,
+      transition: RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+        operationId: "predecessorOperationId" in step ? step.predecessorOperationId : claimOperationId,
+        taskId
+      })
+    })
+    const cases = [
+      continuation(
+        FreshWorkflowStep.ReadPostClaimGraph({
+          claimOperation: commitment.operation,
+          predecessorOperationId: claimOperationId,
+          task
+        })
+      ),
+      continuation(
+        FreshWorkflowStep.ReadTaskWorkSpecification({
+          claimOperationId,
+          predecessorOperationId: claimOperationId,
+          task
+        })
+      ),
+      continuation(
+        FreshWorkflowStep.RecordTaskAttemptPlan({
+          claimOperationId,
+          predecessorOperationId: claimOperationId,
+          specification,
+          task
+        })
+      ),
+      continuation(
+        FreshWorkflowStep.ReconcileTaskWorktree({
+          claimOperationId,
+          plannedAttempt,
+          predecessorOperationId: claimOperationId,
+          task
+        })
+      ),
+      {
+        step: FreshWorkflowStep.BeginPlannedAttemptExecutorWork({
+          claimOperationId,
+          plannedAttempt,
+          specification,
+          task
+        }),
+        transition: RunnableFrontierTransition.BeginPlannedAttemptExecutorWork({ plannedAttempt })
+      }
+    ] as const
+
+    for (const pair of cases) {
+      expect(freshContinuationDecisionOf(pair, [])).toBeUndefined()
+      const decision = freshContinuationDecisionOf(pair, [commitment])
+      expect(decision).toMatchObject({
+        authority: { _tag: "FreshCommitmentAuthority", commitment },
+        step: { _tag: pair.step._tag }
+      })
+      if (decision === undefined) return expect.fail("the accepted claim cycle must authorize its continuation")
+      const proposal = deliveryProposalsOf({
+        acceptedOperationIds: new Set([claimOperationId]),
+        fresh: [decision],
+        runId,
+        transitions: [pair.transition]
+      }).ticketDelivery[0]
+      if (proposal === undefined) return expect.fail("the authorized continuation must produce one proposal")
+      expect(freshContinuationCommitmentRequirementOf(proposal)).toEqual({
+        _tag: "FreshContinuationCommitmentRequired",
+        commitment
+      })
+    }
+  })
+
+  it("does not let continuation authority authorize another route, Run, or causal wait", () => {
+    const claimOperationId = OperationId.make("continuation-boundary-claim")
+    const predecessorOperationId = OperationId.make("continuation-boundary-predecessor")
+    const commitment = makeFreshTaskCommitmentForTest(taskId, claimOperationId, runId)
+    const pair = {
+      step: FreshWorkflowStep.ReadTaskWorkSpecification({ claimOperationId, predecessorOperationId, task }),
+      transition: RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+        operationId: predecessorOperationId,
+        taskId
+      })
+    }
+    const decision = freshContinuationDecisionOf(pair, [commitment])
+    if (decision === undefined) return expect.fail("the exact accepted claim cycle must authorize its continuation")
+    if (decision.step._tag !== "ReadTaskWorkSpecification") {
+      return expect.fail("the continuation decision must retain the focused specification step")
+    }
+    const graphProposal = trackerGraphReadProposalOf({
+      acceptedAt: null,
+      purpose: "EstablishCurrentGraph",
+      runId,
+      target: FixtureTarget.make("continuation-boundary-target")
+    })
+
+    expect(authorizeFreshContinuationProposal(graphProposal, decision, runId)).toBe(graphProposal)
+    expect(freshContinuationCommitmentRequirementOf(graphProposal)).toEqual({
+      _tag: "FreshContinuationCommitmentNotRequired"
+    })
+
+    const issued = deliveryProposalsOf({
+      acceptedOperationIds: new Set([predecessorOperationId]),
+      fresh: [decision],
+      runId,
+      transitions: [pair.transition]
+    }).ticketDelivery[0]
+    if (
+      issued === undefined ||
+      issued.route._tag !== "FreshWorkflowRoute" ||
+      issued.actionIdentity._tag !== "FreshOperationIdRequired"
+    ) {
+      return expect.fail("the authorized continuation must produce one fresh workflow proposal")
+    }
+
+    const wrongRunProposal = { ...issued }
+    expect(
+      authorizeFreshContinuationProposal(wrongRunProposal, decision, RunId.make("continuation-boundary-other-run"))
+    ).toBe(wrongRunProposal)
+    expect(freshContinuationCommitmentRequirementOf(wrongRunProposal)).toEqual({
+      _tag: "FreshContinuationCommitmentMissing"
+    })
+
+    const contradictoryWait = {
+      _tag: issued._tag,
+      actionIdentity: issued.actionIdentity,
+      admission: issued.admission,
+      id: issued.id,
+      order: issued.order,
+      owner: issued.owner,
+      route: { ...issued.route, step: decision.step },
+      waitsForLiveOperationId: OperationId.make("continuation-boundary-foreign-wait")
+    }
+    const authorizedContradiction = authorizeFreshContinuationProposal(contradictoryWait, decision, runId)
+    expect(authorizedContradiction).not.toBe(contradictoryWait)
+    expect(freshContinuationCommitmentRequirementOf(authorizedContradiction)).toEqual({
+      _tag: "FreshContinuationCommitmentMissing"
+    })
+  })
+
+  it("rejects executor observation paired with a different exact attempt", () => {
+    const step = FreshWorkflowStep.ObservePlannedAttemptExecutorWork({
+      acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+      plannedAttempt,
+      specification: makeTaskWorkSpecification({ body: "Implement A", taskId, title: "A" }),
+      task
+    })
+    const transition = RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+      acceptedProgress: step.acceptedProgress,
+      plannedAttempt: PlannedTaskAttempt.make({
+        ...plannedAttempt,
+        attemptId: AttemptId.make("continuation-observe-other-attempt")
+      })
+    })
+
+    expect(freshContinuationDecisionOf({ step, transition }, [])).toBeUndefined()
+  })
+
+  it("fails closed when a derived post-entry step is paired with an incompatible transition", () => {
+    const predecessorOperationId = OperationId.make("invalid-fresh-pair")
+    const step = FreshWorkflowStep.ReadTaskWorkSpecification({
+      claimOperationId: OperationId.make("invalid-fresh-pair-claim"),
+      predecessorOperationId,
+      task
+    })
+    const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+      taskId,
+      taskRevision: TaskRevision.make("invalid-fresh-pair-revision")
+    })
+
+    const result = freshContinuationDecisionsOf([{ step, transition }], [])
+    if (result._tag !== "Failure") return expect.fail("incompatible fresh route unexpectedly passed validation")
+
+    expect(result.failure).toMatchObject({
+      _tag: "FreshDecisionPartitionInvalid",
+      step: "ReadTaskWorkSpecification",
+      stepTaskId: taskId,
+      transition: "CommitFreshTaskClaimIntent",
+      transitionTaskId: taskId
+    })
+  })
+
+  it("rejects a continuation paired with a different causal predecessor operation", () => {
+    const claimOperationId = OperationId.make("fresh-predecessor-mismatch-claim")
+    const step = FreshWorkflowStep.ReadTaskWorkSpecification({
+      claimOperationId,
+      predecessorOperationId: OperationId.make("fresh-predecessor-actual"),
+      task
+    })
+    const transition = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+      operationId: OperationId.make("fresh-predecessor-unrelated"),
+      taskId
+    })
+
+    expect(
+      freshContinuationDecisionOf({ step, transition }, [
+        makeFreshTaskCommitmentForTest(taskId, claimOperationId, runId)
+      ])
+    ).toBeUndefined()
+  })
+
+  it("makes all execution-relevant continuation evidence immutable after minting", () => {
+    const claimOperationId = OperationId.make("fresh-post-mint-claim")
+    const predecessorOperationId = OperationId.make("fresh-post-mint-predecessor")
+    const step = FreshWorkflowStep.RecordTaskAttemptPlan({
+      claimOperationId,
+      predecessorOperationId,
+      specification: makeTaskWorkSpecification({ body: "original", taskId, title: "Original" }),
+      task
+    })
+    const transition = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+      operationId: predecessorOperationId,
+      taskId
+    })
+    const proposal = deliveryProposalsOf({
+      acceptedOperationIds: new Set(),
+      fresh: Result.getOrThrow(
+        freshContinuationDecisionsOf(
+          [{ step, transition }],
+          [makeFreshTaskCommitmentForTest(taskId, claimOperationId, runId)]
+        )
+      ),
+      runId,
+      transitions: [transition]
+    }).ticketDelivery[0]
+    if (proposal === undefined || proposal.route._tag !== "FreshWorkflowRoute") {
+      return expect.fail("missing authorized continuation proposal")
+    }
+    const route = proposal.route
+
+    expect(() => {
+      ;(route.step as { predecessorOperationId: OperationId }).predecessorOperationId =
+        OperationId.make("fresh-post-mint-mutated")
+    }).toThrow()
+    expect(() => {
+      if (route.step._tag !== "RecordTaskAttemptPlan") return
+      ;(route.step.specification as { body: string }).body = "mutated"
+    }).toThrow()
+
+    expect(freshContinuationCommitmentRequirementOf(proposal)._tag).toBe("FreshContinuationCommitmentRequired")
+  })
+
+  it.each([
+    PlannedTaskAttempt.make({ ...plannedAttempt, attemptId: AttemptId.make("attempt-A-other") }),
+    PlannedTaskAttempt.make({ ...plannedAttempt, worktree: WorktreeLocator.make("/worktrees/A-other") })
+  ])("rejects a Begin pair whose exact planned attempts disagree", (transitionAttempt) => {
+    const step = FreshWorkflowStep.BeginPlannedAttemptExecutorWork({
+      claimOperationId: OperationId.make("claim-before-begin"),
+      plannedAttempt,
+      specification: makeTaskWorkSpecification({ body: "Implement A", taskId, title: "A" }),
+      task
+    })
+    const transition = RunnableFrontierTransition.BeginPlannedAttemptExecutorWork({ plannedAttempt: transitionAttempt })
+
+    expect(
+      freshContinuationDecisionsOf(
+        [{ step, transition }],
+        [makeFreshTaskCommitmentForTest(taskId, step.claimOperationId, runId)]
+      )
+    ).toMatchObject({ _tag: "Failure", failure: { _tag: "FreshDecisionPartitionInvalid" } })
   })
 
   it("reuses the exact accepted operation identity for responsibility reconciliation", () => {
@@ -152,6 +432,10 @@ describe("deliveryProposalsOf", () => {
         taskWorkPosition: { _tag: "NoTaskWorkPosition" }
       },
       route: { _tag: "AcceptedWorkflowRoute", transition }
+    })
+    if (proposal === undefined) return expect.fail("accepted reconciliation must produce one proposal")
+    expect(freshContinuationCommitmentRequirementOf(proposal)).toEqual({
+      _tag: "FreshContinuationCommitmentNotRequired"
     })
   })
 
@@ -397,17 +681,25 @@ describe("deliveryProposalsOf", () => {
       taskRevision: TaskRevision.make("revision-A")
     })
     const taskB = TaskId.make("B")
-    const stepB = FreshWorkflowStep.AcquireTaskClaim({
-      predecessorOperationId: OperationId.make("journaled-graph-read"),
+    const predecessorOperationIdB = OperationId.make("accepted-graph-read-B")
+    const claimOperationIdB = OperationId.make("accepted-claim-B")
+    const stepB = FreshWorkflowStep.ReadTaskWorkSpecification({
+      claimOperationId: claimOperationIdB,
+      predecessorOperationId: predecessorOperationIdB,
       task: { id: taskB, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }
     })
-    const readyB = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-      taskId: taskB,
-      taskRevision: TaskRevision.make("revision-B")
+    const readyB = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+      operationId: predecessorOperationIdB,
+      taskId: taskB
     })
     const contributions = deliveryProposalsOf({
       acceptedOperationIds: new Set(),
-      fresh: [{ step: stepB, transition: readyB }],
+      fresh: Result.getOrThrow(
+        freshContinuationDecisionsOf(
+          [{ step: stepB, transition: readyB }],
+          [makeFreshTaskCommitmentForTest(taskB, claimOperationIdB, runId)]
+        )
+      ),
       runId,
       transitions: [brokenA, readyB]
     })
@@ -419,6 +711,7 @@ describe("deliveryProposalsOf", () => {
 
     expect(frontier).toMatchObject({
       _tag: "DeliveryProposalsAvailable",
+      freshTaskCandidates: [],
       isolatedIssues: [{ _tag: "FreshRouteProvenanceMissing", taskId, transition: brokenA._tag }],
       proposals: [{ owner: "TicketDelivery", route: { _tag: "FreshWorkflowRoute", step: { task: { id: taskB } } } }]
     })
@@ -430,17 +723,25 @@ describe("deliveryProposalsOf", () => {
       acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(2) },
       plannedAttempt
     })
-    const claimC = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-      taskId: taskC,
-      taskRevision: TaskRevision.make("revision-C")
+    const predecessorOperationIdC = OperationId.make("accepted-graph-read-C")
+    const claimOperationIdC = OperationId.make("accepted-claim-C")
+    const claimC = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+      operationId: predecessorOperationIdC,
+      taskId: taskC
     })
-    const claimStepC = FreshWorkflowStep.AcquireTaskClaim({
-      predecessorOperationId: OperationId.make("journaled-graph-read"),
+    const claimStepC = FreshWorkflowStep.ReadTaskWorkSpecification({
+      claimOperationId: claimOperationIdC,
+      predecessorOperationId: predecessorOperationIdC,
       task: { id: taskC, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }
     })
     const contributions = deliveryProposalsOf({
       acceptedOperationIds: new Set(),
-      fresh: [{ step: claimStepC, transition: claimC }],
+      fresh: Result.getOrThrow(
+        freshContinuationDecisionsOf(
+          [{ step: claimStepC, transition: claimC }],
+          [makeFreshTaskCommitmentForTest(taskC, claimOperationIdC, runId)]
+        )
+      ),
       responsibilities: [
         { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(2), plannedAttempt }
       ],
@@ -455,6 +756,7 @@ describe("deliveryProposalsOf", () => {
 
     expect(frontier).toMatchObject({
       _tag: "DeliveryProposalsAvailable",
+      freshTaskCandidates: [],
       isolatedIssues: [],
       proposals: [
         {

@@ -848,6 +848,7 @@ const proposalActionLabels = {
   QueueAcceptedResultIntegrationResponsibility: "Queue the accepted result for integration",
   ReadCurrentTaskGraph: "Read the tracker graph for the selected task",
   ReadPostClaimGraph: "Read the tracker graph after creating the task claim",
+  ReadRejectedTaskClaim: "Check whether a previously rejected task claim is still foreign",
   ReadTargetLineage: "Read current target lineage from Git",
   ReadTaskClaim: "Read the current task claim from the tracker",
   ReadTaskWorkSpecification: "Read the task's work instructions from the tracker",
@@ -1270,6 +1271,7 @@ const coordinatorFinalityMatches = (
   expected: (typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type)["decision"],
   actual: CoordinatorFinalityDecision
 ): boolean => {
+  if (expected._tag === "RunMustRemainActiveReasonUnasserted") return actual._tag === "RunMustRemainActive"
   if (expected._tag !== actual._tag) return false
   /* v8 ignore start -- @preserve Authored activation boundaries separate incomplete returns that must remain active; terminal runs have no following activation boundary. */
   if (expected._tag === "RunMayTerminate") return true
@@ -1542,7 +1544,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       })
       const targetPromotionGit = {
         compareAndSet: (request: Parameters<TargetPromotionGitService["compareAndSet"]>[0]) =>
-          cursor.consumeTargetPromotionCompareAndSet.pipe(
+          cursor.consumeTargetPromotionCompareAndSet(request).pipe(
             Effect.map(({ result }) =>
               result._tag === "Applied"
                 ? TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: request.candidateCommit })
@@ -1706,11 +1708,11 @@ const runAuthoredScenarioCassetteWith = (request: {
         if (
           Option.isNone(hold) ||
           plannedAttempt.attemptId !== hold.value.attemptId ||
-          plannedAttempt.taskId !== hold.value.taskId
+          plannedAttempt.taskId !== hold.value.taskId ||
+          request !== "Suspend"
         ) {
           return
         }
-        if (request !== "Suspend") return
         yield* Deferred.await(hold.value.release)
       })
 
@@ -2553,6 +2555,26 @@ const runAuthoredScenarioCassetteWith = (request: {
             )
             const driveTaskWorkSpecificationReadBoundaryRelease =
               cursor.consumeTaskWorkSpecificationReadBoundaryRelease.pipe(Effect.asVoid, Effect.orDie)
+            const driveTaskWorktreeSelectionHold = cursor.consumeTaskWorktreeSelectionHold.pipe(
+              Effect.asVoid,
+              Effect.orDie
+            )
+            const driveTaskWorktreeSelectionRelease = cursor.consumeTaskWorktreeSelectionRelease.pipe(
+              Effect.asVoid,
+              Effect.orDie
+            )
+            const drivePromotedCompletionReadHold = cursor.consumePromotedCompletionReadHold.pipe(
+              Effect.asVoid,
+              Effect.orDie
+            )
+            const drivePromotedCompletionReadRelease = cursor.consumePromotedCompletionReadRelease.pipe(
+              Effect.asVoid,
+              Effect.orDie
+            )
+            const driveFreshTaskClaimSelectionHold = cursor.consumeFreshTaskClaimSelectionHold.pipe(
+              Effect.asVoid,
+              Effect.orDie
+            )
             type DirectlyDrivenStoryItem = Extract<
               AuthoredCassetteStoryItem,
               {
@@ -2568,6 +2590,11 @@ const runAuthoredScenarioCassetteWith = (request: {
                   | "CassetteReleasesHeldTargetPromotionReconciliationRead"
                   | "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary"
                   | "CassetteReleasesHeldTaskWorkSpecificationRead"
+                  | "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion"
+                  | "CassetteReleasesHeldTaskWorktreeSelection"
+                  | "CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins"
+                  | "CassetteReleasesHeldPromotedTaskCompletionClaimRead"
+                  | "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions"
                   | "OperatorContinuesAttempt"
                   | "OperatorDirectsTaskClaimReacquisition"
                   | "OperatorRacesContinueAndStop"
@@ -2593,6 +2620,11 @@ const runAuthoredScenarioCassetteWith = (request: {
               "CassetteReleasesHeldTargetPromotionReconciliationRead",
               "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
               "CassetteReleasesHeldTaskWorkSpecificationRead",
+              "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion",
+              "CassetteReleasesHeldTaskWorktreeSelection",
+              "CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins",
+              "CassetteReleasesHeldPromotedTaskCompletionClaimRead",
+              "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions",
               "OperatorContinuesAttempt",
               "OperatorDirectsTaskClaimReacquisition",
               "OperatorRacesContinueAndStop",
@@ -2624,6 +2656,11 @@ const runAuthoredScenarioCassetteWith = (request: {
                   driveTargetPromotionReconciliationReadBoundaryRelease,
                 CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: () => driveTaskWorkSpecificationReadBoundaryHold,
                 CassetteReleasesHeldTaskWorkSpecificationRead: () => driveTaskWorkSpecificationReadBoundaryRelease,
+                CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion: () => driveTaskWorktreeSelectionHold,
+                CassetteReleasesHeldTaskWorktreeSelection: () => driveTaskWorktreeSelectionRelease,
+                CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins: () => drivePromotedCompletionReadHold,
+                CassetteReleasesHeldPromotedTaskCompletionClaimRead: () => drivePromotedCompletionReadRelease,
+                CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions: () => driveFreshTaskClaimSelectionHold,
                 OperatorContinuesAttempt: () => driveAttemptChoice,
                 OperatorDirectsTaskClaimReacquisition: () => driveClaimReacquisition,
                 OperatorRacesContinueAndStop: () => driveAttemptChoiceRace,
@@ -2693,18 +2730,10 @@ const runAuthoredScenarioCassetteWith = (request: {
 
           const awaitAdmittedContinuationChoice = Effect.fn("AuthoredCassette.awaitAdmittedContinuationChoice")(
             function* (action: ControlledDeliveryAction) {
+              const plannedAttempt = resumedPlannedAttempt(action)
+              if (plannedAttempt === undefined) return
               const hold = yield* cursor.consumeAdmittedContinuationExecutorIntentHold
               if (Option.isNone(hold)) return
-              const plannedAttempt = resumedPlannedAttempt(action)
-              /* v8 ignore start -- @preserve Hold closure validation places this synchronization only before the exact admitted Resume action. */
-              if (plannedAttempt === undefined) {
-                return yield* Effect.die(
-                  new Error(
-                    `authored continuation hold expected ResumePlannedAttemptExecutorWorkAfterCurrentFacts, received ${action.proposal.route._tag}`
-                  )
-                )
-              }
-              /* v8 ignore stop -- @preserve */
               /* v8 ignore start -- @preserve Hold closure validation binds the admitted continuation to this exact planned attempt. */
               if (plannedAttempt.attemptId !== hold.value.attemptId || plannedAttempt.taskId !== hold.value.taskId) {
                 return yield* Effect.die(
@@ -2724,7 +2753,11 @@ const runAuthoredScenarioCassetteWith = (request: {
             if (plannedAttempt === undefined) return
             const key = `${plannedAttempt.taskId}:${plannedAttempt.attemptId}`
             const current = yield* cursor.currentStoryItem
-            if (current?._tag === "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary") {
+            if (
+              current?._tag === "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary" &&
+              current.attemptId === plannedAttempt.attemptId &&
+              current.taskId === plannedAttempt.taskId
+            ) {
               yield* cursor.awaitCurrentStoryAdvance
             }
             const gate = (yield* Ref.get(plannedContinuationExecutorBoundaryGate)).get(key)

@@ -29,6 +29,7 @@ import {
   completionOriginalTaskClaimReleaseFor,
   completionTaskRequestEquals
 } from "./events.js"
+import { CompletionClaimFingerprint, ForeignCompletionClaim } from "./completion-claim.js"
 import { integrationFinalityFixture as fixture } from "./fixtures.js"
 
 const openFacts = FocusedTaskCompletionFacts.make({
@@ -333,6 +334,29 @@ it.effect("fails closed for the remaining explicit unclaimed and mismatched clai
     }).pipe(Effect.provide(controlledCompletionClaimBoundaryLayerFrom([foreignCompletionClaim])))
     expect(completionReplacement).toBeInstanceOf(CompletionClaimReplacementFailure)
   })
+)
+
+it.effect("returns a real foreign completion claim from both controlled claim reads", () =>
+  Effect.gen(function* () {
+    const foreign = ForeignCompletionClaim.make({
+      fingerprint: CompletionClaimFingerprint.make("f".repeat(64)),
+      taskId: fixture.taskId
+    })
+    const boundary = yield* CompletionClaimBoundary
+    const request = completionClaimReadRequestFor(fixture.claim)
+
+    expect(yield* boundary.readTaskClaim(request)).toEqual(foreign)
+    expect(yield* boundary.readCompletionClaimMarker(request)).toEqual(foreign)
+  }).pipe(
+    Effect.provide(
+      controlledCompletionClaimBoundaryLayerFrom([
+        ForeignCompletionClaim.make({
+          fingerprint: CompletionClaimFingerprint.make("f".repeat(64)),
+          taskId: fixture.taskId
+        })
+      ])
+    )
+  )
 )
 
 const independentTaskId = TaskId.make("controlled-independent-task-b")
