@@ -1,7 +1,14 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
+import { plannedAttemptExecutorCorrelation } from "@dalph/contracts"
+import { evaluateDeliveryRuntimeInputBundle, type DeliveryRelationInputBundle } from "@dalph/orchestrator"
 import { Effect } from "effect"
 import { expect } from "vitest"
+import {
+  runIssue268Ds01Characterization,
+  runIssue268Ds02Characterization
+} from "../../test-support/issue-268-controlled-characterization.js"
+import { issue268ControlledDeliveryCharacterization as controlledScenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 
 const lastItemIndex = -1
@@ -12,6 +19,243 @@ const cachedRun = Effect.runSync(
       Effect.provide(NodeCrypto.layer)
     )
   )
+)
+
+const contributedTaskIds = (publications: ReadonlyArray<DeliveryRelationInputBundle>) =>
+  publications.flatMap(({ actionInputs }) =>
+    actionInputs.proposalContributions.ticketDelivery.flatMap(({ order }) => ("taskId" in order ? [order.taskId] : []))
+  )
+
+it.effect("DS-01 derives A, B, and C inside capacity while D and E stay outside", () =>
+  Effect.gen(function* () {
+    const run = yield* runIssue268Ds01Characterization
+    const establishedBundle = run.publications.find(({ publication }) => publication.graph._tag === "GraphEstablished")
+    if (establishedBundle === undefined) return expect.fail("DS-01 must publish the established G0 graph")
+    const established = yield* evaluateDeliveryRuntimeInputBundle(establishedBundle)
+    const placements = established.current.ticketDeliveries.source.placements.map(({ placement, taskId }) => ({
+      placement: placement._tag,
+      taskId
+    }))
+    const selected = established.current.ticketDeliveries.deliveries.map(({ taskId }) => taskId)
+    const candidates = establishedBundle.actionInputs.freshTaskCandidates.map(({ taskId }) => taskId)
+    const forbiddenStages = new Set([
+      "AcquireTaskClaim",
+      "ReadPostClaimGraph",
+      "ReadTaskWorkSpecification",
+      "RecordTaskAttemptPlan",
+      "ReconcileTaskWorktree",
+      "BeginPlannedAttemptExecutorWork",
+      "ObservePlannedAttemptExecutorWork"
+    ])
+    const forbiddenEvents = new Set([
+      "TaskClaimAcquisitionIntended",
+      "TaskClaimAcquired",
+      "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorCommandIntended"
+    ])
+
+    expect(placements).toEqual([
+      { placement: "Selected", taskId: "A" },
+      { placement: "Selected", taskId: "B" },
+      { placement: "Selected", taskId: "C" },
+      { placement: "EligibleOutsideBound", taskId: "D" },
+      { placement: "EligibleOutsideBound", taskId: "E" }
+    ])
+    expect(candidates).toEqual(["A", "B", "C", "D", "E"])
+    expect(selected).toEqual(["A", "B", "C"])
+    expect(run.pendingClaimTaskIds).toHaveLength(3)
+    expect(new Set(run.pendingClaimTaskIds)).toEqual(new Set(["A", "B", "C"]))
+    expect(run.executedActions.filter(({ stage }) => forbiddenStages.has(stage))).toEqual([])
+    expect(run.records.filter(({ event }) => forbiddenEvents.has(event._tag))).toEqual([])
+    expect(run.claimRequests).toEqual([])
+    expect(run.commands).toEqual([])
+    expect(run.plans).toEqual([])
+  })
+)
+
+it.effect("DS-02 starts only A, B, and C through the production workflow algebra", () =>
+  Effect.gen(function* () {
+    const run = yield* runIssue268Ds02Characterization
+    const begun = run.records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+        ? [`${event.plannedAttempt.taskId}:${event.plannedAttempt.attemptId}`]
+        : []
+    )
+    const claimed = run.records.flatMap(({ event }) =>
+      event._tag === "TaskClaimAcquisitionIntended" ? [event.operation.acquisition.taskId] : []
+    )
+    const planned = run.records.flatMap(({ event }) =>
+      event._tag === "TaskAttemptPlanned" ? [event.operation.plannedAttempt.taskId] : []
+    )
+    const prematureOutsideBoundWork = run.records.flatMap(({ event, position }) => {
+      const taskId =
+        event._tag === "TaskClaimAcquisitionIntended"
+          ? event.operation.acquisition.taskId
+          : event._tag === "TaskClaimAcquired"
+            ? event.claim.taskId
+            : event._tag === "TaskAttemptPlanned" || event._tag === "TaskWorktreeReconciliationIntended"
+              ? event.operation.plannedAttempt.taskId
+              : undefined
+      return taskId === "D" || taskId === "E" ? [{ event: event._tag, position, taskId }] : []
+    })
+    const finalPublication = run.publications.at(-1)
+    const expectedStages = [
+      "ReadCurrentTaskGraph",
+      "AcquireTaskClaim",
+      "ReadPostClaimGraph",
+      "ReadTaskWorkSpecification",
+      "RecordTaskAttemptPlan",
+      "ReconcileTaskWorktree",
+      "BeginPlannedAttemptExecutorWork",
+      "ObservePlannedAttemptExecutorWork"
+    ]
+    const stagesByTask = Object.fromEntries(
+      ["A", "B", "C", "D", "E"].map((taskId) => [
+        taskId,
+        run.executedActions.filter((action) => action.taskId === taskId).map(({ stage }) => stage)
+      ])
+    )
+    const commandIntents = run.records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorCommandIntended"
+        ? [{ attemptId: event.plannedAttempt.attemptId, command: event.command, ordinal: event.ordinal }]
+        : []
+    )
+    const commandResponses = run.records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorCommandResponseObserved"
+        ? [{ attemptId: event.plannedAttempt.attemptId, ordinal: event.commandOrdinal, report: event.report }]
+        : []
+    )
+    const acceptedExecutorReports = run.records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkReported"
+        ? [{ attemptId: event.report.correlation.attemptId, ordinal: event.ordinal, report: event.report }]
+        : []
+    )
+    const acquiredClaims = run.records.flatMap(({ event }) => (event._tag === "TaskClaimAcquired" ? [event.claim] : []))
+    const durablePlans = run.records.flatMap(({ event }) =>
+      event._tag === "TaskAttemptPlanned" ? [event.operation.plannedAttempt] : []
+    )
+
+    expect(run.commands).toEqual([
+      { attemptId: "attempt:A:1", command: "Begin" },
+      { attemptId: "attempt:B:1", command: "Begin" },
+      { attemptId: "attempt:C:1", command: "Begin" }
+    ])
+    expect(begun).toEqual(["A:attempt:A:1", "B:attempt:B:1", "C:attempt:C:1"])
+    expect(prematureOutsideBoundWork).toEqual([])
+    expect(new Set(contributedTaskIds(run.publications))).toEqual(new Set(["A", "B", "C"]))
+    expect(claimed).toHaveLength(3)
+    expect(new Set(claimed)).toEqual(new Set(["A", "B", "C"]))
+    expect(planned).toEqual(["A", "B", "C"])
+    expect(stagesByTask).toEqual({ A: expectedStages, B: expectedStages, C: expectedStages, D: [], E: [] })
+    expect(run.claimRequests).toHaveLength(3)
+    expect(run.claimRequests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ owner: "issue-268-controlled-owner", taskId: "A" }),
+        expect.objectContaining({ owner: "issue-268-controlled-owner", taskId: "B" }),
+        expect.objectContaining({ owner: "issue-268-controlled-owner", taskId: "C" })
+      ])
+    )
+    expect(run.claimReleaseOrder).toEqual(["A", "B", "C"])
+    expect(
+      run.claimRequests.every(
+        ({ operationId, taskId, token }) => token === `issue-268-controlled-claim:${taskId}:${operationId}`
+      )
+    ).toBe(true)
+    expect(acquiredClaims).toEqual(run.claimRequests.map((request) => ({ _tag: "ActiveTaskClaim", ...request })))
+    expect(run.plans).toEqual([
+      expect.objectContaining({
+        attemptId: "attempt:A:1",
+        baseSha: controlledScenario.baseSha,
+        branch: "refs/heads/dalph/issue-268-a-1",
+        executor: "executor:issue-268-controlled",
+        runId: controlledScenario.runId,
+        taskId: "A",
+        taskRevision: controlledScenario.specifications.F1.A.fingerprint,
+        worktree: "/dalph/controlled-characterization/issue-268/A-1"
+      }),
+      expect.objectContaining({
+        attemptId: "attempt:B:1",
+        baseSha: controlledScenario.baseSha,
+        branch: "refs/heads/dalph/issue-268-b-1",
+        executor: "executor:issue-268-controlled",
+        runId: controlledScenario.runId,
+        taskId: "B",
+        taskRevision: controlledScenario.specifications.F1.B.fingerprint,
+        worktree: "/dalph/controlled-characterization/issue-268/B-1"
+      }),
+      expect.objectContaining({
+        attemptId: "attempt:C:1",
+        baseSha: controlledScenario.baseSha,
+        branch: "refs/heads/dalph/issue-268-c-1",
+        executor: "executor:issue-268-controlled",
+        runId: controlledScenario.runId,
+        taskId: "C",
+        taskRevision: controlledScenario.specifications.F1.C.fingerprint,
+        worktree: "/dalph/controlled-characterization/issue-268/C-1"
+      })
+    ])
+    expect(durablePlans).toEqual(run.plans)
+    expect(run.worktreeCreateRequests).toEqual(run.plans)
+    expect(commandIntents).toEqual([
+      { attemptId: "attempt:A:1", command: "Begin", ordinal: 1 },
+      { attemptId: "attempt:B:1", command: "Begin", ordinal: 1 },
+      { attemptId: "attempt:C:1", command: "Begin", ordinal: 1 }
+    ])
+    const expectedCommandResponses = run.plans.map((plan) => ({
+      attemptId: plan.attemptId,
+      ordinal: 1,
+      report: { _tag: "ExecutorWorkExecuting" as const, correlation: plannedAttemptExecutorCorrelation(plan) }
+    }))
+    expect(commandResponses).toEqual(expectedCommandResponses)
+    expect(acceptedExecutorReports).toEqual(commandResponses)
+    for (const attemptId of ["attempt:A:1", "attempt:B:1", "attempt:C:1"]) {
+      const plan = run.plans.find((candidate) => candidate.attemptId === attemptId)
+      if (plan === undefined) return expect.fail(`missing exact plan ${attemptId}`)
+      const worktreeIntent = run.records.filter(
+        ({ event }) =>
+          event._tag === "TaskWorktreeReconciliationIntended" && event.operation.plannedAttempt.attemptId === attemptId
+      )
+      expect(worktreeIntent).toHaveLength(1)
+      const worktreeOperationId = worktreeIntent[0]?.event
+      if (worktreeOperationId?._tag !== "TaskWorktreeReconciliationIntended") {
+        return expect.fail(`missing exact worktree intent ${attemptId}`)
+      }
+      const worktreeObservations = run.records.filter(
+        ({ event }) =>
+          event._tag === "TaskWorktreeReady" && event.operationId === worktreeOperationId.operation.operationId
+      )
+      expect(worktreeObservations).toHaveLength(1)
+      expect(worktreeObservations[0]?.event).toMatchObject({
+        proof: {
+          _tag: "PlannedWorktreeReady",
+          baseSha: plan.baseSha,
+          branch: plan.branch,
+          headSha: plan.baseSha,
+          worktree: plan.worktree
+        }
+      })
+      const responsibilityAt = run.records.findIndex(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" && event.plannedAttempt.attemptId === attemptId
+      )
+      const beginIntentAt = run.records.findIndex(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandIntended" &&
+          event.plannedAttempt.attemptId === attemptId &&
+          event.command === "Begin"
+      )
+      expect(responsibilityAt).toBeGreaterThanOrEqual(0)
+      expect(beginIntentAt).toBeGreaterThan(responsibilityAt)
+    }
+    expect(
+      finalPublication?.actionInputs.runtimeFacts.taskWork.held
+        .map(({ correlation }) => correlation.attemptId)
+        .toSorted()
+    ).toEqual(["attempt:A:1", "attempt:B:1", "attempt:C:1"])
+    expect(run.decision).toMatchObject({ _tag: "RunMustRemainActive" })
+  })
 )
 
 it.effect(

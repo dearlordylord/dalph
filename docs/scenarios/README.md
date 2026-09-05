@@ -90,13 +90,14 @@ table does not claim that the corrections are on `master` or shipped.
 | `issue-269-independent-work-retained-priority.md` | 269 | Complete and composed through `a1b81c4fb`; issue closed |
 | `issue-267-exact-causal-active-work-cassette.md` | 267 | Complete and composed through `a1b81c4fb`; issue closed |
 
-**Accepted implementation pending** — these files are current behavior
-authority for open implementation issues. They do not claim that production
-already conforms.
+**Accepted recovery behavior; completion evidence pending** — these files are
+the current authority for open recovery work. They do not claim that the whole
+owning issue is complete.
 
-| File | Issue | Status |
+| File | Owning issue | Status |
 |---|---:|---|
-| `issue-315-preserve-bounded-fresh-admission.md` | 315 | Blocks #268 C2b at DS-02; scenario accepted, model and implementation pending |
+| `issue-315-preserve-bounded-fresh-admission.md` | 315 | Implemented and verified at recovery base `b8a63ef8e`; #268 must independently re-prove its composed DS-02 result |
+| `issue-268-controlled-delivery-story.md` | 268 | Thirteen outcomes accepted; cassette-free observed-order acceptance and C3--C5 remain pending from base `b8a63ef8e` |
 
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state
