@@ -689,6 +689,30 @@ describe("capability registration gate", () => {
     )
   })
 
+  it("does not retain a removed fixture's Layer binding in the next source audit", () => {
+    const provider: CapabilitySourceFile = {
+      path: "scripts/fixtures/transient-provider.ts",
+      source: "export const temporaryProviderLayer = Layer.succeed(UnknownService, {})"
+    }
+    const composition: CapabilitySourceFile = {
+      path: "scripts/fixtures/transient-composition.ts",
+      source:
+        'import { temporaryProviderLayer } from "./transient-provider.js"\nexport const assembled = temporaryProviderLayer'
+    }
+    const inventory = {
+      ...capabilityRegistrationInventory,
+      compositionSources: [
+        ...capabilityRegistrationInventory.compositionSources,
+        { role: "production" as const, source: composition.path }
+      ]
+    }
+    const issue = "production uses unregistered exported Layer temporaryProviderLayer"
+
+    expect(runCapabilityRegistrationGate(inventory, [...sourceFiles, provider, composition])).toContain(issue)
+    expect(runCapabilityRegistrationGate(inventory, [...sourceFiles, composition])).not.toContain(issue)
+    expect(runCapabilityRegistrationGate(inventory, [...sourceFiles, provider, composition])).toContain(issue)
+  })
+
   it("audits exported Layer values without a Layer suffix and through re-exports", () => {
     const layerSource: CapabilitySourceFile = {
       path: "scripts/fixtures/issue-79-layer-source.ts",

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs"
-import { join, relative, resolve } from "node:path"
+import { dirname, join, relative, resolve } from "node:path"
 import ts from "typescript"
 import {
   capabilityRegistrationInventory,
@@ -50,7 +50,9 @@ const virtualPath = (path: string): string => join(virtualRoot, path).replaceAll
 const normalizedVirtualPath = (path: string): string => resolve(path).replaceAll("\\", "/")
 
 const sourceProgramCache = new WeakMap<object, CapabilitySourceProgram>()
-const sourceProgramByRootKey = new Map<string, CapabilitySourceProgram>()
+// Reuse unchanged trees even when a negative-control fixture adds or removes a
+// root. Retain one predecessor, not a full compiler graph for each root set.
+const sourceProgramState: { previous?: CapabilitySourceProgram } = {}
 const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): CapabilitySourceProgram => {
   const cached = sourceProgramCache.get(sourceFiles)
   if (cached !== undefined) return cached
@@ -59,8 +61,14 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
   const virtualSources = new Map(
     sourceFiles.map((file) => [normalizedVirtualPath(virtualPath(file.path)), file] as const)
   )
-  const rootKey = sourceFiles.map(({ path }) => path).join("\u0000")
-  const previous = sourceProgramByRootKey.get(rootKey)
+  /* eslint-disable functional/immutable-data -- TypeScript's compiler host is an intentionally mutable adapter. */
+  const virtualDirectories = new Set<string>()
+  for (const path of virtualSources.keys()) {
+    for (let directory = dirname(path); directory !== dirname(directory); directory = dirname(directory)) {
+      virtualDirectories.add(directory)
+    }
+  }
+  const previous = sourceProgramState.previous
   const options: ts.CompilerOptions = {
     baseUrl: virtualRoot,
     lib: ["lib.es2023.d.ts"],
@@ -75,12 +83,12 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
     skipLibCheck: true,
     target: ts.ScriptTarget.ES2022
   }
+  const moduleResolutionCache = ts.createModuleResolutionCache(virtualRoot, (path) => path, options)
   const host = ts.createCompilerHost(options, true)
   const defaultFileExists = host.fileExists.bind(host)
   const defaultReadFile = host.readFile.bind(host)
   const defaultGetSourceFile = host.getSourceFile.bind(host)
   const defaultDirectoryExists = host.directoryExists?.bind(host)
-  /* eslint-disable functional/immutable-data -- TypeScript's compiler host is an intentionally mutable adapter. */
   host.getCurrentDirectory = () => virtualRoot
   host.fileExists = (fileName) => {
     const normalized = normalizedVirtualPath(fileName)
@@ -102,13 +110,13 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
   }
   host.directoryExists = (directoryName) => {
     const normalized = normalizedVirtualPath(directoryName)
-    return (
-      [...virtualSources.keys()].some((fileName) => fileName.startsWith(`${normalized}/`)) ||
-      (defaultDirectoryExists?.(directoryName) ?? false)
-    )
+    return virtualDirectories.has(normalized) || (defaultDirectoryExists?.(directoryName) ?? false)
   }
   host.resolveModuleNames = (moduleNames, containingFile) =>
-    moduleNames.map((moduleName) => ts.resolveModuleName(moduleName, containingFile, options, host).resolvedModule)
+    moduleNames.map(
+      (moduleName) =>
+        ts.resolveModuleName(moduleName, containingFile, options, host, moduleResolutionCache).resolvedModule
+    )
   const program = ts.createProgram(
     sourceFiles.map(({ path }) => virtualPath(path)),
     options,
@@ -117,7 +125,7 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
   )
   const indexed = { checker: program.getTypeChecker(), program, sourceByPath }
   sourceProgramCache.set(sourceFiles, indexed)
-  sourceProgramByRootKey.set(rootKey, indexed)
+  sourceProgramState.previous = indexed
   /* eslint-enable functional/immutable-data */
   return indexed
 }

@@ -31,7 +31,7 @@ if (nativeFiles.length > 0) {
   run(executable("oxlint"), ["-c", ".oxlintrc.json", "--deny-warnings", ...(fix ? ["--fix"] : []), ...nativeFiles])
 }
 
-const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({ allFiles, selectedFiles, staged })
+const { compatibilityFiles } = selectCompatibilityFiles({ allFiles, selectedFiles, staged })
 const runCompatibility = (files, shouldFix) => {
   if (files.length === 0) return
   run(
@@ -51,12 +51,10 @@ const runCompatibility = (files, shouldFix) => {
   )
 }
 
-if (staged && fix) {
-  runCompatibility(compatibilityFiles, false)
-  runCompatibility(selectedCompatibilityFiles, true)
-} else {
-  runCompatibility(compatibilityFiles, fix)
-}
+// Any fixable diagnostic makes the complete staged check exit before a
+// selected-file fix pass can run. Reaching that pass means there is no fix to
+// apply, so do not load the same project graph again.
+runCompatibility(compatibilityFiles, fix && !staged)
 
 if (selectedFiles.length > 0) {
   run(executable("dprint"), [fix ? "fmt" : "check", ...selectedFiles])

@@ -121,9 +121,9 @@ on Ubuntu/macOS in the [qualification workflow](../.github/workflows/codex-app-s
   `origin/master`, then `HEAD^`. It includes staged/unstaged tracked changes and
   untracked production source; non-executable/test/docs/tooling paths are
   excluded. Istanbul statement spans determine changed executable lines.
-- Successful stages have a cumulative 400-line stdout/stderr budget. Failed
-  stages retain complete diagnostics and their exit status. Reduce reporter
-  noise before raising the budget.
+- Successful stages share the stdout/stderr budget in `run-quality-gate.mjs`.
+  Failed stages retain complete diagnostics and their exit status. Reduce
+  reporter noise before raising the budget.
 
 For a branch review, set the coverage base explicitly:
 
