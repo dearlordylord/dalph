@@ -86,6 +86,10 @@ import {
   sameAttemptChoiceSubject
 } from "../../workflow/protocols/attempt-choice/events.js"
 import {
+  appliedContinueChoicePositionForExactRevision,
+  latestAppliedContinueChoicePositionForAttempt
+} from "../../workflow/protocols/attempt-choice/continue-choice-authority.js"
+import {
   restartChoiceWasInvalidatedByLaterSpecification,
   restartClaimAuthorityAtApplication
 } from "../../workflow/protocols/attempt-choice/restart-authority.js"
@@ -187,20 +191,6 @@ const isExecutorReportFor = (event: JournalRecord["event"], plannedAttempt: Plan
   event._tag === "PlannedAttemptExecutorWorkReported" &&
   event.report.correlation.runId === plannedAttempt.runId &&
   event.report.correlation.attemptId === plannedAttempt.attemptId
-
-/** The Operator's Continue authority names the immutable plan and one exact changed authored fingerprint. */
-const appliedContinueChoicePositionFor = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
-  plannedAttempt: PlannedTaskAttempt,
-  observedTaskRevision?: PlannedTaskAttempt["taskRevision"]
-): JournalPosition | undefined =>
-  records.findLast(
-    ({ event }) =>
-      event._tag === "AttemptChoiceApplied" &&
-      event.choice === "ContinueExistingAttempt" &&
-      plannedTaskAttemptEquivalence(event.subject.plannedAttempt, plannedAttempt) &&
-      (observedTaskRevision === undefined || event.subject.observedTaskRevision === observedTaskRevision)
-  )?.position
 
 type AppliedStopRecord = Omit<JournalRecord, "event"> & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }> & {
@@ -1613,7 +1603,7 @@ export const deriveJournalResponsibilityFacts = (
     const changedSpecification = changedTaskSpecification(responsibility.plannedAttempt)
     const exactChangedSpecificationMayContinue = () =>
       Option.isSome(changedSpecification) &&
-      appliedContinueChoicePositionFor(
+      appliedContinueChoicePositionForExactRevision(
         records,
         responsibility.plannedAttempt,
         changedSpecification.value.fingerprint
@@ -2113,7 +2103,7 @@ const activeWorkAuthorityRefreshFreshnessBaselineForAttempt = (
     activationBaselinePosition.value,
     latestCompletedRunPauseCyclePosition(runState),
     latestCompletedTaskPauseCyclePositionFor(runState, plannedAttempt.taskId, currentGraph),
-    appliedContinueChoicePositionFor(runState.workflowHistory.records, plannedAttempt)
+    latestAppliedContinueChoicePositionForAttempt(runState.workflowHistory.records, plannedAttempt)
   ].filter((position): position is JournalPosition => position !== undefined)
   return Option.some({
     _tag: "AttemptAuthorityFreshnessBaseline",
@@ -2148,7 +2138,7 @@ const attemptAuthorityFreshnessBaseline = (
     executingEstablishedAt === undefined ? Option.getOrUndefined(taskBaseline) : undefined,
     latestCompletedRunPauseCyclePosition(runState),
     latestCompletedTaskPauseCyclePositionFor(runState, plannedAttempt.taskId, currentGraph),
-    appliedContinueChoicePositionFor(runState.workflowHistory.records, plannedAttempt)
+    latestAppliedContinueChoicePositionForAttempt(runState.workflowHistory.records, plannedAttempt)
   ].filter((position): position is JournalPosition => position !== undefined)
   return positions.length === 0
     ? Option.none()
@@ -2955,7 +2945,7 @@ const decisionAfterCurrentSpecification = (
             worktreeObservationOperationId: currentWorktreeEvent.operationId
           }
         })
-      const appliedContinueChoicePosition = appliedContinueChoicePositionFor(records, plannedAttempt)
+      const appliedContinueChoicePosition = latestAppliedContinueChoicePositionForAttempt(records, plannedAttempt)
       if (Option.isNone(integrationTarget)) {
         return {
           explanation: FrontierExplanation.IntegrationConfigurationWait({

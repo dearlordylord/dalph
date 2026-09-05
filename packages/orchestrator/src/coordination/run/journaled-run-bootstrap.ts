@@ -71,6 +71,7 @@ import { ApplicationExitAdmission, type ForwardOwnerLease } from "../application
 import { ApplicationExitDiagnostic } from "../application-exit/lifecycle-decision.js"
 import { ApplicationExitDrainFailure, type ApplicationExitShellService } from "../application-exit/application-shell.js"
 import { suspendExecutingExecutorWorkForApplicationExit } from "../application-exit/executor-drain.js"
+
 import {
   AppliedRunCancellation,
   ApplyRunCancellationRequest,
@@ -97,6 +98,8 @@ import {
   PassivePlannedAttemptProjectionPublication,
   type PassivePlannedAttemptProjectionPublicationService
 } from "./passive-planned-attempt-observer.js"
+
+const latestJournalRecordOffset = -1
 
 export interface JournaledRuntimeLayerInput {
   readonly runId: RunId
@@ -429,11 +432,22 @@ export const journaledRunBootstrapLayer = (
           Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
               const reactivationObservers = yield* Ref.get(acceptedRunReactivationObservers)
+              const acceptedPublicationWatermark = yield* Ref.make(
+                initial.records.at(latestJournalRecordOffset)?.position ?? null
+              )
               const publicationObserver = DeliveryRelationPublicationObserver.of({
-                observe: () =>
-                  Option.match(reactivationObservers, {
-                    onNone: () => Effect.void,
-                    onSome: ({ acceptedFactPublication }) => acceptedFactPublication()
+                observe: (bundle) =>
+                  Effect.gen(function* () {
+                    const acceptedAt = bundle.actionInputs.runtimeFacts.acceptedAt
+                    if (acceptedAt === null) return
+                    const advanced = yield* Ref.modify(acceptedPublicationWatermark, (current) =>
+                      current !== null && acceptedAt <= current ? [false, current] : [true, acceptedAt]
+                    )
+                    if (!advanced) return
+                    yield* Option.match(reactivationObservers, {
+                      onNone: () => Effect.void,
+                      onSome: ({ acceptedFactPublication }) => acceptedFactPublication()
+                    })
                   })
               })
               const downstream = runtimeLayer({ runId, opportunity }).pipe(

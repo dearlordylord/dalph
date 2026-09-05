@@ -5,7 +5,7 @@ import { deterministicDeliveryRuntimeSupport, makeDeliveryRelationsLayer } from 
 import { currentSignalOf, makeDeliveryConsequences, type DeliveryRelationInputBundle } from "./relations.js"
 
 /** Read-only ambient observation of one exact bundle successfully published by the reactive runtime. */
-interface DeliveryRelationPublicationObservation {
+export interface DeliveryRelationPublicationObservation {
   readonly observe: (bundle: DeliveryRelationInputBundle) => Effect.Effect<void>
 }
 

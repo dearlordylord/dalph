@@ -26,6 +26,8 @@ import {
   makeDeliveryRuntimeAdmissionLoop,
   DeliveryRuntimeProposalOwnershipConflict
 } from "./delivery-runtime-admission-loop.js"
+import { runDeliveryRuntimeAdmissionSweep } from "./delivery-runtime-admission-sweep.js"
+import type { DeliveryRuntimeAdmissionProgressContradiction } from "./delivery-runtime-admission-sweep.js"
 import {
   attachCurrentSignal,
   freshTaskCandidateObservationOf,
@@ -62,6 +64,7 @@ import {
 import type { FreshTaskCandidateFrontier } from "./fresh-task-candidate.js"
 
 export { DeliveryRuntimeProposalOwnershipConflict } from "./delivery-runtime-admission-loop.js"
+export { DeliveryRuntimeAdmissionProgressContradiction } from "./delivery-runtime-admission-sweep.js"
 export * from "./delivery-runtime-phase.js"
 export type { DeliveryRuntimeQuiescence } from "./delivery-runtime-quiescence.js"
 
@@ -165,6 +168,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
   | ApplicationExiting
   | DeliveryActionCompletionPublicationMismatch
   | DeliveryActionExecutionError
+  | DeliveryRuntimeAdmissionProgressContradiction
   | DeliveryRuntimeProposalOwnershipConflict
   | DeliveryRuntimeReconfirmationStateInvalid
   | DeliveryRuntimeRunMismatch
@@ -677,7 +681,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         const activeRefreshG2Pending =
           phase._tag === "ActiveRefreshPreG2RuntimePhase" && current.activeRefreshBoundary !== undefined
         if (!activeRefreshG2Pending) {
-          while (yield* admissionLoop.admitPass()) yield* Effect.yieldNow
+          yield* runDeliveryRuntimeAdmissionSweep(current.proposedActions, admissionLoop.admitPass)
         }
 
         const quiescence = yield* runtimeQuiescence()

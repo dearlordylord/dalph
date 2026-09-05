@@ -3903,6 +3903,8 @@ describe("delivery proposal route matrix", () => {
 
   const continuationAuthorizationRecords = (options?: {
     readonly acceptedExecuting?: boolean
+    readonly continueObservedSpecification?: typeof specification
+    readonly currentSpecification?: typeof specification
     readonly graphOmitsTask?: boolean
     readonly graphMissingExplicitCoverage?: boolean
     readonly safeConsumed?: boolean
@@ -4090,6 +4092,20 @@ describe("delivery proposal route matrix", () => {
         })
       )
     }
+    if (options?.continueObservedSpecification !== undefined) {
+      const requestId = AttemptChoiceRequestId.make({ nonce: "continuation-exact-changed-facts", runId })
+      append(
+        attemptChoiceAppliedRecordKey(requestId),
+        AttemptChoiceAppliedEvent.make({
+          choice: "ContinueExistingAttempt",
+          initiatedBy: { _tag: "Operator" },
+          occurrenceClassification: "InitiatedAction",
+          requestId,
+          subject: { observedTaskRevision: options.continueObservedSpecification.fingerprint, plannedAttempt },
+          version: workflowJournalEventVersion
+        })
+      )
+    }
     append(intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
     append(
       outcomeRecordKey(graphOperation.operationId),
@@ -4099,9 +4115,10 @@ describe("delivery proposal route matrix", () => {
       })
     )
     const selectedSpecification =
-      options?.specificationMismatch === true
+      options?.currentSpecification ??
+      (options?.specificationMismatch === true
         ? makeTaskWorkSpecification({ body: "Superseding instructions", taskId, title: "Superseding task" })
-        : specification
+        : (options?.continueObservedSpecification ?? specification))
     append(intentRecordKey(specificationOperation.operationId), taskTrackerReadIntent(specificationOperation))
     append(
       outcomeRecordKey(specificationOperation.operationId),
@@ -4438,6 +4455,152 @@ describe("delivery proposal route matrix", () => {
     }
     return { records, witness }
   }
+
+  it("authorizes the immutable attempt after Continue accepts its exact changed specification", () => {
+    const changedSpecification = makeTaskWorkSpecification({
+      body: "Accepted changed instructions",
+      taskId,
+      title: "Accepted changed task"
+    })
+    const fixture = continuationAuthorizationRecords({ continueObservedSpecification: changedSpecification })
+
+    expect(evaluatePlannedAttemptContinuationAuthorization(fixture.records, plannedAttempt, fixture.witness)).toEqual({
+      _tag: "Authorized"
+    })
+  })
+
+  it("rejects a later specification not named by the applied Continue choice", () => {
+    const acceptedSpecification = makeTaskWorkSpecification({
+      body: "Accepted changed instructions",
+      taskId,
+      title: "Accepted changed task"
+    })
+    const laterSpecification = makeTaskWorkSpecification({
+      body: "Later unaccepted instructions",
+      taskId,
+      title: "Later unaccepted task"
+    })
+    const fixture = continuationAuthorizationRecords({
+      continueObservedSpecification: acceptedSpecification,
+      currentSpecification: laterSpecification
+    })
+
+    expect(
+      evaluatePlannedAttemptContinuationAuthorization(fixture.records, plannedAttempt, fixture.witness)
+    ).toMatchObject({ _tag: "Rejected", reason: "WrongAttemptWitness", witness: "ActiveTaskContinuationSpecification" })
+  })
+
+  it("authorizes the unchanged planned revision after an earlier changed-revision Continue", () => {
+    const changedSpecification = makeTaskWorkSpecification({
+      body: "Previously accepted changed instructions",
+      taskId,
+      title: "Previously accepted changed task"
+    })
+    const fixture = continuationAuthorizationRecords({
+      continueObservedSpecification: changedSpecification,
+      currentSpecification: specification
+    })
+
+    expect(evaluatePlannedAttemptContinuationAuthorization(fixture.records, plannedAttempt, fixture.witness)).toEqual({
+      _tag: "Authorized"
+    })
+  })
+
+  it("rejects an earlier current-revision Continue superseded by a later choice for another revision", () => {
+    const acceptedSpecification = makeTaskWorkSpecification({
+      body: "Accepted changed instructions",
+      taskId,
+      title: "Accepted changed task"
+    })
+    const anotherSpecification = makeTaskWorkSpecification({
+      body: "Another accepted revision",
+      taskId,
+      title: "Another accepted task"
+    })
+    const fixture = continuationAuthorizationRecords({ continueObservedSpecification: acceptedSpecification })
+    const graphIntentIndex = fixture.records.findIndex(
+      ({ event }) => event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
+    )
+    const graphIntent = fixture.records[graphIntentIndex]
+    if (graphIntent === undefined) return expect.fail("fixture lacks its continuation graph intent")
+    const requestId = AttemptChoiceRequestId.make({ nonce: "continuation-another-changed-revision", runId })
+    const anotherChoice: JournalRecord = {
+      event: AttemptChoiceAppliedEvent.make({
+        choice: "ContinueExistingAttempt",
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        requestId,
+        subject: { observedTaskRevision: anotherSpecification.fingerprint, plannedAttempt },
+        version: workflowJournalEventVersion
+      }),
+      key: attemptChoiceAppliedRecordKey(requestId),
+      position: graphIntent.position,
+      runId
+    }
+    const records = [
+      ...fixture.records.slice(0, graphIntentIndex),
+      anotherChoice,
+      ...fixture.records
+        .slice(graphIntentIndex)
+        .map((record) => ({ ...record, position: JournalPosition.make(record.position + 1) }))
+    ]
+
+    expect(evaluatePlannedAttemptContinuationAuthorization(records, plannedAttempt, fixture.witness)).toMatchObject({
+      _tag: "Rejected",
+      reason: "WrongAttemptWitness",
+      witness: "ActiveTaskContinuationSpecification"
+    })
+  })
+
+  it("rejects continuation facts collected before the applied Continue choice", () => {
+    const changedSpecification = makeTaskWorkSpecification({
+      body: "Accepted changed instructions",
+      taskId,
+      title: "Accepted changed task"
+    })
+    const fixture = continuationAuthorizationRecords({ continueObservedSpecification: changedSpecification })
+    const choiceIndex = fixture.records.findIndex(({ event }) => event._tag === "AttemptChoiceApplied")
+    const choice = fixture.records[choiceIndex]
+    if (choice?.event._tag !== "AttemptChoiceApplied") return expect.fail("fixture lacks its Continue choice")
+    const records = fixture.records
+      .toSpliced(choiceIndex, 1)
+      .concat({ ...choice, position: JournalPosition.make(fixture.records.length + 1) })
+
+    expect(evaluatePlannedAttemptContinuationAuthorization(records, plannedAttempt, fixture.witness)).toMatchObject({
+      _tag: "Rejected",
+      reason: "StaleWitness",
+      witness: "ActiveTaskContinuationGraph"
+    })
+  })
+
+  it("rejects changed continuation facts authorized for another attempt", () => {
+    const changedSpecification = makeTaskWorkSpecification({
+      body: "Accepted changed instructions",
+      taskId,
+      title: "Accepted changed task"
+    })
+    const fixture = continuationAuthorizationRecords({ continueObservedSpecification: changedSpecification })
+    const choiceIndex = fixture.records.findIndex(({ event }) => event._tag === "AttemptChoiceApplied")
+    const choice = fixture.records[choiceIndex]
+    if (choice?.event._tag !== "AttemptChoiceApplied") return expect.fail("fixture lacks its Continue choice")
+    const foreignAttempt = PlannedTaskAttempt.make({
+      ...plannedAttempt,
+      attemptId: AttemptId.make("continuation-choice-foreign-attempt")
+    })
+    const records = fixture.records.with(choiceIndex, {
+      ...choice,
+      event: AttemptChoiceAppliedEvent.make({
+        ...choice.event,
+        subject: { ...choice.event.subject, plannedAttempt: foreignAttempt }
+      })
+    })
+
+    expect(evaluatePlannedAttemptContinuationAuthorization(records, plannedAttempt, fixture.witness)).toMatchObject({
+      _tag: "Rejected",
+      reason: "WrongAttemptWitness",
+      witness: "ActiveTaskContinuationSpecification"
+    })
+  })
 
   effectIt.effect("releases a reserved task position after the adapter records a proof-based Stop", () =>
     Effect.gen(function* () {

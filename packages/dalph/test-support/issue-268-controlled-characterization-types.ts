@@ -21,6 +21,7 @@ import type {
   TrackerRevision,
   TrackerTarget
 } from "@dalph/orchestrator"
+import type { Issue268OccurrenceEvidence } from "./issue-268-controlled-occurrences.js"
 
 export interface Issue268ExecutorCommandCapture {
   readonly attemptId: string
@@ -39,12 +40,25 @@ export interface Issue268StartupCharacterization {
   readonly records: ReadonlyArray<JournalRecord>
   readonly trace: ReadonlyArray<TraceItem>
   readonly worktreeCreateRequests: ReadonlyArray<PlannedTaskAttempt>
+  readonly ds01?: Issue268Ds01CheckpointEvidence
+  readonly ds02?: Issue268Ds02CheckpointEvidence
   readonly ds03?: Issue268Ds03Characterization
   readonly ds04?: Issue268Ds04Characterization
   readonly ds05?: Issue268Ds05Characterization
   readonly ds06?: Issue268Ds06Characterization
   readonly ds07?: Issue268Ds07Characterization
   readonly ds08?: Issue268Ds08Characterization
+}
+
+/** The selected G0 frontier while A/B/C claim mutations are still held by the fixture. */
+export interface Issue268Ds01CheckpointEvidence {
+  readonly pendingClaimTaskIds: ReadonlyArray<string>
+  readonly snapshot: Issue268Ds03BoundarySnapshot
+}
+
+/** The first publication boundary after A1/B1/C1 have each become Executing. */
+export interface Issue268Ds02CheckpointEvidence {
+  readonly snapshot: Issue268Ds03BoundarySnapshot
 }
 
 export interface Issue268Ds03BoundarySnapshot {
@@ -70,10 +84,14 @@ export interface Issue268Ds03Characterization {
   }
 }
 
-export type Issue268Ds03StartupCharacterization = Omit<
+type Issue268StartupAfterDs02 = Omit<
   Issue268StartupCharacterization,
-  "ds03" | "ds04" | "ds05" | "ds06" | "ds07"
-> & { readonly ds03: Issue268Ds03Characterization }
+  "ds01" | "ds02" | "ds03" | "ds04" | "ds05" | "ds06" | "ds07"
+> & { readonly ds01: Issue268Ds01CheckpointEvidence; readonly ds02: Issue268Ds02CheckpointEvidence }
+
+export type Issue268Ds03StartupCharacterization = Issue268StartupAfterDs02 & {
+  readonly ds03: Issue268Ds03Characterization
+}
 
 export interface Issue268Ds04Characterization {
   readonly activeRefreshCount: number
@@ -82,10 +100,10 @@ export interface Issue268Ds04Characterization {
   readonly beforeTimer: Issue268Ds03BoundarySnapshot
 }
 
-export type Issue268Ds04StartupCharacterization = Omit<
-  Issue268StartupCharacterization,
-  "ds03" | "ds04" | "ds05" | "ds06" | "ds07"
-> & { readonly ds03: Issue268Ds03Characterization; readonly ds04: Issue268Ds04Characterization }
+export type Issue268Ds04StartupCharacterization = Issue268StartupAfterDs02 & {
+  readonly ds03: Issue268Ds03Characterization
+  readonly ds04: Issue268Ds04Characterization
+}
 
 export interface Issue268Ds05Characterization {
   readonly after: Issue268Ds03BoundarySnapshot
@@ -94,10 +112,7 @@ export interface Issue268Ds05Characterization {
   readonly lifecycleAttachAttemptIds: ReadonlyArray<string>
 }
 
-export type Issue268Ds05StartupCharacterization = Omit<
-  Issue268StartupCharacterization,
-  "ds03" | "ds04" | "ds05" | "ds06" | "ds07"
-> & {
+export type Issue268Ds05StartupCharacterization = Issue268StartupAfterDs02 & {
   readonly ds03: Issue268Ds03Characterization
   readonly ds04: Issue268Ds04Characterization
   readonly ds05: Issue268Ds05Characterization
@@ -111,10 +126,7 @@ export interface Issue268Ds06Characterization {
   readonly r5ReleaseCount: number
 }
 
-export type Issue268Ds06StartupCharacterization = Omit<
-  Issue268StartupCharacterization,
-  "ds03" | "ds04" | "ds05" | "ds06" | "ds07"
-> & {
+export type Issue268Ds06StartupCharacterization = Issue268StartupAfterDs02 & {
   readonly ds03: Issue268Ds03Characterization
   readonly ds04: Issue268Ds04Characterization
   readonly ds05: Issue268Ds05Characterization
@@ -133,10 +145,7 @@ export interface Issue268Ds07Characterization {
   readonly returned: RunControlPolicy
 }
 
-export type Issue268Ds07StartupCharacterization = Omit<
-  Issue268StartupCharacterization,
-  "ds03" | "ds04" | "ds05" | "ds06" | "ds07"
-> & {
+export type Issue268Ds07StartupCharacterization = Issue268StartupAfterDs02 & {
   readonly ds03: Issue268Ds03Characterization
   readonly ds04: Issue268Ds04Characterization
   readonly ds05: Issue268Ds05Characterization
@@ -145,6 +154,12 @@ export type Issue268Ds07StartupCharacterization = Omit<
 }
 
 export interface Issue268Ds08BeforeLoss {
+  readonly ds01: Issue268Ds01CheckpointEvidence
+  readonly ds02: Issue268Ds02CheckpointEvidence
+  readonly ds03: Issue268Ds03Characterization
+  readonly ds04: Issue268Ds04Characterization
+  readonly ds05: Issue268Ds05Characterization
+  readonly ds06: Issue268Ds06Characterization
   readonly ds07: Issue268Ds07Characterization
   readonly executorObserveCalls: number
   readonly projectedReports: ReadonlyMap<string, PlannedAttemptExecutorReport>
@@ -183,6 +198,7 @@ export interface Issue268ExecutorObservationCapture {
 }
 
 export interface Issue268Ds09Characterization {
+  readonly afterLoss: Issue268Ds03BoundarySnapshot
   readonly after: Issue268Ds03BoundarySnapshot
   readonly applicationBuildCount: number
   readonly applicationExitTrace: ReadonlyArray<ApplicationExitTraceEvent>
@@ -251,4 +267,27 @@ export interface Issue268Ds12StartupCharacterization {
   readonly ds10: Issue268Ds10Characterization
   readonly ds11: Issue268Ds11Characterization
   readonly ds12: Issue268Ds12Characterization
+}
+
+export interface Issue268Ds13Characterization {
+  readonly activeRefreshCount: number
+  readonly activeRefreshDecision: undefined
+  readonly after: Issue268Ds03BoundarySnapshot
+  readonly afterProcessStop: Issue268Ds03BoundarySnapshot
+  readonly applicationBuildCount: number
+  readonly before: Issue268Ds12Characterization
+  readonly checkpointPublication: DeliveryRelationInputBundle
+  readonly executorObserveCallCount: number
+  readonly integrationQueueActionCount: number
+  readonly ordinaryOwnerActivationCount: number
+  readonly terminalReport: Extract<PlannedAttemptExecutorReport, { readonly _tag: "ExecutorWorkTerminal" }>
+}
+
+export interface Issue268Ds13StartupCharacterization {
+  readonly ds09: Issue268Ds09Characterization
+  readonly ds10: Issue268Ds10Characterization
+  readonly ds11: Issue268Ds11Characterization
+  readonly ds12: Issue268Ds12Characterization
+  readonly ds13: Issue268Ds13Characterization
+  readonly occurrenceEvidence: Issue268OccurrenceEvidence
 }

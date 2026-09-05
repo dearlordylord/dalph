@@ -836,6 +836,7 @@ export {
 } from "./coordination/delivery/relations.js"
 export {
   DeliveryActionCompletionPublicationMismatch,
+  DeliveryRuntimeAdmissionProgressContradiction,
   DeliveryRuntimeProposalOwnershipConflict,
   DeliveryRuntimeReconfirmationStateInvalid,
   DeliveryRuntimeRunMismatch,

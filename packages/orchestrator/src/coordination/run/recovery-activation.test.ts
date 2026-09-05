@@ -3486,6 +3486,61 @@ it("projects Alice's exact Continue choice and current facts as Resume for the r
   )
 })
 
+it("keeps a changed specification constrained when a later Continue supersedes its choice", () => {
+  const changedSpecification = makeTaskWorkSpecification({
+    body: "Earlier accepted changed instructions",
+    taskId: coverageTaskId,
+    title: "Earlier accepted changed task"
+  })
+  const laterSpecification = makeTaskWorkSpecification({
+    body: "Later accepted changed instructions",
+    taskId: coverageTaskId,
+    title: "Later accepted changed task"
+  })
+  const changedObservation = makeFocusedTaskWorkSpecificationFactsObserved(
+    coverageSpecificationOperation,
+    changedSpecification
+  )
+  const continueChoice = (position: number, nonce: string, observedTaskRevision: TaskRevision): JournalRecord =>
+    coverageRecord(
+      position,
+      AttemptChoiceAppliedEvent.make({
+        choice: "ContinueExistingAttempt",
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        requestId: AttemptChoiceRequestId.make({ nonce, runId: coverageRunId }),
+        subject: { observedTaskRevision, plannedAttempt: coverageAttempt },
+        version: workflowJournalEventVersion
+      })
+    )
+  const records = [
+    ...coveragePlanRecords(),
+    executorReport(
+      5,
+      PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+        correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+      })
+    ),
+    continueChoice(6, "recovery-activation-earlier-continue", changedSpecification.fingerprint),
+    continueChoice(7, "recovery-activation-later-continue", laterSpecification.fingerprint)
+  ]
+  const state = {
+    ...coverageRunState(records, [coverageResponsibility]),
+    graphKnowledge: { taskTrackerFacts: [changedObservation] }
+  }
+
+  const [facts] = deriveJournalResponsibilityFacts(state, Option.none(), Option.none(), coverageTarget)
+
+  expect(facts).toMatchObject({
+    _tag: "PlannedAttemptExecutorFreshFacts",
+    disposition: {
+      _tag: "TaskSpecificationChangeConstraint",
+      observedFingerprint: changedSpecification.fingerprint,
+      plannedFingerprint: coverageAttempt.taskRevision
+    }
+  })
+})
+
 it("does not seed a continuation graph read from a foreign immutable Run target", () => {
   const foreignTarget = FixtureTarget.make("recovery-activation-foreign-target")
   const foreignGraphOperation = makeTrackerGraphObservationOperation(

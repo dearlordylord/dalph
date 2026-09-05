@@ -224,10 +224,74 @@ representative test inventory is:
 | DS-10 | Alice closes C in the tracker without reporting success. The tracker accepts G2 and sends one notification. The sole refresh owner reads G2 once. C's closed lifecycle is already conclusive, so C crosses no focused specification, claim, worktree, or lineage boundary. A and D still match and each complete those four current-fact reads. Dalph records one exact C1 `Suspend` intent, sends one `Suspend`, observes the immediate `Executing` response, and keeps C1's position held. Because C1 still reports `Executing`, the same process-local passive lifecycle owner remains attached and the same active refresh remains live waiting for R9; DS-10 does not manufacture another executor read, finalize that activation, or start another activation. | The maintained result projects C1 as suspending; A1, C1, and D1 still hold three positions. The active refresh remains live for DS-11's exact C1 lifecycle change. |
 | DS-11 | Gate R9 makes C1's exact lifecycle projection become `Safe`. Dalph records and publishes it, releases only C1's position, and retains C1's exact attempt/worktree. After that active action becomes quiescent, Run stabilization—not the executor report—performs one post-quiescence complete G2 read causally descended from the accepted DS-10 G2 operation; the tracker returns unchanged G2. | A1 and D1 hold two positions, exactly filling P2. B1 and C1 are retained. The maintained relation accepts the stabilization-owned G2 reconfirmation. |
 | DS-12 | After the accepted DS-11 publication shows C1 released and A1/D1 filling P2, Alice chooses `Continue` for exact B1 through the active Run's Operator control. Dalph records that choice and reads the current graph, B specification, exact claim, planned worktree, and Git lineage. The facts make B1 eligible for a `Resume` proposal, but no position is free, so no durable continuation authorization or `Resume` intent exists and Dalph sends no executor command yet. | The maintained result projects B1 waiting for capacity to continue; A1 and D1 still occupy both positions. |
-| DS-13 | Gate R11 lets A1's executor projection report terminal `Accepted`. Dalph records and publishes that exact result and releases A1's position. The already-selected exact B1 is considered before unstarted E, binds that position, records one `Resume` intent, sends one `Resume`, observes `Executing`, and publishes B1 as held. | B1 and D1 hold the two positions. A1 is accepted; C1 remains retained; E remains an `EligibleOutsideBound` graph candidate with no materialized operation proposal or capability. No replacement B2 exists. Because E still makes the activation non-quiescent without crossing an operation boundary, this beat does not fabricate a post-quiescence stabilization read. |
+| DS-13 | Gate R11 lets A1's executor projection report terminal `Accepted`. Dalph records and publishes that exact result and releases A1's position. The already-selected exact B1 is considered before unstarted E, binds that position, records one `Resume` intent, sends one `Resume`, observes `Executing`, and publishes B1 as held. Production may then materialize the exact read-only B1 lifecycle-attachment action so later executor changes remain observable; whether that current-first read returns before this checkpoint is not load-bearing. Production may also materialize A1's exact accepted-result integration-queue action. The controlled composition intentionally provides no `EvidenceStore`, so its adapter defers without crossing an evidence or integration boundary; whether this single action is materialized before the checkpoint is also not load-bearing. | B1 and D1 hold the two positions. A1 is accepted; C1 remains retained; E remains an `EligibleOutsideBound` graph candidate with no materialized operation proposal or capability. Any in-flight lifecycle attachment has exact B1 `ReserveOrReuse` position/protocol authority and issues no second `Resume`, `Begin`, or `Suspend`. A1's optional integration-queue action occurs at most once and has no integration side effect in this fixture. No replacement B2 exists. Because E still makes the activation non-quiescent without crossing an operation boundary, this beat does not fabricate a post-quiescence stabilization read. |
 
 The capstone stops at that visible state. It does not imply that the Run is
 terminal or that later delivery-story beats have been proved.
+
+## Run-owner self-wake guard
+
+Starting facts: the sole Run owner has entered an activation at Journal position N. No person changes the tracker
+or control policy, no executor or Git boundary reports a new result, and no timer fires.
+
+Trigger and boundary calls: the maintained delivery relation publishes its initial state, or republishes state whose
+accepted Journal position is still N. This publication is not a new outside trigger and causes no tracker, Git, or
+executor boundary call.
+
+Visible result: after the current activation returns, the owner waits for a real external hint or a publication that
+advances the accepted Journal position beyond N. Alice sees no invented workflow progress.
+
+Forbidden result: an initial or repeated same-position publication must not schedule another activation. The owner
+must not create a self-sustaining activation/publication loop. When a later publication first advances the accepted
+position to N+1, it may schedule exactly one trailing ordinary activation; another publication at N+1 schedules none.
+
+Crash and retry: a process crash discards this activation-local watermark; the next activation seeds a new watermark
+from the latest durable Journal position, so no process-local value is treated as recovered authority. The observer
+performs no provider mutation and therefore has no retry policy; after an ambiguous provider effect, the existing
+workflow protocol must reconcile and durably advance the Journal before this observer can emit another hint.
+
+Acceptance-test mapping:
+
+- `keeps an initial delivery publication harmless before reactivation observers are registered` proves the initial
+  publication has no observer side effect.
+- `does not turn the activation's initial publication into another Run activation` proves position N is silent after
+  observer registration.
+- `signals once only when a relation publication advances beyond the activation entry position` proves N+1 emits
+  exactly once while duplicate and stale positions remain silent.
+- `resumes retained B1 after A1 accepts and does not create B2` proves DS-13 reaches the exact B1 publication without
+  a self-sustaining activation/publication loop.
+
+## Delivery admission sweep guard
+
+Starting facts: one delivery-runtime evaluation contains a fixed list of ordinary proposals and fresh task
+candidates. No person acts during the sweep. The tracker, Git, executor, and Journal facts represented by that
+evaluation do not change until the runtime consumes another event.
+
+Trigger and boundary calls: the runtime tries to start available work from that evaluation. Each successful ordinary
+start installs its live owner before the attempt returns, and each successful fresh start occupies its candidate's
+task-work position before the attempt returns. Therefore the fixed evaluation can produce at most one successful
+start per ordinary proposal and fresh candidate.
+
+Visible result: after at most `ordinary proposal count + fresh candidate count` successful starts, the runtime checks
+quiescence and then either returns or blocks on its event queue. The ownership-conflict form still performs the one
+admission check that reports its existing typed conflict. No boundary call is added for the guard itself.
+
+Forbidden result: a faulty admission result must not keep the JavaScript worker runnable forever. If a pass reports
+more successful starts than the fixed evaluation can contain, Dalph reports a typed admission-progress contradiction
+instead of beginning another pass.
+
+Crash and retry: the sweep owns no durable fact and adds no boundary call, so it has nothing to recover or retry by
+itself. If the process dies during an underlying admission, the existing intent/observation and
+reconcile-before-retry protocols govern that operation after restart. The progress-contradiction result fails the
+current activation closed; it is not automatically retried against the same fixed evaluation.
+
+Acceptance-test mapping in `delivery-runtime-admission-sweep.test.ts`:
+
+- `checks an empty frontier once and stops` proves the zero-work case terminates.
+- `completes the ordinary-plus-fresh fixed frontier` proves the exact ordinary-plus-fresh bound.
+- `fails a non-progressing admission result at the fixed frontier bound` proves an always-success result cannot spin.
+- `executes one ownership-conflict pass so its typed error remains observable` proves the existing typed conflict is
+  not hidden by the bound.
 
 ## Readiness controls
 
@@ -248,7 +312,7 @@ response becomes available.
 | R8 | C's close and its notification arrive only after the exact DS-09 `RunnableTransition` return has settled. |
 | R9 | C1 remains `Executing` through the `Suspend` response while the same active refresh stays live; then its already-attached passive lifecycle owner receives exact C1 `Safe`. |
 | R10 | Alice's Continue choice is accepted after C1 releases its position and while A1/D1 still fill capacity two. |
-| R11 | A1 remains `Executing` until B1 is authorized and waiting, then reports terminal `Accepted`; B1's `Resume` response reports `Executing`. |
+| R11 | A1 remains `Executing` while B1 is selected and waiting for capacity, then reports terminal `Accepted`; only that released position permits B1's authorization and `Resume`, whose response reports `Executing`. A later exact read-only B1 lifecycle attachment may be in flight at the checkpoint, but it must not issue another executor command. |
 | R12 | In the separate stabilization-distinction proof, the finality graph response is withheld until that fixture's active-work refresh and resulting action have quiesced; it returns the unchanged graph exactly once. R12 is not used to bypass DS-13's capacity-blocked E frontier. |
 
 A second notification-and-timer coalescence run is not part of the 13-beat

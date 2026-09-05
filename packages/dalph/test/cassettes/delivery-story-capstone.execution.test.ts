@@ -22,14 +22,36 @@ import {
   runIssue268Ds09Characterization,
   runIssue268Ds10Characterization,
   runIssue268Ds11Characterization,
-  runIssue268Ds12Characterization
+  runIssue268Ds12Characterization,
+  runIssue268Ds13Characterization
 } from "../../test-support/issue-268-controlled-characterization.js"
 import { issue268ControlledDeliveryCharacterization as controlledScenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
-import { isIssue268RetainedBResponsibility } from "../../test-support/issue-268-controlled-ds06.js"
+import { isIssue268Ds04CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds04.js"
+import { isIssue268Ds05CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds05.js"
+import {
+  isIssue268Ds06CompleteCheckpoint,
+  isIssue268RetainedBResponsibility
+} from "../../test-support/issue-268-controlled-ds06.js"
+import { isIssue268Ds07CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds07.js"
+import { isIssue268Ds10CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds10.js"
+import { isIssue268Ds11CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds11.js"
+import { isIssue268Ds12CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds12.js"
+import { isIssue268Ds13CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds13.js"
+import {
+  issue268OccurrenceEvidenceIsComplete,
+  issue268RequiredClaimCoverageIsComplete,
+  reverseIssue268RequiredEdge,
+  validateIssue268RequiredEdges,
+  type Issue268CausalLandmark,
+  type Issue268ObservedOccurrence,
+  type Issue268OccurrenceSource,
+  type Issue268RequiredEdge
+} from "../../test-support/issue-268-controlled-occurrences.js"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 
 const lastItemIndex = -1
 const capstoneTimeout = 600_000
+const boundedContinuationTimeout = 120_000
 const cachedRun = Effect.runSync(
   Effect.cached(
     runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory).pipe(
@@ -1811,6 +1833,710 @@ it.effect(
       ).toEqual([])
     }),
   capstoneTimeout
+)
+
+it.effect(
+  "resumes retained B1 after A1 accepts and does not create B2",
+  () =>
+    Effect.gen(function* () {
+      const { ds12, ds13 } = yield* runIssue268Ds13Characterization
+      const recordSuffix = ds13.after.records.slice(ds12.after.records.length)
+      const aStateObservations = recordSuffix.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorStateObserved" &&
+          event.plannedAttempt.runId === controlledScenario.runId &&
+          event.plannedAttempt.attemptId === controlledScenario.attempts.A1 &&
+          event.observation._tag === "ExactExecutorReport" &&
+          event.observation.report._tag === "ExecutorWorkTerminal" &&
+          event.observation.report.result._tag === "Accepted"
+      )
+      const aReports = recordSuffix.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report.correlation.runId === controlledScenario.runId &&
+          event.report.correlation.attemptId === controlledScenario.attempts.A1 &&
+          event.report._tag === "ExecutorWorkTerminal" &&
+          event.report.result._tag === "Accepted"
+      )
+      const authorizations = recordSuffix.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptContinuationAuthorized" &&
+          event.plannedAttempt.runId === controlledScenario.runId &&
+          event.plannedAttempt.attemptId === controlledScenario.attempts.B1
+      )
+      const resumeIntents = recordSuffix.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandIntended" &&
+          event.command === "Resume" &&
+          event.plannedAttempt.runId === controlledScenario.runId &&
+          event.plannedAttempt.attemptId === controlledScenario.attempts.B1
+      )
+      const resumeResponses = recordSuffix.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandResponseObserved" &&
+          event.plannedAttempt.runId === controlledScenario.runId &&
+          event.plannedAttempt.attemptId === controlledScenario.attempts.B1 &&
+          event.report._tag === "ExecutorWorkExecuting"
+      )
+      const bReports = recordSuffix.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report.correlation.runId === controlledScenario.runId &&
+          event.report.correlation.attemptId === controlledScenario.attempts.B1 &&
+          event.report._tag === "ExecutorWorkExecuting"
+      )
+      const aStateObservation = aStateObservations[0]
+      const aReport = aReports[0]
+      const authorization = authorizations[0]
+      const resumeIntent = resumeIntents[0]
+      const resumeResponse = resumeResponses[0]
+      const bReport = bReports[0]
+      const ds12Suffix = ds12.after.records.slice(ds12.before.after.records.length)
+      const graphOperationId = ds12Suffix.find(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.cause._tag === "AttemptContinuation"
+      )
+      const specificationOperationId = ds12Suffix.find(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTaskWorkSpecification"
+      )
+      const claimOperationId = ds12Suffix.find(
+        ({ event }) => event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTaskClaim"
+      )
+      const worktreeOperationId = ds12Suffix.find(
+        ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTaskWorktree"
+      )
+      const lineageOperationId = ds12Suffix.find(
+        ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage"
+      )
+      const runtime = yield* evaluateDeliveryRuntimeInputBundle(ds13.checkpointPublication)
+      const held = ds13.checkpointPublication.actionInputs.runtimeFacts.taskWork.held
+        .map(({ correlation }) => correlation.attemptId)
+        .toSorted()
+      const occupied = [...ds13.checkpointPublication.actionInputs.runtimeFacts.taskWork.occupied.values()]
+        .flatMap((position) => (position._tag === "ExactAttemptHeld" ? [position.plannedAttempt.attemptId] : []))
+        .toSorted()
+      const bEvidence = ds13.checkpointPublication.publication.exactEvidence.filter(
+        (evidence) =>
+          evidence._tag === "ResponsibilityFacts" &&
+          evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+          evidence.facts.responsibility.plannedAttempt.runId === controlledScenario.runId &&
+          evidence.facts.responsibility.plannedAttempt.attemptId === controlledScenario.attempts.B1
+      )
+      const cEvidence = ds13.checkpointPublication.publication.exactEvidence.filter(
+        (evidence) =>
+          evidence._tag === "ResponsibilityFacts" &&
+          evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+          evidence.facts.responsibility.plannedAttempt.runId === controlledScenario.runId &&
+          evidence.facts.responsibility.plannedAttempt.attemptId === controlledScenario.attempts.C1
+      )
+      const ePlacement = runtime.current.ticketDeliveries.source.placements.find(
+        ({ taskId }) => taskId === controlledScenario.taskIds.E
+      )?.placement
+
+      expect(ds13.before).toEqual(ds12)
+      expect(aStateObservations).toHaveLength(1)
+      expect(aReports).toHaveLength(1)
+      expect(authorizations).toHaveLength(1)
+      expect(resumeIntents).toHaveLength(1)
+      expect(resumeResponses).toHaveLength(1)
+      expect(bReports).toHaveLength(1)
+      expect(aReport?.position).toBeGreaterThan(aStateObservation?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(authorization?.position).toBeGreaterThan(aReport?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(resumeIntent?.position).toBeGreaterThan(authorization?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(resumeResponse?.position).toBeGreaterThan(resumeIntent?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(bReport?.position).toBeGreaterThan(resumeResponse?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(aStateObservation?.event).toMatchObject({ observation: { report: ds13.terminalReport } })
+      expect(aReport?.event).toMatchObject({ ordinal: 2, report: ds13.terminalReport })
+      expect(authorization?.event).toMatchObject({
+        plannedAttempt: ds12.request.subject.plannedAttempt,
+        witness: {
+          activeTaskContinuationRead: {
+            graphObservationOperationId:
+              graphOperationId?.event._tag === "TaskTrackerReadIntentRecorded"
+                ? graphOperationId.event.operation.operationId
+                : undefined,
+            taskClaimObservationOperationId:
+              claimOperationId?.event._tag === "TaskTrackerReadIntentRecorded"
+                ? claimOperationId.event.operation.operationId
+                : undefined,
+            taskWorkSpecificationObservationOperationId:
+              specificationOperationId?.event._tag === "TaskTrackerReadIntentRecorded"
+                ? specificationOperationId.event.operation.operationId
+                : undefined
+          },
+          targetLineageObservationOperationId:
+            lineageOperationId?.event._tag === "GitReadIntentRecorded"
+              ? lineageOperationId.event.operation.operationId
+              : undefined,
+          worktreeObservationOperationId:
+            worktreeOperationId?.event._tag === "GitReadIntentRecorded"
+              ? worktreeOperationId.event.operation.operationId
+              : undefined
+        }
+      })
+      expect(resumeIntent?.event).toMatchObject({
+        command: "Resume",
+        plannedAttempt: ds12.request.subject.plannedAttempt
+      })
+      expect(resumeResponse?.event).toMatchObject({
+        commandOrdinal:
+          resumeIntent?.event._tag === "PlannedAttemptExecutorCommandIntended" ? resumeIntent.event.ordinal : undefined,
+        plannedAttempt: ds12.request.subject.plannedAttempt,
+        report: { _tag: "ExecutorWorkExecuting" }
+      })
+      expect(bReport?.event).toMatchObject({
+        ordinal:
+          resumeIntent?.event._tag === "PlannedAttemptExecutorCommandIntended" ? resumeIntent.event.ordinal : undefined,
+        report: { _tag: "ExecutorWorkExecuting" }
+      })
+      expect(ds13.checkpointPublication.actionInputs.runtimeFacts.acceptedAt).toBeGreaterThanOrEqual(
+        bReport?.position ?? Number.MAX_SAFE_INTEGER
+      )
+      expect(held).toEqual([controlledScenario.attempts.B1, controlledScenario.attempts.D1].toSorted())
+      expect(occupied).toEqual(held)
+      expect(bEvidence).toHaveLength(1)
+      expect(cEvidence).toHaveLength(1)
+      expect(ePlacement).toMatchObject({ _tag: "EligibleOutsideBound" })
+      expect(ds13.activeRefreshCount).toBe(1)
+      expect(ds13.activeRefreshDecision).toBeUndefined()
+      expect(ds13.applicationBuildCount).toBe(ds12.applicationBuildCount)
+      expect(ds13.ordinaryOwnerActivationCount).toBe(ds12.ordinaryOwnerActivationCount)
+      expect(ds13.executorObserveCallCount - ds12.executorObserveCallCount).toBeGreaterThanOrEqual(0)
+      expect(ds13.executorObserveCallCount - ds12.executorObserveCallCount).toBeLessThanOrEqual(1)
+      expect(ds13.integrationQueueActionCount).toBeGreaterThanOrEqual(0)
+      expect(ds13.integrationQueueActionCount).toBeLessThanOrEqual(1)
+      expect(ds13.after.commands.slice(ds12.after.commands.length)).toEqual([
+        { attemptId: controlledScenario.attempts.B1, command: "Resume" }
+      ])
+      expect(ds13.after.claimRequests).toEqual(ds12.after.claimRequests)
+      expect(ds13.after.plans).toEqual(ds12.after.plans)
+      expect(ds13.after.worktreeCreateRequests).toEqual(ds12.after.worktreeCreateRequests)
+      expect(
+        ds13.after.records.filter(
+          ({ event }) =>
+            event._tag === "TaskAttemptPlanned" &&
+            event.operation.plannedAttempt.taskId === controlledScenario.taskIds.B
+        )
+      ).toHaveLength(1)
+      expect(recordSuffix.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toEqual([])
+      expect(
+        recordSuffix.filter(
+          ({ event }) =>
+            event._tag === "TaskTrackerReadIntentRecorded" &&
+            event.operation._tag === "ReadTrackerGraph" &&
+            event.operation.cause._tag === "PostQuiescenceReconfirmation"
+        )
+      ).toEqual([])
+      expect(
+        runtime.proposedActions._tag === "DeliveryProposalsAvailable"
+          ? runtime.proposedActions.proposals.filter(
+              ({ order }) => deliveryProposalOrderTaskId(order) === controlledScenario.taskIds.E
+            )
+          : []
+      ).toEqual([])
+    }),
+  boundedContinuationTimeout
+)
+
+it.effect(
+  "emits the exact DS01 through DS13 delivery checkpoint table",
+  () =>
+    Effect.gen(function* () {
+      const { ds09, ds10, ds11, ds12, ds13 } = yield* runIssue268Ds13Characterization
+      const { ds01, ds02, ds03, ds04, ds05, ds06, ds07 } = ds09.beforeLoss
+      const ds01Publication = ds01.snapshot.publications.find(
+        ({ publication }) => publication.graph._tag === "GraphEstablished"
+      )
+      if (ds01Publication === undefined) return expect.fail("DS-01 checkpoint lacks its accepted G0 publication")
+      const ds01Runtime = yield* evaluateDeliveryRuntimeInputBundle(ds01Publication)
+      const ds02Publication = ds02.snapshot.publications.at(lastItemIndex)
+      if (ds02Publication === undefined) return expect.fail("DS-02 checkpoint lacks its executing publication")
+      const ds04Publication = ds04.after.publications.at(lastItemIndex)
+      if (ds04Publication === undefined) return expect.fail("DS-04 checkpoint lacks its suspension publication")
+      const ds02Held = ds02Publication.actionInputs.runtimeFacts.taskWork.held
+        .map(({ correlation }) => correlation.attemptId)
+        .toSorted()
+      const expectedStartupAttempts = [
+        controlledScenario.attempts.A1,
+        controlledScenario.attempts.B1,
+        controlledScenario.attempts.C1
+      ].toSorted()
+      const expectedRestartAttempts = [
+        controlledScenario.attempts.A1,
+        controlledScenario.attempts.C1,
+        controlledScenario.attempts.D1
+      ]
+      const rows = [
+        {
+          beat: "DS01",
+          assert: () => {
+            expect(ds01.pendingClaimTaskIds).toEqual([
+              controlledScenario.taskIds.A,
+              controlledScenario.taskIds.B,
+              controlledScenario.taskIds.C
+            ])
+            expect(ds01Runtime.current.ticketDeliveries.deliveries.map(({ taskId }) => taskId)).toEqual([
+              controlledScenario.taskIds.A,
+              controlledScenario.taskIds.B,
+              controlledScenario.taskIds.C
+            ])
+            expect(
+              ds01Runtime.current.ticketDeliveries.source.placements.map(({ placement, taskId }) => ({
+                placement: placement._tag,
+                taskId
+              }))
+            ).toEqual([
+              { placement: "Selected", taskId: controlledScenario.taskIds.A },
+              { placement: "Selected", taskId: controlledScenario.taskIds.B },
+              { placement: "Selected", taskId: controlledScenario.taskIds.C },
+              { placement: "EligibleOutsideBound", taskId: controlledScenario.taskIds.D },
+              { placement: "EligibleOutsideBound", taskId: controlledScenario.taskIds.E }
+            ])
+          }
+        },
+        {
+          beat: "DS02",
+          assert: () => {
+            expect(ds02Held).toEqual(expectedStartupAttempts)
+            expect(ds02.snapshot.claimRequests.map(({ taskId }) => taskId)).toEqual([
+              controlledScenario.taskIds.A,
+              controlledScenario.taskIds.B,
+              controlledScenario.taskIds.C
+            ])
+            expect(ds02.snapshot.plans.map(({ attemptId }) => attemptId).toSorted()).toEqual(expectedStartupAttempts)
+            expect(ds02.snapshot.commands).toEqual(
+              expectedStartupAttempts.toSorted().map((attemptId) => ({ attemptId, command: "Begin" }))
+            )
+          }
+        },
+        {
+          beat: "DS03",
+          assert: () => {
+            expect(ds03.edit).toEqual({
+              graphRevision: controlledScenario.graphs.G1.revision,
+              nextFingerprint: controlledScenario.specifications.F2.B.fingerprint,
+              priorFingerprint: controlledScenario.specifications.F1.B.fingerprint,
+              taskId: controlledScenario.taskIds.B
+            })
+            expect(ds03.after.commands).toEqual(ds03.before.commands)
+            expect(ds03.after.records).toEqual(ds03.before.records)
+          }
+        },
+        {
+          beat: "DS04",
+          assert: () =>
+            expect(
+              isIssue268Ds04CompleteCheckpoint(
+                ds04Publication,
+                ds04.after.records.slice(ds04.beforeTimer.records.length),
+                controlledScenario.attempts.B1
+              )
+            ).toBe(true)
+        },
+        {
+          beat: "DS05",
+          assert: () =>
+            expect(isIssue268Ds05CompleteCheckpoint(ds05.checkpointPublication, ds05.after.records)).toBe(true)
+        },
+        {
+          beat: "DS06",
+          assert: () =>
+            expect(isIssue268Ds06CompleteCheckpoint(ds06.checkpointPublication, ds06.after.records)).toBe(true)
+        },
+        {
+          beat: "DS07",
+          assert: () => expect(isIssue268Ds07CompleteCheckpoint(ds07.p2Publication, ds07.after.records)).toBe(true)
+        },
+        {
+          beat: "DS08",
+          assert: () => {
+            expect(ds09.firstProcessInterruptionCount).toBe(1)
+            expect(ds09.beforeLoss.ds07.returned.taskExecutionCapacity).toBe(2)
+            expect(ds09.projectedReports).toEqual(ds09.beforeLoss.projectedReports)
+          }
+        },
+        {
+          beat: "DS09",
+          assert: () => {
+            expect(ds09.decision).toEqual({ _tag: "RunMustRemainActive", reason: "RunnableTransition" })
+            expect(ds09.executorObservations.map(({ correlation }) => correlation.attemptId)).toEqual(
+              expectedRestartAttempts
+            )
+            expect(ds09.after.commands).toEqual([])
+          }
+        },
+        {
+          beat: "DS10",
+          assert: () =>
+            expect(isIssue268Ds10CompleteCheckpoint(ds10.checkpointPublication, ds10.after.records)).toBe(true)
+        },
+        {
+          beat: "DS11",
+          assert: () =>
+            expect(isIssue268Ds11CompleteCheckpoint(ds11.checkpointPublication, ds11.after.records)).toBe(true)
+        },
+        {
+          beat: "DS12",
+          assert: () =>
+            expect(isIssue268Ds12CompleteCheckpoint(ds12.checkpointPublication, ds12.after.records)).toBe(true)
+        },
+        {
+          beat: "DS13",
+          assert: () =>
+            expect(isIssue268Ds13CompleteCheckpoint(ds13.checkpointPublication, ds13.after.records)).toBe(true)
+        }
+      ] as const
+
+      expect(rows.map(({ beat }) => beat)).toEqual([
+        "DS01",
+        "DS02",
+        "DS03",
+        "DS04",
+        "DS05",
+        "DS06",
+        "DS07",
+        "DS08",
+        "DS09",
+        "DS10",
+        "DS11",
+        "DS12",
+        "DS13"
+      ])
+      for (const row of rows) row.assert()
+    }),
+  boundedContinuationTimeout
+)
+
+it.effect(
+  "records the complete cassette-free controlled issue 268 occurrence order",
+  () =>
+    Effect.gen(function* () {
+      const { ds09, ds13, occurrenceEvidence } = yield* runIssue268Ds13Characterization
+      const occurrencesOf = (source: (typeof occurrenceEvidence.observedOccurrences)[number]["source"]) =>
+        occurrenceEvidence.observedOccurrences.filter((occurrence) => occurrence.source === source)
+      const occurrencesWithKind = (kind: string) =>
+        occurrenceEvidence.observedOccurrences.filter((occurrence) => occurrence.kind === kind)
+      expect(issue268OccurrenceEvidenceIsComplete(occurrenceEvidence)).toBe(true)
+      expect(
+        issue268OccurrenceEvidenceIsComplete({
+          ...occurrenceEvidence,
+          observedOccurrences: occurrenceEvidence.observedOccurrences.slice(0, lastItemIndex)
+        })
+      ).toBe(false)
+      const firstOccurrence = occurrenceEvidence.observedOccurrences[0]
+      if (firstOccurrence === undefined) return expect.fail("issue 268 occurrence evidence is empty")
+      expect(
+        issue268OccurrenceEvidenceIsComplete({
+          observedOccurrences: [
+            { ...firstOccurrence, sourceSequence: firstOccurrence.sourceSequence + 1 },
+            ...occurrenceEvidence.observedOccurrences.slice(1)
+          ]
+        })
+      ).toBe(false)
+      const lastOccurrence = occurrenceEvidence.observedOccurrences.at(lastItemIndex)
+      if (lastOccurrence === undefined) return expect.fail("issue 268 occurrence evidence has no last item")
+      expect(
+        issue268OccurrenceEvidenceIsComplete({
+          observedOccurrences: [
+            ...occurrenceEvidence.observedOccurrences,
+            {
+              ...lastOccurrence,
+              ordinal: lastOccurrence.ordinal + 1,
+              sourceSequence: lastOccurrence.sourceSequence + 1
+            }
+          ]
+        })
+      ).toBe(false)
+      const actionOccurrences = occurrencesOf("Action")
+      const lastAction = actionOccurrences.at(lastItemIndex)
+      if (lastAction === undefined) return expect.fail("issue 268 occurrence evidence has no action")
+      expect(
+        issue268OccurrenceEvidenceIsComplete({
+          observedOccurrences: [
+            ...occurrenceEvidence.observedOccurrences,
+            {
+              detail: "negative-control",
+              kind: "UnknownBoundaryOccurrence",
+              ordinal: lastOccurrence.ordinal + 1,
+              source: "Action",
+              sourceSequence: lastAction.sourceSequence + 1
+            }
+          ]
+        })
+      ).toBe(false)
+      expect(new Set(occurrenceEvidence.observedOccurrences.map(({ source }) => source))).toEqual(
+        new Set(["Action", "Control", "Executor", "Git", "Journal", "Publication", "Tracker", "Trace"])
+      )
+      expect(occurrenceEvidence.observedOccurrences.length).toBeGreaterThan(0)
+      expect(occurrenceEvidence.observedOccurrences.at(0)?.ordinal).toBe(1)
+      expect(occurrenceEvidence.observedOccurrences.at(lastItemIndex)?.ordinal).toBe(
+        occurrenceEvidence.observedOccurrences.length
+      )
+      expect(
+        occurrencesOf("Journal").filter(
+          ({ kind }) => kind !== "JournalRecoveryReadCalled" && kind !== "JournalRecoveryReadReturned"
+        )
+      ).toHaveLength(ds13.after.records.length)
+      expect(occurrencesWithKind("JournalRecoveryReadCalled").length).toBeGreaterThan(0)
+      expect(occurrencesWithKind("JournalRecoveryReadReturned")).toHaveLength(
+        occurrencesWithKind("JournalRecoveryReadCalled").length
+      )
+      expect(occurrencesWithKind("DeliveryPublicationObserved")).toHaveLength(
+        ds09.afterLoss.publications.length + ds13.afterProcessStop.publications.length
+      )
+      expect(occurrencesOf("Trace")).toHaveLength(ds09.afterLoss.trace.length + ds13.afterProcessStop.trace.length)
+      expect(occurrencesWithKind("TaskClaimAcquireCalled")).toHaveLength(
+        ds09.afterLoss.claimRequests.length + ds13.afterProcessStop.claimRequests.length
+      )
+      expect(
+        occurrencesWithKind("TrackerGraphReadCalled").length +
+          occurrencesWithKind("TaskWorkSpecificationReadCalled").length
+      ).toBe(ds13.afterProcessStop.requestedTargets.length)
+      expect(occurrencesWithKind("WorktreeCreateCalled")).toHaveLength(
+        ds13.afterProcessStop.worktreeCreateRequests.length
+      )
+      expect(occurrencesWithKind("ExecutorObserveCalled")).toHaveLength(ds13.executorObserveCallCount)
+      expect(
+        ["ExecutorBeginCalled", "ExecutorSuspendCalled", "ExecutorResumeCalled"].flatMap(occurrencesWithKind)
+      ).toHaveLength(ds09.afterLoss.commands.length + ds13.afterProcessStop.commands.length)
+      expect(occurrencesOf("Action").length).toBeGreaterThanOrEqual(
+        ds09.afterLoss.executedActions.length + ds13.afterProcessStop.executedActions.length
+      )
+    }),
+  boundedContinuationTimeout
+)
+
+it.effect(
+  "rejects each required issue 268 edge reversal",
+  () =>
+    Effect.gen(function* () {
+      const { occurrenceEvidence } = yield* runIssue268Ds13Characterization
+      const observed = occurrenceEvidence.observedOccurrences
+      const required = (
+        source: Issue268OccurrenceSource,
+        kind: string,
+        fragments: ReadonlyArray<string> = [],
+        after = 0
+      ): Issue268ObservedOccurrence => {
+        const found = observed.find(
+          (occurrence) =>
+            occurrence.ordinal > after &&
+            occurrence.source === source &&
+            occurrence.kind === kind &&
+            fragments.every((fragment) => occurrence.detail.includes(fragment))
+        )
+        if (found === undefined)
+          return expect.fail(`missing issue 268 occurrence ${source}:${kind} ${fragments.join(" ")}`)
+        return found
+      }
+      let edges: ReadonlyArray<Issue268RequiredEdge> = []
+      let landmarks: ReadonlyArray<Issue268CausalLandmark> = []
+      const addEdge = (
+        claim: number,
+        id: string,
+        before: Issue268ObservedOccurrence,
+        after: Issue268ObservedOccurrence
+      ) => {
+        const beforeKey = `${id}:before`
+        const afterKey = `${id}:after`
+        edges = [...edges, { after: afterKey, before: beforeKey, claim, id }]
+        landmarks = [...landmarks, { ...before, key: beforeKey }, { ...after, key: afterKey }]
+      }
+      const addChain = (claim: number, id: string, chain: ReadonlyArray<Issue268ObservedOccurrence>) => {
+        for (let index = 0; index < chain.length - 1; index++) {
+          const before = chain[index]
+          const after = chain[index + 1]
+          if (before === undefined || after === undefined) return expect.fail(`incomplete edge chain ${id}`)
+          addEdge(claim, `${id}:${index + 1}`, before, after)
+        }
+      }
+      const journalTask = (kind: string, taskId: string, after = 0) =>
+        required("Journal", kind, [`taskId=${taskId}`], after)
+      const journalAttempt = (kind: string, attemptId: string, after = 0, extra: ReadonlyArray<string> = []) =>
+        required("Journal", kind, [`attemptId=${attemptId}`, ...extra], after)
+      const occurrenceAfter = (
+        source: Issue268OccurrenceSource,
+        kind: string,
+        after: Issue268ObservedOccurrence,
+        fragments: ReadonlyArray<string> = []
+      ) => required(source, kind, fragments, after.ordinal)
+      const identityValue = (occurrence: Issue268ObservedOccurrence, key: string) => {
+        const value = occurrence.detail
+          .split("|")
+          .find((part) => part.startsWith(`${key}=`))
+          ?.slice(key.length + 1)
+        return value === undefined ? expect.fail(`missing ${key} in ${occurrence.kind}`) : value
+      }
+
+      const g0Observation = required("Journal", "TaskTrackerFactsObserved", ["contentIdentity=G0"])
+      for (const taskId of ["A", "B", "C"]) {
+        const eligibility = occurrenceAfter("Publication", "TaskEligibilityPublished", g0Observation, [taskId])
+        addEdge(1, `G0-before-${taskId}-eligibility`, g0Observation, eligibility)
+      }
+
+      for (const taskId of ["A", "B", "C", "D"]) {
+        const intent = journalTask("TaskClaimAcquisitionIntended", taskId)
+        const call = occurrenceAfter("Tracker", "TaskClaimAcquireCalled", intent, [`${taskId}:`])
+        const returned = occurrenceAfter("Tracker", "TaskClaimAcquireReturned", call, [`${taskId}:`])
+        const observation = occurrenceAfter("Journal", "TaskClaimAcquired", returned, [`taskId=${taskId}`])
+        addChain(2, `${taskId}-claim`, [intent, call, returned, observation])
+      }
+
+      const readyByTask = new Map<string, Issue268ObservedOccurrence>()
+      for (const [taskId, attemptId] of [
+        ["A", "attempt:A:1"],
+        ["B", "attempt:B:1"],
+        ["C", "attempt:C:1"],
+        ["D", "attempt:D:1"]
+      ] as const) {
+        const plan = journalAttempt("TaskAttemptPlanned", attemptId)
+        const worktreeIntent = journalAttempt("TaskWorktreeReconciliationIntended", attemptId, plan.ordinal)
+        const createCall = occurrenceAfter("Git", "WorktreeCreateCalled", worktreeIntent, [`${taskId}:${attemptId}`])
+        const createReturn = occurrenceAfter("Git", "WorktreeCreateReturned", createCall, [`${taskId}:${attemptId}`])
+        const ready = occurrenceAfter("Journal", "TaskWorktreeReady", createReturn, [
+          `operationId=${identityValue(worktreeIntent, "operation.operationId")}`
+        ])
+        readyByTask.set(taskId, ready)
+        addChain(3, `${taskId}-plan-worktree`, [plan, worktreeIntent, createCall, createReturn, ready])
+        const beginIntent = journalAttempt("PlannedAttemptExecutorCommandIntended", attemptId, ready.ordinal, [
+          "command=Begin"
+        ])
+        const beginCall = occurrenceAfter("Executor", "ExecutorBeginCalled", beginIntent, [attemptId])
+        const beginResponse = journalAttempt(
+          "PlannedAttemptExecutorCommandResponseObserved",
+          attemptId,
+          beginCall.ordinal
+        )
+        addChain(4, `${taskId}-begin`, [ready, beginIntent, beginCall, beginResponse])
+      }
+
+      const f2Edit = required("Control", "AliceTaskSpecificationEditAccepted")
+      const g1Observation = occurrenceAfter("Journal", "TaskTrackerFactsObserved", f2Edit, ["contentIdentity=G1"])
+      addEdge(5, "F2-before-G1", f2Edit, g1Observation)
+      const bSpecification = occurrenceAfter("Journal", "TaskTrackerFactsObserved", g1Observation, [
+        "FocusedTaskWorkSpecificationFacts",
+        "taskId=B"
+      ])
+      const bSuspendIntent = journalAttempt("PlannedAttemptExecutorCommandIntended", "attempt:B:1", 0, [
+        "command=Suspend"
+      ])
+      addEdge(6, "G1-before-B-suspend", g1Observation, bSuspendIntent)
+      addEdge(6, "B-facts-before-suspend", bSpecification, bSuspendIntent)
+      const bSuspendCall = occurrenceAfter("Executor", "ExecutorSuspendCalled", bSuspendIntent, ["attempt:B:1"])
+      const bSuspendResponse = journalAttempt(
+        "PlannedAttemptExecutorCommandResponseObserved",
+        "attempt:B:1",
+        bSuspendCall.ordinal
+      )
+      addChain(7, "B-suspend", [bSuspendIntent, bSuspendCall, bSuspendResponse])
+      const bSafe = journalAttempt("PlannedAttemptExecutorWorkReported", "attempt:B:1", bSuspendResponse.ordinal, [
+        "ExecutorWorkSafelySuspended"
+      ])
+      const bRelease = occurrenceAfter("Publication", "TaskWorkPositionReleased", bSafe, ["attempt:B:1"])
+      addEdge(8, "B-safe-before-release", bSafe, bRelease)
+      const dAdmission = occurrenceAfter("Publication", "TaskWorkPositionAdmissionBound", bRelease, ["D:D:"])
+      addEdge(9, "B-release-before-D-admission", bRelease, dAdmission)
+      const dReady = readyByTask.get("D")
+      if (dReady === undefined) return expect.fail("missing D ready occurrence")
+      const dBegin = occurrenceAfter("Executor", "ExecutorBeginCalled", dReady, ["attempt:D:1"])
+      addEdge(10, "D-worktree-before-begin", dReady, dBegin)
+
+      const processLoss = required("Control", "CoordinatorProcessLoss")
+      const reconstruction = occurrenceAfter("Journal", "JournalRecoveryReadReturned", processLoss)
+      const passiveAttemptIds = ["attempt:A:1", "attempt:C:1", "attempt:D:1"]
+      const passiveCalls = passiveAttemptIds.map((attemptId) =>
+        occurrenceAfter("Executor", "ExecutorObserveCalled", reconstruction, [attemptId])
+      )
+      for (const [index, passiveCall] of passiveCalls.entries()) {
+        addEdge(11, `reconstruction-before-passive-${index + 1}`, reconstruction, passiveCall)
+      }
+      const passiveReturns = passiveCalls.map((call, index) =>
+        occurrenceAfter("Executor", "ExecutorObserveReturned", call, [passiveAttemptIds[index] ?? "missing-attempt"])
+      )
+      const activationReturn = occurrenceAfter(
+        "Control",
+        "OrdinaryActivationReturned",
+        passiveReturns.at(-1) ?? reconstruction
+      )
+      for (const [index, passiveReturn] of passiveReturns.entries()) {
+        addEdge(12, `passive-before-return-${index + 1}`, passiveReturn, activationReturn)
+      }
+      const activeRefresh = occurrenceAfter("Control", "ActiveRefreshStarted", activationReturn)
+      addEdge(12, "return-before-later-refresh", activationReturn, activeRefresh)
+
+      const cClose = required("Control", "AliceTaskClosure")
+      const g2ReadReturn = occurrenceAfter("Tracker", "TrackerGraphReadReturned", cClose, ["G2"])
+      addEdge(13, "C-close-before-G2", cClose, g2ReadReturn)
+      const g2Observation = occurrenceAfter("Journal", "TaskTrackerFactsObserved", g2ReadReturn, ["contentIdentity=G2"])
+      const cSuspendIntent = journalAttempt(
+        "PlannedAttemptExecutorCommandIntended",
+        "attempt:C:1",
+        g2Observation.ordinal,
+        ["command=Suspend"]
+      )
+      const cSuspendCall = occurrenceAfter("Executor", "ExecutorSuspendCalled", cSuspendIntent, ["attempt:C:1"])
+      addChain(14, "G2-C-suspend", [g2Observation, cSuspendIntent, cSuspendCall])
+      const cSafe = journalAttempt("PlannedAttemptExecutorWorkReported", "attempt:C:1", cSuspendCall.ordinal, [
+        "ExecutorWorkSafelySuspended"
+      ])
+      const cRelease = occurrenceAfter("Publication", "TaskWorkPositionReleased", cSafe, ["attempt:C:1"])
+      addEdge(15, "C-safe-before-release", cSafe, cRelease)
+
+      const continueReturn = required("Control", "OperatorContinueReturned")
+      const bResumeResponsibility = occurrenceAfter("Publication", "B1ResumeResponsibilityPublished", continueReturn, [
+        "attempt:B:1"
+      ])
+      addEdge(16, "continue-before-resume-responsibility", continueReturn, bResumeResponsibility)
+      for (const [id, fact] of [
+        ["graph", occurrenceAfter("Tracker", "TrackerGraphReadReturned", continueReturn, ["G2"])],
+        ["specification", occurrenceAfter("Tracker", "TaskWorkSpecificationReadReturned", continueReturn, ["B:"])],
+        ["claim", occurrenceAfter("Tracker", "TaskClaimReadReturned", continueReturn, ["B:"])],
+        ["worktree", occurrenceAfter("Git", "WorktreeReadReturned", continueReturn, ["B:attempt:B:1"])],
+        ["lineage", occurrenceAfter("Git", "TargetLineageReadReturned", continueReturn)]
+      ] as const) {
+        addEdge(16, `${id}-before-resume-responsibility`, fact, bResumeResponsibility)
+      }
+      const aTerminal = journalAttempt("PlannedAttemptExecutorWorkReported", "attempt:A:1", 0, ["Accepted"])
+      const aRelease = occurrenceAfter("Publication", "TaskWorkPositionReleased", aTerminal, ["attempt:A:1"])
+      addEdge(17, "A-terminal-before-release", aTerminal, aRelease)
+      const bBinding = occurrenceAfter("Publication", "TaskWorkPositionAdmissionBound", aRelease, [
+        "B:B:ReserveOrReuse:ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
+      ])
+      const resumeIntent = journalAttempt("PlannedAttemptExecutorCommandIntended", "attempt:B:1", bBinding.ordinal, [
+        "command=Resume"
+      ])
+      const resumeCall = occurrenceAfter("Executor", "ExecutorResumeCalled", resumeIntent, ["attempt:B:1"])
+      addEdge(18, "A-release-before-B-binding", aRelease, bBinding)
+      addEdge(18, "A-release-before-B-resume-intent", aRelease, resumeIntent)
+      addEdge(18, "A-release-before-B-resume-call", aRelease, resumeCall)
+
+      const cSuspendActionReturned = occurrenceAfter("Action", "DeliveryActionReturned", cSuspendCall, ["C"])
+      const quiescence = occurrenceAfter("Control", "PostQuiescenceWitnessObserved", cSuspendActionReturned)
+      addChain(19, "refresh-work-quiescence", [activeRefresh, cSuspendActionReturned, quiescence])
+      const quiescenceIntent = occurrenceAfter("Journal", "TaskTrackerReadIntentRecorded", quiescence, [
+        "PostQuiescenceReconfirmation"
+      ])
+      addEdge(20, "quiescence-before-reconfirmation", quiescence, quiescenceIntent)
+
+      const orderedLandmarks = landmarks.toSorted((left, right) => left.ordinal - right.ordinal)
+      expect(edges).toHaveLength(75)
+      const expectedClaimCardinalities = [3, 12, 16, 12, 1, 2, 2, 1, 1, 1, 3, 4, 1, 2, 1, 6, 1, 3, 2, 1]
+      expect(
+        expectedClaimCardinalities.every(
+          (expected, index) => edges.filter(({ claim }) => claim === index + 1).length === expected
+        )
+      ).toBe(true)
+      expect(issue268RequiredClaimCoverageIsComplete(edges)).toBe(true)
+      expect(validateIssue268RequiredEdges(orderedLandmarks, edges)).toEqual([])
+      for (const edge of edges) {
+        const reversed = reverseIssue268RequiredEdge(orderedLandmarks, edge)
+        expect(validateIssue268RequiredEdges(reversed, [edge])).toEqual([{ edge, reason: "AfterNotAfterBefore" }])
+      }
+    }),
+  boundedContinuationTimeout
 )
 
 it.effect(
