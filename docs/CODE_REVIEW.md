@@ -47,27 +47,24 @@ no runtime behavior changes. Aggregate totals are not scenario evidence.
 
 ### Review closure
 
-1. Pin base and candidate SHAs; for dirty work capture the diff or its content
-   hash. Review the complete candidate along three axes: domain/spec against
-   CONTEXT and accepted requirements; architecture/connascence against
-   ARCHITECTURE and this checklist; correctness/tests/complexity against the
-   final diff.
-2. Classify before repairing. A blocker names the actor/caller, trigger,
-   boundary, violated requirement, and defect or missing-proof evidence. A
-   supported-path defect may expose missing scenarios; establish the required
-   scenario before a behavioral repair. Distinguish standards/handoff omissions
-   from demonstrated safety failures. A code smell alone is not a blocker;
-   internal hardening needs a supported caller or required misuse case, not an
-   invented trust boundary.
-3. Record each disposition: fixed with evidence, rejected with a concrete reason,
-   or deferred with scope/owner. Deferral cannot waive accepted scenarios,
-   blocking dependencies, safety failures, or required gates. Unrelated
-   improvements belong in follow-ups.
+1. Pin base/candidate SHAs or capture the dirty diff/hash. Review domain/spec
+   against CONTEXT and accepted requirements, architecture/connascence against
+   ARCHITECTURE, and correctness/tests/complexity against this checklist and
+   diff. Reconcile the existing test mapping, including required independent
+   tests and blocking dependencies.
+2. Classify before repairing. Blockers name actor/caller, trigger, boundary,
+   violated requirement, and defect or missing-proof evidence. Establish missing
+   scenarios before behavioral repairs. Distinguish handoff/standards omissions
+   from safety failures. Smells alone do not block; hardening needs a supported
+   caller or required misuse case, not an invented trust boundary.
+3. Record fixed evidence, a concrete rejection reason, or deferral scope/owner.
+   Deferral cannot waive accepted scenarios, blocking dependencies, safety
+   failures, or required gates. Unrelated improvements belong in follow-ups.
 4. Recheck fixes and affected behavior. Reopen settled findings only with new
-   contradictory evidence. Changed accepted behavior or cross-module contracts
-   warrant broader review; local fixes/checkpoint commits do not restart every
-   axis or require fresh reviewers. Recurring defect classes call for a shared
-   cause investigation before more local repairs.
-5. Close when scoped blockers are resolved and required evidence is green,
-   including `pnpm check:all` before handoff and applicable final
-   `pnpm check:quint` before integration. See [development checks](DEVELOPMENT.md#commands).
+   contradictory evidence. Changed behavior/contracts warrant broader review;
+   local fixes/commits need neither every axis restarted nor fresh reviewers.
+   Investigate recurring defect classes' shared cause before more local repairs.
+5. Resolve scoped blockers and pass affected checks before the final full gate.
+   Freeze the candidate, then run `pnpm check:all` before handoff and applicable
+   `pnpm check:quint` before integration. Failures reopen affected work under
+   step 4; green gates need no new broad review. See [development checks](DEVELOPMENT.md#commands).

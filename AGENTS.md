@@ -50,9 +50,10 @@ questions. Reuse guidance already read unless it changed or scope changed.
   never retry throttled mutations.
 - Develop with focused checks. Target repositories' application-specific
   typecheck, model-checking, and MBT gates are not Dalph implementation gates.
-- Before handoff, run `pnpm check:all`; review domain/spec,
-  architecture/connascence, and code correctness under the scoped closure rules
-  in [CODE_REVIEW.md](docs/CODE_REVIEW.md).
+- Before the final `pnpm check:all`, close domain/spec, architecture/connascence,
+  and code-correctness reviews under the scoped closure rules in
+  [CODE_REVIEW.md](docs/CODE_REVIEW.md). Passing the final gate remains required
+  before handoff.
 - Run `pnpm check:quint` after final relevant changes and before integration.
   During development, run it for model, conformance-adapter, or model-governed
   behavior changes. It is separate from `check:all`. Uncollected tests,
