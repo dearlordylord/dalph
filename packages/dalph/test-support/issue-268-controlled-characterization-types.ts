@@ -28,6 +28,7 @@ export interface Issue268StartupCharacterization {
   readonly worktreeCreateRequests: ReadonlyArray<PlannedTaskAttempt>
   readonly ds03?: Issue268Ds03Characterization
   readonly ds04?: Issue268Ds04Characterization
+  readonly ds05?: Issue268Ds05Characterization
 }
 
 export interface Issue268Ds03BoundarySnapshot {
@@ -53,7 +54,7 @@ export interface Issue268Ds03Characterization {
   }
 }
 
-export type Issue268Ds03StartupCharacterization = Omit<Issue268StartupCharacterization, "ds03" | "ds04"> & {
+export type Issue268Ds03StartupCharacterization = Omit<Issue268StartupCharacterization, "ds03" | "ds04" | "ds05"> & {
   readonly ds03: Issue268Ds03Characterization
 }
 
@@ -64,7 +65,20 @@ export interface Issue268Ds04Characterization {
   readonly beforeTimer: Issue268Ds03BoundarySnapshot
 }
 
-export type Issue268Ds04StartupCharacterization = Omit<Issue268StartupCharacterization, "ds03" | "ds04"> & {
+export type Issue268Ds04StartupCharacterization = Omit<Issue268StartupCharacterization, "ds03" | "ds04" | "ds05"> & {
   readonly ds03: Issue268Ds03Characterization
   readonly ds04: Issue268Ds04Characterization
+}
+
+export interface Issue268Ds05Characterization {
+  readonly after: Issue268Ds03BoundarySnapshot
+  readonly beforeSafe: Issue268Ds03BoundarySnapshot
+  readonly checkpointPublication: DeliveryRelationInputBundle
+  readonly lifecycleAttachAttemptIds: ReadonlyArray<string>
+}
+
+export type Issue268Ds05StartupCharacterization = Omit<Issue268StartupCharacterization, "ds03" | "ds04" | "ds05"> & {
+  readonly ds03: Issue268Ds03Characterization
+  readonly ds04: Issue268Ds04Characterization
+  readonly ds05: Issue268Ds05Characterization
 }

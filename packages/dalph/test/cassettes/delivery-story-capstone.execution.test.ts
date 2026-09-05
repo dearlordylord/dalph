@@ -1,14 +1,20 @@
 import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import { plannedAttemptExecutorCorrelation } from "@dalph/contracts"
-import { evaluateDeliveryRuntimeInputBundle, type DeliveryRelationInputBundle } from "@dalph/orchestrator"
+import {
+  deriveRunnableFrontier,
+  evaluateDeliveryRuntimeInputBundle,
+  type DeliveryRelationInputBundle,
+  WorkflowResponsibilityState
+} from "@dalph/orchestrator"
 import { Effect } from "effect"
 import { expect } from "vitest"
 import {
   runIssue268Ds01Characterization,
   runIssue268Ds02Characterization,
   runIssue268Ds03Characterization,
-  runIssue268Ds04Characterization
+  runIssue268Ds04Characterization,
+  runIssue268Ds05Characterization
 } from "../../test-support/issue-268-controlled-characterization.js"
 import { issue268ControlledDeliveryCharacterization as controlledScenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
@@ -438,6 +444,171 @@ it.effect(
       expect(heldAttempts).toEqual(["attempt:A:1", "attempt:B:1", "attempt:C:1"])
       expect(releaseEvidence).toEqual([])
       expect(duplicateExecutingReports).toEqual([])
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "DS-05 accepts exact B1 Safe and releases only B1's position",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runIssue268Ds05Characterization
+      const ds05 = run.ds05
+      const newRecords = ds05.after.records.slice(ds05.beforeSafe.records.length)
+      const safeObservations = newRecords.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorStateObserved" &&
+          event.plannedAttempt.attemptId === controlledScenario.attempts.B1 &&
+          event.observation._tag === "ExactExecutorReport" &&
+          event.observation.report._tag === "ExecutorWorkSafelySuspended"
+      )
+      const safeObservation = safeObservations[0]
+      const safeReports = newRecords.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report.correlation.attemptId === controlledScenario.attempts.B1 &&
+          event.report._tag === "ExecutorWorkSafelySuspended"
+      )
+      const safeReport = safeReports[0]
+      const priorSuspendResponse = ds05.beforeSafe.records.findLast(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandResponseObserved" &&
+          event.plannedAttempt.attemptId === controlledScenario.attempts.B1 &&
+          event.commandOrdinal === 2 &&
+          event.report._tag === "ExecutorWorkExecuting"
+      )
+      const beforeHeld = ds05.beforeSafe.publications
+        .at(-1)
+        ?.actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId)
+        .toSorted()
+      const afterHeld = ds05.checkpointPublication.actionInputs.runtimeFacts.taskWork.held
+        .map(({ correlation }) => correlation.attemptId)
+        .toSorted()
+      const runtime = yield* evaluateDeliveryRuntimeInputBundle(ds05.checkpointPublication)
+      const bFacts = runtime.current.ticketDeliveries.deliveries
+        .find(({ taskId }) => taskId === controlledScenario.taskIds.B)
+        ?.standings.flatMap((standing) => (standing._tag === "ResponsibilitySituation" ? [standing.facts] : []))[0]
+      if (bFacts === undefined) return expect.fail("DS-05 must retain B1 responsibility facts")
+      const changedB = deriveRunnableFrontier({
+        freshEligibleTasks: [],
+        responsibility: WorkflowResponsibilityState.make({ entries: [bFacts.responsibility] }),
+        responsibilityFacts: [bFacts]
+      }).explanations.find(
+        (explanation) =>
+          explanation._tag === "PlannedAttemptTaskSpecificationChangeConstraint" &&
+          explanation.taskId === controlledScenario.taskIds.B
+      )
+      const retainedB = run.plans.find(({ attemptId }) => attemptId === controlledScenario.attempts.B1)
+      if (retainedB === undefined) return expect.fail("DS-05 must retain B1's exact durable plan")
+      const beforeB = ds05.beforeSafe.plans.find(({ attemptId }) => attemptId === controlledScenario.attempts.B1)
+      const afterB = ds05.after.plans.find(({ attemptId }) => attemptId === controlledScenario.attempts.B1)
+      const newActions = ds05.after.executedActions.slice(ds05.beforeSafe.executedActions.length)
+      const newCommands = ds05.after.commands.slice(ds05.beforeSafe.commands.length)
+      const bClaimRecords = ds05.after.records.filter(
+        ({ event }) => event._tag === "TaskClaimAcquired" && event.claim.taskId === controlledScenario.taskIds.B
+      )
+      const bPlanRecords = ds05.after.records.filter(
+        ({ event }) =>
+          event._tag === "TaskAttemptPlanned" &&
+          event.operation.plannedAttempt.attemptId === controlledScenario.attempts.B1
+      )
+      const bWorktreeIntents = ds05.after.records.filter(
+        ({ event }) =>
+          event._tag === "TaskWorktreeReconciliationIntended" &&
+          event.operation.plannedAttempt.attemptId === controlledScenario.attempts.B1
+      )
+      const bWorktreeOperationId = bWorktreeIntents[0]?.event
+      const bWorktreeReady = ds05.after.records.filter(
+        ({ event }) =>
+          event._tag === "TaskWorktreeReady" &&
+          bWorktreeOperationId?._tag === "TaskWorktreeReconciliationIntended" &&
+          event.operationId === bWorktreeOperationId.operation.operationId
+      )
+      const forbiddenEvents = new Set([
+        "TaskClaimReleased",
+        "WorktreeCleanupAuthorized",
+        "WorktreeCleanupMutationIntended",
+        "WorktreeCleanupMutationResultRecorded",
+        "WorktreeCleanupSettled",
+        "PlannedAttemptExecutorCommandIntended"
+      ])
+      expect(priorSuspendResponse).toBeDefined()
+      expect(safeObservations).toHaveLength(1)
+      expect(safeReports).toHaveLength(1)
+      expect(safeReport?.event._tag).toBe("PlannedAttemptExecutorWorkReported")
+      if (safeReport?.event._tag === "PlannedAttemptExecutorWorkReported") expect(safeReport.event.ordinal).toBe(2)
+      expect(safeObservation?.position).toBeGreaterThan(priorSuspendResponse?.position ?? 0)
+      expect(safeReport?.position).toBeGreaterThan(safeObservation?.position ?? 0)
+      // The release-path test proves publication-before-release at the boundary; this composed run proves
+      // the accepted Safe position is present before the post-release A1/C1 projection is published.
+      expect(ds05.checkpointPublication.actionInputs.runtimeFacts.acceptedAt).toBeGreaterThanOrEqual(
+        safeReport?.position ?? Number.MAX_SAFE_INTEGER
+      )
+      expect(beforeHeld).toEqual(["attempt:A:1", "attempt:B:1", "attempt:C:1"])
+      expect(afterHeld).toEqual(["attempt:A:1", "attempt:C:1"])
+      expect(changedB).toMatchObject({
+        availableResolutions: ["ContinueExistingAttempt", "RestartTaskImplementation", "StopTaskImplementation"],
+        correlation: { attemptId: controlledScenario.attempts.B1, runId: controlledScenario.runId },
+        observedFingerprint: controlledScenario.specifications.F2.B.fingerprint,
+        plannedFingerprint: controlledScenario.specifications.F1.B.fingerprint,
+        taskId: controlledScenario.taskIds.B
+      })
+      expect(retainedB).toMatchObject({
+        attemptId: controlledScenario.attempts.B1,
+        baseSha: controlledScenario.baseSha,
+        runId: controlledScenario.runId,
+        taskId: controlledScenario.taskIds.B,
+        taskRevision: controlledScenario.specifications.F1.B.fingerprint
+      })
+      expect(afterB).toEqual(beforeB)
+      expect(run.plans.filter(({ taskId }) => taskId === controlledScenario.taskIds.B)).toHaveLength(1)
+      expect(bFacts.responsibility).toMatchObject({
+        _tag: "PlannedAttemptExecutorWorkResponsibility",
+        plannedAttempt: retainedB
+      })
+      expect(bClaimRecords).toHaveLength(1)
+      expect(bClaimRecords[0]?.event).toMatchObject({
+        claim: ds05.after.claimRequests.find(({ taskId }) => taskId === "B")
+      })
+      expect(bPlanRecords).toHaveLength(1)
+      expect(bPlanRecords[0]?.event).toMatchObject({ operation: { plannedAttempt: retainedB } })
+      expect(bWorktreeIntents).toHaveLength(1)
+      expect(bWorktreeReady).toHaveLength(1)
+      expect(bWorktreeReady[0]?.event).toMatchObject({
+        proof: {
+          _tag: "PlannedWorktreeReady",
+          baseSha: retainedB.baseSha,
+          branch: retainedB.branch,
+          headSha: retainedB.baseSha,
+          worktree: retainedB.worktree
+        }
+      })
+      expect(ds05.after.claimRequests).toEqual(ds05.beforeSafe.claimRequests)
+      expect(ds05.after.worktreeCreateRequests).toEqual(ds05.beforeSafe.worktreeCreateRequests)
+      expect(ds05.lifecycleAttachAttemptIds.toSorted()).toEqual([
+        controlledScenario.attempts.A1,
+        controlledScenario.attempts.B1,
+        controlledScenario.attempts.C1
+      ])
+      expect(run.ds04.activeRefreshCount).toBe(1)
+      expect(newCommands).toEqual([])
+      expect(newActions.filter(({ taskId }) => taskId === "D" || taskId === "E")).toEqual([])
+      expect(
+        newRecords.filter(
+          ({ event }) =>
+            event._tag === "GitReadIntentRecorded" ||
+            (event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag !== "ReadTrackerGraph")
+        )
+      ).toEqual([])
+      expect(
+        newRecords.filter(
+          ({ event }) =>
+            event._tag === "PlannedAttemptExecutorWorkReported" &&
+            event.report.correlation.attemptId !== controlledScenario.attempts.B1 &&
+            (event.report._tag === "ExecutorWorkSafelySuspended" || event.report._tag === "ExecutorWorkTerminal")
+        )
+      ).toEqual([])
+      expect(newRecords.filter(({ event }) => forbiddenEvents.has(event._tag))).toEqual([])
     }),
   capstoneTimeout
 )

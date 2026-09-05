@@ -85,7 +85,7 @@ export const isIssue268Ds04CompleteCheckpoint = (
 }
 
 // eslint-disable-next-line functional/no-mixed-types -- The controlled checkpoint groups immutable scenario facts with its test-only boundary controls.
-interface Issue268Ds04TimerCheckpointInput<E, R> {
+export interface Issue268Ds04TimerCheckpointInput<E, R> {
   readonly activateActiveRefresh: (source: "TrackerNotification" | "Timer") => Effect.Effect<RunFinalityDecision, E, R>
   readonly applicationExit: ApplicationExitShellService
   readonly attemptId: AttemptId
@@ -100,8 +100,27 @@ interface Issue268Ds04TimerCheckpointInput<E, R> {
   readonly startupDecision: RunFinalityDecision
 }
 
+interface Issue268Ds04LiveOwnerContinuation<A, E, R> {
+  readonly awaitResult: Effect.Effect<A, E, R>
+  readonly begin: Effect.Effect<void, never, R>
+}
+
+export interface Issue268Ds04TimerCheckpointResult<A> {
+  readonly checkpoint: Issue268Ds04Characterization
+  readonly continuation: A | undefined
+}
+
 /** Drives the real owner to the in-flight Suspend/Executing boundary; DS-05 owns its later settlement. */
-export const runIssue268Ds04TimerCheckpoint = <E, R>(input: Issue268Ds04TimerCheckpointInput<E, R>) =>
+export const runIssue268Ds04TimerCheckpoint = <
+  A = never,
+  E = never,
+  R = never,
+  EContinuation = never,
+  RContinuation = never
+>(
+  input: Issue268Ds04TimerCheckpointInput<E, R>,
+  continuation?: Issue268Ds04LiveOwnerContinuation<A, EContinuation, RContinuation>
+) =>
   Effect.gen(function* () {
     const activeRefreshSources = yield* Ref.make<ReadonlyArray<"TrackerNotification" | "Timer">>([])
     const activeRefreshCount = yield* Ref.make(0)
@@ -146,16 +165,31 @@ export const runIssue268Ds04TimerCheckpoint = <E, R>(input: Issue268Ds04TimerChe
             : awaitCompleteCheckpoint()
         })
       )
-    const after = yield* Effect.gen(function* () {
+    const result = yield* Effect.gen(function* () {
       yield* RunReactivationOwner
       yield* Deferred.await(ownerStartupSettled)
       yield* TestClock.adjust("1 second")
       yield* awaitCompleteCheckpoint()
-      const snapshot = yield* input.snapshot
+      const after = yield* input.snapshot
       if ((yield* Deferred.poll(activeRefreshReturned))._tag === "Some") {
         return yield* Effect.die("DS-04 active refresh returned before its in-flight checkpoint")
       }
-      return snapshot
+      if (continuation === undefined) return { after, continuation: undefined }
+      yield* continuation.begin
+      yield* Effect.all([
+        input.releaseCheckpointPublication,
+        Deferred.succeed(permitActiveRefreshFinalization, undefined)
+      ])
+      return {
+        after,
+        continuation: yield* continuation.awaitResult.pipe(
+          Effect.raceFirst(
+            Deferred.await(ownerFailure).pipe(
+              Effect.flatMap((failure) => Effect.die(`DS-05 reactivation owner failed: ${String(failure)}`))
+            )
+          )
+        )
+      }
     }).pipe(
       Effect.provide(ownerLayer),
       Effect.ensuring(
@@ -166,9 +200,12 @@ export const runIssue268Ds04TimerCheckpoint = <E, R>(input: Issue268Ds04TimerChe
       )
     )
     return {
-      activeRefreshCount: yield* Ref.get(activeRefreshCount),
-      activeRefreshSources: yield* Ref.get(activeRefreshSources),
-      after,
-      beforeTimer: input.beforeTimer
-    } satisfies Issue268Ds04Characterization
+      checkpoint: {
+        activeRefreshCount: yield* Ref.get(activeRefreshCount),
+        activeRefreshSources: yield* Ref.get(activeRefreshSources),
+        after: result.after,
+        beforeTimer: input.beforeTimer
+      },
+      continuation: result.continuation
+    } satisfies Issue268Ds04TimerCheckpointResult<A>
   })
