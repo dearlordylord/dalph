@@ -10,6 +10,8 @@ import {
 } from "@dalph/orchestrator"
 import { Effect } from "effect"
 import { expect } from "vitest"
+// @ts-expect-error The C4 subprocess runner is an executable JavaScript test-support module.
+import { runIssue268C4 } from "../../../../scripts/run-issue-268-c4.mjs"
 import {
   runIssue268Ds01Characterization,
   runIssue268Ds02Characterization,
@@ -57,6 +59,12 @@ import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "
 const lastItemIndex = -1
 const capstoneTimeout = 600_000
 const boundedContinuationTimeout = 120_000
+const c4RepeatabilityTimeout = 18 * 60_000
+const vitestEnvironment = Reflect.get(import.meta, "env")
+const c4AlreadyRunsOutsideCoverage =
+  typeof vitestEnvironment === "object" &&
+  vitestEnvironment !== null &&
+  Reflect.get(vitestEnvironment, "MODE") === "coverage"
 const cachedRun = Effect.runSync(
   Effect.cached(
     runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryInvariantStory).pipe(
@@ -2053,6 +2061,14 @@ it.effect(
       const run = yield* runIssue268ControlledDeliveryCassette(
         issue268ControlledDeliveryCassetteCatalog.issue268Ds01ThroughDs13
       )
+      expect(run.cassette).toMatchObject({
+        acceptedOrderDigest: "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d",
+        acceptedSourceSha: "7100fe3af2103bba753e089e8ec78279c5426eb5",
+        occurrenceCount: 1_014,
+        readinessProfile: "R0ThroughR11",
+        schemaVersion: 1,
+        stop: "DS13Checkpoint"
+      })
       expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_014 })
       const { ds09, ds10, ds11, ds12, ds13 } = run.characterization
       const { ds01, ds02, ds03, ds04, ds05, ds06, ds07 } = ds09.beforeLoss
@@ -2386,6 +2402,24 @@ it.effect(
       }
     }),
   boundedContinuationTimeout
+)
+
+it.skipIf(c4AlreadyRunsOutsideCoverage)(
+  "repeats the complete issue 268 cassette twenty times with one identical order",
+  async () => {
+    const result = await runIssue268C4()
+    expect(result).toMatchObject({
+      acceptedOrderDigest: "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d",
+      iterations: Array.from({ length: 20 }, (_, index) => ({
+        acceptedOrderDigest: "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d",
+        iteration: index + 1,
+        occurrenceCount: 1_014,
+        status: "PASS"
+      })),
+      occurrenceCount: 1_014
+    })
+  },
+  c4RepeatabilityTimeout
 )
 
 it.effect(

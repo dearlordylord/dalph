@@ -21,7 +21,13 @@ const ordinaryWorkerCount = 4
 // workers keep individual 30-second test budgets meaningful on the supported
 // local/hosted runners instead of timing out otherwise passing tests.
 const coverageWorkerCount = 2
-const ordinaryTestIncludes = ["src/**/*.test.ts", "packages/**/*.test.ts", "scripts/**/*.test.ts", "test/**/*.test.ts"]
+const ordinaryTestIncludes = [
+  "src/**/*.test.ts",
+  "packages/**/*.test.ts",
+  "scripts/**/*.test.ts",
+  "scripts/**/*.test.mjs",
+  "test/**/*.test.ts"
+]
 
 export default defineConfig(({ mode }) => ({
   resolve: {

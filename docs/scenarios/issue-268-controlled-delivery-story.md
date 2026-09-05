@@ -585,6 +585,21 @@ failure cannot interrupt and falsely fail unrelated assertions:
 - `repeats the complete issue 268 cassette twenty times with one identical
   order`.
 
+The C4 repeatability test starts twenty fresh Vitest processes sequentially.
+Each process selects only `emits the exact DS01 through DS13 delivery checkpoint
+table`, which first consumes the accepted strict occurrence catalog and then
+asserts all thirteen rows. Each child is independently bounded and the runner
+stops at the first timeout, crash, incomplete selection, failed row, or
+occurrence mismatch. It records the candidate commit, iteration, occurrence
+count, accepted-order digest, and elapsed time. A failed sequence grants no
+credit to its successful prefix.
+
+`pnpm check:all` runs this named C4 test as its own bounded stage. The later
+coverage stage skips only this duplicate twenty-process invocation; it does not
+waive the test, and all ordinary capstone tests remain in coverage. This keeps
+the C4 child-process owner alive through its own termination and reaping path
+instead of letting the coverage-stage deadline strand a detached child.
+
 The characterization and later cassette use that exact file and the
 test-specific
 `issue268ControlledDeliveryCassetteCatalog.issue268Ds01ThroughDs13` catalog
