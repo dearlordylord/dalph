@@ -352,7 +352,7 @@ it.effect("DS-03 accepts Alice's B/F2 and G1 tracker edit without triggering Dal
 )
 
 it.effect(
-  "DS-04 refreshes B from the bounded timer when its notification is lost",
+  "refreshes B from the bounded timer when its notification is lost",
   () =>
     Effect.gen(function* () {
       const run = yield* runIssue268Ds04Characterization
@@ -1598,6 +1598,148 @@ it.effect(
 )
 
 it.effect(
+  "keeps active-work refresh before quiescence and stabilization after it",
+  () =>
+    Effect.gen(function* () {
+      const { ds09, ds10, ds11 } = yield* runIssue268Ds11Characterization
+      const activeRefreshRecords = ds10.after.records.slice(ds09.after.records.length)
+      const afterSafeRecords = ds11.after.records.slice(ds10.after.records.length)
+      const g2Results = activeRefreshRecords.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "CompleteTaskTrackerFacts" &&
+          event.observation.factFamilies.some(
+            ({ contentIdentity }) => contentIdentity === controlledScenario.graphs.G2.revision
+          )
+      )
+      const g2Result = g2Results[0]
+      const g2OperationId =
+        g2Result?.event._tag === "TaskTrackerFactsObserved" ? g2Result.event.observation.operationId : undefined
+      const g2Intents = activeRefreshRecords.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.operationId === g2OperationId
+      )
+      const suspendIntents = activeRefreshRecords.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandIntended" &&
+          event.command === "Suspend" &&
+          event.plannedAttempt.attemptId === controlledScenario.attempts.C1 &&
+          event.plannedAttempt.runId === controlledScenario.runId
+      )
+      const suspendResponses = activeRefreshRecords.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandResponseObserved" &&
+          event.plannedAttempt.attemptId === controlledScenario.attempts.C1 &&
+          event.plannedAttempt.runId === controlledScenario.runId
+      )
+      const safeObservations = afterSafeRecords.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorStateObserved" &&
+          event.plannedAttempt.attemptId === controlledScenario.attempts.C1 &&
+          event.plannedAttempt.runId === controlledScenario.runId &&
+          event.observation._tag === "ExactExecutorReport" &&
+          event.observation.report._tag === "ExecutorWorkSafelySuspended"
+      )
+      const safeReports = afterSafeRecords.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.report._tag === "ExecutorWorkSafelySuspended" &&
+          event.report.correlation.attemptId === controlledScenario.attempts.C1 &&
+          event.report.correlation.runId === controlledScenario.runId
+      )
+      const stabilizationIntents = afterSafeRecords.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.cause._tag === "PostQuiescenceReconfirmation"
+      )
+      const stabilizationIntent = stabilizationIntents[0]
+      const stabilizationOperationId =
+        stabilizationIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
+        stabilizationIntent.event.operation._tag === "ReadTrackerGraph"
+          ? stabilizationIntent.event.operation.operationId
+          : undefined
+      const stabilizationResults = afterSafeRecords.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed" &&
+          event.observation.operationId === stabilizationOperationId
+      )
+
+      expect(ds10.activeRefreshCount).toBe(1)
+      expect(ds10.activeRefreshSources).toEqual(["TrackerNotification"])
+      expect(ds10.activeRefreshDecision).toBeUndefined()
+      expect(ds11.before).toEqual(ds10)
+      expect(ds11.activeRefreshCount).toBe(ds10.activeRefreshCount)
+      expect(ds11.activeRefreshDecision).toBeUndefined()
+      expect(g2Results).toHaveLength(1)
+      expect(g2Intents).toHaveLength(1)
+      expect(suspendIntents).toHaveLength(1)
+      expect(suspendResponses).toHaveLength(1)
+      expect(safeObservations).toHaveLength(1)
+      expect(safeReports).toHaveLength(1)
+      expect(stabilizationIntents).toHaveLength(1)
+      expect(stabilizationResults).toHaveLength(1)
+
+      const g2Intent = g2Intents[0]
+      const suspendIntent = suspendIntents[0]
+      const suspendResponse = suspendResponses[0]
+      const safeObservation = safeObservations[0]
+      const safeReport = safeReports[0]
+      const stabilizationResult = stabilizationResults[0]
+      if (
+        g2Intent === undefined ||
+        g2Result === undefined ||
+        suspendIntent === undefined ||
+        suspendResponse === undefined ||
+        safeObservation === undefined ||
+        safeReport === undefined ||
+        stabilizationIntent === undefined ||
+        stabilizationResult === undefined ||
+        suspendIntent.event._tag !== "PlannedAttemptExecutorCommandIntended" ||
+        suspendResponse.event._tag !== "PlannedAttemptExecutorCommandResponseObserved" ||
+        stabilizationIntent.event._tag !== "TaskTrackerReadIntentRecorded" ||
+        stabilizationIntent.event.operation._tag !== "ReadTrackerGraph" ||
+        stabilizationIntent.event.operation.cause._tag !== "PostQuiescenceReconfirmation"
+      ) {
+        return expect.fail("DS-11 characterization lacks the exact active-refresh/stabilization causal chain")
+      }
+
+      expect(g2Result.position).toBeGreaterThan(g2Intent.position)
+      expect(suspendIntent.position).toBeGreaterThan(g2Result.position)
+      expect(suspendResponse.event).toMatchObject({
+        commandOrdinal: suspendIntent.event.ordinal,
+        plannedAttempt: { attemptId: controlledScenario.attempts.C1, runId: controlledScenario.runId },
+        report: {
+          _tag: "ExecutorWorkExecuting",
+          correlation: { attemptId: controlledScenario.attempts.C1, runId: controlledScenario.runId }
+        }
+      })
+      expect(suspendResponse.position).toBeGreaterThan(suspendIntent.position)
+      expect(safeObservation.position).toBeGreaterThan(suspendResponse.position)
+      expect(safeReport.position).toBeGreaterThan(safeObservation.position)
+      expect(stabilizationIntent.position).toBeGreaterThan(safeReport.position)
+      expect(stabilizationIntent.event.operation.operationId).not.toBe(g2OperationId)
+      expect(stabilizationIntent.event.operation.cause.quiescentGraphOperationId).toBe(g2OperationId)
+      expect(stabilizationIntent.event.operation.predecessorOperationIds).toContain(g2OperationId)
+      expect(stabilizationResult.position).toBeGreaterThan(stabilizationIntent.position)
+      expect(stabilizationResult.event).toMatchObject({
+        observation: {
+          _tag: "UnchangedTaskTrackerFactsReconfirmed",
+          operationId: stabilizationIntent.event.operation.operationId,
+          priorFullObservationOperationId: g2OperationId
+        }
+      })
+      expect(ds11.checkpointPublication.actionInputs.runtimeFacts.acceptedAt).toBeGreaterThanOrEqual(
+        stabilizationResult.position
+      )
+    }),
+  capstoneTimeout
+)
+
+it.effect(
   "accepts exact B1 Continue but defers Resume while A1 and D1 fill capacity",
   () =>
     Effect.gen(function* () {
@@ -2050,6 +2192,203 @@ it.effect(
             )
           : []
       ).toEqual([])
+    }),
+  boundedContinuationTimeout
+)
+
+it.effect(
+  "retains exact Run attempt claim and resource identities across DS01 through DS13",
+  () =>
+    Effect.gen(function* () {
+      const { ds09, ds13 } = yield* runIssue268Ds13Characterization
+      const boundaryCapture = ds09.beforeLoss.snapshot
+      const finalRecords = ds13.afterProcessStop.records
+      const expectedPlans = [
+        {
+          attemptId: controlledScenario.attempts.A1,
+          baseSha: controlledScenario.baseSha,
+          branch: "refs/heads/dalph/issue-268-a-1",
+          executor: "executor:issue-268-controlled",
+          runId: controlledScenario.runId,
+          taskId: controlledScenario.taskIds.A,
+          taskRevision: controlledScenario.specifications.F1.A.fingerprint,
+          worktree: "/dalph/controlled-characterization/issue-268/A-1"
+        },
+        {
+          attemptId: controlledScenario.attempts.B1,
+          baseSha: controlledScenario.baseSha,
+          branch: "refs/heads/dalph/issue-268-b-1",
+          executor: "executor:issue-268-controlled",
+          runId: controlledScenario.runId,
+          taskId: controlledScenario.taskIds.B,
+          taskRevision: controlledScenario.specifications.F1.B.fingerprint,
+          worktree: "/dalph/controlled-characterization/issue-268/B-1"
+        },
+        {
+          attemptId: controlledScenario.attempts.C1,
+          baseSha: controlledScenario.baseSha,
+          branch: "refs/heads/dalph/issue-268-c-1",
+          executor: "executor:issue-268-controlled",
+          runId: controlledScenario.runId,
+          taskId: controlledScenario.taskIds.C,
+          taskRevision: controlledScenario.specifications.F1.C.fingerprint,
+          worktree: "/dalph/controlled-characterization/issue-268/C-1"
+        },
+        {
+          attemptId: controlledScenario.attempts.D1,
+          baseSha: controlledScenario.baseSha,
+          branch: "refs/heads/dalph/issue-268-d-1",
+          executor: "executor:issue-268-controlled",
+          runId: controlledScenario.runId,
+          taskId: controlledScenario.taskIds.D,
+          taskRevision: controlledScenario.specifications.F1.D.fingerprint,
+          worktree: "/dalph/controlled-characterization/issue-268/D-1"
+        }
+      ]
+      const expectedPlanByAttempt = new Map(expectedPlans.map((plan) => [plan.attemptId, plan]))
+      const expectedClaimRequests = [
+        { operationOrdinal: 4, taskId: controlledScenario.taskIds.A },
+        { operationOrdinal: 5, taskId: controlledScenario.taskIds.B },
+        { operationOrdinal: 6, taskId: controlledScenario.taskIds.C },
+        { operationOrdinal: 31, taskId: controlledScenario.taskIds.D }
+      ].map(({ operationOrdinal, taskId }) => {
+        const operationId = `issue-268:${controlledScenario.runId}:startup:${operationOrdinal}`
+        return {
+          operationId,
+          owner: "issue-268-controlled-owner",
+          taskId,
+          token: `issue-268-controlled-claim:${taskId}:${operationId}`
+        }
+      })
+      const sortPlans = <Plan extends { readonly attemptId: string }>(plans: ReadonlyArray<Plan>) =>
+        plans.toSorted((left, right) => left.attemptId.localeCompare(right.attemptId))
+      const durablePlans = finalRecords.flatMap(({ event }) =>
+        event._tag === "TaskAttemptPlanned" ? [event.operation.plannedAttempt] : []
+      )
+      const acquiredClaims = finalRecords.flatMap(({ event }) =>
+        event._tag === "TaskClaimAcquired" ? [event.claim] : []
+      )
+      const responsibilities = finalRecords.flatMap(({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ? [event.plannedAttempt] : []
+      )
+      const planBearingExecutorEvents = finalRecords.flatMap(({ event }) => {
+        if (
+          event._tag === "PlannedAttemptExecutorCommandIntended" ||
+          event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
+          event._tag === "PlannedAttemptExecutorCommandResponseObserved" ||
+          event._tag === "PlannedAttemptExecutorCommandResponseContradicted" ||
+          event._tag === "PlannedAttemptExecutorStateObserved" ||
+          event._tag === "PlannedAttemptContinuationAuthorized"
+        ) {
+          return [event.plannedAttempt]
+        }
+        return []
+      })
+      const executorReports = finalRecords.flatMap(({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" ? [event.report] : []
+      )
+      const finalEvidence = ds13.checkpointPublication.publication.exactEvidence
+      const finalClaimResponsibilities = finalEvidence.flatMap((evidence) =>
+        evidence._tag === "ResponsibilityFacts" && evidence.facts.responsibility._tag === "TaskClaimResponsibility"
+          ? [evidence.facts.responsibility.acquisition]
+          : []
+      )
+      const finalWorktreePlans = finalEvidence.flatMap((evidence) =>
+        evidence._tag === "ResponsibilityFacts" && evidence.facts.responsibility._tag === "TaskWorktreeResponsibility"
+          ? [evidence.facts.responsibility.operation.plannedAttempt]
+          : []
+      )
+      const finalExecutorPlans = finalEvidence.flatMap((evidence) =>
+        evidence._tag === "ResponsibilityFacts" &&
+        evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility"
+          ? [evidence.facts.responsibility.plannedAttempt]
+          : []
+      )
+      const finalAcceptedPlans = finalEvidence.flatMap((evidence) =>
+        evidence._tag === "AcceptedAwaitingIntegration" ? [evidence.accepted.plannedAttempt] : []
+      )
+      const finalHeldCorrelations = ds13.checkpointPublication.actionInputs.runtimeFacts.taskWork.held.map(
+        ({ correlation }) => correlation
+      )
+      const finalOccupiedEntries = [...ds13.checkpointPublication.actionInputs.runtimeFacts.taskWork.occupied.entries()]
+      const finalOccupiedPlans = finalOccupiedEntries.flatMap(([, position]) =>
+        position._tag === "ExactAttemptHeld" ? [position.plannedAttempt] : []
+      )
+
+      expect(new Set(finalRecords.map(({ runId }) => runId))).toEqual(new Set([controlledScenario.runId]))
+      expect(sortPlans(boundaryCapture.plans)).toEqual(sortPlans(expectedPlans))
+      expect(sortPlans(durablePlans)).toEqual(sortPlans(expectedPlans))
+      expect(sortPlans(boundaryCapture.worktreeCreateRequests)).toEqual(sortPlans(expectedPlans))
+      expect(sortPlans(responsibilities)).toEqual(sortPlans(expectedPlans))
+
+      expect(boundaryCapture.claimRequests).toEqual(expectedClaimRequests)
+      expect(acquiredClaims).toEqual(expectedClaimRequests.map((request) => ({ _tag: "ActiveTaskClaim", ...request })))
+
+      for (const expectedPlan of expectedPlans) {
+        const worktreeIntent = finalRecords.filter(
+          ({ event }) =>
+            event._tag === "TaskWorktreeReconciliationIntended" &&
+            event.operation.plannedAttempt.attemptId === expectedPlan.attemptId
+        )
+        expect(worktreeIntent).toHaveLength(1)
+        expect(worktreeIntent[0]?.event).toMatchObject({ operation: { plannedAttempt: expectedPlan } })
+        const worktreeOperationId = worktreeIntent[0]?.event
+        if (worktreeOperationId?._tag !== "TaskWorktreeReconciliationIntended") {
+          return expect.fail(`missing exact worktree intent for ${expectedPlan.attemptId}`)
+        }
+        expect(
+          finalRecords.filter(
+            ({ event }) =>
+              event._tag === "TaskWorktreeReady" && event.operationId === worktreeOperationId.operation.operationId
+          )
+        ).toEqual([
+          expect.objectContaining({
+            event: expect.objectContaining({
+              proof: {
+                _tag: "PlannedWorktreeReady",
+                baseSha: expectedPlan.baseSha,
+                branch: expectedPlan.branch,
+                headSha: expectedPlan.baseSha,
+                worktree: expectedPlan.worktree
+              }
+            })
+          })
+        ])
+      }
+
+      for (const observedPlan of planBearingExecutorEvents) {
+        expect(observedPlan).toEqual(expectedPlanByAttempt.get(observedPlan.attemptId))
+      }
+      for (const report of executorReports) {
+        const expectedPlan = expectedPlanByAttempt.get(report.correlation.attemptId)
+        expect(expectedPlan).toBeDefined()
+        expect(report.correlation).toEqual(
+          expectedPlan === undefined ? undefined : { attemptId: expectedPlan.attemptId, runId: expectedPlan.runId }
+        )
+      }
+      expect(finalEvidence).toHaveLength(13)
+      expect(finalClaimResponsibilities).toEqual(expectedClaimRequests)
+      expect(sortPlans(finalWorktreePlans)).toEqual(sortPlans(expectedPlans))
+      expect(sortPlans(finalExecutorPlans)).toEqual(sortPlans(expectedPlans))
+      expect(finalAcceptedPlans).toEqual([expectedPlans[0]])
+      expect(finalOccupiedEntries).toHaveLength(2)
+      expect(finalOccupiedEntries.every(([, position]) => position._tag === "ExactAttemptHeld")).toBe(true)
+      expect(finalOccupiedEntries.map(([taskId]) => taskId).toSorted()).toEqual(
+        [controlledScenario.taskIds.B, controlledScenario.taskIds.D].toSorted()
+      )
+      expect(sortPlans(finalOccupiedPlans)).toEqual(
+        sortPlans(
+          expectedPlans.filter(
+            ({ attemptId }) =>
+              attemptId === controlledScenario.attempts.B1 || attemptId === controlledScenario.attempts.D1
+          )
+        )
+      )
+      expect(finalHeldCorrelations.toSorted((left, right) => left.attemptId.localeCompare(right.attemptId))).toEqual(
+        [controlledScenario.attempts.B1, controlledScenario.attempts.D1]
+          .map((attemptId) => ({ attemptId, runId: controlledScenario.runId }))
+          .toSorted((left, right) => left.attemptId.localeCompare(right.attemptId))
+      )
     }),
   boundedContinuationTimeout
 )

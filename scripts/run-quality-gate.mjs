@@ -33,7 +33,6 @@ const gates = [
   {
     args: ["test:issue-268-c4"],
     name: "issue 268 fresh-process repeatability",
-    relayParentSignals: true,
     terminationGrace: 15 * SECOND,
     timeout: 19 * 60 * SECOND
   },
@@ -57,7 +56,7 @@ for (const gate of gates) {
     environment: gate.environment,
     executable: process.execPath,
     name: `Quality gate '${gate.name}'`,
-    relayParentSignals: gate.relayParentSignals,
+    relayParentSignals: true,
     terminationGraceMilliseconds: gate.terminationGrace,
     timeoutMilliseconds: gate.timeout
   })
