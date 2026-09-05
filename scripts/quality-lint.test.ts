@@ -1,6 +1,5 @@
 import { it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
-import { spawn } from "node:child_process"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { relative, join } from "node:path"
 import { describe, expect } from "vitest"
@@ -8,39 +7,62 @@ import { describe, expect } from "vitest"
 import { discoverQualityFiles } from "./quality-file-discovery.mjs"
 // @ts-expect-error The lint policy is shared with the executable JavaScript runner.
 import { selectCompatibilityFiles } from "./quality-lint-policy.mjs"
+// @ts-expect-error The bounded command implementation is an executable JavaScript module.
+import { runBoundedCommand } from "./run-bounded-command.mjs"
 
 const repositoryRoot = process.cwd()
 const qualityLintRunner = join(repositoryRoot, "scripts", "run-quality-lint.mjs")
+const compatibilityLintExecutable = join(
+  repositoryRoot,
+  "node_modules",
+  ".bin",
+  process.platform === "win32" ? "eslint.cmd" : "eslint"
+)
 const qualityFixtureRoot = join(repositoryRoot, "test", "fixtures", "quality-lint")
-// Compatibility lint builds the whole TypeScript import graph. Keep its integration-test bound above the
-// observed repository-scale runtime while the outer quality gate retains its own fixed overall deadline.
-const repositoryCompatibilityLintTimeout = 240_000
+// Compatibility lint builds the whole TypeScript import graph. One process receives enough time for a loaded host while
+// remaining well inside the quality gate's twenty-minute coverage-stage bound.
+const repositoryCompatibilityLintTimeout = 320_000
+const compatibilityLintSubprocessTimeout = 300_000
+const compatibilityLintEnvironment = {
+  ...process.env,
+  NODE_OPTIONS: [process.env["NODE_OPTIONS"], "--max-old-space-size=12288"].filter(Boolean).join(" ")
+}
 
-const CommandResult = Schema.Struct({ exitCode: Schema.Finite, stdout: Schema.String, stderr: Schema.String })
+const CommandResult = Schema.Struct({ exitCode: Schema.Finite, output: Schema.String, outputLineCount: Schema.Int })
+const EslintResult = Schema.Struct({
+  filePath: Schema.String,
+  messages: Schema.Array(Schema.Struct({ ruleId: Schema.NullOr(Schema.String) }))
+})
+const EslintResultsFromJson = Schema.fromJsonString(Schema.Array(EslintResult))
 
 class QualityLintCommandError extends Schema.TaggedError<QualityLintCommandError>()("QualityLintCommandError", {
   cause: Schema.String
 }) {}
 
-const run = (arguments_: ReadonlyArray<string>) =>
+const run = ({
+  arguments_,
+  environment,
+  executable,
+  name,
+  timeoutMilliseconds
+}: {
+  readonly arguments_: ReadonlyArray<string>
+  readonly environment?: NodeJS.ProcessEnv
+  readonly executable: string
+  readonly name: string
+  readonly timeoutMilliseconds: number
+}) =>
   Effect.tryPromise({
     try: () =>
-      new Promise((resolvePromise) => {
-        const child = spawn(process.execPath, [qualityLintRunner, ...arguments_], {
-          cwd: repositoryRoot,
-          stdio: ["ignore", "pipe", "pipe"]
-        })
-        const stdout: Array<Buffer> = []
-        const stderr: Array<Buffer> = []
-        child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk))
-        child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk))
-        child.on("close", (exitCode: number | null) =>
-          resolvePromise({
-            exitCode: exitCode ?? 1,
-            stderr: Buffer.concat(stderr).toString("utf8"),
-            stdout: Buffer.concat(stdout).toString("utf8")
-          })
-        )
+      runBoundedCommand({
+        acceptedExitCodes: [0, 1],
+        args: arguments_,
+        captureOutput: true,
+        environment,
+        executable,
+        forwardOutput: false,
+        name,
+        timeoutMilliseconds
       }),
     catch: (cause) => new QualityLintCommandError({ cause: String(cause) })
   }).pipe(Effect.flatMap((result) => Schema.decodeUnknownEffect(CommandResult)(result)))
@@ -69,10 +91,15 @@ describe.sequential("quality lint integration", () => {
       withFixtures((fixtureDirectory) =>
         Effect.gen(function* () {
           const warningFile = yield* copyFixture(fixtureDirectory, "warning")
-          const result = yield* run([relativeToRepository(warningFile)])
+          const result = yield* run({
+            arguments_: [qualityLintRunner, relativeToRepository(warningFile)],
+            executable: process.execPath,
+            name: "Quality lint integration subprocess",
+            timeoutMilliseconds: 20_000
+          })
           expect(result.exitCode).not.toBe(0)
-          expect(`${result.stdout}${result.stderr}`).toContain("no-debugger")
-          expect(`${result.stdout}${result.stderr}`.split("\n").length).toBeLessThan(30)
+          expect(result.output).toContain("no-debugger")
+          expect(result.outputLineCount).toBeLessThan(30)
         })
       ),
     30_000
@@ -85,16 +112,43 @@ describe.sequential("quality lint integration", () => {
         Effect.gen(function* () {
           const functionalFile = yield* copyFixture(fixtureDirectory, "functional")
           const unconsumedFile = yield* copyFixture(fixtureDirectory, "unconsumed")
-          const functionalResult = yield* run([relativeToRepository(functionalFile)])
-          const unconsumedResult = yield* run([relativeToRepository(unconsumedFile)])
-          const publicEntryResult = yield* run(["packages/dalph/src/index.ts"])
+          const functionalPath = relativeToRepository(functionalFile)
+          const unconsumedPath = relativeToRepository(unconsumedFile)
+          const publicEntryPath = "packages/dalph/src/index.ts"
+          const result = yield* run({
+            arguments_: [
+              "--config",
+              "eslint.compat.config.mjs",
+              "--max-warnings",
+              "0",
+              "--suppressions-location",
+              "eslint-functional-suppressions.json",
+              "--no-error-on-unmatched-pattern",
+              "--format",
+              "json",
+              functionalPath,
+              unconsumedPath,
+              publicEntryPath
+            ],
+            environment: compatibilityLintEnvironment,
+            executable: compatibilityLintExecutable,
+            name: "Compatibility lint integration subprocess",
+            timeoutMilliseconds: compatibilityLintSubprocessTimeout
+          })
+          const lintResults = yield* Schema.decodeUnknownEffect(EslintResultsFromJson)(result.output)
 
-          expect(functionalResult.exitCode).not.toBe(0)
-          expect(functionalResult.stdout).toContain("functional/immutable-data")
-          expect(unconsumedResult.exitCode).not.toBe(0)
-          expect(unconsumedResult.stdout).toContain("import-x/no-unused-modules")
-          expect(publicEntryResult.exitCode).toBe(0)
-          expect(`${publicEntryResult.stdout}${publicEntryResult.stderr}`.split("\n").length).toBeLessThan(30)
+          expect(result.exitCode).toBe(1)
+          expect(result.outputLineCount).toBeLessThan(10)
+          expect(lintResults).toHaveLength(3)
+          expect(lintResults).toContainEqual({
+            filePath: functionalFile,
+            messages: expect.arrayContaining([{ ruleId: "functional/immutable-data" }])
+          })
+          expect(lintResults).toContainEqual({
+            filePath: unconsumedFile,
+            messages: expect.arrayContaining([{ ruleId: "import-x/no-unused-modules" }])
+          })
+          expect(lintResults).toContainEqual({ filePath: join(repositoryRoot, publicEntryPath), messages: [] })
         })
       ),
     repositoryCompatibilityLintTimeout
