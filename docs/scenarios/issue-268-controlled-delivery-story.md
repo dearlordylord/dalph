@@ -11,7 +11,7 @@ observe the unchanged production workflow under explicit test controls, and
 only then ask the maintainer to freeze the observed cassette order. This
 documentation-only change does not change Dalph runtime behavior. Acceptance
 freezes the thirteen behavioral outcomes, required causal edges, scope, and
-stop rules. It does not freeze the provisional O001--O089 order or authorize
+stop rules. It does not freeze the provisional O001--O091 order or authorize
 production changes to make that order pass.
 
 The 2026-09-05 pre-DS-04 audit corrected two stale read inventories without
@@ -222,7 +222,7 @@ representative test inventory is:
 | DS-08 | After P2 is durable, the coordinator process dies. The controlled executor substrate and exact sessions remain alive and observable on the same host. | The UI may disconnect. No executor attempt is cancelled or replaced by the process loss. |
 | DS-09 | Alice restarts Dalph on the same host. Dalph reads the Journal and reconstructs P2, A1/C1/D1 as held, and B1 as retained. Because process loss discarded the live graph projection, the fresh activation makes one current complete G1 observation and publishes it before relying on E's current tracker state. Dalph then reads the exact executor projections for A1, C1, and D1; all still report `Executing`. These passive reads acquire no additional task-work position and send no `Begin` or `Resume`. Eligible E remains a descriptive graph candidate with `EligibleOutsideBound` placement; Dalph constructs no E operation proposal or capability because three positions remain held against capacity two. That non-empty capacity-blocked candidate frontier makes the activation return exact `CoordinatorActivationReturned(RunMustRemainActive, RunnableTransition)` after the strict projections and without a second post-quiescence/finality graph read. | The maintained result again projects A1, C1, and D1 executing, B1 retained, and E unstarted, with capacity two. The sole owner settles the exact restart return before accepting the later close-C refresh. |
 | DS-10 | Alice closes C in the tracker without reporting success. The tracker accepts G2 and sends one notification. The sole refresh owner reads G2 once. C's closed lifecycle is already conclusive, so C crosses no focused specification, claim, worktree, or lineage boundary. A and D still match and each complete those four current-fact reads. Dalph records one exact C1 `Suspend` intent, sends one `Suspend`, observes the immediate `Executing` response, and keeps C1's position held. Because C1 still reports `Executing`, the same process-local passive lifecycle owner remains attached and the same active refresh remains live waiting for R9; DS-10 does not manufacture another executor read, finalize that activation, or start another activation. | The maintained result projects C1 as suspending; A1, C1, and D1 still hold three positions. The active refresh remains live for DS-11's exact C1 lifecycle change. |
-| DS-11 | Gate R9 makes C1's exact lifecycle projection become `Safe`. Dalph records and publishes it, releases only C1's position, and retains C1's exact attempt/worktree. | A1 and D1 hold two positions, exactly filling P2. B1 and C1 are retained. |
+| DS-11 | Gate R9 makes C1's exact lifecycle projection become `Safe`. Dalph records and publishes it, releases only C1's position, and retains C1's exact attempt/worktree. After that active action becomes quiescent, Run stabilization—not the executor report—performs one post-quiescence complete G2 read causally descended from the accepted DS-10 G2 operation; the tracker returns unchanged G2. | A1 and D1 hold two positions, exactly filling P2. B1 and C1 are retained. The maintained relation accepts the stabilization-owned G2 reconfirmation. |
 | DS-12 | Alice chooses `Continue` for exact B1. Dalph records that choice and reads the current graph, B specification, exact claim, planned worktree, and Git lineage. The facts authorize resuming B1, but no position is free, so Dalph records no `Resume` intent and sends no executor command yet. | The maintained result projects B1 waiting to continue; A1 and D1 still occupy both positions. |
 | DS-13 | Gate R11 lets A1's executor projection report terminal `Accepted`. Dalph records and publishes that exact result and releases A1's position. The already-selected exact B1 is considered before unstarted E, binds that position, records one `Resume` intent, sends one `Resume`, observes `Executing`, and publishes B1 as held. | B1 and D1 hold the two positions. A1 is accepted; C1 remains retained; E remains an `EligibleOutsideBound` graph candidate with no materialized operation proposal or capability. No replacement B2 exists. Because E still makes the activation non-quiescent without crossing an operation boundary, this beat does not fabricate a post-quiescence stabilization read. |
 
@@ -355,7 +355,7 @@ condition for closing #268.
 
 ## Provisional occurrence hypothesis and stable denominator
 
-O001--O089 is a provisional, source-derived characterization checklist. It is
+O001--O091 is a provisional, source-derived characterization checklist. It is
 not yet the strict cassette oracle or a progress denominator. The cassette-free
 characterization must confirm, remove, add, and reorder these groups without
 changing production. Its observed complete inventory becomes authoritative
@@ -367,7 +367,8 @@ records of one boundary operation. `read/publication` currently occupies two
 consecutive hypotheses. For a healthy task's four focused facts, the proposed
 order is specification, claim, planned worktree, then Git lineage. A conclusive
 fact stops the affected task's chain: B has only its specification read in
-DS-04, and C has no focused read after G2 closes it in DS-10. The characterization
+DS-04, and C has no focused read after G2 closes it in DS-10. DS-11 adds the
+stabilization-owned post-quiescence G2 reconfirmation observed after C1 releases. The characterization
 report maps every raw observed item to a hypothesis, identifies every missing
 or extra item, and publishes the resulting exact order for review.
 
@@ -376,8 +377,8 @@ to C, using the six operations listed in that row. DS-06 uses the same six
 operations for D. DS-04 assigns O028--O031 to A, O032 to B's conclusive
 specification, and O033--O036 to C. DS-10 assigns O063--O066 to A and
 O067--O070 to D; C's closed G2 fact stops its focused chain. DS-12 assigns
-O075 to the Continue record, O076--O077 to the graph read/publication pair,
-O078--O081 to B's four focused facts, and O082 to the waiting projection.
+O077 to the Continue record, O078--O079 to the graph read/publication pair,
+O080--O083 to B's four focused facts, and O084 to the waiting projection.
 
 | Beat | IDs | Occurrence groups | Count |
 |---|---|---|---:|
@@ -391,10 +392,10 @@ O078--O081 to B's four focused facts, and O082 to the waiting projection.
 | DS-08 | O049 | coordinator process loss | 1 |
 | DS-09 | O050--O057 | Journal reconstruction; current G1 read; accepted G1 publication; A1/C1/D1 passive projection reads; reconstructed state publication; exact `RunnableTransition` activation return | 8 |
 | DS-10 | O058--O071 | refresh ownership; Alice's C close; notification; G2 read; G2 publication; A/D four focused current-fact reads; C1 Suspend intent/call/Executing response | 14 |
-| DS-11 | O072--O074 | C1 Safe projection; Safe Journal/publication; C1 position release/retention | 3 |
-| DS-12 | O075--O082 | Alice's exact Continue record; current graph read/publication; four focused B fact reads; waiting projection | 8 |
-| DS-13 | O083--O089 | A1 terminal projection; terminal Journal record; terminal publication; A1 position release; B1 position binding; Resume intent/call/Executing response; held-position publication | 7 |
-| **Total** | **Thirteen beats** | **89** |
+| DS-11 | O072--O076 | C1 Safe projection; Safe Journal/publication; C1 position release/retention; stabilization-owned post-quiescence G2 read; accepted unchanged G2 reconfirmation | 5 |
+| DS-12 | O077--O084 | Alice's exact Continue record; current graph read/publication; four focused B fact reads; waiting projection | 8 |
+| DS-13 | O085--O091 | A1 terminal projection; terminal Journal record; terminal publication; A1 position release; B1 position binding; Resume intent/call/Executing response; held-position publication | 7 |
+| **Total** | **Thirteen beats** | **91** |
 
 The stable recovery denominator accepted now is:
 
@@ -417,7 +418,7 @@ The stable recovery denominator accepted now is:
   substitute closes #268.
 
 Before the observed-order acceptance cut, the occurrence count and remaining
-implementation count are unknown; O089 is not a numerator or denominator. No
+implementation count are unknown; O091 is not a numerator or denominator. No
 completion percentage may be reported. After that cut, a hang, timeout, or
 partial trace is zero complete capstone runs, not partial completion.
 
@@ -493,7 +494,7 @@ cached ten-task run. Its table carries these thirteen named assertion rows:
 | DS-08 | The coordinator dies after P2 while exact executor sessions remain externally observable. |
 | DS-09 | Restart reconstructs A1/C1/D1 held plus B1 retained, makes one current complete G1 observation before relying on E's current placement, performs only passive executor reads with zero Begin/Resume and zero additional-position admission, and settles exact `RunMustRemainActive(RunnableTransition)` without a second finality graph read before the later refresh. |
 | DS-10 | C's non-success closure becomes G2; only C1 receives one Suspend and keeps its position while the same active refresh remains live for DS-11. |
-| DS-11 | Exact C1 Safe publishes before its release; A1/D1 hold two positions and B1/C1 are retained. |
+| DS-11 | Exact C1 Safe publishes before its release; stabilization then performs one causally paired post-quiescence G2 reconfirmation; A1/D1 hold two positions and B1/C1 are retained. |
 | DS-12 | Alice's exact Continue authorizes B1, but B1 waits with zero Resume while A1/D1 fill capacity two. |
 | DS-13 | A1 Accepted publishes before release; exact B1 takes that position ahead of unstarted E and receives one Resume/Executing pair; no B2 exists. |
 

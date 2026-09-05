@@ -215,3 +215,18 @@ export interface Issue268Ds10StartupCharacterization {
   readonly ds09: Issue268Ds09Characterization
   readonly ds10: Issue268Ds10Characterization
 }
+
+export interface Issue268Ds11Characterization {
+  readonly activeRefreshCount: number
+  readonly activeRefreshDecision: undefined
+  readonly after: Issue268Ds03BoundarySnapshot
+  readonly before: Issue268Ds10Characterization
+  readonly checkpointPublication: DeliveryRelationInputBundle
+  readonly executorObserveCallCount: number
+}
+
+export interface Issue268Ds11StartupCharacterization {
+  readonly ds09: Issue268Ds09Characterization
+  readonly ds10: Issue268Ds10Characterization
+  readonly ds11: Issue268Ds11Characterization
+}

@@ -1,4 +1,4 @@
-/* eslint-disable max-lines -- One scoped driver keeps the chronological DS-01 through DS-10 handoffs auditable. */
+/* eslint-disable max-lines -- One scoped driver keeps the chronological DS-01 through DS-11 handoffs auditable. */
 import {
   PlannedAttemptExecutor,
   PlannedAttemptExecutorLifecycleObservation,
@@ -92,6 +92,8 @@ import type {
   Issue268Ds09StartupCharacterization,
   Issue268Ds10Characterization,
   Issue268Ds10StartupCharacterization,
+  Issue268Ds11Characterization,
+  Issue268Ds11StartupCharacterization,
   Issue268ExecutorObservationCapture,
   Issue268ExecutorCommandCapture
 } from "./issue-268-controlled-characterization-types.js"
@@ -112,6 +114,7 @@ import { isIssue268Ds05CompleteCheckpoint } from "./issue-268-controlled-ds05.js
 import { isIssue268Ds06CompleteCheckpoint } from "./issue-268-controlled-ds06.js"
 import { isIssue268Ds07CompleteCheckpoint } from "./issue-268-controlled-ds07.js"
 import { isIssue268Ds10CompleteCheckpoint } from "./issue-268-controlled-ds10.js"
+import { isIssue268Ds11CompleteCheckpoint } from "./issue-268-controlled-ds11.js"
 
 const checkpointPublicationLimit = 128
 type Issue268StartupMode = "DS01" | "DS02" | "DS03" | "DS04" | "DS05" | "DS06" | "DS07" | "DS08" | "DS09"
@@ -165,11 +168,17 @@ interface Issue268Ds10Controls {
   readonly activeRefreshSources: Ref.Ref<ReadonlyArray<"TrackerNotification">>
   readonly cLifecycleChanges: Queue.Queue<PlannedAttemptExecutorProjection>
   readonly checkpoint: Deferred.Deferred<DeliveryRelationInputBundle>
+  readonly ds11?: Issue268Ds11Controls
   readonly idleHandoffCount: Ref.Ref<number>
   readonly idleHandoffReleases: ReadonlyArray<Deferred.Deferred<void>>
   readonly idleHandoffs: Queue.Queue<number>
-  readonly phase: Ref.Ref<"DS09" | "DS10">
+  readonly phase: Ref.Ref<"DS09" | "DS10" | "DS11">
   readonly trailingActivationCount: Ref.Ref<number>
+}
+
+interface Issue268Ds11Controls {
+  readonly checkpoint: Deferred.Deferred<DeliveryRelationInputBundle>
+  readonly checkpointRelease: Deferred.Deferred<void>
 }
 
 interface Issue268SharedAuthorities {
@@ -220,7 +229,7 @@ const runIssue268StartupCharacterizationFor = (
   options: Issue268StartupCharacterizationOptions = {}
 ) =>
   Effect.suspend(() =>
-    // eslint-disable-next-line complexity -- One chronological controlled driver preserves the exact DS-01 through DS-10 causal handoffs.
+    // eslint-disable-next-line complexity -- One chronological controlled driver preserves the exact DS-01 through DS-11 causal handoffs.
     Effect.gen(function* () {
       const ds08Controls = options.ds08
       const ds09Controls = options.ds09
@@ -256,7 +265,7 @@ const runIssue268StartupCharacterizationFor = (
       const ds09ObservationIndex = yield* Ref.make(0)
       const executor = PlannedAttemptExecutor.of({
         observe: (correlation, purpose) =>
-          // eslint-disable-next-line complexity -- Restart branches fail-close the exact DS-09 passive observations and DS-10 suspension gate.
+          // eslint-disable-next-line complexity -- Restart branches fail-close DS-09 observations plus DS-10/DS-11 suspension lifecycle gates.
           Effect.gen(function* () {
             yield* Ref.update(executorObserveCalls, (count) => count + 1)
             const reports = yield* Ref.get(projectedReports)
@@ -475,16 +484,27 @@ const runIssue268StartupCharacterizationFor = (
           : Effect.void
       const publicationObserver = DeliveryRelationPublicationObserver.of({
         observe: (bundle) =>
+          // eslint-disable-next-line complexity -- One observer routes content-qualified DS-04 through DS-11 checkpoint signals without changing production.
           Effect.gen(function* () {
             yield* Ref.update(publications, (current) => [...current, bundle])
             yield* Queue.offer(publicationQueue, bundle)
             const ds10Controls = ds09Controls?.ds10
-            if (ds10Controls !== undefined && (yield* Ref.get(ds10Controls.phase)) === "DS10") {
+            const restartPhase = ds10Controls === undefined ? undefined : yield* Ref.get(ds10Controls.phase)
+            if (ds10Controls !== undefined && restartPhase === "DS10") {
               const records = yield* sharedJournal
                 .read(scenario.runId)
                 .pipe(Effect.catch((failure) => Effect.die(`DS-10 checkpoint Journal read failed: ${failure._tag}`)))
               if (isIssue268Ds10CompleteCheckpoint(bundle, records)) {
                 yield* Deferred.succeed(ds10Controls.checkpoint, bundle)
+              }
+            }
+            if (ds10Controls?.ds11 !== undefined && restartPhase === "DS11") {
+              const records = yield* sharedJournal
+                .read(scenario.runId)
+                .pipe(Effect.catch((failure) => Effect.die(`DS-11 checkpoint Journal read failed: ${failure._tag}`)))
+              if (isIssue268Ds11CompleteCheckpoint(bundle, records)) {
+                yield* Deferred.succeed(ds10Controls.ds11.checkpoint, bundle)
+                yield* Deferred.await(ds10Controls.ds11.checkpointRelease)
               }
             }
             const baseline = yield* Ref.get(ds04CheckpointBaseline)
@@ -584,6 +604,9 @@ const runIssue268StartupCharacterizationFor = (
                 return
               }
               const ds10Phase = ds09Controls.ds10 === undefined ? undefined : yield* Ref.get(ds09Controls.ds10.phase)
+              if (ds10Phase === "DS11") {
+                return yield* Effect.die("DS-11 materialized an unexpected delivery action")
+              }
               if (ds10Phase === "DS10") {
                 const orderedTaskId = deliveryProposalOrderTaskId(action.proposal.order)
                 if (
@@ -1358,8 +1381,10 @@ export const runIssue268Ds08Characterization = Effect.scoped(
   })
 )
 
-/** Reconstructs the same Run in a fresh coordinator and optionally continues through DS-10. */
-const runIssue268RestartCharacterization = (includeDs10: boolean) =>
+type Issue268RestartContinuation = "DS09" | "DS10" | "DS11"
+
+/** Reconstructs the same Run in a fresh coordinator and optionally continues through DS-11. */
+const runIssue268RestartCharacterization = (continuation: Issue268RestartContinuation) =>
   Effect.scoped(
     // eslint-disable-next-line complexity -- One restart scenario owns process loss, fresh owner startup, three observation gates, and exact settlement.
     Effect.gen(function* () {
@@ -1438,10 +1463,12 @@ const runIssue268RestartCharacterization = (includeDs10: boolean) =>
       const activeRefreshSources = yield* Ref.make<ReadonlyArray<"TrackerNotification">>([])
       const cLifecycleChanges = yield* Queue.unbounded<PlannedAttemptExecutorProjection>()
       const ds10Checkpoint = yield* Deferred.make<DeliveryRelationInputBundle>()
+      const ds11Checkpoint = yield* Deferred.make<DeliveryRelationInputBundle>()
+      const ds11CheckpointRelease = yield* Deferred.make<void>()
       const idleHandoffCount = yield* Ref.make(0)
       const idleHandoffReleases = [yield* Deferred.make<void>(), yield* Deferred.make<void>()]
       const idleHandoffs = yield* Queue.unbounded<number>()
-      const restartPhase = yield* Ref.make<"DS09" | "DS10">("DS09")
+      const restartPhase = yield* Ref.make<"DS09" | "DS10" | "DS11">("DS09")
       const trailingActivationCount = yield* Ref.make(0)
       const notificationCount = yield* Ref.make(0)
       const ownerFailure = yield* Deferred.make<unknown>()
@@ -1474,7 +1501,7 @@ const runIssue268RestartCharacterization = (includeDs10: boolean) =>
           ownerStartup,
           projectedReports,
           snapshot: secondProcessSnapshot,
-          ...(includeDs10
+          ...(continuation !== "DS09"
             ? {
                 ds10: {
                   activeRefreshCount,
@@ -1483,6 +1510,9 @@ const runIssue268RestartCharacterization = (includeDs10: boolean) =>
                   activeRefreshSources,
                   cLifecycleChanges,
                   checkpoint: ds10Checkpoint,
+                  ...(continuation === "DS11"
+                    ? { ds11: { checkpoint: ds11Checkpoint, checkpointRelease: ds11CheckpointRelease } }
+                    : {}),
                   idleHandoffCount,
                   idleHandoffReleases,
                   idleHandoffs,
@@ -1568,7 +1598,7 @@ const runIssue268RestartCharacterization = (includeDs10: boolean) =>
         projectedReports: new Map(yield* Ref.get(projectedReports)),
         reconstructedPublication
       } satisfies Issue268Ds09Characterization
-      if (!includeDs10) {
+      if (continuation === "DS09") {
         yield* Deferred.succeed(ownerRelease, undefined)
         const secondRun = yield* Fiber.join(secondProcess)
         if (secondRun.decision?._tag !== "RunMustRemainActive" || secondRun.decision.reason !== "RunnableTransition") {
@@ -1636,23 +1666,73 @@ const runIssue268RestartCharacterization = (includeDs10: boolean) =>
         notificationCount: yield* Ref.get(notificationCount),
         trailingActivationCount: yield* Ref.get(trailingActivationCount)
       } satisfies Issue268Ds10Characterization
+      if (continuation === "DS10") {
+        yield* Fiber.interrupt(secondProcess)
+        yield* Scope.close(secondProcessScope, Exit.void)
+        return { ds09, ds10 } satisfies Issue268Ds10StartupCharacterization
+      }
+
+      const cObservation = ds09.executorObservations.find(
+        ({ plannedAttempt }) => plannedAttempt.attemptId === scenario.attempts.C1
+      )
+      if (cObservation === undefined) return yield* Effect.die("DS-11 cannot find C1's retained planned attempt")
+      const safeReport = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+        correlation: plannedAttemptExecutorCorrelation(cObservation.plannedAttempt)
+      })
+      yield* Ref.set(restartPhase, "DS11")
+      yield* Ref.update(projectedReports, (current) =>
+        new Map(current).set(plannedAttemptExecutorCorrelationKey(safeReport.correlation), safeReport)
+      )
+      yield* Queue.offer(cLifecycleChanges, PlannedAttemptExecutorProjection.cases.Exact.make({ report: safeReport }))
+      const ds11CheckpointPublication = yield* awaitLiveSecondProcess(
+        Deferred.await(ds11Checkpoint),
+        "safe-suspension release checkpoint"
+      )
+      const ds11LiveDecision = yield* Ref.get(activeRefreshDecision)
+      if (ds11LiveDecision !== undefined) {
+        return yield* Effect.die("DS-11 active refresh finalized before its release publication was inspected")
+      }
+      const afterDs11 = yield* readSecondProcessSnapshot()
+      const ds11 = {
+        activeRefreshCount: yield* Ref.get(activeRefreshCount),
+        activeRefreshDecision: ds11LiveDecision,
+        after: afterDs11,
+        before: ds10,
+        checkpointPublication: ds11CheckpointPublication,
+        executorObserveCallCount: yield* Ref.get(executorObserveCalls)
+      } satisfies Issue268Ds11Characterization
+      yield* Deferred.succeed(ds11CheckpointRelease, undefined)
       yield* Fiber.interrupt(secondProcess)
       yield* Scope.close(secondProcessScope, Exit.void)
-      return { ds09, ds10 } satisfies Issue268Ds10StartupCharacterization
+      return { ds09, ds10, ds11 } satisfies Issue268Ds11StartupCharacterization
     })
   )
 
 /** Reconstructs the same Run in a fresh coordinator after the DS-08 process cut. */
-export const runIssue268Ds09Characterization = runIssue268RestartCharacterization(false).pipe(
+export const runIssue268Ds09Characterization = runIssue268RestartCharacterization("DS09").pipe(
   Effect.map((result) => ({ ds09: result.ds09 }))
 )
 
 /** Continues the same restarted owner through Alice's closed-C notification and active refresh. */
-export const runIssue268Ds10Characterization = runIssue268RestartCharacterization(true).pipe(
+export const runIssue268Ds10Characterization = runIssue268RestartCharacterization("DS10").pipe(
   Effect.flatMap((result) => {
     if (!("ds10" in result)) {
       return Effect.die("DS-10 continuation was not constructed")
     }
     return Effect.succeed({ ds09: result.ds09, ds10: result.ds10 } satisfies Issue268Ds10StartupCharacterization)
+  })
+)
+
+/** Continues the same live C1 lifecycle attachment through exact safe suspension and position release. */
+export const runIssue268Ds11Characterization = runIssue268RestartCharacterization("DS11").pipe(
+  Effect.flatMap((result) => {
+    if (!("ds10" in result) || !("ds11" in result)) {
+      return Effect.die("DS-11 continuation was not constructed")
+    }
+    return Effect.succeed({
+      ds09: result.ds09,
+      ds10: result.ds10,
+      ds11: result.ds11
+    } satisfies Issue268Ds11StartupCharacterization)
   })
 )

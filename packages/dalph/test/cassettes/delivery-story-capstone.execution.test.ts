@@ -20,7 +20,8 @@ import {
   runIssue268Ds07Characterization,
   runIssue268Ds08Characterization,
   runIssue268Ds09Characterization,
-  runIssue268Ds10Characterization
+  runIssue268Ds10Characterization,
+  runIssue268Ds11Characterization
 } from "../../test-support/issue-268-controlled-characterization.js"
 import { issue268ControlledDeliveryCharacterization as controlledScenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
 import { isIssue268RetainedBResponsibility } from "../../test-support/issue-268-controlled-ds06.js"
@@ -1421,6 +1422,141 @@ it.effect(
           ({ order }) => deliveryProposalOrderTaskId(order) === controlledScenario.taskIds.E
         )
       ).toEqual([])
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "accepts exact C1 Safe and releases only C1's position",
+  () =>
+    Effect.gen(function* () {
+      const { ds10, ds11 } = yield* runIssue268Ds11Characterization
+      const recordSuffix = ds11.after.records.slice(ds10.after.records.length)
+      const safeObservations = recordSuffix.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorStateObserved" &&
+          event.plannedAttempt.attemptId === controlledScenario.attempts.C1 &&
+          event.plannedAttempt.runId === controlledScenario.runId &&
+          event.observation._tag === "ExactExecutorReport" &&
+          event.observation.report._tag === "ExecutorWorkSafelySuspended" &&
+          event.observation.report.correlation.attemptId === controlledScenario.attempts.C1 &&
+          event.observation.report.correlation.runId === controlledScenario.runId
+      )
+      const safeReports = recordSuffix.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.ordinal === 2 &&
+          event.report._tag === "ExecutorWorkSafelySuspended" &&
+          event.report.correlation.attemptId === controlledScenario.attempts.C1 &&
+          event.report.correlation.runId === controlledScenario.runId
+      )
+      const safeObservation = safeObservations[0]
+      const safeReport = safeReports[0]
+      const ds10G2 = ds10.after.records.findLast(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "CompleteTaskTrackerFacts" &&
+          event.observation.factFamilies.some(
+            ({ contentIdentity }) => contentIdentity === controlledScenario.graphs.G2.revision
+          )
+      )
+      const stabilizationIntents = recordSuffix.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.cause._tag === "PostQuiescenceReconfirmation"
+      )
+      const stabilizationIntent = stabilizationIntents[0]
+      const stabilizationResults = recordSuffix.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
+      )
+      const stabilizationResult = stabilizationResults[0]
+      const expectedHeld = [controlledScenario.attempts.A1, controlledScenario.attempts.D1].map((attemptId) => ({
+        attemptId,
+        runId: controlledScenario.runId
+      }))
+      const held = ds11.checkpointPublication.actionInputs.runtimeFacts.taskWork.held
+        .map(({ correlation }) => ({ attemptId: correlation.attemptId, runId: correlation.runId }))
+        .toSorted((left, right) => left.attemptId.localeCompare(right.attemptId))
+      const cResponsibilityBefore = ds10.checkpointPublication.publication.exactEvidence.find(
+        (evidence) =>
+          evidence._tag === "ResponsibilityFacts" &&
+          evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+          evidence.facts.responsibility.plannedAttempt.attemptId === controlledScenario.attempts.C1 &&
+          evidence.facts.responsibility.plannedAttempt.runId === controlledScenario.runId
+      )
+      const cResponsibilityAfter = ds11.checkpointPublication.publication.exactEvidence.find(
+        (evidence) =>
+          evidence._tag === "ResponsibilityFacts" &&
+          evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+          evidence.facts.responsibility.plannedAttempt.attemptId === controlledScenario.attempts.C1 &&
+          evidence.facts.responsibility.plannedAttempt.runId === controlledScenario.runId
+      )
+
+      expect(ds11.before).toEqual(ds10)
+      expect(ds11.activeRefreshCount).toBe(1)
+      expect(ds11.activeRefreshDecision).toBeUndefined()
+      expect(ds11.executorObserveCallCount).toBe(ds10.executorObserveCallCount)
+      expect(recordSuffix.map(({ event }) => event._tag)).toEqual([
+        "PlannedAttemptExecutorStateObserved",
+        "PlannedAttemptExecutorWorkReported",
+        "TaskTrackerReadIntentRecorded",
+        "TaskTrackerFactsObserved"
+      ])
+      expect(safeObservations).toHaveLength(1)
+      expect(safeReports).toHaveLength(1)
+      expect(stabilizationIntents).toHaveLength(1)
+      expect(stabilizationResults).toHaveLength(1)
+      expect(safeReport?.position).toBeGreaterThan(safeObservation?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(stabilizationIntent?.position).toBeGreaterThan(safeReport?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(stabilizationIntent?.event).toMatchObject({
+        operation: {
+          cause: {
+            _tag: "PostQuiescenceReconfirmation",
+            quiescentGraphOperationId:
+              ds10G2?.event._tag === "TaskTrackerFactsObserved" ? ds10G2.event.observation.operationId : undefined
+          },
+          target: controlledScenario.target
+        }
+      })
+      expect(stabilizationResult?.position).toBeGreaterThan(stabilizationIntent?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(stabilizationResult?.event).toMatchObject({
+        observation: {
+          _tag: "UnchangedTaskTrackerFactsReconfirmed",
+          operationId:
+            stabilizationIntent?.event._tag === "TaskTrackerReadIntentRecorded"
+              ? stabilizationIntent.event.operation.operationId
+              : undefined,
+          priorFullObservationOperationId:
+            ds10G2?.event._tag === "TaskTrackerFactsObserved" ? ds10G2.event.observation.operationId : undefined
+        }
+      })
+      expect(ds11.checkpointPublication.actionInputs.runtimeFacts.acceptedAt).toBeGreaterThanOrEqual(
+        stabilizationResult?.position ?? Number.MAX_SAFE_INTEGER
+      )
+      expect(held).toEqual(expectedHeld)
+      expect(ds11.checkpointPublication.publication.graph).toMatchObject({
+        _tag: "GraphEstablished",
+        observation: { snapshot: controlledScenario.graphs.G2 }
+      })
+      expect(ds11.checkpointPublication.publication.policy).toEqual(ds10.checkpointPublication.publication.policy)
+      expect(cResponsibilityAfter).toMatchObject({
+        facts: {
+          disposition: { _tag: "TaskLifecycleConstraint", lifecycle: "TerminalWithoutSuccess" },
+          responsibility:
+            cResponsibilityBefore?._tag === "ResponsibilityFacts"
+              ? cResponsibilityBefore.facts.responsibility
+              : undefined
+        }
+      })
+      expect(ds11.checkpointPublication.publication.exactEvidence.some(isIssue268RetainedBResponsibility)).toBe(true)
+      expect(cResponsibilityAfter).toBeDefined()
+      expect(ds11.after.requestedTargets.slice(ds10.after.requestedTargets.length)).toEqual([controlledScenario.target])
+      expect(ds11.after.claimRequests).toEqual(ds10.after.claimRequests)
+      expect(ds11.after.commands).toEqual(ds10.after.commands)
+      expect(ds11.after.executedActions).toEqual(ds10.after.executedActions)
+      expect(ds11.after.worktreeCreateRequests).toEqual(ds10.after.worktreeCreateRequests)
     }),
   capstoneTimeout
 )
