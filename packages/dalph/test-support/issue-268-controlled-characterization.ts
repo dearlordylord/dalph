@@ -13,6 +13,7 @@ import {
 } from "@dalph/contracts"
 import {
   AllocatedWorkflowRunId,
+  AttemptChoiceRequestId,
   ApplicationExitShell,
   ClaimOwner,
   controlledTrackerMutationLayerFrom,
@@ -94,6 +95,8 @@ import type {
   Issue268Ds10StartupCharacterization,
   Issue268Ds11Characterization,
   Issue268Ds11StartupCharacterization,
+  Issue268Ds12Characterization,
+  Issue268Ds12StartupCharacterization,
   Issue268ExecutorObservationCapture,
   Issue268ExecutorCommandCapture
 } from "./issue-268-controlled-characterization-types.js"
@@ -111,10 +114,11 @@ import {
   runIssue268Ds04TimerCheckpoint
 } from "./issue-268-controlled-ds04.js"
 import { isIssue268Ds05CompleteCheckpoint } from "./issue-268-controlled-ds05.js"
-import { isIssue268Ds06CompleteCheckpoint } from "./issue-268-controlled-ds06.js"
+import { isIssue268Ds06CompleteCheckpoint, isIssue268RetainedBResponsibility } from "./issue-268-controlled-ds06.js"
 import { isIssue268Ds07CompleteCheckpoint } from "./issue-268-controlled-ds07.js"
 import { isIssue268Ds10CompleteCheckpoint } from "./issue-268-controlled-ds10.js"
 import { isIssue268Ds11CompleteCheckpoint } from "./issue-268-controlled-ds11.js"
+import { isIssue268Ds12CompleteCheckpoint } from "./issue-268-controlled-ds12.js"
 
 const checkpointPublicationLimit = 128
 type Issue268StartupMode = "DS01" | "DS02" | "DS03" | "DS04" | "DS05" | "DS06" | "DS07" | "DS08" | "DS09"
@@ -153,6 +157,7 @@ interface Issue268Ds09Controls extends Issue268ProcessControls {
   readonly ownerFailure: Deferred.Deferred<unknown>
   readonly ownerRelease: Deferred.Deferred<void>
   readonly ownerStartup: Deferred.Deferred<{
+    readonly applyAttemptChoice: JournaledRunBootstrap["Service"]["operatorControl"]["applyAttemptChoice"]
     readonly decision: RunFinalityDecision
     readonly owner: RunReactivationOwnerService
   }>
@@ -169,16 +174,21 @@ interface Issue268Ds10Controls {
   readonly cLifecycleChanges: Queue.Queue<PlannedAttemptExecutorProjection>
   readonly checkpoint: Deferred.Deferred<DeliveryRelationInputBundle>
   readonly ds11?: Issue268Ds11Controls
+  readonly ds12?: Issue268Ds12Controls
   readonly idleHandoffCount: Ref.Ref<number>
   readonly idleHandoffReleases: ReadonlyArray<Deferred.Deferred<void>>
   readonly idleHandoffs: Queue.Queue<number>
-  readonly phase: Ref.Ref<"DS09" | "DS10" | "DS11">
+  readonly phase: Ref.Ref<"DS09" | "DS10" | "DS11" | "DS12">
   readonly trailingActivationCount: Ref.Ref<number>
 }
 
 interface Issue268Ds11Controls {
   readonly checkpoint: Deferred.Deferred<DeliveryRelationInputBundle>
   readonly checkpointRelease: Deferred.Deferred<void>
+}
+
+interface Issue268Ds12Controls {
+  readonly checkpoint: Deferred.Deferred<DeliveryRelationInputBundle>
 }
 
 interface Issue268SharedAuthorities {
@@ -507,6 +517,14 @@ const runIssue268StartupCharacterizationFor = (
                 yield* Deferred.await(ds10Controls.ds11.checkpointRelease)
               }
             }
+            if (ds10Controls?.ds12 !== undefined && restartPhase === "DS12") {
+              const records = yield* sharedJournal
+                .read(scenario.runId)
+                .pipe(Effect.catch((failure) => Effect.die(`DS-12 checkpoint Journal read failed: ${failure._tag}`)))
+              if (isIssue268Ds12CompleteCheckpoint(bundle, records)) {
+                yield* Deferred.succeed(ds10Controls.ds12.checkpoint, bundle)
+              }
+            }
             const baseline = yield* Ref.get(ds04CheckpointBaseline)
             if (!ds04Modes.has(mode) || baseline === undefined) return
             const records = yield* sharedJournal
@@ -606,6 +624,27 @@ const runIssue268StartupCharacterizationFor = (
               const ds10Phase = ds09Controls.ds10 === undefined ? undefined : yield* Ref.get(ds09Controls.ds10.phase)
               if (ds10Phase === "DS11") {
                 return yield* Effect.die("DS-11 materialized an unexpected delivery action")
+              }
+              if (ds10Phase === "DS12") {
+                const orderedTaskId = deliveryProposalOrderTaskId(action.proposal.order)
+                if (
+                  action._tag === "FreshOperationAction" &&
+                  action.proposal.route._tag === "RecoveredNewActionRoute"
+                ) {
+                  const recovered = action.proposal.route.action
+                  if (
+                    recovered.plannedAttempt?.attemptId === scenario.attempts.B1 &&
+                    orderedTaskId === scenario.taskIds.B &&
+                    (recovered._tag === "ReadTrackerGraph" ||
+                      recovered._tag === "ReadTaskWorkSpecification" ||
+                      recovered._tag === "ReadTaskClaim" ||
+                      recovered._tag === "ReadTaskWorktree" ||
+                      recovered._tag === "ReadTargetLineage")
+                  ) {
+                    return
+                  }
+                }
+                return yield* Effect.die(`DS-12 materialized unexpected action for ${orderedTaskId ?? "the Run"}`)
               }
               if (ds10Phase === "DS10") {
                 const orderedTaskId = deliveryProposalOrderTaskId(action.proposal.order)
@@ -825,7 +864,11 @@ const runIssue268StartupCharacterizationFor = (
                 )
                 const result = yield* Ref.get(activationResult)
                 if (result === undefined) return yield* Effect.die("DS-09 owner finalized without an activation result")
-                yield* Deferred.succeed(ds09Controls.ownerStartup, { decision: result, owner })
+                yield* Deferred.succeed(ds09Controls.ownerStartup, {
+                  applyAttemptChoice: sharedBootstrap.operatorControl.applyAttemptChoice,
+                  decision: result,
+                  owner
+                })
                 yield* Deferred.await(ds09Controls.ownerRelease)
                 return result
               }).pipe(Effect.provide(ownerLayer))
@@ -1381,9 +1424,9 @@ export const runIssue268Ds08Characterization = Effect.scoped(
   })
 )
 
-type Issue268RestartContinuation = "DS09" | "DS10" | "DS11"
+type Issue268RestartContinuation = "DS09" | "DS10" | "DS11" | "DS12"
 
-/** Reconstructs the same Run in a fresh coordinator and optionally continues through DS-11. */
+/** Reconstructs the same Run in a fresh coordinator and optionally continues through DS-12. */
 const runIssue268RestartCharacterization = (continuation: Issue268RestartContinuation) =>
   Effect.scoped(
     // eslint-disable-next-line complexity -- One restart scenario owns process loss, fresh owner startup, three observation gates, and exact settlement.
@@ -1465,15 +1508,17 @@ const runIssue268RestartCharacterization = (continuation: Issue268RestartContinu
       const ds10Checkpoint = yield* Deferred.make<DeliveryRelationInputBundle>()
       const ds11Checkpoint = yield* Deferred.make<DeliveryRelationInputBundle>()
       const ds11CheckpointRelease = yield* Deferred.make<void>()
+      const ds12Checkpoint = yield* Deferred.make<DeliveryRelationInputBundle>()
       const idleHandoffCount = yield* Ref.make(0)
       const idleHandoffReleases = [yield* Deferred.make<void>(), yield* Deferred.make<void>()]
       const idleHandoffs = yield* Queue.unbounded<number>()
-      const restartPhase = yield* Ref.make<"DS09" | "DS10" | "DS11">("DS09")
+      const restartPhase = yield* Ref.make<"DS09" | "DS10" | "DS11" | "DS12">("DS09")
       const trailingActivationCount = yield* Ref.make(0)
       const notificationCount = yield* Ref.make(0)
       const ownerFailure = yield* Deferred.make<unknown>()
       const ownerRelease = yield* Deferred.make<void>()
       const ownerStartup = yield* Deferred.make<{
+        readonly applyAttemptChoice: JournaledRunBootstrap["Service"]["operatorControl"]["applyAttemptChoice"]
         readonly decision: RunFinalityDecision
         readonly owner: RunReactivationOwnerService
       }>()
@@ -1483,6 +1528,7 @@ const runIssue268RestartCharacterization = (continuation: Issue268RestartContinu
       const after = yield* Ref.make<Issue268Ds03BoundarySnapshot | undefined>(undefined)
 
       yield* Effect.addFinalizer((exit) => Scope.close(secondProcessScope, exit))
+      yield* Effect.addFinalizer(() => Deferred.succeed(ds11CheckpointRelease, undefined).pipe(Effect.asVoid))
       const secondProcess = yield* runIssue268StartupCharacterizationFor("DS09", {
         ds09: {
           after,
@@ -1510,9 +1556,10 @@ const runIssue268RestartCharacterization = (continuation: Issue268RestartContinu
                   activeRefreshSources,
                   cLifecycleChanges,
                   checkpoint: ds10Checkpoint,
-                  ...(continuation === "DS11"
+                  ...(continuation === "DS11" || continuation === "DS12"
                     ? { ds11: { checkpoint: ds11Checkpoint, checkpointRelease: ds11CheckpointRelease } }
                     : {}),
+                  ...(continuation === "DS12" ? { ds12: { checkpoint: ds12Checkpoint } } : {}),
                   idleHandoffCount,
                   idleHandoffReleases,
                   idleHandoffs,
@@ -1612,12 +1659,14 @@ const runIssue268RestartCharacterization = (continuation: Issue268RestartContinu
         effect.pipe(
           Effect.raceFirst(
             Deferred.await(ownerFailure).pipe(
-              Effect.flatMap((failure) => Effect.die(`DS-10 owner failed at ${boundary}: ${String(failure)}`))
+              Effect.flatMap((failure) =>
+                Effect.die(`${continuation} restart owner failed at ${boundary}: ${String(failure)}`)
+              )
             )
           ),
           Effect.raceFirst(
             Fiber.await(secondProcess).pipe(
-              Effect.flatMap((exit) => Effect.die(`DS-10 second process exited at ${boundary}: ${exit._tag}`))
+              Effect.flatMap((exit) => Effect.die(`${continuation} second process exited at ${boundary}: ${exit._tag}`))
             )
           )
         )
@@ -1701,10 +1750,57 @@ const runIssue268RestartCharacterization = (continuation: Issue268RestartContinu
         checkpointPublication: ds11CheckpointPublication,
         executorObserveCallCount: yield* Ref.get(executorObserveCalls)
       } satisfies Issue268Ds11Characterization
+      if (continuation === "DS11") {
+        yield* Deferred.succeed(ds11CheckpointRelease, undefined)
+        yield* Fiber.interrupt(secondProcess)
+        yield* Scope.close(secondProcessScope, Exit.void)
+        return { ds09, ds10, ds11 } satisfies Issue268Ds11StartupCharacterization
+      }
+
+      const retainedB = ds11.checkpointPublication.publication.exactEvidence.find(isIssue268RetainedBResponsibility)
+      if (
+        retainedB === undefined ||
+        retainedB._tag !== "ResponsibilityFacts" ||
+        retainedB.facts._tag !== "PlannedAttemptExecutorFreshFacts"
+      ) {
+        return yield* Effect.die("DS-12 cannot find exact retained B1 in the accepted DS-11 publication")
+      }
+      const bPlan = retainedB.facts.responsibility.plannedAttempt
+      const request = {
+        choice: "ContinueExistingAttempt",
+        requestId: AttemptChoiceRequestId.make({ nonce: "issue-268-continue-B1", runId: scenario.runId }),
+        subject: { observedTaskRevision: scenario.specifications.F2.B.fingerprint, plannedAttempt: bPlan }
+      } as const
+      yield* Ref.set(restartPhase, "DS12")
+      const choice = yield* startup.applyAttemptChoice(request)
+      if (choice._tag !== "ContinueApplied") {
+        return yield* Effect.die(`DS-12 expected ContinueApplied, received ${choice._tag}`)
+      }
       yield* Deferred.succeed(ds11CheckpointRelease, undefined)
+      const ds12CheckpointPublication = yield* awaitLiveSecondProcess(
+        Deferred.await(ds12Checkpoint),
+        "capacity-deferred continuation checkpoint"
+      )
+      const afterDs12 = yield* readSecondProcessSnapshot()
+      const ds12LiveDecision = yield* Ref.get(activeRefreshDecision)
+      if (ds12LiveDecision !== undefined) {
+        return yield* Effect.die("DS-12 active refresh finalized before its capacity-deferred proposal was inspected")
+      }
+      const ds12 = {
+        activeRefreshCount: yield* Ref.get(activeRefreshCount),
+        activeRefreshDecision: ds12LiveDecision,
+        after: afterDs12,
+        applicationBuildCount: yield* Ref.get(applicationBuildCount),
+        before: ds11,
+        checkpointPublication: ds12CheckpointPublication,
+        choice,
+        executorObserveCallCount: yield* Ref.get(executorObserveCalls),
+        ordinaryOwnerActivationCount: yield* Ref.get(ordinaryOwnerActivationCount),
+        request
+      } satisfies Issue268Ds12Characterization
       yield* Fiber.interrupt(secondProcess)
       yield* Scope.close(secondProcessScope, Exit.void)
-      return { ds09, ds10, ds11 } satisfies Issue268Ds11StartupCharacterization
+      return { ds09, ds10, ds11, ds12 } satisfies Issue268Ds12StartupCharacterization
     })
   )
 
@@ -1734,5 +1830,20 @@ export const runIssue268Ds11Characterization = runIssue268RestartCharacterizatio
       ds10: result.ds10,
       ds11: result.ds11
     } satisfies Issue268Ds11StartupCharacterization)
+  })
+)
+
+/** Applies exact B1 Continue while A1/D1 fill P2 and proves Resume waits for capacity. */
+export const runIssue268Ds12Characterization = runIssue268RestartCharacterization("DS12").pipe(
+  Effect.flatMap((result) => {
+    if (!("ds10" in result) || !("ds11" in result) || !("ds12" in result)) {
+      return Effect.die("DS-12 continuation was not constructed")
+    }
+    return Effect.succeed({
+      ds09: result.ds09,
+      ds10: result.ds10,
+      ds11: result.ds11,
+      ds12: result.ds12
+    } satisfies Issue268Ds12StartupCharacterization)
   })
 )

@@ -4,7 +4,8 @@ import { issue268ControlledDeliveryCharacterization as scenario } from "./issue-
 
 const expectedHeldAttemptIds = [scenario.attempts.A1, scenario.attempts.C1, scenario.attempts.D1].toSorted()
 
-const isExpectedRetainedBPlan = (plan: PlannedTaskAttempt) =>
+/** Exact immutable B1 attempt used across the controlled delivery story. */
+export const isIssue268ExactB1Plan = (plan: PlannedTaskAttempt) =>
   [
     plan.attemptId === scenario.attempts.B1,
     plan.baseSha === scenario.baseSha,
@@ -30,7 +31,7 @@ export const isIssue268RetainedBResponsibility = (
   return (
     disposition.observedFingerprint === scenario.specifications.F2.B.fingerprint &&
     disposition.plannedFingerprint === scenario.specifications.F1.B.fingerprint &&
-    isExpectedRetainedBPlan(responsibility.plannedAttempt)
+    isIssue268ExactB1Plan(responsibility.plannedAttempt)
   )
 }
 

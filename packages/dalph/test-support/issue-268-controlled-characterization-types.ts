@@ -8,7 +8,9 @@ import type {
   TaskRevision
 } from "@dalph/contracts"
 import type {
+  ApplyAttemptChoiceRequest,
   ApplicationExitTraceEvent,
+  AttemptChoiceApplicationResult,
   DeliveryRelationInputBundle,
   JournalRecord,
   RunControlPolicy,
@@ -229,4 +231,24 @@ export interface Issue268Ds11StartupCharacterization {
   readonly ds09: Issue268Ds09Characterization
   readonly ds10: Issue268Ds10Characterization
   readonly ds11: Issue268Ds11Characterization
+}
+
+export interface Issue268Ds12Characterization {
+  readonly activeRefreshCount: number
+  readonly activeRefreshDecision: undefined
+  readonly after: Issue268Ds03BoundarySnapshot
+  readonly applicationBuildCount: number
+  readonly before: Issue268Ds11Characterization
+  readonly checkpointPublication: DeliveryRelationInputBundle
+  readonly choice: Extract<AttemptChoiceApplicationResult, { readonly _tag: "ContinueApplied" }>
+  readonly executorObserveCallCount: number
+  readonly ordinaryOwnerActivationCount: number
+  readonly request: ApplyAttemptChoiceRequest
+}
+
+export interface Issue268Ds12StartupCharacterization {
+  readonly ds09: Issue268Ds09Characterization
+  readonly ds10: Issue268Ds10Characterization
+  readonly ds11: Issue268Ds11Characterization
+  readonly ds12: Issue268Ds12Characterization
 }
