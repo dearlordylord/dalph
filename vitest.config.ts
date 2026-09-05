@@ -25,7 +25,7 @@ const ordinaryTestIncludes = [
   "src/**/*.test.ts",
   "packages/**/*.test.ts",
   "scripts/**/*.test.ts",
-  "scripts/**/*.test.mjs",
+  "scripts/run-issue-268-c4.test.mjs",
   "test/**/*.test.ts"
 ]
 
