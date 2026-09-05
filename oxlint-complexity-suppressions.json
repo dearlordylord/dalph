@@ -4,6 +4,16 @@
       "count": 6
     }
   },
+  "packages/dalph/test-support/issue-268-controlled-characterization.ts": {
+    "complexity": {
+      "count": 3
+    }
+  },
+  "packages/dalph/test-support/issue-268-controlled-occurrences.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
   "packages/orchestrator/src/coordination/delivery/delivery-proposal-derivation.ts": {
     "complexity": {
       "count": 1

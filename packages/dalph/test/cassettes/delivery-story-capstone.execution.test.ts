@@ -26,6 +26,11 @@ import {
   runIssue268Ds13Characterization
 } from "../../test-support/issue-268-controlled-characterization.js"
 import { issue268ControlledDeliveryCharacterization as controlledScenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
+import {
+  consumeIssue268AcceptedOccurrenceOrder,
+  issue268ControlledDeliveryCassetteCatalog,
+  runIssue268ControlledDeliveryCassette
+} from "../../test-support/issue-268-controlled-occurrence-cassette.js"
 import { isIssue268Ds04CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds04.js"
 import { isIssue268Ds05CompleteCheckpoint } from "../../test-support/issue-268-controlled-ds05.js"
 import {
@@ -2045,7 +2050,11 @@ it.effect(
   "emits the exact DS01 through DS13 delivery checkpoint table",
   () =>
     Effect.gen(function* () {
-      const { ds09, ds10, ds11, ds12, ds13 } = yield* runIssue268Ds13Characterization
+      const run = yield* runIssue268ControlledDeliveryCassette(
+        issue268ControlledDeliveryCassetteCatalog.issue268Ds01ThroughDs13
+      )
+      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_014 })
+      const { ds09, ds10, ds11, ds12, ds13 } = run.characterization
       const { ds01, ds02, ds03, ds04, ds05, ds06, ds07 } = ds09.beforeLoss
       const ds01Publication = ds01.snapshot.publications.find(
         ({ publication }) => publication.graph._tag === "GraphEstablished"
@@ -2305,6 +2314,76 @@ it.effect(
       expect(occurrencesOf("Action").length).toBeGreaterThanOrEqual(
         ds09.afterLoss.executedActions.length + ds13.afterProcessStop.executedActions.length
       )
+    }),
+  boundedContinuationTimeout
+)
+
+it.effect(
+  "consumes exactly the accepted issue 268 occurrence inventory",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runIssue268ControlledDeliveryCassette(
+        issue268ControlledDeliveryCassetteCatalog.issue268Ds01ThroughDs13
+      )
+      const actual = run.characterization.occurrenceEvidence.observedOccurrences
+      expect(run.cassette).toMatchObject({
+        acceptedOrderDigest: "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d",
+        acceptedSourceSha: "7100fe3af2103bba753e089e8ec78279c5426eb5",
+        occurrenceCount: 1_014,
+        readinessProfile: "R0ThroughR11",
+        schemaVersion: 1,
+        stop: "DS13Checkpoint"
+      })
+      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_014 })
+
+      const missing = consumeIssue268AcceptedOccurrenceOrder(run.cassette.occurrences, actual.slice(0, -1))
+      expect(missing._tag).toBe("OccurrenceOrderMismatch")
+      if (missing._tag === "OccurrenceOrderMismatch") {
+        expect(missing.mismatch).toMatchObject({ _tag: "UnconsumedExpectedOccurrence", position: 1_014 })
+      }
+
+      const finalOccurrence = actual.at(-1)
+      if (finalOccurrence === undefined) return expect.fail("accepted issue 268 occurrence inventory is empty")
+      const unexpected = consumeIssue268AcceptedOccurrenceOrder(run.cassette.occurrences, [
+        ...actual,
+        { ...finalOccurrence, ordinal: finalOccurrence.ordinal + 1, sourceSequence: finalOccurrence.sourceSequence + 1 }
+      ])
+      expect(unexpected._tag).toBe("OccurrenceOrderMismatch")
+      if (unexpected._tag === "OccurrenceOrderMismatch") {
+        expect(unexpected.mismatch).toMatchObject({ _tag: "UnexpectedOccurrence", position: 1_015 })
+      }
+
+      const substituted = actual.map((occurrence, index) =>
+        index === 0 ? { ...occurrence, detail: `${occurrence.detail}:substituted` } : occurrence
+      )
+      const identityMismatch = consumeIssue268AcceptedOccurrenceOrder(run.cassette.occurrences, substituted)
+      expect(identityMismatch._tag).toBe("OccurrenceOrderMismatch")
+      if (identityMismatch._tag === "OccurrenceOrderMismatch") {
+        expect(identityMismatch.mismatch).toMatchObject({ _tag: "DifferentOccurrence", position: 1 })
+      }
+      const combined = substituted.map((occurrence, index) =>
+        index === substituted.length - 1 ? { ...occurrence, ordinal: occurrence.ordinal + 1 } : occurrence
+      )
+      const firstCombinedMismatch = consumeIssue268AcceptedOccurrenceOrder(run.cassette.occurrences, combined)
+      expect(firstCombinedMismatch._tag).toBe("OccurrenceOrderMismatch")
+      if (firstCombinedMismatch._tag === "OccurrenceOrderMismatch") {
+        expect(firstCombinedMismatch.mismatch).toMatchObject({ _tag: "DifferentOccurrence", position: 1 })
+      }
+
+      const swapped = [actual[1], actual[0], ...actual.slice(2)].flatMap((occurrence) =>
+        occurrence === undefined ? [] : [occurrence]
+      )
+      const sourceSequences = new Map<Issue268OccurrenceSource, number>()
+      const restamped = swapped.map((occurrence, index) => {
+        const sourceSequence = (sourceSequences.get(occurrence.source) ?? 0) + 1
+        sourceSequences.set(occurrence.source, sourceSequence)
+        return { ...occurrence, ordinal: index + 1, sourceSequence }
+      })
+      const orderMismatch = consumeIssue268AcceptedOccurrenceOrder(run.cassette.occurrences, restamped)
+      expect(orderMismatch._tag).toBe("OccurrenceOrderMismatch")
+      if (orderMismatch._tag === "OccurrenceOrderMismatch") {
+        expect(orderMismatch.mismatch).toMatchObject({ _tag: "DifferentOccurrence", position: 1 })
+      }
     }),
   boundedContinuationTimeout
 )

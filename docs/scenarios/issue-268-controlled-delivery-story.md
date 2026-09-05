@@ -65,6 +65,13 @@ This creates two acceptance cuts:
    its owning scenario; a different order among independent operations changes
    only the cassette adjustment.
 
+The maintainer accepted the complete observed order at
+`7100fe3af2103bba753e089e8ec78279c5426eb5` on 2026-09-05. C3 serializes that
+order as exact `{ source, kind, detail }` tuples after confirming that the
+unchanged accepted runner produces the recorded 1,014-item inventory and
+digest. The strict comparator observes only the completed DS-13 snapshot; it
+cannot delay or authorize production work.
+
 The following work is deliberately outside #268:
 
 - issue [#309](https://github.com/dearlordylord/dalph/issues/309)'s general
@@ -578,8 +585,13 @@ failure cannot interrupt and falsely fail unrelated assertions:
 - `repeats the complete issue 268 cassette twenty times with one identical
   order`.
 
-The characterization and later cassette plan must use that exact file and
-catalog seam or amend this accepted behavioral scenario before code changes.
+The characterization and later cassette use that exact file and the
+test-specific
+`issue268ControlledDeliveryCassetteCatalog.issue268Ds01ThroughDs13` catalog
+seam. They
+must not translate this full cross-boundary observation inventory into the
+generic authored-cassette cursor, whose story items describe a different input
+contract.
 It must first run without strict cursor expectations and publish the observed
 order. It must also list the existing focused predecessor tests from #264--#269
 that remain green; aggregate package totals do not substitute for these

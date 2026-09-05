@@ -35,6 +35,8 @@ interface DeliveryStoryAcceptanceTest {
     | "prototypes/reducer-lab/src/cassette-lab.smoke.ts"
 }
 
+type DeliveryStoryCassetteKey = `authored:${string}` | `controlled:${string}` | `integration-finality:${string}`
+
 type DeliveryStoryBeatCoverage =
   | {
       readonly _tag: "DemonstratedBySpine"
@@ -44,10 +46,7 @@ type DeliveryStoryBeatCoverage =
   | {
       readonly _tag: "DemonstratedByMaintainedSlice"
       readonly acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
-      readonly cassetteKeys: readonly [
-        `authored:${string}` | `integration-finality:${string}`,
-        ...ReadonlyArray<`authored:${string}` | `integration-finality:${string}`>
-      ]
+      readonly cassetteKeys: readonly [DeliveryStoryCassetteKey, ...ReadonlyArray<DeliveryStoryCassetteKey>]
     }
   | {
       readonly _tag: "NotImplemented"
@@ -75,21 +74,14 @@ const capstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
 
 const topologyTest = capstoneTest("consumes a staggered graph while restart-added X waits for recovered capacity")
 const restartTest = capstoneTest("preserves the double-diamond middle positions across coordinator restart")
-
-const spine = (
-  beatId: DeliveryStoryBeatId,
-  ...acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
-): DeliveryStoryBeatManifestEntry => ({
-  beatId,
-  coverage: { _tag: "DemonstratedBySpine", acceptanceTests, cassetteKeys: ["authored:deliveryInvariantStory"] }
-})
+const issue268CheckpointTable = capstoneTest("emits the exact DS01 through DS13 delivery checkpoint table")
+const issue268OccurrenceCassette = capstoneTest("consumes exactly the accepted issue 268 occurrence inventory")
+const issue268CassetteKeys = ["controlled:issue268Ds01ThroughDs13"] as const
+const issue268BeatIds = deliveryStoryBeatIds.slice(0, deliveryStoryBeatIds.indexOf("DS-13") + 1)
 
 const slice = (
   beatId: DeliveryStoryBeatId,
-  cassetteKeys: readonly [
-    `authored:${string}` | `integration-finality:${string}`,
-    ...ReadonlyArray<`authored:${string}` | `integration-finality:${string}`>
-  ],
+  cassetteKeys: readonly [DeliveryStoryCassetteKey, ...ReadonlyArray<DeliveryStoryCassetteKey>],
   ...acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
 ): DeliveryStoryBeatManifestEntry => ({
   beatId,
@@ -111,42 +103,8 @@ export const deliveryStoryManifest = {
   cassetteAcceptanceTests: [topologyTest, restartTest],
   sourceDocument: "docs/DELIVERY-STORY.md" as const,
   beats: [
-    missing(
-      "DS-01",
-      "The maintained double diamond starts with only A eligible; the prose beat requires five independent eligible tasks."
-    ),
-    missing("DS-02", "No maintained run admits A, B, and C together yet."),
-    missing(
-      "DS-03",
-      "No maintained cassette represents Alice editing B and then observes the exact G0-to-G1 tracker revision change."
-    ),
-    missing(
-      "DS-04",
-      "No named acceptance test proves B's changed graph/specification rereads, safe-suspension request, and retained position together."
-    ),
-    missing(
-      "DS-05",
-      "The current changed-attempt choice supports Continue or Stop, not the prose beat's three choices including Restart."
-    ),
-    missing(
-      "DS-06",
-      "No maintained run admits D after B's changed-instruction suspension releases one of three held positions."
-    ),
-    missing(
-      "DS-07",
-      "No maintained catalog cassette lowers capacity from three to two while A, C, and D all remain held."
-    ),
-    spine("DS-08", restartTest),
-    missing("DS-09", "The maintained double diamond recovers held B and C, not held A, C, and D plus retained B."),
-    missing("DS-10", "No maintained run closes C without success and then asks its exact executor to suspend."),
-    missing("DS-11", "No maintained run releases closed C's position while retaining its reversible lifecycle wait."),
-    missing(
-      "DS-12",
-      "No maintained run applies Continue to retained B while two other tasks consume all current capacity."
-    ),
-    missing(
-      "DS-13",
-      "No maintained run releases A's position after its accepted result and then admits already-owned B."
+    ...issue268BeatIds.map((beatId) =>
+      slice(beatId, issue268CassetteKeys, issue268CheckpointTable, issue268OccurrenceCassette)
     ),
     slice(
       "DS-14",
