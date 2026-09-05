@@ -55,6 +55,7 @@ import {
   validatedRunActivationLayer,
   workflowInterpreterLayer,
   WorkflowTrace,
+  type ApplicationExitTraceEvent,
   type DeliveryRelationInputBundle,
   type JournalRecord,
   type JournaledRuntimeLayerInput,
@@ -62,7 +63,7 @@ import {
   type RunReactivationOwnerOptions,
   type TraceItem
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Stream } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Ref, Scope, Stream } from "effect"
 import { issue268ControlledDeliveryCharacterization as scenario } from "./issue-268-controlled-characterization-catalog.js"
 import type {
   Issue268Ds03BoundarySnapshot,
@@ -76,6 +77,9 @@ import type {
   Issue268Ds06StartupCharacterization,
   Issue268Ds07Characterization,
   Issue268Ds07StartupCharacterization,
+  Issue268Ds08BeforeLoss,
+  Issue268Ds08Characterization,
+  Issue268Ds08StartupCharacterization,
   Issue268ExecutorCommandCapture
 } from "./issue-268-controlled-characterization-types.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "./controlled-synchronous-planned-attempt-executor.js"
@@ -96,10 +100,61 @@ import { isIssue268Ds06CompleteCheckpoint } from "./issue-268-controlled-ds06.js
 import { isIssue268Ds07CompleteCheckpoint } from "./issue-268-controlled-ds07.js"
 
 const checkpointPublicationLimit = 128
+type Issue268StartupMode = "DS01" | "DS02" | "DS03" | "DS04" | "DS05" | "DS06" | "DS07" | "DS08"
+const ds04Modes: ReadonlySet<Issue268StartupMode> = new Set(["DS04", "DS05", "DS06", "DS07", "DS08"])
+const ds05Modes: ReadonlySet<Issue268StartupMode> = new Set(["DS05", "DS06", "DS07", "DS08"])
+const ds06Modes: ReadonlySet<Issue268StartupMode> = new Set(["DS06", "DS07", "DS08"])
+const ds07Modes: ReadonlySet<Issue268StartupMode> = new Set(["DS07", "DS08"])
 
-const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | "DS04" | "DS05" | "DS06" | "DS07") =>
-  Effect.scoped(
+interface Issue268Ds08Controls {
+  readonly applicationBuildCount: Ref.Ref<number>
+  readonly applicationExitTrace: Ref.Ref<ReadonlyArray<ApplicationExitTraceEvent>>
+  readonly beforeLoss: Ref.Ref<Issue268Ds08BeforeLoss | undefined>
+  readonly childScopeFinalizationCount: Ref.Ref<number>
+  readonly executorObserveCalls: Ref.Ref<number>
+  readonly firstProcessReady: Deferred.Deferred<void>
+  readonly p2PublicationReturned: Deferred.Deferred<void>
+  readonly projectedReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>
+  readonly snapshot: Ref.Ref<(() => Effect.Effect<Issue268Ds03BoundarySnapshot, unknown, never>) | undefined>
+}
+
+interface Issue268StartupCharacterizationOptions {
+  readonly ds08?: Issue268Ds08Controls
+  readonly sharedScope?: Scope.Scope
+}
+
+const applicationExitTraceFor = (controls: Issue268Ds08Controls | undefined) =>
+  controls === undefined
+    ? undefined
+    : {
+        emit: (event: ApplicationExitTraceEvent) =>
+          Ref.update(controls.applicationExitTrace, (current) => [...current, event])
+      }
+
+const incrementApplicationBuildCount = (controls: Issue268Ds08Controls | undefined) =>
+  controls === undefined ? Effect.void : Ref.update(controls.applicationBuildCount, (count) => count + 1)
+
+const signalP2PublicationReturned = (
+  mode: Issue268StartupMode,
+  bundle: DeliveryRelationInputBundle,
+  records: ReadonlyArray<JournalRecord>,
+  localSignal: Deferred.Deferred<void>,
+  externalSignal: Deferred.Deferred<void> | undefined
+) =>
+  ds07Modes.has(mode) && isIssue268Ds07CompleteCheckpoint(bundle, records)
+    ? Effect.gen(function* () {
+        yield* Deferred.succeed(localSignal, undefined)
+        if (externalSignal !== undefined) yield* Deferred.succeed(externalSignal, undefined)
+      })
+    : Effect.void
+
+const runIssue268StartupCharacterizationFor = (
+  mode: Issue268StartupMode,
+  options: Issue268StartupCharacterizationOptions = {}
+) =>
+  Effect.suspend(() =>
     Effect.gen(function* () {
+      const ds08Controls = options.ds08
       const claimRequestQueue = yield* Queue.unbounded<TaskClaimAcquisition>()
       const claimRequests = yield* Ref.make<ReadonlyArray<TaskClaimAcquisition>>([])
       const claimReleaseOrder = yield* Ref.make<ReadonlyArray<string>>([])
@@ -112,7 +167,10 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
       const pendingClaimTaskIds = yield* Ref.make<ReadonlyArray<string>>([])
       const ds01ClaimGate = yield* Deferred.make<void>()
       const executedActions = yield* Ref.make<ReadonlyArray<{ readonly stage: string; readonly taskId: string }>>([])
-      const projectedReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
+      const projectedReports =
+        options.ds08?.projectedReports ??
+        (yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()))
+      const executorObserveCalls = options.ds08?.executorObserveCalls ?? (yield* Ref.make(0))
       const ds05LifecycleChanges = yield* Queue.unbounded<PlannedAttemptExecutorProjection>()
       const ds06DActionReached = yield* Deferred.make<void>()
       const ds06DActionRelease = yield* Deferred.make<void>()
@@ -123,14 +181,14 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
       const plans = yield* Ref.make<ReadonlyArray<PlannedTaskAttempt>>([])
       const executor = PlannedAttemptExecutor.of({
         observe: (correlation) =>
-          Ref.get(projectedReports).pipe(
-            Effect.map((reports) => {
-              const report = reports.get(plannedAttemptExecutorCorrelationKey(correlation))
-              return report === undefined
-                ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
-                : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
-            })
-          ),
+          Effect.gen(function* () {
+            yield* Ref.update(executorObserveCalls, (count) => count + 1)
+            const reports = yield* Ref.get(projectedReports)
+            const report = reports.get(plannedAttemptExecutorCorrelationKey(correlation))
+            return report === undefined
+              ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+              : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+          }),
         begin: (request: PlannedAttemptExecutorRequest) =>
           Effect.gen(function* () {
             const report = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
@@ -147,8 +205,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
             return report
           }),
         requestSuspension: (plannedAttempt) =>
-          (mode === "DS04" || mode === "DS05" || mode === "DS06" || mode === "DS07") &&
-          plannedAttempt.attemptId === scenario.attempts.B1
+          ds04Modes.has(mode) && plannedAttempt.attemptId === scenario.attempts.B1
             ? Effect.gen(function* () {
                 yield* Ref.update(commands, (current) => [
                   ...current,
@@ -161,33 +218,30 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
             : Effect.die(`C2b startup must not suspend ${plannedAttempt.attemptId}`),
         resume: (request) => Effect.die(`C2b startup must not resume ${request.plannedAttempt.attemptId}`)
       })
-      const executorLayer =
-        mode === "DS05" || mode === "DS06" || mode === "DS07"
-          ? Layer.merge(
-              Layer.succeed(PlannedAttemptExecutor, executor),
-              Layer.succeed(
-                PlannedAttemptExecutorLifecycleObservation,
-                PlannedAttemptExecutorLifecycleObservation.of({
-                  attach: (correlation) =>
-                    Effect.gen(function* () {
-                      const current = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
-                      yield* Ref.update(lifecycleAttachAttemptIds, (attemptIds) => [
-                        ...attemptIds,
-                        correlation.attemptId
-                      ])
-                      return {
-                        changes:
-                          correlation.attemptId === scenario.attempts.B1
-                            ? Stream.fromQueue(ds05LifecycleChanges)
-                            : Stream.never,
-                        close: Effect.void,
-                        current
-                      }
-                    })
-                })
-              )
+      const executorLayer = ds05Modes.has(mode)
+        ? Layer.merge(
+            Layer.succeed(PlannedAttemptExecutor, executor),
+            Layer.succeed(
+              PlannedAttemptExecutorLifecycleObservation,
+              PlannedAttemptExecutorLifecycleObservation.of({
+                attach: (correlation) =>
+                  Effect.gen(function* () {
+                    const current = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+                    yield* Ref.update(lifecycleAttachAttemptIds, (attemptIds) => [...attemptIds, correlation.attemptId])
+                    return {
+                      changes:
+                        correlation.attemptId === scenario.attempts.B1
+                          ? Stream.fromQueue(ds05LifecycleChanges)
+                          : Stream.never,
+                      close: Effect.void,
+                      current
+                    }
+                  })
+              })
             )
-          : controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor))
+          )
+        : controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor))
+      const currentScope = yield* Effect.scope
       const sharedContext = yield* Layer.build(
         Layer.mergeAll(
           memoryJournalStoreLayer,
@@ -202,7 +256,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
             })
           )
         )
-      )
+      ).pipe(Scope.provide(options.sharedScope ?? currentScope))
       const sharedJournal = Context.get(sharedContext, JournalStore)
       const journalLayer = journalStoreCapabilities(Layer.succeed(JournalStore, sharedJournal))
       const trackerGraphReaderLayer = Layer.succeed(TrackerGraphReader, Context.get(sharedContext, TrackerGraphReader))
@@ -213,10 +267,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
           Effect.gen(function* () {
             yield* Ref.update(claimRequests, (current) => [...current, acquisition])
             yield* Queue.offer(claimRequestQueue, acquisition)
-            if (
-              mode !== "DS01" &&
-              !((mode === "DS06" || mode === "DS07") && acquisition.taskId === scenario.taskIds.D)
-            ) {
+            if (mode !== "DS01" && !(ds06Modes.has(mode) && acquisition.taskId === scenario.taskIds.D)) {
               const release = releaseFor(acquisition.taskId, claimReleases)
               if (release === undefined)
                 return yield* Effect.die(`outside-bound claim request for ${acquisition.taskId}`)
@@ -241,6 +292,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
       const ds06CheckpointPublicationRelease = yield* Deferred.make<void>()
       const ds07P2PublicationReached = yield* Deferred.make<void>()
       const ds07P2PublicationRelease = yield* Deferred.make<void>()
+      const ds07P2PublicationReturned = yield* Deferred.make<void>()
       const ds04CheckpointBaseline = yield* Ref.make<number | undefined>(undefined)
       const holdDs04CheckpointPublication = (
         bundle: DeliveryRelationInputBundle,
@@ -255,7 +307,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
         bundle: DeliveryRelationInputBundle,
         records: ReadonlyArray<JournalRecord>
       ) =>
-        (mode === "DS05" || mode === "DS06" || mode === "DS07") && isIssue268Ds05CompleteCheckpoint(bundle, records)
+        ds05Modes.has(mode) && isIssue268Ds05CompleteCheckpoint(bundle, records)
           ? Deferred.succeed(ds05CheckpointPublicationReached, undefined).pipe(
               Effect.andThen(Deferred.await(ds05CheckpointPublicationRelease))
             )
@@ -264,13 +316,13 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
         bundle: DeliveryRelationInputBundle,
         records: ReadonlyArray<JournalRecord>
       ) =>
-        (mode === "DS06" || mode === "DS07") && isIssue268Ds06CompleteCheckpoint(bundle, records)
+        ds06Modes.has(mode) && isIssue268Ds06CompleteCheckpoint(bundle, records)
           ? Deferred.succeed(ds06CheckpointPublicationReached, undefined).pipe(
               Effect.andThen(Deferred.await(ds06CheckpointPublicationRelease))
             )
           : Effect.void
       const holdDs07P2Publication = (bundle: DeliveryRelationInputBundle, records: ReadonlyArray<JournalRecord>) =>
-        mode === "DS07" && isIssue268Ds07CompleteCheckpoint(bundle, records)
+        ds07Modes.has(mode) && isIssue268Ds07CompleteCheckpoint(bundle, records)
           ? Deferred.succeed(ds07P2PublicationReached, undefined).pipe(
               Effect.andThen(Deferred.await(ds07P2PublicationRelease))
             )
@@ -281,8 +333,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
             yield* Ref.update(publications, (current) => [...current, bundle])
             yield* Queue.offer(publicationQueue, bundle)
             const baseline = yield* Ref.get(ds04CheckpointBaseline)
-            if ((mode !== "DS04" && mode !== "DS05" && mode !== "DS06" && mode !== "DS07") || baseline === undefined)
-              return
+            if (!ds04Modes.has(mode) || baseline === undefined) return
             const records = yield* sharedJournal
               .read(scenario.runId)
               .pipe(Effect.catch((failure) => Effect.die(`DS-04 checkpoint Journal read failed: ${failure._tag}`)))
@@ -290,6 +341,13 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
             yield* holdDs05CheckpointPublication(bundle, records)
             yield* holdDs06CheckpointPublication(bundle, records)
             yield* holdDs07P2Publication(bundle, records)
+            yield* signalP2PublicationReturned(
+              mode,
+              bundle,
+              records,
+              ds07P2PublicationReturned,
+              ds08Controls?.p2PublicationReturned
+            )
           })
       })
       const ordinaryInterpreterLayer = workflowInterpreterLayer.pipe(
@@ -321,7 +379,11 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
         release: Effect.void,
         runMutation: (mutation) => mutation
       })
-      const applicationExit = yield* makeApplicationExitShell(coordinatorOwnership, { requestEnd: () => Effect.void })
+      const applicationExit = yield* makeApplicationExitShell(
+        coordinatorOwnership,
+        { requestEnd: () => Effect.void },
+        applicationExitTraceFor(ds08Controls)
+      )
       const runtimeLayer = ({ opportunity }: JournaledRuntimeLayerInput) =>
         validatedRunActivationLayer(
           scenario.runId,
@@ -351,6 +413,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
         Layer.provide(executorLayer)
       )
       const applicationContext = yield* Layer.build(application)
+      yield* incrementApplicationBuildCount(ds08Controls)
       const sharedBootstrap = Context.get(applicationContext, JournaledRunBootstrap)
       const sharedBootstrapLayer = Layer.succeed(JournaledRunBootstrap, sharedBootstrap)
       const controlledExecutorFactory = (runId: RunId, target: TrackerTarget) =>
@@ -371,14 +434,14 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
               ? Effect.never
               : Effect.void
           const awaitDs06DAction = (stage: ReturnType<typeof actionStage>) =>
-            (mode === "DS06" || mode === "DS07") && stage?.taskId === scenario.taskIds.D
+            ds06Modes.has(mode) && stage?.taskId === scenario.taskIds.D
               ? Effect.gen(function* () {
                   yield* Deferred.succeed(ds06DActionReached, undefined)
                   yield* Deferred.await(ds06DActionRelease)
                 })
               : Effect.void
           const rejectDs06EAction = (stage: ReturnType<typeof actionStage>) =>
-            (mode === "DS06" || mode === "DS07") && stage?.taskId === scenario.taskIds.E
+            ds06Modes.has(mode) && stage?.taskId === scenario.taskIds.E
               ? Effect.die("DS-06 must not materialize any E action")
               : Effect.void
           return DeliveryActionExecutor.of({
@@ -410,7 +473,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
             Layer.succeed(DeliveryRelationPublicationObserver, publicationObserver)
           )
         ),
-        Effect.forkChild
+        Effect.forkIn(currentScope)
       )
 
       const takeWhileRuntimeActive = <A>(queue: Queue.Dequeue<A>): Effect.Effect<A> =>
@@ -652,7 +715,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
               yield* Ref.update(ds06R5ReleaseCount, (count) => count + 1)
               yield* Deferred.succeed(ds06DActionRelease, undefined)
               const ds06Checkpoint = yield* awaitDs06Checkpoint()
-              if (mode !== "DS07") return { ds05Checkpoint, ds06Checkpoint }
+              if (!ds07Modes.has(mode)) return { ds05Checkpoint, ds06Checkpoint }
               const beforeCapacity = yield* ds03Snapshot()
               const p1 = yield* sharedBootstrap.operatorControl.readTaskWorkCapacity(scenario.runId)
               const request = { capacity: scenario.policies.P2, expectedRevision: p1.revision, runId: scenario.runId }
@@ -667,21 +730,31 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
               const p2 = yield* awaitDs07Checkpoint().pipe(
                 Effect.ensuring(Deferred.succeed(ds07P2PublicationRelease, undefined))
               )
-              return {
-                ds05Checkpoint,
-                ds06Checkpoint,
-                ds07: {
-                  after: p2.after,
-                  beforeCapacity,
-                  capacityRecord,
-                  checkpointPublication: ds06Checkpoint.checkpointPublication,
-                  p1,
-                  p2Publication: p2.checkpointPublication,
-                  readback,
-                  request,
-                  returned
-                }
+              const ds07 = {
+                after: p2.after,
+                beforeCapacity,
+                capacityRecord,
+                checkpointPublication: ds06Checkpoint.checkpointPublication,
+                p1,
+                p2Publication: p2.checkpointPublication,
+                readback,
+                request,
+                returned
               }
+              if (ds08Controls !== undefined) {
+                yield* Deferred.await(ds08Controls.p2PublicationReturned)
+                const snapshot = yield* ds03Snapshot()
+                yield* Ref.set(ds08Controls.beforeLoss, {
+                  ds07,
+                  executorObserveCalls: yield* Ref.get(ds08Controls.executorObserveCalls),
+                  projectedReports: new Map(yield* Ref.get(ds08Controls.projectedReports)),
+                  snapshot
+                })
+                yield* Ref.set(ds08Controls.snapshot, ds03Snapshot)
+                yield* Deferred.succeed(ds08Controls.firstProcessReady, undefined)
+                return yield* Effect.never
+              }
+              return { ds05Checkpoint, ds06Checkpoint, ds07 }
             }).pipe(
               Effect.ensuring(
                 Effect.all([
@@ -723,7 +796,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
             dActionAbsentBeforeBRelease: yield* Ref.get(ds06DActionAbsentBeforeBRelease),
             r5ReleaseCount: yield* Ref.get(ds06R5ReleaseCount)
           }
-          if (mode === "DS07") {
+          if (ds07Modes.has(mode)) {
             if (timer.continuation.ds07 === undefined)
               return yield* Effect.die("DS-07 continuation lost capacity evidence")
             ds07 = timer.continuation.ds07
@@ -755,11 +828,12 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
               taskId: nextSpecification.taskId
             }
           }
-          if (mode === "DS04" || mode === "DS05" || mode === "DS06" || mode === "DS07") {
+          if (ds04Modes.has(mode)) {
             const beforeTimer = yield* ds03Snapshot()
             yield* Ref.set(ds04CheckpointBaseline, beforeTimer.records.length)
-            if (mode === "DS06" || mode === "DS07") yield* runDs06Checkpoint(beforeTimer, startupDecision)
-            else if (mode === "DS05") yield* runDs05Checkpoint(beforeTimer, startupDecision)
+            if (ds06Modes.has(mode)) {
+              yield* runDs06Checkpoint(beforeTimer, startupDecision)
+            } else if (mode === "DS05") yield* runDs05Checkpoint(beforeTimer, startupDecision)
             else yield* runDs04Checkpoint(beforeTimer, startupDecision)
           }
         })
@@ -816,13 +890,13 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
   )
 
 /** Pauses after G0 placement and before any selected claim action executes. */
-export const runIssue268Ds01Characterization = runIssue268StartupCharacterizationFor("DS01")
+export const runIssue268Ds01Characterization = Effect.scoped(runIssue268StartupCharacterizationFor("DS01"))
 
 /** Releases the three independently pending claim responses in explicit R1 order. */
-export const runIssue268Ds02Characterization = runIssue268StartupCharacterizationFor("DS02")
+export const runIssue268Ds02Characterization = Effect.scoped(runIssue268StartupCharacterizationFor("DS02"))
 
 /** Applies Alice's external F2/G1 tracker edit after DS-02 without triggering a Dalph refresh. */
-export const runIssue268Ds03Characterization = runIssue268StartupCharacterizationFor("DS03").pipe(
+export const runIssue268Ds03Characterization = Effect.scoped(runIssue268StartupCharacterizationFor("DS03")).pipe(
   Effect.flatMap(
     (run): Effect.Effect<Issue268Ds03StartupCharacterization> =>
       run.ds03 === undefined
@@ -832,7 +906,7 @@ export const runIssue268Ds03Characterization = runIssue268StartupCharacterizatio
 )
 
 /** Recovers the lost B/F2 notification through one real bounded-timer refresh. */
-export const runIssue268Ds04Characterization = runIssue268StartupCharacterizationFor("DS04").pipe(
+export const runIssue268Ds04Characterization = Effect.scoped(runIssue268StartupCharacterizationFor("DS04")).pipe(
   Effect.flatMap(
     (run): Effect.Effect<Issue268Ds04StartupCharacterization> =>
       run.ds03 === undefined || run.ds04 === undefined
@@ -842,7 +916,7 @@ export const runIssue268Ds04Characterization = runIssue268StartupCharacterizatio
 )
 
 /** Observes B1 become safely suspended, then proves its exact position releases while B1 is retained. */
-export const runIssue268Ds05Characterization = runIssue268StartupCharacterizationFor("DS05").pipe(
+export const runIssue268Ds05Characterization = Effect.scoped(runIssue268StartupCharacterizationFor("DS05")).pipe(
   Effect.flatMap(
     (run): Effect.Effect<Issue268Ds05StartupCharacterization> =>
       run.ds03 === undefined || run.ds04 === undefined || run.ds05 === undefined
@@ -852,7 +926,7 @@ export const runIssue268Ds05Characterization = runIssue268StartupCharacterizatio
 )
 
 /** Admits D only after the exact B1 Safe publication releases its position. */
-export const runIssue268Ds06Characterization = runIssue268StartupCharacterizationFor("DS06").pipe(
+export const runIssue268Ds06Characterization = Effect.scoped(runIssue268StartupCharacterizationFor("DS06")).pipe(
   Effect.flatMap(
     (run): Effect.Effect<Issue268Ds06StartupCharacterization> =>
       run.ds03 === undefined || run.ds04 === undefined || run.ds05 === undefined || run.ds06 === undefined
@@ -862,7 +936,7 @@ export const runIssue268Ds06Characterization = runIssue268StartupCharacterizatio
 )
 
 /** Applies P2 through the active-Run Operator boundary while A1/C1/D1 remain held. */
-export const runIssue268Ds07Characterization = runIssue268StartupCharacterizationFor("DS07").pipe(
+export const runIssue268Ds07Characterization = Effect.scoped(runIssue268StartupCharacterizationFor("DS07")).pipe(
   Effect.flatMap(
     (run): Effect.Effect<Issue268Ds07StartupCharacterization> =>
       run.ds03 === undefined ||
@@ -873,4 +947,76 @@ export const runIssue268Ds07Characterization = runIssue268StartupCharacterizatio
         ? Effect.die("DS-07 runner completed without its required edit, Safe, D, and capacity evidence")
         : Effect.succeed({ ...run, ds03: run.ds03, ds04: run.ds04, ds05: run.ds05, ds06: run.ds06, ds07: run.ds07 })
   )
+)
+
+/** Interrupts the first coordinator after the accepted P2 publication callback returns; outer authorities survive. */
+export const runIssue268Ds08Characterization = Effect.scoped(
+  Effect.gen(function* () {
+    const outerScope = yield* Effect.scope
+    const processScope = yield* Scope.make()
+    const applicationBuildCount = yield* Ref.make(0)
+    const applicationExitTrace = yield* Ref.make<ReadonlyArray<ApplicationExitTraceEvent>>([])
+    const beforeLoss = yield* Ref.make<Issue268Ds08BeforeLoss | undefined>(undefined)
+    const childScopeFinalizationCount = yield* Ref.make(0)
+    const executorObserveCalls = yield* Ref.make(0)
+    const firstProcessInterruptionCount = yield* Ref.make(0)
+    const firstProcessReady = yield* Deferred.make<void>()
+    const p2PublicationReturned = yield* Deferred.make<void>()
+    const projectedReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
+    const snapshot = yield* Ref.make<(() => Effect.Effect<Issue268Ds03BoundarySnapshot, unknown, never>) | undefined>(
+      undefined
+    )
+
+    yield* Scope.addFinalizer(
+      processScope,
+      Ref.update(childScopeFinalizationCount, (count) => count + 1)
+    )
+    yield* Effect.addFinalizer((exit) => Scope.close(processScope, exit))
+
+    const firstProcess = yield* runIssue268StartupCharacterizationFor("DS08", {
+      sharedScope: outerScope,
+      ds08: {
+        applicationBuildCount,
+        applicationExitTrace,
+        beforeLoss,
+        childScopeFinalizationCount,
+        executorObserveCalls,
+        firstProcessReady,
+        p2PublicationReturned,
+        projectedReports,
+        snapshot
+      }
+    }).pipe(Effect.provideService(Scope.Scope, processScope), Effect.forkIn(processScope))
+    const awaitFirstProcessReady = Deferred.await(firstProcessReady).pipe(
+      Effect.raceFirst(
+        Fiber.await(firstProcess).pipe(
+          Effect.flatMap((exit) => Effect.die(`DS-08 first coordinator exited before crash readiness: ${exit._tag}`))
+        )
+      )
+    )
+    yield* awaitFirstProcessReady
+    const preLoss = yield* Ref.get(beforeLoss)
+    if (preLoss === undefined) return yield* Effect.die("DS-08 did not capture its pre-loss boundary")
+
+    yield* Ref.update(firstProcessInterruptionCount, (count) => count + 1)
+    yield* Fiber.interrupt(firstProcess)
+    yield* Scope.close(processScope, Exit.void)
+
+    const readAfterLoss = yield* Ref.get(snapshot)
+    if (readAfterLoss === undefined) return yield* Effect.die("DS-08 did not retain its outer snapshot seam")
+    const afterLoss = yield* readAfterLoss().pipe(Effect.orDie)
+    return {
+      ds08: {
+        applicationExitTrace: yield* Ref.get(applicationExitTrace),
+        beforeLoss: preLoss,
+        childScopeFinalizationCount: yield* Ref.get(childScopeFinalizationCount),
+        executorObserveCallsAfterLoss: yield* Ref.get(executorObserveCalls),
+        executorObserveCallsBeforeLoss: preLoss.executorObserveCalls,
+        firstProcessInterruptionCount: yield* Ref.get(firstProcessInterruptionCount),
+        afterLoss,
+        applicationBuildCount: yield* Ref.get(applicationBuildCount),
+        projectedReports: new Map(yield* Ref.get(projectedReports))
+      } satisfies Issue268Ds08Characterization
+    } satisfies Issue268Ds08StartupCharacterization
+  })
 )

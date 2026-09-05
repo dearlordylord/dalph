@@ -1,5 +1,6 @@
-import type { PlannedTaskAttempt, TaskId, TaskRevision } from "@dalph/contracts"
+import type { PlannedAttemptExecutorReport, PlannedTaskAttempt, TaskId, TaskRevision } from "@dalph/contracts"
 import type {
+  ApplicationExitTraceEvent,
   DeliveryRelationInputBundle,
   JournalRecord,
   RunControlPolicy,
@@ -33,6 +34,7 @@ export interface Issue268StartupCharacterization {
   readonly ds05?: Issue268Ds05Characterization
   readonly ds06?: Issue268Ds06Characterization
   readonly ds07?: Issue268Ds07Characterization
+  readonly ds08?: Issue268Ds08Characterization
 }
 
 export interface Issue268Ds03BoundarySnapshot {
@@ -131,3 +133,24 @@ export type Issue268Ds07StartupCharacterization = Omit<
   readonly ds06: Issue268Ds06Characterization
   readonly ds07: Issue268Ds07Characterization
 }
+
+export interface Issue268Ds08BeforeLoss {
+  readonly ds07: Issue268Ds07Characterization
+  readonly executorObserveCalls: number
+  readonly projectedReports: ReadonlyMap<string, PlannedAttemptExecutorReport>
+  readonly snapshot: Issue268Ds03BoundarySnapshot
+}
+
+export interface Issue268Ds08Characterization {
+  readonly afterLoss: Issue268Ds03BoundarySnapshot
+  readonly applicationBuildCount: number
+  readonly applicationExitTrace: ReadonlyArray<ApplicationExitTraceEvent>
+  readonly beforeLoss: Issue268Ds08BeforeLoss
+  readonly childScopeFinalizationCount: number
+  readonly executorObserveCallsAfterLoss: number
+  readonly executorObserveCallsBeforeLoss: number
+  readonly firstProcessInterruptionCount: number
+  readonly projectedReports: ReadonlyMap<string, PlannedAttemptExecutorReport>
+}
+
+export type Issue268Ds08StartupCharacterization = { readonly ds08: Issue268Ds08Characterization }

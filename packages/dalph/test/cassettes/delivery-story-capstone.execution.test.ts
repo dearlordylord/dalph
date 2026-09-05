@@ -16,7 +16,8 @@ import {
   runIssue268Ds04Characterization,
   runIssue268Ds05Characterization,
   runIssue268Ds06Characterization,
-  runIssue268Ds07Characterization
+  runIssue268Ds07Characterization,
+  runIssue268Ds08Characterization
 } from "../../test-support/issue-268-controlled-characterization.js"
 import { issue268ControlledDeliveryCharacterization as controlledScenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
@@ -1016,6 +1017,93 @@ it.effect(
       expect(newRecords.filter(({ event }) => forbiddenPostCapacityEvents.has(event._tag))).toEqual([])
       expect(newRecords.filter(({ event }) => event._tag === "TaskWorkCapacityChanged")).toHaveLength(1)
       expect(postCapacityActions.filter(({ taskId }) => taskId === controlledScenario.taskIds.E)).toEqual([])
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "DS-08 interrupts the first coordinator after published P2 while the external executor state survives",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runIssue268Ds08Characterization
+      const ds08 = run.ds08
+      const before = ds08.beforeLoss.snapshot
+      const after = ds08.afterLoss
+      const expectedHeld = [
+        controlledScenario.attempts.A1,
+        controlledScenario.attempts.C1,
+        controlledScenario.attempts.D1
+      ].toSorted()
+      const held = ds08.beforeLoss.ds07.p2Publication.actionInputs.runtimeFacts.taskWork.held
+        .map(({ correlation }) => correlation.attemptId)
+        .toSorted()
+      const reportsByAttempt = new Map(
+        [...ds08.projectedReports.values()].map((report) => [report.correlation.attemptId, report] as const)
+      )
+      const p2EraPublicationsAtCut = after.publications.filter(
+        ({ actionInputs }) =>
+          actionInputs.runtimeFacts.acceptedAt !== null &&
+          actionInputs.runtimeFacts.acceptedAt >= ds08.beforeLoss.ds07.capacityRecord.position
+      )
+      expect(held).toEqual(expectedHeld)
+      expect(ds08.beforeLoss.ds07.p2Publication.publication.policy).toEqual(ds08.beforeLoss.ds07.returned)
+      expect(ds08.beforeLoss.ds07.after.records).toContainEqual(ds08.beforeLoss.ds07.capacityRecord)
+      expect(ds08.firstProcessInterruptionCount).toBe(1)
+      expect(ds08.childScopeFinalizationCount).toBe(1)
+      expect(ds08.applicationBuildCount).toBe(1)
+      expect(ds08.applicationExitTrace).toEqual([])
+      expect(ds08.executorObserveCallsAfterLoss).toBe(ds08.executorObserveCallsBeforeLoss)
+      expect(ds08.projectedReports).toEqual(ds08.beforeLoss.projectedReports)
+      expect(after.records).toEqual(before.records)
+      expect(p2EraPublicationsAtCut).toContainEqual(ds08.beforeLoss.ds07.p2Publication)
+      for (const publication of p2EraPublicationsAtCut) {
+        expect(publication.publication.policy).toEqual(ds08.beforeLoss.ds07.returned)
+        expect(
+          publication.actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId).toSorted()
+        ).toEqual(expectedHeld)
+        expect(publication.actionInputs.runtimeFacts.acceptedAt).not.toBeNull()
+        expect(publication.actionInputs.runtimeFacts.acceptedAt).toBeGreaterThanOrEqual(
+          ds08.beforeLoss.ds07.capacityRecord.position
+        )
+        const tailRuntime = yield* evaluateDeliveryRuntimeInputBundle(publication)
+        if (tailRuntime.proposedActions._tag !== "DeliveryProposalsAvailable") {
+          return expect.fail("DS-08 must not leave a conflicting publication at the process-loss cut")
+        }
+        expect(
+          tailRuntime.proposedActions.proposals.flatMap(({ admission }) =>
+            admission.taskWorkPosition._tag === "TaskWorkPositionRequired" ? [admission.taskWorkPosition.taskId] : []
+          )
+        ).not.toContain(controlledScenario.taskIds.E)
+      }
+      expect(after.commands).toEqual(before.commands)
+      expect(after.claimRequests).toEqual(before.claimRequests)
+      expect(after.plans).toEqual(before.plans)
+      expect(after.worktreeCreateRequests).toEqual(before.worktreeCreateRequests)
+      expect(after.requestedTargets).toEqual(before.requestedTargets)
+      expect(reportsByAttempt.get(controlledScenario.attempts.A1)).toMatchObject({
+        _tag: "ExecutorWorkExecuting",
+        correlation: { attemptId: controlledScenario.attempts.A1, runId: controlledScenario.runId }
+      })
+      expect(reportsByAttempt.get(controlledScenario.attempts.C1)).toMatchObject({
+        _tag: "ExecutorWorkExecuting",
+        correlation: { attemptId: controlledScenario.attempts.C1, runId: controlledScenario.runId }
+      })
+      expect(reportsByAttempt.get(controlledScenario.attempts.D1)).toMatchObject({
+        _tag: "ExecutorWorkExecuting",
+        correlation: { attemptId: controlledScenario.attempts.D1, runId: controlledScenario.runId }
+      })
+      expect(reportsByAttempt.get(controlledScenario.attempts.B1)).toMatchObject({
+        _tag: "ExecutorWorkSafelySuspended",
+        correlation: { attemptId: controlledScenario.attempts.B1, runId: controlledScenario.runId }
+      })
+      expect([...reportsByAttempt.keys()].toSorted()).toEqual(
+        [
+          controlledScenario.attempts.A1,
+          controlledScenario.attempts.B1,
+          controlledScenario.attempts.C1,
+          controlledScenario.attempts.D1
+        ].toSorted()
+      )
     }),
   capstoneTimeout
 )
