@@ -3,6 +3,7 @@ import {
   acceptedResultFixture,
   registerAcceptedResultEvidence
 } from "../../../test/support/evidence.js"
+import { appendAcceptedExecutingExecutorHistory } from "../../../test/support/planned-attempt-executor-history.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -40,15 +41,11 @@ import {
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import {
-  PlannedAttemptExecutorCommandIntendedEvent,
-  PlannedAttemptExecutorCommandOrdinal,
-  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorStateObservationOrdinal,
   PlannedAttemptExecutorStateObservedEvent,
-  PlannedAttemptExecutorWorkReportedEvent,
-  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+  PlannedAttemptExecutorWorkReportedEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
@@ -60,11 +57,8 @@ import {
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
-  plannedAttemptExecutorCommandIntendedRecordKey,
-  plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorStateObservedRecordKey,
-  plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+  plannedAttemptExecutorWorkReportedRecordKey
 } from "../../workflow-journal/record-key.js"
 import { JournalStore } from "../../workflow-journal/store.js"
 import { OperationId } from "../../workflow/identity.js"
@@ -134,48 +128,7 @@ const seedTerminalAccepted = Effect.gen(function* () {
       version: workflowJournalEventVersion
     })
   )
-  yield* journal.append(
-    runId,
-    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
-  )
-  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-  yield* journal.append(
-    runId,
-    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-    PlannedAttemptExecutorCommandIntendedEvent.make({
-      command: "Begin",
-      initiatedBy: { _tag: "DalphCoordinator" },
-      occurrenceClassification: "InitiatedAction",
-      ordinal: commandOrdinal,
-      plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-  const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-    correlation: { attemptId: plannedAttempt.attemptId, runId }
-  })
-  yield* journal.append(
-    runId,
-    plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-    PlannedAttemptExecutorCommandResponseObservedEvent.make({
-      commandOrdinal,
-      occurrenceClassification: "NonActionOccurrence",
-      plannedAttempt,
-      report: executingReport,
-      version: workflowJournalEventVersion
-    })
-  )
-  const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
-  yield* journal.append(
-    runId,
-    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal),
-    PlannedAttemptExecutorWorkReportedEvent.make({
-      ordinal,
-      report: executingReport,
-      version: workflowJournalEventVersion
-    })
-  )
+  yield* appendAcceptedExecutingExecutorHistory(plannedAttempt)
   const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
     correlation: { attemptId: plannedAttempt.attemptId, runId },
     result: { _tag: "Accepted", acceptedResult }

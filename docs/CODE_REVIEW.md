@@ -100,4 +100,37 @@ Before handoff, run `pnpm check:all` and perform three reviews:
 3. Strict code review: inspect the final diff for correctness, typed failures,
    invalid states, tests, and accidental complexity.
 
-Record why any reasonable finding is rejected.
+### Review closure
+
+Pin both ends of the reviewed change. For uncommitted work, record the base SHA
+and a captured diff or its content hash; a moving worktree is not a fixed
+candidate. Reviewers report findings without editing the candidate. The
+implementer classifies the findings before starting repairs.
+
+For each blocking finding, identify the actor or caller, concrete trigger,
+affected boundary, violated accepted scenario or repository rule, and evidence
+that demonstrates the defect or missing proof. A reproducible defect in a
+supported path may instead expose missing scenario coverage; identify that
+gap and establish the required accepted scenario before a behavior-changing
+repair. Separate behavioral severity from a documentation or standards handoff
+requirement: a missing test name
+must be corrected, but is not itself a demonstrated production safety failure.
+A code-smell heuristic alone is not a blocking requirement. For internal API
+hardening, explain which supported caller or required misuse case reaches the
+invalid state; do not silently add a new trust boundary to the task.
+
+Keep a disposition for each finding: fixed with evidence, rejected with a
+concrete reason, or deferred with its scope and owner. Deferral cannot waive an
+accepted scenario, blocking dependency, safety failure, or required gate. An
+independent improvement that is not required to deliver this task belongs in a
+separate follow-up, rather than extending the current task's completion test.
+
+Perform the three-axis review once on a complete fixed handoff candidate.
+After that review, recheck the fixes and behavior they can affect. Reopen a
+settled finding only with new contradictory evidence. A change
+to the accepted behavior or a cross-module contract warrants a broader review;
+a local correction or checkpoint commit does not automatically restart all
+three passes or require a fresh set of reviewers. Stop reviewing when scoped
+blocking findings are resolved and the required evidence is green. If another
+round exposes the same class of defect, investigate the shared design cause
+before continuing local repairs.

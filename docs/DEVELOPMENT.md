@@ -46,6 +46,47 @@ runtime behavior. Reviewers reject an exemption that hides a changed command,
 workflow decision, external request, durable fact, retry, recovery rule,
 concurrency rule, cleanup action, or visible result.
 
+## Keeping implementation work finite
+
+When Alice's accepted story spans startup, a tracker edit, suspension, restart,
+and resumption, attempt one minimally instrumented complete-story diagnostic
+before polishing each prefix. Assert accepted outcomes, identities, required
+causal ordering, and forbidden effects; treat predicted internal call order as
+an observation to check. A visible capacity update, for example, does not by
+itself require its publishing activation to have returned. If execution stops,
+record the reached outcome, first obstruction, and unexecuted suffix. This
+follows the operational scenario gate and does not replace final acceptance
+tests. Reuse existing complete-story evidence when it still applies; adopting
+this workflow does not restart completed characterization.
+
+After two attempts fail to advance the same outcome, change the investigation
+before another equivalent run. Name competing explanations and an experiment
+that distinguishes them: did the executor never emit Safe, did the coordinator
+not accept it, or did a test callback block publication? Another reviewer,
+larger timeout, or full gate is not new evidence by itself. Continue independent
+authorized work; ask only when accepted behavior leaves materially different
+outcomes unresolved.
+
+For long-running work, reuse the accepted issue/specification/scenario for
+outcomes and test mappings, current revision, first obstruction, and next
+experiment. Link instead of copying the plan to parent issues. Create no new
+ledger when an existing source suffices. Record any task deadline with an
+explicit unit and timezone. Dependencies, reviews, and renamed checkpoints do
+not reset its parent budget; apply the accepted stop rule on expiry.
+
+Use focused checks during development. After a full gate fails, close that
+stage and its affected checks before restarting the full gate. Intermediate
+commits do not each require the handoff ceremony. A final candidate still needs
+`pnpm check:all` and the applicable final `pnpm check:quint`; old passing stages
+are not a final green gate.
+
+At the next existing milestone, record broad review rounds, reopened findings
+and their new evidence, full-gate restarts, and closure time in the task's own
+record. Check that unrelated suggestions do not expand the task while a
+reproduced accepted-path defect still blocks it. Fewer rounds alone do not
+prove improvement: required scenario evidence must remain intact. No new
+dashboard or ledger is needed.
+
 ## Domain language
 
 Canonical Dalph terms live in [CONTEXT.md](CONTEXT.md). Before adding or changing

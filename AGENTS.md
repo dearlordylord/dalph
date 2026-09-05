@@ -4,6 +4,20 @@
 - Work on `master` unless a task explicitly requires an isolated task branch or
   worktree.
 
+## Read by task
+
+Use the relevant route below; follow additional links when they answer a
+concrete question. Reuse already-read guidance unless it changed or the task
+crosses another boundary. These routes do not waive the gates below.
+
+| Task | Guidance |
+| --- | --- |
+| Change runtime behavior | [Operational scenarios](docs/OPERATIONAL-SCENARIOS.md), then the accepted scenario for that behavior |
+| Change domain or architecture language | [Context](docs/CONTEXT.md) and [architecture](docs/ARCHITECTURE.md) |
+| Write or change a Quint model | [Quint guide](docs/QUINT-GUIDE.md) |
+| Review a candidate or repair findings | [Code review checklist and closure](docs/CODE_REVIEW.md) |
+| Choose checks or diagnose repeated stalls | [Development workflow](docs/DEVELOPMENT.md#keeping-implementation-work-finite) and [commands](docs/DEVELOPMENT.md#commands) |
+
 ## Operational scenario gate
 
 - Read `docs/OPERATIONAL-SCENARIOS.md` before planning behavior-changing work.
@@ -78,6 +92,13 @@
   needing a negative control.
 - Every implementation ticket must preserve its declared acceptance scenarios
   and blocking edges.
-- After significant changes, repeat domain/spec, architecture/connascence, and
-  code-review passes until no reasonable finding remains. Record a concrete
-  reason for any rejected finding.
+- Review significant changes along domain/spec, architecture/connascence, and
+  code-review axes. Classify findings against the accepted task before editing;
+  follow the review closure rules in `docs/CODE_REVIEW.md`. Recheck fixes and
+  affected behavior rather than restarting every review for each checkpoint.
+  Record a concrete reason for any rejected or deferred finding.
+- For composed workflows, attempt a minimally instrumented complete-story
+  diagnostic before polishing individual checkpoints. If it stops, record the
+  reached outcome, first obstruction, and unexecuted suffix.
+  Follow `docs/DEVELOPMENT.md` when repeated runs or reviews stop advancing the
+  same observable outcome; a new subtask does not reset the parent time budget.
