@@ -14,7 +14,8 @@ import {
   runIssue268Ds02Characterization,
   runIssue268Ds03Characterization,
   runIssue268Ds04Characterization,
-  runIssue268Ds05Characterization
+  runIssue268Ds05Characterization,
+  runIssue268Ds06Characterization
 } from "../../test-support/issue-268-controlled-characterization.js"
 import { issue268ControlledDeliveryCharacterization as controlledScenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
@@ -609,6 +610,257 @@ it.effect(
         )
       ).toEqual([])
       expect(newRecords.filter(({ event }) => forbiddenEvents.has(event._tag))).toEqual([])
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "DS-06 admits D only after B1 releases and keeps E outside every boundary",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runIssue268Ds06Characterization
+      const ds06 = run.ds06
+      const newRecords = ds06.after.records.slice(ds06.beforeD.records.length)
+      const newActions = ds06.after.executedActions.slice(ds06.beforeD.executedActions.length)
+      const newClaims = ds06.after.claimRequests.slice(ds06.beforeD.claimRequests.length)
+      const newCommands = ds06.after.commands.slice(ds06.beforeD.commands.length)
+      const newPlans = ds06.after.plans.slice(ds06.beforeD.plans.length)
+      const newWorktrees = ds06.after.worktreeCreateRequests.slice(ds06.beforeD.worktreeCreateRequests.length)
+      const dPlan = newPlans[0]
+      if (dPlan === undefined) return expect.fail("DS-06 must record D1's exact plan")
+      const beforeHeld = ds06.beforeD.publications
+        .at(-1)
+        ?.actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId)
+        .toSorted()
+      const afterHeld = ds06.checkpointPublication.actionInputs.runtimeFacts.taskWork.held
+        .map(({ correlation }) => correlation.attemptId)
+        .toSorted()
+      const beforeOutsideBoundActions = ds06.beforeD.executedActions.filter(
+        ({ taskId }) => taskId === controlledScenario.taskIds.D || taskId === controlledScenario.taskIds.E
+      )
+      const claimIntent = newRecords.find(({ event }) => event._tag === "TaskClaimAcquisitionIntended")
+      const acquiredClaim = newRecords.find(({ event }) => event._tag === "TaskClaimAcquired")
+      const postClaimGraphIntent = newRecords.find(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.predecessorOperationIds.length === 1
+      )
+      const specificationIntent = newRecords.find(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTaskWorkSpecification"
+      )
+      const specificationObservation = newRecords.find(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+      )
+      const planRecord = newRecords.find(({ event }) => event._tag === "TaskAttemptPlanned")
+      const worktreeIntent = newRecords.find(({ event }) => event._tag === "TaskWorktreeReconciliationIntended")
+      const worktreeReady = newRecords.find(({ event }) => event._tag === "TaskWorktreeReady")
+      const responsibility = newRecords.find(
+        ({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
+      )
+      const beginIntent = newRecords.find(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+      const beginResponse = newRecords.find(
+        ({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved"
+      )
+      const acceptedExecuting = newRecords.find(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")
+      const postClaimGraphObservation = newRecords.find(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          postClaimGraphIntent?.event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operationId === postClaimGraphIntent.event.operation.operationId
+      )
+      const forbiddenERecords = newRecords.filter(({ event }) => {
+        if (event._tag === "TaskTrackerReadIntentRecorded") {
+          return event.operation._tag === "ReadTaskWorkSpecification"
+            ? event.operation.taskId === controlledScenario.taskIds.E
+            : event.operation._tag === "ReadTrackerGraph"
+              ? event.operation.readShape.explicitlyCoveredTaskIds.includes(controlledScenario.taskIds.E)
+              : false
+        }
+        if (
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+        ) {
+          return event.observation.factFamily.taskId === controlledScenario.taskIds.E
+        }
+        if (event._tag === "TaskClaimAcquisitionIntended") return event.operation.acquisition.taskId === "E"
+        if (event._tag === "TaskClaimAcquired") return event.claim.taskId === "E"
+        if (event._tag === "TaskAttemptPlanned" || event._tag === "TaskWorktreeReconciliationIntended") {
+          return event.operation.plannedAttempt.taskId === "E"
+        }
+        if (
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
+          event._tag === "PlannedAttemptExecutorCommandIntended" ||
+          event._tag === "PlannedAttemptExecutorCommandResponseObserved"
+        ) {
+          return event.plannedAttempt.taskId === "E"
+        }
+        return false
+      })
+      const forbiddenReleaseOrCleanup = newRecords.filter(({ event }) =>
+        new Set([
+          "TaskClaimReleased",
+          "WorktreeCleanupAuthorized",
+          "WorktreeCleanupMutationIntended",
+          "WorktreeCleanupMutationResultRecorded",
+          "WorktreeCleanupSettled"
+        ]).has(event._tag)
+      )
+      const runtime = yield* evaluateDeliveryRuntimeInputBundle(ds06.checkpointPublication)
+      const retainedB = runtime.current.ticketDeliveries.deliveries
+        .find(({ taskId }) => taskId === controlledScenario.taskIds.B)
+        ?.standings.flatMap((standing) => (standing._tag === "ResponsibilitySituation" ? [standing.facts] : []))[0]
+
+      expect(ds06.r5ReleaseCount).toBe(1)
+      expect(ds06.dActionAbsentBeforeBRelease).toBe(true)
+      expect(beforeHeld).toEqual([controlledScenario.attempts.A1, controlledScenario.attempts.C1])
+      expect(beforeOutsideBoundActions).toEqual([])
+      expect(afterHeld).toEqual([
+        controlledScenario.attempts.A1,
+        controlledScenario.attempts.C1,
+        controlledScenario.attempts.D1
+      ])
+      // A naturally occurring pre-claim graph read is inventory evidence, not a DS-06 requirement.
+      expect(newActions.filter(({ stage }) => stage !== "ReadCurrentTaskGraph")).toEqual(
+        [
+          "AcquireTaskClaim",
+          "ReadPostClaimGraph",
+          "ReadTaskWorkSpecification",
+          "RecordTaskAttemptPlan",
+          "ReconcileTaskWorktree",
+          "BeginPlannedAttemptExecutorWork"
+        ].map((stage) => ({ stage, taskId: controlledScenario.taskIds.D }))
+      )
+      expect(newClaims).toEqual([
+        expect.objectContaining({ owner: "issue-268-controlled-owner", taskId: controlledScenario.taskIds.D })
+      ])
+      expect(newClaims[0]?.token).toBe(`issue-268-controlled-claim:D:${newClaims[0]?.operationId}`)
+      expect(newCommands).toEqual([{ attemptId: controlledScenario.attempts.D1, command: "Begin" }])
+      expect(dPlan).toMatchObject({
+        attemptId: controlledScenario.attempts.D1,
+        baseSha: controlledScenario.baseSha,
+        branch: "refs/heads/dalph/issue-268-d-1",
+        executor: "executor:issue-268-controlled",
+        runId: controlledScenario.runId,
+        taskId: controlledScenario.taskIds.D,
+        taskRevision: controlledScenario.specifications.F1.D.fingerprint,
+        worktree: "/dalph/controlled-characterization/issue-268/D-1"
+      })
+      expect(newWorktrees).toEqual([dPlan])
+      expect(claimIntent?.event).toMatchObject({ operation: { acquisition: newClaims[0] } })
+      expect(acquiredClaim?.event).toMatchObject({ claim: { _tag: "ActiveTaskClaim", ...newClaims[0] } })
+      expect(postClaimGraphIntent?.event).toMatchObject({
+        operation: {
+          predecessorOperationIds: [newClaims[0]?.operationId],
+          readShape: { _tag: "CompleteTargetClosure", explicitlyCoveredTaskIds: [controlledScenario.taskIds.D] }
+        }
+      })
+      expect(postClaimGraphObservation?.event).toMatchObject({
+        observation: { _tag: "UnchangedTaskTrackerFactsReconfirmed" }
+      })
+      if (
+        postClaimGraphObservation?.event._tag === "TaskTrackerFactsObserved" &&
+        postClaimGraphObservation.event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
+      ) {
+        expect(
+          postClaimGraphObservation.event.observation.factFamilies.every(
+            ({ contentIdentity }) => contentIdentity === controlledScenario.graphs.G1.revision
+          )
+        ).toBe(true)
+      }
+      expect(specificationIntent?.event).toMatchObject({
+        operation: {
+          predecessorOperationIds: [
+            postClaimGraphIntent?.event._tag === "TaskTrackerReadIntentRecorded"
+              ? postClaimGraphIntent.event.operation.operationId
+              : undefined
+          ],
+          taskId: controlledScenario.taskIds.D
+        }
+      })
+      expect(specificationObservation?.event).toMatchObject({
+        observation: {
+          factFamily: {
+            fingerprint: controlledScenario.specifications.F1.D.fingerprint,
+            taskId: controlledScenario.taskIds.D
+          }
+        }
+      })
+      expect(planRecord?.event).toMatchObject({ operation: { plannedAttempt: dPlan } })
+      expect(worktreeIntent?.event).toMatchObject({ operation: { plannedAttempt: dPlan } })
+      expect(worktreeReady?.event).toMatchObject({
+        operationId:
+          worktreeIntent?.event._tag === "TaskWorktreeReconciliationIntended"
+            ? worktreeIntent.event.operation.operationId
+            : undefined,
+        proof: {
+          _tag: "PlannedWorktreeReady",
+          baseSha: dPlan.baseSha,
+          branch: dPlan.branch,
+          headSha: dPlan.baseSha,
+          worktree: dPlan.worktree
+        }
+      })
+      expect(newRecords.filter(({ event }) => event._tag === "TaskWorktreeReady")).toHaveLength(1)
+      expect(responsibility?.event).toMatchObject({ plannedAttempt: dPlan })
+      expect(beginIntent?.event).toMatchObject({ command: "Begin", ordinal: 1, plannedAttempt: dPlan })
+      expect(beginResponse?.event).toMatchObject({
+        commandOrdinal: 1,
+        plannedAttempt: dPlan,
+        report: { _tag: "ExecutorWorkExecuting", correlation: plannedAttemptExecutorCorrelation(dPlan) }
+      })
+      expect(acceptedExecuting?.event).toMatchObject({
+        ordinal: 1,
+        report: { _tag: "ExecutorWorkExecuting", correlation: plannedAttemptExecutorCorrelation(dPlan) }
+      })
+      expect(newRecords.filter(({ event }) => event._tag === "PlannedAttemptExecutorWorkReported")).toHaveLength(1)
+      expect(acquiredClaim?.position).toBeGreaterThan(claimIntent?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(postClaimGraphIntent?.position).toBeGreaterThan(acquiredClaim?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(postClaimGraphObservation?.position).toBeGreaterThan(
+        postClaimGraphIntent?.position ?? Number.MAX_SAFE_INTEGER
+      )
+      expect(specificationIntent?.position).toBeGreaterThan(
+        postClaimGraphObservation?.position ?? Number.MAX_SAFE_INTEGER
+      )
+      expect(specificationObservation?.position).toBeGreaterThan(
+        specificationIntent?.position ?? Number.MAX_SAFE_INTEGER
+      )
+      expect(planRecord?.position).toBeGreaterThan(specificationObservation?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(worktreeIntent?.position).toBeGreaterThan(planRecord?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(worktreeReady?.position).toBeGreaterThan(worktreeIntent?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(responsibility?.position).toBeGreaterThan(worktreeReady?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(beginIntent?.position).toBeGreaterThan(responsibility?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(beginResponse?.position).toBeGreaterThan(beginIntent?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(acceptedExecuting?.position).toBeGreaterThan(beginResponse?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(ds06.checkpointPublication.actionInputs.runtimeFacts.acceptedAt).toBeGreaterThanOrEqual(
+        acceptedExecuting?.position ?? Number.MAX_SAFE_INTEGER
+      )
+      expect(ds06.after.plans.filter(({ taskId }) => taskId === controlledScenario.taskIds.B)).toEqual(
+        ds06.beforeD.plans.filter(({ taskId }) => taskId === controlledScenario.taskIds.B)
+      )
+      expect(ds06.after.worktreeCreateRequests.filter(({ taskId }) => taskId === controlledScenario.taskIds.B)).toEqual(
+        ds06.beforeD.worktreeCreateRequests.filter(({ taskId }) => taskId === controlledScenario.taskIds.B)
+      )
+      expect(retainedB).toMatchObject({
+        _tag: "PlannedAttemptExecutorFreshFacts",
+        disposition: {
+          _tag: "TaskSpecificationChangeConstraint",
+          observedFingerprint: controlledScenario.specifications.F2.B.fingerprint,
+          plannedFingerprint: controlledScenario.specifications.F1.B.fingerprint
+        },
+        responsibility: {
+          _tag: "PlannedAttemptExecutorWorkResponsibility",
+          plannedAttempt: ds06.beforeD.plans.find(({ attemptId }) => attemptId === controlledScenario.attempts.B1)
+        }
+      })
+      expect(newActions.filter(({ taskId }) => taskId === controlledScenario.taskIds.E)).toEqual([])
+      expect(newClaims.filter(({ taskId }) => taskId === controlledScenario.taskIds.E)).toEqual([])
+      expect(newPlans.filter(({ taskId }) => taskId === controlledScenario.taskIds.E)).toEqual([])
+      expect(newWorktrees.filter(({ taskId }) => taskId === controlledScenario.taskIds.E)).toEqual([])
+      expect(forbiddenERecords).toEqual([])
+      expect(forbiddenReleaseOrCleanup).toEqual([])
     }),
   capstoneTimeout
 )
