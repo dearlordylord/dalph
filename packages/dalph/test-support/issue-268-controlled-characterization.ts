@@ -13,6 +13,7 @@ import {
 } from "@dalph/contracts"
 import {
   AllocatedWorkflowRunId,
+  ApplicationExitShell,
   ClaimOwner,
   controlledTrackerMutationLayerFrom,
   CoordinatorOwnership,
@@ -37,6 +38,8 @@ import {
   PlannedWorktreeAbsent,
   preservingDispositionCleanupBoundaryLayer,
   JournaledRunBootstrap,
+  RunReactivationOwner,
+  runReactivationOwnerLayer,
   runWorkflowWithControlledDeliveryActionExecutor,
   runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh,
   taskClaimReacquisitionControlLayer,
@@ -59,7 +62,9 @@ import {
   type DeliveryRelationInputBundle,
   type JournalRecord,
   type JournaledRuntimeLayerInput,
+  type MaterializedDeliveryAction,
   type RunFinalityDecision,
+  type RunActivationOpportunityValue,
   type RunReactivationOwnerOptions,
   type TraceItem
 } from "@dalph/orchestrator"
@@ -80,6 +85,9 @@ import type {
   Issue268Ds08BeforeLoss,
   Issue268Ds08Characterization,
   Issue268Ds08StartupCharacterization,
+  Issue268Ds09Characterization,
+  Issue268Ds09StartupCharacterization,
+  Issue268ExecutorObservationCapture,
   Issue268ExecutorCommandCapture
 } from "./issue-268-controlled-characterization-types.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "./controlled-synchronous-planned-attempt-executor.js"
@@ -100,15 +108,18 @@ import { isIssue268Ds06CompleteCheckpoint } from "./issue-268-controlled-ds06.js
 import { isIssue268Ds07CompleteCheckpoint } from "./issue-268-controlled-ds07.js"
 
 const checkpointPublicationLimit = 128
-type Issue268StartupMode = "DS01" | "DS02" | "DS03" | "DS04" | "DS05" | "DS06" | "DS07" | "DS08"
+type Issue268StartupMode = "DS01" | "DS02" | "DS03" | "DS04" | "DS05" | "DS06" | "DS07" | "DS08" | "DS09"
 const ds04Modes: ReadonlySet<Issue268StartupMode> = new Set(["DS04", "DS05", "DS06", "DS07", "DS08"])
 const ds05Modes: ReadonlySet<Issue268StartupMode> = new Set(["DS05", "DS06", "DS07", "DS08"])
 const ds06Modes: ReadonlySet<Issue268StartupMode> = new Set(["DS06", "DS07", "DS08"])
 const ds07Modes: ReadonlySet<Issue268StartupMode> = new Set(["DS07", "DS08"])
 
-interface Issue268Ds08Controls {
+interface Issue268ProcessControls {
   readonly applicationBuildCount: Ref.Ref<number>
   readonly applicationExitTrace: Ref.Ref<ReadonlyArray<ApplicationExitTraceEvent>>
+}
+
+interface Issue268Ds08Controls extends Issue268ProcessControls {
   readonly beforeLoss: Ref.Ref<Issue268Ds08BeforeLoss | undefined>
   readonly childScopeFinalizationCount: Ref.Ref<number>
   readonly executorObserveCalls: Ref.Ref<number>
@@ -118,12 +129,40 @@ interface Issue268Ds08Controls {
   readonly snapshot: Ref.Ref<(() => Effect.Effect<Issue268Ds03BoundarySnapshot, unknown, never>) | undefined>
 }
 
+interface Issue268Ds09Controls extends Issue268ProcessControls {
+  readonly after: Ref.Ref<Issue268Ds03BoundarySnapshot | undefined>
+  readonly executorObserveCalls: Ref.Ref<number>
+  readonly executorObservations: Ref.Ref<ReadonlyArray<Issue268ExecutorObservationCapture>>
+  readonly observationAdmissions: Ref.Ref<
+    ReadonlyMap<string, Pick<Issue268ExecutorObservationCapture, "admission" | "plannedAttempt">>
+  >
+  readonly observationReleases: ReadonlyArray<Deferred.Deferred<void>>
+  readonly observationRequests: Queue.Queue<Issue268ExecutorObservationCapture>
+  readonly observationReturned: ReadonlyArray<Deferred.Deferred<void>>
+  readonly ordinaryOwnerActivationCount: Ref.Ref<number>
+  readonly ordinaryOwnerActivationOpportunities: Ref.Ref<ReadonlyArray<"OrdinaryRunEntry">>
+  readonly projectedReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>
+}
+
+interface Issue268SharedAuthorities {
+  readonly gitTargetLineage: GitTargetLineage["Service"]
+  readonly gitWorktree: GitWorktree["Service"]
+  readonly journal: JournalStore["Service"]
+  readonly testGitWorktree: TestGitWorktree["Service"]
+  readonly testTrackerGraphReader: TestTrackerGraphReader["Service"]
+  readonly trackerGraphReader: TrackerGraphReader["Service"]
+  readonly trackerMutation: TrackerMutation["Service"]
+}
+
 interface Issue268StartupCharacterizationOptions {
   readonly ds08?: Issue268Ds08Controls
+  readonly ds09?: Issue268Ds09Controls
+  readonly sharedAuthorities?: Issue268SharedAuthorities
+  readonly sharedAuthoritiesReady?: Deferred.Deferred<Issue268SharedAuthorities>
   readonly sharedScope?: Scope.Scope
 }
 
-const applicationExitTraceFor = (controls: Issue268Ds08Controls | undefined) =>
+const applicationExitTraceFor = (controls: Issue268ProcessControls | undefined) =>
   controls === undefined
     ? undefined
     : {
@@ -131,7 +170,7 @@ const applicationExitTraceFor = (controls: Issue268Ds08Controls | undefined) =>
           Ref.update(controls.applicationExitTrace, (current) => [...current, event])
       }
 
-const incrementApplicationBuildCount = (controls: Issue268Ds08Controls | undefined) =>
+const incrementApplicationBuildCount = (controls: Issue268ProcessControls | undefined) =>
   controls === undefined ? Effect.void : Ref.update(controls.applicationBuildCount, (count) => count + 1)
 
 const signalP2PublicationReturned = (
@@ -153,8 +192,11 @@ const runIssue268StartupCharacterizationFor = (
   options: Issue268StartupCharacterizationOptions = {}
 ) =>
   Effect.suspend(() =>
+    // eslint-disable-next-line complexity -- One chronological controlled driver preserves the exact DS-01 through DS-09 causal handoffs.
     Effect.gen(function* () {
       const ds08Controls = options.ds08
+      const ds09Controls = options.ds09
+      const processControls = ds08Controls ?? ds09Controls
       const claimRequestQueue = yield* Queue.unbounded<TaskClaimAcquisition>()
       const claimRequests = yield* Ref.make<ReadonlyArray<TaskClaimAcquisition>>([])
       const claimReleaseOrder = yield* Ref.make<ReadonlyArray<string>>([])
@@ -168,9 +210,11 @@ const runIssue268StartupCharacterizationFor = (
       const ds01ClaimGate = yield* Deferred.make<void>()
       const executedActions = yield* Ref.make<ReadonlyArray<{ readonly stage: string; readonly taskId: string }>>([])
       const projectedReports =
-        options.ds08?.projectedReports ??
+        ds08Controls?.projectedReports ??
+        ds09Controls?.projectedReports ??
         (yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()))
-      const executorObserveCalls = options.ds08?.executorObserveCalls ?? (yield* Ref.make(0))
+      const executorObserveCalls =
+        ds08Controls?.executorObserveCalls ?? ds09Controls?.executorObserveCalls ?? (yield* Ref.make(0))
       const ds05LifecycleChanges = yield* Queue.unbounded<PlannedAttemptExecutorProjection>()
       const ds06DActionReached = yield* Deferred.make<void>()
       const ds06DActionRelease = yield* Deferred.make<void>()
@@ -179,15 +223,58 @@ const runIssue268StartupCharacterizationFor = (
       const lifecycleAttachAttemptIds = yield* Ref.make<ReadonlyArray<string>>([])
       const commands = yield* Ref.make<ReadonlyArray<Issue268ExecutorCommandCapture>>([])
       const plans = yield* Ref.make<ReadonlyArray<PlannedTaskAttempt>>([])
+      const publications = yield* Ref.make<ReadonlyArray<DeliveryRelationInputBundle>>([])
+      const publicationQueue = yield* Queue.unbounded<DeliveryRelationInputBundle>()
+      const ds09ObservationIndex = yield* Ref.make(0)
       const executor = PlannedAttemptExecutor.of({
-        observe: (correlation) =>
+        observe: (correlation, purpose) =>
+          // eslint-disable-next-line complexity -- The DS-09 branch fail-closes the exact ordered passive-observation gate inside the shared executor fixture.
           Effect.gen(function* () {
             yield* Ref.update(executorObserveCalls, (count) => count + 1)
             const reports = yield* Ref.get(projectedReports)
             const report = reports.get(plannedAttemptExecutorCorrelationKey(correlation))
-            return report === undefined
-              ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
-              : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+            const projection =
+              report === undefined
+                ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+                : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+            if (ds09Controls === undefined) return projection
+            if (purpose._tag !== "PassiveLifecycleObservation") {
+              return yield* Effect.die(`DS-09 must not reconcile ${correlation.attemptId}`)
+            }
+            const currentPublication = (yield* Ref.get(publications)).findLast(
+              ({ publication }) => publication.graph._tag === "GraphEstablished"
+            )
+            const index = yield* Ref.getAndUpdate(ds09ObservationIndex, (current) => current + 1)
+            const expectedAttemptId = [scenario.attempts.A1, scenario.attempts.C1, scenario.attempts.D1][index]
+            const release = ds09Controls.observationReleases[index]
+            const returned = ds09Controls.observationReturned[index]
+            if (expectedAttemptId === undefined || release === undefined || returned === undefined) {
+              return yield* Effect.die(`DS-09 observed an unexpected executor attempt ${correlation.attemptId}`)
+            }
+            if (correlation.attemptId !== expectedAttemptId) {
+              return yield* Effect.die(
+                `DS-09 expected ${expectedAttemptId} passive observation, received ${correlation.attemptId}`
+              )
+            }
+            const admission = (yield* Ref.get(ds09Controls.observationAdmissions)).get(
+              plannedAttemptExecutorCorrelationKey(correlation)
+            )
+            if (admission === undefined) {
+              return yield* Effect.die(`DS-09 observed ${correlation.attemptId} without its admitted action`)
+            }
+            const capture: Issue268ExecutorObservationCapture = {
+              ...admission,
+              correlation,
+              currentGraphPublication: currentPublication,
+              process: "DS09",
+              projection,
+              purpose
+            }
+            yield* Ref.update(ds09Controls.executorObservations, (current) => [...current, capture])
+            yield* Queue.offer(ds09Controls.observationRequests, capture)
+            yield* Deferred.await(release)
+            yield* Deferred.succeed(returned, undefined)
+            return projection
           }),
         begin: (request: PlannedAttemptExecutorRequest) =>
           Effect.gen(function* () {
@@ -218,49 +305,76 @@ const runIssue268StartupCharacterizationFor = (
             : Effect.die(`C2b startup must not suspend ${plannedAttempt.attemptId}`),
         resume: (request) => Effect.die(`C2b startup must not resume ${request.plannedAttempt.attemptId}`)
       })
-      const executorLayer = ds05Modes.has(mode)
-        ? Layer.merge(
-            Layer.succeed(PlannedAttemptExecutor, executor),
-            Layer.succeed(
-              PlannedAttemptExecutorLifecycleObservation,
-              PlannedAttemptExecutorLifecycleObservation.of({
-                attach: (correlation) =>
-                  Effect.gen(function* () {
-                    const current = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
-                    yield* Ref.update(lifecycleAttachAttemptIds, (attemptIds) => [...attemptIds, correlation.attemptId])
-                    return {
-                      changes:
-                        correlation.attemptId === scenario.attempts.B1
-                          ? Stream.fromQueue(ds05LifecycleChanges)
-                          : Stream.never,
-                      close: Effect.void,
-                      current
-                    }
-                  })
-              })
+      const executorLayer =
+        ds05Modes.has(mode) || ds09Controls !== undefined
+          ? Layer.merge(
+              Layer.succeed(PlannedAttemptExecutor, executor),
+              Layer.succeed(
+                PlannedAttemptExecutorLifecycleObservation,
+                PlannedAttemptExecutorLifecycleObservation.of({
+                  attach: (correlation) =>
+                    Effect.gen(function* () {
+                      const current = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+                      yield* Ref.update(lifecycleAttachAttemptIds, (attemptIds) => [
+                        ...attemptIds,
+                        correlation.attemptId
+                      ])
+                      return {
+                        changes:
+                          correlation.attemptId === scenario.attempts.B1
+                            ? Stream.fromQueue(ds05LifecycleChanges)
+                            : Stream.never,
+                        close: Effect.void,
+                        current
+                      }
+                    })
+                })
+              )
             )
-          )
-        : controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor))
+          : controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor))
       const currentScope = yield* Effect.scope
-      const sharedContext = yield* Layer.build(
-        Layer.mergeAll(
-          memoryJournalStoreLayer,
-          controlledTrackerMutationLayerFrom([]),
-          trackerGraphReaderTestLayer(scenario.graphs.G0, Object.values(scenario.specifications.F1)),
-          gitWorktreeTestLayer(PlannedWorktreeAbsent.make({})),
-          gitTargetLineageTestLayer(
-            TargetLineageObservation.make({
-              plannedBaseIsAncestorOfTargetHead: true,
-              plannedBaseSha: scenario.baseSha,
-              targetHeadSha: scenario.baseSha
-            })
-          )
-        )
-      ).pipe(Scope.provide(options.sharedScope ?? currentScope))
-      const sharedJournal = Context.get(sharedContext, JournalStore)
+      const sharedContext =
+        options.sharedAuthorities === undefined
+          ? yield* Layer.build(
+              Layer.mergeAll(
+                memoryJournalStoreLayer,
+                controlledTrackerMutationLayerFrom([]),
+                trackerGraphReaderTestLayer(scenario.graphs.G0, Object.values(scenario.specifications.F1)),
+                gitWorktreeTestLayer(PlannedWorktreeAbsent.make({})),
+                gitTargetLineageTestLayer(
+                  TargetLineageObservation.make({
+                    plannedBaseIsAncestorOfTargetHead: true,
+                    plannedBaseSha: scenario.baseSha,
+                    targetHeadSha: scenario.baseSha
+                  })
+                )
+              )
+            ).pipe(Scope.provide(options.sharedScope ?? currentScope))
+          : Context.empty().pipe(
+              Context.add(JournalStore, options.sharedAuthorities.journal),
+              Context.add(TrackerMutation, options.sharedAuthorities.trackerMutation),
+              Context.add(TrackerGraphReader, options.sharedAuthorities.trackerGraphReader),
+              Context.add(TestTrackerGraphReader, options.sharedAuthorities.testTrackerGraphReader),
+              Context.add(GitWorktree, options.sharedAuthorities.gitWorktree),
+              Context.add(TestGitWorktree, options.sharedAuthorities.testGitWorktree),
+              Context.add(GitTargetLineage, options.sharedAuthorities.gitTargetLineage)
+            )
+      const sharedAuthorities: Issue268SharedAuthorities = options.sharedAuthorities ?? {
+        gitTargetLineage: Context.get(sharedContext, GitTargetLineage),
+        gitWorktree: Context.get(sharedContext, GitWorktree),
+        journal: Context.get(sharedContext, JournalStore),
+        testGitWorktree: Context.get(sharedContext, TestGitWorktree),
+        testTrackerGraphReader: Context.get(sharedContext, TestTrackerGraphReader),
+        trackerGraphReader: Context.get(sharedContext, TrackerGraphReader),
+        trackerMutation: Context.get(sharedContext, TrackerMutation)
+      }
+      if (options.sharedAuthoritiesReady !== undefined) {
+        yield* Deferred.succeed(options.sharedAuthoritiesReady, sharedAuthorities)
+      }
+      const sharedJournal = sharedAuthorities.journal
       const journalLayer = journalStoreCapabilities(Layer.succeed(JournalStore, sharedJournal))
-      const trackerGraphReaderLayer = Layer.succeed(TrackerGraphReader, Context.get(sharedContext, TrackerGraphReader))
-      const baseTrackerMutation = Context.get(sharedContext, TrackerMutation)
+      const trackerGraphReaderLayer = Layer.succeed(TrackerGraphReader, sharedAuthorities.trackerGraphReader)
+      const baseTrackerMutation = sharedAuthorities.trackerMutation
       const controlledTrackerMutation = TrackerMutation.of({
         ...baseTrackerMutation,
         acquireTaskClaim: (acquisition) =>
@@ -277,14 +391,12 @@ const runIssue268StartupCharacterizationFor = (
           })
       })
       const trackerMutationLayer = Layer.succeed(TrackerMutation, controlledTrackerMutation)
-      const testTrackerGraphReader = Context.get(sharedContext, TestTrackerGraphReader)
-      const gitWorktreeLayer = Layer.succeed(GitWorktree, Context.get(sharedContext, GitWorktree))
-      const testGitWorktree = Context.get(sharedContext, TestGitWorktree)
-      const gitTargetLineageLayer = Layer.succeed(GitTargetLineage, Context.get(sharedContext, GitTargetLineage))
+      const testTrackerGraphReader = sharedAuthorities.testTrackerGraphReader
+      const gitWorktreeLayer = Layer.succeed(GitWorktree, sharedAuthorities.gitWorktree)
+      const testGitWorktree = sharedAuthorities.testGitWorktree
+      const gitTargetLineageLayer = Layer.succeed(GitTargetLineage, sharedAuthorities.gitTargetLineage)
       const traceItems = yield* Ref.make<ReadonlyArray<TraceItem>>([])
       const trace = WorkflowTrace.of({ emit: (item) => Ref.update(traceItems, (current) => [...current, item]) })
-      const publications = yield* Ref.make<ReadonlyArray<DeliveryRelationInputBundle>>([])
-      const publicationQueue = yield* Queue.unbounded<DeliveryRelationInputBundle>()
       const ds04CheckpointPublicationRelease = yield* Deferred.make<void>()
       const ds05CheckpointPublicationReached = yield* Deferred.make<void>()
       const ds05CheckpointPublicationRelease = yield* Deferred.make<void>()
@@ -356,7 +468,9 @@ const runIssue268StartupCharacterizationFor = (
         Layer.provide(gitTargetLineageLayer)
       )
       const planningLayer = Layer.mergeAll(
-        deterministicOperationIdAllocatorLayer(`issue-268:${scenario.runId}:startup`),
+        deterministicOperationIdAllocatorLayer(
+          `issue-268:${scenario.runId}:${mode === "DS09" ? "restart" : "startup"}`
+        ),
         deterministicTaskClaimAcquisitionPlannerLayer({
           owner: ClaimOwner.make("issue-268-controlled-owner"),
           tokenPrefix: "issue-268-controlled-claim"
@@ -382,7 +496,7 @@ const runIssue268StartupCharacterizationFor = (
       const applicationExit = yield* makeApplicationExitShell(
         coordinatorOwnership,
         { requestEnd: () => Effect.void },
-        applicationExitTraceFor(ds08Controls)
+        applicationExitTraceFor(processControls)
       )
       const runtimeLayer = ({ opportunity }: JournaledRuntimeLayerInput) =>
         validatedRunActivationLayer(
@@ -413,12 +527,47 @@ const runIssue268StartupCharacterizationFor = (
         Layer.provide(executorLayer)
       )
       const applicationContext = yield* Layer.build(application)
-      yield* incrementApplicationBuildCount(ds08Controls)
+      yield* incrementApplicationBuildCount(processControls)
       const sharedBootstrap = Context.get(applicationContext, JournaledRunBootstrap)
       const sharedBootstrapLayer = Layer.succeed(JournaledRunBootstrap, sharedBootstrap)
       const controlledExecutorFactory = (runId: RunId, target: TrackerTarget) =>
         Effect.gen(function* () {
           const live = yield* makeLiveDeliveryActionExecutor(runId, target)
+          // eslint-disable-next-line complexity -- DS-09 admits only its one graph read and exact A/C/D reusable-position observations.
+          const validateDs09Action = (action: MaterializedDeliveryAction) => {
+            if (ds09Controls === undefined) return Effect.void
+            if (action._tag === "FreshOperationAction" && action.proposal.route._tag === "TrackerGraphReadRoute") {
+              return Effect.void
+            }
+            if (
+              action._tag !== "IdentityFreeAction" ||
+              action.proposal.route._tag !== "IdentityFreeWorkflowRoute" ||
+              action.proposal.route.transition._tag !== "ObservePlannedAttemptExecutorWork"
+            ) {
+              return Effect.die(`DS-09 materialized unexpected action ${action._tag}`)
+            }
+            const { admission } = action.proposal
+            const { plannedAttempt } = action.proposal.route.transition
+            const expectedCorrelation = plannedAttemptExecutorCorrelation(plannedAttempt)
+            if (
+              admission.taskWorkPosition._tag !== "TaskWorkPositionRequired" ||
+              admission.taskWorkPosition.mode !== "ReserveOrReuse" ||
+              admission.taskWorkPosition.taskId !== plannedAttempt.taskId ||
+              admission.plannedAttemptProtocol._tag !== "PlannedAttemptProtocolRequired" ||
+              plannedAttemptExecutorCorrelationKey(admission.plannedAttemptProtocol.correlation) !==
+                plannedAttemptExecutorCorrelationKey(expectedCorrelation)
+            ) {
+              return Effect.die(`DS-09 admitted ${plannedAttempt.attemptId} without exact reusable-position authority`)
+            }
+            const taskWorkPosition = admission.taskWorkPosition
+            const plannedAttemptProtocolCorrelation = admission.plannedAttemptProtocol.correlation
+            return Ref.update(ds09Controls.observationAdmissions, (current) =>
+              new Map(current).set(plannedAttemptExecutorCorrelationKey(expectedCorrelation), {
+                admission: { plannedAttemptProtocolCorrelation, taskWorkPosition },
+                plannedAttempt
+              })
+            )
+          }
           const awaitDs01Claim = (stage: ReturnType<typeof actionStage>) =>
             mode === "DS01" && stage?.stage === "AcquireTaskClaim"
               ? Effect.gen(function* () {
@@ -448,6 +597,7 @@ const runIssue268StartupCharacterizationFor = (
             execute: (action, lease) =>
               Effect.gen(function* () {
                 const stage = actionStage(action)
+                yield* validateDs09Action(action)
                 yield* rejectDs06EAction(stage)
                 yield* awaitDs01Claim(stage)
                 yield* holdDs05AdditionalClaim(stage)
@@ -459,22 +609,80 @@ const runIssue268StartupCharacterizationFor = (
               })
           })
         })
-      const fiber = yield* runWorkflowWithControlledDeliveryActionExecutor(
-        scenario.target,
-        Effect.succeed(scenario.policies.P1),
-        AllocatedWorkflowRunId.make(scenario.runId),
-        controlledExecutorFactory,
-        false
-      ).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            sharedBootstrapLayer,
-            sharedPlanningLayer,
-            Layer.succeed(DeliveryRelationPublicationObserver, publicationObserver)
-          )
-        ),
-        Effect.forkIn(currentScope)
+      const activationLayer = Layer.mergeAll(
+        sharedBootstrapLayer,
+        sharedPlanningLayer,
+        Layer.succeed(DeliveryRelationPublicationObserver, publicationObserver)
       )
+      const ordinaryActivation = (opportunity?: RunActivationOpportunityValue) =>
+        runWorkflowWithControlledDeliveryActionExecutor(
+          scenario.target,
+          mode === "DS09"
+            ? Effect.die("DS-09 must reconstruct the existing Run")
+            : Effect.succeed(scenario.policies.P1),
+          AllocatedWorkflowRunId.make(scenario.runId),
+          controlledExecutorFactory,
+          false,
+          opportunity
+        ).pipe(Effect.provide(activationLayer))
+      const fiber = yield* (
+        ds09Controls === undefined
+          ? ordinaryActivation()
+          : Effect.gen(function* () {
+              const activationResult = yield* Ref.make<RunFinalityDecision | undefined>(undefined)
+              const activationSettled = yield* Deferred.make<void>()
+              const ownerFailure = yield* Deferred.make<unknown>()
+              const ownerLayer = runReactivationOwnerLayer({
+                activate: (opportunity) =>
+                  Effect.gen(function* () {
+                    if (opportunity._tag !== "OrdinaryRunEntry") {
+                      return yield* Effect.die("DS-09 owner invoked its ordinary callback with an active refresh")
+                    }
+                    yield* Ref.update(ds09Controls.ordinaryOwnerActivationCount, (count) => count + 1)
+                    yield* Ref.update(ds09Controls.ordinaryOwnerActivationOpportunities, (current) => [
+                      ...current,
+                      opportunity._tag
+                    ])
+                    const result = yield* ordinaryActivation(opportunity)
+                    yield* Ref.set(activationResult, result)
+                    return result
+                  }),
+                activateActiveWorkAuthorityRefresh: (source) =>
+                  Effect.die(`DS-09 received an unexpected ${source} refresh before restart settlement`),
+                activationInterval: "1 hour",
+                failureCooldown: "1 hour",
+                installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
+                  sharedBootstrap
+                    .registerAcceptedRunReactivationObservers({
+                      acceptedFactPublication: () => acceptedFactPublication,
+                      control
+                    })
+                    .pipe(Effect.orDie),
+                isTerminationFailure: () => false,
+                onActivationFinalizationStart: (kind) =>
+                  kind === "Ordinary"
+                    ? Deferred.succeed(activationSettled, undefined).pipe(Effect.asVoid)
+                    : Effect.die("DS-09 finalized an unexpected active refresh"),
+                onFailure: (failure) => Deferred.succeed(ownerFailure, failure).pipe(Effect.asVoid),
+                readControl: sharedBootstrap.readRunReactivationControl(scenario.target, scenario.runId),
+                runId: scenario.runId
+              }).pipe(Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)))
+              return yield* Effect.gen(function* () {
+                yield* RunReactivationOwner
+                yield* Deferred.await(activationSettled).pipe(
+                  Effect.raceFirst(
+                    Deferred.await(ownerFailure).pipe(
+                      Effect.flatMap((failure) => Effect.die(`DS-09 reactivation owner failed: ${String(failure)}`))
+                    )
+                  )
+                )
+                const result = yield* Ref.get(activationResult)
+                return result === undefined
+                  ? yield* Effect.die("DS-09 owner finalized without an activation result")
+                  : result
+              }).pipe(Effect.provide(ownerLayer))
+            })
+      ).pipe(Effect.forkIn(currentScope))
 
       const takeWhileRuntimeActive = <A>(queue: Queue.Dequeue<A>): Effect.Effect<A> =>
         Queue.take(queue).pipe(
@@ -866,7 +1074,10 @@ const runIssue268StartupCharacterizationFor = (
         if (mode !== "DS02") yield* completeTrackerEdit(startupDecision)
       })
 
-      if (mode === "DS01") yield* completeDs01
+      if (mode === "DS09") {
+        decision = yield* Fiber.join(fiber)
+        if (ds09Controls !== undefined) yield* Ref.set(ds09Controls.after, yield* ds03Snapshot())
+      } else if (mode === "DS01") yield* completeDs01
       else yield* completeDs02
       return {
         claimReleaseOrder: yield* Ref.get(claimReleaseOrder),
@@ -1018,5 +1229,171 @@ export const runIssue268Ds08Characterization = Effect.scoped(
         projectedReports: new Map(yield* Ref.get(projectedReports))
       } satisfies Issue268Ds08Characterization
     } satisfies Issue268Ds08StartupCharacterization
+  })
+)
+
+/** Reconstructs the same Run in a fresh coordinator after the DS-08 process cut. */
+export const runIssue268Ds09Characterization = Effect.scoped(
+  // eslint-disable-next-line complexity -- One restart scenario owns process loss, fresh owner startup, three observation gates, and exact settlement.
+  Effect.gen(function* () {
+    const outerScope = yield* Effect.scope
+    const firstProcessScope = yield* Scope.make()
+    const applicationBuildCount = yield* Ref.make(0)
+    const applicationExitTrace = yield* Ref.make<ReadonlyArray<ApplicationExitTraceEvent>>([])
+    const beforeLoss = yield* Ref.make<Issue268Ds08BeforeLoss | undefined>(undefined)
+    const childScopeFinalizationCount = yield* Ref.make(0)
+    const executorObserveCalls = yield* Ref.make(0)
+    const firstProcessInterruptionCount = yield* Ref.make(0)
+    const firstProcessReady = yield* Deferred.make<void>()
+    const p2PublicationReturned = yield* Deferred.make<void>()
+    const projectedReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
+    const snapshot = yield* Ref.make<(() => Effect.Effect<Issue268Ds03BoundarySnapshot, unknown, never>) | undefined>(
+      undefined
+    )
+    const sharedAuthoritiesReady = yield* Deferred.make<Issue268SharedAuthorities>()
+
+    yield* Scope.addFinalizer(
+      firstProcessScope,
+      Ref.update(childScopeFinalizationCount, (count) => count + 1)
+    )
+    yield* Effect.addFinalizer((exit) => Scope.close(firstProcessScope, exit))
+
+    const firstProcess = yield* runIssue268StartupCharacterizationFor("DS08", {
+      sharedAuthoritiesReady,
+      sharedScope: outerScope,
+      ds08: {
+        applicationBuildCount,
+        applicationExitTrace,
+        beforeLoss,
+        childScopeFinalizationCount,
+        executorObserveCalls,
+        firstProcessReady,
+        p2PublicationReturned,
+        projectedReports,
+        snapshot
+      }
+    }).pipe(Effect.provideService(Scope.Scope, firstProcessScope), Effect.forkIn(firstProcessScope))
+    yield* Deferred.await(firstProcessReady).pipe(
+      Effect.raceFirst(
+        Fiber.await(firstProcess).pipe(
+          Effect.flatMap((exit) => Effect.die(`DS-09 first coordinator exited before process loss: ${exit._tag}`))
+        )
+      )
+    )
+    const preLoss = yield* Ref.get(beforeLoss)
+    if (preLoss === undefined) return yield* Effect.die("DS-09 did not capture its pre-loss boundary")
+    yield* Ref.update(firstProcessInterruptionCount, (count) => count + 1)
+    yield* Fiber.interrupt(firstProcess)
+    yield* Scope.close(firstProcessScope, Exit.void)
+
+    const sharedAuthorities = yield* Deferred.await(sharedAuthoritiesReady)
+    const secondProcessScope = yield* Scope.make()
+    const executorObservations = yield* Ref.make<ReadonlyArray<Issue268ExecutorObservationCapture>>([])
+    const observationAdmissions = yield* Ref.make<
+      ReadonlyMap<string, Pick<Issue268ExecutorObservationCapture, "admission" | "plannedAttempt">>
+    >(new Map())
+    const observationRequests = yield* Queue.unbounded<Issue268ExecutorObservationCapture>()
+    const observationReleases = [
+      yield* Deferred.make<void>(),
+      yield* Deferred.make<void>(),
+      yield* Deferred.make<void>()
+    ]
+    const observationReturned = [
+      yield* Deferred.make<void>(),
+      yield* Deferred.make<void>(),
+      yield* Deferred.make<void>()
+    ]
+    const ordinaryOwnerActivationCount = yield* Ref.make(0)
+    const ordinaryOwnerActivationOpportunities = yield* Ref.make<ReadonlyArray<"OrdinaryRunEntry">>([])
+    const after = yield* Ref.make<Issue268Ds03BoundarySnapshot | undefined>(undefined)
+
+    yield* Effect.addFinalizer((exit) => Scope.close(secondProcessScope, exit))
+    const secondProcess = yield* runIssue268StartupCharacterizationFor("DS09", {
+      ds09: {
+        after,
+        applicationBuildCount,
+        applicationExitTrace,
+        executorObserveCalls,
+        executorObservations,
+        observationAdmissions,
+        observationReleases,
+        observationRequests,
+        observationReturned,
+        ordinaryOwnerActivationCount,
+        ordinaryOwnerActivationOpportunities,
+        projectedReports
+      },
+      sharedAuthorities,
+      sharedScope: outerScope
+    }).pipe(Effect.provideService(Scope.Scope, secondProcessScope), Effect.forkIn(secondProcessScope))
+
+    const takeObservationWhileRunning = Queue.take(observationRequests).pipe(
+      Effect.raceFirst(
+        Fiber.await(secondProcess).pipe(
+          Effect.flatMap((exit) => Effect.die(`DS-09 second coordinator exited before R7: ${JSON.stringify(exit)}`))
+        )
+      )
+    )
+    const awaitObservationReturned = (index: number) => {
+      const returned = observationReturned[index]
+      return returned === undefined
+        ? Effect.die(`DS-09 has no return gate for observation ${index}`)
+        : Deferred.await(returned).pipe(
+            Effect.raceFirst(
+              Fiber.await(secondProcess).pipe(
+                Effect.flatMap((exit) =>
+                  Effect.die(`DS-09 second coordinator exited during R7: ${JSON.stringify(exit)}`)
+                )
+              )
+            )
+          )
+    }
+    const expectedAttemptIds = [scenario.attempts.A1, scenario.attempts.C1, scenario.attempts.D1]
+    for (const [index, expectedAttemptId] of expectedAttemptIds.entries()) {
+      const capture = yield* takeObservationWhileRunning
+      if (capture.correlation.attemptId !== expectedAttemptId) {
+        return yield* Effect.die(
+          `DS-09 expected ${expectedAttemptId} passive observation, received ${capture.correlation.attemptId}`
+        )
+      }
+      if (capture.correlation.runId !== scenario.runId || capture.purpose._tag !== "PassiveLifecycleObservation") {
+        return yield* Effect.die("DS-09 passive observation carried the wrong identity or purpose")
+      }
+      const release = observationReleases[index]
+      if (release === undefined) return yield* Effect.die(`DS-09 has no release gate for observation ${index}`)
+      yield* Deferred.succeed(release, undefined)
+      yield* awaitObservationReturned(index)
+    }
+
+    const secondRun = yield* Fiber.join(secondProcess)
+    const afterLoss = yield* Ref.get(after)
+    if (afterLoss === undefined) return yield* Effect.die("DS-09 did not capture its post-restart boundary")
+    if (secondRun.decision?._tag !== "RunMustRemainActive" || secondRun.decision.reason !== "RunnableTransition") {
+      return yield* Effect.die("DS-09 did not return exact RunMustRemainActive(RunnableTransition)")
+    }
+    const decision = { _tag: "RunMustRemainActive", reason: "RunnableTransition" } as const
+    const reconstructedPublication = afterLoss.publications.findLast(
+      ({ publication }) => publication.graph._tag === "GraphEstablished"
+    )
+    if (reconstructedPublication === undefined) {
+      return yield* Effect.die("DS-09 did not publish reconstructed current graph state")
+    }
+    yield* Fiber.interrupt(secondProcess)
+    yield* Scope.close(secondProcessScope, Exit.void)
+    return {
+      ds09: {
+        after: afterLoss,
+        applicationBuildCount: yield* Ref.get(applicationBuildCount),
+        applicationExitTrace: yield* Ref.get(applicationExitTrace),
+        beforeLoss: preLoss,
+        decision,
+        executorObservations: yield* Ref.get(executorObservations),
+        firstProcessInterruptionCount: yield* Ref.get(firstProcessInterruptionCount),
+        ordinaryOwnerActivationCount: yield* Ref.get(ordinaryOwnerActivationCount),
+        ordinaryOwnerActivationOpportunities: yield* Ref.get(ordinaryOwnerActivationOpportunities),
+        projectedReports: new Map(yield* Ref.get(projectedReports)),
+        reconstructedPublication
+      } satisfies Issue268Ds09Characterization
+    } satisfies Issue268Ds09StartupCharacterization
   })
 )

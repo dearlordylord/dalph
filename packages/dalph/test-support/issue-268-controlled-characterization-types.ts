@@ -1,4 +1,12 @@
-import type { PlannedAttemptExecutorReport, PlannedTaskAttempt, TaskId, TaskRevision } from "@dalph/contracts"
+import type {
+  PlannedAttemptExecutorCorrelation,
+  PlannedAttemptExecutorObservationPurpose,
+  PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorReport,
+  PlannedTaskAttempt,
+  TaskId,
+  TaskRevision
+} from "@dalph/contracts"
 import type {
   ApplicationExitTraceEvent,
   DeliveryRelationInputBundle,
@@ -154,3 +162,38 @@ export interface Issue268Ds08Characterization {
 }
 
 export type Issue268Ds08StartupCharacterization = { readonly ds08: Issue268Ds08Characterization }
+
+export interface Issue268ExecutorObservationCapture {
+  readonly admission: {
+    readonly plannedAttemptProtocolCorrelation: PlannedAttemptExecutorCorrelation
+    readonly taskWorkPosition: {
+      readonly _tag: "TaskWorkPositionRequired"
+      readonly mode: "ReserveOrReuse"
+      readonly taskId: TaskId
+    }
+  }
+  readonly correlation: PlannedAttemptExecutorCorrelation
+  readonly currentGraphPublication: DeliveryRelationInputBundle | undefined
+  readonly plannedAttempt: PlannedTaskAttempt
+  readonly process: "DS09"
+  readonly projection: PlannedAttemptExecutorProjection
+  readonly purpose: PlannedAttemptExecutorObservationPurpose
+}
+
+export interface Issue268Ds09Characterization {
+  readonly after: Issue268Ds03BoundarySnapshot
+  readonly applicationBuildCount: number
+  readonly applicationExitTrace: ReadonlyArray<ApplicationExitTraceEvent>
+  readonly beforeLoss: Issue268Ds08BeforeLoss
+  readonly decision: Extract<RunFinalityDecision, { readonly _tag: "RunMustRemainActive" }> & {
+    readonly reason: "RunnableTransition"
+  }
+  readonly executorObservations: ReadonlyArray<Issue268ExecutorObservationCapture>
+  readonly firstProcessInterruptionCount: number
+  readonly ordinaryOwnerActivationCount: number
+  readonly ordinaryOwnerActivationOpportunities: ReadonlyArray<"OrdinaryRunEntry">
+  readonly projectedReports: ReadonlyMap<string, PlannedAttemptExecutorReport>
+  readonly reconstructedPublication: DeliveryRelationInputBundle
+}
+
+export type Issue268Ds09StartupCharacterization = { readonly ds09: Issue268Ds09Characterization }

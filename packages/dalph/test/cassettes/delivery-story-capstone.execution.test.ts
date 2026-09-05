@@ -2,6 +2,7 @@ import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import { plannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import {
+  deliveryProposalOrderTaskId,
   deriveRunnableFrontier,
   evaluateDeliveryRuntimeInputBundle,
   type DeliveryRelationInputBundle,
@@ -17,9 +18,11 @@ import {
   runIssue268Ds05Characterization,
   runIssue268Ds06Characterization,
   runIssue268Ds07Characterization,
-  runIssue268Ds08Characterization
+  runIssue268Ds08Characterization,
+  runIssue268Ds09Characterization
 } from "../../test-support/issue-268-controlled-characterization.js"
 import { issue268ControlledDeliveryCharacterization as controlledScenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
+import { isIssue268RetainedBResponsibility } from "../../test-support/issue-268-controlled-ds06.js"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
 
 const lastItemIndex = -1
@@ -1104,6 +1107,155 @@ it.effect(
           controlledScenario.attempts.D1
         ].toSorted()
       )
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "reattaches three exact attempts after restart without Begin or Resume",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runIssue268Ds09Characterization
+      const ds09 = run.ds09
+      const expectedHeld = [
+        controlledScenario.attempts.A1,
+        controlledScenario.attempts.C1,
+        controlledScenario.attempts.D1
+      ].toSorted()
+      const observations = ds09.executorObservations
+      const secondPublications = ds09.after.publications
+      const journalSuffix = ds09.after.records.slice(ds09.beforeLoss.snapshot.records.length)
+      const trackerRequestSuffix = ds09.after.requestedTargets.slice(ds09.beforeLoss.snapshot.requestedTargets.length)
+      const held = (publication: DeliveryRelationInputBundle) =>
+        publication.actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId).toSorted()
+      const preLossPlans = new Map(
+        ds09.beforeLoss.snapshot.plans.map((plannedAttempt) => [plannedAttempt.attemptId, plannedAttempt] as const)
+      )
+
+      expect(observations.map(({ correlation }) => correlation.attemptId)).toEqual([
+        controlledScenario.attempts.A1,
+        controlledScenario.attempts.C1,
+        controlledScenario.attempts.D1
+      ])
+      expect(observations.every(({ purpose }) => purpose._tag === "PassiveLifecycleObservation")).toBe(true)
+      for (const { currentGraphPublication } of observations) {
+        expect(currentGraphPublication).toMatchObject({
+          publication: {
+            graph: { _tag: "GraphEstablished", observation: { snapshot: controlledScenario.graphs.G1 } },
+            policy: ds09.beforeLoss.ds07.returned
+          }
+        })
+      }
+      expect(
+        observations.map(({ projection }) =>
+          projection._tag === "Exact"
+            ? { attemptId: projection.report.correlation.attemptId, report: projection.report._tag }
+            : projection
+        )
+      ).toEqual([
+        { attemptId: controlledScenario.attempts.A1, report: "ExecutorWorkExecuting" },
+        { attemptId: controlledScenario.attempts.C1, report: "ExecutorWorkExecuting" },
+        { attemptId: controlledScenario.attempts.D1, report: "ExecutorWorkExecuting" }
+      ])
+      expect(observations.map(({ correlation }) => correlation.runId)).toEqual([
+        controlledScenario.runId,
+        controlledScenario.runId,
+        controlledScenario.runId
+      ])
+      for (const observation of observations) {
+        expect(observation.plannedAttempt).toEqual(preLossPlans.get(observation.correlation.attemptId))
+        expect(observation.admission.taskWorkPosition).toEqual({
+          _tag: "TaskWorkPositionRequired",
+          mode: "ReserveOrReuse",
+          taskId: observation.plannedAttempt.taskId
+        })
+        expect(observation.admission.plannedAttemptProtocolCorrelation).toEqual(observation.correlation)
+      }
+      expect(ds09.after.commands).toEqual([])
+      expect(ds09.after.claimRequests).toEqual([])
+      expect(ds09.after.plans).toEqual([])
+      expect(ds09.after.worktreeCreateRequests).toEqual(ds09.beforeLoss.snapshot.worktreeCreateRequests)
+      expect(journalSuffix.map(({ event }) => event._tag)).toEqual([
+        "TaskTrackerReadIntentRecorded",
+        "TaskTrackerFactsObserved"
+      ])
+      expect(journalSuffix[0]?.event).toMatchObject({
+        operation: { _tag: "ReadTrackerGraph", cause: { _tag: "WorkflowEstablishment" } }
+      })
+      expect(journalSuffix[1]?.event).toMatchObject({ observation: { _tag: "UnchangedTaskTrackerFactsReconfirmed" } })
+      expect(trackerRequestSuffix).toEqual([controlledScenario.target])
+      expect(secondPublications.length).toBeGreaterThan(0)
+      for (const publication of secondPublications) {
+        expect(publication.publication.policy).toEqual(ds09.beforeLoss.ds07.returned)
+        expect(held(publication)).toEqual(expectedHeld)
+        expect(publication.publication.exactEvidence.some(isIssue268RetainedBResponsibility)).toBe(true)
+      }
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "returns RunnableTransition after strict restart projections before the later refresh",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runIssue268Ds09Characterization
+      const ds09 = run.ds09
+      expect(ds09.decision).toEqual({ _tag: "RunMustRemainActive", reason: "RunnableTransition" })
+      expect(ds09.applicationBuildCount).toBe(2)
+      expect(ds09.firstProcessInterruptionCount).toBe(1)
+      expect(ds09.ordinaryOwnerActivationCount).toBe(1)
+      expect(ds09.ordinaryOwnerActivationOpportunities).toEqual(["OrdinaryRunEntry"])
+      expect(ds09.applicationExitTrace).toEqual([])
+      expect(ds09.projectedReports).toEqual(ds09.beforeLoss.projectedReports)
+      const expectedHeld = [
+        controlledScenario.attempts.A1,
+        controlledScenario.attempts.C1,
+        controlledScenario.attempts.D1
+      ].toSorted()
+      const reportsByAttempt = new Map(
+        [...ds09.projectedReports.values()].map((report) => [report.correlation.attemptId, report] as const)
+      )
+      expect(reportsByAttempt.get(controlledScenario.attempts.A1)).toMatchObject({
+        _tag: "ExecutorWorkExecuting",
+        correlation: { attemptId: controlledScenario.attempts.A1, runId: controlledScenario.runId }
+      })
+      expect(reportsByAttempt.get(controlledScenario.attempts.C1)).toMatchObject({
+        _tag: "ExecutorWorkExecuting",
+        correlation: { attemptId: controlledScenario.attempts.C1, runId: controlledScenario.runId }
+      })
+      expect(reportsByAttempt.get(controlledScenario.attempts.D1)).toMatchObject({
+        _tag: "ExecutorWorkExecuting",
+        correlation: { attemptId: controlledScenario.attempts.D1, runId: controlledScenario.runId }
+      })
+      expect(reportsByAttempt.get(controlledScenario.attempts.B1)).toMatchObject({
+        _tag: "ExecutorWorkSafelySuspended",
+        correlation: { attemptId: controlledScenario.attempts.B1, runId: controlledScenario.runId }
+      })
+      const publication = ds09.reconstructedPublication
+      expect(
+        publication.actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId).toSorted()
+      ).toEqual(expectedHeld)
+      const runtime = yield* evaluateDeliveryRuntimeInputBundle(publication)
+      if (runtime.proposedActions._tag !== "DeliveryProposalsAvailable") {
+        return expect.fail("DS-09 must retain a coherent capacity-blocked proposal frontier")
+      }
+      expect(runtime.proposedActions.freshTaskCandidates.map(({ taskId }) => taskId)).toContain(
+        controlledScenario.taskIds.E
+      )
+      expect(
+        runtime.proposedActions.proposals.filter(
+          ({ order }) => deliveryProposalOrderTaskId(order) === controlledScenario.taskIds.E
+        )
+      ).toEqual([])
+      const ePlacement = runtime.current.ticketDeliveries.source.placements.find(
+        ({ taskId }) => taskId === controlledScenario.taskIds.E
+      )?.placement
+      expect(ePlacement).toMatchObject({ _tag: "EligibleOutsideBound" })
+      expect(
+        runtime.proposedActions.proposals.flatMap(({ admission }) =>
+          admission.taskWorkPosition._tag === "TaskWorkPositionRequired" ? [admission.taskWorkPosition.taskId] : []
+        )
+      ).not.toContain(controlledScenario.taskIds.E)
     }),
   capstoneTimeout
 )

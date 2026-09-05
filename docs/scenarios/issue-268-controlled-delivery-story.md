@@ -11,7 +11,7 @@ observe the unchanged production workflow under explicit test controls, and
 only then ask the maintainer to freeze the observed cassette order. This
 documentation-only change does not change Dalph runtime behavior. Acceptance
 freezes the thirteen behavioral outcomes, required causal edges, scope, and
-stop rules. It does not freeze the provisional O001--O087 order or authorize
+stop rules. It does not freeze the provisional O001--O089 order or authorize
 production changes to make that order pass.
 
 The 2026-09-05 pre-DS-04 audit corrected two stale read inventories without
@@ -220,7 +220,7 @@ representative test inventory is:
 | DS-06 | The newly free position admits independent D. Dalph records and observes D's exact claim, reads the required post-claim graph and current specification, records D1's plan/Base SHA, creates D1's worktree, records one `Begin` intent, sends one `Begin`, observes `Executing`, and publishes D1 as holding the position. | A1, C1, and D1 execute and hold three positions; B1 remains retained; E remains unstarted. |
 | DS-07 | Alice changes capacity from three to two while those three exact attempts are executing. Dalph records and applies policy revision P2. It does not evict or suspend any attempt merely to reach the lower limit. | Capacity is two; A1, C1, and D1 continue to hold three grandfathered positions. |
 | DS-08 | After P2 is durable, the coordinator process dies. The controlled executor substrate and exact sessions remain alive and observable on the same host. | The UI may disconnect. No executor attempt is cancelled or replaced by the process loss. |
-| DS-09 | Alice restarts Dalph on the same host. Dalph reads the Journal, reconstructs P2, A1/C1/D1 as held and B1 as retained, and reads the exact executor projections for A1, C1, and D1. All still report `Executing`. These passive reads consume no task-work position and send no `Begin` or `Resume`. Eligible E remains a descriptive graph candidate with `EligibleOutsideBound` placement; Dalph constructs no E operation proposal or capability because three positions remain held against capacity two. That non-empty capacity-blocked candidate frontier makes the activation return exact `CoordinatorActivationReturned(RunMustRemainActive, RunnableTransition)` after the strict projections and without another graph read. | The maintained result again projects A1, C1, and D1 executing, B1 retained, and E unstarted, with capacity two. The sole owner settles the exact restart return before accepting the later close-C refresh. |
+| DS-09 | Alice restarts Dalph on the same host. Dalph reads the Journal and reconstructs P2, A1/C1/D1 as held, and B1 as retained. Because process loss discarded the live graph projection, the fresh activation makes one current complete G1 observation and publishes it before relying on E's current tracker state. Dalph then reads the exact executor projections for A1, C1, and D1; all still report `Executing`. These passive reads acquire no additional task-work position and send no `Begin` or `Resume`. Eligible E remains a descriptive graph candidate with `EligibleOutsideBound` placement; Dalph constructs no E operation proposal or capability because three positions remain held against capacity two. That non-empty capacity-blocked candidate frontier makes the activation return exact `CoordinatorActivationReturned(RunMustRemainActive, RunnableTransition)` after the strict projections and without a second post-quiescence/finality graph read. | The maintained result again projects A1, C1, and D1 executing, B1 retained, and E unstarted, with capacity two. The sole owner settles the exact restart return before accepting the later close-C refresh. |
 | DS-10 | Alice closes C in the tracker without reporting success. The tracker accepts G2 and sends one notification. The sole refresh owner reads G2 once. C's closed lifecycle is already conclusive, so C crosses no focused specification, claim, worktree, or lineage boundary. A and D still match and each complete those four current-fact reads. Dalph records one exact C1 `Suspend` intent, sends one `Suspend`, observes the immediate `Executing` response, and keeps C1's position held. | The maintained result projects C1 as suspending; A1, C1, and D1 still hold three positions. |
 | DS-11 | Gate R9 makes C1's exact lifecycle projection become `Safe`. Dalph records and publishes it, releases only C1's position, and retains C1's exact attempt/worktree. | A1 and D1 hold two positions, exactly filling P2. B1 and C1 are retained. |
 | DS-12 | Alice chooses `Continue` for exact B1. Dalph records that choice and reads the current graph, B specification, exact claim, planned worktree, and Git lineage. The facts authorize resuming B1, but no position is free, so Dalph records no `Resume` intent and sends no executor command yet. | The maintained result projects B1 waiting to continue; A1 and D1 still occupy both positions. |
@@ -354,7 +354,7 @@ condition for closing #268.
 
 ## Provisional occurrence hypothesis and stable denominator
 
-O001--O087 is a provisional, source-derived characterization checklist. It is
+O001--O089 is a provisional, source-derived characterization checklist. It is
 not yet the strict cassette oracle or a progress denominator. The cassette-free
 characterization must confirm, remove, add, and reorder these groups without
 changing production. Its observed complete inventory becomes authoritative
@@ -373,10 +373,10 @@ or extra item, and publishes the resulting exact order for review.
 Within DS-02, O003--O008 belong to A, O009--O014 to B, and O015--O020
 to C, using the six operations listed in that row. DS-06 uses the same six
 operations for D. DS-04 assigns O028--O031 to A, O032 to B's conclusive
-specification, and O033--O036 to C. DS-10 assigns O061--O064 to A and
-O065--O068 to D; C's closed G2 fact stops its focused chain. DS-12 assigns
-O073 to the Continue record, O074--O075 to the graph read/publication pair,
-O076--O079 to B's four focused facts, and O080 to the waiting projection.
+specification, and O033--O036 to C. DS-10 assigns O063--O066 to A and
+O067--O070 to D; C's closed G2 fact stops its focused chain. DS-12 assigns
+O075 to the Continue record, O076--O077 to the graph read/publication pair,
+O078--O081 to B's four focused facts, and O082 to the waiting projection.
 
 | Beat | IDs | Occurrence groups | Count |
 |---|---|---|---:|
@@ -388,12 +388,12 @@ O076--O079 to B's four focused facts, and O080 to the waiting projection.
 | DS-06 | O041--O046 | D claim intent/call/observation; post-claim graph and specification reads; accepted plan/Base SHA record; worktree intent/call/observation; Begin intent/call/Executing observation; held-position publication | 6 |
 | DS-07 | O047--O048 | Alice's capacity request; durable P2 application | 2 |
 | DS-08 | O049 | coordinator process loss | 1 |
-| DS-09 | O050--O055 | Journal reconstruction; A1/C1/D1 passive projection reads; reconstructed state publication; exact `RunnableTransition` activation return | 6 |
-| DS-10 | O056--O069 | refresh ownership; Alice's C close; notification; G2 read; G2 publication; A/D four focused current-fact reads; C1 Suspend intent/call/Executing response | 14 |
-| DS-11 | O070--O072 | C1 Safe projection; Safe Journal/publication; C1 position release/retention | 3 |
-| DS-12 | O073--O080 | Alice's exact Continue record; current graph read/publication; four focused B fact reads; waiting projection | 8 |
-| DS-13 | O081--O087 | A1 terminal projection; terminal Journal record; terminal publication; A1 position release; B1 position binding; Resume intent/call/Executing response; held-position publication | 7 |
-| **Total** | **Thirteen beats** | **87** |
+| DS-09 | O050--O057 | Journal reconstruction; current G1 read; accepted G1 publication; A1/C1/D1 passive projection reads; reconstructed state publication; exact `RunnableTransition` activation return | 8 |
+| DS-10 | O058--O071 | refresh ownership; Alice's C close; notification; G2 read; G2 publication; A/D four focused current-fact reads; C1 Suspend intent/call/Executing response | 14 |
+| DS-11 | O072--O074 | C1 Safe projection; Safe Journal/publication; C1 position release/retention | 3 |
+| DS-12 | O075--O082 | Alice's exact Continue record; current graph read/publication; four focused B fact reads; waiting projection | 8 |
+| DS-13 | O083--O089 | A1 terminal projection; terminal Journal record; terminal publication; A1 position release; B1 position binding; Resume intent/call/Executing response; held-position publication | 7 |
+| **Total** | **Thirteen beats** | **89** |
 
 The stable recovery denominator accepted now is:
 
@@ -416,7 +416,7 @@ The stable recovery denominator accepted now is:
   substitute closes #268.
 
 Before the observed-order acceptance cut, the occurrence count and remaining
-implementation count are unknown; O087 is not a numerator or denominator. No
+implementation count are unknown; O089 is not a numerator or denominator. No
 completion percentage may be reported. After that cut, a hang, timeout, or
 partial trace is zero complete capstone runs, not partial completion.
 
@@ -490,7 +490,7 @@ cached ten-task run. Its table carries these thirteen named assertion rows:
 | DS-06 | D1 begins only after B1 releases, and A1/C1/D1 hold three positions. |
 | DS-07 | P2 lowers capacity to two without evicting A1/C1/D1. |
 | DS-08 | The coordinator dies after P2 while exact executor sessions remain externally observable. |
-| DS-09 | Restart reconstructs A1/C1/D1 held plus B1 retained and E unstarted, performs only passive executor reads with zero Begin/Resume and zero admission, and settles exact `RunMustRemainActive(RunnableTransition)` before later refresh. |
+| DS-09 | Restart reconstructs A1/C1/D1 held plus B1 retained, makes one current complete G1 observation before relying on E's current placement, performs only passive executor reads with zero Begin/Resume and zero additional-position admission, and settles exact `RunMustRemainActive(RunnableTransition)` without a second finality graph read before the later refresh. |
 | DS-10 | C's non-success closure becomes G2; only C1 receives one Suspend and keeps its position. |
 | DS-11 | Exact C1 Safe publishes before its release; A1/D1 hold two positions and B1/C1 are retained. |
 | DS-12 | Alice's exact Continue authorizes B1, but B1 waits with zero Resume while A1/D1 fill capacity two. |
