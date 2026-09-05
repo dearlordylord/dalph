@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -96,3 +96,32 @@ test.skipIf(process.platform === "win32")(
     }
   }
 )
+
+test.each([0, 7])("silent pnpm retains tool diagnostics and exit status %i", async (exitCode) => {
+  const directory = await mkdtemp(join(tmpdir(), "dalph-quiet-gate-"))
+  try {
+    await writeFile(
+      join(directory, "package.json"),
+      JSON.stringify({ private: true, scripts: { probe: "node probe.cjs" } })
+    )
+    await writeFile(
+      join(directory, "probe.cjs"),
+      `process.stdout.write("tool output\\n"); process.stderr.write("tool diagnostic\\n"); process.exitCode = ${exitCode}`
+    )
+    const result = await runBoundedCommand({
+      acceptedExitCodes: [exitCode],
+      args: ["--silent", "--dir", directory, "run", "probe"],
+      captureOutput: true,
+      executable: "pnpm",
+      forwardOutput: false,
+      name: "quiet gate fixture",
+      timeoutMilliseconds: 5000
+    })
+    expect(result.exitCode).toBe(exitCode)
+    expect(result.output).toContain("tool output\n")
+    expect(result.output).toContain("tool diagnostic\n")
+    expect(result.outputLineCount).toBe(2)
+  } finally {
+    await rm(directory, { force: true, recursive: true })
+  }
+})

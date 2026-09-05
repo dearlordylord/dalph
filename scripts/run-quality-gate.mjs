@@ -45,7 +45,8 @@ let successfulOutputLines = 0
 
 for (const gate of gates) {
   const result = await runBoundedCommand({
-    args: [pnpmEntryPoint, ...gate.args],
+    // Omit pnpm lifecycle banners; retain the child tool's output and exit status.
+    args: [pnpmEntryPoint, "--silent", ...gate.args],
     environment: gate.environment,
     executable: process.execPath,
     name: `Quality gate '${gate.name}'`,
