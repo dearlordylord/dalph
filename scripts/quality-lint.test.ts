@@ -25,7 +25,7 @@ const repositoryCompatibilityLintTimeout = 320_000
 const compatibilityLintSubprocessTimeout = 300_000
 const compatibilityLintEnvironment = {
   ...process.env,
-  NODE_OPTIONS: [process.env.NODE_OPTIONS, "--max-old-space-size=12288"].filter(Boolean).join(" ")
+  NODE_OPTIONS: [process.env["NODE_OPTIONS"], "--max-old-space-size=12288"].filter(Boolean).join(" ")
 }
 
 const CommandResult = Schema.Struct({ exitCode: Schema.Finite, output: Schema.String, outputLineCount: Schema.Int })
