@@ -16,7 +16,10 @@ const isExpectedRetainedBPlan = (plan: PlannedTaskAttempt) =>
     plan.worktree === "/dalph/controlled-characterization/issue-268/B-1"
   ].every(Boolean)
 
-const isExpectedRetainedB = (evidence: DeliveryRelationInputBundle["publication"]["exactEvidence"][number]) => {
+/** Exact retained B1 responsibility shared by later controlled-story checkpoints. */
+export const isIssue268RetainedBResponsibility = (
+  evidence: DeliveryRelationInputBundle["publication"]["exactEvidence"][number]
+) => {
   if (evidence._tag !== "ResponsibilityFacts" || evidence.facts._tag !== "PlannedAttemptExecutorFreshFacts") {
     return false
   }
@@ -49,7 +52,7 @@ export const isIssue268Ds06CompleteCheckpoint = (
       evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
       evidence.facts.responsibility.plannedAttempt.attemptId === scenario.attempts.D1
   )
-  const hasRetainedBResponsibility = publication.publication.exactEvidence.some(isExpectedRetainedB)
+  const hasRetainedBResponsibility = publication.publication.exactEvidence.some(isIssue268RetainedBResponsibility)
   const heldAttemptIds = publication.actionInputs.runtimeFacts.taskWork.held
     .map(({ correlation }) => correlation.attemptId)
     .toSorted()

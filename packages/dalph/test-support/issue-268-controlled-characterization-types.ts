@@ -2,7 +2,9 @@ import type { PlannedTaskAttempt, TaskId, TaskRevision } from "@dalph/contracts"
 import type {
   DeliveryRelationInputBundle,
   JournalRecord,
+  RunControlPolicy,
   RunFinalityDecision,
+  SetTaskWorkCapacityRequest,
   TaskClaimAcquisition,
   TraceItem,
   TrackerRevision,
@@ -30,6 +32,7 @@ export interface Issue268StartupCharacterization {
   readonly ds04?: Issue268Ds04Characterization
   readonly ds05?: Issue268Ds05Characterization
   readonly ds06?: Issue268Ds06Characterization
+  readonly ds07?: Issue268Ds07Characterization
 }
 
 export interface Issue268Ds03BoundarySnapshot {
@@ -57,7 +60,7 @@ export interface Issue268Ds03Characterization {
 
 export type Issue268Ds03StartupCharacterization = Omit<
   Issue268StartupCharacterization,
-  "ds03" | "ds04" | "ds05" | "ds06"
+  "ds03" | "ds04" | "ds05" | "ds06" | "ds07"
 > & { readonly ds03: Issue268Ds03Characterization }
 
 export interface Issue268Ds04Characterization {
@@ -69,7 +72,7 @@ export interface Issue268Ds04Characterization {
 
 export type Issue268Ds04StartupCharacterization = Omit<
   Issue268StartupCharacterization,
-  "ds03" | "ds04" | "ds05" | "ds06"
+  "ds03" | "ds04" | "ds05" | "ds06" | "ds07"
 > & { readonly ds03: Issue268Ds03Characterization; readonly ds04: Issue268Ds04Characterization }
 
 export interface Issue268Ds05Characterization {
@@ -81,7 +84,7 @@ export interface Issue268Ds05Characterization {
 
 export type Issue268Ds05StartupCharacterization = Omit<
   Issue268StartupCharacterization,
-  "ds03" | "ds04" | "ds05" | "ds06"
+  "ds03" | "ds04" | "ds05" | "ds06" | "ds07"
 > & {
   readonly ds03: Issue268Ds03Characterization
   readonly ds04: Issue268Ds04Characterization
@@ -98,10 +101,33 @@ export interface Issue268Ds06Characterization {
 
 export type Issue268Ds06StartupCharacterization = Omit<
   Issue268StartupCharacterization,
-  "ds03" | "ds04" | "ds05" | "ds06"
+  "ds03" | "ds04" | "ds05" | "ds06" | "ds07"
 > & {
   readonly ds03: Issue268Ds03Characterization
   readonly ds04: Issue268Ds04Characterization
   readonly ds05: Issue268Ds05Characterization
   readonly ds06: Issue268Ds06Characterization
+}
+
+export interface Issue268Ds07Characterization {
+  readonly after: Issue268Ds03BoundarySnapshot
+  readonly beforeCapacity: Issue268Ds03BoundarySnapshot
+  readonly capacityRecord: JournalRecord
+  readonly checkpointPublication: DeliveryRelationInputBundle
+  readonly p1: RunControlPolicy
+  readonly p2Publication: DeliveryRelationInputBundle
+  readonly readback: RunControlPolicy
+  readonly request: SetTaskWorkCapacityRequest
+  readonly returned: RunControlPolicy
+}
+
+export type Issue268Ds07StartupCharacterization = Omit<
+  Issue268StartupCharacterization,
+  "ds03" | "ds04" | "ds05" | "ds06" | "ds07"
+> & {
+  readonly ds03: Issue268Ds03Characterization
+  readonly ds04: Issue268Ds04Characterization
+  readonly ds05: Issue268Ds05Characterization
+  readonly ds06: Issue268Ds06Characterization
+  readonly ds07: Issue268Ds07Characterization
 }

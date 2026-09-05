@@ -15,7 +15,8 @@ import {
   runIssue268Ds03Characterization,
   runIssue268Ds04Characterization,
   runIssue268Ds05Characterization,
-  runIssue268Ds06Characterization
+  runIssue268Ds06Characterization,
+  runIssue268Ds07Characterization
 } from "../../test-support/issue-268-controlled-characterization.js"
 import { issue268ControlledDeliveryCharacterization as controlledScenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
@@ -861,6 +862,160 @@ it.effect(
       expect(newWorktrees.filter(({ taskId }) => taskId === controlledScenario.taskIds.E)).toEqual([])
       expect(forbiddenERecords).toEqual([])
       expect(forbiddenReleaseOrCleanup).toEqual([])
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "DS-07 applies P2 without evicting the three already-held attempts",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runIssue268Ds07Characterization
+      const ds07 = run.ds07
+
+      const newRecords = ds07.after.records.slice(ds07.beforeCapacity.records.length)
+      const capacityRecords = newRecords.filter(({ event }) => event._tag === "TaskWorkCapacityChanged")
+      const dExecuting = ds07.beforeCapacity.records.find(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          event.ordinal === 1 &&
+          event.report._tag === "ExecutorWorkExecuting" &&
+          event.report.correlation.attemptId === controlledScenario.attempts.D1
+      )
+      const ds06AcceptedAt = ds07.checkpointPublication.actionInputs.runtimeFacts.acceptedAt
+      const p2Publications = ds07.after.publications.filter(
+        ({ actionInputs }) =>
+          actionInputs.runtimeFacts.acceptedAt !== null &&
+          actionInputs.runtimeFacts.acceptedAt >= ds07.capacityRecord.position
+      )
+      const postCapacityActions = ds07.after.executedActions.slice(ds07.beforeCapacity.executedActions.length)
+      const expectedHeld = [
+        controlledScenario.attempts.A1,
+        controlledScenario.attempts.C1,
+        controlledScenario.attempts.D1
+      ].toSorted()
+      const latestHolderReports = expectedHeld.map((attemptId) =>
+        ds07.beforeCapacity.records
+          .flatMap(({ event }) =>
+            event._tag === "PlannedAttemptExecutorWorkReported" && event.report.correlation.attemptId === attemptId
+              ? [event]
+              : []
+          )
+          .at(lastItemIndex)
+      )
+      const held = (publication: DeliveryRelationInputBundle) =>
+        publication.actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId).toSorted()
+      const runtime = yield* evaluateDeliveryRuntimeInputBundle(ds07.p2Publication)
+      const retainedB = runtime.current.ticketDeliveries.deliveries
+        .find(({ taskId }) => taskId === controlledScenario.taskIds.B)
+        ?.standings.flatMap((standing) => (standing._tag === "ResponsibilitySituation" ? [standing.facts] : []))[0]
+      const ePlacement = runtime.current.ticketDeliveries.source.placements.find(
+        ({ taskId }) => taskId === controlledScenario.taskIds.E
+      )?.placement
+      const forbiddenPostCapacityEvents = new Set([
+        "TaskTrackerReadIntentRecorded",
+        "TaskTrackerFactsObserved",
+        "GitReadIntentRecorded",
+        "TaskClaimAcquisitionIntended",
+        "TaskClaimAcquired",
+        "TaskClaimReleased",
+        "TaskAttemptPlanned",
+        "TaskWorktreeReconciliationIntended",
+        "TaskWorktreeReady",
+        "PlannedAttemptExecutorWorkResponsibilityBegan",
+        "PlannedAttemptExecutorCommandIntended",
+        "PlannedAttemptExecutorCommandResponseObserved",
+        "PlannedAttemptExecutorCommandProjectionObserved",
+        "PlannedAttemptExecutorStateObserved",
+        "PlannedAttemptExecutorWorkReported",
+        "WorktreeCleanupAuthorized",
+        "WorktreeCleanupMutationIntended",
+        "WorktreeCleanupMutationResultRecorded",
+        "WorktreeCleanupSettled"
+      ])
+
+      expect(ds07.p1).toEqual({ revision: 1, taskExecutionCapacity: 3 })
+      expect(ds07.request).toEqual({
+        capacity: controlledScenario.policies.P2,
+        expectedRevision: ds07.p1.revision,
+        runId: controlledScenario.runId
+      })
+      expect(ds07.returned).toEqual({ revision: 2, taskExecutionCapacity: 2 })
+      expect(ds07.readback).toEqual(ds07.returned)
+      expect(capacityRecords).toHaveLength(1)
+      expect(ds07.capacityRecord).toEqual(capacityRecords[0])
+      expect(ds07.capacityRecord.event).toMatchObject({
+        _tag: "TaskWorkCapacityChanged",
+        capacity: controlledScenario.policies.P2,
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        previousRevision: 1,
+        revision: 2
+      })
+      expect(dExecuting).toBeDefined()
+      expect(ds06AcceptedAt).not.toBeNull()
+      expect(ds06AcceptedAt).toBeGreaterThanOrEqual(dExecuting?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(ds07.capacityRecord.position).toBeGreaterThan(dExecuting?.position ?? Number.MAX_SAFE_INTEGER)
+      expect(ds07.capacityRecord.position).toBeGreaterThan(ds06AcceptedAt ?? Number.MAX_SAFE_INTEGER)
+      expect(newRecords).toEqual([ds07.capacityRecord])
+      expect(ds07.beforeCapacity.publications.at(-1)).toEqual(ds07.checkpointPublication)
+      expect(held(ds07.checkpointPublication)).toEqual(expectedHeld)
+      expect(p2Publications.length).toBeGreaterThan(0)
+      expect(p2Publications).toEqual(expect.arrayContaining([ds07.p2Publication]))
+      for (const publication of p2Publications) {
+        expect(publication.publication.policy).toEqual(ds07.returned)
+        expect(held(publication)).toEqual(expectedHeld)
+      }
+      expect(held(ds07.p2Publication)).toEqual(expectedHeld)
+      expect(runtime.taskWork.capacity).toBe(controlledScenario.policies.P2)
+      expect(latestHolderReports).toMatchObject(
+        expectedHeld.map((attemptId) => ({
+          _tag: "PlannedAttemptExecutorWorkReported",
+          ordinal: 1,
+          report: { _tag: "ExecutorWorkExecuting", correlation: { attemptId } }
+        }))
+      )
+      expect(ePlacement).toMatchObject({ _tag: "EligibleOutsideBound" })
+      if (runtime.proposedActions._tag !== "DeliveryProposalsAvailable") {
+        return expect.fail("DS-07 must retain one coherent, conflict-free proposal frontier")
+      }
+      expect(runtime.proposedActions.freshTaskCandidates.map(({ taskId }) => taskId)).toContain(
+        controlledScenario.taskIds.E
+      )
+      expect(
+        runtime.proposedActions.proposals.flatMap(({ admission }) =>
+          admission.taskWorkPosition._tag === "TaskWorkPositionRequired" ? [admission.taskWorkPosition.taskId] : []
+        )
+      ).not.toContain(controlledScenario.taskIds.E)
+      expect(retainedB).toMatchObject({
+        _tag: "PlannedAttemptExecutorFreshFacts",
+        disposition: {
+          _tag: "TaskSpecificationChangeConstraint",
+          observedFingerprint: controlledScenario.specifications.F2.B.fingerprint,
+          plannedFingerprint: controlledScenario.specifications.F1.B.fingerprint
+        },
+        responsibility: {
+          _tag: "PlannedAttemptExecutorWorkResponsibility",
+          plannedAttempt: ds07.beforeCapacity.plans.find(
+            ({ attemptId }) => attemptId === controlledScenario.attempts.B1
+          )
+        }
+      })
+      // The already-running D1 may be passively observed after P2. That positionless read neither admits work nor
+      // commands the executor, and its presence is occurrence-inventory evidence rather than a DS-07 requirement.
+      expect(
+        postCapacityActions.every(
+          ({ stage, taskId }) =>
+            stage === "ObservePlannedAttemptExecutorWork" && taskId === controlledScenario.taskIds.D
+        )
+      ).toBe(true)
+      expect(ds07.after.claimRequests.slice(ds07.beforeCapacity.claimRequests.length)).toEqual([])
+      expect(ds07.after.plans.slice(ds07.beforeCapacity.plans.length)).toEqual([])
+      expect(ds07.after.worktreeCreateRequests.slice(ds07.beforeCapacity.worktreeCreateRequests.length)).toEqual([])
+      expect(ds07.after.commands.slice(ds07.beforeCapacity.commands.length)).toEqual([])
+      expect(newRecords.filter(({ event }) => forbiddenPostCapacityEvents.has(event._tag))).toEqual([])
+      expect(newRecords.filter(({ event }) => event._tag === "TaskWorkCapacityChanged")).toHaveLength(1)
+      expect(postCapacityActions.filter(({ taskId }) => taskId === controlledScenario.taskIds.E)).toEqual([])
     }),
   capstoneTimeout
 )

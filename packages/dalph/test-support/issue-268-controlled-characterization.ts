@@ -74,6 +74,8 @@ import type {
   Issue268Ds05StartupCharacterization,
   Issue268Ds06Characterization,
   Issue268Ds06StartupCharacterization,
+  Issue268Ds07Characterization,
+  Issue268Ds07StartupCharacterization,
   Issue268ExecutorCommandCapture
 } from "./issue-268-controlled-characterization-types.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "./controlled-synchronous-planned-attempt-executor.js"
@@ -91,10 +93,11 @@ import {
 } from "./issue-268-controlled-ds04.js"
 import { isIssue268Ds05CompleteCheckpoint } from "./issue-268-controlled-ds05.js"
 import { isIssue268Ds06CompleteCheckpoint } from "./issue-268-controlled-ds06.js"
+import { isIssue268Ds07CompleteCheckpoint } from "./issue-268-controlled-ds07.js"
 
 const checkpointPublicationLimit = 128
 
-const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | "DS04" | "DS05" | "DS06") =>
+const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | "DS04" | "DS05" | "DS06" | "DS07") =>
   Effect.scoped(
     Effect.gen(function* () {
       const claimRequestQueue = yield* Queue.unbounded<TaskClaimAcquisition>()
@@ -144,7 +147,8 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
             return report
           }),
         requestSuspension: (plannedAttempt) =>
-          (mode === "DS04" || mode === "DS05" || mode === "DS06") && plannedAttempt.attemptId === scenario.attempts.B1
+          (mode === "DS04" || mode === "DS05" || mode === "DS06" || mode === "DS07") &&
+          plannedAttempt.attemptId === scenario.attempts.B1
             ? Effect.gen(function* () {
                 yield* Ref.update(commands, (current) => [
                   ...current,
@@ -158,7 +162,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
         resume: (request) => Effect.die(`C2b startup must not resume ${request.plannedAttempt.attemptId}`)
       })
       const executorLayer =
-        mode === "DS05" || mode === "DS06"
+        mode === "DS05" || mode === "DS06" || mode === "DS07"
           ? Layer.merge(
               Layer.succeed(PlannedAttemptExecutor, executor),
               Layer.succeed(
@@ -209,7 +213,10 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
           Effect.gen(function* () {
             yield* Ref.update(claimRequests, (current) => [...current, acquisition])
             yield* Queue.offer(claimRequestQueue, acquisition)
-            if (mode !== "DS01" && !(mode === "DS06" && acquisition.taskId === scenario.taskIds.D)) {
+            if (
+              mode !== "DS01" &&
+              !((mode === "DS06" || mode === "DS07") && acquisition.taskId === scenario.taskIds.D)
+            ) {
               const release = releaseFor(acquisition.taskId, claimReleases)
               if (release === undefined)
                 return yield* Effect.die(`outside-bound claim request for ${acquisition.taskId}`)
@@ -232,6 +239,8 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
       const ds05CheckpointPublicationRelease = yield* Deferred.make<void>()
       const ds06CheckpointPublicationReached = yield* Deferred.make<void>()
       const ds06CheckpointPublicationRelease = yield* Deferred.make<void>()
+      const ds07P2PublicationReached = yield* Deferred.make<void>()
+      const ds07P2PublicationRelease = yield* Deferred.make<void>()
       const ds04CheckpointBaseline = yield* Ref.make<number | undefined>(undefined)
       const holdDs04CheckpointPublication = (
         bundle: DeliveryRelationInputBundle,
@@ -246,7 +255,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
         bundle: DeliveryRelationInputBundle,
         records: ReadonlyArray<JournalRecord>
       ) =>
-        (mode === "DS05" || mode === "DS06") && isIssue268Ds05CompleteCheckpoint(bundle, records)
+        (mode === "DS05" || mode === "DS06" || mode === "DS07") && isIssue268Ds05CompleteCheckpoint(bundle, records)
           ? Deferred.succeed(ds05CheckpointPublicationReached, undefined).pipe(
               Effect.andThen(Deferred.await(ds05CheckpointPublicationRelease))
             )
@@ -255,9 +264,15 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
         bundle: DeliveryRelationInputBundle,
         records: ReadonlyArray<JournalRecord>
       ) =>
-        mode === "DS06" && isIssue268Ds06CompleteCheckpoint(bundle, records)
+        (mode === "DS06" || mode === "DS07") && isIssue268Ds06CompleteCheckpoint(bundle, records)
           ? Deferred.succeed(ds06CheckpointPublicationReached, undefined).pipe(
               Effect.andThen(Deferred.await(ds06CheckpointPublicationRelease))
+            )
+          : Effect.void
+      const holdDs07P2Publication = (bundle: DeliveryRelationInputBundle, records: ReadonlyArray<JournalRecord>) =>
+        mode === "DS07" && isIssue268Ds07CompleteCheckpoint(bundle, records)
+          ? Deferred.succeed(ds07P2PublicationReached, undefined).pipe(
+              Effect.andThen(Deferred.await(ds07P2PublicationRelease))
             )
           : Effect.void
       const publicationObserver = DeliveryRelationPublicationObserver.of({
@@ -266,13 +281,15 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
             yield* Ref.update(publications, (current) => [...current, bundle])
             yield* Queue.offer(publicationQueue, bundle)
             const baseline = yield* Ref.get(ds04CheckpointBaseline)
-            if ((mode !== "DS04" && mode !== "DS05" && mode !== "DS06") || baseline === undefined) return
+            if ((mode !== "DS04" && mode !== "DS05" && mode !== "DS06" && mode !== "DS07") || baseline === undefined)
+              return
             const records = yield* sharedJournal
               .read(scenario.runId)
               .pipe(Effect.catch((failure) => Effect.die(`DS-04 checkpoint Journal read failed: ${failure._tag}`)))
             yield* holdDs04CheckpointPublication(bundle, records, baseline)
             yield* holdDs05CheckpointPublication(bundle, records)
             yield* holdDs06CheckpointPublication(bundle, records)
+            yield* holdDs07P2Publication(bundle, records)
           })
       })
       const ordinaryInterpreterLayer = workflowInterpreterLayer.pipe(
@@ -354,14 +371,14 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
               ? Effect.never
               : Effect.void
           const awaitDs06DAction = (stage: ReturnType<typeof actionStage>) =>
-            mode === "DS06" && stage?.taskId === scenario.taskIds.D
+            (mode === "DS06" || mode === "DS07") && stage?.taskId === scenario.taskIds.D
               ? Effect.gen(function* () {
                   yield* Deferred.succeed(ds06DActionReached, undefined)
                   yield* Deferred.await(ds06DActionRelease)
                 })
               : Effect.void
           const rejectDs06EAction = (stage: ReturnType<typeof actionStage>) =>
-            mode === "DS06" && stage?.taskId === scenario.taskIds.E
+            (mode === "DS06" || mode === "DS07") && stage?.taskId === scenario.taskIds.E
               ? Effect.die("DS-06 must not materialize any E action")
               : Effect.void
           return DeliveryActionExecutor.of({
@@ -434,6 +451,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
       let ds04: Issue268Ds04Characterization | undefined
       let ds05: Issue268Ds05Characterization | undefined
       let ds06: Issue268Ds06Characterization | undefined
+      let ds07: Issue268Ds07Characterization | undefined
 
       const makeCheckpointInput = (beforeTimer: Issue268Ds03BoundarySnapshot, startupDecision: RunFinalityDecision) => {
         const activationLayer = Layer.mergeAll(
@@ -593,6 +611,32 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
                     : awaitDs06Checkpoint(remaining - 1)
               )
             )
+          const awaitDs07Checkpoint = (
+            remaining = checkpointPublicationLimit
+          ): Effect.Effect<{
+            readonly after: Issue268Ds03BoundarySnapshot
+            readonly checkpointPublication: DeliveryRelationInputBundle
+          }> =>
+            Queue.take(publicationQueue).pipe(
+              Effect.flatMap((publication) =>
+                sharedJournal.read(scenario.runId).pipe(
+                  Effect.catch((failure) => Effect.die(`DS-07 checkpoint Journal read failed: ${failure._tag}`)),
+                  Effect.map((records) => ({ publication, records })),
+                  Effect.orDie
+                )
+              ),
+              Effect.flatMap(({ publication, records }) =>
+                isIssue268Ds07CompleteCheckpoint(publication, records)
+                  ? Deferred.await(ds07P2PublicationReached).pipe(
+                      Effect.andThen(ds03Snapshot()),
+                      Effect.orDie,
+                      Effect.map((after) => ({ after, checkpointPublication: publication }))
+                    )
+                  : remaining === 0
+                    ? Effect.die("DS-07 exceeded its bounded publication search")
+                    : awaitDs07Checkpoint(remaining - 1)
+              )
+            )
           const timer = yield* runIssue268Ds04TimerCheckpoint(makeCheckpointInput(beforeTimer, startupDecision), {
             awaitResult: Effect.gen(function* () {
               const ds05Checkpoint = yield* awaitDs05Checkpoint()
@@ -608,12 +652,42 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
               yield* Ref.update(ds06R5ReleaseCount, (count) => count + 1)
               yield* Deferred.succeed(ds06DActionRelease, undefined)
               const ds06Checkpoint = yield* awaitDs06Checkpoint()
-              return { ds05Checkpoint, ds06Checkpoint }
+              if (mode !== "DS07") return { ds05Checkpoint, ds06Checkpoint }
+              const beforeCapacity = yield* ds03Snapshot()
+              const p1 = yield* sharedBootstrap.operatorControl.readTaskWorkCapacity(scenario.runId)
+              const request = { capacity: scenario.policies.P2, expectedRevision: p1.revision, runId: scenario.runId }
+              const returned = yield* sharedBootstrap.operatorControl.setTaskWorkCapacity(request)
+              const records = yield* sharedJournal.read(scenario.runId)
+              const capacityRecords = records.filter(({ event }) => event._tag === "TaskWorkCapacityChanged")
+              const capacityRecord = capacityRecords[capacityRecords.length - 1]
+              if (capacityRecord === undefined) return yield* Effect.die("DS-07 must record P2's capacity change")
+              const readback = yield* sharedBootstrap.operatorControl.readTaskWorkCapacity(scenario.runId)
+              // The DS-06 observer owns the publication gate; release it before waiting for its queued P2 refresh.
+              yield* Deferred.succeed(ds06CheckpointPublicationRelease, undefined)
+              const p2 = yield* awaitDs07Checkpoint().pipe(
+                Effect.ensuring(Deferred.succeed(ds07P2PublicationRelease, undefined))
+              )
+              return {
+                ds05Checkpoint,
+                ds06Checkpoint,
+                ds07: {
+                  after: p2.after,
+                  beforeCapacity,
+                  capacityRecord,
+                  checkpointPublication: ds06Checkpoint.checkpointPublication,
+                  p1,
+                  p2Publication: p2.checkpointPublication,
+                  readback,
+                  request,
+                  returned
+                }
+              }
             }).pipe(
               Effect.ensuring(
                 Effect.all([
                   Deferred.succeed(ds05CheckpointPublicationRelease, undefined),
-                  Deferred.succeed(ds06CheckpointPublicationRelease, undefined)
+                  Deferred.succeed(ds06CheckpointPublicationRelease, undefined),
+                  Deferred.succeed(ds07P2PublicationRelease, undefined)
                 ]).pipe(Effect.asVoid)
               )
             ),
@@ -649,6 +723,11 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
             dActionAbsentBeforeBRelease: yield* Ref.get(ds06DActionAbsentBeforeBRelease),
             r5ReleaseCount: yield* Ref.get(ds06R5ReleaseCount)
           }
+          if (mode === "DS07") {
+            if (timer.continuation.ds07 === undefined)
+              return yield* Effect.die("DS-07 continuation lost capacity evidence")
+            ds07 = timer.continuation.ds07
+          }
         })
 
       const completeTrackerEdit = (startupDecision: RunFinalityDecision) =>
@@ -676,10 +755,10 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
               taskId: nextSpecification.taskId
             }
           }
-          if (mode === "DS04" || mode === "DS05" || mode === "DS06") {
+          if (mode === "DS04" || mode === "DS05" || mode === "DS06" || mode === "DS07") {
             const beforeTimer = yield* ds03Snapshot()
             yield* Ref.set(ds04CheckpointBaseline, beforeTimer.records.length)
-            if (mode === "DS06") yield* runDs06Checkpoint(beforeTimer, startupDecision)
+            if (mode === "DS06" || mode === "DS07") yield* runDs06Checkpoint(beforeTimer, startupDecision)
             else if (mode === "DS05") yield* runDs05Checkpoint(beforeTimer, startupDecision)
             else yield* runDs04Checkpoint(beforeTimer, startupDecision)
           }
@@ -724,6 +803,7 @@ const runIssue268StartupCharacterizationFor = (mode: "DS01" | "DS02" | "DS03" | 
         ds04,
         ds05,
         ds06,
+        ds07,
         executedActions: yield* Ref.get(executedActions),
         pendingClaimTaskIds: yield* Ref.get(pendingClaimTaskIds),
         plans: yield* Ref.get(plans),
@@ -778,5 +858,19 @@ export const runIssue268Ds06Characterization = runIssue268StartupCharacterizatio
       run.ds03 === undefined || run.ds04 === undefined || run.ds05 === undefined || run.ds06 === undefined
         ? Effect.die("DS-06 runner completed without its required edit, Safe, and D evidence")
         : Effect.succeed({ ...run, ds03: run.ds03, ds04: run.ds04, ds05: run.ds05, ds06: run.ds06 })
+  )
+)
+
+/** Applies P2 through the active-Run Operator boundary while A1/C1/D1 remain held. */
+export const runIssue268Ds07Characterization = runIssue268StartupCharacterizationFor("DS07").pipe(
+  Effect.flatMap(
+    (run): Effect.Effect<Issue268Ds07StartupCharacterization> =>
+      run.ds03 === undefined ||
+      run.ds04 === undefined ||
+      run.ds05 === undefined ||
+      run.ds06 === undefined ||
+      run.ds07 === undefined
+        ? Effect.die("DS-07 runner completed without its required edit, Safe, D, and capacity evidence")
+        : Effect.succeed({ ...run, ds03: run.ds03, ds04: run.ds04, ds05: run.ds05, ds06: run.ds06, ds07: run.ds07 })
   )
 )
