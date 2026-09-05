@@ -1,136 +1,73 @@
 # Code review checklist
 
-Review changes against the applicable accepted implementation specification,
-accepted tooling requirements, and these implementation constraints.
+Review the fixed candidate against accepted behavior/tooling requirements and
+repository constraints. Reviewers report findings without editing it.
 
 ## Operational scenario gate
 
-Missing operational scenarios or a missing scenario-to-test mapping are a hard
-review failure for behavior-changing work. Read
-[OPERATIONAL-SCENARIOS.md](OPERATIONAL-SCENARIOS.md), then verify:
-
-- each scenario tells a chronological story using the affected person when one
-  exists, concrete facts from the relevant GitHub/Git/executor/journal systems,
-  actual boundary calls, applicable crash and retry outcomes, and the visible
-  result;
-- a scenario that omits a boundary, crash, or retry says concretely why it
-  cannot affect that behavior instead of adding ritual filler;
-- each changed command, workflow decision, external request, durable fact,
-  retry, recovery rule, concurrency rule, cleanup action, and visible outcome
-  appears in at least one scenario;
-- each scenario maps to a named acceptance test or model check;
-- when a scenario refines or composes existing accepted behavior, its
-  `Governing behavior` pointer names the concrete decision, links the direct
-  owners, states whether it preserves, refines, or supersedes the linked
-  behavior, and bounds what the new scenario adds;
-- the code does not add behavior absent from the scenarios;
-- the handoff reports the result scenario by scenario rather than substituting
-  aggregate gate totals; and
-- any tooling-only or documentation-only exemption gives a concrete reason no
-  Dalph runtime behavior can change.
-
-Reject a scenario that merely replaces one abstraction with another. “Alice's
-browser retries the pause command after losing Dalph's response” is an event;
-“the client repeats an idempotent control operation” is not an adequate
-operational explanation.
+Apply [OPERATIONAL-SCENARIOS.md](OPERATIONAL-SCENARIOS.md) to the accepted issue,
+specification, scenarios, tests, and handoff together. Missing chronological
+scenarios or scenario-to-test mappings block behavior-changing work. Check
+changed behavior is covered, governing-behavior pointers are valid, causal and
+forbidden outcomes are proved, and documentation/tooling exemptions explain why
+no runtime behavior changes. Aggregate totals are not scenario evidence.
 
 ## Implementation checklist
 
-- Domain language passes the literal reading test in
-  [DEVELOPMENT.md](DEVELOPMENT.md): each important sentence names the actor,
-  action, changed state, and the exact boundary reread for evidence. Standalone
-  “managed,” “controlled,”
-  “mutation,” “substrate,” “authority,” “ambiguity,” and generic “operation”
-  require replacement or an immediate concrete definition and example.
-- Data received from task trackers, executors, Git commands,
-  configuration, and journal storage is parsed with Effect Schema; parsed and
-  branded values flow inward instead of raw primitives being revalidated.
-- Expected failures remain precise typed Effect failures. Throws represent
-  defects or unavoidable bootstrap failures only.
-- Effect `Context.Service` tags, Layers, configuration, schedules, streams,
-  time, and concurrency follow the repository's Effect V4 architecture.
-- The workflow algebra invokes the same operations in dry-run, deterministic
-  test, partial-integration, and production compositions. The
-  `WorkflowInterpreter` is the injected Effect service that executes those
-  selected operations; an Effect Layer constructs it by choosing real or
-  simulated implementations independently at each boundary. Reject workflow
-  branches that select different operations only because a prior result was
-  simulated. Permit controlled test adapters to exercise production protocol
-  code beside simulated boundaries. If an adapter may change external state,
-  require that composition to record intent at that exact boundary and claim
-  only the safety and durability guarantees its selected implementations
-  provide.
-- Tests substitute services through Layers. They do not patch modules, depend
-  on real sleeps, or merely restate compile-time guarantees.
-- When an accepted scenario requires an action exactly once, before or after
-  another action, for one exact identity or correlation, or not at all, the
-  acceptance test directly asserts that count, order, identity, correlation,
-  or absence at the relevant boundary or durable record. A matching final
-  state alone does not prove those causal requirements.
-- Dalph domain types do not admit impossible field combinations. Tagged variants
-  replace sentinel values and bags of conditionally related optional fields.
-- Current task state is read through the task tracker, Git state from Git,
-  planned-attempt execution observations through the execution substrate, and
-  Dalph-recorded workflow history from the Dalph workflow journal. Derived
-  frontier, resource, and presentation state is not stored as a substitute.
-- If two code locations must agree on the same literal, parser rule, event
-  order, or default, define that rule once or represent the relationship with a
-  shared type.
-- Every export and abstraction has a current consumer. No speculative code is
-  added for possible future use.
-- Dalph is greenfield. Do not add or preserve compatibility wrappers, adapters,
-  upcasts, or fallback semantics for historical shapes unless the current
-  ticket names released data that must remain readable. Git history, unreleased
-  schemas, fixtures, and the historical Ralph experiment are not compatibility
-  targets.
-- Casts and non-null assertions are absent from production code. An unavoidable
-  cast while decoding data from a named external application, command, config,
-  or store requires concrete evidence and a narrowly scoped suppression.
-- For an uncertain request outcome, recovery preserves the recorded intent and
-  rereads the request's destination: the task tracker for a claim, Git for a ref
-  or worktree, or the execution substrate for a planned-attempt report. Cleanup
-  follows the same fail-closed rule.
-
-Before handoff, run `pnpm check:all` and perform three reviews:
-
-1. Domain/spec: compare domain names and behavior with `docs/CONTEXT.md` and the
-   applicable accepted implementation specification.
-2. Architecture/connascence: compare dependency direction and facts that must
-   change together with `docs/ARCHITECTURE.md` and this checklist.
-3. Strict code review: inspect the final diff for correctness, typed failures,
-   invalid states, tests, and accidental complexity.
+- **Language:** apply the [literal reading test](DEVELOPMENT.md#domain-language).
+  Name the actor, action, state change, and boundary before canonical shorthand.
+  Define abstract terms concretely or replace them.
+- **Boundaries and failures:** parse tracker, executor, Git, configuration, and
+  journal data with Effect Schema; branded values flow inward. Expected failures
+  remain precise typed Effect failures; throws are defects or unavoidable bootstrap failures.
+  Production casts/non-null assertions are forbidden except evidenced, narrowly
+  suppressed casts at a named external decoding boundary.
+- **Effect and tests:** follow Effect V4 architecture. Substitute services with
+  Layers, not module patches or real sleeps. Tests prove behavior rather than
+  restating compile-time guarantees; directly assert required counts, order,
+  identities, correlations, and absence at boundaries/durable records.
+- **One workflow:** dry-run, deterministic tests, partial integration, and
+  production select the same workflow operations. Layers choose real/simulated
+  boundary implementations for `WorkflowInterpreter`; simulated results must
+  not select alternate operations. Controlled adapters may exercise production
+  protocol code. A composition that can change external state must record intent
+  at that boundary and claim only guarantees its implementations provide.
+- **Facts and state:** trackers own task facts, Git owns Git facts, execution
+  substrate owns execution observations, and the journal owns workflow history.
+  Do not persist derived frontier/resource/presentation substitutes. Use tagged
+  variants instead of sentinels or conditionally related optional fields.
+- **Coupling and scope:** define rules that must agree once or enforce them with
+  shared types. Every export/abstraction needs a current consumer. No speculative
+  code or historical compatibility wrappers, upcasts, or fallback semantics
+  unless the ticket names released data requiring them; unreleased schemas,
+  fixtures, Git history, and Ralph are not compatibility targets.
+- **Recovery:** preserve intent after an uncertain result and reread the request
+  destination before retry: tracker for claims, Git for refs/worktrees, execution
+  substrate for reports. Cleanup is also fail-closed.
 
 ### Review closure
 
-Pin both ends of the reviewed change. For uncommitted work, record the base SHA
-and a captured diff or its content hash; a moving worktree is not a fixed
-candidate. Reviewers report findings without editing the candidate. The
-implementer classifies the findings before starting repairs.
-
-For each blocking finding, identify the actor or caller, concrete trigger,
-affected boundary, violated accepted scenario or repository rule, and evidence
-that demonstrates the defect or missing proof. A reproducible defect in a
-supported path may instead expose missing scenario coverage; identify that
-gap and establish the required accepted scenario before a behavior-changing
-repair. Separate behavioral severity from a documentation or standards handoff
-requirement: a missing test name
-must be corrected, but is not itself a demonstrated production safety failure.
-A code-smell heuristic alone is not a blocking requirement. For internal API
-hardening, explain which supported caller or required misuse case reaches the
-invalid state; do not silently add a new trust boundary to the task.
-
-Keep a disposition for each finding: fixed with evidence, rejected with a
-concrete reason, or deferred with its scope and owner. Deferral cannot waive an
-accepted scenario, blocking dependency, safety failure, or required gate. An
-independent improvement that is not required to deliver this task belongs in a
-separate follow-up, rather than extending the current task's completion test.
-
-Perform the three-axis review once on a complete fixed handoff candidate.
-After that review, recheck the fixes and behavior they can affect. Reopen a
-settled finding only with new contradictory evidence. A change
-to the accepted behavior or a cross-module contract warrants a broader review;
-a local correction or checkpoint commit does not automatically restart all
-three passes or require a fresh set of reviewers. Stop reviewing when scoped
-blocking findings are resolved and the required evidence is green. If another
-round exposes the same class of defect, investigate the shared design cause
-before continuing local repairs.
+1. Pin base and candidate SHAs; for dirty work capture the diff or its content
+   hash. Review the complete candidate along three axes: domain/spec against
+   CONTEXT and accepted requirements; architecture/connascence against
+   ARCHITECTURE and this checklist; correctness/tests/complexity against the
+   final diff.
+2. Classify before repairing. A blocker names the actor/caller, trigger,
+   boundary, violated requirement, and defect or missing-proof evidence. A
+   supported-path defect may expose missing scenarios; establish the required
+   scenario before a behavioral repair. Distinguish standards/handoff omissions
+   from demonstrated safety failures. A code smell alone is not a blocker;
+   internal hardening needs a supported caller or required misuse case, not an
+   invented trust boundary.
+3. Record each disposition: fixed with evidence, rejected with a concrete reason,
+   or deferred with scope/owner. Deferral cannot waive accepted scenarios,
+   blocking dependencies, safety failures, or required gates. Unrelated
+   improvements belong in follow-ups.
+4. Recheck fixes and affected behavior. Reopen settled findings only with new
+   contradictory evidence. Changed accepted behavior or cross-module contracts
+   warrant broader review; local fixes/checkpoint commits do not restart every
+   axis or require fresh reviewers. Recurring defect classes call for a shared
+   cause investigation before more local repairs.
+5. Close when scoped blockers are resolved and required evidence is green,
+   including `pnpm check:all` before handoff and applicable final
+   `pnpm check:quint` before integration. See [development checks](DEVELOPMENT.md#commands).
