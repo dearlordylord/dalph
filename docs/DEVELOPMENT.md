@@ -28,15 +28,12 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   the existing issue/specification/scenario. Link it from parent issues. Record
   deadlines with units and timezone; dependencies, reviews, and renamed
   checkpoints do not reset the parent budget or its accepted stop rule.
-- Develop with focused checks. Repair a failed gate stage and check affected
-  behavior before rerunning the full gate. Intermediate commits need no handoff
-  ceremony; the final candidate still requires `pnpm check:all` and applicable
-  `pnpm check:quint`. Earlier passing stages are not a final green gate.
-- For the workflow pilot, use the next existing milestone to record broad review rounds, reopened findings
-  with new evidence, full-gate restarts, and closure time. Verify that required
-  scenario evidence survives and reproduced accepted-path defects still block
-  closure. Fewer rounds alone do not demonstrate improvement. Use the existing
-  task record, not another ledger.
+- Develop with focused checks. Repair a failed stage and check affected behavior
+  before rerunning the full gate. Reconcile the accepted scenario-to-test mapping
+  and close [scoped reviews](CODE_REVIEW.md#review-closure) before the final gate.
+  Freeze that candidate, then run `pnpm check:all` and applicable
+  `pnpm check:quint`. Intermediate commits need no handoff ceremony; earlier
+  passing stages are not a final green gate.
 
 ## Domain language
 
@@ -103,6 +100,11 @@ The browser runner owns its host; no manual Vite or `REDUCER_LAB_URL` is needed.
 `CODEX_HOME`, serves a deterministic local Responses endpoint, and uses temporary
 Git repositories/worktrees. It is outside `check:all`; the same contract runs
 on Ubuntu/macOS in the [qualification workflow](../.github/workflows/codex-app-server-qualification.yml).
+
+For shared-host Quint timing failures, dispatch [Quint qualification](../.github/workflows/quint-qualification.yml)
+once with the frozen `candidate_sha`. It runs the unchanged gate on a fresh ARM
+worker. Diagnose failures from stage timings. CPU affinity does not reserve
+capacity; different hardware is not a calibrated baseline.
 
 ### Coverage and output budgets
 
