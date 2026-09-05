@@ -27,6 +27,7 @@ export interface Issue268StartupCharacterization {
   readonly trace: ReadonlyArray<TraceItem>
   readonly worktreeCreateRequests: ReadonlyArray<PlannedTaskAttempt>
   readonly ds03?: Issue268Ds03Characterization
+  readonly ds04?: Issue268Ds04Characterization
 }
 
 export interface Issue268Ds03BoundarySnapshot {
@@ -52,6 +53,18 @@ export interface Issue268Ds03Characterization {
   }
 }
 
-export type Issue268Ds03StartupCharacterization = Omit<Issue268StartupCharacterization, "ds03"> & {
+export type Issue268Ds03StartupCharacterization = Omit<Issue268StartupCharacterization, "ds03" | "ds04"> & {
   readonly ds03: Issue268Ds03Characterization
+}
+
+export interface Issue268Ds04Characterization {
+  readonly activeRefreshCount: number
+  readonly activeRefreshSources: ReadonlyArray<"TrackerNotification" | "Timer">
+  readonly after: Issue268Ds03BoundarySnapshot
+  readonly beforeTimer: Issue268Ds03BoundarySnapshot
+}
+
+export type Issue268Ds04StartupCharacterization = Omit<Issue268StartupCharacterization, "ds03" | "ds04"> & {
+  readonly ds03: Issue268Ds03Characterization
+  readonly ds04: Issue268Ds04Characterization
 }

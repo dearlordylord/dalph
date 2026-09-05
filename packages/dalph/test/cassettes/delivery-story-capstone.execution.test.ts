@@ -7,7 +7,8 @@ import { expect } from "vitest"
 import {
   runIssue268Ds01Characterization,
   runIssue268Ds02Characterization,
-  runIssue268Ds03Characterization
+  runIssue268Ds03Characterization,
+  runIssue268Ds04Characterization
 } from "../../test-support/issue-268-controlled-characterization.js"
 import { issue268ControlledDeliveryCharacterization as controlledScenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
 import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
@@ -298,6 +299,147 @@ it.effect("DS-03 accepts Alice's B/F2 and G1 tracker edit without triggering Dal
       { attemptId: "attempt:C:1", command: "Begin" }
     ])
   })
+)
+
+it.effect(
+  "DS-04 refreshes B from the bounded timer when its notification is lost",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* runIssue268Ds04Characterization
+      const ds04 = run.ds04
+      const newRecords = ds04.after.records.slice(ds04.beforeTimer.records.length)
+      const authorityGraphReads = newRecords.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.cause._tag === "ExecutingWorkAuthorityCheck"
+      )
+      const acceptedG1 = newRecords.find(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "CompleteTaskTrackerFacts" &&
+          event.observation.factFamilies.some(
+            (family) => family.contentIdentity === controlledScenario.graphs.G1.revision
+          )
+      )
+      const specificationReads = newRecords.flatMap(({ event, position }) =>
+        event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+          ? [
+              {
+                fingerprint: event.observation.factFamily.fingerprint,
+                position,
+                taskId: event.observation.factFamily.taskId
+              }
+            ]
+          : []
+      )
+      const claimReads = newRecords.flatMap(({ event }) =>
+        event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskClaimFacts"
+          ? [event.observation.coverage.taskId]
+          : []
+      )
+      const gitReads = newRecords.flatMap(({ event }) =>
+        event._tag === "GitReadIntentRecorded"
+          ? [{ read: event.operation._tag, taskId: event.operation.plannedAttempt.taskId }]
+          : []
+      )
+      const suspendIntents = newRecords.flatMap(({ event, position }) =>
+        event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
+          ? [{ attemptId: event.plannedAttempt.attemptId, ordinal: event.ordinal, position }]
+          : []
+      )
+      const suspendResponses = newRecords.flatMap(({ event, position }) =>
+        event._tag === "PlannedAttemptExecutorCommandResponseObserved" && event.commandOrdinal === 2
+          ? [{ attemptId: event.plannedAttempt.attemptId, position, report: event.report._tag }]
+          : []
+      )
+      const newActions = ds04.after.executedActions.slice(ds04.beforeTimer.executedActions.length)
+      const outsideBoundActions = newActions.filter(({ taskId }) => taskId === "D" || taskId === "E")
+      const timerPublications = ds04.after.publications.slice(ds04.beforeTimer.publications.length)
+      const heldAttemptsByPublication = timerPublications.map(({ actionInputs }) =>
+        actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId).toSorted()
+      )
+      const bSuspensionPublications = timerPublications.filter(({ publication }) =>
+        publication.exactEvidence.some(
+          (evidence) =>
+            evidence._tag === "ResponsibilityFacts" &&
+            evidence.facts.responsibility._tag === "PlannedAttemptExecutorWorkResponsibility" &&
+            evidence.facts.responsibility.plannedAttempt.attemptId === controlledScenario.attempts.B1 &&
+            evidence.facts.disposition._tag === "PlannedAttemptExecutorSuspensionRequested"
+        )
+      )
+      const heldAttempts = ds04.after.publications
+        .at(-1)
+        ?.actionInputs.runtimeFacts.taskWork.held.map(({ correlation }) => correlation.attemptId)
+        .toSorted()
+      const releaseEvidence = newRecords.filter(({ event }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" ||
+        event._tag === "PlannedAttemptExecutorCommandResponseObserved"
+          ? event.report._tag === "ExecutorWorkSafelySuspended" || event.report._tag === "ExecutorWorkTerminal"
+          : false
+      )
+      const duplicateExecutingReports = newRecords.filter(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkReported" &&
+          [controlledScenario.attempts.A1, controlledScenario.attempts.B1, controlledScenario.attempts.C1].includes(
+            event.report.correlation.attemptId
+          ) &&
+          event.report._tag === "ExecutorWorkExecuting"
+      )
+      const bSpecification = specificationReads.find(({ taskId }) => taskId === controlledScenario.taskIds.B)
+
+      expect(ds04.activeRefreshSources).toEqual(["Timer"])
+      expect(ds04.activeRefreshCount).toBe(1)
+      expect(authorityGraphReads).toHaveLength(1)
+      expect(acceptedG1).toBeDefined()
+      expect(specificationReads).toHaveLength(3)
+      expect(specificationReads).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ fingerprint: controlledScenario.specifications.F1.A.fingerprint, taskId: "A" }),
+          expect.objectContaining({ fingerprint: controlledScenario.specifications.F2.B.fingerprint, taskId: "B" }),
+          expect.objectContaining({ fingerprint: controlledScenario.specifications.F1.C.fingerprint, taskId: "C" })
+        ])
+      )
+      expect(claimReads).toHaveLength(2)
+      expect(new Set(claimReads)).toEqual(new Set(["A", "C"]))
+      expect(gitReads).toHaveLength(4)
+      expect(gitReads).toEqual(
+        expect.arrayContaining([
+          { read: "ReadTaskWorktree", taskId: "A" },
+          { read: "ReadTargetLineage", taskId: "A" },
+          { read: "ReadTaskWorktree", taskId: "C" },
+          { read: "ReadTargetLineage", taskId: "C" }
+        ])
+      )
+      for (const taskId of ["A", "C"]) {
+        expect(gitReads.findIndex((read) => read.taskId === taskId && read.read === "ReadTaskWorktree")).toBeLessThan(
+          gitReads.findIndex((read) => read.taskId === taskId && read.read === "ReadTargetLineage")
+        )
+      }
+      expect(suspendIntents).toEqual([expect.objectContaining({ attemptId: "attempt:B:1", ordinal: 2 })])
+      expect(suspendResponses).toEqual([
+        expect.objectContaining({ attemptId: "attempt:B:1", report: "ExecutorWorkExecuting" })
+      ])
+      expect(suspendResponses[0]?.position).toBeGreaterThan(suspendIntents[0]?.position ?? 0)
+      expect(bSpecification?.position).toBeGreaterThan(acceptedG1?.position ?? 0)
+      expect(suspendIntents[0]?.position).toBeGreaterThan(bSpecification?.position ?? 0)
+      expect(run.commands).toEqual([
+        { attemptId: "attempt:A:1", command: "Begin" },
+        { attemptId: "attempt:B:1", command: "Begin" },
+        { attemptId: "attempt:C:1", command: "Begin" },
+        { attemptId: "attempt:B:1", command: "Suspend" }
+      ])
+      expect(outsideBoundActions).toEqual([])
+      expect(heldAttemptsByPublication.length).toBeGreaterThan(0)
+      expect(heldAttemptsByPublication).toEqual(
+        heldAttemptsByPublication.map(() => ["attempt:A:1", "attempt:B:1", "attempt:C:1"])
+      )
+      expect(bSuspensionPublications.length).toBeGreaterThan(0)
+      expect(heldAttempts).toEqual(["attempt:A:1", "attempt:B:1", "attempt:C:1"])
+      expect(releaseEvidence).toEqual([])
+      expect(duplicateExecutingReports).toEqual([])
+    }),
+  capstoneTimeout
 )
 
 it.effect(
