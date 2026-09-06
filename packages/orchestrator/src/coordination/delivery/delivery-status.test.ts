@@ -126,8 +126,13 @@ type StatusProjectionHasOnlyObservationInputs =
   Parameters<typeof deliveryStatusOf> extends [DeliveryStatusSubject, DeliveryRuntimeObservationState] ? true : false
 type StatusVocabularyHasNoExecutorPrivateTags =
   Extract<DeliveryStatusEntry["_tag"], "Agent" | "Session" | "Turn" | "Role" | "Stage"> extends never ? true : false
+type SettlementCompatibilityIdentityFieldsAreAbsent =
+  Extract<keyof Extract<DeliveryStatusEntry, { readonly _tag: "Settlement" }>, "taskId" | "attemptId"> extends never
+    ? true
+    : false
 const statusProjectionHasOnlyObservationInputs: StatusProjectionHasOnlyObservationInputs = true
 const statusVocabularyHasNoExecutorPrivateTags: StatusVocabularyHasNoExecutorPrivateTags = true
+const settlementCompatibilityIdentityFieldsAreAbsent: SettlementCompatibilityIdentityFieldsAreAbsent = true
 
 const runId = RunId.make("delivery-status-run")
 const policy = RunControlPolicy.make({
@@ -746,10 +751,7 @@ it("maps responsibility dispositions by meaning without turning terminal or paus
     if (expected === "Settlement") {
       expect(status.entries[0]).toMatchObject({
         _tag: "Settlement",
-        settlement: {
-          _tag: "AcceptedStandingSettlement",
-          standing: { _tag: disposition._tag, claimDisposition: "Released", responsibility: executorResponsibility }
-        }
+        settlement: { _tag: disposition._tag, claimDisposition: "Released", responsibility: executorResponsibility }
       })
     }
   }
@@ -791,10 +793,7 @@ it("projects cancelled and stopped accepted standings as distinct public settlem
     const settlement = status.entries.find(({ _tag }) => _tag === "Settlement")
     expect(settlement).toMatchObject({
       _tag: "Settlement",
-      settlement: {
-        _tag: "AcceptedStandingSettlement",
-        standing: { _tag: disposition._tag, claimDisposition: disposition.claimDisposition, responsibility }
-      }
+      settlement: { _tag: disposition._tag, claimDisposition: disposition.claimDisposition, responsibility }
     })
   }
 
@@ -1007,9 +1006,9 @@ it("orders accepted-standing settlements by responsibility beganAt before correl
   expect(settlements).toHaveLength(2)
   expect(
     settlements.map(({ settlement }) =>
-      settlement._tag === "AcceptedStandingSettlement"
-        ? settlement.standing.responsibility.plannedAttempt.attemptId
-        : settlement.attemptId
+      settlement._tag === "DeliverySettlement"
+        ? settlement.attemptId
+        : settlement.responsibility.plannedAttempt.attemptId
     )
   ).toEqual([earlierResponsibility.plannedAttempt.attemptId, laterResponsibility.plannedAttempt.attemptId])
 })
@@ -1761,8 +1760,6 @@ it.effect("keeps settlement and relinquishment distinct with exact supporting fa
         expect.objectContaining({
           _tag: "Settlement",
           subject: expect.objectContaining({ _tag: "Task", runId: fixture.runId, taskId: fixture.taskId }),
-          taskId: fixture.taskId,
-          attemptId: fixture.plannedAttempt.attemptId,
           settlement: expect.objectContaining({ _tag: "DeliverySettlement", taskId: fixture.taskId })
         }),
         expect.objectContaining({
@@ -1776,6 +1773,8 @@ it.effect("keeps settlement and relinquishment distinct with exact supporting fa
     const settlementEntry = status.entries.find(({ _tag }) => _tag === "Settlement")
     const relinquishmentEntry = status.entries.find(({ _tag }) => _tag === "Relinquishment")
     expect(settlementEntry?.classification).toBe("Settled")
+    expect(settlementEntry).not.toHaveProperty("taskId")
+    expect(settlementEntry).not.toHaveProperty("attemptId")
     expect(relinquishmentEntry?.classification).toBe("Relinquished")
   })
 )
@@ -1995,6 +1994,7 @@ it.effect("requires only a passive status signal and performs no journal or auth
     yield* signal.changes.pipe(Stream.take(2), Stream.runCollect)
     expect(statusProjectionHasOnlyObservationInputs).toBe(true)
     expect(statusVocabularyHasNoExecutorPrivateTags).toBe(true)
+    expect(settlementCompatibilityIdentityFieldsAreAbsent).toBe(true)
     const source = readFileSync(fileURLToPath(new URL("./delivery-status.ts", import.meta.url)), "utf8")
     expect(source).not.toMatch(
       /\b(?:JournalStore|DeliveryRuntimeResourcesService|DeliveryRuntimeAdmissionController|TaskTrackerService|GitService|IntegratorService|ApplicationExitService)\b/
@@ -2852,6 +2852,6 @@ it("orders and filters established settlements while failing closed on missing t
     const settlements = mixedStatus.entries.filter(({ _tag }) => _tag === "Settlement")
     expect(settlements).toHaveLength(2)
     expect(settlements[0]).toMatchObject({ settlement: { _tag: "DeliverySettlement" } })
-    expect(settlements[1]).toMatchObject({ settlement: { _tag: "AcceptedStandingSettlement" } })
+    expect(settlements[1]).toMatchObject({ settlement: { _tag: "CancelledAttemptSettled" } })
   }
 })

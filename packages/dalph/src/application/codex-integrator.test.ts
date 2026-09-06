@@ -40,6 +40,7 @@ import {
   CodexAppServer,
   CodexAppServerFailure,
   CodexOwnedActivityCensus,
+  CodexThreadListSummary,
   CodexThreadWorkingDirectory,
   controlledCodexOwnedActivityCensusLayer,
   type CodexAppServerService,
@@ -164,7 +165,6 @@ type FixtureOptions = {
   readonly duplicateTurnToken?: boolean
   readonly threadListingUnavailable?: boolean
   readonly listThreadsHidePersisted?: boolean
-  readonly listedThreadTokenMode?: "exact" | "tokenless" | "foreign"
   readonly preexistingThread?: boolean
   readonly preRegisteredWorktree?: boolean
   readonly preRegisteredWorktreePathExists?: boolean
@@ -244,20 +244,12 @@ const fixtureLayer = (
               : options.duplicateThreads === true
                 ? [...threads, ...threads]
                 : threads
-            ).map((thread) => ({
-              id: thread.id,
-              cwd: CodexThreadWorkingDirectory.make(fixtureWorktreePath),
-              status: "idle" as const,
-              turns: [],
-              ...(options.listedThreadTokenMode === "tokenless"
-                ? {}
-                : {
-                    ownedThreadToken:
-                      options.listedThreadTokenMode === "foreign"
-                        ? CodexThreadOwnershipToken.make("foreign-listed-thread-token")
-                        : thread.ownedThreadToken
-                  })
-            }))
+            ).map((thread) =>
+              CodexThreadListSummary.IdentityOnly({
+                id: thread.id,
+                cwd: CodexThreadWorkingDirectory.make(fixtureWorktreePath)
+              })
+            )
           )
         )
       const app: CodexAppServerService = {
@@ -300,9 +292,9 @@ const fixtureLayer = (
             }
             return thread
           }),
-        ...(options.threadListingUnavailable === true
+        ...(options.threadListingUnavailable === true || options.listThreadsHidePersisted === true
           ? {}
-          : { listThreads, listThreadsComplete: options.listThreadsHidePersisted !== true }),
+          : { listThreads, listThreadsComplete: true as const }),
         readThread: () =>
           Effect.gen(function* () {
             const current = yield* Ref.get(turns)
@@ -1934,13 +1926,7 @@ describe("Codex Integrator", () => {
         yield* Effect.flip(integrator.prepare(requestFor(1)))
         return yield* Effect.flip(integrator.prepare(requestFor(1)))
       }).pipe(
-        Effect.provide(
-          providerLayer(listedConfig, {
-            loseFirstThreadResponse: true,
-            listedThreadTokenMode: "foreign",
-            resumeThreadTokenMode: "foreign"
-          })
-        )
+        Effect.provide(providerLayer(listedConfig, { loseFirstThreadResponse: true, resumeThreadTokenMode: "foreign" }))
       )
     )
     expect(listedFailure._tag).toBe("IntegratorCallFailure")

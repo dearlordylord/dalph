@@ -2,11 +2,13 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
 import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Redacted, Stream } from "effect"
-import { expect } from "vitest"
+import { expect, expectTypeOf } from "vitest"
 import {
   CodexAppServer,
   CodexAppServerFailure,
   type CodexAppServerService,
+  type CodexThreadListSummary,
+  type CodexThreadSnapshot,
   codexAppServerNodeLayer
 } from "./codex-app-server.js"
 import {
@@ -108,10 +110,21 @@ const responseFor = (method, params = {}) => {
     const { status: _status, ...threadWithoutStatus } = validThread
     return { data: [threadWithoutStatus] }
   }
+  if (mode === "thread-list-missing-turns" && method === "thread/list") {
+    const { turns: _turns, ...threadWithoutTurns } = validThread
+    return { data: [threadWithoutTurns] }
+  }
+  if (mode === "thread-list-identity-only" && method === "thread/list") {
+    const { status: _status, turns: _turns, ...threadIdentity } = validThread
+    return { data: [threadIdentity] }
+  }
   if (mode === "thread-list-paginated" && method === "thread/list") {
-    return params.cursor === "page-two"
-      ? { data: [{ ...validThread, id: "protocol-thread-two", cwd: "/fixture/worktree-two" }], nextCursor: null }
-      : { data: [validThread], nextCursor: "page-two" }
+    if (params.cursor !== "page-two") return { data: [validThread], nextCursor: "page-two" }
+    const { status: _status, turns: _turns, ...threadIdentity } = validThread
+    return {
+      data: [{ ...threadIdentity, id: "protocol-thread-two", cwd: "/fixture/worktree-two" }],
+      nextCursor: null
+    }
   }
   if (mode === "thread-list-repeated-cursor" && method === "thread/list") {
     return { data: [validThread], nextCursor: "same-page" }
@@ -676,12 +689,6 @@ it.effect("reads a complete persistent thread list and preserves malformed-list 
     )
     expect(metadataOwned).toBe("metadata-owned-thread")
 
-    const missingStatus = yield* withFixture("thread-list-missing-status", (app) => {
-      if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
-      return Effect.map(app.listThreads(), (threads) => threads[0]?.status)
-    })
-    expect(missingStatus).toBe("idle")
-
     const alternateKey = yield* withFixture("thread-list-threads-key", (app) => {
       if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
       return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
@@ -693,12 +700,6 @@ it.effect("reads a complete persistent thread list and preserves malformed-list 
       return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
     })
     expect(identicalAliases).toEqual(["protocol-thread"])
-
-    const paginated = yield* withFixture("thread-list-paginated", (app) => {
-      if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
-      return Effect.map(app.listThreads(), (threads) => threads.map((thread) => thread.id))
-    })
-    expect(paginated).toEqual(["protocol-thread", "protocol-thread-two"])
 
     for (const mode of [
       "thread-list-not-array",
@@ -727,6 +728,46 @@ it.effect("reads a complete persistent thread list and preserves malformed-list 
       expectAppFailure(result, "thread/list")
     }
   })
+)
+
+it.effect("keeps partial thread-list summaries distinct from exact thread snapshots", () =>
+  Effect.gen(function* () {
+    expectTypeOf<
+      Extract<CodexThreadListSummary, { readonly _tag: "CompleteSummary" }>
+    >().not.toMatchTypeOf<CodexThreadSnapshot>()
+    const summaries = yield* Effect.forEach(
+      ["thread-list-identity-only", "thread-list-missing-status", "thread-list-missing-turns", "thread-list-valid"],
+      (mode) =>
+        withFixture(mode, (app) => {
+          if (app.listThreads === undefined) return Effect.fail("Node app-server did not expose thread/list")
+          return Effect.map(app.listThreads(), (threads) => threads[0])
+        })
+    )
+
+    expect(summaries).toEqual([
+      { _tag: "IdentityOnly", id: "protocol-thread", cwd: "/fixture/worktree" },
+      { _tag: "IncompleteSummary", id: "protocol-thread", cwd: "/fixture/worktree", summary: { turns: [] } },
+      { _tag: "IncompleteSummary", id: "protocol-thread", cwd: "/fixture/worktree", summary: { status: "idle" } },
+      {
+        _tag: "CompleteSummary",
+        id: "protocol-thread",
+        cwd: "/fixture/worktree",
+        summary: { status: "idle", turns: [] }
+      }
+    ])
+  })
+)
+
+it.effect("reads every persistent thread-list page before reporting a complete identity list", () =>
+  withFixture("thread-list-paginated", (app) =>
+    Effect.gen(function* () {
+      expect(app.listThreadsComplete).toBe(true)
+      if (app.listThreads === undefined) return yield* Effect.fail("Node app-server did not expose thread/list")
+      const threads = yield* app.listThreads()
+      expect(threads.map((thread) => thread.id)).toEqual(["protocol-thread", "protocol-thread-two"])
+      expect(threads.map((thread) => thread._tag)).toEqual(["CompleteSummary", "IdentityOnly"])
+    })
+  )
 )
 
 it.effect("rejects invalid turn-start responses and preserves the requested token boundary", () =>

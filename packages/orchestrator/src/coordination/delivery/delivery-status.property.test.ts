@@ -523,9 +523,7 @@ it("orders every simultaneous delivery-status phenomenon independently of source
       .filter(
         (entry): entry is Extract<DeliveryStatusEntry, { readonly _tag: "Settlement" }> => entry._tag === "Settlement"
       )
-      .map((entry) =>
-        entry.settlement._tag === "AcceptedStandingSettlement" ? entry.settlement.standing._tag : entry.settlement._tag
-      )
+      .map((entry) => entry.settlement._tag)
   ).toEqual(["DeliverySettlement", "CancelledAttemptSettled", "DeliverySettlement", "StoppedAttemptSettled"])
   fc.assert(
     fc.property(

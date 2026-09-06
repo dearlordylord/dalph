@@ -2,22 +2,52 @@ import { describe, expect, it } from "vitest"
 
 import { quintGateBatchResults, quintGateFamilyConcurrency, runQuintGateFamily } from "./quint-gate-concurrency.mjs"
 
+const controlledCompletion = () => {
+  let resolve!: () => void
+  const promise = new Promise<void>((complete) => {
+    resolve = complete
+  })
+  return { promise, resolve }
+}
+
+const controlledCommands = (commands: ReadonlyArray<string>) =>
+  new Map(commands.map((command) => [command, controlledCompletion()] as const))
+
+const controlledCommand = (values: ReturnType<typeof controlledCommands>, command: string) => {
+  const value = values.get(command)
+  if (value === undefined) throw new Error(`missing controlled command ${command}`)
+  return value
+}
+
 describe("Quint gate family scheduler", () => {
   it("keeps a fixed family bound and restores input order after out-of-order completion", async () => {
     let active = 0
     let peak = 0
     const completionOrder: Array<string> = []
-    const results = await runQuintGateFamily({
+    const releases = controlledCommands(["slow", "fast", "medium"])
+    const started = controlledCommands(["slow", "fast", "medium"])
+    const completed = controlledCommands(["slow", "fast", "medium"])
+    const execution = runQuintGateFamily({
       commands: ["slow", "fast", "medium"],
       run: async (command) => {
         active += 1
         peak = Math.max(peak, active)
-        await new Promise((resolve) => setTimeout(resolve, command === "slow" ? 30 : command === "fast" ? 5 : 10))
+        controlledCommand(started, command).resolve()
+        await controlledCommand(releases, command).promise
         completionOrder.push(command)
         active -= 1
+        controlledCommand(completed, command).resolve()
         return `${command} result`
       }
     })
+
+    await Promise.all([controlledCommand(started, "slow").promise, controlledCommand(started, "fast").promise])
+    controlledCommand(releases, "fast").resolve()
+    await controlledCommand(started, "medium").promise
+    controlledCommand(releases, "medium").resolve()
+    await controlledCommand(completed, "medium").promise
+    controlledCommand(releases, "slow").resolve()
+    const results = await execution
 
     expect(peak).toBe(quintGateFamilyConcurrency)
     expect(completionOrder).toEqual(["fast", "medium", "slow"])
@@ -27,19 +57,30 @@ describe("Quint gate family scheduler", () => {
   it("caps a caller-requested concurrency above the fixed family bound", async () => {
     let active = 0
     let peak = 0
-    const results = await runQuintGateFamily({
+    const startedCommands: Array<string> = []
+    const releases = controlledCommands(["first", "second", "third", "fourth"])
+    const started = controlledCommands(["first", "second", "third", "fourth"])
+    const execution = runQuintGateFamily({
       commands: ["first", "second", "third", "fourth"],
       concurrency: 3,
       run: async (command) => {
         active += 1
         peak = Math.max(peak, active)
-        await new Promise<void>((resolve) => setTimeout(resolve, 10))
+        startedCommands.push(command)
+        controlledCommand(started, command).resolve()
+        await controlledCommand(releases, command).promise
         active -= 1
         return command
       }
     })
 
+    await Promise.all([controlledCommand(started, "first").promise, controlledCommand(started, "second").promise])
+    const initiallyStarted = [...startedCommands]
+    for (const release of releases.values()) release.resolve()
+    const results = await execution
+
     expect(peak).toBe(quintGateFamilyConcurrency)
+    expect(initiallyStarted).toEqual(["first", "second"])
     expect(results).toEqual(["first", "second", "third", "fourth"])
   })
 
@@ -55,11 +96,9 @@ describe("Quint gate family scheduler", () => {
           started.push(command)
           if (command === "failure") throw new Error("selected command failed")
           await new Promise((resolve) => {
-            const timer = setTimeout(resolve, 1000)
             signal.addEventListener(
               "abort",
               () => {
-                clearTimeout(timer)
                 aborted.push(command)
                 resolve(undefined)
               },

@@ -131,27 +131,12 @@ const acceptedStandingSettlementResolutionFor = (
   ) {
     return { _tag: "ProjectionConflict", reason: "OutstandingWorkflowResponsibility" }
   }
-  const base = { _tag: "AcceptedStandingSettlement" as const }
   return {
     _tag: "Accepted",
     settlement:
       disposition._tag === "CancelledAttemptSettled"
-        ? {
-            ...base,
-            standing: {
-              _tag: "CancelledAttemptSettled" as const,
-              claimDisposition: disposition.claimDisposition,
-              responsibility
-            }
-          }
-        : {
-            ...base,
-            standing: {
-              _tag: "StoppedAttemptSettled" as const,
-              claimDisposition: disposition.claimDisposition,
-              responsibility
-            }
-          }
+        ? { _tag: "CancelledAttemptSettled" as const, claimDisposition: disposition.claimDisposition, responsibility }
+        : { _tag: "StoppedAttemptSettled" as const, claimDisposition: disposition.claimDisposition, responsibility }
   }
 }
 

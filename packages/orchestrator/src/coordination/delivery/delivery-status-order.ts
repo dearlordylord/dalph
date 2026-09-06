@@ -186,7 +186,7 @@ const statusEntryPosition = Match.typeTags<NonActionStatusEntry, StructuralOrder
   Settlement: (entry) =>
     entry.settlement._tag === "DeliverySettlement"
       ? missingOrderPosition
-      : orderPosition(entry.settlement.standing.responsibility.beganAt),
+      : orderPosition(entry.settlement.responsibility.beganAt),
   Relinquishment: (entry) => orderPosition(entry.responsibility.responsibility.beganAt)
 })
 
@@ -250,12 +250,16 @@ export const statusEntryIdentity = Match.typeTags<DeliveryStatusEntry, string>()
   EvidenceConflict: (entry) => canonicalIdentity([statusEntryPrefix(entry), ...entry.evidenceIdentities]),
   Settlement: (entry) =>
     entry.settlement._tag === "DeliverySettlement"
-      ? canonicalIdentity([statusEntryPrefix(entry), "DeliverySettlement", entry.settlement.attemptId])
+      ? canonicalIdentity([
+          statusEntryPrefix(entry),
+          entry.settlement._tag,
+          entry.settlement.taskId,
+          entry.settlement.attemptId
+        ])
       : canonicalIdentity([
           statusEntryPrefix(entry),
-          "AcceptedStandingSettlement",
-          entry.settlement.standing._tag,
-          workflowResponsibilityKey(entry.settlement.standing.responsibility)
+          entry.settlement._tag,
+          workflowResponsibilityKey(entry.settlement.responsibility)
         ]),
   Relinquishment: (entry) =>
     canonicalIdentity([statusEntryPrefix(entry), workflowResponsibilityKey(entry.responsibility.responsibility)])

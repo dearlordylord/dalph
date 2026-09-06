@@ -65,9 +65,10 @@ the actor of a related action.
 ### Starting facts
 
 Alice has the same selected `TraceAtCursor` from Run `R`. A process-local
-current-status source may report `Waiting`, `Running`, or an explicit
-unavailable state. That source is observational only and has no journal append,
-tracker, Git, executor, or Integrator capability.
+current-status source may report `Waiting`, `Running`, a settled delivery or
+accepted cancelled/stopped executor standing, or an explicit unavailable state.
+That source is observational only and has no journal append, tracker, Git,
+executor, or Integrator capability.
 
 ### Trigger and ordered boundary calls
 
@@ -84,18 +85,29 @@ status source updates only the passive status region. A history read retry
 still reads the named committed cursor and has no streaming/transcript
 continuation to recover.
 
+Every settled status item has one canonical `Settlement` entry whose nested
+settlement fact is distinctly tagged as `DeliverySettlement`,
+`CancelledAttemptSettled`, or `StoppedAttemptSettled`. Alice's task and attempt
+identity used to distinguish the settlement come from that nested delivery fact
+or its exact workflow responsibility. The task-scoped subject remains the view
+scope; the status item does not add top-level `taskId` or `attemptId`
+compatibility copies beside it and the nested fact.
+
 ### Forbidden result
 
 The renderer must not use current status as a new workflow occurrence, move
 the selected cursor, claim that status proves an executor or Integrator action,
-or expose a live transcript capability that the `TraceReader` does not provide.
+add top-level `taskId` or `attemptId` compatibility fields beside the subject
+and authoritative nested settlement fact, collapse cancelled and stopped
+standings under one indistinguishable nested tag, or expose a live transcript
+capability that the `TraceReader` does not provide.
 
 ## Acceptance-test mapping
 
 | Scenario | Focused evidence |
 | --- | --- |
 | 1 — immutable snapshot, truthful actors, opaque internals, and individually inspectable promotion attempts | `occurrence-projection.test.ts` exhaustive classification/presentation test; `workflow-trace.production.test.ts` human-readable console rendering and retry snapshot test; `cassette-lab.smoke.ts` history/legend smoke test with exact repeated promotion identities |
-| 2 — passive current status beside fixed history | `trace-reader.test.ts` fixed-history/current-status composition tests; `workflow-trace.production.test.ts` console capability test; `cassette-lab.smoke.ts` Lab status/history separation test |
+| 2 — passive current status beside fixed history | `delivery-status.test.ts` canonical nested settlement shape and identity tests; `delivery-status.property.test.ts` delivery/cancelled/stopped settlement ordering test; `trace-reader.test.ts` fixed-history/current-status composition tests; `workflow-trace.production.test.ts` console capability test; `cassette-lab.smoke.ts` Lab status/history separation test |
 
 The scenario intentionally does not add actors, sessions, transcript events,
 workflow events, TraceReader facets, or history folding. Large navigation and

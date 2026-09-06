@@ -237,8 +237,6 @@ const settlementEntriesFor = (
         _tag: "Settlement",
         classification: "Settled",
         subject: taskStatusSubject(subject, settlement.taskId),
-        taskId: settlement.taskId,
-        attemptId: settlement.attemptId,
         settlement
       },
       taskOrder

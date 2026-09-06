@@ -87,6 +87,36 @@ describe("production repository host configuration", () => {
     expect(JSON.stringify(result)).not.toContain(credentialNeedle)
     expect(JSON.stringify(result)).not.toContain("/usr/local/bin/codex")
   })
+
+  it("rejects filesystem-root and trailing-separator parent overlaps before any live-boundary continuation", async () => {
+    for (const override of [{ plannedAttemptWorktreeRoot: "/" }, { plannedAttemptWorktreeRoot: "/srv/dalph/" }]) {
+      const opened = await Effect.runPromise(Ref.make(0))
+      const result = await Effect.runPromise(
+        withProductionRepositoryHostConfiguration({ ...validRawConfiguration(), ...override }, () =>
+          Ref.update(opened, (count) => count + 1)
+        ).pipe(Effect.flip)
+      )
+
+      expect(await Effect.runPromise(Ref.get(opened))).toBe(0)
+      expect(result).toMatchObject({
+        _tag: "ProductionRepositoryHostConfigurationError",
+        detail: expect.stringContaining("disjoint")
+      })
+    }
+  })
+
+  it("accepts disjoint paths whose names share only a text prefix", async () => {
+    const decoded = await Effect.runPromise(
+      decodeProductionRepositoryHostConfiguration({
+        ...validRawConfiguration(),
+        plannedAttemptWorktreeRoot: "/srv/dalph/work",
+        integratorCandidateWorktreeRoot: "/srv/dalph/work-archive"
+      })
+    )
+
+    expect(decoded.plannedAttemptWorktreeRoot).toBe("/srv/dalph/work")
+    expect(decoded.integratorCandidateWorktreeRoot).toBe("/srv/dalph/work-archive")
+  })
 })
 
 describe("production planned-attempt location codec", () => {

@@ -1,5 +1,10 @@
 import { Effect } from "effect"
-import { CodexThreadWorkingDirectory, type CodexAppServer, type CodexThreadSnapshot } from "./codex-app-server.js"
+import {
+  CodexThreadWorkingDirectory,
+  type CodexAppServer,
+  type CodexThreadListSummary,
+  type CodexThreadSnapshot
+} from "./codex-app-server.js"
 import {
   CodexIntegratorPrivateRecord,
   nextPrivateRecordFields,
@@ -11,7 +16,7 @@ const adoptListedThread = Effect.fn("CodexIntegrator.adoptListedThread")(functio
   app: CodexAppServer["Service"],
   record: CodexIntegratorPrivateRecord,
   store: CodexIntegratorPrivateStoreService,
-  matching: CodexThreadSnapshot
+  matching: CodexThreadListSummary
 ) {
   if (record._tag !== "ThreadStartIntentRecorded") {
     return yield* Effect.fail(providerFailure("persistent candidate thread is unowned"))
@@ -74,7 +79,7 @@ const adoptOrStartListedThread = Effect.fn("CodexIntegrator.adoptOrStartListedTh
   app: CodexAppServer["Service"],
   record: CodexIntegratorPrivateRecord,
   store: CodexIntegratorPrivateStoreService,
-  listed: ReadonlyArray<CodexThreadSnapshot>
+  listed: ReadonlyArray<CodexThreadListSummary>
 ) {
   const candidateDirectory = CodexThreadWorkingDirectory.make(record.candidatePath)
   const matches = listed.filter((thread) => thread.cwd === candidateDirectory)

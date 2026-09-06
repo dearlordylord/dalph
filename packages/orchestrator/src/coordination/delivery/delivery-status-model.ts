@@ -158,30 +158,41 @@ type AcceptedStandingResponsibility = Extract<
   { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }
 >
 
+/** A cancelled executor attempt whose accepted terminal standing is settled. */
+export interface DeliveryStatusCancelledAttemptSettlement {
+  readonly _tag: "CancelledAttemptSettled"
+  readonly claimDisposition: "NoRelease" | "Released"
+  readonly responsibility: AcceptedStandingResponsibility
+}
+
+/** A stopped executor attempt whose accepted terminal standing is settled. */
+export interface DeliveryStatusStoppedAttemptSettlement {
+  readonly _tag: "StoppedAttemptSettled"
+  readonly claimDisposition: "NoRelease" | "Released"
+  readonly responsibility: AcceptedStandingResponsibility
+}
+
 /**
- * An accepted terminal executor standing that remains visible after the
- * cancellation/stop disposition is settled. The two variants are separate so
- * a cancelled standing cannot be represented as a stopped standing (or vice
- * versa); the exact workflow responsibility and planned-attempt correlation
- * remain attached to both.
+ * An accepted terminal executor standing that remains visible after its exact
+ * cancellation or stop disposition is settled.
  */
 export type DeliveryStatusAcceptedStandingSettlement =
-  | {
-      readonly _tag: "AcceptedStandingSettlement"
-      readonly standing: {
-        readonly _tag: "CancelledAttemptSettled"
-        readonly claimDisposition: "NoRelease" | "Released"
-        readonly responsibility: AcceptedStandingResponsibility
-      }
-    }
-  | {
-      readonly _tag: "AcceptedStandingSettlement"
-      readonly standing: {
-        readonly _tag: "StoppedAttemptSettled"
-        readonly claimDisposition: "NoRelease" | "Released"
-        readonly responsibility: AcceptedStandingResponsibility
-      }
-    }
+  | DeliveryStatusCancelledAttemptSettlement
+  | DeliveryStatusStoppedAttemptSettlement
+
+/** The exact nested fact carried by one settled status entry. */
+export type DeliveryStatusSettlement = DeliverySettlement | DeliveryStatusAcceptedStandingSettlement
+
+/**
+ * One canonical settled status shape. Settlement identity is derived from the
+ * nested fact rather than repeated as top-level compatibility fields.
+ */
+export interface DeliveryStatusSettlementEntry {
+  readonly _tag: "Settlement"
+  readonly classification: "Settled"
+  readonly subject: Extract<DeliveryStatusSubject, { readonly _tag: "Task" }>
+  readonly settlement: DeliveryStatusSettlement
+}
 
 /** A graph observation identity carried with a task-absent result. */
 export interface DeliveryStatusGraphSource {
@@ -263,22 +274,7 @@ export type DeliveryStatusEntry =
     }
   | DeliveryStatusEvidenceUnavailableEntry
   | DeliveryStatusEvidenceConflictEntry
-  | {
-      readonly _tag: "Settlement"
-      readonly classification: "Settled"
-      readonly subject: DeliveryStatusSubject
-      /** Established settlement keeps its historical task/attempt fields for API compatibility. */
-      readonly taskId: TaskId
-      readonly attemptId: DeliverySettlement["attemptId"]
-      readonly settlement: DeliverySettlement
-    }
-  | {
-      readonly _tag: "Settlement"
-      readonly classification: "Settled"
-      readonly subject: Extract<DeliveryStatusSubject, { readonly _tag: "Task" }>
-      /** Accepted standing settlement derives task and attempt identity from its exact responsibility. */
-      readonly settlement: DeliveryStatusAcceptedStandingSettlement
-    }
+  | DeliveryStatusSettlementEntry
   | {
       readonly _tag: "Relinquishment"
       readonly classification: "Relinquished"

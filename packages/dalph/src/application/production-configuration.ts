@@ -66,8 +66,13 @@ const CodexProviderName = Schema.NonEmptyString.check(
   )
 )
 
-const pathContains = (parent: string, child: string): boolean =>
-  parent === child || child.startsWith(`${parent}${nodePath.sep}`)
+const pathContains = (parent: string, child: string): boolean => {
+  const relative = nodePath.relative(parent, child)
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${nodePath.sep}`) && !nodePath.isAbsolute(relative))
+  )
+}
 
 const pathsOverlap = (left: string, right: string): boolean => pathContains(left, right) || pathContains(right, left)
 

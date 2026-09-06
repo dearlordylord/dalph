@@ -8,6 +8,7 @@ import { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import type { Scope } from "effect"
 import {
   Context,
+  Data,
   Deferred,
   Duration,
   Effect,
@@ -193,6 +194,37 @@ export interface CodexThreadSnapshot {
   readonly correlation?: PlannedAttemptExecutorCorrelation
 }
 
+interface CodexThreadListIdentityFields {
+  readonly id: CodexThreadId
+  readonly cwd: CodexThreadWorkingDirectory
+}
+
+/**
+ * Provider fields present on one thread-list entry without enough coverage to
+ * constitute an exact thread snapshot.
+ */
+type CodexThreadIncompleteSummary =
+  | { readonly status: CodexThreadStatus; readonly turns?: never }
+  | { readonly status?: never; readonly turns: ReadonlyArray<CodexTurnSnapshot> }
+
+/** Provider fields present on one thread-list entry with both summary fields. */
+interface CodexThreadCompleteSummary {
+  readonly status: CodexThreadStatus
+  readonly turns: ReadonlyArray<CodexTurnSnapshot>
+}
+
+/**
+ * One persistent-thread list observation. Even CompleteSummary is list
+ * evidence, not the exact snapshot returned by thread/read.
+ */
+export type CodexThreadListSummary = Data.TaggedEnum<{
+  IdentityOnly: CodexThreadListIdentityFields
+  IncompleteSummary: CodexThreadListIdentityFields & { readonly summary: CodexThreadIncompleteSummary }
+  CompleteSummary: CodexThreadListIdentityFields & { readonly summary: CodexThreadCompleteSummary }
+}>
+
+export const CodexThreadListSummary = Data.taggedEnum<CodexThreadListSummary>()
+
 /** An implementation-owned background terminal associated with a Codex thread. */
 export interface CodexBackgroundTerminal {
   readonly processId: string
@@ -365,9 +397,9 @@ export interface CodexAppServerService {
     ownedThreadToken?: CodexThreadOwnershipToken
   ) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   /** Complete persistent-thread identity read used to reconcile an ambiguous thread/start. */
-  readonly listThreads?: () => Effect.Effect<ReadonlyArray<CodexThreadSnapshot>, CodexAppServerFailure>
-  /** True only when the server completed the full persistent-thread listing. */
-  readonly listThreadsComplete?: boolean
+  readonly listThreads?: () => Effect.Effect<ReadonlyArray<CodexThreadListSummary>, CodexAppServerFailure>
+  /** True only when the server completed every page; entry field coverage is carried by each summary tag. */
+  readonly listThreadsComplete?: true
   readonly readThread: (threadId: CodexThreadId) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   readonly resumeThread: (
     threadId: CodexThreadId,
@@ -1377,12 +1409,6 @@ const normalizeThreadTurns = (
 const threadStatusValue = (value: CodexThreadSummaryBoundary["status"]): CodexThreadStatus | undefined =>
   typeof value === "string" ? value : value?.type
 
-const threadStatusForOperation = (
-  source: CodexThreadSummaryBoundary,
-  operation: CodexAppServerOperation
-): CodexThreadStatus | undefined =>
-  source.status === undefined && operation === "thread/list" ? "idle" : threadStatusValue(source.status)
-
 const normalizeThreadOwnership = (
   source: CodexThreadSummaryBoundary,
   operation: CodexAppServerOperation
@@ -1416,9 +1442,7 @@ const normalizeThreadBoundary = (
   source: CodexThreadSummaryBoundary,
   operation: CodexAppServerOperation
 ): CodexThreadSnapshot | CodexAppServerFailure => {
-  const status = threadStatusForOperation(source, operation)
-  // `thread/list` summaries may omit a live status while still carrying the
-  // durable id and cwd needed to resume and complete the identity read.
+  const status = threadStatusValue(source.status)
   if (status === undefined) {
     return operationFailure(operation, "Malformed", "thread id, cwd, or status is invalid")
   }
@@ -1456,22 +1480,43 @@ const normalizedThreadEffect = (
 
 const maximumThreadListPages = 100
 
+const normalizeThreadListSummary = (
+  source: CodexThreadSummaryBoundary
+): CodexThreadListSummary | CodexAppServerFailure => {
+  const ownedThreadToken = normalizeThreadOwnership(source, "thread/list")
+  if (ownedThreadToken instanceof CodexAppServerFailure) return ownedThreadToken
+  const status = threadStatusValue(source.status)
+  const turns = source.turns === undefined ? undefined : normalizeThreadTurns(source.turns, "thread/list")
+  if (turns instanceof CodexAppServerFailure) return turns
+  const identity = { id: source.id, cwd: source.cwd }
+  if (status === undefined) {
+    if (turns === undefined) return CodexThreadListSummary.IdentityOnly(identity)
+    return CodexThreadListSummary.IncompleteSummary({ ...identity, summary: { turns } })
+  }
+  if (turns === undefined) {
+    return CodexThreadListSummary.IncompleteSummary({ ...identity, summary: { status } })
+  }
+  return CodexThreadListSummary.CompleteSummary({ ...identity, summary: { status, turns } })
+}
+
 const normalizeThreadListThreads = (
   rawThreads: ReadonlyArray<CodexThreadSummaryBoundary>
-): ReadonlyArray<CodexThreadSnapshot> | CodexAppServerFailure => {
-  const normalizedThreads = rawThreads.map((thread) => normalizeThreadBoundary(thread, "thread/list"))
+): ReadonlyArray<CodexThreadListSummary> | CodexAppServerFailure => {
+  const normalizedThreads = rawThreads.map(normalizeThreadListSummary)
   const failure = normalizedThreads.find(
     (thread): thread is CodexAppServerFailure => thread instanceof CodexAppServerFailure
   )
   if (failure !== undefined) return failure
-  return normalizedThreads.filter((thread): thread is CodexThreadSnapshot => !(thread instanceof CodexAppServerFailure))
+  return normalizedThreads.filter(
+    (thread): thread is CodexThreadListSummary => !(thread instanceof CodexAppServerFailure)
+  )
 }
 
 const normalizedThreadListEnvelope = (
   response: CodexThreadListEnvelope
 ):
   | {
-      readonly threads: ReadonlyArray<CodexThreadSnapshot>
+      readonly threads: ReadonlyArray<CodexThreadListSummary>
       readonly nextCursor: CodexThreadListCursor | null | undefined
     }
   | CodexAppServerFailure => {
@@ -1487,7 +1532,7 @@ const threadListPage = (
   response: unknown
 ):
   | {
-      readonly threads: ReadonlyArray<CodexThreadSnapshot>
+      readonly threads: ReadonlyArray<CodexThreadListSummary>
       readonly nextCursor: CodexThreadListCursor | null | undefined
     }
   | CodexAppServerFailure => {
@@ -2815,7 +2860,7 @@ export const codexAppServerLayer = (
         return yield* normalizedThreadEffect(normalizeThreadSummary(response["thread"], "thread/start"))
       })
       const listThreads = Effect.fn("CodexAppServer.listThreads")(function* () {
-        let pages: ReadonlyArray<ReadonlyArray<CodexThreadSnapshot>> = []
+        let pages: ReadonlyArray<ReadonlyArray<CodexThreadListSummary>> = []
         let cursors: ReadonlySet<CodexThreadListCursor> = new Set<CodexThreadListCursor>()
         let cursor: CodexThreadListCursor | undefined
         for (let page = 0; page < maximumThreadListPages; page += 1) {
