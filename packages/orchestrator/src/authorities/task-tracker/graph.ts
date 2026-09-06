@@ -1,6 +1,6 @@
 /* eslint-disable functional/immutable-data -- Local builder and traversal scratch never escapes the opaque snapshot. */
 import { Graph, HashMap, HashSet, Option, Order, Result, Schema } from "effect"
-import { encodeTaskRevisionFingerprint, TaskId, type TaskRevision } from "@dalph/contracts"
+import { compareTaskIds, encodeTaskRevisionFingerprint, TaskId, type TaskRevision } from "@dalph/contracts"
 import {
   isDependencySatisfied,
   isTaskOpen,
@@ -83,8 +83,6 @@ const taskProjectionRevision = (task: Task): TaskRevision =>
  * Adding normalized task meaning requires adding it to this projection.
  */
 export const taskRevisionFor = taskProjectionRevision
-
-const compareTaskIds: Order.Order<TaskId> = Order.String
 
 const sorted = (taskIds: Iterable<TaskId>): ReadonlyArray<TaskId> => [...taskIds].sort(compareTaskIds)
 

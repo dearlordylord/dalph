@@ -77,7 +77,11 @@ const historicalConsoleUsesPassiveStatus: HistoricalConsoleUsesPassiveStatus = t
 
 const runId = RunId.make("console-production-trace-run")
 const target = FixtureTarget.make("console-production-trace-target")
-const operation = makeTrackerGraphObservationOperation(OperationId.make("console-production-trace-operation"), target)
+const operation = makeTrackerGraphObservationOperation(
+  { _tag: "WorkflowEstablishment" },
+  OperationId.make("console-production-trace-operation"),
+  target
+)
 const occurrence = TaskTrackerReadInitiated.make({
   initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
   occurrenceClassification: "InitiatedAction",
@@ -91,7 +95,11 @@ const historyItem = TraceHistoryItem.make({
   operationIds: [operation.operationId],
   taskIds: []
 })
-const laterOperation = makeTrackerGraphObservationOperation(OperationId.make("console-production-trace-later"), target)
+const laterOperation = makeTrackerGraphObservationOperation(
+  { _tag: "WorkflowEstablishment" },
+  OperationId.make("console-production-trace-later"),
+  target
+)
 const laterHistoryItem = TraceHistoryItem.make({
   identity: TracePositionIdentity.make({ position: JournalPosition.make(3), runId }),
   occurrence: TaskTrackerReadInitiated.make({
@@ -231,7 +239,11 @@ it.effect("reads one exact production cursor through TraceReader and writes its 
           target,
           InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
         )
-        const operation = makeTrackerGraphObservationOperation(OperationId.make("console-e2e-operation"), target)
+        const operation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          OperationId.make("console-e2e-operation"),
+          target
+        )
         yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
         const historyBeforePresentation = yield* journal.read(runId)
         const console = yield* HistoricalTraceConsole

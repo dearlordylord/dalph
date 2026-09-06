@@ -101,6 +101,33 @@ export const acceptedOperationIdsOf = (records: ReadonlyArray<JournalRecord>): R
   return operationIds
 }
 
+/** Ordinary tracker or Git read identities whose journal-first intent has no typed outcome yet. */
+export const pendingReadOperationIdsOf = (records: ReadonlyArray<JournalRecord>): ReadonlySet<OperationId> => {
+  const completed = new Set(
+    records.flatMap(({ event }) => {
+      if (event._tag === "TaskTrackerFactsObserved") return [event.operationId]
+      if (event._tag === "PlannedAttemptWorktreeObserved" || event._tag === "TargetLineageObserved") {
+        return [event.operationId]
+      }
+      if (
+        event._tag === "AttemptRestartAuthorityReadFailed" &&
+        event.failure._tag !== "AttemptRestartTaskFactsReadFailure"
+      ) {
+        return [event.operationId]
+      }
+      return []
+    })
+  )
+  return new Set(
+    records.flatMap(({ event }) =>
+      (event._tag === "GitReadIntentRecorded" || event._tag === "TaskTrackerReadIntentRecorded") &&
+      !completed.has(event.operation.operationId)
+        ? [event.operation.operationId]
+        : []
+    )
+  )
+}
+
 const journaledIntegrationEvidenceByPrefix = new WeakMap<
   ReadonlyArray<JournalRecord>,
   ReadonlyArray<ExactTicketDeliveryEvidence>

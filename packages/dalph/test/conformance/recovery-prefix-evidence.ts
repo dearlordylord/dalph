@@ -3,6 +3,14 @@ import { trackerCompletionRecoveryTrace } from "./tracker-completion-recovery-tr
 const event = (tag: string) => ({ _tag: "WorkflowEventTag" as const, tag })
 const cassette = (key: string) => ({ _tag: "MaintainedCassetteKey" as const, key })
 const focused = (path: string, reference: string) => ({ _tag: "FocusedTestSeam" as const, path, reference })
+const worktreeReconciliationRecovery = focused(
+  "packages/orchestrator/src/workflow-journal/journaled-interruptible-recovery.test.ts",
+  "rebuilds the Git application from its recovery projection and records the available response"
+)
+const persistedWorktreeReadRecovery = focused(
+  "packages/orchestrator/src/workflow-journal/journaled-worktree-observation.test.ts",
+  "reopens persisted Git read intent in a fresh application and records the exact ready observation"
+)
 
 /** Current journal, cassette, and focused-test evidence referenced by the recovery-prefix inventory. */
 export const currentRecoveryPrefixEvidence = {
@@ -34,17 +42,15 @@ export const currentRecoveryPrefixEvidence = {
       "accepts authoritative absence after an ambiguous release response"
     )
   ],
-  worktree: [
-    event("TaskWorktreeReconciliationIntended"),
-    event("GitReadIntentRecorded"),
-    event("PlannedAttemptWorktreeObserved"),
-    event("TaskWorktreeReady"),
-    cassette("lostPlannedWorktreeSafelySuspends"),
-    focused(
-      "packages/orchestrator/src/workflow-journal/journaled-worktree-observation.test.ts",
-      "reopens an intent-only Git read with the same operation identity"
-    )
-  ],
+  worktree: {
+    P0: [cassette("lostPlannedWorktreeSafelySuspends"), worktreeReconciliationRecovery],
+    P1: [event("TaskWorktreeReconciliationIntended"), worktreeReconciliationRecovery],
+    P2: [worktreeReconciliationRecovery],
+    P3: [worktreeReconciliationRecovery],
+    P4: [event("GitReadIntentRecorded"), persistedWorktreeReadRecovery],
+    P5: [event("PlannedAttemptWorktreeObserved"), persistedWorktreeReadRecovery],
+    P6: [event("TaskWorktreeReady"), worktreeReconciliationRecovery]
+  },
   targetLineage: [
     event("GitReadIntentRecorded"),
     event("TargetLineageObserved"),

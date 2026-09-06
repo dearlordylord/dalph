@@ -1,4 +1,5 @@
 import {
+  compareTaskIds,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   type PlannedTaskAttempt,
@@ -31,8 +32,8 @@ import {
 } from "./relations.js"
 import type { DeliveryActionProposal, DeliveryProposalContributions } from "./delivery-proposal.js"
 
-const compareTaskIds = (left: { readonly taskId: TaskId }, right: { readonly taskId: TaskId }): number =>
-  left.taskId.localeCompare(right.taskId)
+const compareByTaskId = (left: { readonly taskId: TaskId }, right: { readonly taskId: TaskId }): number =>
+  compareTaskIds(left.taskId, right.taskId)
 
 const exclusionsFor = (
   task: TrackerTask,
@@ -48,7 +49,7 @@ const exclusionsFor = (
       const prerequisite = tasks.get(taskId)
       return prerequisite === undefined || !isDependencySatisfied(prerequisite.lifecycle)
     })
-    .toSorted((left, right) => left.localeCompare(right))
+    .toSorted(compareTaskIds)
   return prerequisiteTaskIds.length === 0
     ? lifecycle
     : [...lifecycle, { _tag: "PrerequisitesIncomplete", prerequisiteTaskIds }]
@@ -119,7 +120,7 @@ export const frontierOf = (publication: DeliveryGraphPublication): DeliveryFront
         ? { _tag: "Eligible", taskId: task.id, taskRevision: taskRevisionFor(task) }
         : { _tag: "Excluded", reasons: [firstReason, ...reasons.slice(1)], taskId: task.id }
     })
-    .toSorted(compareTaskIds)
+    .toSorted(compareByTaskId)
   return { _tag: "DeliveryFrontier", publication, source: graph, standings }
 }
 
@@ -339,9 +340,7 @@ export const ticketDeliveriesOf = (
   const desiredTaskIds = tickets.placements.flatMap(({ placement, taskId }) =>
     placement._tag === "Selected" ? [taskId] : []
   )
-  const taskIds = [...new Set([...desiredTaskIds, ...evidenceByTask.keys()])].toSorted((left, right) =>
-    left.localeCompare(right)
-  )
+  const taskIds = [...new Set([...desiredTaskIds, ...evidenceByTask.keys()])].toSorted(compareTaskIds)
   const deliveries = taskIds.flatMap((taskId): ReadonlyArray<TicketDelivery> => {
     const evidence = evidenceByTask.get(taskId) ?? []
     const placement = placementFor(tickets, taskId)

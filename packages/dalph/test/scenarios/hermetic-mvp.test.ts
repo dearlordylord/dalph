@@ -71,6 +71,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { ConfigProvider, Deferred, Effect, Exit, FileSystem, Fiber, Layer, Option, Ref, Schema, Scope } from "effect"
 import { expect } from "vitest"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
+import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import { acceptedManifestBytes, runInGitDirectory, runInWorktree } from "./hermetic-support.js"
 
 type TrackerClaim = ActiveTaskClaim | UnclaimedTask
@@ -387,7 +388,7 @@ const runHermeticMvpJourney = (crashAfterPromotion: boolean) =>
         GitCommonDirectoryTarget.make(`${repository}/.git`),
         integrationTarget,
         Layer.succeed(TrackerMutation, trackerMutation),
-        Layer.succeed(PlannedAttemptExecutor, executor),
+        controlledSynchronousPlannedAttemptExecutorLayer(Layer.succeed(PlannedAttemptExecutor, executor)),
         unavailableIntegratorCandidateProviderAuthority,
         {
           acceptedResultEvidenceStore: evidenceStore,

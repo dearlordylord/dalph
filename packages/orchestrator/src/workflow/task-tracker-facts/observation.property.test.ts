@@ -39,7 +39,11 @@ it("round-trips every generated complete fact family and reconstructs the same c
   fc.assert(
     fc.property(taskIdsArbitrary, fc.string({ minLength: 1, maxLength: 24 }), (taskIds, suffix) => {
       const target = FixtureTarget.make("property-target")
-      const operation = makeTrackerGraphObservationOperation(OperationId.make(`property-read-${suffix}`), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make(`property-read-${suffix}`),
+        target
+      )
       const snapshot = validFlatSnapshot(taskIds, `property-revision-${suffix}`)
       const event = taskTrackerFactsObservedEvent(
         operation.operationId,
@@ -59,10 +63,17 @@ it("reconfirms unchanged generated graphs compactly while preserving reconstruct
   fc.assert(
     fc.property(taskIdsArbitrary, fc.string({ minLength: 1, maxLength: 24 }), (taskIds, suffix) => {
       const target = FixtureTarget.make("reconfirm-property-target")
-      const first = makeTrackerGraphObservationOperation(OperationId.make(`first-${suffix}`), target)
-      const later = makeTrackerGraphObservationOperation(OperationId.make(`later-${suffix}`), target, [
-        first.operationId
-      ])
+      const first = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make(`first-${suffix}`),
+        target
+      )
+      const later = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make(`later-${suffix}`),
+        target,
+        [first.operationId]
+      )
       const snapshot = validFlatSnapshot(taskIds, `unchanged-${suffix}`)
       const firstEvent = taskTrackerFactsObservedEvent(
         first.operationId,

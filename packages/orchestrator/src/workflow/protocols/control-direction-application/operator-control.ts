@@ -37,6 +37,7 @@ export const applyOperatorControlDirection = Effect.fn("OperatorControlDirection
   if (request.subject._tag === "Run") return yield* dependencies.application.apply(request)
 
   const operation = makeTrackerGraphObservationOperation(
+    { _tag: "TaskControlMembershipCheck" },
     yield* dependencies.allocator.allocate(),
     target,
     [],

@@ -532,6 +532,30 @@ it("keeps unobserved claims and absent durable lineage waiting without starting 
   expect(noDurableLineage.transitions()).toEqual([])
 })
 
+it("waits for an explicitly applied claim reacquisition when integration claim evidence is missing", () => {
+  const scenario = unfinishedFirstSessionHistory()
+  const frontier = deriveIntegrationFrontier(scenario.runState, {
+    activeResponsibilityPositions: new Set(),
+    currentTrackerTaskIds: new Set([taskId]),
+    heldResponsibilityPositions: new Set([responsibility.queuedAt]),
+    integrationTarget: Option.some(target),
+    targetLineageByAttemptId: new Map([[attemptId, scenario.initialLineage]]),
+    targetLineageRefreshRequiredAttemptIds: new Set(),
+    targetPromotionConfigured: true,
+    taskClaimAuthorityByAttemptId: new Map([[attemptId, { _tag: "Missing" as const }]])
+  })
+
+  expect(frontier.explanations).toEqual([
+    {
+      _tag: "IntegrationTaskClaimConstraint",
+      claimState: "Missing",
+      plannedAttempt: responsibility.plannedAttempt,
+      wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
+    }
+  ])
+  expect(frontier.transitions).toEqual([])
+})
+
 it("explains incompatible lineage as a target rewrite after the fixed session", () => {
   const scenario = unfinishedFirstSessionHistory()
   const incompatibleLineage = TargetLineageObservation.make({

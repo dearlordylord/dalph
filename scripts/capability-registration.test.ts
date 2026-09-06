@@ -844,4 +844,13 @@ describe("capability registration gate", () => {
     timeout: withoutQuint ? 60 * SECOND : 2 * 60 * SECOND
   }`)
   })
+
+  it("relays parent signals for every bounded quality-gate stage", () => {
+    const qualityGate = readFileSync("scripts/run-quality-gate.mjs", "utf8")
+
+    expect(qualityGate).toMatch(
+      /name: `Quality gate '\$\{gate\.name\}'`,\n\s*relayParentSignals: true,\n\s*terminationGraceMilliseconds: gate\.terminationGrace,/u
+    )
+    expect(qualityGate).not.toContain("relayParentSignals: gate.relayParentSignals")
+  })
 })

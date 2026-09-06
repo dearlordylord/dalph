@@ -6,6 +6,7 @@ import {
   EvidenceReference,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
   type PlannedAttemptExecutorService,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
@@ -28,12 +29,28 @@ import {
   EvidenceStoreFailure,
   GitCommand,
   GitCommandInvocationFailure,
+  makePassivePlannedAttemptObserver,
   memoryEvidenceStoreLayer,
   OperationId,
   type GitCommandService
 } from "@dalph/orchestrator"
 import { NodeServices } from "@effect/platform-node"
-import { Crypto, Effect, FileSystem, Layer, Option, PlatformError, Ref, Schema } from "effect"
+import {
+  Crypto,
+  Deferred,
+  Duration,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  PlatformError,
+  PubSub,
+  Ref,
+  Schema,
+  Stream
+} from "effect"
+import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import { definePlannedAttemptExecutorConformanceSuite } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/conformance.test.js"
 import { plannedAttemptExecutorContract } from "../../../orchestrator/test/contracts/planned-attempt-executor-contract.js"
@@ -74,8 +91,10 @@ import {
   type CodexReplacementAuthority,
   CodexReplacementAuthorityFailure,
   CodexReplacementAuthorityProof,
+  CodexOwnedActivityObservationInterval,
   controlledCodexReplacementAuthorityLayer,
-  codexPlannedAttemptExecutorLayer
+  codexPlannedAttemptExecutorLayer,
+  codexPlannedAttemptExecutorLayerWithOptions
 } from "./codex-planned-attempt-executor.js"
 
 const head = GitCommitSha.make("a".repeat(40))
@@ -129,25 +148,30 @@ type Harness = {
   readonly turnCwds: Array<string>
   readonly turnTexts: Array<string>
   readonly resumeCwds: Array<string>
+  readonly interruptCount: () => number
   readonly threadStarts: () => number
+  readonly attemptReadCount: () => number
   readonly turnCount: () => number
   readonly associationAtTurn: () => CodexAttemptRecord | undefined
   readonly currentThread: () => CodexThreadSnapshot
   readonly currentRecord: () => CodexAttemptRecord | undefined
   readonly replacementLedger: () => CodexPurgedWorkUnitReplacementLedger | undefined
   readonly setThread: (thread: CodexThreadSnapshot) => void
+  readonly restoreProviderThread: (thread: CodexThreadSnapshot) => void
   readonly preserveResumeCwd: () => void
   readonly setRecord: (record: CodexAttemptRecord) => void
   readonly setReadOverride: (record: CodexAttemptRecord | undefined) => void
   readonly complete: (message: string) => void
   readonly completeWithItems: (items: ReadonlyArray<unknown>) => void
   readonly makeTerminalActivity: () => void
+  readonly finishTerminalActivity: () => void
   readonly setActivityCensus: (projection: CodexOwnedActivityCensusProjection | undefined) => void
   readonly setActivityCensusSequence: (projections: ReadonlyArray<CodexOwnedActivityCensusProjection>) => void
   readonly observeActivityCensus: (
     thread: CodexThreadSnapshot,
     backgroundTerminals: ReadonlyArray<CodexBackgroundTerminal>
   ) => CodexOwnedActivityCensusProjection
+  readonly afterActivityCensus: () => Effect.Effect<void>
   readonly terminateDescendants: (descendants: ReadonlyArray<CodexOwnedProcessIdentity>) => void
   readonly backgroundTerminationCount: () => number
   readonly descendantTerminationCount: () => number
@@ -193,6 +217,11 @@ const makeHarness = (
     readonly failAfterReplacementSealOnce?: boolean
     readonly dieAfterReplacementTurnStartOnce?: boolean
     readonly dieAfterFirstTurnStartOnce?: boolean
+    readonly lifecycleHintCount?: number
+    readonly lifecycleHints?: CodexAppServerService["attachTurnCompletedHints"]
+    readonly activityHints?: CodexAppServerService["attachOwnedActivityHints"]
+    readonly beforeAttemptRead?: () => Effect.Effect<void>
+    readonly afterActivityCensus?: () => Effect.Effect<void>
   } = {}
 ): Harness => {
   const threadId = CodexThreadId.make("codex-thread-issue-58")
@@ -214,12 +243,14 @@ const makeHarness = (
   let associatedRecord: CodexAttemptRecord | undefined
   let readOverride: CodexAttemptRecord | undefined
   let threadStartCount = 0
+  let attemptReadCount = 0
   let resumeUnavailable = false
   let resumeFailure: CodexAppServerFailure | undefined
   let readFailure = false
   let preserveResumeCwdOnResume = false
   let foreignResume = false
   let interruptUnavailable = options.interruptUnavailable === true
+  let interruptCount = 0
   let interruptSettlesBeforeFailure = false
   let interruptSettlesTerminalBeforeFailure = false
   let backgroundTerminationFailure = false
@@ -245,6 +276,10 @@ const makeHarness = (
 
   const app: CodexAppServerService = {
     incarnation: CodexServerIncarnation.make("controlled-issue-58"),
+    attachTurnCompletedHints:
+      options.lifecycleHints ??
+      Effect.succeed(Stream.fromIterable(Array.from({ length: options.lifecycleHintCount ?? 0 }, () => undefined))),
+    attachOwnedActivityHints: options.activityHints ?? Effect.succeed(Stream.empty),
     startThread: (cwd) =>
       Effect.sync(() => {
         threadStartCount += 1
@@ -325,6 +360,7 @@ const makeHarness = (
         return currentTurn
       }),
     interruptTurn: (threadIdValue, turnId) => {
+      interruptCount += 1
       if (interruptUnavailable) {
         if (interruptSettlesBeforeFailure && threadIdValue === threadId && currentTurn?.id === turnId) {
           currentTurn = {
@@ -369,13 +405,19 @@ const makeHarness = (
   }
 
   const store: CodexAttemptStoreService = {
-    readAttempt: (runId, attemptId) =>
-      readFailure
-        ? Effect.fail(new CodexAttemptStoreFailure({ detail: "read failed", operation: "readAttempt" }))
-        : Effect.sync(() => {
-            const record = readOverride ?? records.get(keyOf(runId, attemptId))
-            return record === undefined ? Option.none() : Option.some(record)
-          }),
+    readAttempt: (runId, attemptId) => {
+      attemptReadCount += 1
+      return (options.beforeAttemptRead?.() ?? Effect.void).pipe(
+        Effect.andThen(
+          readFailure
+            ? Effect.fail(new CodexAttemptStoreFailure({ detail: "read failed", operation: "readAttempt" }))
+            : Effect.sync(() => {
+                const record = readOverride ?? records.get(keyOf(runId, attemptId))
+                return record === undefined ? Option.none() : Option.some(record)
+              })
+        )
+      )
+    },
     writeAttempt: (record) => {
       if (record._tag === "AssociatedPreTurn" && options.failAssociatedWriteOnce === true && !associatedWriteFailure) {
         associatedWriteFailure = true
@@ -451,7 +493,9 @@ const makeHarness = (
     turnCwds,
     turnTexts,
     resumeCwds,
+    interruptCount: () => interruptCount,
     threadStarts: () => threadStartCount,
+    attemptReadCount: () => attemptReadCount,
     turnCount: () => turnNumber,
     associationAtTurn: () => associationAtTurn,
     currentThread: () => currentThread,
@@ -459,6 +503,12 @@ const makeHarness = (
     replacementLedger: () => [...replacementLedgers.values()].at(-1),
     setThread: (thread) => {
       currentThread = thread
+    },
+    restoreProviderThread: (thread) => {
+      turns.splice(0, turns.length, ...thread.turns)
+      currentThread = { ...thread, turns }
+      currentTurn = turns.findLast((turn) => turn.ownedTurnToken !== undefined)
+      turnNumber = turns.length
     },
     preserveResumeCwd: () => {
       preserveResumeCwdOnResume = true
@@ -495,6 +545,9 @@ const makeHarness = (
     makeTerminalActivity: () => {
       terminalActivity = true
     },
+    finishTerminalActivity: () => {
+      terminalActivity = false
+    },
     setActivityCensus: (projection) => {
       activityCensusOverride = projection
       activityCensusSequence = []
@@ -518,6 +571,7 @@ const makeHarness = (
       ]
       return activities.length === 0 ? { _tag: "Absent" } : { _tag: "ExactLive", activities }
     },
+    afterActivityCensus: () => options.afterActivityCensus?.() ?? Effect.void,
     terminateDescendants: (descendants) => {
       descendantTerminationCount += descendants.length
     },
@@ -616,7 +670,9 @@ const layerForImplementation =
             controlledCodexAppServerLayer(harness.app),
             controlledCodexOwnedActivityCensusLayer({
               observe: (thread, backgroundTerminals) =>
-                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
+                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)).pipe(
+                  Effect.tap(() => harness.afterActivityCensus())
+                ),
               terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
             }),
             Layer.succeed(CodexAttemptStore, store),
@@ -626,7 +682,9 @@ const layerForImplementation =
             controlledCodexAppServerLayer(harness.app),
             controlledCodexOwnedActivityCensusLayer({
               observe: (thread, backgroundTerminals) =>
-                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)),
+                Effect.succeed(harness.observeActivityCensus(thread, backgroundTerminals)).pipe(
+                  Effect.tap(() => harness.afterActivityCensus())
+                ),
               terminateDescendants: (descendants) => Effect.sync(() => harness.terminateDescendants(descendants))
             }),
             Layer.succeed(CodexAttemptStore, store),
@@ -816,6 +874,413 @@ const observeExactReport = Effect.fn("CodexPlannedAttemptExecutorTest.observeExa
   if (projection._tag === "Exact") return projection.report
   return yield* Effect.die(`expected exact executor report, received ${projection._tag}`)
 })
+
+it.effect("uses one coalesced provider wake to reproject a later terminal state without command progress", () => {
+  const harness = makeHarness({ lifecycleHintCount: 1 })
+  return Effect.gen(function* () {
+    const executor = yield* PlannedAttemptExecutor
+    const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+    yield* executor.begin(request)
+    const readsBeforeAttachment = harness.attemptReadCount()
+
+    const attachment = yield* lifecycle.attach(correlation)
+    harness.complete(finalResponse(head))
+    const changed = yield* Stream.runHead(attachment.changes)
+
+    expect(attachment.current).toEqual(
+      PlannedAttemptExecutorProjection.cases.Exact.make({
+        report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+      })
+    )
+    expect(changed).toMatchObject({
+      _tag: "Some",
+      value: { _tag: "Exact", report: { _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Accepted" } } }
+    })
+    expect(harness.attemptReadCount() - readsBeforeAttachment).toBe(2)
+    expect(harness.turnCount()).toBe(1)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("keeps equal executing provider wakes inside one passive owner without Journal or command progress", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const providerHints = yield* PubSub.unbounded<void>()
+      const barrierProjectionEntered = yield* Deferred.make<void>()
+      const releaseBarrierProjection = yield* Deferred.make<void>()
+      const terminalPublished = yield* Deferred.make<void>()
+      let observerReadCount = 0
+      let observerActive = false
+      const harness = makeHarness({
+        beforeAttemptRead: () =>
+          Effect.sync(() => {
+            if (!observerActive) return observerReadCount
+            observerReadCount += 1
+            return observerReadCount
+          }).pipe(
+            Effect.flatMap((readCount) =>
+              readCount === 3
+                ? Deferred.succeed(barrierProjectionEntered, undefined).pipe(
+                    Effect.andThen(Deferred.await(releaseBarrierProjection))
+                  )
+                : Effect.void
+            )
+          ),
+        lifecycleHints: PubSub.subscribe(providerHints).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        )
+      })
+
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const observer = yield* makePassivePlannedAttemptObserver()
+        yield* executor.begin(request)
+        const currentPublications = yield* Ref.make(0)
+        const changedPublications = yield* Ref.make(0)
+        const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+        const input = {
+          plannedAttempt: attempt,
+          publishCurrent: (projection: PlannedAttemptExecutorProjection) => {
+            if (projection._tag !== "Exact") return Effect.die("the controlled current projection must be exact")
+            return Ref.update(currentPublications, (count) => count + 1).pipe(
+              Effect.as({ acceptedFacts: "UnchangedPassiveObservation" as const, report: projection.report })
+            )
+          },
+          publishChange: (projection: PlannedAttemptExecutorProjection) =>
+            Ref.update(changedPublications, (count) => count + 1).pipe(
+              Effect.andThen(
+                projection._tag === "Exact" && projection.report._tag === "ExecutorWorkTerminal"
+                  ? Deferred.succeed(terminalPublished, undefined)
+                  : Effect.die("only the later Terminal projection may leave the passive owner")
+              ),
+              Effect.asVoid
+            )
+        }
+
+        observerActive = true
+        const observed = yield* observer.attach(input)
+        yield* PubSub.publish(providerHints, undefined)
+        yield* PubSub.publish(providerHints, undefined)
+        yield* Deferred.await(barrierProjectionEntered)
+        const duplicate = yield* observer.attach(input)
+        expect(duplicate).toEqual(observed)
+        expect({
+          changedPublications: yield* Ref.get(changedPublications),
+          currentPublications: yield* Ref.get(currentPublications),
+          observerReadCount
+        }).toEqual({ changedPublications: 0, currentPublications: 1, observerReadCount: 3 })
+
+        harness.complete(finalResponse(head))
+        yield* Deferred.succeed(releaseBarrierProjection, undefined)
+        yield* Deferred.await(terminalPublished)
+        expect(yield* Ref.get(changedPublications)).toBe(1)
+        expect(observerReadCount).toBe(3)
+        expect(observed).toMatchObject({ acceptedFacts: "UnchangedPassiveObservation", report: executing })
+        expect(harness.turnCount()).toBe(1)
+      }).pipe(Effect.provide(layerFor(harness)))
+    })
+  )
+)
+
+it.effect("observes descendant exit at targeted cadence after an equal item-completed wake", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const activityHints = yield* PubSub.unbounded<void>()
+      const equalProjectionObserved = yield* Deferred.make<void>()
+      const terminalPublished = yield* Deferred.make<void>()
+      let observerObservationCount = 0
+      let observerActive = false
+      const harness = makeHarness({
+        afterActivityCensus: () =>
+          Effect.sync(() => {
+            if (!observerActive) return observerObservationCount
+            observerObservationCount += 1
+            return observerObservationCount
+          }).pipe(
+            Effect.flatMap((observationCount) =>
+              observationCount === 2 ? Deferred.succeed(equalProjectionObserved, undefined) : Effect.void
+            )
+          ),
+        activityHints: PubSub.subscribe(activityHints).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        )
+      })
+      const observationInterval = CodexOwnedActivityObservationInterval.make(Duration.seconds(1))
+      const cadenceLayer = codexPlannedAttemptExecutorLayerWithOptions({
+        ownedActivityObservationInterval: observationInterval
+      })
+
+      yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const observer = yield* makePassivePlannedAttemptObserver()
+        yield* executor.begin(request)
+        harness.makeTerminalActivity()
+        harness.complete(finalResponse(head))
+        const changedPublications = yield* Ref.make(0)
+        observerActive = true
+        const observed = yield* observer.attach({
+          plannedAttempt: attempt,
+          publishCurrent: (projection) => {
+            if (projection._tag !== "Exact") {
+              return Effect.die("owned activity must keep the exact attempt Executing")
+            }
+            return Effect.succeed({ acceptedFacts: "UnchangedPassiveObservation" as const, report: projection.report })
+          },
+          publishChange: (projection) =>
+            projection._tag === "Exact" && projection.report._tag === "ExecutorWorkTerminal"
+              ? Ref.update(changedPublications, (count) => count + 1).pipe(
+                  Effect.andThen(Deferred.succeed(terminalPublished, undefined)),
+                  Effect.asVoid
+                )
+              : Effect.die("owned-activity exit must publish the retained terminal projection")
+        })
+
+        expect(observed).toMatchObject({
+          acceptedFacts: "UnchangedPassiveObservation",
+          report: { _tag: "ExecutorWorkExecuting", correlation }
+        })
+        // Codex emits item/completed for the unified-exec root, but the exact
+        // descendant census still keeps the normalized attempt Executing.
+        yield* PubSub.publish(activityHints, undefined)
+        yield* Deferred.await(equalProjectionObserved)
+        expect(yield* Ref.get(changedPublications)).toBe(0)
+
+        const readsBeforeCadence = harness.attemptReadCount()
+        harness.finishTerminalActivity()
+        yield* TestClock.adjust(Duration.millis(999))
+        yield* Effect.yieldNow
+        expect(harness.attemptReadCount()).toBe(readsBeforeCadence)
+
+        yield* TestClock.adjust(Duration.millis(1))
+        yield* Deferred.await(terminalPublished)
+        expect(yield* Ref.get(changedPublications)).toBe(1)
+        expect(harness.attemptReadCount()).toBe(readsBeforeCadence + 1)
+        // Terminal sealing deliberately performs a second census after the
+        // accepted-result evidence read, so the three projections make four
+        // authoritative activity observations in total.
+        expect(observerObservationCount).toBe(4)
+      }).pipe(Effect.provide(layerForImplementation(cadenceLayer)(harness)))
+    })
+  )
+)
+
+it.effect("closing a held-terminal attachment stops targeted owned-activity census checks", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = makeHarness()
+      const cadenceLayer = codexPlannedAttemptExecutorLayerWithOptions({
+        ownedActivityObservationInterval: CodexOwnedActivityObservationInterval.make(Duration.seconds(1))
+      })
+      const result = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request)
+        harness.makeTerminalActivity()
+        harness.complete(finalResponse(head))
+        const attachment = yield* lifecycle.attach(correlation)
+        const waiting = yield* Stream.runHead(attachment.changes).pipe(Effect.forkChild)
+        const readsAtClose = harness.attemptReadCount()
+
+        yield* attachment.close
+        harness.finishTerminalActivity()
+        yield* TestClock.adjust(Duration.seconds(2))
+        yield* Effect.yieldNow
+
+        return { readsAtClose, result: yield* Fiber.join(waiting) }
+      }).pipe(Effect.provide(layerForImplementation(cadenceLayer)(harness)))
+
+      expect(result.result).toEqual(Option.none())
+      expect(harness.attemptReadCount()).toBe(result.readsAtClose)
+    })
+  )
+)
+
+it.effect("a typed held-terminal projection failure stops targeted census checks without retry", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const harness = makeHarness()
+      const cadenceLayer = codexPlannedAttemptExecutorLayerWithOptions({
+        ownedActivityObservationInterval: CodexOwnedActivityObservationInterval.make(Duration.seconds(1))
+      })
+      const result = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request)
+        harness.makeTerminalActivity()
+        harness.complete(finalResponse(head))
+        const attachment = yield* lifecycle.attach(correlation)
+        harness.makeReadFailure()
+        const waiting = yield* Stream.runCollect(attachment.changes).pipe(Effect.forkChild)
+
+        yield* Effect.yieldNow
+        yield* TestClock.adjust(Duration.seconds(1))
+        const changes = yield* Fiber.join(waiting)
+        const readsAfterFailure = harness.attemptReadCount()
+        yield* TestClock.adjust(Duration.seconds(5))
+        yield* Effect.yieldNow
+
+        return { changes: Array.from(changes), readsAfterFailure }
+      }).pipe(Effect.provide(layerForImplementation(cadenceLayer)(harness)))
+
+      expect(result.changes).toMatchObject([{ _tag: "Unreadable", correlation }])
+      expect(harness.attemptReadCount()).toBe(result.readsAfterFailure)
+    })
+  )
+)
+
+it.effect("current-first attachment cannot miss a terminal change between projection and await", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const providerHints = yield* PubSub.unbounded<void>()
+      const subscriptionAttached = yield* Deferred.make<void>()
+      const harness = makeHarness({
+        lifecycleHints: PubSub.subscribe(providerHints).pipe(
+          Effect.tap(() => Deferred.succeed(subscriptionAttached, undefined)),
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        )
+      })
+
+      const attachment = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request)
+        const attached = yield* lifecycle.attach(correlation)
+        yield* Deferred.await(subscriptionAttached)
+        expect(attached.current).toMatchObject({
+          _tag: "Exact",
+          report: { _tag: "ExecutorWorkExecuting", correlation }
+        })
+        harness.complete(finalResponse(head))
+        yield* PubSub.publish(providerHints, undefined)
+        const changed = yield* Stream.runHead(attached.changes)
+        return { attached, changed }
+      }).pipe(Effect.provide(layerFor(harness)))
+
+      expect(attachment.changed).toMatchObject({
+        _tag: "Some",
+        value: { _tag: "Exact", report: { _tag: "ExecutorWorkTerminal", correlation, result: { _tag: "Accepted" } } }
+      })
+      expect(harness.turnCount()).toBe(1)
+      yield* attachment.attached.close
+    })
+  )
+)
+
+it.effect("rebuilds Codex lifecycle attachment from durable association across scoped restart", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const firstHarness = makeHarness()
+      const sharedStore = firstHarness.store
+      const firstCurrent = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request)
+        return (yield* lifecycle.attach(correlation)).current
+      }).pipe(Effect.provide(layerFor(firstHarness, defaultGitCommand, undefined, undefined, sharedStore)))
+
+      expect(firstCurrent).toMatchObject({ _tag: "Exact", report: { _tag: "ExecutorWorkExecuting", correlation } })
+      expect(firstHarness.currentRecord()).toMatchObject({
+        _tag: "Running",
+        correlationRunId: correlation.runId,
+        correlationAttemptId: correlation.attemptId,
+        threadId: firstHarness.currentThread().id
+      })
+
+      const lifecycleHints = yield* PubSub.unbounded<void>()
+      const secondHarness = makeHarness({
+        lifecycleHints: PubSub.subscribe(lifecycleHints).pipe(
+          Effect.map((subscription) =>
+            Stream.unfold(undefined, () =>
+              PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const))
+            )
+          )
+        )
+      })
+      secondHarness.restoreProviderThread(firstHarness.currentThread())
+
+      const changed = yield* Effect.gen(function* () {
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        const attachment = yield* lifecycle.attach(correlation)
+        expect(attachment.current).toMatchObject({
+          _tag: "Exact",
+          report: { _tag: "ExecutorWorkExecuting", correlation }
+        })
+
+        const thread = secondHarness.currentThread()
+        const retainedTurn = thread.turns.findLast((turn) => turn.ownedTurnToken !== undefined)
+        if (retainedTurn === undefined) return yield* Effect.die("restart fixture lost the durable owned turn")
+        secondHarness.restoreProviderThread({
+          ...thread,
+          status: "idle",
+          turns: [
+            ...thread.turns.filter((turn) => turn.id !== retainedTurn.id),
+            { ...retainedTurn, status: "completed", items: [{ type: "agentMessage", text: finalResponse(head) }] }
+          ]
+        })
+        yield* PubSub.publish(lifecycleHints, undefined)
+        return yield* attachment.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
+      }).pipe(Effect.provide(layerFor(secondHarness, defaultGitCommand, undefined, undefined, sharedStore)))
+
+      expect(changed).toMatchObject({ _tag: "Exact", report: { _tag: "ExecutorWorkTerminal", correlation } })
+      expect(firstHarness.turnCount()).toBe(1)
+      expect(secondHarness.turnCwds).toHaveLength(0)
+      expect(secondHarness.interruptCount()).toBe(0)
+    })
+  )
+)
+
+it.effect("rebuilds a causally proved Safe Codex projection from durable association across scoped restart", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const firstHarness = makeHarness()
+      const sharedStore = firstHarness.store
+      const firstSafe = yield* Effect.gen(function* () {
+        const executor = yield* PlannedAttemptExecutor
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        yield* executor.begin(request)
+        expect(yield* executor.requestSuspension(attempt)).toEqual(
+          PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+        )
+        return (yield* lifecycle.attach(correlation)).current
+      }).pipe(Effect.provide(layerFor(firstHarness, defaultGitCommand, undefined, undefined, sharedStore)))
+
+      expect(firstSafe).toMatchObject({ _tag: "Exact", report: { _tag: "ExecutorWorkSafelySuspended", correlation } })
+      expect(firstHarness.currentRecord()).toMatchObject({
+        _tag: "SafelySuspended",
+        correlationRunId: correlation.runId,
+        correlationAttemptId: correlation.attemptId,
+        threadId: firstHarness.currentThread().id
+      })
+      expect(firstHarness.interruptCount()).toBe(1)
+
+      const secondHarness = makeHarness()
+      secondHarness.restoreProviderThread(firstHarness.currentThread())
+      const restartedCurrent = yield* Effect.gen(function* () {
+        const lifecycle = yield* PlannedAttemptExecutorLifecycleObservation
+        return (yield* lifecycle.attach(correlation)).current
+      }).pipe(Effect.provide(layerFor(secondHarness, defaultGitCommand, undefined, undefined, sharedStore)))
+
+      expect(restartedCurrent).toMatchObject({
+        _tag: "Exact",
+        report: { _tag: "ExecutorWorkSafelySuspended", correlation }
+      })
+      expect(firstHarness.turnCount()).toBe(1)
+      expect(secondHarness.turnCwds).toHaveLength(0)
+      expect(secondHarness.interruptCount()).toBe(0)
+    })
+  )
+)
 
 it.effect("persists the exact association before the first turn and seals Accepted from reread evidence", () => {
   const harness = makeHarness()
@@ -1854,7 +2319,7 @@ it.effect("sends the first turn on a freshly associated thread without treating 
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
-it.effect("does not replace a conclusively absent recovered pre-turn thread", () => {
+it.effect("replaces only a conclusively absent recovered pre-turn thread before sending the first turn", () => {
   const harness = makeHarness({ missingEmptyThread: true })
   return Effect.gen(function* () {
     const lostEmptyThread = yield* harness.app.startThread(worktree)
@@ -1864,6 +2329,52 @@ it.effect("does not replace a conclusively absent recovered pre-turn thread", ()
         correlationAttemptId: attempt.attemptId,
         correlationRunId: attempt.runId,
         threadId: lostEmptyThread.id,
+        worktree
+      })
+    )
+    const executor = yield* PlannedAttemptExecutor
+    expect(yield* executor.begin(request)).toEqual(
+      PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    )
+    expect(harness.threadStarts()).toBe(2)
+    expect(harness.turnCount()).toBe(1)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("reuses an exact idle recovered pre-turn thread before sending its first turn", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const existingThread = yield* harness.app.startThread(worktree)
+    harness.setRecord(
+      CodexAttemptRecord.cases.AssociatedPreTurn.make({
+        attemptId: attempt.attemptId,
+        correlationAttemptId: attempt.attemptId,
+        correlationRunId: attempt.runId,
+        threadId: existingThread.id,
+        worktree
+      })
+    )
+    const executor = yield* PlannedAttemptExecutor
+    expect((yield* executor.begin(request))._tag).toBe("ExecutorWorkExecuting")
+    expect(harness.threadStarts()).toBe(1)
+    expect(harness.turnCount()).toBe(1)
+    const association = harness.associationAtTurn()
+    expect(association?._tag).toBe("AssociatedPreTurn")
+    if (association?._tag === "AssociatedPreTurn") expect(association.threadId).toBe(existingThread.id)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("rejects recovered pre-turn state when the associated thread already contains a turn", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const existingThread = yield* harness.app.startThread(worktree)
+    harness.addManualTurn("after")
+    harness.setRecord(
+      CodexAttemptRecord.cases.AssociatedPreTurn.make({
+        attemptId: attempt.attemptId,
+        correlationAttemptId: attempt.attemptId,
+        correlationRunId: attempt.runId,
+        threadId: existingThread.id,
         worktree
       })
     )

@@ -20,7 +20,6 @@ import {
 import { acceptedResultFixture } from "../../test/support/evidence.js"
 import { completedRunFinalityFixture } from "../../test/run-finality.js"
 import { GitCommand } from "../authorities/git/command.js"
-import { GitWorktreeReadFailure } from "../authorities/git/worktree.js"
 import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { TargetLineageObservation } from "../authorities/git/target-lineage.js"
@@ -99,7 +98,6 @@ import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import {
   makeTaskClaimAcquisitionOperation,
   makeCompletionTaskFactsObservationOperation,
-  makeTaskWorktreeObservationOperation,
   makeTargetLineageObservationOperation,
   makeTrackerGraphObservationOperation
 } from "../workflow/registry/operation.js"
@@ -110,12 +108,6 @@ import {
 } from "../workflow/protocols/integration-finality/completion-task-operation-identity.js"
 import { makeFocusedTaskCompletionFactsObserved } from "../workflow/task-tracker-facts/focused-completion-observation.js"
 import { integrationFinalityFixture } from "../workflow/protocols/integration-finality/fixtures.js"
-import {
-  ActiveWorkAuthorityRefreshAuthority,
-  ActiveWorkAuthorityRefreshGitReadFailedEvent,
-  ActiveWorkAuthorityRefreshOrdinal,
-  makeActiveWorkAuthorityRefreshGitReadOperation
-} from "../workflow/protocols/active-work-authority-refresh/events.js"
 import {
   IntegratorRunCorrelation,
   IntegratorRunCandidateGitObservedEvent,
@@ -235,7 +227,12 @@ const appendGraphObservation = Effect.fn("TraceReaderTest.appendGraphObservation
   predecessorOperationIds: ReadonlyArray<OperationId> = [],
   observationTarget: TrackerTarget = target
 ) {
-  const operation = makeTrackerGraphObservationOperation(operationId, observationTarget, predecessorOperationIds)
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    operationId,
+    observationTarget,
+    predecessorOperationIds
+  )
   yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
   yield* journal.append(
     runId,
@@ -252,7 +249,12 @@ const appendGraphObservationFor = Effect.fn("TraceReaderTest.appendGraphObservat
   predecessorOperationIds: ReadonlyArray<OperationId> = [],
   observationSnapshot: typeof snapshot = snapshot
 ) {
-  const operation = makeTrackerGraphObservationOperation(operationId, observedTarget, predecessorOperationIds)
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    operationId,
+    observedTarget,
+    predecessorOperationIds
+  )
   yield* journal.append(observedRunId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
   yield* journal.append(
     observedRunId,
@@ -296,7 +298,7 @@ const appendIncompleteGraphObservation = Effect.fn("TraceReaderTest.appendIncomp
   journal: JournalStore["Service"],
   operationId: OperationId
 ) {
-  const operation = makeTrackerGraphObservationOperation(operationId, target)
+  const operation = makeTrackerGraphObservationOperation({ _tag: "WorkflowEstablishment" }, operationId, target)
   const observation = TaskTrackerFactsReadFailed.make({
     completeness: "Unreadable",
     failure: {
@@ -822,71 +824,6 @@ it.effect("indexes completion lookup and candidate ancestry roles in the public 
   })
 )
 
-it.effect(
-  "returns the same projection failure when a coordinator records a Git failure without its refresh intent",
-  () =>
-    Effect.gen(function* () {
-      const authority = ActiveWorkAuthorityRefreshAuthority.make({
-        attemptId: integrationPlannedAttempt.attemptId,
-        runId
-      })
-      const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
-      const operation = makeActiveWorkAuthorityRefreshGitReadOperation(
-        makeTaskWorktreeObservationOperation({
-          operationId: OperationId.make("trace-reader-active-refresh-without-intent"),
-          plannedAttempt: integrationPlannedAttempt,
-          predecessorOperationIds: []
-        }),
-        authority,
-        ordinal
-      )
-      const failureEvent = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
-        authority,
-        failure: new GitWorktreeReadFailure({
-          detail: "the committed prefix omitted the Git intent",
-          worktree: integrationPlannedAttempt.worktree
-        }),
-        occurrenceClassification: "NonActionOccurrence",
-        operation,
-        ordinal,
-        source: "Timer",
-        version: workflowJournalEventVersion
-      })
-      const beginningEvent = WorkflowRunBeganEvent.make({
-        initialControlPolicy: initialPolicy,
-        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-        occurrenceClassification: "InitiatedAction",
-        target,
-        version: workflowJournalEventVersion
-      })
-      const records: ReadonlyArray<JournalRecord> = [
-        {
-          event: beginningEvent,
-          key: describeJournalEvent(beginningEvent).expectedKey,
-          position: JournalPosition.make(1),
-          runId
-        },
-        {
-          event: failureEvent,
-          key: describeJournalEvent(failureEvent).expectedKey,
-          position: JournalPosition.make(2),
-          runId
-        }
-      ]
-      const reader = readerFromRecords(records)
-      const historyFailure = yield* reader.read(runId).pipe(Effect.flip)
-      expect(historyFailure).toMatchObject({ _tag: "TraceProjectionInvalid", runId })
-      if (historyFailure._tag !== "TraceProjectionInvalid") {
-        return yield* Effect.die("invalid Git outcome must fail trace projection")
-      }
-      expect(historyFailure.detail).toContain("GitOutcomeWithoutReadIntent")
-      const cursorFailure = yield* reader
-        .readAt(TraceCursor.make({ position: JournalPosition.make(2), runId }))
-        .pipe(Effect.flip)
-      expect(cursorFailure).toEqual(historyFailure)
-    })
-)
-
 it.effect("rejects the coordinator's acknowledgement when it names a different completion request", () =>
   Effect.gen(function* () {
     const records = historicalLookupRecords()
@@ -929,6 +866,7 @@ it.effect("rejects a tracker read when its operation ID already identifies the c
       return yield* Effect.die("completion lookup fixture is missing")
     }
     const collidingOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       lookup.event.operationId,
       integrationFinalityFixture.target
     )
@@ -1245,7 +1183,11 @@ it.effect("rejects duplicate OperationIds as visible causal contradictions", () 
     const journal = yield* JournalStore
     const beginning = yield* journal.beginRun(runId, target, initialPolicy)
     const duplicateOperationId = OperationId.make("duplicate-operation")
-    const operation = makeTrackerGraphObservationOperation(duplicateOperationId, target)
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      duplicateOperationId,
+      target
+    )
     const first = taskTrackerReadIntent(operation)
     const second = taskTrackerReadIntent(operation)
     const records: ReadonlyArray<JournalRecord> = [
@@ -1271,8 +1213,17 @@ it.effect("rejects a predecessor recorded after its successor as a visible causa
     const beginning = yield* journal.beginRun(runId, target, initialPolicy)
     const predecessorOperationId = OperationId.make("recorded-later")
     const successorOperationId = OperationId.make("recorded-first")
-    const successor = makeTrackerGraphObservationOperation(successorOperationId, target, [predecessorOperationId])
-    const predecessor = makeTrackerGraphObservationOperation(predecessorOperationId, target)
+    const successor = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      successorOperationId,
+      target,
+      [predecessorOperationId]
+    )
+    const predecessor = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      predecessorOperationId,
+      target
+    )
     const successorEvent = taskTrackerReadIntent(successor)
     const predecessorEvent = taskTrackerReadIntent(predecessor)
     const records: ReadonlyArray<JournalRecord> = [
@@ -1550,7 +1501,11 @@ it.effect("does not reconstruct a graph from a reconfirmation with no earlier fu
   Effect.gen(function* () {
     const journal = yield* JournalStore
     yield* journal.beginRun(runId, target, initialPolicy)
-    const firstOperation = makeTrackerGraphObservationOperation(OperationId.make("reconfirmation-first"), target)
+    const firstOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("reconfirmation-first"),
+      target
+    )
     yield* journal.append(runId, intentRecordKey(firstOperation.operationId), taskTrackerReadIntent(firstOperation))
     yield* journal.append(
       runId,
@@ -1560,9 +1515,12 @@ it.effect("does not reconstruct a graph from a reconfirmation with no earlier fu
         makeCompleteTaskTrackerFactsObserved(firstOperation, snapshot)
       )
     )
-    const laterOperation = makeTrackerGraphObservationOperation(OperationId.make("reconfirmation-later"), target, [
-      firstOperation.operationId
-    ])
+    const laterOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("reconfirmation-later"),
+      target,
+      [firstOperation.operationId]
+    )
     const reconfirmed = makeTaskTrackerFactsObservedFromRead(yield* journal.read(runId), laterOperation, snapshot)
     if (reconfirmed.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed") {
       return yield* Effect.die("reconfirmation fixture did not produce compact unchanged facts")

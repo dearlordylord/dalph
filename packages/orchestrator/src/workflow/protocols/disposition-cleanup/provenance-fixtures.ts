@@ -178,6 +178,7 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
   )
   if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("replacement fixture requires a begun Run")
   const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     ids.graphObservationOperationId,
     began.event.target,
     [],
@@ -213,6 +214,7 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
   // after that choice. Keep those authorities distinct so the startup
   // reducer sees the same chronology as an ordinary coordinator.
   const choiceGraphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make(`${ids.graphObservationOperationId}:choice-authority`),
     began.event.target,
     [],

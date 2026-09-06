@@ -1,5 +1,6 @@
 import { it } from "@effect/vitest"
 import { appendAcceptedSafeExecutorHistory } from "../../../../test/support/planned-attempt-executor-history.js"
+import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -23,6 +24,8 @@ import {
   UnclaimedTask
 } from "../../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
+import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
+import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import {
   deriveJournalResponsibilityFacts,
@@ -60,6 +63,8 @@ import {
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimReleaseIntendedEvent,
   TaskClaimReleasedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent
 } from "../../registry/event.js"
 import {
@@ -68,6 +73,8 @@ import {
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
   makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
+  makeTrackerGraphObservationOperation,
   TaskClaimReleaseAuthority
 } from "../../registry/operation.js"
 import {
@@ -124,7 +131,7 @@ const inertBoundaryLease = {
 const runId = RunId.make("attempt-stop-run")
 const taskId = TaskId.make("attempt-stop-task")
 const target = FixtureTarget.make("attempt-stop-target")
-const plannedRevision = TaskRevision.make("attempt-stop-F1")
+const plannedSpecification = makeTaskWorkSpecification({ body: "Original F1", taskId, title: "Original F1" })
 const changedSpecification = makeTaskWorkSpecification({ body: "Changed F2", taskId, title: "Changed F2" })
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("attempt-stop-P"),
@@ -133,7 +140,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
   executor: TaskExecutorLocator.make("executor:attempt-stop"),
   runId,
   taskId,
-  taskRevision: plannedRevision,
+  taskRevision: plannedSpecification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/attempt-stop-P")
 })
 const correlation = { attemptId: plannedAttempt.attemptId, runId }
@@ -153,10 +160,32 @@ const unusedPlannedAttemptExecutor = PlannedAttemptExecutor.of({
   begin: () => Effect.die("unused begin"),
   resume: () => Effect.die("unused resume")
 })
+const plannedGraphOperation = makeTrackerGraphObservationOperation(
+  { _tag: "WorkflowEstablishment" },
+  OperationId.make("attempt-stop-planned-post-claim-graph"),
+  target,
+  [exactClaim.operationId],
+  [taskId]
+)
+const plannedSpecificationRead = makeTaskWorkSpecificationObservationOperation(
+  OperationId.make("attempt-stop-planned-F1"),
+  target,
+  taskId,
+  [plannedGraphOperation.operationId]
+)
 const planOperation = makeTaskAttemptPlanOperation({
   operationId: OperationId.make("attempt-stop-plan"),
   plannedAttempt,
-  predecessorOperationIds: [exactClaim.operationId]
+  predecessorOperationIds: [
+    exactClaim.operationId,
+    plannedGraphOperation.operationId,
+    plannedSpecificationRead.operationId
+  ]
+})
+const plannedWorktreeOperation = makeTaskWorktreeReconciliationOperation({
+  operationId: OperationId.make("attempt-stop-planned-worktree-P"),
+  plannedAttempt,
+  predecessorOperationIds: [planOperation.operationId]
 })
 const requestId = AttemptChoiceRequestId.make({ nonce: "attempt-stop-D2", runId })
 const subject = { observedTaskRevision: changedSpecification.fingerprint, plannedAttempt }
@@ -187,12 +216,62 @@ const appendExposedStop = Effect.fn("AttemptStopTest.appendExposed")(function* (
       outcomeRecordKey(exactClaim.operationId),
       TaskClaimAcquiredEvent.make({ claim: exactClaim, version: workflowJournalEventVersion })
     )
+    yield* journal.append(
+      runId,
+      intentRecordKey(plannedGraphOperation.operationId),
+      taskTrackerReadIntent(plannedGraphOperation)
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(plannedGraphOperation.operationId),
+      taskTrackerGraphFactsObserved(plannedGraphOperation, {
+        revision: TrackerRevision.make("attempt-stop-planned-graph"),
+        taskIds: [taskId]
+      })
+    )
+    yield* journal.append(
+      runId,
+      intentRecordKey(plannedSpecificationRead.operationId),
+      taskTrackerReadIntent(plannedSpecificationRead)
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(plannedSpecificationRead.operationId),
+      taskTrackerFactsObservedEvent(
+        plannedSpecificationRead.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(plannedSpecificationRead, plannedSpecification)
+      )
+    )
   }
   yield* journal.append(
     runId,
     attemptPlanRecordKey(plannedAttempt.attemptId),
     TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
   )
+  if (includeClaim) {
+    yield* journal.append(
+      runId,
+      intentRecordKey(plannedWorktreeOperation.operationId),
+      TaskWorktreeReconciliationIntendedEvent.make({
+        operation: plannedWorktreeOperation,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(plannedWorktreeOperation.operationId),
+      TaskWorktreeReadyEvent.make({
+        operationId: plannedWorktreeOperation.operationId,
+        proof: PlannedWorktreeReady.make({
+          baseSha: plannedAttempt.baseSha,
+          branch: plannedAttempt.branch,
+          headSha: plannedAttempt.baseSha,
+          worktree: plannedAttempt.worktree
+        }),
+        version: workflowJournalEventVersion
+      })
+    )
+  }
   yield* appendAcceptedSafeExecutorHistory(plannedAttempt)
   const specificationRead = makeTaskWorkSpecificationObservationOperation(
     OperationId.make("attempt-stop-observe-F2"),
@@ -242,8 +321,56 @@ const appendExposedPrefix = Effect.fn("AttemptStopTest.appendExposedPrefix")(fun
   )
   yield* journal.append(
     runId,
+    intentRecordKey(plannedGraphOperation.operationId),
+    taskTrackerReadIntent(plannedGraphOperation)
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(plannedGraphOperation.operationId),
+    taskTrackerGraphFactsObserved(plannedGraphOperation, {
+      revision: TrackerRevision.make("attempt-stop-published-prefix-graph"),
+      taskIds: [taskId]
+    })
+  )
+  yield* journal.append(
+    runId,
+    intentRecordKey(plannedSpecificationRead.operationId),
+    taskTrackerReadIntent(plannedSpecificationRead)
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(plannedSpecificationRead.operationId),
+    taskTrackerFactsObservedEvent(
+      plannedSpecificationRead.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(plannedSpecificationRead, plannedSpecification)
+    )
+  )
+  yield* journal.append(
+    runId,
     attemptPlanRecordKey(plannedAttempt.attemptId),
     TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    runId,
+    intentRecordKey(plannedWorktreeOperation.operationId),
+    TaskWorktreeReconciliationIntendedEvent.make({
+      operation: plannedWorktreeOperation,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(plannedWorktreeOperation.operationId),
+    TaskWorktreeReadyEvent.make({
+      operationId: plannedWorktreeOperation.operationId,
+      proof: PlannedWorktreeReady.make({
+        baseSha: plannedAttempt.baseSha,
+        branch: plannedAttempt.branch,
+        headSha: plannedAttempt.baseSha,
+        worktree: plannedAttempt.worktree
+      }),
+      version: workflowJournalEventVersion
+    })
   )
   yield* appendAcceptedSafeExecutorHistory(plannedAttempt)
   const specificationRead = makeTaskWorkSpecificationObservationOperation(

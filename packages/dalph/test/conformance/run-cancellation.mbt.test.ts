@@ -25,6 +25,7 @@ import {
 } from "@dalph/contracts"
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Queue, Schema, Scope, Stream } from "effect"
 import { expect } from "vitest"
+import { PlannedWorktreeReady } from "../../../orchestrator/src/authorities/git/worktree.js"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
 import { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
@@ -34,6 +35,7 @@ import {
   DeliveryActionExecutor,
   type DeliveryActionExecutionLease
 } from "../../../orchestrator/src/coordination/delivery/delivery-action-executor.js"
+import { DeliveryAcceptedFactPublication } from "../../../orchestrator/src/coordination/delivery/delivery-accepted-fact-publication.js"
 import { makeReactiveDeliveryRelationsLayer } from "../../../orchestrator/src/coordination/delivery/reactive-delivery-relations.js"
 import { executeFreshTrackerGraphRead } from "../../../orchestrator/src/coordination/delivery/delivery-action-adapter-common.js"
 import { executeIntegrationAction } from "../../../orchestrator/src/coordination/delivery/integration-delivery-action-adapter.js"
@@ -64,6 +66,7 @@ import {
 import { journaledCurrentDeliveryFrameOf } from "../../../orchestrator/src/coordination/run/current-delivery-frame.js"
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
+import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import { noopJournalMaintenanceObservation } from "../../../orchestrator/src/workflow-journal/maintenance.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { runStabilizedDelivery } from "../../../orchestrator/src/coordination/run/run-stabilization.js"
@@ -112,6 +115,8 @@ import {
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTargetLineageObservationOperation,
   makeTrackerGraphObservationOperation,
   TaskClaimReleaseAuthority
@@ -120,8 +125,11 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReconciliationIntendedEvent,
+  TaskWorktreeReadyEvent,
   GitReadIntentRecordedEvent,
-  TargetLineageObservedEvent
+  TargetLineageObservedEvent,
+  taskTrackerReadIntent
 } from "../../../orchestrator/src/workflow/registry/event.js"
 import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
 import {
@@ -135,6 +143,11 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
 import {
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent
@@ -469,6 +482,20 @@ type ClassificationGraph = {
   readonly observedAt: JournalPosition
 }
 
+const acceptedAttemptGraphFor = (attempt: PlannedTaskAttempt): TaskDagSnapshot => {
+  const projected = projectTrackerSnapshot({
+    revision: cancellationTrackerRevision,
+    rootTaskId: attempt.taskId,
+    tasks: [{ id: attempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  if (projected._tag !== "Valid")
+    return Effect.runSync(Effect.die(`invalid cancellation lineage graph: ${JSON.stringify(projected.issues)}`))
+  return projected.snapshot
+}
+
+const acceptedAttemptSpecificationFor = (attempt: PlannedTaskAttempt) =>
+  makeTaskWorkSpecification({ body: taskSpecification.body, taskId: attempt.taskId, title: taskSpecification.title })
+
 const identityFreeIntegrationActionFor = (
   transition: RunnableFrontierTransition,
   responsibility: StartedIntegrationResponsibility
@@ -509,20 +536,89 @@ const claimAcquisitionOperation = makeTaskClaimAcquisitionOperation({
   },
   predecessorOperationIds: []
 })
+const graphOperation = makeTrackerGraphObservationOperation(
+  { _tag: "WorkflowEstablishment" },
+  OperationId.make("run-cancellation-post-claim-graph"),
+  target,
+  [claimAcquisitionOperation.acquisition.operationId],
+  [plannedAttempt.taskId]
+)
+const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+  OperationId.make("run-cancellation-specification"),
+  target,
+  plannedAttempt.taskId,
+  [graphOperation.operationId]
+)
 const planOperation = makeTaskAttemptPlanOperation({
   operationId: OperationId.make("run-cancellation-attempt-plan"),
   plannedAttempt,
-  predecessorOperationIds: [activeClaim.operationId]
+  predecessorOperationIds: [specificationOperation.operationId]
 })
+const integrationClaim = ActiveTaskClaim.make({
+  operationId: OperationId.make("run-cancellation-integration-claim-acquisition"),
+  owner: ClaimOwner.make("dalph-run-cancellation-integration"),
+  taskId: integrationPlannedAttempt.taskId,
+  token: ClaimToken.make("run-cancellation-integration-claim-token")
+})
+const integrationClaimAcquisitionOperation = makeTaskClaimAcquisitionOperation({
+  acquisition: {
+    operationId: integrationClaim.operationId,
+    owner: integrationClaim.owner,
+    taskId: integrationClaim.taskId,
+    token: integrationClaim.token
+  },
+  predecessorOperationIds: []
+})
+const integrationGraphOperation = makeTrackerGraphObservationOperation(
+  { _tag: "WorkflowEstablishment" },
+  OperationId.make("run-cancellation-integration-post-claim-graph"),
+  target,
+  [integrationClaim.operationId],
+  [integrationPlannedAttempt.taskId]
+)
+const integrationSpecificationOperation = makeTaskWorkSpecificationObservationOperation(
+  OperationId.make("run-cancellation-integration-specification"),
+  target,
+  integrationPlannedAttempt.taskId,
+  [integrationGraphOperation.operationId]
+)
 const integrationPlanOperation = makeTaskAttemptPlanOperation({
   operationId: OperationId.make("run-cancellation-integration-attempt-plan"),
   plannedAttempt: integrationPlannedAttempt,
+  predecessorOperationIds: [integrationSpecificationOperation.operationId]
+})
+const quarantineClaim = ActiveTaskClaim.make({
+  operationId: OperationId.make("run-cancellation-quarantine-claim-acquisition"),
+  owner: ClaimOwner.make("dalph-run-cancellation-quarantine"),
+  taskId: quarantinePlannedAttempt.taskId,
+  token: ClaimToken.make("run-cancellation-quarantine-claim-token")
+})
+const quarantineClaimAcquisitionOperation = makeTaskClaimAcquisitionOperation({
+  acquisition: {
+    operationId: quarantineClaim.operationId,
+    owner: quarantineClaim.owner,
+    taskId: quarantineClaim.taskId,
+    token: quarantineClaim.token
+  },
   predecessorOperationIds: []
 })
+const quarantineGraphOperation = makeTrackerGraphObservationOperation(
+  { _tag: "WorkflowEstablishment" },
+  OperationId.make("run-cancellation-quarantine-post-claim-graph"),
+  target,
+  [quarantineClaim.operationId],
+  [quarantinePlannedAttempt.taskId]
+)
+const quarantineSpecificationOperation = makeTaskWorkSpecificationObservationOperation(
+  OperationId.make("run-cancellation-quarantine-specification"),
+  target,
+  quarantinePlannedAttempt.taskId,
+  [quarantineGraphOperation.operationId]
+)
 const quarantineIntegrationPlanOperation = makeTaskAttemptPlanOperation({
   operationId: OperationId.make("run-cancellation-quarantine-attempt-plan"),
   plannedAttempt: quarantinePlannedAttempt,
-  predecessorOperationIds: []
+  predecessorOperationIds: [quarantineSpecificationOperation.operationId]
 })
 const claimReadOperationId = OperationId.make("run-cancellation-claim-read")
 const claimReadOperation = makeTaskClaimObservationOperation(claimReadOperationId, target, taskId, [
@@ -968,6 +1064,9 @@ const makeCancellationDriverImplementation = () => {
       Layer.succeed(RunLifecycleJournal, Context.get(journalContext, RunLifecycleJournal)),
       Layer.succeed(CoordinatorOwnership, ownership)
     )
+    const executorLayer = controlledSynchronousPlannedAttemptExecutorLayer(
+      Layer.succeed(PlannedAttemptExecutor, executorForSettlement)
+    )
     const exitShell = yield* makeExitShell(ownership, { requestEnd: () => Effect.void }).pipe(
       Effect.provideService(Scope.Scope, scope)
     )
@@ -977,7 +1076,7 @@ const makeCancellationDriverImplementation = () => {
         ({ runId: activeRunId }) => runtimeLayer(activeRunId, executorForSettlement, workflowInterpreterForSettlement),
         exitShell,
         noopJournalMaintenanceObservation
-      ).pipe(Layer.provide(dependencies))
+      ).pipe(Layer.provide(dependencies), Layer.provide(executorLayer))
     ).pipe(Effect.provideService(Scope.Scope, scope))
     applicationExit = exitShell
     return Context.get(context, JournaledRunBootstrap)
@@ -1018,6 +1117,7 @@ const makeCancellationDriverImplementation = () => {
         runtimeResources.integrationTargets
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
+      const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))
       const workflowInterpreter = yield* WorkflowInterpreter
       const workflowTrace = yield* WorkflowTrace
       const finalityExecutor = DeliveryActionExecutor.of({
@@ -1046,6 +1146,7 @@ const makeCancellationDriverImplementation = () => {
         Effect.gen(function* () {
           graphLifecycle = lifecycle
           const operation = makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
             OperationId.make(`run-cancellation-graph-${operationNumber}`),
             target,
             [],
@@ -1079,22 +1180,114 @@ const makeCancellationDriverImplementation = () => {
           latestClassificationGraph = result
           return result
         })
+      const appendAcceptedAttemptLineage = Effect.fn("RunCancellation.appendAcceptedAttemptLineage")(function* (input: {
+        readonly claim: ActiveTaskClaim
+        readonly claimOperation: ReturnType<typeof makeTaskClaimAcquisitionOperation>
+        readonly graphOperation: ReturnType<typeof makeTrackerGraphObservationOperation>
+        readonly plannedAttempt: PlannedTaskAttempt
+        readonly planOperation: ReturnType<typeof makeTaskAttemptPlanOperation>
+        readonly specificationOperation: ReturnType<typeof makeTaskWorkSpecificationObservationOperation>
+      }) {
+        const { claim, claimOperation, graphOperation, plannedAttempt, planOperation, specificationOperation } = input
+        yield* journal.append(
+          runId,
+          intentRecordKey(claim.operationId),
+          TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+        )
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(claim.operationId),
+          TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+        )
+        yield* journal.append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(graphOperation.operationId),
+          taskTrackerFactsObservedEvent(
+            graphOperation.operationId,
+            makeCompleteTaskTrackerFactsObserved(graphOperation, acceptedAttemptGraphFor(plannedAttempt))
+          )
+        )
+        yield* journal.append(
+          runId,
+          intentRecordKey(specificationOperation.operationId),
+          taskTrackerReadIntent(specificationOperation)
+        )
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(specificationOperation.operationId),
+          taskTrackerFactsObservedEvent(
+            specificationOperation.operationId,
+            makeFocusedTaskWorkSpecificationFactsObserved(
+              specificationOperation,
+              acceptedAttemptSpecificationFor(plannedAttempt)
+            )
+          )
+        )
+        yield* journal.append(
+          runId,
+          attemptPlanRecordKey(plannedAttempt.attemptId),
+          TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
+        )
+        const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+          operationId: OperationId.make(`${plannedAttempt.attemptId}-worktree`),
+          plannedAttempt,
+          predecessorOperationIds: [planOperation.operationId]
+        })
+        yield* journal.append(
+          runId,
+          intentRecordKey(worktreeOperation.operationId),
+          TaskWorktreeReconciliationIntendedEvent.make({
+            operation: worktreeOperation,
+            version: workflowJournalEventVersion
+          })
+        )
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(worktreeOperation.operationId),
+          TaskWorktreeReadyEvent.make({
+            operationId: worktreeOperation.operationId,
+            proof: PlannedWorktreeReady.make({
+              baseSha: plannedAttempt.baseSha,
+              branch: plannedAttempt.branch,
+              headSha: plannedAttempt.baseSha,
+              worktree: plannedAttempt.worktree
+            }),
+            version: workflowJournalEventVersion
+          })
+        )
+      })
       const appendAcceptedTerminalExecutorHistory = Effect.fn("RunCancellation.appendAcceptedTerminalExecutorHistory")(
         function* (input: {
           readonly acceptedResult: AcceptedResult
           readonly planOperation: typeof integrationPlanOperation
+          readonly claim: ActiveTaskClaim
+          readonly claimOperation: ReturnType<typeof makeTaskClaimAcquisitionOperation>
+          readonly graphOperation: ReturnType<typeof makeTrackerGraphObservationOperation>
+          readonly specificationOperation: ReturnType<typeof makeTaskWorkSpecificationObservationOperation>
           readonly plannedAttempt: PlannedTaskAttempt
         }) {
-          const { acceptedResult, plannedAttempt: terminalAttempt, planOperation: terminalPlanOperation } = input
+          const {
+            acceptedResult,
+            claim,
+            claimOperation,
+            graphOperation,
+            plannedAttempt: terminalAttempt,
+            planOperation: terminalPlanOperation,
+            specificationOperation
+          } = input
           const beginOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
           const executingReportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
           const terminalObservationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
           const terminalReportOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
-          yield* journal.append(
-            runId,
-            attemptPlanRecordKey(terminalAttempt.attemptId),
-            TaskAttemptPlannedEvent.make({ operation: terminalPlanOperation, version: workflowJournalEventVersion })
-          )
+          yield* appendAcceptedAttemptLineage({
+            claim,
+            claimOperation,
+            graphOperation,
+            planOperation: terminalPlanOperation,
+            plannedAttempt: terminalAttempt,
+            specificationOperation
+          })
           yield* journal.append(
             runId,
             plannedAttemptExecutorWorkResponsibilityBeganRecordKey(terminalAttempt.attemptId),
@@ -1171,24 +1364,14 @@ const makeCancellationDriverImplementation = () => {
       while (true) {
         const command = yield* Queue.take(commands)
         if (command._tag === "SeedExecutingAttempt") {
-          yield* journal.append(
-            runId,
-            intentRecordKey(activeClaim.operationId),
-            TaskClaimAcquisitionIntendedEvent.make({
-              operation: claimAcquisitionOperation,
-              version: workflowJournalEventVersion
-            })
-          )
-          yield* journal.append(
-            runId,
-            outcomeRecordKey(activeClaim.operationId),
-            TaskClaimAcquiredEvent.make({ claim: activeClaim, version: workflowJournalEventVersion })
-          )
-          yield* journal.append(
-            runId,
-            attemptPlanRecordKey(plannedAttempt.attemptId),
-            TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
-          )
+          yield* appendAcceptedAttemptLineage({
+            claim: activeClaim,
+            claimOperation: claimAcquisitionOperation,
+            graphOperation,
+            planOperation,
+            plannedAttempt,
+            specificationOperation
+          })
           yield* journal.append(
             runId,
             plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
@@ -1251,6 +1434,7 @@ const makeCancellationDriverImplementation = () => {
           yield* Deferred.succeed(command.completed, effectivePause)
         } else if (command._tag === "PublishUnreadableGraph") {
           const operation = makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
             OperationId.make(`run-cancellation-unreadable-graph-${command.operationNumber}`),
             target,
             [],
@@ -1276,8 +1460,9 @@ const makeCancellationDriverImplementation = () => {
           } else if (latestClassificationGraph === undefined) {
             return yield* Effect.die("production finality handoff had no established graph read")
           }
-          const proof = yield* runStabilizedDelivery(target, relation).pipe(
+          const proof = yield* runStabilizedDelivery(target, runId, relation).pipe(
             Effect.provideService(DeliveryActionExecutor, finalityExecutor),
+            Effect.provideService(DeliveryAcceptedFactPublication, acceptedFactPublication),
             Effect.provideService(PlannedTaskAttemptPlanner, finalityPlanner)
           )
           if (!("disposition" in proof) || proof.disposition !== command.disposition) {
@@ -1320,8 +1505,12 @@ const makeCancellationDriverImplementation = () => {
           if (currentFixture === undefined) {
             yield* appendAcceptedTerminalExecutorHistory({
               acceptedResult: integrationAcceptedResult,
+              claim: integrationClaim,
+              claimOperation: integrationClaimAcquisitionOperation,
+              graphOperation: integrationGraphOperation,
               planOperation: integrationPlanOperation,
-              plannedAttempt: integrationPlannedAttempt
+              plannedAttempt: integrationPlannedAttempt,
+              specificationOperation: integrationSpecificationOperation
             })
             const began = yield* journal.append(
               runId,
@@ -1441,8 +1630,12 @@ const makeCancellationDriverImplementation = () => {
             if (preparedFixture === undefined) return yield* Effect.die("normal integration fixture was not prepared")
             yield* appendAcceptedTerminalExecutorHistory({
               acceptedResult: quarantineAcceptedResult,
+              claim: quarantineClaim,
+              claimOperation: quarantineClaimAcquisitionOperation,
+              graphOperation: quarantineGraphOperation,
               planOperation: quarantineIntegrationPlanOperation,
-              plannedAttempt: quarantinePlannedAttempt
+              plannedAttempt: quarantinePlannedAttempt,
+              specificationOperation: quarantineSpecificationOperation
             })
             const quarantineBegan = yield* journal.append(
               runId,

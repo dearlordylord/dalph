@@ -23,6 +23,7 @@ import { DeliveryActionProtocolAdmissionMissing } from "./delivery-action-execut
 import { DeliveryProposalId, trackerGraphReadProposalOf } from "./delivery-action-proposal.js"
 import { deliveryRuntimeResourceCapabilitiesOf } from "./delivery-runtime-resources.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
+import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import {
   deliveryRuntimeLiveOwnerSnapshots,
   makeDeliveryRuntimeLiveOwner,
@@ -42,18 +43,17 @@ const proposal = {
   }),
   id: DeliveryProposalId.make("owner-proposal")
 }
-const correlation = plannedAttemptExecutorCorrelation(
-  PlannedTaskAttempt.make({
-    attemptId: AttemptId.make("owner-attempt"),
-    baseSha: GitCommitSha.make("1".repeat(40)),
-    branch: TaskBranchRef.make("refs/heads/owner-task"),
-    executor: TaskExecutorLocator.make("executor:owner-test"),
-    runId,
-    taskId,
-    taskRevision: TaskRevision.make("owner-revision"),
-    worktree: WorktreeLocator.make("/owner-test/worktree")
-  })
-)
+const ownerAttempt = PlannedTaskAttempt.make({
+  attemptId: AttemptId.make("owner-attempt"),
+  baseSha: GitCommitSha.make("1".repeat(40)),
+  branch: TaskBranchRef.make("refs/heads/owner-task"),
+  executor: TaskExecutorLocator.make("executor:owner-test"),
+  runId,
+  taskId,
+  taskRevision: TaskRevision.make("owner-revision"),
+  worktree: WorktreeLocator.make("/owner-test/worktree")
+})
+const correlation = plannedAttemptExecutorCorrelation(ownerAttempt)
 
 const makeOwner = Effect.fn("DeliveryRuntimeObservationTest.makeOwner")(function* () {
   const integrationTargets = yield* makeIntegrationTargetResourceController()
@@ -62,7 +62,7 @@ const makeOwner = Effect.fn("DeliveryRuntimeObservationTest.makeOwner")(function
     (yield* makeApplicationExitLifecycle()).admission
   )
   const admission = yield* resources
-    .makeAdmissionController({ capacity: TaskWorkCapacity.make(1), held: [] })
+    .makeAdmissionController(makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), runId }))
     .pipe(Effect.provide(plannedAttemptProtocolControllerLayer))
   const admitted = yield* admission.tryReserve(proposal)
   if (admitted._tag === "Deferred") return yield* Effect.die("fixture proposal must be admitted")
@@ -195,5 +195,27 @@ it.effect("keeps Alice's runtime observation open when an ordinary runtime phase
 
     expect(yield* observation.signal.get).toMatchObject({ _tag: "NotReady" })
     yield* observation.close
+  })
+)
+
+it.effect("reuses one process admission controller and synchronizes recovered positions on each activation", () =>
+  Effect.gen(function* () {
+    const integrationTargets = yield* makeIntegrationTargetResourceController()
+    const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(
+      integrationTargets,
+      (yield* makeApplicationExitLifecycle()).admission
+    )
+    const first = yield* capabilities.resources
+      .makeAdmissionController(
+        makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [ownerAttempt], runId })
+      )
+      .pipe(Effect.provide(plannedAttemptProtocolControllerLayer))
+    const second = yield* capabilities.resources
+      .makeAdmissionController(makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), runId }))
+      .pipe(Effect.provide(plannedAttemptProtocolControllerLayer))
+
+    expect(second).toBe(first)
+    expect((yield* second.snapshot).positions.size).toBe(0)
+    expect(yield* capabilities.releasePlannedAttemptPosition(correlation)).toBe("AlreadyAbsent")
   })
 )

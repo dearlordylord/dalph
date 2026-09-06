@@ -134,9 +134,8 @@ it.effect("rebuilds the tracker application from its recovery projection and rec
         ),
         restartedScope
       )
-      expect((yield* restartedInterpreter.acquireTaskClaim(operation, Effect.void, restartedOwner)).claim).toEqual(
-        claim
-      )
+      const restartedResult = yield* restartedInterpreter.acquireTaskClaim(operation, Effect.void, restartedOwner)
+      expect(restartedResult).toEqual(AuthoritativeTaskClaimAcquired.make({ claim }))
       expect(yield* restartedOwner.snapshot).toMatchObject({
         _tag: "BoundaryResultRecorded",
         intent: InterruptibleWorkflowBoundaryIntent.AuthorityRequest({

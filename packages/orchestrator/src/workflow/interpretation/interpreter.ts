@@ -63,7 +63,10 @@ export type {
   InterruptibleWorkflowBoundaryFamily
 } from "./interruptible-boundary.js"
 
-type TaskAttemptPlanRecordingError = JournalAppendError | TaskAttemptPlan.TaskAttemptPlanRunContradiction
+type TaskAttemptPlanRecordingError =
+  | JournalAppendError
+  | TaskAttemptPlan.TaskAttemptPlanHistoryContradiction
+  | TaskAttemptPlan.TaskAttemptPlanRunContradiction
 
 /** The generic operation handlers used before complete-attempt executor work. */
 export interface WorkflowInterpreterService {
@@ -161,6 +164,17 @@ export const AuthoritativeTaskClaimAcquired = Schema.TaggedStruct("Authoritative
   claim: ActiveTaskClaim
 })
 
+/**
+ * The tracker conclusively proved that another exact claim owns the task and
+ * the Journal durably accepted that task-local rejection. This is a settled
+ * acquisition result, not a provider failure and not authority to mutate the
+ * observed claim.
+ */
+export const AuthoritativeTaskClaimAcquisitionRejected = Schema.TaggedStruct(
+  "AuthoritativeTaskClaimAcquisitionRejected",
+  { observed: ActiveTaskClaim }
+)
+
 export const AuthoritativeTaskClaimObserved = Schema.TaggedStruct("AuthoritativeTaskClaimObserved", {
   observation: TaskClaimObservation
 })
@@ -187,8 +201,11 @@ export const AuthoritativeTargetLineageObserved = Schema.TaggedStruct("Authorita
 const TargetLineageObservationResult = AuthoritativeTargetLineageObserved
 export type TargetLineageObservationResult = typeof TargetLineageObservationResult.Type
 
-const TaskClaimAcquisitionResult = AuthoritativeTaskClaimAcquired
-type TaskClaimAcquisitionResult = typeof TaskClaimAcquisitionResult.Type
+const TaskClaimAcquisitionResult = Schema.Union([
+  AuthoritativeTaskClaimAcquired,
+  AuthoritativeTaskClaimAcquisitionRejected
+])
+export type TaskClaimAcquisitionResult = typeof TaskClaimAcquisitionResult.Type
 
 const TaskClaimReleaseResult = AuthoritativeTaskClaimReleased
 type TaskClaimReleaseResult = typeof TaskClaimReleaseResult.Type

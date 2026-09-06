@@ -15,14 +15,11 @@
     }
   },
   "packages/dalph/src/cassettes/authored-cursor.ts": {
-    "functional/immutable-data": {
-      "count": 1
-    },
     "functional/no-mixed-types": {
       "count": 1
     },
     "import-x/no-unused-modules": {
-      "count": 2
+      "count": 1
     }
   },
   "packages/dalph/src/cassettes/authored-domain.ts": {
@@ -140,7 +137,7 @@
   },
   "packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.ts": {
     "functional/immutable-data": {
-      "count": 4
+      "count": 3
     },
     "functional/no-mixed-types": {
       "count": 1
@@ -190,9 +187,6 @@
   "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts": {
     "functional/no-throw-statements": {
       "count": 2
-    },
-    "functional/prefer-tacit": {
-      "count": 1
     }
   },
   "packages/orchestrator/src/coordination/delivery/ticket-delivery-projection.ts": {
@@ -208,11 +202,6 @@
   "packages/orchestrator/src/coordination/reconstruction/run-policy-history.ts": {
     "import-x/no-unused-modules": {
       "count": 2
-    }
-  },
-  "packages/orchestrator/src/coordination/run/fresh-workflow.ts": {
-    "import-x/no-unused-modules": {
-      "count": 1
     }
   },
   "packages/orchestrator/src/coordination/run/journaled-run-bootstrap.test.ts": {

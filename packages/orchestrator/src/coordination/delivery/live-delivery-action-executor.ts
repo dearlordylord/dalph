@@ -7,7 +7,6 @@ import {
   provideOptionalEvidenceStore,
   type DeliveryActionAdapterEnvironment
 } from "./delivery-action-adapter-environment.js"
-import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
 import {
   DeliveryActionExecutor,
   type DeliveryActionExecutionError,
@@ -23,6 +22,10 @@ import {
   executePlannedAttemptTransition
 } from "./planned-attempt-delivery-action-adapter.js"
 import { executeAcceptedWorkflowAction, executeNewRecoveredAction } from "./recovered-delivery-action-adapter.js"
+import {
+  PassivePlannedAttemptObserver,
+  PassivePlannedAttemptProjectionPublication
+} from "../run/passive-planned-attempt-observer.js"
 
 type AcceptedOperationAction = Extract<MaterializedDeliveryAction, { readonly _tag: "AcceptedOperationAction" }>
 type FreshOperationAction = Extract<MaterializedDeliveryAction, { readonly _tag: "FreshOperationAction" }>
@@ -122,13 +125,16 @@ export const makeLiveDeliveryActionExecutor = Effect.fn("DeliveryActionExecutor.
 ) {
   const dependencies = yield* Effect.context<DeliveryActionAdapterEnvironment>()
   const evidenceStore = optionalEvidenceStoreOf(yield* Effect.context<never>())
-  const acceptedFactPublication = yield* DeliveryAcceptedFactPublication
+  const passiveObserver = yield* PassivePlannedAttemptObserver
+  const passivePublication = yield* PassivePlannedAttemptProjectionPublication
   return DeliveryActionExecutor.of({
     execute: (action, lease) => {
-      const execution = executeLiveAction(action, lease, runId, target).pipe(Effect.provide(dependencies))
-      return provideOptionalEvidenceStore(execution, evidenceStore).pipe(
-        Effect.tap(() => acceptedFactPublication.awaitCurrent)
+      const execution = executeLiveAction(action, lease, runId, target).pipe(
+        Effect.provide(dependencies),
+        Effect.provideService(PassivePlannedAttemptObserver, passiveObserver),
+        Effect.provideService(PassivePlannedAttemptProjectionPublication, passivePublication)
       )
+      return provideOptionalEvidenceStore(execution, evidenceStore)
     }
   })
 })

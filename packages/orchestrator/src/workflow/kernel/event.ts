@@ -12,8 +12,8 @@ export type JournalEventKind = typeof JournalEventKind.Type
 
 /**
  * Current immutable semantic version shared by every workflow journal event.
- * Version 13 separates active-refresh Git intent records from ordinary Git
- * reads and keeps the refresh source process-local on successful reads; the
- * event codec is intentionally fail-closed and decodes only this version.
+ * Version 14 removes the rejected private active-refresh read vocabulary;
+ * tracker and Git observations now use only their ordinary journal-first
+ * protocols. The event codec remains fail-closed at this version.
  */
-export const workflowJournalEventVersion = 13 as const // eslint-disable-line no-magic-numbers
+export const workflowJournalEventVersion = 14 as const // eslint-disable-line no-magic-numbers

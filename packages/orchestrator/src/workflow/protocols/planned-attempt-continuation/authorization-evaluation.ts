@@ -3,6 +3,7 @@ import type { JournalRecord } from "../../../workflow-journal/store.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import { exactWorkflowRunTargetForRun } from "../../../workflow-journal/run-target.js"
 import { appliedTerminalChoiceFor } from "../attempt-choice/terminal-choice-authority.js"
+import { appliedContinueChoiceForExactRevision } from "../attempt-choice/continue-choice-authority.js"
 import {
   currentUnconsumedAcceptedSafeEvidence,
   latestPlannedAttemptExecutorEvidence
@@ -34,6 +35,37 @@ const isRejected = (
 ): validation is Extract<WitnessValidation, { readonly _tag: "Rejected" }> => validation._tag === "Rejected"
 
 type ValidExecutorAuthority = { readonly _tag: "ValidExecutorAuthority"; readonly observedAt: JournalPosition }
+
+const continuationTaskAuthorityFor = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  witness: PlannedAttemptContinuationWitness,
+  executorObservedAt: JournalPosition
+) => {
+  const operationId = witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId
+  const witnessedSpecification = records.findLast(
+    ({ event }) =>
+      event._tag === "TaskTrackerFactsObserved" &&
+      event.operationId === operationId &&
+      event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+  )
+  const currentTaskRevision =
+    witnessedSpecification?.event._tag === "TaskTrackerFactsObserved" &&
+    witnessedSpecification.event.observation._tag === "FocusedTaskWorkSpecificationFacts"
+      ? witnessedSpecification.event.observation.factFamily.fingerprint
+      : plannedAttempt.taskRevision
+  if (currentTaskRevision === plannedAttempt.taskRevision) {
+    return { authorizedTaskRevision: plannedAttempt.taskRevision, freshnessBaseline: executorObservedAt }
+  }
+  const continueChoice = appliedContinueChoiceForExactRevision(records, plannedAttempt, currentTaskRevision)
+  if (continueChoice === undefined) {
+    return { authorizedTaskRevision: plannedAttempt.taskRevision, freshnessBaseline: executorObservedAt }
+  }
+  return {
+    authorizedTaskRevision: continueChoice.event.subject.observedTaskRevision,
+    freshnessBaseline: continueChoice.position > executorObservedAt ? continueChoice.position : executorObservedAt
+  }
+}
 
 const validateExecutorAuthority = (
   records: ReadonlyArray<JournalRecord>,
@@ -102,12 +134,18 @@ export const evaluatePlannedAttemptContinuationAuthorization = (
   }
   const executorAuthority = validateExecutorAuthority(records, plannedAttempt)
   if (executorAuthority._tag !== "ValidExecutorAuthority") return executorAuthority
+  const { authorizedTaskRevision, freshnessBaseline } = continuationTaskAuthorityFor(
+    records,
+    plannedAttempt,
+    witness,
+    executorAuthority.observedAt
+  )
 
   const graph = validateContinuationGraphWitness(
     records,
     plannedAttempt,
     witness,
-    executorAuthority.observedAt,
+    freshnessBaseline,
     immutableRunTarget
   )
   if (isRejected(graph)) return graph
@@ -117,7 +155,8 @@ export const evaluatePlannedAttemptContinuationAuthorization = (
     plannedAttempt,
     witness,
     graph.outcome.position,
-    executorAuthority.observedAt,
+    freshnessBaseline,
+    authorizedTaskRevision,
     immutableRunTarget
   )
   if (isRejected(specification)) return specification
@@ -127,7 +166,7 @@ export const evaluatePlannedAttemptContinuationAuthorization = (
     plannedAttempt,
     witness,
     specification.outcome.position,
-    executorAuthority.observedAt,
+    freshnessBaseline,
     immutableRunTarget
   )
   if (isRejected(claim)) return claim
@@ -137,7 +176,7 @@ export const evaluatePlannedAttemptContinuationAuthorization = (
     plannedAttempt,
     witness,
     claim.outcome.position,
-    executorAuthority.observedAt
+    freshnessBaseline
   )
   if (isRejected(worktree)) return worktree
 
@@ -146,7 +185,7 @@ export const evaluatePlannedAttemptContinuationAuthorization = (
     plannedAttempt,
     witness,
     worktree.outcome.position,
-    executorAuthority.observedAt
+    freshnessBaseline
   )
   if (isRejected(targetLineage)) return targetLineage
 

@@ -130,15 +130,25 @@ reservation, or wakeup.
 
 ## Planning, admission, and positions
 
-Planning derives a deterministic proposal frontier from current descriptive
-facts. It performs no external request, owns no fiber, and allocates no fresh
-operation or attempt identity. Duplicate ownership of one exact proposal is a
-typed conflict rather than a deduplication rule.
+Planning derives deterministic descriptions from current facts. Existing exact
+obligations can yield exact proposals. A graph-only fresh task yields a ranked
+candidate, not a proposal. Planning performs no external request, owns no fiber,
+and allocates no fresh operation or attempt identity.
 
-Runtime chooses proposals that fit current resource availability. It gives
-existing obligations their accepted priority and uses stable task identity to
-order otherwise equivalent fresh work. Tracker enumeration order, map
-iteration, and ambient randomness are not scheduling inputs.
+Runtime first gives ready existing responsibilities their accepted priority,
+then atomically reserves only the fresh candidates that fit current capacity in
+stable derived order. Only that accepted reservation can materialize the
+candidate's first exact delivery action proposal and live owner. A candidate
+outside the decision has no proposal or executable operation. Duplicate
+ownership of one exact admitted proposal is a typed conflict rather than a
+deduplication rule. Tracker enumeration order, map iteration, and ambient
+randomness are not scheduling inputs.
+
+The fresh entry reservation becomes a Journal-derived admission commitment when
+the first exact claim intent is accepted. That single per-task occupancy remains
+through claim, post-claim graph, specification, plan, and worktree preparation.
+Accepting the executor-work responsibility atomically replaces it with the exact
+attempt-held task-work position; no action completion creates a free interval.
 
 One task holds at most one task-work position. Dalph decides whether a proposed
 action needs zero or one position; the executor does not acquire or release it.
@@ -146,11 +156,12 @@ The position becomes associated with an exact planned attempt before executor
 work begins and remains occupied until a terminal executor report or safe
 suspension permits release.
 
-Capacity contraction is non-preemptive. Existing holders continue even when
-usage temporarily exceeds the new ceiling; later admission waits. Expansion
-preserves holders and permits later proposals to be admitted. Positions are
-recreated from unfinished exact obligations after the next Run establishment,
-not restored from a persisted semaphore.
+Capacity contraction is non-preemptive. Existing reservations, commitments,
+and position holders continue even when usage temporarily exceeds the new
+ceiling; later admission waits. Expansion preserves them and permits the next
+ranked candidates to be admitted. Commitments and positions are rederived from
+unfinished accepted history after the next Run establishment, not restored from
+a persisted semaphore.
 
 Integration-resource ownership is separate from task-work capacity and is
 serialized by repository/ref target according to the integration protocol.
@@ -180,9 +191,11 @@ shared valid history/capability.
 
 ## Run stabilization
 
-Run stabilization observes both the current proposal frontier and live runtime
-ownership. Quiescence requires no executable proposal and no admitted action
-still running. It requires one later accepted complete tracker observation G2
+Run stabilization observes the current graph candidates, admitted proposal
+frontier, durable commitments, exact positions, and live runtime ownership.
+Quiescence requires no executable admitted proposal and no admitted action still
+running; capacity-stalled candidates do not disappear merely because they have
+no proposal yet. Stabilization requires one later accepted complete tracker observation G2
 after the observation G1 from which quiescence was derived. Equal graph content
 still gives G2 its own later logical-read identity. Quiescence is not proof of
 completion and is not persisted.

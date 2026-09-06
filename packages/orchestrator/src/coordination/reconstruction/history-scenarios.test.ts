@@ -15,6 +15,7 @@ import {
   TaskId,
   TaskRevision,
   WorktreeLocator,
+  makeTaskWorkSpecification,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   PlannedAttemptExecutorReport
@@ -24,15 +25,10 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
-import {
-  ConflictingWorktreeRegistration,
-  GitWorktreeReadFailure,
-  PlannedWorktreeReady
-} from "../../authorities/git/worktree.js"
+import { ConflictingWorktreeRegistration, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
-  activeWorkAuthorityRefreshGitReadFailedRecordKey,
   attemptPlanRecordKey,
   attemptChoiceAppliedRecordKey,
   controlDirectionAppliedRecordKey,
@@ -51,7 +47,6 @@ import {
 } from "../../workflow-journal/record-key.js"
 import { type JournalRecord } from "../../workflow-journal/store.js"
 import {
-  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
   TaskAttemptPlannedEvent,
@@ -106,8 +101,8 @@ import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
-  makeTargetLineageObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
+  makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation,
@@ -131,19 +126,17 @@ import {
 import {
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskClaimFactsUnreadable,
+  makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
-import {
-  ActiveWorkAuthorityRefreshAuthority,
-  ActiveWorkAuthorityRefreshGitReadFailedEvent,
-  ActiveWorkAuthorityRefreshOrdinal,
-  makeActiveWorkAuthorityRefreshGitReadOperation
-} from "../../workflow/protocols/active-work-authority-refresh/events.js"
-
 const runId = RunId.make("workflow-journal-history")
 const taskId = TaskId.make("task-A")
 const target = FixtureTarget.make("fixture-A")
-const initial = makeTrackerGraphObservationOperation(OperationId.make("observe-initial"), target)
+const initial = makeTrackerGraphObservationOperation(
+  { _tag: "WorkflowEstablishment" },
+  OperationId.make("observe-initial"),
+  target
+)
 const claim = makeTaskClaimAcquisitionOperation({
   acquisition: {
     operationId: OperationId.make("claim-A"),
@@ -154,10 +147,18 @@ const claim = makeTaskClaimAcquisitionOperation({
   predecessorOperationIds: [initial.operationId]
 })
 const admission = makeTrackerGraphObservationOperation(
+  { _tag: "WorkflowEstablishment" },
   OperationId.make("observe-admission"),
   target,
   [claim.acquisition.operationId],
   [taskId]
+)
+const specification = makeTaskWorkSpecification({ body: "Implement task A.", taskId, title: "Implement task A" })
+const specificationRead = makeTaskWorkSpecificationObservationOperation(
+  OperationId.make("observe-specification"),
+  target,
+  taskId,
+  [admission.operationId]
 )
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("attempt-A"),
@@ -166,13 +167,13 @@ const plannedAttempt = PlannedTaskAttempt.make({
   executor: TaskExecutorLocator.make("executor:fake"),
   runId,
   taskId,
-  taskRevision: TaskRevision.make("revision-A"),
+  taskRevision: specification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/attempt-A")
 })
 const plan = makeTaskAttemptPlanOperation({
   operationId: OperationId.make("plan-A"),
   plannedAttempt,
-  predecessorOperationIds: [admission.operationId]
+  predecessorOperationIds: [specificationRead.operationId]
 })
 const worktree = makeTaskWorktreeReconciliationOperation({
   operationId: OperationId.make("worktree-A"),
@@ -215,6 +216,14 @@ const eventRows = [
   {
     event: taskTrackerGraphFactsObserved(admission, { revision: TrackerRevision.make("tracker-2"), taskIds: [taskId] }),
     key: outcomeRecordKey(admission.operationId)
+  },
+  { event: taskTrackerReadIntent(specificationRead), key: intentRecordKey(specificationRead.operationId) },
+  {
+    event: taskTrackerFactsObservedEvent(
+      specificationRead.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(specificationRead, specification)
+    ),
+    key: outcomeRecordKey(specificationRead.operationId)
   },
   {
     event: TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion }),
@@ -370,12 +379,12 @@ const records = recordsFrom(eventRows)
 const firstRecord = Option.getOrThrow(Option.fromUndefinedOr(records[0]))
 const firstOutcomeRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[1]))
 const claimOutcomeRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[3]))
-const planRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[6]))
-const startRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[9]))
-const firstCommandRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[10]))
-const firstResponseRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[11]))
-const firstReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[12]))
-const terminalReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[18]))
+const planRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[8]))
+const startRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[11]))
+const firstCommandRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[12]))
+const firstResponseRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[13]))
+const firstReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[14]))
+const terminalReportRow = Option.getOrThrow(Option.fromUndefinedOr(eventRows[20]))
 
 const executorCommandRow = (
   command: "Begin" | "Resume" | "Suspend",
@@ -464,46 +473,6 @@ const executorReportRow = (
   }
 }
 
-const activeWorktreeFailureRows = (
-  attempt: PlannedTaskAttempt,
-  operationId: OperationId,
-  ordinal: number
-): ReadonlyArray<{ readonly event: JournalRecord["event"]; readonly key: JournalRecord["key"] }> => {
-  const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: attempt.attemptId, runId: attempt.runId })
-  const activeOrdinal = ActiveWorkAuthorityRefreshOrdinal.make(ordinal)
-  const operation = makeActiveWorkAuthorityRefreshGitReadOperation(
-    makeTaskWorktreeObservationOperation({ operationId, plannedAttempt: attempt, predecessorOperationIds: [] }),
-    authority,
-    activeOrdinal
-  )
-  return [
-    {
-      event: ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        operation,
-        version: workflowJournalEventVersion
-      }),
-      key: intentRecordKey(operationId)
-    },
-    {
-      event: ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
-        authority,
-        failure: new GitWorktreeReadFailure({
-          detail: "controlled active-refresh worktree read failure",
-          worktree: attempt.worktree
-        }),
-        occurrenceClassification: "NonActionOccurrence",
-        operation,
-        ordinal: activeOrdinal,
-        source: "TrackerNotification",
-        version: workflowJournalEventVersion
-      }),
-      key: activeWorkAuthorityRefreshGitReadFailedRecordKey(operationId, activeOrdinal)
-    }
-  ]
-}
-
 it("accepts every chronological workflow-journal-history boundary prefix", () => {
   for (let length = 0; length <= records.length; length += 1) {
     const reduction = reduceWorkflowJournalHistory(runId, records.slice(0, length))
@@ -513,64 +482,12 @@ it("accepts every chronological workflow-journal-history boundary prefix", () =>
   expect(final._tag).toBe("ValidWorkflowJournalHistory")
   if (final._tag !== "ValidWorkflowJournalHistory") return
   expect(final.runState.appliedThrough).toBe(records.length)
-  expect(final.runState.graphKnowledge.taskTrackerFacts).toHaveLength(2)
-  const running = reconstructRunState(runId, records.slice(0, 13))
+  expect(final.runState.graphKnowledge.taskTrackerFacts).toHaveLength(3)
+  const running = reconstructRunState(runId, records.slice(0, 15))
   expect(running._tag).toBe("ValidReconstructedRun")
   if (running._tag !== "ValidReconstructedRun") return
   expect(hasUnfinishedRunResponsibility(running.state)).toBe(true)
   expect(hasUnfinishedRunResponsibility(final.runState)).toBe(false)
-})
-
-it("accepts exact Running active-refresh failure chronology and rejects mismatched authority chronology", () => {
-  const runningRows = eventRows.slice(0, 13)
-  const exactFailureRows = activeWorktreeFailureRows(
-    plannedAttempt,
-    OperationId.make("active-refresh-exact-running-failure"),
-    1
-  )
-  const exactReduction = reduceWorkflowJournalHistory(runId, recordsFrom([...runningRows, ...exactFailureRows]))
-  expect(exactReduction).toMatchObject({
-    _tag: "ValidWorkflowJournalHistory",
-    runState: { appliedThrough: runningRows.length + exactFailureRows.length }
-  })
-
-  const foreignRunAttempt = PlannedTaskAttempt.make({
-    ...plannedAttempt,
-    attemptId: AttemptId.make("active-refresh-foreign-run-attempt"),
-    runId: RunId.make("active-refresh-foreign-run")
-  })
-  const histories = [
-    {
-      detail: "binds another Run",
-      rows: [
-        ...runningRows,
-        ...activeWorktreeFailureRows(foreignRunAttempt, OperationId.make("active-refresh-foreign-run-failure"), 1)
-      ]
-    },
-    {
-      detail: "requires the latest exact Running executor report",
-      rows: [
-        ...eventRows.slice(0, 10),
-        ...activeWorktreeFailureRows(plannedAttempt, OperationId.make("active-refresh-without-running-report"), 1)
-      ]
-    },
-    {
-      detail: "must exceed prior durable ordinal 1, found 1",
-      rows: [
-        ...runningRows,
-        ...activeWorktreeFailureRows(plannedAttempt, OperationId.make("active-refresh-first-durable-ordinal"), 1),
-        ...activeWorktreeFailureRows(plannedAttempt, OperationId.make("active-refresh-reused-durable-ordinal"), 1)
-      ]
-    }
-  ] as const
-
-  for (const history of histories) {
-    const reduction = reduceWorkflowJournalHistory(runId, recordsFrom(history.rows))
-    expect(reduction).toMatchObject({
-      _tag: "InvalidWorkflowJournalHistory",
-      issues: expect.arrayContaining([expect.objectContaining({ detail: expect.stringContaining(history.detail) })])
-    })
-  }
 })
 
 it("rejects Git outcomes that do not match the exact read intent and planned attempt", () => {
@@ -682,6 +599,8 @@ it("describes every current journal identity", () => {
     "OperationEventDescriptor",
     "OperationEventDescriptor",
     "OperationEventDescriptor",
+    "OperationEventDescriptor",
+    "OperationEventDescriptor",
     "PlannedAttemptExecutorEventDescriptor",
     "PlannedAttemptExecutorEventDescriptor",
     "PlannedAttemptExecutorEventDescriptor",
@@ -725,7 +644,7 @@ it("does not authorize an attempt choice from an exact Safe state crash prefix b
   const reduction = reduceWorkflowJournalHistory(
     runId,
     recordsFrom([
-      ...eventRows.slice(0, 13),
+      ...eventRows.slice(0, 15),
       executorStateRow(PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: safe })),
       {
         event: AttemptChoiceAppliedEvent.make({
@@ -765,7 +684,7 @@ it.each(["StateObserved", "SuspendResponse"] as const)(
         : [executorCommandRow("Suspend", 3), executorResponseRow(executing, 3)]
     const reduction = reduceWorkflowJournalHistory(
       runId,
-      recordsFrom([...eventRows.slice(0, 16), ...unacceptedRows, executorReportRow(executing, 3)])
+      recordsFrom([...eventRows.slice(0, 18), ...unacceptedRows, executorReportRow(executing, 3)])
     )
 
     expect(reduction).toMatchObject({
@@ -788,7 +707,7 @@ it.each(["CommandResponse", "CommandProjection"] as const)(
     const reduction = reduceWorkflowJournalHistory(
       runId,
       recordsFrom([
-        ...eventRows.slice(0, 16),
+        ...eventRows.slice(0, 18),
         executorCommandRow("Resume", 3),
         unaccepted,
         executorReportRow(executing, 3)
@@ -808,7 +727,7 @@ it("validates a typed passive lifecycle contradiction without treating it as exa
       observed: executing
     })
   )
-  const valid = reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 16), contradiction]))
+  const valid = reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 18), contradiction]))
   expect(valid._tag).toBe("ValidWorkflowJournalHistory")
 
   const malformed = executorStateRow(
@@ -817,7 +736,7 @@ it("validates a typed passive lifecycle contradiction without treating it as exa
       observed: safe
     })
   )
-  expect(reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 16), malformed]))).toMatchObject({
+  expect(reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 18), malformed]))).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: expect.arrayContaining([
       expect.objectContaining({ detail: expect.stringContaining("does not name its latest accepted report") })
@@ -831,7 +750,7 @@ it("validates a typed passive lifecycle contradiction without treating it as exa
     })
   )
   expect(
-    reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 16), foreignCorrelationContradiction]))
+    reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 18), foreignCorrelationContradiction]))
   ).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: expect.arrayContaining([
@@ -847,11 +766,11 @@ it("validates a typed first-report causality contradiction only before an exact 
       observed: executing
     })
   )
-  expect(reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 10), contradiction]))._tag).toBe(
+  expect(reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 12), contradiction]))._tag).toBe(
     "ValidWorkflowJournalHistory"
   )
 
-  expect(reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 13), contradiction]))).toMatchObject({
+  expect(reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 15), contradiction]))).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: expect.arrayContaining([
       expect.objectContaining({ detail: expect.stringContaining("does not describe a missing exact Begin settlement") })
@@ -864,7 +783,7 @@ it("validates a typed first-report causality contradiction only before an exact 
     })
   )
   expect(
-    reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 10), foreignContradiction]))
+    reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 12), foreignContradiction]))
   ).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: expect.arrayContaining([
@@ -877,7 +796,7 @@ it("rejects Safe as the first lifecycle report even when it matches a settled Be
   const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
   const reduction = reduceWorkflowJournalHistory(
     runId,
-    recordsFrom([...eventRows.slice(0, 11), executorResponseRow(safe, 1), executorReportRow(safe, 1)])
+    recordsFrom([...eventRows.slice(0, 13), executorResponseRow(safe, 1), executorReportRow(safe, 1)])
   )
 
   expect(reduction).toMatchObject({
@@ -891,7 +810,7 @@ it("rejects Safe as the first lifecycle report even when it matches a settled Be
 it("rejects a Safe-to-Executing report without a later command-boundary witness", () => {
   const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
   expect(
-    reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 16), executorReportRow(executing, 3)]))
+    reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 18), executorReportRow(executing, 3)]))
   ).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: expect.arrayContaining([
@@ -905,7 +824,7 @@ it("rejects a Safe-to-Executing report without a later command-boundary witness"
 it("rejects an unchanged executor lifecycle report as a duplicate accepted observation", () => {
   const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
   expect(
-    reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 13), executorReportRow(executing, 2)]))
+    reduceWorkflowJournalHistory(runId, recordsFrom([...eventRows.slice(0, 15), executorReportRow(executing, 2)]))
   ).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
     issues: expect.arrayContaining([
@@ -918,7 +837,7 @@ it("rejects a command response whose report belongs to another attempt", () => {
   expect(
     reduceWorkflowJournalHistory(
       runId,
-      recordsFrom([...eventRows.slice(0, 11), executorResponseRow(foreignExecuting, 1)])
+      recordsFrom([...eventRows.slice(0, 13), executorResponseRow(foreignExecuting, 1)])
     )
   ).toMatchObject({
     _tag: "InvalidWorkflowJournalHistory",
@@ -978,7 +897,7 @@ it("rejects a stopped-claim release intent after a prior no-release disposition"
   const reduction = reduceWorkflowJournalHistory(
     runId,
     recordsFrom([
-      ...eventRows.slice(0, 16),
+      ...eventRows.slice(0, 18),
       { event: appliedStop, key: attemptChoiceAppliedRecordKey(requestId) },
       { event: abandonment, key: describeJournalEvent(abandonment).expectedKey },
       { event: taskTrackerReadIntent(claimRead), key: intentRecordKey(claimRead.operationId) },
@@ -1007,7 +926,7 @@ it("rejects a stopped-claim release intent after a prior no-release disposition"
 it("rejects a Suspend intent without latest accepted Executing authority", () => {
   const reduction = reduceWorkflowJournalHistory(
     runId,
-    recordsFrom([...eventRows.slice(0, 10), executorCommandRow("Suspend", 1)])
+    recordsFrom([...eventRows.slice(0, 12), executorCommandRow("Suspend", 1)])
   )
 
   expect(reduction).toMatchObject({
@@ -1023,7 +942,7 @@ it("rejects Resume after later raw evidence supersedes the accepted Safe report"
   const reduction = reduceWorkflowJournalHistory(
     runId,
     recordsFrom([
-      ...eventRows.slice(0, 16),
+      ...eventRows.slice(0, 18),
       executorStateRow(PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: executing })),
       executorCommandRow("Resume", 3)
     ])
@@ -1051,7 +970,7 @@ it("rejects a lifecycle report when a later unavailable read supersedes its exac
   }
   const reduction = reduceWorkflowJournalHistory(
     runId,
-    recordsFrom([...eventRows.slice(0, 12), unavailable, firstReportRow])
+    recordsFrom([...eventRows.slice(0, 14), unavailable, firstReportRow])
   )
 
   expect(reduction).toMatchObject({
@@ -1140,6 +1059,7 @@ it("records the superseded attempt before rejecting its later executor responsib
     token: ClaimToken.make("history-replacement-token")
   })
   const graphRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("history-replacement-graph"),
     target,
     [],
@@ -1313,7 +1233,7 @@ it("does not reset the suspension-command epoch from an unaccepted exact Safe st
   const reduction = reduceWorkflowJournalHistory(
     runId,
     recordsFrom([
-      ...eventRows.slice(0, 13),
+      ...eventRows.slice(0, 15),
       ...commandAndResponses.slice(0, 6),
       executorStateRow(
         PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
@@ -1410,7 +1330,7 @@ it("reconstructs all applied pause directions and responsibility identities", ()
     { direction: "Unpause", subject: { _tag: "Run", runId } }
   ] as const
   const withDirections = recordsFrom([
-    ...eventRows.slice(0, 10),
+    ...eventRows.slice(0, 12),
     ...directions.map((direction, index) => ({
       event: ControlDirectionAppliedEvent.make({
         ...direction,
@@ -1422,11 +1342,11 @@ it("reconstructs all applied pause directions and responsibility identities", ()
       key: controlDirectionAppliedRecordKey(ControlDirectionApplicationOrdinal.make(index + 1))
     }))
   ])
-  for (let length = 11; length <= withDirections.length; length += 1) {
+  for (let length = 13; length <= withDirections.length; length += 1) {
     const reconstruction = reconstructRunState(runId, withDirections.slice(0, length))
     expect(reconstruction._tag).toBe("ValidReconstructedRun")
   }
-  const pausedTask = reconstructRunState(runId, withDirections.slice(0, 11))
+  const pausedTask = reconstructRunState(runId, withDirections.slice(0, 13))
   expect(pausedTask._tag).toBe("ValidReconstructedRun")
   if (pausedTask._tag !== "ValidReconstructedRun") return
   expect(reconstructedTaskIsPaused(pausedTask.state.pause, taskId)).toBe(true)
@@ -1840,11 +1760,18 @@ it("retains each canonical tracker-facts observation in journal order", () => {
   const taskB = TaskId.make("task-B")
   const taskC = TaskId.make("task-C")
   const observations = [
-    makeTrackerGraphObservationOperation(OperationId.make("membership-1"), target),
-    makeTrackerGraphObservationOperation(OperationId.make("membership-2"), target),
-    makeTrackerGraphObservationOperation(OperationId.make("membership-3"), target),
-    makeTrackerGraphObservationOperation(OperationId.make("membership-4"), target, [], [taskId, taskB, taskC]),
+    makeTrackerGraphObservationOperation({ _tag: "WorkflowEstablishment" }, OperationId.make("membership-1"), target),
+    makeTrackerGraphObservationOperation({ _tag: "WorkflowEstablishment" }, OperationId.make("membership-2"), target),
+    makeTrackerGraphObservationOperation({ _tag: "WorkflowEstablishment" }, OperationId.make("membership-3"), target),
     makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("membership-4"),
+      target,
+      [],
+      [taskId, taskB, taskC]
+    ),
+    makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("membership-other-target"),
       FixtureTarget.make("other-target")
     )
@@ -1869,7 +1796,7 @@ it("retains each canonical tracker-facts observation in journal order", () => {
   expect(conflicting._tag).toBe("ValidReconstructedRun")
 
   const orphanId = OperationId.make("orphan")
-  const orphanOperation = makeTrackerGraphObservationOperation(orphanId, target)
+  const orphanOperation = makeTrackerGraphObservationOperation({ _tag: "WorkflowEstablishment" }, orphanId, target)
   const orphanOutcome = reconstructRunState(
     runId,
     recordsFrom([
@@ -1903,7 +1830,7 @@ it("reports reconstructed state whose derived facts do not match their journal p
     { ...(recordsFrom([eventRows[0]])[0] as JournalRecord), position: JournalPosition.make(10) },
     { ...(recordsFrom([eventRows[1]])[0] as JournalRecord), position: JournalPosition.make(11) },
     { ...(recordsFrom([eventRows[2]])[0] as JournalRecord), position: JournalPosition.make(12) },
-    { ...(recordsFrom([eventRows[9]])[0] as JournalRecord), position: JournalPosition.make(13) }
+    { ...(recordsFrom([eventRows[11]])[0] as JournalRecord), position: JournalPosition.make(13) }
   ]
   const reconstruction = reconstructRunState(runId, malformedPositions)
   expect(reconstruction._tag).toBe("InvalidReconstructedRun")

@@ -1,7 +1,6 @@
-import { type AttemptId, type RunId } from "@dalph/contracts"
+import { AttemptId, RunId } from "@dalph/contracts"
 import { Chunk, Schema } from "effect"
-import { ActiveWorkAuthorityRefreshAuthority } from "../../workflow/protocols/active-work-authority-refresh/intent.js"
-import { latestPlannedAttemptExecutorEvidence } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import { currentAcceptedPlannedAttemptExecutorLifecycleFor } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
 
 /** The two process-local triggers that can request a refresh of Running work. */
@@ -12,6 +11,7 @@ type OrdinaryRunEntry = { readonly _tag: "OrdinaryRunEntry" }
 
 /** A pair is the authority subject; the rest of a planned attempt is not needed for selection. */
 type ActiveWorkAuthorityRefreshSubject = Readonly<{ readonly attemptId: AttemptId; readonly runId: RunId }>
+const ActiveWorkAuthorityRefreshSubject = Schema.Struct({ attemptId: AttemptId, runId: RunId })
 
 const sameActiveWorkAuthorityRefreshSubject = (
   left: ActiveWorkAuthorityRefreshSubject,
@@ -20,8 +20,8 @@ const sameActiveWorkAuthorityRefreshSubject = (
 
 const immutableActiveWorkAuthorityRefreshSubject = (
   subject: ActiveWorkAuthorityRefreshSubject
-): ActiveWorkAuthorityRefreshAuthority =>
-  Object.freeze(ActiveWorkAuthorityRefreshAuthority.make({ attemptId: subject.attemptId, runId: subject.runId }))
+): ActiveWorkAuthorityRefreshSubject =>
+  Object.freeze(ActiveWorkAuthorityRefreshSubject.make({ attemptId: subject.attemptId, runId: subject.runId }))
 
 /**
  * The exact Running attempt pairs captured at one activation boundary. A
@@ -31,7 +31,7 @@ const immutableActiveWorkAuthorityRefreshSubject = (
  * explicit uniqueness check preserves set semantics while Chunk preserves
  * the validated responsibility order for deterministic activation traces.
  */
-const ActiveWorkAuthorityRefreshSubjects = Schema.Chunk(ActiveWorkAuthorityRefreshAuthority)
+const ActiveWorkAuthorityRefreshSubjects = Schema.Chunk(ActiveWorkAuthorityRefreshSubject)
   .check(
     Schema.makeFilter((subjects) => {
       const captured = [...subjects]
@@ -77,12 +77,13 @@ const makeActiveWorkAuthorityRefreshSubjects = (
 export const activeWorkAuthorityRefreshSubjectsFor = makeActiveWorkAuthorityRefreshSubjects
 
 /**
- * Selects every exact unfinished attempt whose latest executor evidence in a
- * validated journal prefix is `Running`. Responsibility reconstruction has
- * already removed historical and superseded plans; the evidence fold removes
- * safely suspended, terminal, and invalidated reports. The caller supplies
- * the prefix read at the activation boundary, so later publications cannot
- * enter this immutable subject set.
+ * Selects every exact unfinished attempt whose current accepted lifecycle
+ * report in a validated journal prefix is `ExecutorWorkExecuting`.
+ * Responsibility reconstruction has already removed historical and
+ * superseded plans; an exact response or projection still awaiting lifecycle
+ * acceptance grants no refresh authority. The caller supplies the prefix read
+ * at the activation boundary, so later publications cannot enter this
+ * immutable subject set.
  */
 export const activeWorkAuthorityRefreshSubjectsForRunState = (
   runState: Pick<ReconstructedRunState, "runId" | "responsibility" | "workflowHistory">
@@ -92,8 +93,8 @@ export const activeWorkAuthorityRefreshSubjectsForRunState = (
       if (entry._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
       const { plannedAttempt } = entry
       if (plannedAttempt.runId !== runState.runId) return []
-      return latestPlannedAttemptExecutorEvidence(runState.workflowHistory.records, plannedAttempt)?.report._tag ===
-        "ExecutorWorkExecuting"
+      return currentAcceptedPlannedAttemptExecutorLifecycleFor(runState.workflowHistory.records, plannedAttempt)
+        ._tag === "Executing"
         ? [{ runId: plannedAttempt.runId, attemptId: plannedAttempt.attemptId }]
         : []
     })
@@ -104,14 +105,6 @@ export const activeWorkAuthorityRefreshSubjectsContain = (
   subjects: ActiveWorkAuthorityRefreshSubjects,
   plannedAttempt: ActiveWorkAuthorityRefreshSubject
 ): boolean => [...subjects].some((subject) => sameActiveWorkAuthorityRefreshSubject(subject, plannedAttempt))
-
-/** Narrows an opportunity only when its captured subjects contain this attempt. */
-export const isActiveWorkAuthorityRefreshForAttempt = (
-  opportunity: RunActivationOpportunity,
-  plannedAttempt: ActiveWorkAuthorityRefreshSubject
-): opportunity is Extract<RunActivationOpportunity, { readonly _tag: "ActiveWorkAuthorityRefresh" }> =>
-  opportunity._tag === "ActiveWorkAuthorityRefresh" &&
-  activeWorkAuthorityRefreshSubjectsContain(opportunity.subjects, plannedAttempt)
 
 /**
  * A tracker notification or timer is allowed to refresh authority for work

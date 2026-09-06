@@ -34,6 +34,7 @@ import {
   TargetPromotionCompareAndSetResult,
   TargetPromotionCompareAndSetFailure,
   TargetPromotionGitReadFailure,
+  TargetPromotionRequestId,
   targetPromotionCorrelationEquals,
   type TargetPromotionGitService,
   TargetPromotionCorrelation,
@@ -610,6 +611,15 @@ it("legacy target-verification evidence cannot authorize promotion", () => {
       verificationManifest: { byteLength: 0, digest: "a".repeat(64) }
     })
   ).toBe(false)
+})
+
+it("rejects a structurally complete promotion correlation with a foreign deterministic request id", () => {
+  const foreignCorrelation = {
+    qualifiedCandidate,
+    requestId: TargetPromotionRequestId.make("target-promotion:foreign-request")
+  }
+
+  expect(Schema.is(TargetPromotionCorrelation)(foreignCorrelation)).toBe(false)
 })
 
 it.effect("rejects recovery for a foreign exact promotion correlation sharing the request id", () =>

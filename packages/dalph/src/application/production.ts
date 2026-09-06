@@ -1,12 +1,17 @@
 import { NodeServices } from "@effect/platform-node"
-import { type IntegrationTarget, PlannedAttemptExecutor, type RunId } from "@dalph/contracts"
+import {
+  type IntegrationTarget,
+  PlannedAttemptExecutor,
+  type PlannedAttemptExecutorLifecycleObservation,
+  type RunId
+} from "@dalph/contracts"
 import {
   AllocatedWorkflowRunId,
   JournaledRunBootstrap,
   type JournaledRuntimeLayerInput,
   type RunActivationOpportunityValue,
   type TrackerGraphReader,
-  attemptChoiceControlLayer,
+  attemptChoiceControlWithProvidedProtocolLayer,
   controlDirectionApplicationLayer,
   coordinatorOwnedGitWorktreeLayer,
   coordinatorOwnedTrackerMutationLayer,
@@ -175,7 +180,7 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
   target: GitCommonDirectoryTarget,
   integrationTarget: IntegrationTarget,
   trackerMutationAdapterLayer: Layer.Layer<TrackerMutation, TrackerError, TrackerRequirements>,
-  plannedAttemptExecutorLayer: Layer.Layer<PlannedAttemptExecutor>,
+  plannedAttemptExecutorLayer: Layer.Layer<PlannedAttemptExecutor | PlannedAttemptExecutorLifecycleObservation>,
   /**
    * Provider-owned Integrator candidate authority. Production cannot infer
    * predecessor ownership or writer quiescence from a Git locator. Callers
@@ -243,11 +248,10 @@ export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirem
       const runtimeLayer = ({ opportunity, runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const interpreterLayer = journaledWorkflowInterpreterLayer(
           activeRunId,
-          Layer.succeed(WorkflowInterpreter, interpreter),
-          opportunity
+          Layer.succeed(WorkflowInterpreter, interpreter)
         )
         const operatorControlLayer = Layer.mergeAll(
-          attemptChoiceControlLayer,
+          attemptChoiceControlWithProvidedProtocolLayer,
           controlDirectionApplicationLayer,
           taskClaimReacquisitionControlLayer,
           taskWorkCapacityControlLayer

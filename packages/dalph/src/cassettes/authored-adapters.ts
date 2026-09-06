@@ -1,30 +1,31 @@
-import { Deferred, Effect, Layer, Match, Option, Ref, Schema } from "effect"
+import { Deferred, Effect, Layer, Match, Option, Ref, Schema, Stream } from "effect"
 import {
   PlannedAttemptExecutorCommandFailure,
   EvidenceDigest,
   EvidenceReference,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorReport,
   type PlannedAttemptExecutorRequest,
   PlannedAttemptExecutorResult,
+  passiveLifecycleObservationPurpose,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey,
   samePlannedAttemptExecutorCorrelation,
+  makeTaskWorkSpecification,
   type PlannedTaskAttempt,
   type RunId,
-  makeTaskWorkSpecification,
   type TaskId
 } from "@dalph/contracts"
 import {
   projectTrackerSnapshot,
   TraceOutputError,
-  TrackerAdapterReadContext,
-  TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
   TrackerGraphReader,
   type TraceItem,
   type WorkflowOperation,
+  workflowOperationId,
   WorkflowTrace
 } from "@dalph/orchestrator"
 import {
@@ -33,18 +34,10 @@ import {
   type AuthoredCassetteStoryItem
 } from "./authored-domain.js"
 import type { StoryCursor } from "./authored-cursor.js"
+import { awaitTraceSelectionBoundaries } from "./authored-trace-boundaries.js"
+import { trackerReadFailure } from "./authored-tracker-read-results.js"
 
 const evidenceDigestHexLength = 64
-
-const trackerReadFailure = (
-  detail: string,
-  reason: TrackerAdapterReadFailureReason = TrackerAdapterReadFailureReason.cases.IncompleteSnapshot.make({})
-) =>
-  new TrackerAdapterReadError({
-    context: TrackerAdapterReadContext.cases.Fixture.make({ operation: "TrackerGraphReader.selectAdapter" }),
-    detail,
-    reason
-  })
 
 export const controlledTrackerGraphReaderLayer = (cursor: StoryCursor) =>
   Layer.succeed(
@@ -219,34 +212,46 @@ const awaitTraceBoundaries = (
     yield* awaitTraceOperatorControlGraphReadBoundary(item, options)
   })
 
+const emitControlledDecision = (
+  cursor: StoryCursor,
+  item: Extract<TraceItem, { readonly _tag: "OperationSelected" }>,
+  actual: CassetteDecision,
+  options: ControlledTraceOptions
+): Effect.Effect<void, TraceOutputError> =>
+  Effect.gen(function* () {
+    yield* awaitTraceBoundaries(cursor, item, actual, options)
+    const expected = yield* cursor
+      .consumeDalphSelectionFor(actual, {
+        operationId: workflowOperationId(item.operation),
+        predecessorOperationIds: item.operation.predecessorOperationIds
+      })
+      .pipe(
+        Effect.mapError(
+          (failure) =>
+            new TraceOutputError({
+              detail:
+                `${failure._tag} at story position ${failure.storyPosition}: ` +
+                `${failure._tag === "AuthoredCassetteInteractionMismatch" ? `expected ${failure.expected}, received ${failure.actual}` : failure.detail} ` +
+                `while emitting ${encodedDecision(actual)}`
+            })
+        )
+      )
+    if (encodedDecision(actual) !== encodedDecision(expected.operation)) {
+      const storyPosition = (yield* cursor.storyPosition) - 1
+      return yield* new TraceOutputError({
+        detail: `at story position ${storyPosition}: expected ${encodedDecision(expected.operation)}, received ${encodedDecision(actual)}`
+      })
+    }
+  })
+
 export const controlledTrace = (cursor: StoryCursor, options: ControlledTraceOptions = {}): WorkflowTrace["Service"] =>
   WorkflowTrace.of({
     emit: Effect.fn("AuthoredCassette.WorkflowTrace.emit")(function* (item) {
-      // Stabilization performs its final tracker read outside the delivery
-      // action executor. Its operation-selection trace is the remaining
-      // same-fiber action boundary for a lifecycle control.
-      if (item._tag === "OperationSelected") yield* cursor.pauseAtCoordinatorProcessDeath
+      yield* awaitTraceSelectionBoundaries(cursor, item)
       const actual = actualDecision(item)
-      if (actual === undefined) return
-      yield* awaitTraceBoundaries(cursor, item, actual, options)
-      const expected = yield* cursor
-        .consumeDalphSelectionFor(actual)
-        .pipe(
-          Effect.mapError(
-            (failure) =>
-              new TraceOutputError({
-                detail:
-                  `${failure._tag} at story position ${failure.storyPosition}: ` +
-                  `expected ${failure.expected}, received ${failure.actual} while emitting ${encodedDecision(actual)}`
-              })
-          )
-        )
-      if (encodedDecision(actual) !== encodedDecision(expected.operation)) {
-        const storyPosition = (yield* cursor.storyPosition) - 1
-        return yield* new TraceOutputError({
-          detail: `at story position ${storyPosition}: expected ${encodedDecision(expected.operation)}, received ${encodedDecision(actual)}`
-        })
-      }
+      /* v8 ignore next -- @preserve A cassette decision is derived only from an OperationSelected trace item. */
+      if (actual === undefined || item._tag !== "OperationSelected") return
+      yield* emitControlledDecision(cursor, item, actual, options)
     })
   })
 
@@ -255,6 +260,7 @@ const executorReport = (
     AuthoredCassetteStoryItem,
     {
       readonly _tag:
+        | "PlannedAttemptExecutorPassiveLifecycleChanged"
         | "PlannedAttemptExecutorProjectionReturned"
         | "PlannedAttemptExecutorResponseLost"
         | "PlannedAttemptExecutorWorkReported"
@@ -352,48 +358,82 @@ export const controlledExecutorLayer = (
       return report
     }).pipe(Effect.ensuring(cursor.endExecutorReportRequest(request, plannedAttempt.attemptId)))
   })
-  return Layer.succeed(
-    PlannedAttemptExecutor,
-    PlannedAttemptExecutor.of({
-      observe: (correlation) =>
-        Effect.gen(function* () {
-          const projection = yield* cursor.consumeExecutorProjection
-          if (Option.isNone(projection)) {
-            const unresolved = yield* Ref.get(unresolvedLostResponses)
-            if (unresolved.has(plannedAttemptExecutorCorrelationKey(correlation))) {
-              return yield* Effect.die(
-                new Error(
-                  `authored executor projection for unresolved ${correlation.attemptId} requires an explicit return`
-                )
+  const executor = PlannedAttemptExecutor.of({
+    observe: (correlation) =>
+      Effect.gen(function* () {
+        const projection = yield* cursor.consumeExecutorProjection
+        if (Option.isNone(projection)) {
+          const unresolved = yield* Ref.get(unresolvedLostResponses)
+          if (unresolved.has(plannedAttemptExecutorCorrelationKey(correlation))) {
+            return yield* Effect.die(
+              new Error(
+                `authored executor projection for unresolved ${correlation.attemptId} requires an explicit return`
               )
-            }
-            const report = (yield* Ref.get(reports)).get(plannedAttemptExecutorCorrelationKey(correlation))
-            return report === undefined
-              ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
-              : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+            )
           }
-          const projectedReport = yield* prepareReport(executorReport(projection.value, runId))
-          if (!samePlannedAttemptExecutorCorrelation(projectedReport.correlation, correlation)) {
-            return PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
-              expected: correlation,
-              observed: projectedReport
-            })
-          }
-          yield* Ref.update(
-            reports,
-            (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), projectedReport]])
-          )
-          yield* Ref.update(unresolvedLostResponses, (current) => {
-            const next = new Set(current)
-            next.delete(plannedAttemptExecutorCorrelationKey(correlation))
-            return next
+          const report = (yield* Ref.get(reports)).get(plannedAttemptExecutorCorrelationKey(correlation))
+          return report === undefined
+            ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+            : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+        }
+        const projectedReport = yield* prepareReport(executorReport(projection.value, runId))
+        if (!samePlannedAttemptExecutorCorrelation(projectedReport.correlation, correlation)) {
+          return PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+            expected: correlation,
+            observed: projectedReport
           })
-          return PlannedAttemptExecutorProjection.cases.Exact.make({ report: projectedReport })
-        }),
-      /* v8 ignore next -- Live Pause/Suspend production behavior is outside issue 170's maintained singleton. */
-      requestSuspension: (plannedAttempt) => consume("Suspend", plannedAttempt),
-      begin: (request: PlannedAttemptExecutorRequest) => consume("Begin", request.plannedAttempt),
-      resume: (request: PlannedAttemptExecutorRequest) => consume("Resume", request.plannedAttempt)
-    })
+        }
+        yield* Ref.update(
+          reports,
+          (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), projectedReport]])
+        )
+        yield* Ref.update(unresolvedLostResponses, (current) => {
+          const next = new Set(current)
+          next.delete(plannedAttemptExecutorCorrelationKey(correlation))
+          return next
+        })
+        return PlannedAttemptExecutorProjection.cases.Exact.make({ report: projectedReport })
+      }),
+    /* v8 ignore next -- Live Pause/Suspend production behavior is outside issue 170's maintained singleton. */
+    requestSuspension: (plannedAttempt) => consume("Suspend", plannedAttempt),
+    begin: (request: PlannedAttemptExecutorRequest) => consume("Begin", request.plannedAttempt),
+    resume: (request: PlannedAttemptExecutorRequest) => consume("Resume", request.plannedAttempt)
+  })
+  return Layer.merge(
+    Layer.succeed(PlannedAttemptExecutor, executor),
+    Layer.succeed(
+      PlannedAttemptExecutorLifecycleObservation,
+      PlannedAttemptExecutorLifecycleObservation.of({
+        attach: (correlation) =>
+          Effect.gen(function* () {
+            const item = yield* cursor.currentStoryItem
+            const current =
+              item?._tag === "PlannedAttemptExecutorProjectionReturned" &&
+              item.report.attemptId === correlation.attemptId
+                ? yield* executor.observe(correlation, passiveLifecycleObservationPurpose)
+                : yield* Ref.get(reports).pipe(
+                    Effect.map((current) => current.get(plannedAttemptExecutorCorrelationKey(correlation))),
+                    Effect.map((report) =>
+                      report === undefined
+                        ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+                        : PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+                    )
+                  )
+            const changes = cursor.passiveExecutorLifecycleChangesFor(correlation.attemptId).pipe(
+              Stream.mapEffect((item) =>
+                Effect.gen(function* () {
+                  const report = yield* prepareReport(executorReport(item, runId))
+                  yield* Ref.update(
+                    reports,
+                    (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), report]])
+                  )
+                  return PlannedAttemptExecutorProjection.cases.Exact.make({ report })
+                })
+              )
+            )
+            return { changes, close: Effect.void, current }
+          })
+      })
+    )
   )
 }

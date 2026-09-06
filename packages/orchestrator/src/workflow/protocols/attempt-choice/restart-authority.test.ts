@@ -52,7 +52,13 @@ const record = (position: number, event: JournalRecord["event"], key: string): J
 
 it("reuses one unresolved Restart read identity and allocates the next identity after reconciliation", () => {
   const pendingOperationId = OperationId.make(`attempt-restart:${encodeURIComponent(requestId.nonce)}:graph:after:2`)
-  const pendingOperation = makeTrackerGraphObservationOperation(pendingOperationId, target, [], [taskId])
+  const pendingOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    pendingOperationId,
+    target,
+    [],
+    [taskId]
+  )
   const pending = record(3, taskTrackerReadIntent(pendingOperation), intentRecordKey(pendingOperationId).toString())
   expect(nextRestartReadOperationId([pending], requestId, "graph", JournalPosition.make(2))).toBe(pendingOperationId)
   expect(nextRestartReadOperationId([], requestId, "graph", JournalPosition.make(2))).toBe(

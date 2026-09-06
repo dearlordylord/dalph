@@ -1,5 +1,6 @@
 import { Context, Effect, Stream } from "effect"
 import type { DeliveryProposalDerivationIssue } from "./delivery-action-proposal.js"
+import type { FreshTaskCandidate, FreshTaskCandidateFrontier } from "./fresh-task-candidate.js"
 import {
   deliveryProposalFrontierOf,
   currentSignalFromCurrentFirstStream,
@@ -18,6 +19,8 @@ export interface DeliveryActionPlanningInput {
   readonly deliveryReflection: ReadonlyArray<DeliveryActionProposal>
   readonly deliverySettlement: ReadonlyArray<DeliveryActionProposal>
   readonly isolatedIssues: ReadonlyArray<DeliveryProposalDerivationIssue>
+  readonly freshTaskCandidateFrontier?: FreshTaskCandidateFrontier
+  readonly freshTaskCandidates: ReadonlyArray<FreshTaskCandidate>
   readonly ticketDelivery: ReadonlyArray<DeliveryActionProposal>
   readonly trackerGraph: ReadonlyArray<TrackerGraphActionProposal>
 }
@@ -27,16 +30,11 @@ export interface CoherentDeliveryActionPlanningInputSignal<E> extends CurrentSig
   readonly [DeliveryConsequences, DeliveryActionPlanningInput],
   E
 > {
-  readonly changesWithinStablePublication: Stream.Stream<
-    readonly [DeliveryConsequences, DeliveryActionPlanningInput],
-    E
-  >
   readonly getWithinStablePublication: Effect.Effect<readonly [DeliveryConsequences, DeliveryActionPlanningInput], E>
 }
 
 /** A planned frontier with an ungated read reserved for the existing gated runtime adapter. */
 export interface DeliveryActionPlanningSignal<E> extends CurrentSignal<DeliveryProposalFrontier, E> {
-  readonly changesWithinStablePublication: Stream.Stream<DeliveryProposalFrontier, E>
   readonly getWithinStablePublication: Effect.Effect<DeliveryProposalFrontier, E>
 }
 
@@ -68,7 +66,9 @@ const frontierOf = (delivery: DeliveryConsequences, input: DeliveryActionPlannin
       input.deliverySettlement,
       input.deliveryReflection
     ],
-    input.isolatedIssues
+    input.isolatedIssues,
+    input.freshTaskCandidates,
+    input.freshTaskCandidateFrontier
   )
 
 /**
@@ -85,10 +85,6 @@ export const deliveryActionPlanning = Effect.fn("Delivery.actionPlanning")(funct
   return {
     ...currentSignalFromCurrentFirstStream(
       frontier.changes.pipe(Stream.changesWith((left, right) => frontierKey(left) === frontierKey(right)))
-    ),
-    changesWithinStablePublication: coherent.changesWithinStablePublication.pipe(
-      Stream.map(([delivery, input]) => frontierOf(delivery, input)),
-      Stream.changesWith((left, right) => frontierKey(left) === frontierKey(right))
     ),
     getWithinStablePublication: coherent.getWithinStablePublication.pipe(
       Effect.map(([delivery, input]) => frontierOf(delivery, input))

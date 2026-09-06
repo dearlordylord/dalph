@@ -82,7 +82,11 @@ it.effect("state.get equals the latest publication observed after an accepted ap
     const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(runId, target, initial, storage)
-    const operation = makeTrackerGraphObservationOperation(OperationId.make("current-value-law"), target)
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("current-value-law"),
+      target
+    )
     const attached = yield* Deferred.make<void>()
     const observed = yield* journal.state.changes.pipe(
       Stream.tap(() => Deferred.succeed(attached, undefined)),
@@ -115,7 +119,11 @@ it.effect("publishes GraphNotEstablished first and an accepted complete graph at
     const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(runId, target, initial, storage)
-    const operation = makeTrackerGraphObservationOperation(OperationId.make("journal-read"), target)
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("journal-read"),
+      target
+    )
     const subscriberAttached = yield* Deferred.make<void>()
     const observed = yield* journaledGraphChanges(journal).pipe(
       Stream.tap(() => Deferred.succeed(subscriberAttached, undefined)),
@@ -158,7 +166,11 @@ it.effect("does not publish complete graph facts for another tracker target", ()
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(foreignRunId, target, initial, storage)
 
-    const localOperation = makeTrackerGraphObservationOperation(OperationId.make("foreign-target-local-read"), target)
+    const localOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("foreign-target-local-read"),
+      target
+    )
     yield* journal.append(
       foreignRunId,
       intentRecordKey(localOperation.operationId),
@@ -176,6 +188,7 @@ it.effect("does not publish complete graph facts for another tracker target", ()
 
     const foreignTarget = FixtureTarget.make("journal-foreign-target-source")
     const foreignOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("foreign-target-read"),
       foreignTarget
     )
@@ -215,6 +228,7 @@ it.effect("does not pair a target-A graph read with an earlier foreign-target sn
     const journal = yield* makeJournal(mixedTargetRunId, target, initial, storage)
     const foreignTarget = FixtureTarget.make("journal-mixed-target-order-foreign")
     const foreignOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("mixed-target-order-foreign-read"),
       foreignTarget
     )
@@ -233,6 +247,7 @@ it.effect("does not pair a target-A graph read with an earlier foreign-target sn
     )
 
     const localOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("mixed-target-order-local-read"),
       target
     )
@@ -268,8 +283,16 @@ it.effect("publishes an equal-content reconfirmation as a later journaled graph 
     const initial = reduceWorkflowJournalHistory(fixedRunId, yield* storage.read(fixedRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(fixedRunId, target, initial, storage)
-    const firstOperation = makeTrackerGraphObservationOperation(OperationId.make("equal-content-G1"), target)
-    const secondOperation = makeTrackerGraphObservationOperation(OperationId.make("equal-content-G2"), target)
+    const firstOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("equal-content-G1"),
+      target
+    )
+    const secondOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("equal-content-G2"),
+      target
+    )
     const snapshot = graph("equal-content", ["A"])
     const attached = yield* Deferred.make<void>()
     const firstSeen = yield* Deferred.make<void>()
@@ -356,7 +379,11 @@ it.effect("skips accepted focused facts while retaining the latest graph observa
         )
       )
     )
-    const graphOperation = makeTrackerGraphObservationOperation(OperationId.make("graph-after-focused"), target)
+    const graphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("graph-after-focused"),
+      target
+    )
     yield* journal.append(
       focusedRunId,
       intentRecordKey(graphOperation.operationId),
@@ -401,7 +428,11 @@ it.effect("rejects an empty, unbegun, or different-Run initial history at the jo
           {
             ...runBeginning,
             event: taskTrackerReadIntent(
-              makeTrackerGraphObservationOperation(OperationId.make("not-a-beginning"), target)
+              makeTrackerGraphObservationOperation(
+                { _tag: "WorkflowEstablishment" },
+                OperationId.make("not-a-beginning"),
+                target
+              )
             )
           }
         ]
@@ -448,8 +479,16 @@ it.effect("serializes concurrent accepted appends and publishes every position i
       Effect.forkChild
     )
     yield* Deferred.await(attached)
-    const first = makeTrackerGraphObservationOperation(OperationId.make("concurrent-one"), target)
-    const second = makeTrackerGraphObservationOperation(OperationId.make("concurrent-two"), target)
+    const first = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("concurrent-one"),
+      target
+    )
+    const second = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("concurrent-two"),
+      target
+    )
 
     yield* Effect.all([
       journal.append(concurrentRunId, intentRecordKey(first.operationId), taskTrackerReadIntent(first)),
@@ -469,8 +508,16 @@ it.effect("accepts concurrently completed tracker outcomes in the order they rea
     const initial = reduceWorkflowJournalHistory(outcomeRunId, yield* storage.read(outcomeRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const journal = yield* makeJournal(outcomeRunId, target, initial, storage)
-    const first = makeTrackerGraphObservationOperation(OperationId.make("outcome-started-first"), target)
-    const second = makeTrackerGraphObservationOperation(OperationId.make("outcome-finished-first"), target)
+    const first = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("outcome-started-first"),
+      target
+    )
+    const second = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("outcome-finished-first"),
+      target
+    )
     yield* journal.append(outcomeRunId, intentRecordKey(first.operationId), taskTrackerReadIntent(first))
     yield* journal.append(outcomeRunId, intentRecordKey(second.operationId), taskTrackerReadIntent(second))
     const firstStarted = yield* Deferred.make<void>()
@@ -528,7 +575,11 @@ it.effect("never loses the latest journaled graph when subscription and publicat
     for (let index = 0; index < 12; index += 1) {
       const start = yield* Deferred.make<void>()
       const revision = `attachment-race-${index}`
-      const operation = makeTrackerGraphObservationOperation(OperationId.make(revision), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make(revision),
+        target
+      )
       const observed = Deferred.await(start).pipe(
         Effect.andThen(
           journaledGraphChanges(journal).pipe(
@@ -572,7 +623,11 @@ it.effect("reconstructs an append accepted before the process could publish it",
     yield* storage.beginRun(crashRunId, target, initialPolicy)
     const initial = reduceWorkflowJournalHistory(crashRunId, yield* storage.read(crashRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
-    const operation = makeTrackerGraphObservationOperation(OperationId.make("accepted-before-publication"), target)
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("accepted-before-publication"),
+      target
+    )
     const stoppedProcess = yield* Effect.scoped(
       Effect.gen(function* () {
         const failAfterDurableAppend = yield* Ref.make(false)
@@ -657,7 +712,11 @@ it.effect("lets multiple graph subscribers observe one accepted read without per
     yield* Deferred.await(firstAttached)
     yield* Deferred.await(secondAttached)
 
-    const operation = makeTrackerGraphObservationOperation(OperationId.make("one-read-two-subscribers"), target)
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("one-read-two-subscribers"),
+      target
+    )
     yield* journal.append(subscriberRunId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
     yield* journal.append(
       subscriberRunId,
@@ -696,7 +755,11 @@ it.effect("does not republish an idempotent append and rejects a different Run",
       Effect.forkChild
     )
     yield* Effect.yieldNow
-    const operation = makeTrackerGraphObservationOperation(OperationId.make("idempotent-intent"), target)
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("idempotent-intent"),
+      target
+    )
     const append = journal.append(fixedRunId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
     yield* append
     yield* append
@@ -743,7 +806,11 @@ it.effect("does not replay queued open values to a subscriber after publication 
     )
     yield* Deferred.await(firstConsumed)
 
-    const accepted = makeTrackerGraphObservationOperation(OperationId.make("queued-open"), target)
+    const accepted = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("queued-open"),
+      target
+    )
     yield* journal.append(slowRunId, intentRecordKey(accepted.operationId), taskTrackerReadIntent(accepted))
     yield* journal.append(
       slowRunId,
@@ -753,7 +820,11 @@ it.effect("does not replay queued open values to a subscriber after publication 
         makeCompleteTaskTrackerFactsObserved(accepted, graph("queued-open", ["A"]))
       )
     )
-    const missingIntent = makeTrackerGraphObservationOperation(OperationId.make("queued-failure"), target)
+    const missingIntent = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("queued-failure"),
+      target
+    )
     const failure = yield* journal
       .append(
         slowRunId,
@@ -779,7 +850,11 @@ it.effect("fails closed when storage returns different content for an already pu
     const initial = reduceWorkflowJournalHistory(mismatchRunId, yield* storage.read(mismatchRunId))
     if (initial._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initial)
     const appendCalls = yield* Ref.make(0)
-    const replacement = makeTrackerGraphObservationOperation(OperationId.make("replacement-content"), target)
+    const replacement = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("replacement-content"),
+      target
+    )
     const journal = yield* makeJournal(mismatchRunId, target, initial, {
       append: (...args) =>
         Ref.getAndUpdate(appendCalls, (count) => count + 1).pipe(
@@ -789,7 +864,11 @@ it.effect("fails closed when storage returns different content for an already pu
           )
         )
     })
-    const operation = makeTrackerGraphObservationOperation(OperationId.make("published-content"), target)
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("published-content"),
+      target
+    )
     const append = journal.append(
       mismatchRunId,
       intentRecordKey(operation.operationId),
@@ -799,7 +878,11 @@ it.effect("fails closed when storage returns different content for an already pu
     const failure = yield* append.pipe(Effect.flip)
     expect(failure).toBeInstanceOf(JournalRecordMismatch)
 
-    const later = makeTrackerGraphObservationOperation(OperationId.make("after-record-mismatch"), target)
+    const later = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("after-record-mismatch"),
+      target
+    )
     expect(
       yield* journal
         .append(mismatchRunId, intentRecordKey(later.operationId), taskTrackerReadIntent(later))
@@ -824,7 +907,11 @@ it.effect("state.get and changes fail with the same typed error after the prefix
       Effect.forkChild
     )
     yield* Deferred.await(subscriberAttached)
-    const missingIntent = makeTrackerGraphObservationOperation(OperationId.make("missing-intent"), target)
+    const missingIntent = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("missing-intent"),
+      target
+    )
     const failure = yield* journal
       .append(
         invalidRunId,
@@ -839,7 +926,11 @@ it.effect("state.get and changes fail with the same typed error after the prefix
     expect(yield* Fiber.join(existingSubscriber).pipe(Effect.flip)).toEqual(failure)
     expect(yield* journal.state.get.pipe(Effect.flip)).toEqual(failure)
     expect(yield* Effect.flip(journal.read(invalidRunId))).toEqual(failure)
-    const later = makeTrackerGraphObservationOperation(OperationId.make("after-invalid"), target)
+    const later = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("after-invalid"),
+      target
+    )
     const repeated = yield* journal
       .append(invalidRunId, intentRecordKey(later.operationId), taskTrackerReadIntent(later))
       .pipe(Effect.flip)
@@ -863,13 +954,21 @@ it.effect("attempts no later storage append after an accepted position contradic
           Effect.map((record) => ({ ...record, position: JournalPosition.make(record.position + 1) }))
         )
     })
-    const first = makeTrackerGraphObservationOperation(OperationId.make("gap-first"), target)
+    const first = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("gap-first"),
+      target
+    )
     const failure = yield* journal
       .append(gapRunId, intentRecordKey(first.operationId), taskTrackerReadIntent(first))
       .pipe(Effect.flip)
     expect(failure).toBeInstanceOf(JournalPositionGap)
 
-    const later = makeTrackerGraphObservationOperation(OperationId.make("gap-later"), target)
+    const later = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make("gap-later"),
+      target
+    )
     expect(
       yield* journal
         .append(gapRunId, intentRecordKey(later.operationId), taskTrackerReadIntent(later))

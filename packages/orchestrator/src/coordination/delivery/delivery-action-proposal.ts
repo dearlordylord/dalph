@@ -1,11 +1,7 @@
-import type {
-  IntegrationTarget,
-  PlannedAttemptExecutorCorrelation,
-  PlannedTaskAttempt,
-  RunId,
-  TaskId
-} from "@dalph/contracts"
-import { Match, Schema } from "effect"
+/* eslint-disable max-lines -- Delivery proposal types and their private authority constructors remain colocated. */
+import { plannedTaskAttemptEquivalence, TaskId } from "@dalph/contracts"
+import type { IntegrationTarget, PlannedAttemptExecutorCorrelation, PlannedTaskAttempt, RunId } from "@dalph/contracts"
+import { Match, Result, Schema } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -16,12 +12,18 @@ import type {
   WorkflowTaskClaimReleaseOperation
 } from "../../workflow/registry/operation.js"
 import type { IntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
-import type { ActiveWorkAuthorityRefreshGitReadOperation } from "../../workflow/protocols/active-work-authority-refresh/events.js"
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
-import type { RunnableFrontierTransition } from "../frontier/frontier.js"
+import { runnableTransitionTaskId, type RunnableFrontierTransition } from "../frontier/frontier.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import type { TransitionForRoute } from "./delivery-transition-policy.js"
+import type { FreshTaskCommitment } from "../admission/fresh-task-admission.js"
+import { immutableSnapshot } from "../immutable-snapshot.js"
+import {
+  replacementContinuationAuthorityMatchesStep,
+  replacementContinuationAuthorityOf,
+  type ReplacementContinuationAuthority
+} from "./replacement-continuation-authority.js"
 
 /** Stable structural identity of one exact proposed action; it is not a journal OperationId. */
 export const DeliveryProposalId = Schema.NonEmptyString.pipe(Schema.brand("DeliveryProposalId"))
@@ -284,6 +286,126 @@ export type DeliveryActionProposal =
   | FreshIdentityDeliveryProposal
   | IdentityFreeDeliveryProposal
 
+type FreshContinuationProposalAuthority = {
+  readonly authority:
+    | { readonly _tag: "FreshCommitmentAuthority"; readonly commitment: FreshTaskCommitment }
+    | { readonly _tag: "ReplacementAuthority"; readonly replacement: ReplacementContinuationAuthority }
+  readonly continuationSnapshot: FreshContinuationAuthoritySnapshot
+}
+
+const issuedFreshContinuationProposals = new WeakMap<object, FreshContinuationProposalAuthority>()
+
+type FreshContinuationAuthoritySnapshot =
+  | {
+      readonly _tag: "FreshOperationContinuationAuthority"
+      readonly claimOperationId: OperationId
+      readonly predecessorOperationId: OperationId
+      readonly runId: RunId
+      readonly step: FreshCommittedContinuationOperationStep["_tag"]
+      readonly taskId: TaskId
+    }
+  | {
+      readonly _tag: "FreshAttemptHandoffAuthority"
+      readonly claimOperationId: OperationId
+      readonly plannedAttempt: PlannedTaskAttempt
+      readonly runId: RunId
+      readonly step: FreshContinuationBeginStep["_tag"]
+      readonly taskId: TaskId
+    }
+
+export type FreshContinuationCommitmentRequirement =
+  | { readonly _tag: "FreshContinuationCommitmentNotRequired" }
+  | { readonly _tag: "FreshContinuationCommitmentMissing" }
+  | { readonly _tag: "FreshContinuationCommitmentRequired"; readonly commitment: FreshTaskCommitment }
+  | { readonly _tag: "ReplacementContinuationRequired"; readonly replacement: ReplacementContinuationAuthority }
+
+const proposalNeedsFreshCommitment = (proposal: DeliveryActionProposal): boolean => {
+  const route = proposal.route
+  if (route._tag === "FreshExecutorWorkflowRoute") return route.step._tag === "BeginPlannedAttemptExecutorWork"
+  if (route._tag !== "FreshWorkflowRoute") return false
+  return (
+    route.step._tag === "ReadPostClaimGraph" ||
+    route.step._tag === "ReadTaskWorkSpecification" ||
+    route.step._tag === "RecordTaskAttemptPlan" ||
+    route.step._tag === "ReconcileTaskWorktree"
+  )
+}
+
+const proposalContinuationStep = (proposal: DeliveryActionProposal): FreshWorkflowStep | undefined => {
+  const route = proposal.route
+  return route._tag === "FreshWorkflowRoute" || route._tag === "FreshExecutorWorkflowRoute" ? route.step : undefined
+}
+
+const continuationClaimOperationIdOrNull = (step: FreshWorkflowStep): OperationId | null =>
+  step._tag === "ReadPostClaimGraph"
+    ? step.claimOperation.acquisition.operationId
+    : "claimOperationId" in step
+      ? step.claimOperationId
+      : null
+
+const continuationSnapshotMatches = (
+  proposal: DeliveryActionProposal,
+  step: FreshWorkflowStep,
+  snapshot: FreshContinuationAuthoritySnapshot
+): boolean => {
+  const claimOperationId = continuationClaimOperationIdOrNull(step)
+  return Match.valueTags(snapshot, {
+    FreshAttemptHandoffAuthority: (attempt) =>
+      step._tag === attempt.step &&
+      step.task.id === attempt.taskId &&
+      claimOperationId === attempt.claimOperationId &&
+      proposal.waitsForLiveOperationId === null &&
+      "plannedAttempt" in step &&
+      step.plannedAttempt.runId === attempt.runId &&
+      plannedTaskAttemptEquivalence(step.plannedAttempt, attempt.plannedAttempt),
+    FreshOperationContinuationAuthority: (operation) =>
+      step._tag === operation.step &&
+      step.task.id === operation.taskId &&
+      claimOperationId === operation.claimOperationId &&
+      "predecessorOperationId" in step &&
+      step.predecessorOperationId === operation.predecessorOperationId &&
+      proposal.waitsForLiveOperationId === operation.predecessorOperationId
+  })
+}
+
+/** Reveals whether one proposal carries the private exact-commitment capability required by its route. */
+export const freshContinuationCommitmentRequirementOf = (
+  proposal: DeliveryActionProposal
+): FreshContinuationCommitmentRequirement => {
+  if (!proposalNeedsFreshCommitment(proposal)) return { _tag: "FreshContinuationCommitmentNotRequired" }
+  const authority = issuedFreshContinuationProposals.get(proposal)
+  if (authority === undefined) return { _tag: "FreshContinuationCommitmentMissing" }
+  const step = proposalContinuationStep(proposal)
+  if (step === undefined || !continuationSnapshotMatches(proposal, step, authority.continuationSnapshot)) {
+    return { _tag: "FreshContinuationCommitmentMissing" }
+  }
+  return authority.authority._tag === "FreshCommitmentAuthority"
+    ? { _tag: "FreshContinuationCommitmentRequired", commitment: authority.authority.commitment }
+    : { _tag: "ReplacementContinuationRequired", replacement: authority.authority.replacement }
+}
+
+/**
+ * A proposal derived from an already-started responsibility. Runtime uses
+ * this durable order evidence to preserve existing responsibility priority
+ * when its reservation is deferred; it must not infer priority from a route
+ * or transition tag.
+ */
+type ExistingResponsibilityOrderEvidence = Extract<
+  DeliveryProposalOrderEvidence,
+  { readonly _tag: "RecoveredWorkflowOrder" }
+> & { readonly responsibilityBeganAt: JournalPosition }
+
+export type ExistingResponsibilityDeliveryProposal = DeliveryActionProposal & {
+  readonly order: ExistingResponsibilityOrderEvidence
+}
+
+export const isExistingResponsibilityDeliveryProposal = (
+  proposal: DeliveryActionProposal
+): proposal is ExistingResponsibilityDeliveryProposal => {
+  const order = proposal.order
+  return order._tag === "RecoveredWorkflowOrder" && order.responsibilityBeganAt !== null
+}
+
 /** The tracker relation can propose only one typed graph-read route it owns. */
 export type TrackerGraphActionProposal = FreshIdentityDeliveryProposal & {
   readonly owner: "TrackerGraph"
@@ -323,13 +445,297 @@ export interface FreshDecision {
   readonly transition: RunnableFrontierTransition
 }
 
+type FreshCommittedContinuationOperationStep = Extract<
+  FreshWorkflowStep,
+  {
+    readonly _tag:
+      | "ReadPostClaimGraph"
+      | "ReadTaskWorkSpecification"
+      | "RecordTaskAttemptPlan"
+      | "ReconcileTaskWorktree"
+  }
+>
+type FreshPositionFreeContinuationOperationStep = Extract<FreshWorkflowStep, { readonly _tag: "ReadRejectedTaskClaim" }>
+type FreshContinuationOperationTransition = Extract<
+  RunnableFrontierTransition,
+  { readonly _tag: "ContinueFreshWorkflowOperation" }
+>
+type FreshContinuationBeginStep = Extract<FreshWorkflowStep, { readonly _tag: "BeginPlannedAttemptExecutorWork" }>
+type FreshContinuationBeginTransition = Extract<
+  RunnableFrontierTransition,
+  { readonly _tag: "BeginPlannedAttemptExecutorWork" }
+>
+type FreshContinuationObserveStep = Extract<FreshWorkflowStep, { readonly _tag: "ObservePlannedAttemptExecutorWork" }>
+type FreshContinuationObserveTransition = Extract<
+  RunnableFrontierTransition,
+  { readonly _tag: "ObservePlannedAttemptExecutorWork" }
+>
+
+type FreshCommitmentBoundContinuationPair =
+  | {
+      readonly step: FreshCommittedContinuationOperationStep
+      readonly transition: FreshContinuationOperationTransition
+    }
+  | { readonly step: FreshContinuationBeginStep; readonly transition: FreshContinuationBeginTransition }
+
+type FreshPositionFreeContinuationPair =
+  | {
+      readonly step: FreshPositionFreeContinuationOperationStep
+      readonly transition: FreshContinuationOperationTransition
+    }
+  | { readonly step: FreshContinuationObserveStep; readonly transition: FreshContinuationObserveTransition }
+
+const issuedFreshContinuationDecisions = new WeakSet<object>()
+
+/**
+ * Checked post-entry route evidence. A fresh entry decision cannot satisfy
+ * this type and therefore cannot be handed to ordinary proposal derivation.
+ */
+export type FreshContinuationDecision =
+  | (FreshCommitmentBoundContinuationPair & {
+      readonly authority: { readonly _tag: "FreshCommitmentAuthority"; readonly commitment: FreshTaskCommitment }
+    })
+  | (FreshPositionFreeContinuationPair & { readonly authority: { readonly _tag: "FreshPositionFreeAuthority" } })
+  | (FreshCommitmentBoundContinuationPair & {
+      readonly authority: {
+        readonly _tag: "ReplacementAuthority"
+        readonly replacement: ReplacementContinuationAuthority
+      }
+    })
+
+/** Runtime guard for the private continuation authority at module boundaries. */
+export const isFreshContinuationDecision = (decision: FreshDecision): decision is FreshContinuationDecision =>
+  issuedFreshContinuationDecisions.has(decision)
+
+const freshCommitmentBoundContinuationOf = (
+  pair: FreshCommitmentBoundContinuationPair,
+  commitment: FreshTaskCommitment
+): FreshContinuationDecision => {
+  const decision: FreshContinuationDecision = Object.freeze({
+    ...immutableSnapshot(pair),
+    authority: Object.freeze({ _tag: "FreshCommitmentAuthority", commitment })
+  })
+  issuedFreshContinuationDecisions.add(decision)
+  return decision
+}
+
+const freshPositionFreeContinuationOf = (pair: FreshPositionFreeContinuationPair): FreshContinuationDecision => {
+  const decision: FreshContinuationDecision = Object.freeze({
+    ...immutableSnapshot(pair),
+    authority: Object.freeze({ _tag: "FreshPositionFreeAuthority" })
+  })
+  issuedFreshContinuationDecisions.add(decision)
+  return decision
+}
+
+const replacementBoundContinuationOf = (
+  pair: FreshCommitmentBoundContinuationPair,
+  replacement: ReplacementContinuationAuthority
+): FreshContinuationDecision => {
+  const decision: FreshContinuationDecision = Object.freeze({
+    ...immutableSnapshot(pair),
+    authority: Object.freeze({ _tag: "ReplacementAuthority", replacement })
+  })
+  issuedFreshContinuationDecisions.add(decision)
+  return decision
+}
+
+const continuationAuthorityMatchesRun = (decision: FreshContinuationDecision, runId: RunId): boolean => {
+  const authority = decision.authority
+  if (authority._tag === "FreshPositionFreeAuthority") return false
+  return authority._tag === "FreshCommitmentAuthority"
+    ? authority.commitment.runId === runId
+    : authority.replacement.plannedAttempt.runId === runId
+}
+
+const freshContinuationSnapshotOf = (
+  step: FreshWorkflowStep,
+  runId: RunId
+): FreshContinuationAuthoritySnapshot | undefined =>
+  step._tag === "BeginPlannedAttemptExecutorWork"
+    ? Object.freeze({
+        _tag: "FreshAttemptHandoffAuthority",
+        claimOperationId: continuationClaimOperationId(step),
+        plannedAttempt: immutableSnapshot(step.plannedAttempt),
+        runId,
+        step: step._tag,
+        taskId: step.task.id
+      })
+    : step._tag === "ReadPostClaimGraph" ||
+        step._tag === "ReadTaskWorkSpecification" ||
+        step._tag === "RecordTaskAttemptPlan" ||
+        step._tag === "ReconcileTaskWorktree"
+      ? Object.freeze({
+          _tag: "FreshOperationContinuationAuthority",
+          claimOperationId: continuationClaimOperationId(step),
+          predecessorOperationId: step.predecessorOperationId,
+          runId,
+          step: step._tag,
+          taskId: step.task.id
+        })
+      : undefined
+
+/** Mints the private proposal capability only from an already checked exact fresh continuation. */
+export const authorizeFreshContinuationProposal = (
+  proposal: DeliveryActionProposal,
+  decision: FreshContinuationDecision,
+  runId: RunId
+): DeliveryActionProposal => {
+  if (!isFreshContinuationDecision(decision)) return proposal
+  if (decision.authority._tag === "FreshPositionFreeAuthority") return proposal
+  if (!continuationAuthorityMatchesRun(decision, runId)) return proposal
+  const proposalStep = proposalContinuationStep(proposal)
+  if (proposalStep !== decision.step || !proposalNeedsFreshCommitment(proposal)) return proposal
+  const immutableProposal = immutableSnapshot(proposal)
+  const continuationSnapshot = freshContinuationSnapshotOf(decision.step, runId)
+  if (continuationSnapshot === undefined) return proposal
+  const authorized = Object.freeze(immutableProposal)
+  issuedFreshContinuationProposals.set(authorized, { authority: decision.authority, continuationSnapshot })
+  return authorized
+}
+
+/**
+ * Validates the route evidence needed to continue an already-entered fresh
+ * task. Entry steps are intentionally rejected: only
+ * `AcceptedFreshTaskAdmission` can materialize that first proposal.
+ */
+const continuationClaimOperationId = (step: FreshCommitmentBoundContinuationPair["step"]): OperationId => {
+  switch (step._tag) {
+    case "ReadPostClaimGraph":
+      return step.claimOperation.acquisition.operationId
+    case "ReadTaskWorkSpecification":
+    case "RecordTaskAttemptPlan":
+    case "ReconcileTaskWorktree":
+    case "BeginPlannedAttemptExecutorWork":
+      return step.claimOperationId
+  }
+}
+
+const beginContinuationDecisionOf = (
+  step: FreshContinuationBeginStep,
+  transition: RunnableFrontierTransition,
+  commitments: ReadonlyArray<FreshTaskCommitment>
+): FreshContinuationDecision | undefined => {
+  if (
+    transition._tag !== "BeginPlannedAttemptExecutorWork" ||
+    !plannedTaskAttemptEquivalence(transition.plannedAttempt, step.plannedAttempt)
+  ) {
+    return undefined
+  }
+  const pair: FreshCommitmentBoundContinuationPair = { step, transition }
+  const replacement = replacementContinuationAuthorityOf(step)
+  if (replacement !== undefined && replacementContinuationAuthorityMatchesStep(replacement, step)) {
+    return replacementBoundContinuationOf(pair, replacement)
+  }
+  const commitment = commitments.find(
+    (candidate) =>
+      candidate.operation.acquisition.taskId === step.task.id &&
+      candidate.operation.acquisition.operationId === step.claimOperationId
+  )
+  return commitment === undefined ? undefined : freshCommitmentBoundContinuationOf(pair, commitment)
+}
+
+const observedContinuationDecisionOf = (
+  step: FreshContinuationObserveStep,
+  transition: RunnableFrontierTransition
+): FreshContinuationDecision | undefined =>
+  transition._tag === "ObservePlannedAttemptExecutorWork" &&
+  plannedTaskAttemptEquivalence(transition.plannedAttempt, step.plannedAttempt)
+    ? freshPositionFreeContinuationOf({ step, transition })
+    : undefined
+
+const operationContinuationDecisionOf = (
+  step: FreshCommittedContinuationOperationStep | FreshPositionFreeContinuationOperationStep,
+  transition: RunnableFrontierTransition,
+  commitments: ReadonlyArray<FreshTaskCommitment>
+): FreshContinuationDecision | undefined => {
+  if (
+    transition._tag !== "ContinueFreshWorkflowOperation" ||
+    transition.taskId !== step.task.id ||
+    transition.operationId !== step.predecessorOperationId
+  ) {
+    return undefined
+  }
+  if (step._tag === "ReadRejectedTaskClaim") return freshPositionFreeContinuationOf({ step, transition })
+  const pair: FreshCommitmentBoundContinuationPair = { step, transition }
+  const replacement = replacementContinuationAuthorityOf(step)
+  if (replacement !== undefined && replacementContinuationAuthorityMatchesStep(replacement, step)) {
+    return replacementBoundContinuationOf(pair, replacement)
+  }
+  const claimOperationId = continuationClaimOperationId(pair.step)
+  const commitment = commitments.find(
+    (candidate) =>
+      candidate.operation.acquisition.taskId === step.task.id &&
+      candidate.operation.acquisition.operationId === claimOperationId
+  )
+  return commitment === undefined ? undefined : freshCommitmentBoundContinuationOf(pair, commitment)
+}
+
+const isFreshContinuationOperationStep = (
+  step: FreshOperationStep
+): step is FreshCommittedContinuationOperationStep | FreshPositionFreeContinuationOperationStep =>
+  step._tag !== "ReadCurrentTaskGraph" && step._tag !== "AcquireTaskClaim"
+
+export const freshContinuationDecisionOf = (
+  decision: FreshDecision,
+  commitments: ReadonlyArray<FreshTaskCommitment>
+): FreshContinuationDecision | undefined => {
+  if (decision.step._tag === "BeginPlannedAttemptExecutorWork") {
+    return beginContinuationDecisionOf(decision.step, decision.transition, commitments)
+  }
+  if (decision.step._tag === "ObservePlannedAttemptExecutorWork") {
+    return observedContinuationDecisionOf(decision.step, decision.transition)
+  }
+  if (!isFreshContinuationOperationStep(decision.step)) return undefined
+  return operationContinuationDecisionOf(decision.step, decision.transition, commitments)
+}
+
+/** A derived fresh step and frontier transition disagree and therefore cannot be authorized as either entry or continuation. */
+export class FreshDecisionPartitionInvalid extends Schema.TaggedError<FreshDecisionPartitionInvalid>()(
+  "FreshDecisionPartitionInvalid",
+  { step: Schema.String, stepTaskId: TaskId, transition: Schema.String, transitionTaskId: TaskId }
+) {}
+
+const isFreshEntryDecision = (decision: FreshDecision): boolean =>
+  (decision.step._tag === "ReadCurrentTaskGraph" &&
+    decision.transition._tag === "ContinueFreshWorkflowOperation" &&
+    decision.transition.taskId === decision.step.task.id) ||
+  (decision.step._tag === "AcquireTaskClaim" &&
+    decision.transition._tag === "CommitFreshTaskClaimIntent" &&
+    decision.transition.taskId === decision.step.task.id)
+
+/**
+ * Checks a batch of fresh route evidence at the ordinary-proposal boundary.
+ * Fresh entry decisions are intentionally omitted; only post-entry
+ * continuations can cross this boundary.
+ */
+export const freshContinuationDecisionsOf = (
+  decisions: ReadonlyArray<FreshDecision>,
+  commitments: ReadonlyArray<FreshTaskCommitment>
+): Result.Result<ReadonlyArray<FreshContinuationDecision>, FreshDecisionPartitionInvalid> => {
+  const evaluated = decisions
+    .filter((decision) => !isFreshEntryDecision(decision))
+    .map((decision) => ({ continuation: freshContinuationDecisionOf(decision, commitments), decision }))
+  const invalid = evaluated.find(({ continuation }) => continuation === undefined)
+  if (invalid !== undefined) {
+    return Result.fail(
+      new FreshDecisionPartitionInvalid({
+        step: invalid.decision.step._tag,
+        stepTaskId: invalid.decision.step.task.id,
+        transition: invalid.decision.transition._tag,
+        transitionTaskId: runnableTransitionTaskId(invalid.decision.transition)
+      })
+    )
+  }
+  return Result.succeed(evaluated.flatMap(({ continuation }) => (continuation === undefined ? [] : [continuation])))
+}
+
 export interface DeliveryProposalsInput {
   readonly acceptedAt?: JournalPosition | null
   readonly acceptedOperationIds: ReadonlySet<OperationId>
-  /** Active-refresh Git intents still pending at this exact journal evaluation. */
-  readonly activeRefreshPendingGitReadOperations?: ReadonlyArray<ActiveWorkAuthorityRefreshGitReadOperation>
-  readonly fresh: ReadonlyArray<FreshDecision>
+  readonly fresh: ReadonlyArray<FreshContinuationDecision>
   readonly integrationResponsibilities?: ReadonlyArray<IntegrationResponsibility>
+  readonly pendingReadOperationIds?: ReadonlySet<OperationId>
   readonly responsibilities?: ReadonlyArray<WorkflowResponsibilityEntry>
   readonly runId: RunId
   readonly transitions: ReadonlyArray<RunnableFrontierTransition>

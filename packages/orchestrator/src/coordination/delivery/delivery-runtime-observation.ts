@@ -160,11 +160,11 @@ export const makeObservedDeliveryActionLease = (
     owner.reservation.acquiredIntegrationResponsibility === null
       ? Effect.void
       : integrationTargets.publishAcceptedOwnership(owner.reservation.acquiredIntegrationResponsibility),
-  bindPlannedAttemptPosition: (correlation) => {
+  bindPlannedAttemptPosition: (plannedAttempt, acceptedResponsibility) => {
     const requirement = owner.proposal.admission.taskWorkPosition
-    return requirement._tag === "TaskWorkPositionRequired"
-      ? admission.bindPlannedAttemptPosition(requirement.taskId, correlation)
-      : Effect.void
+    return requirement._tag === "TaskWorkPositionRequired" && requirement.taskId === plannedAttempt.taskId
+      ? admission.bindPlannedAttemptPosition(owner.reservation, plannedAttempt, acceptedResponsibility)
+      : Effect.die(`planned-attempt position does not match proposal ${owner.proposal.id}`)
   },
   integrationTargets,
   forwardBoundary:

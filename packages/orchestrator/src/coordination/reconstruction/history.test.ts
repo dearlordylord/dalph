@@ -10,8 +10,12 @@ import {
   TaskId,
   TaskRevision,
   WorktreeLocator,
-  plannedAttemptExecutorCorrelation
+  plannedAttemptExecutorCorrelation,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
+import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
+import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { TrackerRevision } from "../../authorities/task-tracker/task.js"
@@ -35,6 +39,10 @@ import {
 import { type JournalRecord } from "../../workflow-journal/store.js"
 import {
   TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
   TaskWorkCapacityChangedEvent,
   taskTrackerReadIntent,
   WorkflowRunBeganEvent,
@@ -60,10 +68,14 @@ import {
 import { RunCancellationAppliedEvent } from "../../workflow/protocols/run-cancellation/events.js"
 import {
   makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -126,7 +138,11 @@ const historyDetailsFor = (records: ReadonlyArray<JournalRecord>): ReadonlyArray
 
 it("rejects Completed termination when the fresh graph is unsettled without cancellation", () => {
   const target = FixtureTarget.make("unsettled-termination-target")
-  const operation = makeTrackerGraphObservationOperation(OperationId.make("unsettled-termination-graph"), target)
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("unsettled-termination-graph"),
+    target
+  )
   const snapshot = validSnapshot({
     revision: "unsettled-termination-revision",
     rootTaskId: "root",
@@ -331,7 +347,7 @@ it("rejects a Run beginning that follows workflow records", () => {
         version: workflowJournalEventVersion
       }),
       key: workflowRunBeganRecordKey,
-      position: JournalPosition.make(3),
+      position: JournalPosition.make(11),
       runId
     }
   ])
@@ -339,33 +355,137 @@ it("rejects a Run beginning that follows workflow records", () => {
   expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
   if (reduction._tag !== "InvalidWorkflowJournalHistory") return
   expect(reduction.issues).toContainEqual(
-    expect.objectContaining({ detail: "WorkflowRunBegan must be the first record", position: 3, runId })
+    expect.objectContaining({ detail: "WorkflowRunBegan must be the first record", position: 11, runId })
   )
 })
 
 const attempt = (attemptId: string) =>
-  PlannedTaskAttempt.make({
-    attemptId: AttemptId.make(attemptId),
-    baseSha: GitCommitSha.make("1".repeat(40)),
-    branch: TaskBranchRef.make(`refs/heads/dalph/${attemptId}`),
-    executor: TaskExecutorLocator.make("executor:controlled-fake"),
-    runId,
-    taskId,
-    taskRevision: TaskRevision.make("task-A-revision"),
-    worktree: WorktreeLocator.make(`/worktrees/${attemptId}`)
-  })
+  (() => {
+    const specification = makeTaskWorkSpecification({ body: "Complete task A.", taskId, title: "Complete task A" })
+    return PlannedTaskAttempt.make({
+      attemptId: AttemptId.make(attemptId),
+      baseSha: GitCommitSha.make("1".repeat(40)),
+      branch: TaskBranchRef.make(`refs/heads/dalph/${attemptId}`),
+      executor: TaskExecutorLocator.make("executor:controlled-fake"),
+      runId,
+      taskId,
+      taskRevision: TaskRevision.make(specification.fingerprint),
+      worktree: WorktreeLocator.make(`/worktrees/${attemptId}`)
+    })
+  })()
 
 const planAndStart = (plannedAttempt: PlannedTaskAttempt, firstPosition: number): ReadonlyArray<JournalRecord> => {
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make(`claim-${plannedAttempt.attemptId}`),
+    owner: ClaimOwner.make("history-test"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make(`token-${plannedAttempt.attemptId}`)
+  })
+  const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+  const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make(`graph-${plannedAttempt.attemptId}`),
+    FixtureTarget.make(`history-${plannedAttempt.attemptId}`),
+    [claim.operationId],
+    [plannedAttempt.taskId]
+  )
+  const specification = makeTaskWorkSpecification({ body: "Complete task A.", taskId, title: "Complete task A" })
+  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make(`specification-${plannedAttempt.attemptId}`),
+    graphOperation.target,
+    plannedAttempt.taskId,
+    [graphOperation.operationId]
+  )
   const operation = makeTaskAttemptPlanOperation({
     operationId: OperationId.make(`plan-${plannedAttempt.attemptId}`),
     plannedAttempt,
-    predecessorOperationIds: []
+    predecessorOperationIds: [specificationOperation.operationId]
+  })
+  const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+    operationId: OperationId.make(`worktree-${plannedAttempt.attemptId}`),
+    plannedAttempt,
+    predecessorOperationIds: [operation.operationId]
+  })
+  const graph = validSnapshot({
+    revision: `history-${plannedAttempt.attemptId}-graph`,
+    rootTaskId: plannedAttempt.taskId,
+    tasks: [{ id: plannedAttempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  const worktreeProof = PlannedWorktreeReady.make({
+    baseSha: plannedAttempt.baseSha,
+    branch: plannedAttempt.branch,
+    headSha: plannedAttempt.baseSha,
+    worktree: plannedAttempt.worktree
   })
   return [
     {
+      event: TaskClaimAcquisitionIntendedEvent.make({
+        operation: claimOperation,
+        version: workflowJournalEventVersion
+      }),
+      key: intentRecordKey(claim.operationId),
+      position: JournalPosition.make(firstPosition),
+      runId
+    },
+    {
+      event: TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion }),
+      key: outcomeRecordKey(claim.operationId),
+      position: JournalPosition.make(firstPosition + 1),
+      runId
+    },
+    {
+      event: taskTrackerReadIntent(graphOperation),
+      key: intentRecordKey(graphOperation.operationId),
+      position: JournalPosition.make(firstPosition + 2),
+      runId
+    },
+    {
+      event: taskTrackerFactsObservedEvent(
+        graphOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(graphOperation, graph)
+      ),
+      key: outcomeRecordKey(graphOperation.operationId),
+      position: JournalPosition.make(firstPosition + 3),
+      runId
+    },
+    {
+      event: taskTrackerReadIntent(specificationOperation),
+      key: intentRecordKey(specificationOperation.operationId),
+      position: JournalPosition.make(firstPosition + 4),
+      runId
+    },
+    {
+      event: taskTrackerFactsObservedEvent(
+        specificationOperation.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification)
+      ),
+      key: outcomeRecordKey(specificationOperation.operationId),
+      position: JournalPosition.make(firstPosition + 5),
+      runId
+    },
+    {
       event: TaskAttemptPlannedEvent.make({ operation, version: workflowJournalEventVersion }),
       key: attemptPlanRecordKey(plannedAttempt.attemptId),
-      position: JournalPosition.make(firstPosition),
+      position: JournalPosition.make(firstPosition + 6),
+      runId
+    },
+    {
+      event: TaskWorktreeReconciliationIntendedEvent.make({
+        operation: worktreeOperation,
+        version: workflowJournalEventVersion
+      }),
+      key: intentRecordKey(worktreeOperation.operationId),
+      position: JournalPosition.make(firstPosition + 7),
+      runId
+    },
+    {
+      event: TaskWorktreeReadyEvent.make({
+        operationId: worktreeOperation.operationId,
+        proof: worktreeProof,
+        version: workflowJournalEventVersion
+      }),
+      key: outcomeRecordKey(worktreeOperation.operationId),
+      position: JournalPosition.make(firstPosition + 8),
       runId
     },
     {
@@ -374,7 +494,7 @@ const planAndStart = (plannedAttempt: PlannedTaskAttempt, firstPosition: number)
         version: workflowJournalEventVersion
       }),
       key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-      position: JournalPosition.make(firstPosition + 1),
+      position: JournalPosition.make(firstPosition + 9),
       runId
     }
   ]
@@ -383,7 +503,7 @@ const planAndStart = (plannedAttempt: PlannedTaskAttempt, firstPosition: number)
 it("lower reducer identifies duplicate unfinished planned-attempt executor work", () => {
   const first = attempt("attempt-A-3")
   const second = attempt("attempt-A-4")
-  const reduction = reduceWorkflowJournalHistory(runId, [...planAndStart(first, 1), ...planAndStart(second, 3)])
+  const reduction = reduceWorkflowJournalHistory(runId, [...planAndStart(first, 1), ...planAndStart(second, 11)])
 
   expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
   if (reduction._tag !== "InvalidWorkflowJournalHistory") return
@@ -393,8 +513,8 @@ it("lower reducer identifies duplicate unfinished planned-attempt executor work"
   expect(reduction.issues).toContainEqual(
     expect.objectContaining({
       _tag: "DuplicateUnfinishedTaskAttemptIssue",
-      first: expect.objectContaining({ attemptId: "attempt-A-3", position: 2, runId }),
-      second: expect.objectContaining({ attemptId: "attempt-A-4", position: 4, runId }),
+      first: expect.objectContaining({ attemptId: "attempt-A-3", position: 10, runId }),
+      second: expect.objectContaining({ attemptId: "attempt-A-4", position: 20, runId }),
       taskId: "A"
     })
   )
@@ -403,15 +523,15 @@ it("lower reducer identifies duplicate unfinished planned-attempt executor work"
 it("reports duplicate unfinished attempts in journal order despite HashMap key order", () => {
   const first = attempt("attempt-z")
   const second = attempt("attempt-a")
-  const reduction = reduceWorkflowJournalHistory(runId, [...planAndStart(first, 1), ...planAndStart(second, 3)])
+  const reduction = reduceWorkflowJournalHistory(runId, [...planAndStart(first, 1), ...planAndStart(second, 11)])
 
   expect(reduction._tag).toBe("InvalidWorkflowJournalHistory")
   if (reduction._tag !== "InvalidWorkflowJournalHistory") return
   expect(reduction.issues).toContainEqual(
     expect.objectContaining({
       _tag: "DuplicateUnfinishedTaskAttemptIssue",
-      first: expect.objectContaining({ attemptId: "attempt-z", position: 2, runId }),
-      second: expect.objectContaining({ attemptId: "attempt-a", position: 4, runId }),
+      first: expect.objectContaining({ attemptId: "attempt-z", position: 10, runId }),
+      second: expect.objectContaining({ attemptId: "attempt-a", position: 20, runId }),
       taskId: "A"
     })
   )
@@ -428,7 +548,7 @@ it("rejects a second start for the same planned attempt without merging it", () 
         version: workflowJournalEventVersion
       }),
       key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-      position: JournalPosition.make(3),
+      position: JournalPosition.make(11),
       runId
     }
   ])
@@ -438,8 +558,8 @@ it("rejects a second start for the same planned attempt without merging it", () 
   expect(reduction.issues).toContainEqual(
     expect.objectContaining({
       _tag: "DuplicateUnfinishedTaskAttemptIssue",
-      first: expect.objectContaining({ attemptId: "attempt-A-3", position: 2, runId }),
-      second: expect.objectContaining({ attemptId: "attempt-A-3", position: 3, runId }),
+      first: expect.objectContaining({ attemptId: "attempt-A-3", position: 10, runId }),
+      second: expect.objectContaining({ attemptId: "attempt-A-3", position: 11, runId }),
       taskId: "A"
     })
   )
@@ -552,7 +672,7 @@ it("folds the executor command, projection, response, state, and report evidence
     rows: ReadonlyArray<{ readonly event: JournalRecord["event"]; readonly key: JournalRecord["key"] }>
   ) => [
     ...planAndStart(plannedAttempt, 1),
-    ...rows.map((row, index) => ({ ...row, position: JournalPosition.make(index + 3), runId }))
+    ...rows.map((row, index) => ({ ...row, position: JournalPosition.make(index + 11), runId }))
   ]
   const histories = [
     {
@@ -684,7 +804,7 @@ it("rejects executor commands that lack the authority required by their command 
     rows: ReadonlyArray<{ readonly event: JournalRecord["event"]; readonly key: JournalRecord["key"] }>
   ): ReadonlyArray<JournalRecord> => [
     ...planAndStart(plannedAttempt, 1),
-    ...rows.map((row, index) => ({ ...row, position: JournalPosition.make(index + 3), runId }))
+    ...rows.map((row, index) => ({ ...row, position: JournalPosition.make(index + 11), runId }))
   ]
   const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
 
@@ -768,7 +888,7 @@ it("rejects executor evidence that bypasses a pending command or resumes without
     rows: ReadonlyArray<{ readonly event: JournalRecord["event"]; readonly key: JournalRecord["key"] }>
   ): ReadonlyArray<JournalRecord> => [
     ...planAndStart(plannedAttempt, 1),
-    ...rows.map((row, index) => ({ ...row, position: JournalPosition.make(index + 3), runId }))
+    ...rows.map((row, index) => ({ ...row, position: JournalPosition.make(index + 11), runId }))
   ]
 
   expect(
