@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@types/cytoscape-dagre": "2.3.4",
-    "linkedom": "0.18.12",
+    "linkedom": "0.18.13",
     "playwright": "1.62.1",
     "typescript": "5.9.3",
     "vite": "7.3.6"
