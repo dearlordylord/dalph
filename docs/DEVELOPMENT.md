@@ -1,6 +1,6 @@
 # Development harness
 
-Use pnpm and Node 24.15.0 (recommended). [package.json](../package.json)
+Use pnpm and Node 24.20.0. [package.json](../package.json)
 `engines.node` defines supported versions; CI tests each declared minimum.
 Before adding a Node major, prove a frozen install and the production exclusive
 coordinator lock in [ARCHITECTURE.md](ARCHITECTURE.md). Require a matching native
@@ -72,6 +72,8 @@ All commands below use `pnpm`. Script definitions live in
 
 | Command | Use |
 | --- | --- |
+| `bootstrap:worktree` | Initialize repository submodules, install the frozen dependency graph, clean-build and validate production artifacts, then relink and verify generated workspace bins. |
+| `check:artifacts` | Clean-build production packages in dependency order, then validate normal exports, declarations, bins, package boundaries, and packed contents. |
 | `vitest run <test-file>` | Focused development check; `test` runs deterministic Vitest. |
 | `typecheck` | Strict TypeScript-Go with Effect errors; suggestions remain nonfatal. |
 | `typecheck:effect` | Dedicated strict Effect pass; errors and warnings fail, JSON output. |
@@ -90,6 +92,51 @@ All commands below use `pnpm`. Script definitions live in
 | `check:secrets` | Scan Git history with gitleaks. |
 | `check:all` | Bounded handoff gate, including MBT and non-browser Lab; excludes exhaustive model checks. |
 | `check:ci` | Hosted gate; currently omits only Quint-connected MBT. |
+
+### Current source and built artifacts
+
+Root development checks resolve `@dalph/contracts`, `@dalph/orchestrator`, and
+`@dalph/dalph` directly to the current source entry points. Package emit
+configurations do not inherit those mappings. This keeps typecheck, Effect
+diagnostics, lint, and focused tests independent of ignored or stale `dist/`
+directories without changing emitted runtime imports. TypeScript documents that
+[`paths` changes compiler resolution but does not rewrite emitted imports](https://www.typescriptlang.org/tsconfig/paths.html).
+
+Anything that consumes distributable output uses `pnpm check:artifacts`. The
+command first rejects a production package without a build script, then runs the
+existing clean workspace build. pnpm's recursive execution is
+[dependency-ordered by default](https://pnpm.io/10.x/cli/recursive#--no-sort).
+Afterward, the command resolves declarations without the development mappings,
+imports each package in a fresh Node process through its normal
+[`exports` entry point](https://nodejs.org/api/packages.html#package-entry-points),
+validates every declared bin, and checks the
+[`pnpm pack --dry-run`](https://pnpm.io/10.x/cli/pack) inventory. Missing,
+malformed, or unpackaged artifacts fail the command. `check:all` starts with
+this operation.
+
+In a fresh worktree run:
+
+```sh
+pnpm bootstrap:worktree
+```
+
+The bootstrap first initializes the repository's declared Git submodules, then
+runs [`pnpm install --frozen-lockfile`](https://pnpm.io/10.x/cli/install#--frozen-lockfile)
+before `check:artifacts`. Because pnpm cannot create a workspace bin launcher
+whose generated target is absent during that first install, the bootstrap then
+runs a second frozen install with lifecycle scripts disabled and verifies every
+declared launcher under `node_modules/.bin`. It stops at the first failure.
+Install lifecycle scripts are not the artifact correctness boundary: pnpm can
+deliberately [disable them](https://pnpm.io/10.x/cli/install#--ignore-scripts).
+
+Run the real bootstrap integration as
+`pnpm test scripts/bootstrap-worktree.test.ts`. That package-script boundary
+provides the same pnpm entry point used by `bootstrap:worktree`; `pnpm exec
+vitest` does not provide it and is intentionally rejected by this test.
+
+These are repository-tooling rules only. They do not change a Dalph command,
+workflow decision, external request, journal fact, retry, concurrency rule,
+cleanup action, or user-visible delivery outcome.
 
 Effect tests use `it.effect`, test Layers, `TestClock`, and deterministic
 synchronization instead of module mocks, ambient time, or sleeps. Name property tests
