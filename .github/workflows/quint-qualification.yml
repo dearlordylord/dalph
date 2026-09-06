@@ -1,44 +1,66 @@
-name: Quint qualification
+name: Candidate qualification
 
 on:
   workflow_dispatch:
     inputs:
+      gate:
+        description: Final gate to qualify
+        type: choice
+        default: quint
+        options:
+          - quint
+          - all
       candidate_sha:
         description: Exact 40-character candidate commit SHA
         required: true
+        type: string
+
+      coverage_base_sha:
+        description: Exact reviewed base SHA (required for all)
         type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: quint-qualification-${{ inputs.candidate_sha }}
+  group: candidate-qualification-${{ inputs.gate }}-${{ inputs.candidate_sha }}
   cancel-in-progress: false
 
 jobs:
   qualification:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
+    runs-on: ${{ inputs.gate == 'all' && 'ubuntu-latest' || 'ubuntu-24.04-arm' }}
+    timeout-minutes: ${{ inputs.gate == 'all' && 80 || 20 }}
     env:
-      DALPH_QUINT_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      DALPH_COVERAGE_BASE_SHA: ${{ inputs.coverage_base_sha }}
+      NODE_OPTIONS: --max-old-space-size=8192
 
     steps:
       - name: Validate candidate SHA
-        run: '[[ "$DALPH_QUINT_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]'
+        run: '[[ "$DALPH_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]'
+
+      - name: Validate coverage base SHA
+        if: inputs.gate == 'all'
+        run: '[[ "$DALPH_COVERAGE_BASE_SHA" =~ ^[0-9a-f]{40}$ ]]'
 
       - name: Checkout exact candidate
         uses: actions/checkout@v7
         with:
           ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 0
           submodules: true
           persist-credentials: false
 
       - name: Verify candidate and record worker
         run: |
-          test "$(git rev-parse HEAD)" = "$DALPH_QUINT_CANDIDATE_SHA"
+          test "$(git rev-parse HEAD)" = "$DALPH_CANDIDATE_SHA"
           git rev-parse HEAD
           uname -m
           lscpu
+
+      - name: Verify reviewed base exists
+        if: inputs.gate == 'all'
+        run: git cat-file -e "$DALPH_COVERAGE_BASE_SHA^{commit}"
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
@@ -55,5 +77,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Install gitleaks
+        if: inputs.gate == 'all'
+        run: bash scripts/install-gitleaks.sh
+
+      - name: Run unchanged final quality gate
+        if: inputs.gate == 'all'
+        run: pnpm check:all
+
       - name: Run unchanged final Quint gate
+        if: inputs.gate != 'all'
         run: pnpm check:quint

@@ -88,7 +88,7 @@ All commands below use `pnpm`. Script definitions live in
 | `qualify:codex` | Opt-in real app-server contract; prerequisites below. |
 | `check:quint` | Deterministic, sampled, exhaustive model checks. Run after final relevant changes and before integration; during development only for model, conformance-adapter, or governed-behavior changes. |
 | `check:secrets` | Scan Git history with gitleaks. |
-| `check:all` | Bounded local handoff gate, including MBT and non-browser Lab; excludes exhaustive model checks. |
+| `check:all` | Bounded handoff gate, including MBT and non-browser Lab; excludes exhaustive model checks. |
 | `check:ci` | Hosted gate; currently omits only Quint-connected MBT. |
 
 Effect tests use `it.effect`, test Layers, `TestClock`, and deterministic
@@ -113,10 +113,11 @@ The browser runner owns its host; no manual Vite or `REDUCER_LAB_URL` is needed.
 Git repositories/worktrees. It is outside `check:all`; the same contract runs
 on Ubuntu/macOS in the [qualification workflow](../.github/workflows/codex-app-server-qualification.yml).
 
-For shared-host Quint timing failures, dispatch [Quint qualification](../.github/workflows/quint-qualification.yml)
-once with the frozen `candidate_sha`. It runs the unchanged gate on a fresh ARM
-worker. Diagnose failures from stage timings. CPU affinity does not reserve
-capacity; different hardware is not a calibrated baseline.
+For shared-host gate failures, dispatch [Candidate qualification](../.github/workflows/quint-qualification.yml)
+once with the frozen `candidate_sha`. Choose `quint` (default, ARM) or `all`
+(x64, full history, submodules, gitleaks); `all` also requires the reviewed
+`coverage_base_sha`. It runs the same gate on a fresh worker. Diagnose stage
+failures before retrying; different hardware is not a calibrated baseline.
 
 ### Coverage and output budgets
 
