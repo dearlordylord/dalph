@@ -187,6 +187,25 @@ test("rejects an already-aborted signal without starting a child", async () => {
   ).rejects.toThrow("pre-cancelled command fixture cancelled")
 })
 
+test("runs a bounded child in the requested working directory", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "dalph-bounded-command-cwd-"))
+  try {
+    const result = await runBoundedCommand({
+      args: ["-e", "process.stdout.write(process.cwd())"],
+      captureOutput: true,
+      cwd: directory,
+      executable: process.execPath,
+      forwardOutput: false,
+      name: "working directory fixture",
+      timeoutMilliseconds: 2000
+    })
+
+    expect(result).toEqual({ exitCode: 0, output: directory, outputLineCount: 1 })
+  } finally {
+    await rm(directory, { force: true, recursive: true })
+  }
+})
+
 test.skipIf(process.platform === "win32")(
   "kills a resistant descendant after the process-group leader exits",
   async () => {

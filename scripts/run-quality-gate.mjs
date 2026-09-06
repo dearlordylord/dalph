@@ -15,13 +15,7 @@ if (pnpmEntryPoint === undefined) {
 }
 
 const gates = [
-  { args: ["build"], name: "build", timeout: 2 * 60 * SECOND },
-  { args: ["check:package-boundary"], name: "production package boundary", timeout: 60 * SECOND },
-  {
-    args: ["test:capability-registration"],
-    name: "capability registration",
-    timeout: withoutQuint ? 60 * SECOND : 2 * 60 * SECOND
-  },
+  { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
   { args: ["test:ci-change-classification"], name: "CI change classification", timeout: 60 * SECOND },
   { args: ["typecheck"], name: "typecheck", timeout: 2 * 60 * SECOND },
   { args: ["typecheck:effect"], name: "Effect diagnostics", timeout: 3 * 60 * SECOND },

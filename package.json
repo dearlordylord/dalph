@@ -5,12 +5,13 @@
   "type": "module",
   "packageManager": "pnpm@10.29.3",
   "engines": {
-    "node": "^22.22.2 || ^24.15.0",
+    "node": "^24.20.0",
     "pnpm": ">=10.29.0"
   },
   "scripts": {
     "prepare": "husky && effect-tsgo patch --typescript-package @typescript/native",
-    "build": "pnpm --filter './packages/**' --if-present run build",
+    "build": "pnpm --filter './packages/**' run build",
+    "bootstrap:worktree": "node scripts/bootstrap-worktree.mjs",
     "memory": "node scripts/project-memory.mjs",
     "memory:update": "node scripts/update-project-memory-toolkit.mjs",
     "memory:wake": "node scripts/project-memory.mjs wake",
@@ -32,6 +33,7 @@
     "check:lab": "pnpm --filter @dalph/reducer-lab-prototype check",
     "check:lab:browser": "pnpm --filter @dalph/reducer-lab-prototype check:browser",
     "check:package-boundary": "node scripts/check-package-boundaries.mjs",
+    "check:artifacts": "node scripts/workspace-artifacts.mjs",
     "check:quint": "node scripts/check-quint-models.mjs",
     "check:secrets": "gitleaks git --redact --no-banner",
     "qualify:codex": "node scripts/qualify-codex-app-server.mjs",

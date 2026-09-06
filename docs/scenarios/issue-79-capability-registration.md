@@ -93,8 +93,8 @@ that is not consumed by its declared composition`, `rejects implementation
 evidence pointed at a consumer instead of its declaration`, `rejects a
 same-name local composition value that shadows the registered Layer`, `requires
 source-backed support binding evidence and a concrete reason`, `keeps the
-required family denominator outside a mutated inventory`, and `is part of
-check:all`.
+required family denominator outside a mutated inventory`. These assertions also
+run through `test:coverage` within `check:all`.
 
 ## Scenario-to-test handoff
 
@@ -116,4 +116,4 @@ check:all`.
 | Existing registration changed | Removing the journal suite's direct SQLite shared-contract call fails only the journal production execution. | `rejects journal production when its shared contract edge is removed` |
 | Existing registration changed | A destructured local helper shadow cannot satisfy an imported shared-contract execution. | `rejects a destructuring shadow of an imported shared contract` |
 | Existing registration changed | Every non-capability support layer has declaration-backed evidence and a concrete reason. | `requires source-backed support binding evidence and a concrete reason` |
-| Existing registration changed | The focused gate cannot be omitted from the repository acceptance path. | `is part of check:all`; `pnpm check:all` |
+| Existing registration changed | Capability assertions remain required by repository acceptance. | `scripts/capability-registration.test.ts` in coverage mode; `test:coverage` within `pnpm check:all` |
