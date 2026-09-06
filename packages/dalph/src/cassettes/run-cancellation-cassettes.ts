@@ -253,7 +253,7 @@ export const integrationRunCancellationAuthoredCassette = Schema.decodeUnknownSy
         deliveryFinalityExpectedBehavior.orchestration === null
           ? null
           : deliveryFinalityExpectedBehavior.orchestration.filter(
-              (evidence) => !("attemptId" in evidence && evidence.attemptId === "attempt:B:1")
+              (evidence) => !("attemptId" in evidence && evidence.attemptId === "attempt:B:0")
             ),
       taskWork: {
         ...deliveryFinalityExpectedBehavior.taskWork,
