@@ -1,4 +1,4 @@
-name: Quint qualification
+name: Temporary hermetic CI full-gate qualification
 
 on:
   workflow_dispatch:
@@ -12,30 +12,33 @@ permissions:
   contents: read
 
 concurrency:
-  group: quint-qualification-${{ inputs.candidate_sha }}
+  group: check-all-qualification-${{ inputs.candidate_sha }}
   cancel-in-progress: false
 
 jobs:
   qualification:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
+    timeout-minutes: 80
     env:
-      DALPH_QUINT_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      DALPH_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      DALPH_COVERAGE_BASE_SHA: f22b14fd00411e75de0762b9deacc9fba644cb9a
+      NODE_OPTIONS: --max-old-space-size=8192
 
     steps:
       - name: Validate candidate SHA
-        run: '[[ "$DALPH_QUINT_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]'
+        run: '[[ "$DALPH_CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]'
 
       - name: Checkout exact candidate
         uses: actions/checkout@v7
         with:
           ref: ${{ inputs.candidate_sha }}
+          fetch-depth: 0
           submodules: true
           persist-credentials: false
 
       - name: Verify candidate and record worker
         run: |
-          test "$(git rev-parse HEAD)" = "$DALPH_QUINT_CANDIDATE_SHA"
+          test "$(git rev-parse HEAD)" = "$DALPH_CANDIDATE_SHA"
           git rev-parse HEAD
           uname -m
           lscpu
@@ -55,5 +58,5 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run unchanged final Quint gate
-        run: pnpm check:quint
+      - name: Run unchanged final full gate
+        run: pnpm check:all
