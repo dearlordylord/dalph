@@ -69,11 +69,6 @@
       "count": 1
     }
   },
-  "packages/orchestrator/src/workflow/protocols/disposition-cleanup/activation.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
   "packages/orchestrator/src/workflow/protocols/disposition-cleanup/boundaries.ts": {
     "complexity": {
       "count": 2
@@ -120,6 +115,11 @@
     }
   },
   "packages/orchestrator/src/workflow/protocols/integration-quarantine/provider-failure.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/integration-quarantine/state.ts": {
     "complexity": {
       "count": 1
     }
