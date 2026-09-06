@@ -473,12 +473,17 @@ which is a statement about tractability rather than about expressiveness.
 **D37a Complete host configuration validation precedes every live boundary.**
 The production host decodes and cross-validates its complete raw configuration
 before it constructs or acquires a coordinator lock, Journal, GitHub, Git,
-executor, Integrator, worktree, or provider-private boundary. Configured path
-locators are invalid when equal or when either is a real filesystem ancestor
-of the other, including the filesystem root and ancestor spellings with a
-trailing separator; a shared text prefix between sibling names is not an
-overlap. Rejected configuration produces one typed, credential-free failure
-and no external call or durable effect.
+executor, Integrator, worktree, or provider-private boundary. The
+cross-field path predicate rejects overlap only in the families that the host
+requires to be disjoint: the two worktree roots from each other; either
+worktree root from the repository, common-directory, or private-state
+locators; and the private-state locators from each other. Within those
+families, equal locators or a real filesystem ancestor relationship is invalid,
+including the filesystem root and ancestor spellings with a trailing
+separator; a shared text prefix between sibling names is not an overlap. The
+repository and common-directory locators are intentionally not compared and
+may be equal when the Git layout requires it. Rejected configuration produces
+one typed, credential-free failure and no external call or durable effect.
 → `production-configuration.test.ts` checks `rejects filesystem-root and
 trailing-separator parent overlaps before any live-boundary continuation`,
 `accepts disjoint paths whose names share only a text prefix`, and the broader

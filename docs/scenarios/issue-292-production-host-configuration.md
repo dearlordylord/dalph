@@ -8,8 +8,9 @@ issue #292's accepted configuration boundary.
 ## Governing behavior
 
 The decision here is whether one complete raw production-host configuration may
-continue past decoding when its path fields are equal or stand in an ancestor
-relationship. It is governed by [Scenario 1: Invalid configuration opens no
+continue past decoding when a required-disjoint pair of path fields is equal or
+stands in an ancestor relationship. It is governed by [Scenario 1: Invalid
+configuration opens no
 live boundary](https://github.com/dearlordylord/dalph/issues/259): that accepted
 scenario requires the whole value to be decoded before an acquired production
 Layer exists, with one typed safe failure and no durable or external effect.
@@ -19,9 +20,12 @@ scenario name are the direct reference.
 The boundary-specific owner is [D37a Complete host configuration validation
 precedes every live boundary](../DELIVERY-INVARIANTS.md#run-boundaries): it
 requires the complete value to be checked before a live boundary exists,
-rejects equal or real-ancestor paths, accepts sibling text prefixes, and
-forbids external or durable effects during validation. Its executable evidence
-is the exact path tests named below.
+rejects equal or real-ancestor paths only in the path families that the host
+requires to be disjoint, accepts sibling text prefixes, and forbids external
+or durable effects during validation. Repository/common-directory equality is
+intentionally valid because those two locators are not compared by the host's
+cross-field predicate. Its executable evidence is the exact path tests named
+below.
 
 The adjacent planned-attempt codec amendment preserves [D1 Exact identity on
 every action](../DELIVERY-INVARIANTS.md#identity) and [D2 Attempt
@@ -61,15 +65,19 @@ worktree, or provider-private record exists for this invocation.
 
 A separate valid configuration uses sibling names such as `/srv/dalph/work`
 and `/srv/dalph/work-archive`. Their shared text prefix is not a filesystem
-parent relationship.
+parent relationship. The repository and common-directory locators may also be
+equal; that Git layout is valid and is outside the required-disjoint path
+families.
 
 ### Ordered result, crash, retry, and visible outcome
 
 1. The host decodes each absolute path and compares path components using the
    host platform's `node:path` semantics.
-2. Equality or a real ancestor relationship is overlap regardless of whether
-   the ancestor is the filesystem root or ends in a path separator. The host
-   returns the typed configuration failure before constructing a live Layer.
+2. Equality or a real ancestor relationship is overlap for a required-disjoint
+   pair regardless of whether the ancestor is the filesystem root or ends in a
+   path separator. The host returns the typed configuration failure before
+   constructing a live Layer. Repository/common-directory equality remains
+   valid because that pair is intentionally not compared.
 3. A mere sibling-prefix match is not overlap, so the otherwise-valid sibling
    configuration completes decoding.
 
@@ -78,23 +86,25 @@ nothing to reconcile; retrying the same invalid bytes returns the same failure,
 and Alice may correct the path and invoke the host again.
 
 Alice sees an actionable, credential-free configuration error for a real
-overlap and a successful decode for disjoint siblings. Dalph must not treat
-`/` as containing no paths, let a trailing separator hide an ancestor, reject
-one sibling solely because its name begins with the other's text, or open any
-live boundary after an overlapping value.
+required-disjoint overlap and a successful decode for disjoint siblings. Dalph
+must not treat `/` as containing no paths in a required-disjoint comparison,
+let a trailing separator hide an ancestor, reject one sibling solely because
+its name begins with the other's text, or open any live boundary after a
+required-disjoint overlap.
 
 ### Forbidden-result mapping
 
 [D37a Complete host configuration validation precedes every live
 boundary](../DELIVERY-INVARIANTS.md#run-boundaries) owns all four prohibitions:
 the schema cross-field check `hostPathRelationships` rejects `/` and trailing
-separator ancestors, accepts sibling text prefixes, and leaves the live
-continuation unopened for every real overlap. The exact tests `rejects
-filesystem-root and trailing-separator parent overlaps before any live-boundary
-continuation` and `accepts disjoint paths whose names share only a text prefix`
-prove those negative and positive cases. D37a also owns the
-no-external-call/no-durable-write result. The credential-free error is the
-#259 safe-error rule and is enforced by `rejects %s before any live-boundary
+separator ancestors only for required-disjoint path pairs, accepts sibling
+text prefixes, leaves the live continuation unopened for every rejected
+overlap, and leaves repository/common-directory equality valid. The exact tests
+`rejects filesystem-root and trailing-separator parent overlaps before any
+live-boundary continuation` and `accepts disjoint paths whose names share only
+a text prefix` prove those negative and positive cases. D37a also owns the
+no-external-call/no-durable-write result. The credential-free error is the #259
+safe-error rule and is enforced by `rejects %s before any live-boundary
 continuation` and `decodes one complete value with branded locations and
 redacted credentials` in the linked test file. The adjacent exact-location and
 attempt-fact constraints are the named D1/D2 rules and the codec tests listed
