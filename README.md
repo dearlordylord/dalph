@@ -45,8 +45,8 @@ targets.
 
 ## Try the current implementation
 
-Dalph supports Node 22 from 22.22.2 and Node 24 from 24.15.0. Node 25 is not
-supported. Node 24.15.0 with pnpm 10.29.0 or newer is recommended.
+Dalph supports Node 24 from 24.20.0. Other Node majors are not supported.
+Use Node 24.20.0 with pnpm 10.29.0 or newer.
 
 ```sh
 pnpm install
