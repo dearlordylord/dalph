@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- The five exact witness validators share one closed authorization boundary. */
 
-import { type PlannedTaskAttempt, plannedTaskAttemptEquivalence } from "@dalph/contracts"
+import { type PlannedTaskAttempt, plannedTaskAttemptEquivalence, type TaskRevision } from "@dalph/contracts"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
@@ -155,6 +155,7 @@ export const validateContinuationSpecificationWitness = (
   witness: PlannedAttemptContinuationWitness,
   after: JournalPosition,
   freshnessBaseline: JournalPosition,
+  authorizedTaskRevision: TaskRevision,
   immutableRunTarget: TrackerTarget
 ): WitnessValidation => {
   const operationId = witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId
@@ -205,12 +206,12 @@ export const validateContinuationSpecificationWitness = (
   }
   if (
     !specificationIntentMatches(currentIntent, plannedAttempt) ||
-    !specificationOutcomeMatches(currentIntent, currentOutcome, plannedAttempt)
+    !specificationOutcomeMatches(currentIntent, currentOutcome, plannedAttempt, authorizedTaskRevision)
   ) {
     return reject(
       "ActiveTaskContinuationSpecification",
       "WrongAttemptWitness",
-      `active-task continuation specification observation ${operationId} does not prove the retained attempt revision`
+      `active-task continuation specification observation ${operationId} does not prove the currently authorized task revision`
     )
   }
   if (currentOutcome.event._tag !== "TaskTrackerFactsObserved") {

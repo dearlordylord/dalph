@@ -11,7 +11,6 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  TaskRevision,
   WorktreeLocator,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
@@ -39,12 +38,16 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent
 } from "../../registry/event.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
-  makeTaskWorkSpecificationObservationOperation
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
+  makeTrackerGraphObservationOperation
 } from "../../registry/operation.js"
 import {
   makeFocusedTaskClaimFactsUnreadable,
@@ -63,7 +66,7 @@ const integrationTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/attempt-choice-recovery.git"),
   ref: IntegrationTargetRef.make("refs/heads/main")
 })
-const plannedRevision = TaskRevision.make("attempt-choice-recovery-F1")
+const plannedSpecification = makeTaskWorkSpecification({ body: "Original body F1", taskId, title: "Original title F1" })
 const observedSpecification = makeTaskWorkSpecification({ body: "Changed body F2", taskId, title: "Changed title F2" })
 const observedRevision = observedSpecification.fingerprint
 const plannedAttempt = PlannedTaskAttempt.make({
@@ -73,7 +76,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
   executor: TaskExecutorLocator.make("executor:attempt-choice-recovery"),
   runId,
   taskId,
-  taskRevision: plannedRevision,
+  taskRevision: plannedSpecification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/attempt-choice-recovery-P")
 })
 const claimOperation = makeTaskClaimAcquisitionOperation({
@@ -86,10 +89,32 @@ const claimOperation = makeTaskClaimAcquisitionOperation({
   predecessorOperationIds: []
 })
 const exactClaim = ActiveTaskClaim.make(claimOperation.acquisition)
+const plannedGraphOperation = makeTrackerGraphObservationOperation(
+  { _tag: "WorkflowEstablishment" },
+  OperationId.make("attempt-choice-recovery-planned-post-claim-graph"),
+  target,
+  [exactClaim.operationId],
+  [taskId]
+)
+const plannedSpecificationRead = makeTaskWorkSpecificationObservationOperation(
+  OperationId.make("attempt-choice-recovery-planned-F1"),
+  target,
+  taskId,
+  [plannedGraphOperation.operationId]
+)
 const planOperation = makeTaskAttemptPlanOperation({
   operationId: OperationId.make("attempt-choice-recovery-plan"),
   plannedAttempt,
-  predecessorOperationIds: [claimOperation.acquisition.operationId]
+  predecessorOperationIds: [
+    claimOperation.acquisition.operationId,
+    plannedGraphOperation.operationId,
+    plannedSpecificationRead.operationId
+  ]
+})
+const plannedWorktreeOperation = makeTaskWorktreeReconciliationOperation({
+  operationId: OperationId.make("attempt-choice-recovery-planned-worktree"),
+  plannedAttempt,
+  predecessorOperationIds: [planOperation.operationId]
 })
 
 const appendChangedSafelySuspendedAttempt = Effect.fn("AttemptChoiceRecoveryTest.appendChangedSafelySuspendedAttempt")(
@@ -112,8 +137,56 @@ const appendChangedSafelySuspendedAttempt = Effect.fn("AttemptChoiceRecoveryTest
     )
     yield* journal.append(
       runId,
+      intentRecordKey(plannedGraphOperation.operationId),
+      taskTrackerReadIntent(plannedGraphOperation)
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(plannedGraphOperation.operationId),
+      taskTrackerGraphFactsObserved(plannedGraphOperation, {
+        revision: TrackerRevision.make("attempt-choice-recovery-planned-graph"),
+        taskIds: [taskId]
+      })
+    )
+    yield* journal.append(
+      runId,
+      intentRecordKey(plannedSpecificationRead.operationId),
+      taskTrackerReadIntent(plannedSpecificationRead)
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(plannedSpecificationRead.operationId),
+      taskTrackerFactsObservedEvent(
+        plannedSpecificationRead.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(plannedSpecificationRead, plannedSpecification)
+      )
+    )
+    yield* journal.append(
+      runId,
       attemptPlanRecordKey(plannedAttempt.attemptId),
       TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      intentRecordKey(plannedWorktreeOperation.operationId),
+      TaskWorktreeReconciliationIntendedEvent.make({
+        operation: plannedWorktreeOperation,
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(plannedWorktreeOperation.operationId),
+      TaskWorktreeReadyEvent.make({
+        operationId: plannedWorktreeOperation.operationId,
+        proof: PlannedWorktreeReady.make({
+          baseSha: plannedAttempt.baseSha,
+          branch: plannedAttempt.branch,
+          headSha: plannedAttempt.baseSha,
+          worktree: plannedAttempt.worktree
+        }),
+        version: workflowJournalEventVersion
+      })
     )
     yield* appendAcceptedSafeExecutorHistory(plannedAttempt)
     const changedRead = makeTaskWorkSpecificationObservationOperation(
@@ -271,7 +344,7 @@ it.effect("never claims the executor incorporated changed instructions", () =>
         worktreeObservationOperationId: worktree.operation.operationId
       }
     })
-    expect(plannedAttempt.taskRevision).toBe(plannedRevision)
+    expect(plannedAttempt.taskRevision).toBe(plannedSpecification.fingerprint)
   }).pipe(Effect.provide(attemptChoiceControlLayer), Effect.provide(memoryJournalTestLayer))
 )
 
@@ -382,7 +455,7 @@ it.effect("requires a new choice when instructions change again before continuat
       expect.objectContaining({
         _tag: "PlannedAttemptTaskSpecificationChangeConstraint",
         observedFingerprint: thirdRevision,
-        plannedFingerprint: plannedRevision
+        plannedFingerprint: plannedSpecification.fingerprint
       })
     )
     expect(constrained.transitions).toEqual([])

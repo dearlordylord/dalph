@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Stream } from "effect"
+import { Effect, Equal, Layer, Stream } from "effect"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { RunControlPolicy } from "../../control/policy.js"
 import {
@@ -37,6 +37,7 @@ import {
   ticketDeliveriesOf
 } from "./ticket-delivery-projection.js"
 import type { DeliveryProposalContributions } from "./delivery-proposal.js"
+import type { FreshTaskCandidate } from "./fresh-task-candidate.js"
 
 export interface DeliveryRelationsLayerInput {
   readonly publicationConsistency: {
@@ -138,6 +139,10 @@ const deduplicatedPublicationSignal = (
     )
   )
 
+/** Keeps a source change lossless while making its payload unavailable as sampling truth. */
+const changeNotificationsOf = <A, E>(changes: Stream.Stream<A, E>): Stream.Stream<void, E> =>
+  changes.pipe(Stream.map(() => undefined))
+
 /** Explicit non-reactive runtime facts for deterministic relation and shadow evaluation only. */
 export const deterministicDeliveryRuntimeSupport = (_policy: RunControlPolicy) => ({
   publicationConsistency: { withStablePublication: <A, E, R>(effect: Effect.Effect<A, E, R>) => effect }
@@ -184,11 +189,15 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
   const planningInputOf = (
     trackerProposals: ReadonlyArray<TrackerGraphActionProposal>,
     lowerContributions: DeliveryProposalContributions,
-    deliveryReflection: ReadonlyArray<DeliveryActionProposal>
+    deliveryReflection: ReadonlyArray<DeliveryActionProposal>,
+    freshTaskCandidates: ReadonlyArray<FreshTaskCandidate>,
+    freshTaskCandidateFrontier?: DeliveryRelationInputBundle["actionInputs"]["freshTaskCandidateFrontier"]
   ): DeliveryActionPlanningInput => {
     return {
       deliveryReflection,
       deliverySettlement: lowerContributions.deliverySettlement,
+      ...(freshTaskCandidateFrontier === undefined ? {} : { freshTaskCandidateFrontier }),
+      freshTaskCandidates,
       isolatedIssues: lowerContributions.issues,
       ticketDelivery: lowerContributions.ticketDelivery,
       trackerGraph: trackerProposals
@@ -212,14 +221,22 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
             zipCurrentSignals(proposalContributions, reflectionProposals)
           )
         ),
-        ([, [trackerProposals, [lowerContributions, deliveryReflection]]]) =>
-          planningInputOf(trackerProposals, lowerContributions, deliveryReflection)
+        ([bundle, [trackerProposals, [lowerContributions, deliveryReflection]]]) =>
+          planningInputOf(
+            trackerProposals,
+            lowerContributions,
+            deliveryReflection,
+            bundle.actionInputs.freshTaskCandidates,
+            bundle.actionInputs.freshTaskCandidateFrontier
+          )
       )
     : mapCurrentSignal(input.coherent, (bundle) =>
         planningInputOf(
           bundle.actionInputs.trackerGraphProposals,
           releaseEligibleContributions(bundle, bundle.actionInputs.proposalContributions),
-          bundle.actionInputs.reflectionProposals
+          bundle.actionInputs.reflectionProposals,
+          bundle.actionInputs.freshTaskCandidates,
+          bundle.actionInputs.freshTaskCandidateFrontier
         )
       )
   const actionPlanTrackerGraphProposals = mapCurrentSignal(planningInputs, ({ trackerGraph }) => trackerGraph)
@@ -278,12 +295,7 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
           consequences.changes.pipe(Stream.map(() => undefined)),
           planningInputs.changes.pipe(Stream.map(() => undefined))
         ).pipe(Stream.mapEffect(() => get))
-        const changesWithinStablePublication = zipCurrentSignals(consequences, planningInputs).changes
-        return {
-          ...currentSignalFromCurrentFirstStream(changes),
-          changesWithinStablePublication,
-          getWithinStablePublication
-        }
+        return { ...currentSignalFromCurrentFirstStream(changes), getWithinStablePublication }
       }
     })
   )
@@ -297,7 +309,10 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
         readonly delivery: CurrentSignal<DeliveryConsequences, E>
         readonly proposedActions: DeliveryActionPlanningSignal<E | DeliveryRelationSourceError>
       }) => {
-        const facts = mapCurrentSignal(input.coherent, ({ actionInputs }) => actionInputs.runtimeFacts)
+        const facts: CurrentSignal<DeliveryRuntimeFacts, DeliveryRelationSourceError> = mapCurrentSignal(
+          input.coherent,
+          ({ actionInputs }) => actionInputs.runtimeFacts
+        )
         const current = mapCurrentSignal(delivery, (delivery) => ({
           _tag: "DeliveryRuntimeSnapshot" as const,
           reflection: delivery.trackerConsequences,
@@ -305,45 +320,58 @@ export const makeDeliveryRelationsLayer = (input: DeliveryRelationsLayerInput) =
           ticketDeliveries: delivery.ticketDeliveries,
           trackerGraph: delivery.graph
         }))
-        const makeEvaluation = (
-          facts: DeliveryRuntimeFacts,
-          current: Effect.Effect<
-            Omit<DeliveryRuntimeEvaluation["current"], "cancellationApplied" | "runId">,
-            E | DeliveryRelationSourceError
-          >,
-          proposedActions: Effect.Effect<DeliveryRuntimeEvaluation["proposedActions"], E | DeliveryRelationSourceError>
-        ) =>
-          Effect.all({ current, proposedActions }).pipe(
-            Effect.map(
-              ({ current, proposedActions }): DeliveryRuntimeEvaluation => ({
+        const sampleEvaluation = input.publicationConsistency.withStablePublication(
+          Effect.all({
+            current: current.get,
+            facts: facts.get,
+            proposedActions: proposedActions.getWithinStablePublication
+          }).pipe(
+            Effect.map(({ current, facts, proposedActions }): DeliveryRuntimeEvaluation => {
+              const runId = facts.runId ?? facts.taskWork.runId
+              return {
                 _tag: "DeliveryRuntimeEvaluation",
                 acceptedAt: facts.acceptedAt,
-                current: {
-                  ...current,
-                  cancellationApplied: facts.cancellationApplied,
-                  ...(facts.runId === undefined ? {} : { runId: facts.runId })
-                },
+                current: { ...current, cancellationApplied: facts.cancellationApplied, runId },
                 cancellationApplied: facts.cancellationApplied,
-                ...(facts.runId === undefined ? {} : { runId: facts.runId }),
                 pauseCoverage: facts.pauseCoverage,
                 proposedActions,
                 quiescence: facts.quiescence,
+                runId,
                 taskWork: facts.taskWork,
                 ...(facts.activeRefreshBoundary === undefined
                   ? {}
                   : { activeRefreshBoundary: facts.activeRefreshBoundary })
-              })
+              }
+            })
+          )
+        )
+        const invalidations: Stream.Stream<void, E | DeliveryRelationSourceError> = Stream.scoped(
+          Stream.unwrap(
+            Effect.all({
+              delivery: delivery.attach,
+              facts: facts.attach,
+              proposedActions: proposedActions.attach
+            }).pipe(
+              Effect.map(({ delivery, facts, proposedActions }) =>
+                Stream.concat(
+                  Stream.make(undefined),
+                  Stream.mergeAll<void, E | DeliveryRelationSourceError, never>(
+                    [
+                      changeNotificationsOf(delivery.changes),
+                      changeNotificationsOf(proposedActions.changes),
+                      changeNotificationsOf(facts.changes)
+                    ],
+                    { bufferSize: 1, concurrency: 3 }
+                  )
+                )
+              )
             )
           )
-        const sampleEvaluation = (facts: DeliveryRuntimeFacts) =>
-          makeEvaluation(
-            facts,
-            current.changes.pipe(Stream.runHead, Effect.map(Option.getOrThrow)),
-            proposedActions.changesWithinStablePublication.pipe(Stream.runHead, Effect.map(Option.getOrThrow))
-          )
+        )
         const evaluations = currentSignalFromCurrentFirstStream(
-          facts.changes.pipe(
-            Stream.mapEffect((facts) => input.publicationConsistency.withStablePublication(sampleEvaluation(facts)))
+          invalidations.pipe(
+            Stream.mapEffect(() => sampleEvaluation),
+            Stream.changesWith<DeliveryRuntimeEvaluation>(Equal.equals)
           )
         )
         return evaluations

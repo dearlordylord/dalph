@@ -4,6 +4,7 @@ import {
   EvidenceDigest,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorProjection,
   type PlannedAttemptExecutorObservationPurpose,
@@ -20,6 +21,7 @@ import {
   PlannedTaskAttempt,
   type PlannedAttemptExecutorRequest,
   samePlannedTaskAttempt,
+  samePlannedAttemptExecutorProjection,
   TaskRevision,
   TaskWorkSpecification,
   WorktreeLocator
@@ -31,7 +33,23 @@ import {
   isExactTaskClaim,
   type EvidenceStoreService
 } from "@dalph/orchestrator"
-import { Context, Crypto, Effect, Layer, Option, Ref, Result, Schema, Semaphore } from "effect"
+import {
+  Context,
+  Crypto,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Ref,
+  Result,
+  Schedule,
+  Schema,
+  Semaphore,
+  Stream
+} from "effect"
+import * as Scope from "effect/Scope"
 import {
   CodexAppServer,
   CodexAppServerFailure,
@@ -792,11 +810,33 @@ type StartedTurnResult =
 /** The only planned facts needed after a task turn's prompt has already been supplied. */
 type CodexAttemptContext = Pick<PlannedTaskAttempt, "attemptId" | "runId" | "worktree">
 
+const finitePositiveDuration = Schema.DurationFromString.check(
+  Schema.makeFilter((duration) =>
+    Duration.isFinite(duration) && Duration.isPositive(duration)
+      ? undefined
+      : "owned-activity observation interval must be finite and greater than zero"
+  )
+)
+
+/** Cadence for a fresh exact census only while a terminal Codex turn remains held by owned activity. */
+export const CodexOwnedActivityObservationInterval = finitePositiveDuration.pipe(
+  Schema.brand("CodexOwnedActivityObservationInterval")
+)
+export type CodexOwnedActivityObservationInterval = typeof CodexOwnedActivityObservationInterval.Type
+
+const defaultCodexOwnedActivityObservationInterval = CodexOwnedActivityObservationInterval.make(Duration.seconds(1))
+
+interface CodexPlannedAttemptExecutorLayerOptions {
+  readonly ownedActivityObservationInterval?: CodexOwnedActivityObservationInterval
+}
+
 /**
  * The concrete app-server executor keeps all Codex identities private. The
  * generic boundary receives only normalized #140/#168 reports.
  */
-export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
+const makeCodexPlannedAttemptExecutorContext = (
+  ownedActivityObservationInterval: CodexOwnedActivityObservationInterval
+) =>
   Effect.gen(function* () {
     const app = yield* CodexAppServer
     const activityCensus = yield* CodexOwnedActivityCensus
@@ -1182,7 +1222,7 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       return yield* failed(attempt, correlation, observedRecord, turn.id, reconciliation.thread)
     })
 
-    const terminalOrRunning = Effect.fn("CodexPlannedAttemptExecutor.terminalOrRunning")(function* (
+    const terminalOrRunningOutcome = Effect.fn("CodexPlannedAttemptExecutor.terminalOrRunningOutcome")(function* (
       attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexAttemptRecord,
@@ -1191,9 +1231,26 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       const observedRecord = yield* observedRecordForTerminal(attempt, record, reconciliation)
       const census = yield* observeOwnedActivity(reconciliation.thread)
       if (censusHasActivity(census)) {
-        return yield* runningAfterActivity(attempt, correlation, observedRecord)
+        return {
+          // Only an exact nonempty census activates paced rereads. Unreadable
+          // or contradictory evidence remains fail-closed without retry.
+          heldTerminalActivity: census._tag === "ExactLive",
+          report: yield* runningAfterActivity(attempt, correlation, observedRecord)
+        }
       }
-      return yield* finishTerminalOrFailed(attempt, correlation, observedRecord, reconciliation)
+      return {
+        heldTerminalActivity: false as const,
+        report: yield* finishTerminalOrFailed(attempt, correlation, observedRecord, reconciliation)
+      }
+    })
+
+    const terminalOrRunning = Effect.fn("CodexPlannedAttemptExecutor.terminalOrRunning")(function* (
+      attempt: CodexAttemptContext,
+      correlation: PlannedAttemptExecutorCorrelation,
+      record: CodexAttemptRecord,
+      reconciliation: Extract<ThreadReconciliation, { readonly _tag: "Terminal" }>
+    ) {
+      return (yield* terminalOrRunningOutcome(attempt, correlation, record, reconciliation)).report
     })
 
     const reconcileAfterTurnBoundary = Effect.fn("CodexPlannedAttemptExecutor.reconcileAfterTurnBoundary")(function* (
@@ -1540,6 +1597,16 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       return unreadable(correlation)
     })
 
+    type LifecycleProjectionOutcome = {
+      readonly heldTerminalActivity: boolean
+      readonly projection: PlannedAttemptExecutorProjectionType
+    }
+
+    const projectionOutcome = (
+      projection: PlannedAttemptExecutorProjectionType,
+      heldTerminalActivity = false
+    ): LifecycleProjectionOutcome => ({ heldTerminalActivity, projection })
+
     const projectReconciliation = Effect.fn("CodexPlannedAttemptExecutor.projectReconciliation")(function* (
       correlation: PlannedAttemptExecutorCorrelation,
       record: CodexThreadBackedRecord,
@@ -1547,15 +1614,18 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       reconciliation: ThreadReconciliation,
       purpose: PlannedAttemptExecutorObservationPurpose
     ) {
-      if (reconciliation._tag === "Running") return exact(running(correlation))
+      if (reconciliation._tag === "Running") return projectionOutcome(exact(running(correlation)))
       if (reconciliation._tag === "Terminal") {
-        const report = yield* terminalOrRunning(attempt, correlation, record, reconciliation)
+        const outcome = yield* terminalOrRunningOutcome(attempt, correlation, record, reconciliation)
         // A Begin reconciliation settles the lost public command response
         // before ordinary passive delivery can expose the retained terminal.
-        return exact(isBeginReconciliation(purpose) ? running(correlation) : report)
+        return projectionOutcome(
+          exact(isBeginReconciliation(purpose) ? running(correlation) : outcome.report),
+          outcome.heldTerminalActivity
+        )
       }
-      if (reconciliation._tag === "Unresolved") return unreadable(correlation)
-      return yield* projectIdleRecord(correlation, record)
+      if (reconciliation._tag === "Unresolved") return projectionOutcome(unreadable(correlation))
+      return projectionOutcome(yield* projectIdleRecord(correlation, record))
     })
 
     const projectStoredRecord = Effect.fn("CodexPlannedAttemptExecutor.projectStoredRecord")(function* (
@@ -1563,16 +1633,16 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       purpose: PlannedAttemptExecutorObservationPurpose
     ) {
       const found = yield* store.readAttempt(correlation.runId, correlation.attemptId)
-      if (Option.isNone(found)) return noReport(correlation)
+      if (Option.isNone(found)) return projectionOutcome(noReport(correlation))
       const record = found.value
       const observed = PlannedAttemptExecutorCorrelation.make({
         runId: record.correlationRunId,
         attemptId: record.correlationAttemptId
       })
-      if (!sameCorrelation(observed, correlation)) return foreign(correlation, observed)
-      if (!isThreadBackedRecord(record)) return noReport(correlation)
+      if (!sameCorrelation(observed, correlation)) return projectionOutcome(foreign(correlation, observed))
+      if (!isThreadBackedRecord(record)) return projectionOutcome(noReport(correlation))
       if (isBeginReconciliation(purpose) && record._tag === "Terminal") {
-        return exact(running(correlation))
+        return projectionOutcome(exact(running(correlation)))
       }
       const attempt: CodexAttemptContext = {
         attemptId: correlation.attemptId,
@@ -1604,10 +1674,18 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
       purpose: PlannedAttemptExecutorObservationPurpose
     ) {
       try {
-        return yield* projectStoredRecord(correlation, purpose)
+        return (yield* projectStoredRecord(correlation, purpose)).projection
       } catch (error) {
         return projectFailure(correlation, error)
       }
+    })
+
+    const projectLifecycle = Effect.fn("CodexPlannedAttemptExecutor.projectLifecycle")(function* (
+      correlation: PlannedAttemptExecutorCorrelation
+    ) {
+      return yield* projectStoredRecord(correlation, { _tag: "PassiveLifecycleObservation" }).pipe(
+        Effect.catch((error: unknown) => Effect.succeed(projectionOutcome(projectFailure(correlation, error))))
+      )
     })
 
     const replacementResultFromAuthorityFailure = (
@@ -2369,12 +2447,63 @@ export const codexPlannedAttemptExecutorLayer = Layer.effectContext(
         return gateFor(correlation).pipe(Effect.flatMap((gate) => gate.withPermit(replacement(request))))
       }
     }
+    const lifecycleObservation = PlannedAttemptExecutorLifecycleObservation.of({
+      attach: (correlation) =>
+        Effect.gen(function* () {
+          const attachmentScope = yield* Scope.make()
+          yield* Effect.addFinalizer((exit) => Scope.close(attachmentScope, exit))
+          const projectionGate = yield* Semaphore.make(1)
+          const heldTerminalActivity = yield* Deferred.make<void>()
+          const closed = yield* Deferred.make<void>()
+          const turnHints = yield* app.attachTurnCompletedHints.pipe(
+            Effect.provideService(Scope.Scope, attachmentScope)
+          )
+          const activityHints = yield* app.attachOwnedActivityHints.pipe(
+            Effect.provideService(Scope.Scope, attachmentScope)
+          )
+          const hints = Stream.merge(turnHints, activityHints)
+          const readLifecycle = projectionGate
+            .withPermit(projectLifecycle(correlation))
+            .pipe(
+              Effect.tap((outcome) =>
+                outcome.heldTerminalActivity ? Deferred.succeed(heldTerminalActivity, undefined) : Effect.void
+              )
+            )
+          const current = yield* readLifecycle
+          const heldActivityCadence = Stream.fromEffect(Deferred.await(heldTerminalActivity)).pipe(
+            Stream.flatMap(() => Stream.fromSchedule(Schedule.spaced(ownedActivityObservationInterval))),
+            Stream.mapEffect(() => readLifecycle),
+            Stream.takeUntil((candidate) => !candidate.heldTerminalActivity)
+          )
+          const notificationCandidates = hints.pipe(Stream.mapEffect(() => readLifecycle))
+          const changes = Stream.merge(notificationCandidates, heldActivityCadence).pipe(
+            Stream.map((candidate) => candidate.projection),
+            Stream.filter((candidate) => !samePlannedAttemptExecutorProjection(candidate, current.projection)),
+            Stream.interruptWhen(Deferred.await(closed))
+          )
+          const close = Deferred.succeed(closed, undefined).pipe(
+            Effect.andThen(Scope.close(attachmentScope, Exit.void)),
+            Effect.asVoid
+          )
+          return { changes, close, current: current.projection }
+        })
+    })
     return Context.empty().pipe(
       Context.add(PlannedAttemptExecutor, executor),
+      Context.add(PlannedAttemptExecutorLifecycleObservation, lifecycleObservation),
       Context.add(CodexProviderWorkUnitReplacement, replacementService)
     )
   })
-)
+
+export const codexPlannedAttemptExecutorLayerWithOptions = (options: CodexPlannedAttemptExecutorLayerOptions = {}) =>
+  Layer.effectContext(
+    makeCodexPlannedAttemptExecutorContext(
+      options.ownedActivityObservationInterval ?? defaultCodexOwnedActivityObservationInterval
+    )
+  )
+
+/** Default app-server executor composition with the supported one-second held-activity census cadence. */
+export const codexPlannedAttemptExecutorLayer = codexPlannedAttemptExecutorLayerWithOptions()
 
 /** Supported production composition: use the node-owned activity census. */
 export const nodeCodexPlannedAttemptExecutorLayer = codexPlannedAttemptExecutorLayer.pipe(

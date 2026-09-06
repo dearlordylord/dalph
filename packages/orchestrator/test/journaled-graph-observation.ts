@@ -7,7 +7,7 @@ import { makeJournal } from "../src/coordination/delivery/journal.js"
 import type { JournaledTrackerGraphObservation } from "../src/coordination/delivery/journal.js"
 import { InitialControlPolicy, RunPolicyRevision, initialRunPolicyRevision } from "../src/control/policy.js"
 import { reduceWorkflowJournalHistory } from "../src/coordination/reconstruction/history.js"
-import { makeTrackerGraphObservationOperation } from "../src/workflow/registry/operation.js"
+import { makeTrackerGraphObservationOperation, type TrackerGraphReadCause } from "../src/workflow/registry/operation.js"
 import { TaskWorkCapacityChangedEvent, taskTrackerReadIntent } from "../src/workflow/registry/event.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
@@ -29,6 +29,7 @@ const policyRevisionIncrement = 1
 
 /** Builds a valid graph observation through the journal state service. */
 export const makeTestJournaledTrackerGraphObservation = (input: {
+  readonly cause?: typeof TrackerGraphReadCause.Type
   readonly snapshot: TaskDagSnapshot
   readonly operationId: OperationId
   readonly recordedAt: JournalPosition
@@ -62,7 +63,11 @@ export const makeTestJournaledTrackerGraphObservation = (input: {
           )
           revision = nextRevision
         }
-        const operation = makeTrackerGraphObservationOperation(input.operationId, target)
+        const operation = makeTrackerGraphObservationOperation(
+          input.cause ?? { _tag: "WorkflowEstablishment" },
+          input.operationId,
+          target
+        )
         yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
         yield* journal.append(
           runId,

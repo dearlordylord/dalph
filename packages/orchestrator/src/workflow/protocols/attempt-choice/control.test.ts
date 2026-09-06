@@ -1,5 +1,6 @@
 import { it } from "@effect/vitest"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
+import { validSnapshot } from "../../../../test/task-dag.js"
 import {
   appendAcceptedExecutingExecutorHistory,
   appendAcceptedSafeExecutorHistory
@@ -22,6 +23,9 @@ import {
 } from "@dalph/contracts"
 import { Effect } from "effect"
 import { expect } from "vitest"
+import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
+import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
@@ -53,13 +57,24 @@ import {
 } from "../planned-attempt-executor-work/events.js"
 import {
   makeFocusedTaskWorkSpecificationFactsObserved,
+  makeCompleteTaskTrackerFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../task-tracker-facts/observation.js"
-import { TaskAttemptPlannedEvent, taskTrackerReadIntent } from "../../registry/event.js"
+import {
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
+  taskTrackerReadIntent
+} from "../../registry/event.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "../integration-admission/events.js"
 import {
   makeTaskAttemptPlanOperation,
-  makeTaskWorkSpecificationObservationOperation
+  makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
+  makeTrackerGraphObservationOperation
 } from "../../registry/operation.js"
 import {
   AttemptChoiceAlreadyApplied,
@@ -75,7 +90,8 @@ import { reduceWorkflowJournalHistory } from "../../../coordination/reconstructi
 
 const runId = RunId.make("attempt-choice-run")
 const taskId = TaskId.make("attempt-choice-task-A")
-const plannedRevision = TaskRevision.make("planned-fingerprint-F1")
+const plannedSpecification = makeTaskWorkSpecification({ body: "Planned body F1", taskId, title: "Planned title F1" })
+const plannedRevision = plannedSpecification.fingerprint
 const observedRevision = TaskRevision.make("observed-fingerprint-F2")
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("attempt-choice-P"),
@@ -87,6 +103,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
   taskRevision: plannedRevision,
   worktree: WorktreeLocator.make("/worktrees/attempt-choice-P")
 })
+const target = FixtureTarget.make("attempt-choice-target")
 
 const appendExposedChoice = Effect.fn("AttemptChoiceTest.appendExposedChoice")(function* (
   acceptedReport: PlannedAttemptExecutorReport = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
@@ -94,17 +111,99 @@ const appendExposedChoice = Effect.fn("AttemptChoiceTest.appendExposedChoice")(f
   })
 ) {
   const journal = yield* JournalStore
-  const target = FixtureTarget.make("attempt-choice-target")
   yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }))
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make("attempt-choice-claim"),
+    owner: ClaimOwner.make("attempt-choice-test"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make("attempt-choice-token")
+  })
+  const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+  yield* journal.append(
+    runId,
+    intentRecordKey(claim.operationId),
+    TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(claim.operationId),
+    TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+  )
+  const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("attempt-choice-post-claim-graph"),
+    target,
+    [claim.operationId],
+    [taskId]
+  )
+  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("attempt-choice-planned-specification"),
+    target,
+    taskId,
+    [graphOperation.operationId]
+  )
+  yield* journal.append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(graphOperation.operationId),
+    taskTrackerFactsObservedEvent(
+      graphOperation.operationId,
+      makeCompleteTaskTrackerFactsObserved(
+        graphOperation,
+        validSnapshot({
+          revision: "attempt-choice-planned-graph",
+          rootTaskId: taskId,
+          tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+        })
+      )
+    )
+  )
+  yield* journal.append(
+    runId,
+    intentRecordKey(specificationOperation.operationId),
+    taskTrackerReadIntent(specificationOperation)
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(specificationOperation.operationId),
+    taskTrackerFactsObservedEvent(
+      specificationOperation.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, plannedSpecification)
+    )
+  )
   const plan = makeTaskAttemptPlanOperation({
     operationId: OperationId.make("attempt-choice-plan"),
     plannedAttempt,
-    predecessorOperationIds: []
+    predecessorOperationIds: [specificationOperation.operationId]
+  })
+  const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+    operationId: OperationId.make("attempt-choice-worktree"),
+    plannedAttempt,
+    predecessorOperationIds: [plan.operationId]
   })
   yield* journal.append(
     runId,
     attemptPlanRecordKey(plannedAttempt.attemptId),
     TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    runId,
+    intentRecordKey(worktreeOperation.operationId),
+    TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(worktreeOperation.operationId),
+    TaskWorktreeReadyEvent.make({
+      operationId: worktreeOperation.operationId,
+      proof: PlannedWorktreeReady.make({
+        baseSha: plannedAttempt.baseSha,
+        branch: plannedAttempt.branch,
+        headSha: plannedAttempt.baseSha,
+        worktree: plannedAttempt.worktree
+      }),
+      version: workflowJournalEventVersion
+    })
   )
   if (acceptedReport._tag === "ExecutorWorkSafelySuspended") {
     yield* appendAcceptedSafeExecutorHistory(plannedAttempt)

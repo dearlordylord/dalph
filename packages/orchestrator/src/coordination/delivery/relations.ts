@@ -2,7 +2,6 @@
 import {
   PlannedAttemptExecutorReport,
   type AttemptId,
-  type PlannedAttemptExecutorCorrelation,
   type RunId,
   type TaskId,
   type TaskRevision
@@ -12,6 +11,13 @@ import type * as Scope from "effect/Scope"
 import type { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { JournaledTrackerGraphObservation } from "./journal.js"
+import {
+  freshTaskCandidateObservationUnavailable,
+  type FreshTaskCandidate,
+  type FreshTaskCandidateFrontier,
+  type FreshTaskCandidateObservation
+} from "./fresh-task-candidate.js"
+import type { FreshTaskAdmissionBasis } from "../admission/fresh-task-admission.js"
 import type { RunControlPolicy } from "../../control/policy.js"
 import type { ReconstructedPauseState, WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
@@ -33,7 +39,6 @@ import {
   RunFinalityDecision,
   type RunFinalityDecision as RunFinalityDecisionType
 } from "../frontier/run-finality.js"
-import type { TaskWorkCapacity } from "../admission/capacity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { ActiveRefreshRuntimeBoundary } from "../run/recovery-activation.js"
 import type {
@@ -473,6 +478,9 @@ export type DeliveryProposalFrontier =
   | {
       readonly _tag: "DeliveryProposalsAvailable"
       readonly isolatedIssues: ReadonlyArray<DeliveryProposalDerivationIssue>
+      /** Opaque complete frontier; candidate arrays alone grant no admission authority. */
+      readonly freshTaskCandidateFrontier?: FreshTaskCandidateFrontier
+      readonly freshTaskCandidates: ReadonlyArray<FreshTaskCandidate>
       readonly proposals: ReadonlyArray<DeliveryActionProposal>
     }
   | {
@@ -482,6 +490,22 @@ export type DeliveryProposalFrontier =
         ...ReadonlyArray<DeliveryProposalOwnershipConflict>
       ]
     }
+
+/**
+ * Returns fresh-entry authority only when the descriptive candidate view is
+ * exactly the same ordered identity set as the opaque complete frontier.
+ * Missing authority, ownership conflict, and contradictory views fail closed.
+ */
+export const freshTaskCandidateObservationOf = (frontier: DeliveryProposalFrontier): FreshTaskCandidateObservation => {
+  if (frontier._tag === "DeliveryProposalOwnershipConflict" || frontier.freshTaskCandidateFrontier === undefined) {
+    return freshTaskCandidateObservationUnavailable
+  }
+  const authoritative = frontier.freshTaskCandidateFrontier.candidates
+  return authoritative.length === frontier.freshTaskCandidates.length &&
+    authoritative.every(({ id }, index) => frontier.freshTaskCandidates[index]?.id === id)
+    ? frontier.freshTaskCandidateFrontier
+    : freshTaskCandidateObservationUnavailable
+}
 
 /** One coherent current value assembled from every relationship visible to the Effect. */
 export interface DeliveryRuntimeSnapshot {
@@ -495,11 +519,8 @@ export interface DeliveryRuntimeSnapshot {
   readonly cancellationApplied: boolean
 }
 
-/** Exact process-local admission facts reconstructed below the descriptive relation. */
-export interface DeliveryTaskWorkAdmissionBasis {
-  readonly capacity: TaskWorkCapacity
-  readonly held: ReadonlyArray<{ readonly correlation: PlannedAttemptExecutorCorrelation; readonly taskId: TaskId }>
-}
+/** One checked occupancy basis reconstructed below the descriptive relation. */
+export type DeliveryTaskWorkAdmissionBasis = FreshTaskAdmissionBasis
 
 /** Whether an empty relation may ask for one final graph read or must remain passive. */
 export type DeliveryQuiescenceDisposition =
@@ -541,6 +562,8 @@ export interface DeliveryGraphPublication {
 
 /** Current action-planning and runtime inputs kept outside the descriptive chain. */
 interface DeliveryActionInputs {
+  readonly freshTaskCandidateFrontier?: FreshTaskCandidateFrontier
+  readonly freshTaskCandidates: ReadonlyArray<FreshTaskCandidate>
   readonly proposalContributions: DeliveryProposalContributions
   readonly reflectionProposals: ReadonlyArray<DeliveryActionProposal>
   readonly runtimeFacts: DeliveryRuntimeFacts
@@ -561,6 +584,7 @@ export interface DeliveryRuntimeEvaluation {
   readonly pauseCoverage: PauseCoverageFacts
   readonly proposedActions: DeliveryProposalFrontier
   readonly quiescence: DeliveryQuiescenceDisposition
+  readonly runId: RunId
   readonly taskWork: DeliveryTaskWorkAdmissionBasis
   /** Durable cancellation direction reconstructed for every production Run. */
   readonly cancellationApplied: boolean
@@ -614,7 +638,7 @@ export const deliveryFinalityOf = (
   if (proposedActions._tag === "DeliveryProposalOwnershipConflict") {
     return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
   }
-  if (proposedActions.proposals.length > 0) {
+  if (proposedActions.proposals.length > 0 || proposedActions.freshTaskCandidates.length > 0) {
     return RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" })
   }
   if (proposedActions.isolatedIssues.length > 0) {
@@ -630,15 +654,19 @@ export const deliveryFinalityOf = (
 const proposalOrdinal = (proposal: DeliveryActionProposal): number =>
   proposal.order._tag === "TrackerGraphOrder" ? Number.MAX_SAFE_INTEGER : proposal.order.frontierOrdinal
 
-/** Combines lower owners without consulting live positions or silently deduplicating identities. */
-export const deliveryProposalFrontierOf = (
-  contributions: ReadonlyArray<ReadonlyArray<DeliveryActionProposal>>,
-  issues: ReadonlyArray<DeliveryProposalDerivationIssue> = []
-): DeliveryProposalFrontier => {
-  const proposals = contributions.flat().toSorted((left, right) => {
-    const byOrdinal = proposalOrdinal(left) - proposalOrdinal(right)
-    return byOrdinal !== 0 ? byOrdinal : left.id.localeCompare(right.id)
-  })
+type DeliveryProposalsAvailable = Extract<DeliveryProposalFrontier, { readonly _tag: "DeliveryProposalsAvailable" }>
+
+const freshTaskCandidateFieldsOf = (
+  freshTaskCandidates: ReadonlyArray<FreshTaskCandidate>,
+  freshTaskCandidateFrontier: FreshTaskCandidateFrontier | undefined
+): Pick<DeliveryProposalsAvailable, "freshTaskCandidateFrontier" | "freshTaskCandidates"> => ({
+  ...(freshTaskCandidateFrontier === undefined ? {} : { freshTaskCandidateFrontier }),
+  freshTaskCandidates: freshTaskCandidateFrontier?.candidates ?? freshTaskCandidates
+})
+
+const proposalConflictsOf = (
+  proposals: ReadonlyArray<DeliveryActionProposal>
+): ReadonlyArray<DeliveryProposalOwnershipConflict> => {
   const firstById = new Map<DeliveryProposalId, DeliveryActionProposal>()
   const conflictsById = new Map<DeliveryProposalId, DeliveryProposalOwnershipConflict>()
   for (const proposal of proposals) {
@@ -655,11 +683,31 @@ export const deliveryProposalFrontierOf = (
         : { id: proposal.id, order: conflict.order, owners: [...conflict.owners, proposal.owner] }
     )
   }
-  const conflicts = [...conflictsById.values()]
+  return [...conflictsById.values()]
+}
+
+/** Combines lower owners without consulting live positions or silently deduplicating identities. */
+export const deliveryProposalFrontierOf = (
+  contributions: ReadonlyArray<ReadonlyArray<DeliveryActionProposal>>,
+  issues: ReadonlyArray<DeliveryProposalDerivationIssue> = [],
+  freshTaskCandidates: ReadonlyArray<FreshTaskCandidate> = [],
+  freshTaskCandidateFrontier?: FreshTaskCandidateFrontier
+): DeliveryProposalFrontier => {
+  const proposals = contributions.flat().toSorted((left, right) => {
+    const byOrdinal = proposalOrdinal(left) - proposalOrdinal(right)
+    return byOrdinal !== 0 ? byOrdinal : left.id.localeCompare(right.id)
+  })
+  const conflicts = proposalConflictsOf(proposals)
   const [firstConflict, ...remainingConflicts] = conflicts
-  return firstConflict === undefined
-    ? { _tag: "DeliveryProposalsAvailable", isolatedIssues: issues, proposals }
-    : { _tag: "DeliveryProposalOwnershipConflict", conflicts: [firstConflict, ...remainingConflicts] }
+  if (firstConflict !== undefined) {
+    return { _tag: "DeliveryProposalOwnershipConflict", conflicts: [firstConflict, ...remainingConflicts] }
+  }
+  return {
+    _tag: "DeliveryProposalsAvailable",
+    ...freshTaskCandidateFieldsOf(freshTaskCandidates, freshTaskCandidateFrontier),
+    isolatedIssues: issues,
+    proposals
+  }
 }
 
 export interface BoundedParallelTicketsProjectionService {
@@ -710,8 +758,6 @@ export interface DeliveryRuntimeAssemblyService {
   readonly of: <E>(input: {
     readonly delivery: CurrentSignal<DeliveryConsequences, E>
     readonly proposedActions: CurrentSignal<DeliveryProposalFrontier, E | DeliveryRelationSourceError> & {
-      /** Ungated current-first planning stream used only while this assembly holds the shared publication gate. */
-      readonly changesWithinStablePublication: Stream.Stream<DeliveryProposalFrontier, E | DeliveryRelationSourceError>
       /** Ungated planning read used only while this assembly holds the shared publication gate. */
       readonly getWithinStablePublication: Effect.Effect<DeliveryProposalFrontier, E | DeliveryRelationSourceError>
     }

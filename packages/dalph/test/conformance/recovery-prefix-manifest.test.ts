@@ -87,6 +87,30 @@ it("keeps the recovery-prefix manifest closed and tied to current evidence", () 
   })
 })
 
+it("scopes Git worktree evidence to the exact recovery cut it proves", () => {
+  const worktree = recoveryPrefixManifest.boundaries.find(({ id }) => id === "git-worktree")
+  if (worktree === undefined) return expect.fail("Git worktree boundary required")
+  const tagsAt = (cut: keyof typeof worktree.cuts) =>
+    worktree.cuts[cut].evidence.flatMap((evidence) => (evidence._tag === "WorkflowEventTag" ? [evidence.tag] : []))
+  const focusedAt = (cut: keyof typeof worktree.cuts) =>
+    worktree.cuts[cut].evidence.flatMap((evidence) =>
+      evidence._tag === "FocusedTestSeam" ? [`${evidence.path}#${evidence.reference}`] : []
+    )
+
+  expect(tagsAt("P1")).toEqual(["TaskWorktreeReconciliationIntended"])
+  expect(tagsAt("P4")).toEqual(["GitReadIntentRecorded"])
+  expect(tagsAt("P5")).toEqual(["PlannedAttemptWorktreeObserved"])
+  expect(tagsAt("P6")).toEqual(["TaskWorktreeReady"])
+  expect(focusedAt("P1")).toEqual([
+    "packages/orchestrator/src/workflow-journal/journaled-interruptible-recovery.test.ts#rebuilds the Git application from its recovery projection and records the available response"
+  ])
+  expect(focusedAt("P4")).toEqual([
+    "packages/orchestrator/src/workflow-journal/journaled-worktree-observation.test.ts#reopens persisted Git read intent in a fresh application and records the exact ready observation"
+  ])
+  expect(focusedAt("P5")).toEqual(focusedAt("P4"))
+  expect(focusedAt("P6")).toEqual(focusedAt("P1"))
+})
+
 it("requires an applicability decision and reason for every boundary cut", () => {
   for (const boundary of recoveryPrefixManifest.boundaries) {
     for (const cut of recoveryPrefixCutLabels) {

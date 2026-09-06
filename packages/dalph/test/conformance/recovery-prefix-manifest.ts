@@ -114,18 +114,19 @@ const notApplicable = (reason: string, evidence: ReadonlyArray<RecoveryPrefixEvi
 
 const makeCuts = (input: {
   readonly endpoints: Partial<Record<RecoveryPrefixCutLabel, string>>
-  readonly evidence: ReadonlyArray<RecoveryPrefixEvidenceReference>
+  readonly evidence: (cut: RecoveryPrefixCutLabel) => ReadonlyArray<RecoveryPrefixEvidenceReference>
   readonly family: string
   readonly notApplicableReason: (cut: RecoveryPrefixCutLabel) => string
 }) => {
   const make = (cut: RecoveryPrefixCutLabel) => {
     const endpoint = input.endpoints[cut]
+    const evidence = input.evidence(cut)
     return endpoint === undefined
-      ? notApplicable(input.notApplicableReason(cut), input.evidence)
+      ? notApplicable(input.notApplicableReason(cut), evidence)
       : applicable(
           endpoint,
           `${input.family}: ${recoveryPrefixCutMeaning[cut]} is retained through ${endpoint}.`,
-          input.evidence
+          evidence
         )
   }
   return {
@@ -142,7 +143,7 @@ const makeCuts = (input: {
 const boundary = (input: {
   readonly description: string
   readonly endpoints: Partial<Record<RecoveryPrefixCutLabel, string>>
-  readonly evidence: ReadonlyArray<RecoveryPrefixEvidenceReference>
+  readonly evidence: (cut: RecoveryPrefixCutLabel) => ReadonlyArray<RecoveryPrefixEvidenceReference>
   readonly family: string
   readonly id: RecoveryPrefixBoundaryId
   readonly notApplicableReason: (cut: RecoveryPrefixCutLabel) => string
@@ -153,10 +154,8 @@ const metadataOnly = (reason: string): typeof RecoveryPrefixQualification.Type =
 
 const noEndpointReasonFor = (family: string, cut: RecoveryPrefixCutLabel): string =>
   `${family} does not record ${recoveryPrefixCutMeaning[cut]}; no event in this row's evidence represents that cut.`
-const metadataReasonFor = (family: string): typeof RecoveryPrefixQualification.Type =>
-  metadataOnly(
-    `${family} is inventory metadata only; #142 qualifies both physical stores through tracker completion and claims no dual-store matrix for this row.`
-  )
+const metadataReasonFor = (family: string) =>
+  metadataOnly(`${family}: #142 covers both stores through tracker completion; no dual-store matrix is claimed.`)
 
 const runCancellationEvidence: ReadonlyArray<RecoveryPrefixEvidenceReference> = [
   { _tag: "WorkflowEventTag", tag: "RunCancellationApplied" },
@@ -182,7 +181,7 @@ const sourceManifest = {
       id: "tracker-task-facts",
       family: "Tracker task-facts reads",
       description: "Tracker graph and task-fact reads that may return a lost or unreadable response.",
-      evidence: currentEvidence.trackerFacts,
+      evidence: () => currentEvidence.trackerFacts,
       endpoints: {
         P0: "the record before TaskTrackerReadIntentRecorded",
         P1: "TaskTrackerReadIntentRecorded",
@@ -196,7 +195,7 @@ const sourceManifest = {
       id: "tracker-claim-acquisition",
       family: "Tracker claim acquisition",
       description: "Task-claim acquisition after a tracker read and before accepting the exact claim.",
-      evidence: currentEvidence.claimAcquisition,
+      evidence: () => currentEvidence.claimAcquisition,
       endpoints: {
         P0: "the TaskTrackerFactsObserved record before acquisition",
         P1: "TaskClaimAcquisitionIntended",
@@ -212,7 +211,7 @@ const sourceManifest = {
       id: "tracker-claim-release",
       family: "Tracker claim release",
       description: "Exact task-claim release with a fresh absence check after an uncertain deletion response.",
-      evidence: currentEvidence.claimRelease,
+      evidence: () => currentEvidence.claimRelease,
       endpoints: {
         P0: "the record before TaskClaimReleaseIntended",
         P1: "TaskClaimReleaseIntended",
@@ -228,7 +227,7 @@ const sourceManifest = {
       id: "git-worktree",
       family: "Git worktree reconciliation",
       description: "Git worktree reconciliation and observation for one immutable planned attempt.",
-      evidence: currentEvidence.worktree,
+      evidence: (cut) => currentEvidence.worktree[cut],
       endpoints: {
         P0: "the record before TaskWorktreeReconciliationIntended",
         P1: "TaskWorktreeReconciliationIntended",
@@ -243,7 +242,7 @@ const sourceManifest = {
       id: "git-target-lineage",
       family: "Git target-lineage reads",
       description: "Git target-head and ancestry reads that decide whether a planned Base SHA remains compatible.",
-      evidence: currentEvidence.targetLineage,
+      evidence: () => currentEvidence.targetLineage,
       endpoints: {
         P0: "the record before GitReadIntentRecorded",
         P1: "GitReadIntentRecorded",
@@ -257,7 +256,7 @@ const sourceManifest = {
       id: "planned-attempt-executor",
       family: "Planned-attempt executor work",
       description: "Opaque planned-attempt executor commands, projections, and reports.",
-      evidence: currentEvidence.executor,
+      evidence: () => currentEvidence.executor,
       endpoints: {
         P0: "PlannedAttemptExecutorWorkResponsibilityBegan",
         P1: "PlannedAttemptExecutorCommandIntended",
@@ -273,7 +272,7 @@ const sourceManifest = {
       id: "integrator-session",
       family: "Integrator session",
       description: "One fixed outer Integrator session and its durable run/result and candidate-read evidence.",
-      evidence: currentEvidence.integrator,
+      evidence: () => currentEvidence.integrator,
       endpoints: {
         P0: "IntegratorSessionFixed",
         P1: "IntegratorRunStarted",
@@ -289,7 +288,7 @@ const sourceManifest = {
       id: "target-promotion",
       family: "Target promotion",
       description: "Target-ref compare-and-set promotion and its bounded fresh Git reconciliation.",
-      evidence: currentEvidence.promotion,
+      evidence: () => currentEvidence.promotion,
       endpoints: {
         P0: "IntegratorRunCandidateGitObserved",
         P1: "TargetPromotionIntended",
@@ -306,7 +305,7 @@ const sourceManifest = {
       id: trackerCompletionRecoveryTrace.boundaryId,
       family: "Tracker completion finality",
       description: "Tracker completion admission, completion-claim replacement/deletion, and final settlement.",
-      evidence: currentEvidence.completion,
+      evidence: () => currentEvidence.completion,
       endpoints: trackerCompletionRecoveryTrace.endpoints,
       notApplicableReason: (cut) => noEndpointReasonFor("Tracker completion finality", cut),
       qualification: {
@@ -319,7 +318,7 @@ const sourceManifest = {
       id: "control-direction",
       family: "Control-direction application",
       description: "Operator Pause or Unpause application as a durable control direction.",
-      evidence: currentEvidence.controlDirection,
+      evidence: () => currentEvidence.controlDirection,
       endpoints: { P0: "the record before ControlDirectionApplied", P6: "ControlDirectionApplied" },
       notApplicableReason: (cut) => noEndpointReasonFor("Control-direction application", cut),
       qualification: metadataReasonFor("Control-direction application")
@@ -328,7 +327,7 @@ const sourceManifest = {
       id: "attempt-choice",
       family: "Attempt-choice application",
       description: "Operator Continue, Restart, or Stop choice application for one exact attempt.",
-      evidence: currentEvidence.attemptChoice,
+      evidence: () => currentEvidence.attemptChoice,
       endpoints: { P0: "the record before AttemptChoiceApplied", P6: "AttemptChoiceApplied" },
       notApplicableReason: (cut) => noEndpointReasonFor("Attempt-choice application", cut),
       qualification: metadataReasonFor("Attempt-choice application")
@@ -337,7 +336,7 @@ const sourceManifest = {
       id: "planned-attempt-worktree-cleanup",
       family: "Planned-attempt worktree cleanup",
       description: "Exact superseded/terminal worktree cleanup with fresh Git reconciliation.",
-      evidence: currentEvidence.worktreeCleanup,
+      evidence: () => currentEvidence.worktreeCleanup,
       endpoints: {
         P0: "the record before WorktreeCleanupAuthorized",
         P1: "WorktreeCleanupAuthorized",
@@ -354,7 +353,7 @@ const sourceManifest = {
       id: "planned-attempt-branch-cleanup",
       family: "Planned-attempt branch cleanup",
       description: "Exact branch cleanup gated by settled worktree removal.",
-      evidence: currentEvidence.branchCleanup,
+      evidence: () => currentEvidence.branchCleanup,
       endpoints: {
         P0: "the record before BranchCleanupAuthorized",
         P1: "BranchCleanupAuthorized",
@@ -371,7 +370,7 @@ const sourceManifest = {
       id: "integrator-candidate-cleanup",
       family: "Integrator predecessor-candidate cleanup",
       description: "Exact FullRerun predecessor-candidate cleanup with session ownership reconciliation.",
-      evidence: currentEvidence.integratorCandidateCleanup,
+      evidence: () => currentEvidence.integratorCandidateCleanup,
       endpoints: {
         P0: "the record before IntegratorCandidateCleanupAuthorized",
         P1: "IntegratorCandidateCleanupAuthorized",
@@ -388,7 +387,7 @@ const sourceManifest = {
       id: "run-establishment",
       family: "Run establishment",
       description: "Run establishment and re-entry from the current durable journal history.",
-      evidence: currentEvidence.runEstablishment,
+      evidence: () => currentEvidence.runEstablishment,
       endpoints: { P0: "the empty journal before WorkflowRunBegan", P6: "WorkflowRunBegan or WorkflowRunTerminated" },
       notApplicableReason: (cut) => noEndpointReasonFor("Run establishment", cut),
       qualification: metadataReasonFor("Run establishment")
@@ -397,7 +396,7 @@ const sourceManifest = {
       id: "run-cancellation-finality",
       family: "Run cancellation finality",
       description: "Fresh G2 graph recovery, terminal append acknowledgement loss, and exactly-once re-entry.",
-      evidence: runCancellationEvidence,
+      evidence: () => runCancellationEvidence,
       endpoints: {
         P0: "the record before RunCancellationApplied",
         P1: "RunCancellationApplied",
@@ -416,7 +415,7 @@ const sourceManifest = {
       id: "application-exit",
       family: "Application Exit",
       description: "Process-local graceful application Exit admission and drain, which writes no Run event.",
-      evidence: currentEvidence.applicationExit,
+      evidence: () => currentEvidence.applicationExit,
       endpoints: {},
       notApplicableReason: (cut) =>
         `Application Exit is process-local, so ${recoveryPrefixCutMeaning[cut]} has no Run-journal representation; the application-exit conformance seam is the evidence.`,

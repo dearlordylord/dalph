@@ -4,6 +4,21 @@
       "count": 6
     }
   },
+  "packages/dalph/test-support/issue-268-controlled-characterization.ts": {
+    "complexity": {
+      "count": 3
+    }
+  },
+  "packages/dalph/test-support/issue-268-controlled-occurrences.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/delivery/delivery-proposal-derivation.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
   "packages/orchestrator/src/coordination/delivery/delivery-proposal-identity.ts": {
     "complexity": {
       "count": 1
@@ -24,11 +39,6 @@
       "count": 1
     }
   },
-  "packages/orchestrator/src/coordination/reconstruction/history.ts": {
-    "complexity": {
-      "count": 1
-    }
-  },
   "packages/orchestrator/src/coordination/frontier/task-claim-authority.ts": {
     "complexity": {
       "count": 1
@@ -36,7 +46,7 @@
   },
   "packages/orchestrator/src/coordination/run/recovery-activation.ts": {
     "complexity": {
-      "count": 9
+      "count": 7
     }
   },
   "packages/orchestrator/src/coordination/run/run-reactivation-owner.ts": {
@@ -52,11 +62,6 @@
   "packages/orchestrator/src/workflow/claim-authority-history.ts": {
     "complexity": {
       "count": 6
-    }
-  },
-  "packages/orchestrator/src/workflow/protocols/active-work-authority-refresh/events.ts": {
-    "complexity": {
-      "count": 2
     }
   },
   "packages/orchestrator/src/workflow/protocols/attempt-choice/restart-authority-evidence.ts": {
@@ -129,9 +134,9 @@
       "count": 2
     }
   },
-  "packages/orchestrator/src/workflow/registry/occurrence-projection.ts": {
+  "packages/orchestrator/src/workflow/protocols/planned-attempt-continuation/tracker-read-freshness.ts": {
     "complexity": {
-      "count": 2
+      "count": 1
     }
   }
 }

@@ -1,4 +1,5 @@
 /* eslint-disable import/no-nodejs-modules -- This acceptance test audits the checked-in documentation contract. */
+import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
 import { expect, it } from "vitest"
 import { maintainedAuthoredCassetteCatalog } from "../packages/dalph/src/cassettes/catalog.js"
@@ -7,6 +8,11 @@ import {
   renderDeliveryStoryManifest
 } from "../packages/dalph/src/cassettes/delivery-story-manifest.js"
 import { maintainedIntegrationFinalityProtocolCassetteCatalog } from "../packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.js"
+import { issue268ControlledDeliveryCassetteCatalog } from "../packages/dalph/test-support/issue-268-controlled-occurrence-cassette.js"
+import {
+  issue268AcceptedOccurrenceOrder,
+  issue268AcceptedOccurrenceOrderDigest
+} from "../packages/dalph/test-support/issue-268-controlled-occurrence-cassette-data.js"
 
 it("keeps every delivery-story beat linked to maintained evidence or an explicit implementation gap", () => {
   const document = readFileSync(new URL("../docs/DELIVERY-STORY.md", import.meta.url), "utf8")
@@ -21,6 +27,7 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
     const [catalog, name] = key.split(":")
     return (
       (catalog === "authored" && name !== undefined && name in maintainedAuthoredCassetteCatalog) ||
+      (catalog === "controlled" && name !== undefined && name in issue268ControlledDeliveryCassetteCatalog) ||
       (catalog === "integration-finality" &&
         name !== undefined &&
         name in maintainedIntegrationFinalityProtocolCassetteCatalog)
@@ -41,6 +48,9 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
   expect(document).toContain(`maintained catalog key is \`${deliveryStoryManifest.cassetteKey}\``)
   expect(deliveryStoryManifest.cassetteAcceptanceTests.length).toBeGreaterThan(0)
   expect(deliveryStoryManifest.cassetteAcceptanceTests.every(acceptanceTestExists)).toBe(true)
+  expect(createHash("sha256").update(JSON.stringify(issue268AcceptedOccurrenceOrder)).digest("hex")).toBe(
+    issue268AcceptedOccurrenceOrderDigest
+  )
   for (const { coverage } of deliveryStoryManifest.beats) {
     if (coverage._tag === "NotImplemented") {
       expect(coverage.reason.length).toBeGreaterThan(0)

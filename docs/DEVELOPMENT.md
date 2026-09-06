@@ -34,6 +34,17 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   Freeze that candidate, then run `pnpm check:all` and applicable
   `pnpm check:quint`. Intermediate commits need no handoff ceremony; earlier
   passing stages are not a final green gate.
+- Bounded commands use detached process groups so timeout cleanup can reach
+  descendants. A timeout settles only after the direct child closes and the
+  Unix process group is absent, or after a bounded explicit failure to prove
+  absence. A nested detached command must opt into parent-signal relay; the
+  issue-268 C4 runner does so for every child and Git lookup. Do not add an
+  outer GNU `timeout` around `check:all`.
+- For the workflow pilot, use the next existing milestone to record broad review rounds, reopened findings
+  with new evidence, full-gate restarts, and closure time. Verify that required
+  scenario evidence survives and reproduced accepted-path defects still block
+  closure. Fewer rounds alone do not demonstrate improvement. Use the existing
+  task record, not another ledger.
 
 ## Domain language
 
@@ -70,6 +81,7 @@ All commands below use `pnpm`. Script definitions live in
 | `check:duplicates` | Enforce the configured duplication budget. |
 | `test:coverage` | Enforce separate production/evaluation coverage and changed-line floors below. |
 | `test:mbt` | Quint-connected executable conformance suites. |
+| `test:issue-268-c4` | Run the accepted DS01–DS13 table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. |
 | `test:ci-change-classification` | Prove the docs-only CI allowlist and fail-closed classification. |
 | `check:lab` | Reducer Lab typecheck, maintained-cassette smoke, build; no browser. |
 | `check:lab:browser` | Host an ephemeral Lab, run Chromium against every maintained cassette, stop the host. |

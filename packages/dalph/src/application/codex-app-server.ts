@@ -4,8 +4,9 @@ import { randomUUID } from "node:crypto"
 import nodePath from "node:path"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import type { ChildProcessHandle } from "effect/unstable/process/ChildProcessSpawner"
+import type * as Scope from "effect/Scope"
 import { AttemptId, PlannedAttemptExecutorCorrelation, RunId } from "@dalph/contracts"
-import { Context, Deferred, Duration, Effect, Layer, Option, Ref, Schema, Semaphore, Stream } from "effect"
+import { Context, Deferred, Duration, Effect, Layer, Option, PubSub, Ref, Schema, Semaphore, Stream } from "effect"
 import {
   ApplicationExitDiagnostic,
   ApplicationExitDrainFailure,
@@ -206,6 +207,17 @@ export interface CodexAppServerService {
   readonly incarnation: CodexServerIncarnation
   /** Exact process root used only by the Node execution-substrate activity census. */
   readonly serverPid?: number
+  /**
+   * Opens a broadcast subscription for provider `turn/completed` hints. The
+   * payload is deliberately not authority; callers must reread exact state.
+   */
+  readonly attachTurnCompletedHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
+  /**
+   * Opens a broadcast subscription for execution-substrate activity changes
+   * that can settle after the owning turn. The notification remains only a
+   * wake hint; callers must reread the thread and owned-activity census.
+   */
+  readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   readonly startThread: (cwd: string) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   readonly readThread: (threadId: CodexThreadId) => Effect.Effect<CodexThreadSnapshot, CodexAppServerFailure>
   readonly resumeThread: (
@@ -309,6 +321,7 @@ export const processWasAbsent = (error: unknown): boolean => {
 
 const processIdentitySeparator = "|"
 const codexServerIncarnationEnvironment = "DALPH_CODEX_SERVER_INCARNATION"
+const codexThreadEnvironment = "CODEX_THREAD_ID"
 const processStatAfterCommandOffset = 2
 const linuxProcessStatStartTimeFieldIndex = 19
 
@@ -709,7 +722,8 @@ const tokenReadFailure = async (
 const readTokenMember = async (
   stat: LinuxProcessStat,
   token: CodexServerIncarnation,
-  native: CodexProcessNativeService
+  native: CodexProcessNativeService,
+  threadId?: CodexThreadId
 ): Promise<TokenMemberObservation> => {
   try {
     const environment =
@@ -718,6 +732,12 @@ const readTokenMember = async (
         ? await native.readFile(`/proc/${stat.pid}/environ`)
         : (await native.execFile("ps", ["eww", "-o", "command=", "-p", String(stat.pid)])).stdout
     if (!environmentCarriesToken(environment, `${codexServerIncarnationEnvironment}=${token}`, native.platform)) {
+      return undefined
+    }
+    if (
+      threadId !== undefined &&
+      !environmentCarriesToken(environment, `${codexThreadEnvironment}=${threadId}`, native.platform)
+    ) {
       return undefined
     }
     return {
@@ -735,14 +755,18 @@ const readTokenMember = async (
 const readDarwinTokenMembers = async (
   stats: ReadonlyArray<LinuxProcessStat>,
   token: CodexServerIncarnation,
-  native: CodexProcessNativeService
+  native: CodexProcessNativeService,
+  threadId?: CodexThreadId
 ): Promise<ReadonlyArray<TokenMemberObservation>> => {
   const observation = await readDarwinProcessCommands(native)
   if ("failure" in observation) return [observation.failure]
   const tokenEntry = `${codexServerIncarnationEnvironment}=${token}`
+  const threadEntry = threadId === undefined ? undefined : `${codexThreadEnvironment}=${threadId}`
   return stats.flatMap((stat) => {
     const command = observation.commands.get(stat.pid)
-    return command !== undefined && environmentCarriesToken(command, tokenEntry, "darwin")
+    return command !== undefined &&
+      environmentCarriesToken(command, tokenEntry, "darwin") &&
+      (threadEntry === undefined || environmentCarriesToken(command, threadEntry, "darwin"))
       ? [
           {
             pid: stat.pid,
@@ -821,7 +845,8 @@ const observeOwnedActivityProcesses = async (
   roots: ReadonlyArray<number>,
   native: CodexProcessNativeService = nodeCodexProcessNativeService,
   incarnation?: CodexServerIncarnation,
-  appServerPid?: number
+  appServerPid?: number,
+  threadId?: CodexThreadId
 ): Promise<OwnedActivityProcessProjection> => {
   if (roots.length === 0 && incarnation === undefined) return { _tag: "Absent" }
   if (native.platform !== "linux" && native.platform !== "darwin") {
@@ -843,8 +868,8 @@ const observeOwnedActivityProcesses = async (
     token === undefined
       ? []
       : native.platform === "darwin"
-        ? await readDarwinTokenMembers([...byPid.values()], token, native)
-        : await Promise.all([...byPid.values()].map((stat) => readTokenMember(stat, token, native)))
+        ? await readDarwinTokenMembers([...byPid.values()], token, native, threadId)
+        : await Promise.all([...byPid.values()].map((stat) => readTokenMember(stat, token, native, threadId)))
   const tokenFailure = tokenMembers.find((member) => member !== undefined && "detail" in member)
   if (tokenFailure !== undefined && "detail" in tokenFailure) return { _tag: "Unreadable", detail: tokenFailure.detail }
   const exactTokenMembers = tokenMembers.filter(
@@ -959,7 +984,8 @@ export const makeNodeCodexOwnedActivityCensusService = (
           ),
           native,
           incarnation,
-          appServerPid
+          appServerPid,
+          thread.id
         )
         if (processProjection._tag === "Unreadable" || processProjection._tag === "Contradictory") {
           return processProjection
@@ -1286,6 +1312,8 @@ const normalizeBackgroundTerminals = (
 
 // eslint-disable-next-line functional/no-mixed-types -- The private JSON-RPC transport closes as an effect value after request methods finish.
 interface JsonRpcClient {
+  readonly attachTurnCompletedHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
+  readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   readonly request: (
     operation: CodexAppServerOperation,
     method: string,
@@ -1324,6 +1352,12 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   const writes = yield* Semaphore.make(1)
   const closed = yield* Ref.make(false)
   const pending = yield* Ref.make<ReadonlyMap<number, PendingJsonRpcRequest>>(new Map())
+  // Provider notifications are non-authoritative wake hints. One pending wake
+  // is sufficient because every consumer rereads exact provider state.
+  const turnCompletedHints = yield* PubSub.sliding<void>(1)
+  const ownedActivityHints = yield* PubSub.sliding<void>(1)
+  yield* Effect.addFinalizer(() => PubSub.shutdown(turnCompletedHints))
+  yield* Effect.addFinalizer(() => PubSub.shutdown(ownedActivityHints))
   const encoder = new TextEncoder()
   const failPending = (failure: CodexAppServerFailure) =>
     Ref.modify(
@@ -1350,7 +1384,14 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
         ),
         Effect.flatMap((message) => {
           const id = message["id"]
-          if (id === undefined) return Effect.void
+          if (id === undefined) {
+            if (message["method"] === "turn/completed") {
+              return PubSub.publish(turnCompletedHints, undefined).pipe(Effect.asVoid)
+            }
+            return message["method"] === "item/completed"
+              ? PubSub.publish(ownedActivityHints, undefined).pipe(Effect.asVoid)
+              : Effect.void
+          }
           if (typeof id !== "number") {
             return failPending(operationFailure("initialize", "Protocol", "JSON-RPC response id is invalid"))
           }
@@ -1443,7 +1484,21 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
     if (!shouldClose) return
     yield* failPending(operationFailure("close", "Unavailable", `app-server ${incarnation} closed`))
   })
-  return { request, notify, close } satisfies JsonRpcClient
+  return {
+    attachOwnedActivityHints: PubSub.subscribe(ownedActivityHints).pipe(
+      Effect.map((subscription) =>
+        Stream.unfold(undefined, () => PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const)))
+      )
+    ),
+    attachTurnCompletedHints: PubSub.subscribe(turnCompletedHints).pipe(
+      Effect.map((subscription) =>
+        Stream.unfold(undefined, () => PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const)))
+      )
+    ),
+    request,
+    notify,
+    close
+  } satisfies JsonRpcClient
 })
 
 const responseObject = (
@@ -1528,6 +1583,10 @@ const unavailableAppServer = (failure: CodexAppServerFailure): CodexAppServerSer
     )
   return {
     incarnation: newIncarnation(),
+    // Initialization failed before a provider process existed, so there can
+    // be no later provider notification for this explicit unavailable value.
+    attachTurnCompletedHints: Effect.succeed(Stream.empty),
+    attachOwnedActivityHints: Effect.succeed(Stream.empty),
     startThread: () => fail("thread/start"),
     readThread: () => fail("thread/read"),
     resumeThread: () => fail("thread/resume"),
@@ -2553,6 +2612,8 @@ export const codexAppServerLayer = (
         return response["terminated"]
       })
       return {
+        attachTurnCompletedHints: rpc.attachTurnCompletedHints,
+        attachOwnedActivityHints: rpc.attachOwnedActivityHints,
         incarnation: liveIncarnation,
         serverPid: childPid,
         startThread,

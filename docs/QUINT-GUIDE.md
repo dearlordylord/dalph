@@ -26,7 +26,40 @@ collected deterministic and negative tests, sampled invariant/witness check,
 and complete finite-state verification with no arbitrary depth token.
 
 The current proof projections are `taskFactReconciliation_proof.qnt` and
-`plannedAttemptExecutor_proof.qnt`. The task-fact projection includes the
+`plannedAttemptExecutor_proof.qnt`. `freshTaskAdmission_proof.qnt` contains two
+more projections for one canonical subject. The capacity/order projection
+retains all five ordered task identities A through E; reducing it to counters
+would erase the D-before-E and task-local rejection properties it exists to
+prove. The continuity projection retains one exact selected task and one
+outside-task sentinel, but preserves the selected task's intent, provider-call,
+reconciliation, immutable-lineage, responsibility-handoff, crash, and release
+states. The sentinel detects an outside authorization while that exact task
+still occupies the position. Neither projection is a second behavior source.
+The canonical `freshTaskAdmission.qnt` model remains the vocabulary and MBT
+source, and every canonical action has an explicit projection action or stutter
+mapping in the accepted #315 scenario.
+
+The fresh-admission projections deliberately divide the state product rather
+than weaken either property family:
+
+- the capacity/order projection owns bounded entry, stable A-E rank, ready
+  existing-responsibility priority, task-local foreign rejection, contraction
+  without eviction, and expansion;
+- the continuity projection owns one closed occupancy path from process-local
+  entry through exact held attempt, including accepted-but-unobserved Journal
+  appends, lost provider responses, reread-before-retry, repeated crash and
+  recovery, post-ownership fail-closed retention, and atomic responsibility
+  handoff.
+
+Their collected positive tests establish the named scenario paths, and their
+negative tests deliberately perform outside-bound admission, rank inversion,
+fresh-over-ready admission, contraction eviction, blind retry, ambiguity
+release, lineage replacement, and gap handoff. Exhaustive checking must finish
+each complete finite graph without a depth token. The canonical model, not the
+projections, remains in mutation analysis because only it owns the runtime
+vocabulary and future conformance adapter.
+
+The task-fact projection includes the
 accepted #218/#281 active-work slice: it separately proves `Running`
 establishment, tracker/timer source provenance, and healthy/unreadable
 observation behavior. Their negative test modules are the mutation
@@ -189,3 +222,21 @@ gate, which is worth knowing even when the invariant is correct.
 
 Run it after changing a model. A per-invariant count that drops is a weakened
 model, whether or not the gate still passes.
+
+The mutation census is intentionally expensive. For every compiled mutant it
+runs the whole invariant set, then reruns each invariant separately to
+attribute a kill; a full model can therefore require roughly one plus the
+invariant count simulations per mutant and prints no progress before its final
+report. Use `--max-mutants`, smaller `--samples`, and a fixed seed only for a
+clearly labelled diagnostic sample. Do not report that sample as the full
+census. A full census must be scheduled and monitored as long-running research;
+it is not a substitute for the collected negative controls or the ordinary
+implementation handoff gate.
+
+Before any Quint result, run `pnpm exec quint --version` and compare it with the
+version pinned in `package.json`. A Git worktree without its own installed
+`node_modules` can make `pnpm exec quint` fall through to a globally installed
+binary; in that state even `pnpm exec node mutate-specs.mjs` reports
+`npm_execpath` as unset and the mutation script also falls back to `PATH`.
+Install the worktree dependencies or invoke the repository's exact installed
+binary. Never describe a run as pinned based on the `pnpm exec` spelling alone.

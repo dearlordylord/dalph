@@ -175,6 +175,7 @@ it.effect("substitutes controlled Layers without changing public delivery values
       PlannedTaskAttemptPlanRequest.Fresh({ specification: supportSpecification })
     )
     const graph = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       PublicApi.OperationId.make("support-read"),
       FixtureTarget.make("support-fixture")
     )

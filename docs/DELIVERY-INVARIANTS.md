@@ -75,7 +75,11 @@ projection remains unwriteable outside Alloy.
 ## Graph and selection
 
 **D6 Bound.** The selected set is the first `capacity` eligible tasks in
-deterministic graph order. Live positions are not an input to selection.
+deterministic graph order. Live positions are not an input to selection. This
+graph-policy placement is descriptive: it grants no runtime admission
+capability. A task described as `EligibleOutsideBound` can become the next
+fresh entrant only through D13a after a release or capacity expansion
+establishes free capacity.
 → `I1 (weakened: Quint checks `selected.size() <= capacity`, an upper bound, not the equality I1 states, and neither states graph order)`
 
 **D7 Order independence.** Selection is invariant under permutation of the
@@ -120,6 +124,38 @@ exceed capacity, including across restart.
 → `I8 (weakened unevenly: Quint, TLA+ and fast-check maintain a history flag,
 which the benchmark counts as evidence; Alloy, Dafny, Lean and Agda have only
 an admission guard, which nothing tests)`
+
+**D13a Fresh-task admission is continuous through executor-responsibility
+handoff.** Before a fresh task records its first claim intent, its exact live
+entry reservation consumes one admission. Accepting
+`TaskClaimAcquisitionIntended` under `TaskSelectionAuthority` replaces that
+reservation with one journal-derived fresh-task admission commitment. The
+commitment continues across claim, post-claim graph, specification, plan, and
+worktree stages. Accepting
+`PlannedAttemptExecutorWorkResponsibilityBegan` atomically replaces it with the
+exact D12 attempt-held position. A matching pre-ownership
+`TaskClaimAcquisitionRejected` can instead end only that commitment. Conclusive
+proof that the first claim-intent append was not accepted releases its exact
+live reservation because no durable commitment exists; an ambiguous append
+retains the reservation until the Journal proves acceptance or absence. A
+failed or ambiguous executor-responsibility append retains the pre-attempt
+commitment. No action completion, provider failure, timeout, other ambiguous
+outcome, capacity change, or process death creates a gap or releases either
+form.
+
+For each coherent admission decision, unique live entry reservations,
+fresh-task admission commitments, and exact held attempts consume the current
+ceiling. Existing ready responsibilities retain priority before fresh entry;
+only the first remaining entry-capable tasks in stable derived order can
+receive the free reservations. Graph placement remains descriptive and grants
+no admission capability. Only an admitted candidate can be materialized as a
+delivery action proposal. Contraction can leave
+occupancy above capacity but admits no new task. After Dalph owns a claim, a
+later task constraint retains the commitment until an accepted phase-specific
+disposition proves release; issue #316 owns that later liveness protocol.
+→ `freshTaskAdmission` continuous occupancy, deterministic entry, exact
+handoff, crash preservation, and candidate-without-capability invariants plus
+production-backed conformance; model and adapter pending under issue #315.
 
 **D14 One position per attempt, added and released by the exact holder.** An
 attempt occupies at most one task-work position at a time, and an

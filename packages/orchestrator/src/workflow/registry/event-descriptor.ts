@@ -15,7 +15,6 @@ import {
   attemptPlanRecordKey,
   attemptChoiceAppliedRecordKey,
   attemptRestartAuthorityReadFailedRecordKey,
-  activeWorkAuthorityRefreshGitReadFailedRecordKey,
   attemptImplementationAbandonedRecordKey,
   attemptStoppageIntentRecordKey,
   controlDirectionAppliedRecordKey,
@@ -289,22 +288,6 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
             ? "TaskTrackerReadIntentRecorded"
             : "GitReadIntentRecorded"
         ]
-      }),
-    ActiveWorkAuthorityRefreshGitReadIntentRecorded: (event) =>
-      operationEvent({
-        expectedKey: intentRecordKey(event.operation.operationId),
-        operationId: event.operation.operationId,
-        plannedAttempt: event.operation.plannedAttempt,
-        requiredOperationIds: event.operation.predecessorOperationIds
-      }),
-    ActiveWorkAuthorityRefreshGitReadFailed: (event) =>
-      operationEvent({
-        expectedKey: activeWorkAuthorityRefreshGitReadFailedRecordKey(event.operation.operationId, event.ordinal),
-        operationId: event.operation.operationId,
-        plannedAttempt: event.operation.plannedAttempt,
-        requiredOperationIds: [event.operation.operationId],
-        requiredPredecessorKey: intentRecordKey(event.operation.operationId),
-        requiredPredecessorKinds: ["ActiveWorkAuthorityRefreshGitReadIntentRecorded"]
       }),
     AttemptStoppageIntended: (event) => ({
       _tag: "AttemptChoiceEventDescriptor",
@@ -663,9 +646,7 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
         operationId: event.operationId,
         requiredOperationIds: [event.operationId],
         requiredPredecessorKey: intentRecordKey(event.operationId),
-        requiredPredecessorKindAlternatives: [
-          ["GitReadIntentRecorded", "ActiveWorkAuthorityRefreshGitReadIntentRecorded"]
-        ]
+        requiredPredecessorKinds: ["GitReadIntentRecorded"]
       }),
     TargetLineageObserved: (event) =>
       operationEvent({
@@ -674,9 +655,7 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
         plannedAttempt: event.plannedAttempt,
         requiredOperationIds: [event.operationId],
         requiredPredecessorKey: intentRecordKey(event.operationId),
-        requiredPredecessorKindAlternatives: [
-          ["GitReadIntentRecorded", "ActiveWorkAuthorityRefreshGitReadIntentRecorded"]
-        ]
+        requiredPredecessorKinds: ["GitReadIntentRecorded"]
       }),
     TaskTrackerFactsObserved: (event) =>
       operationEvent({

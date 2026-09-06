@@ -700,6 +700,7 @@ const completeGraphEvent = (outcome: "Blocked" | "Released", observationOrdinal:
   })
   const snapshot = Option.getOrThrow(graph._tag === "Valid" ? Option.some(graph.snapshot) : Option.none())
   const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     operationId,
     integrationFinalityFixture.target,
     [],

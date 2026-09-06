@@ -3,7 +3,7 @@ import nodeProcess from "node:process"
 import { spawn } from "node:child_process"
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Cause, Effect, Exit, FileSystem, Layer, Option, Path } from "effect"
+import { Cause, Effect, Exit, FileSystem, Layer, Option, Path, Stream } from "effect"
 import { expect } from "vitest"
 import {
   CodexAppServer,
@@ -288,6 +288,8 @@ it.effect("keeps controlled app-server and owned-activity substitutions at their
   Effect.gen(function* () {
     const service: CodexAppServerService = {
       incarnation: CodexServerIncarnation.make("controlled-incarnation"),
+      attachOwnedActivityHints: Effect.succeed(Stream.empty),
+      attachTurnCompletedHints: Effect.succeed(Stream.empty),
       startThread: (cwd: string) =>
         Effect.succeed(thread("idle", [] as const) as CodexThreadSnapshot).pipe(
           Effect.map((value) => ({ ...value, cwd }))
@@ -475,6 +477,106 @@ it.effect("classifies controlled Linux process census observations at the public
     )
   )
 })
+
+const makeTwoThreadActivityNative = () => {
+  const token = CodexServerIncarnation.make("two-thread-incarnation")
+  const threadA = CodexThreadId.make("thread-A")
+  const threadB = CodexThreadId.make("thread-B")
+  const processA = 181
+  const processB = 182
+  const processWithoutThread = 183
+  const live = new Set([processA, processB, processWithoutThread])
+  const killed: Array<number> = []
+  const threadForProcess = (pid: number) => (pid === processA ? threadA : threadB)
+  const readFile = async (path: string): Promise<string> => {
+    const match = /\/proc\/([0-9]+)\/(stat|cmdline|environ)$/.exec(path)
+    if (match === null) {
+      const error = Object.assign(new Error(`unexpected process file ${path}`), { code: "ENOENT" })
+      // eslint-disable-next-line functional/no-throw-statements -- controlled proc reader rejects an unknown fixture path.
+      throw error
+    }
+    const pid = Number(match[1])
+    if (!live.has(pid)) {
+      const error = Object.assign(new Error(`process ${pid} is absent`), { code: "ESRCH" })
+      // eslint-disable-next-line functional/no-throw-statements -- controlled native boundary reports an absent process.
+      throw error
+    }
+    if (match[2] === "stat") return linuxProcessStat(pid, 0, pid, `two-thread-${pid}`)
+    if (match[2] === "cmdline") return "fixture-worker\u0000"
+    return pid === processWithoutThread
+      ? `DALPH_CODEX_SERVER_INCARNATION=${token}\u0000`
+      : `DALPH_CODEX_SERVER_INCARNATION=${token}\u0000CODEX_THREAD_ID=${threadForProcess(pid)}\u0000`
+  }
+  const kill = ((pid: number, signal?: number | NodeJS.Signals) => {
+    if (!live.has(pid)) {
+      const error = Object.assign(new Error(`process ${pid} is absent`), { code: "ESRCH" })
+      // eslint-disable-next-line functional/no-throw-statements -- controlled kill boundary reports an absent process.
+      throw error
+    }
+    if (signal !== 0) {
+      killed.push(pid)
+      live.delete(pid)
+    }
+    return true
+  }) as typeof nodeProcess.kill
+  return {
+    census: makeNodeCodexOwnedActivityCensusService(
+      { ...nodeCodexProcessNativeService, kill, readFile, readdir: async () => [...live].map(String) },
+      undefined,
+      token
+    ),
+    forgetA: () => live.delete(processA),
+    killed,
+    processA,
+    processB,
+    processWithoutThread,
+    threadA: { id: threadA, cwd: "/thread-A", status: "idle" as const, turns: [] }
+  }
+}
+
+it.effect("attributes escaped activity to the exact Codex thread and rejects foreign or missing thread ids", () =>
+  Effect.gen(function* () {
+    const fixture = makeTwoThreadActivityNative()
+    const observed = yield* fixture.census.observe(fixture.threadA, [])
+    expect(observed).toMatchObject({
+      _tag: "ExactLive",
+      activities: [{ _tag: "ProcessGroupDescendant", identity: { pid: fixture.processA } }]
+    })
+    if (observed._tag === "ExactLive") {
+      expect(
+        observed.activities.some(
+          (activity) => activity._tag === "ProcessGroupDescendant" && activity.identity.pid === fixture.processB
+        )
+      ).toBe(false)
+      expect(
+        observed.activities.some(
+          (activity) =>
+            activity._tag === "ProcessGroupDescendant" && activity.identity.pid === fixture.processWithoutThread
+        )
+      ).toBe(false)
+    }
+
+    fixture.forgetA()
+    expect(yield* fixture.census.observe(fixture.threadA, [])).toEqual({ _tag: "Absent" })
+  })
+)
+
+it.effect("suspension census for one Codex thread never signals another thread", () =>
+  Effect.gen(function* () {
+    const fixture = makeTwoThreadActivityNative()
+    const observed = yield* fixture.census.observe(fixture.threadA, [])
+    if (observed._tag !== "ExactLive") return yield* Effect.die("thread A must expose its exact descendant")
+    const descendants = observed.activities.flatMap((activity) =>
+      activity._tag === "ProcessGroupDescendant" ? [activity.identity] : []
+    )
+
+    yield* fixture.census.terminateDescendants(descendants)
+
+    expect(fixture.killed).toEqual([fixture.processA])
+    expect(fixture.killed).not.toContain(fixture.processB)
+    expect(yield* fixture.census.observe(fixture.threadA, [])).toEqual({ _tag: "Absent" })
+  })
+)
 
 it.effect("revalidates and signals controlled Linux descendants without touching native processes", () => {
   const member = (pid: number, startIdentity = "same", processGroupId = pid): CodexOwnedProcessIdentity => ({

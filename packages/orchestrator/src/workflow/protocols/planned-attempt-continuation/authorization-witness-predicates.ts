@@ -1,4 +1,4 @@
-import { type PlannedTaskAttempt, plannedTaskAttemptEquivalence } from "@dalph/contracts"
+import { type PlannedTaskAttempt, plannedTaskAttemptEquivalence, type TaskRevision } from "@dalph/contracts"
 import { isExactTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import type { authorizedClaimForAttempt } from "../../claim-authority-history.js"
@@ -46,14 +46,15 @@ export const specificationIntentMatches = (intent: JournalRecord, plannedAttempt
 export const specificationOutcomeMatches = (
   intent: JournalRecord,
   outcome: JournalRecord,
-  plannedAttempt: PlannedTaskAttempt
+  plannedAttempt: PlannedTaskAttempt,
+  authorizedTaskRevision: TaskRevision
 ): boolean =>
   intent.event._tag === "TaskTrackerReadIntentRecorded" &&
   outcome.event._tag === "TaskTrackerFactsObserved" &&
   outcome.event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
   outcome.event.observation.factFamily.taskId === plannedAttempt.taskId &&
   taskTrackerObservationMatchesRead(outcome.event.observation, intent.event.operation) &&
-  outcome.event.observation.factFamily.fingerprint === plannedAttempt.taskRevision
+  outcome.event.observation.factFamily.fingerprint === authorizedTaskRevision
 
 const claimIntentMatches = (intent: JournalRecord, plannedAttempt: PlannedTaskAttempt): boolean =>
   intent.event._tag === "TaskTrackerReadIntentRecorded" &&

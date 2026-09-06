@@ -191,6 +191,50 @@ export type JournalStorageAppendError = JournalStoreContradiction | JournalStore
 /** Failures from raw persistence or the installed journal state service. */
 export type JournalAppendError = JournalError | InRunJournalRunMismatch | JournalStorageAppendError
 
+/** Whether a failed append call proves that its exact record was never submitted to storage. */
+type JournalAppendFailureDisposition = "DefinitelyAbsent" | "MayHaveCommitted" | "NotJournalAppendFailure"
+
+const JournalAppendErrorSchema = Schema.Union([
+  JournalHistoryInvalid,
+  JournalPositionGap,
+  JournalRecordMismatch,
+  InRunJournalRunMismatch,
+  JournalStoreContradiction,
+  JournalDataCorruption,
+  JournalHistoryCorruption,
+  JournalSchemaIncompatible,
+  JournalStorageAccessDenied,
+  JournalStorageCapacityExhausted,
+  JournalStorageLocked,
+  JournalStorageUnavailable,
+  JournalPartitionContradiction,
+  WorkflowRunAlreadyTerminated
+])
+
+const journalAppendFailureDispositions: Readonly<Record<JournalAppendError["_tag"], JournalAppendFailureDisposition>> =
+  {
+    InRunJournalRunMismatch: "DefinitelyAbsent",
+    JournalDataCorruption: "MayHaveCommitted",
+    JournalHistoryCorruption: "MayHaveCommitted",
+    JournalHistoryInvalid: "MayHaveCommitted",
+    JournalPartitionContradiction: "MayHaveCommitted",
+    JournalPositionGap: "MayHaveCommitted",
+    JournalRecordMismatch: "MayHaveCommitted",
+    JournalSchemaIncompatible: "MayHaveCommitted",
+    JournalStorageAccessDenied: "MayHaveCommitted",
+    JournalStorageCapacityExhausted: "MayHaveCommitted",
+    JournalStorageLocked: "MayHaveCommitted",
+    JournalStorageUnavailable: "MayHaveCommitted",
+    JournalStoreContradiction: "MayHaveCommitted",
+    WorkflowRunAlreadyTerminated: "MayHaveCommitted"
+  }
+
+/** Exhaustively classifies typed append failures without inspecting error names or messages. */
+export const journalAppendFailureDisposition = (failure: unknown): JournalAppendFailureDisposition => {
+  if (!Schema.is(JournalAppendErrorSchema)(failure)) return "NotJournalAppendFailure"
+  return journalAppendFailureDispositions[failure._tag]
+}
+
 /** Failures that prevent a caller from reading one coherent in-Run journal prefix. */
 export type JournalReadError = JournalError | InRunJournalRunMismatch | JournalStoreError
 

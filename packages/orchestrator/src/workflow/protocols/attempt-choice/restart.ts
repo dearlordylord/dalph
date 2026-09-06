@@ -252,6 +252,7 @@ const readRestartGraph = Effect.fn("AttemptRestart.readGraph")(function* (prepar
   const interpreter = yield* WorkflowInterpreter
   const records = yield* journal.read(subject.plannedAttempt.runId)
   const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "AttemptRestartAuthorityCheck" },
     nextRestartReadOperationId(
       records,
       requestId,

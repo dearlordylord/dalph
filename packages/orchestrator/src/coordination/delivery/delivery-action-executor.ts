@@ -6,6 +6,7 @@ import {
 } from "@dalph/contracts"
 import { Context, Effect, Schema } from "effect"
 import type { InRunJournalService } from "../../workflow-journal/store.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
   InterruptibleWorkflowBoundaryExecution,
   WorkflowInterpreterService,
@@ -23,6 +24,7 @@ import type {
   PlannedAttemptExecutorProjectionNoCurrentReport,
   PlannedAttemptExecutorResponsibilityAbandoned,
   PlannedAttemptExecutorResponsibilityContradiction,
+  PlannedAttemptExecutorResponsibilityLineageMissing,
   PlannedAttemptExecutorResponsibilityMissing,
   PlannedAttemptExecutorResumeNotAuthorized,
   PlannedAttemptExecutorStateNoCurrentReport,
@@ -44,6 +46,7 @@ import type {
   PlannedAttemptExecutorWorkAlreadyTerminal
 } from "../../workflow/protocols/planned-attempt-executor-work/errors.js"
 import type { PlannedAttemptProtocolPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import type { AcceptedPlannedAttemptExecutorResponsibility } from "../../workflow/protocols/planned-attempt-executor-work/responsibility.js"
 import type {
   AcceptedResultEvidenceConflict,
   AcceptedResultEvidenceUnavailable,
@@ -126,7 +129,10 @@ export type DeliveryActionForwardBoundary =
 
 export interface DeliveryActionExecutionLease {
   readonly acceptIntegrationTargetOwnership: Effect.Effect<void>
-  readonly bindPlannedAttemptPosition: (correlation: PlannedAttemptExecutorCorrelation) => Effect.Effect<void>
+  readonly bindPlannedAttemptPosition: (
+    plannedAttempt: PlannedTaskAttempt,
+    acceptedResponsibility?: AcceptedPlannedAttemptExecutorResponsibility
+  ) => Effect.Effect<void>
   readonly forwardBoundary: DeliveryActionForwardBoundary
   readonly integrationTargets: IntegrationTargetResourceController
   readonly recordIntent: (operationId: OperationId) => Effect.Effect<void>
@@ -253,6 +259,7 @@ export type DeliveryActionExecutionError =
   | PlannedAttemptExecutorProjectionNoCurrentReport
   | PlannedAttemptExecutorResponsibilityAbandoned
   | PlannedAttemptExecutorResponsibilityContradiction
+  | PlannedAttemptExecutorResponsibilityLineageMissing
   | PlannedAttemptExecutorResponsibilityMissing
   | PlannedAttemptExecutorStateNoCurrentReport
   | PlannedAttemptExecutorStateTemporarilyUnavailable
@@ -280,6 +287,12 @@ export class DeliveryActionExecutor extends Context.Service<DeliveryActionExecut
 
 export type DeliverySemanticTraceEvent =
   | { readonly _tag: "ActionOutcome"; readonly result: DeliveryActionResult }
+  /** One successful action remains owned until the runtime consumes its accepted publication prefix. */
+  | {
+      readonly _tag: "ActionCompletionPublicationPending"
+      readonly acceptedThrough: JournalPosition
+      readonly proposalId: DeliveryProposalId
+    }
   | { readonly _tag: "ProposalAdmitted"; readonly proposalId: DeliveryProposalId }
   | {
       readonly _tag: "ProposalDeferred"

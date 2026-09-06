@@ -9,9 +9,43 @@ import { InRunJournal } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   PlannedAttemptExecutorResponsibilityAbandoned,
-  PlannedAttemptExecutorResponsibilityContradiction
+  PlannedAttemptExecutorResponsibilityContradiction,
+  PlannedAttemptExecutorResponsibilityLineageMissing
 } from "./errors.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "./events.js"
+import { acceptedFreshAttemptLineage } from "../../../coordination/admission/fresh-attempt-lineage.js"
+import type { JournalPosition } from "../../../workflow-journal/identity.js"
+
+/** Exact accepted Journal boundary that made one planned-attempt executor responsibility durable. */
+class AcceptedPlannedAttemptExecutorResponsibilityValue {
+  readonly #acceptedPlannedAttemptExecutorResponsibility = true
+
+  constructor(
+    readonly acceptedAt: JournalPosition,
+    readonly plannedAttempt: PlannedTaskAttempt
+  ) {
+    Object.freeze(this)
+  }
+
+  isAcceptedResponsibility(): boolean {
+    return this.#acceptedPlannedAttemptExecutorResponsibility
+  }
+}
+
+export type AcceptedPlannedAttemptExecutorResponsibility = AcceptedPlannedAttemptExecutorResponsibilityValue
+
+/** Runtime guard for the privately issued accepted-responsibility capability. */
+export const isAcceptedPlannedAttemptExecutorResponsibility = (
+  value: unknown
+): value is AcceptedPlannedAttemptExecutorResponsibility =>
+  value instanceof AcceptedPlannedAttemptExecutorResponsibilityValue && value.isAcceptedResponsibility()
+
+const acceptedResponsibility = (
+  acceptedAt: JournalPosition,
+  plannedAttempt: PlannedTaskAttempt
+): AcceptedPlannedAttemptExecutorResponsibility => {
+  return new AcceptedPlannedAttemptExecutorResponsibilityValue(acceptedAt, plannedAttempt)
+}
 
 /** Records ownership before any adapter records a command intent or crosses the executor boundary. */
 export const beginPlannedAttemptExecutorResponsibility = Effect.fn(
@@ -42,11 +76,24 @@ export const beginPlannedAttemptExecutorResponsibility = Effect.fn(
         requested: plannedAttempt
       })
     }
+    return acceptedResponsibility(responsibilityBegan.position, responsibilityBegan.event.plannedAttempt)
   } else {
-    yield* journal.append(
+    const ordinaryPlanWasAccepted = records.some(
+      ({ event }) =>
+        event._tag === "TaskAttemptPlanned" &&
+        plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plannedAttempt)
+    )
+    if (
+      ordinaryPlanWasAccepted &&
+      acceptedFreshAttemptLineage(records, plannedAttempt, "WorktreeReady") === undefined
+    ) {
+      return yield* new PlannedAttemptExecutorResponsibilityLineageMissing({ correlation })
+    }
+    const appended = yield* journal.append(
       plannedAttempt.runId,
       plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
       PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
     )
+    return acceptedResponsibility(appended.position, plannedAttempt)
   }
 })

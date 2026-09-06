@@ -27,6 +27,7 @@ it.effect("preserves the 10,000-pair non-coverage projection signal", () =>
     const pairCount = 10_000
     const records = Array.from({ length: pairCount }, (_unused, index) => {
       const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make(`performance-read-${index}`),
         FixtureTarget.make("performance-target")
       )

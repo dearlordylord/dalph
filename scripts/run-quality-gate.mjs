@@ -30,6 +30,12 @@ const gates = [
   { args: ["check:complexity"], name: "cyclomatic complexity", timeout: 60 * SECOND },
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
   { args: ["test:memory"], name: "project memory scenarios", timeout: 60 * SECOND },
+  {
+    args: ["test:issue-268-c4"],
+    name: "issue 268 fresh-process repeatability",
+    terminationGrace: 15 * SECOND,
+    timeout: 19 * 60 * SECOND
+  },
   { args: ["check:lab"], name: "Reducer Lab maintained evaluation", timeout: 5 * 60 * SECOND },
   ...(withoutQuint
     ? []
@@ -50,6 +56,8 @@ for (const gate of gates) {
     environment: gate.environment,
     executable: process.execPath,
     name: `Quality gate '${gate.name}'`,
+    relayParentSignals: true,
+    terminationGraceMilliseconds: gate.terminationGrace,
     timeoutMilliseconds: gate.timeout
   })
   successfulOutputLines = addSuccessfulOutputLines({

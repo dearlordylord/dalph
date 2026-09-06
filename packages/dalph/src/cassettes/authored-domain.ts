@@ -29,6 +29,7 @@ import {
   TaskClaimReacquisitionRequestId,
   TargetLineageObservation,
   TargetPromotionAttemptOrdinal,
+  TargetPromotionGitRequest,
   TargetPromotionRequest,
   TargetPromotionTerminalBasis,
   TrackerRevision,
@@ -66,6 +67,27 @@ export const AuthoredRunActivationOrdinal = Schema.Int.check(Schema.isGreaterTha
 )
 export type AuthoredRunActivationOrdinal = typeof AuthoredRunActivationOrdinal.Type
 
+/**
+ * Stable cassette-only name for one exact operation occurrence. The authored
+ * story can therefore constrain generated operation identities without
+ * hard-coding a Run-local identifier.
+ */
+const AuthoredCausalRole = Schema.NonEmptyString.pipe(Schema.brand("AuthoredCausalRole"))
+
+/**
+ * Symbolic name for one operation selected at the real trace seam whose own
+ * ancestry is outside this causal check. Later batch members may name this
+ * exact raw operation identity as an immediate predecessor.
+ */
+const AuthoredCausalAnchor = Schema.Struct({ occurrenceRole: AuthoredCausalRole })
+
+/** Exact symbolic predecessor contract for one authored operation selection. */
+export const AuthoredCausalSelection = Schema.Struct({
+  occurrenceRole: AuthoredCausalRole,
+  predecessorRoles: Schema.Array(AuthoredCausalRole).check(Schema.isUnique())
+})
+export type AuthoredCausalSelection = typeof AuthoredCausalSelection.Type
+
 export const AuthoredTaskWorkSpecification = Schema.Struct({
   body: Schema.String,
   taskId: TaskId,
@@ -85,6 +107,43 @@ export const AuthoredCassetteDecision = Schema.TaggedUnion({
   RecordTaskAttemptPlan: { attemptId: AttemptId, taskId: TaskId }
 })
 export type AuthoredCassetteDecision = typeof AuthoredCassetteDecision.Type
+
+/**
+ * Result owned by one cassette-only concurrent tracker read. These are the
+ * two tracker boundaries used by the active-work G1/F2 chronology; Git and
+ * claim reads keep their ordinary ordered story items.
+ */
+export const AuthoredConcurrentTrackerReadResult = Schema.TaggedUnion({
+  TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,
+  TrackerGraphReadFailed: { reason: Schema.Literal("IncompleteSnapshot") },
+  TrackerGraphReadReturned: { graph: AuthoredTrackerGraph }
+})
+export type AuthoredConcurrentTrackerReadResult = typeof AuthoredConcurrentTrackerReadResult.Type
+
+const AuthoredConcurrentTrackerRead = Schema.Union([
+  Schema.Struct({
+    causal: AuthoredCausalSelection,
+    operation: AuthoredCassetteDecision.cases.ReadTaskWorkSpecification,
+    result: AuthoredConcurrentTrackerReadResult.cases.TaskWorkSpecificationReadReturned
+  }),
+  Schema.Struct({
+    causal: AuthoredCausalSelection,
+    operation: AuthoredCassetteDecision.cases.ReadTrackerGraph,
+    result: Schema.Union([
+      AuthoredConcurrentTrackerReadResult.cases.TrackerGraphReadFailed,
+      AuthoredConcurrentTrackerReadResult.cases.TrackerGraphReadReturned
+    ])
+  })
+]).check(
+  Schema.makeFilter((member) =>
+    member.operation._tag === "ReadTaskWorkSpecification" && member.result._tag === "TaskWorkSpecificationReadReturned"
+      ? member.operation.taskId === member.result.taskId
+        ? undefined
+        : "a concurrent task-work specification result must name the selected task"
+      : undefined
+  )
+)
+export type AuthoredConcurrentTrackerRead = typeof AuthoredConcurrentTrackerRead.Type
 
 /**
  * Executor reports in authored input name the attempt but never a RunId.
@@ -660,7 +719,12 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
       RunMayTerminate: {},
       RunMustRemainActive: {
         reason: Schema.Literals(["RunnableTransition", "TrackerTargetUnsettled", "UnsettledResponsibility"])
-      }
+      },
+      /**
+       * The activation must remain active, while this scenario deliberately
+       * leaves the production diagnostic reason outside its acceptance claim.
+       */
+      RunMustRemainActiveReasonUnasserted: {}
     })
   },
   /** Harness lifecycle: dispose one coordinator and its same-process executor session without journaling an occurrence. */
@@ -712,13 +776,67 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: { taskId: TaskId },
   /** Harness synchronization: release the exact task specification read named by its paired hold. */
   CassetteReleasesHeldTaskWorkSpecificationRead: { taskId: TaskId },
+  /**
+   * Harness synchronization: pre-arm one exact planned-attempt worktree
+   * reconciliation selection before its real boundary is selected. The
+   * exact promotion request identifies the later successful target-promotion
+   * compare-and-set that releases this hold.
+   */
+  CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion: {
+    attemptId: AttemptId,
+    promotionRequest: TargetPromotionGitRequest,
+    taskId: TaskId
+  },
+  /** Harness synchronization: release the exact worktree-selection hold after its Applied promotion CAS. */
+  CassetteReleasesHeldTaskWorktreeSelection: {
+    attemptId: AttemptId,
+    promotionRequest: TargetPromotionGitRequest,
+    taskId: TaskId
+  },
+  /**
+   * Harness synchronization: park the promoted task's first completion-claim
+   * read until another exact attempt has crossed its Begin response.
+   */
+  CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins: {
+    promotedAttemptId: AttemptId,
+    promotedTaskId: TaskId,
+    releasedByAttemptId: AttemptId,
+    releasedByTaskId: TaskId
+  },
+  /** Harness synchronization: release the paired completion-claim read after the exact Begin response. */
+  CassetteReleasesHeldPromotedTaskCompletionClaimRead: {
+    promotedAttemptId: AttemptId,
+    promotedTaskId: TaskId,
+    releasedByAttemptId: AttemptId,
+    releasedByTaskId: TaskId
+  },
+  /**
+   * Harness synchronization: arm one exact set of fresh task claims and keep
+   * matching TaskSelectionAuthority operations parked until terminal
+   * assertions interrupt the controlled activation.
+   */
+  CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions: {
+    taskIds: Schema.NonEmptyArray(TaskId).check(Schema.isUnique())
+  },
+  /** Harness input: offer these non-authoritative hints to the real Run reactivation owner. */
+  CassetteOffersRunReactivationHints: {
+    hints: Schema.NonEmptyArray(Schema.Literals(["TrackerNotification", "Timer"]))
+  },
+  /** Harness input: publish one current tracker notification while the real Run reactivation owner attaches. */
+  CassettePublishesCurrentTrackerNotification: {},
   /** Harness synchronization: keep this exact executor request in flight while the next ordinary delivery fact publishes. */
   DalphHoldsExecutorRequestThroughNextDeliveryPublication: {
     attemptId: AttemptId,
     request: Schema.Literals(["Begin", "Resume", "Suspend"]),
     taskId: TaskId
   },
-  DalphSelects: { operation: AuthoredCassetteDecision },
+  /** One bounded tracker-read phase whose causally named members may complete in either order. */
+  ConcurrentTrackerReadBatch: { members: Schema.NonEmptyArray(AuthoredConcurrentTrackerRead) },
+  DalphSelects: {
+    causal: Schema.optionalKey(AuthoredCausalSelection),
+    causalAnchor: Schema.optionalKey(AuthoredCausalAnchor),
+    operation: AuthoredCassetteDecision
+  },
   /** Task-work assertions with optional complete lower-level evidence projections. */
   ExpectedBehavior: AuthoredExpectedBehavior.fields,
   GitWorktreeObservationChanged: {
@@ -736,9 +854,10 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   IntegratorGitObservationFailed: { candidateText: IntegratorCandidateText, detail: Schema.String },
   /** Git's exact H -> M compare-and-set result, or its lost response. */
   TargetPromotionCompareAndSetReturned: {
+    request: TargetPromotionGitRequest,
     result: Schema.TaggedUnion({ Applied: {}, RejectedExpectedHead: { observedHeadSha: GitCommitSha } })
   },
-  TargetPromotionCompareAndSetResponseLost: { detail: Schema.String },
+  TargetPromotionCompareAndSetResponseLost: { detail: Schema.String, request: TargetPromotionGitRequest },
   /** Git's complete candidate-ancestry reconciliation result, or an unreadable read. */
   TargetPromotionGitReadReturned: {
     candidateCommit: GitCommitSha,
@@ -761,6 +880,16 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   },
   /** A read-only executor projection returns this exact current authority state. */
   PlannedAttemptExecutorProjectionReturned: { report: AuthoredPlannedAttemptExecutorReport },
+  /**
+   * An already-attached passive owner observes this exact attempt change.
+   * Unlike a requested projection, only the matching lifecycle subscription may consume it.
+   */
+  PlannedAttemptExecutorPassiveLifecycleChanged: {
+    report: Schema.Union([
+      AuthoredPlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended,
+      AuthoredPlannedAttemptExecutorReport.cases.ExecutorWorkTerminal
+    ])
+  },
   /** Executor applied the request and changed its authority state, but Dalph lost the response before journaling it. */
   PlannedAttemptExecutorResponseLost: {
     detail: Schema.String,
@@ -884,6 +1013,8 @@ const defineStoryItemOwners = <
 
 export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   CassetteControl: [
+    "CassetteOffersRunReactivationHints",
+    "CassettePublishesCurrentTrackerNotification",
     "InitialControlPolicy",
     "OperatorAppliesControlDirection",
     "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
@@ -916,9 +1047,14 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "CassetteKillsCoordinatorAtTargetPromotionReconciliationRead",
     "CassetteReleasesHeldTargetPromotionReconciliationRead",
     "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
-    "CassetteReleasesHeldTaskWorkSpecificationRead"
+    "CassetteReleasesHeldTaskWorkSpecificationRead",
+    "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion",
+    "CassetteReleasesHeldTaskWorktreeSelection",
+    "CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins",
+    "CassetteReleasesHeldPromotedTaskCompletionClaimRead",
+    "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions"
   ],
-  DalphOperationTrace: ["DalphSelects"],
+  DalphOperationTrace: ["DalphSelects", "ConcurrentTrackerReadBatch"],
   Git: ["GitPlannedWorktreeCreateResponseLost", "GitWorktreeObservationChanged"],
   OuterIntegrator: [
     "IntegratorRequestReceived",
@@ -933,6 +1069,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "TargetPromotionGitReadFailed"
   ],
   PlannedAttemptExecutor: [
+    "PlannedAttemptExecutorPassiveLifecycleChanged",
     "PlannedAttemptExecutorProjectionReturned",
     "PlannedAttemptExecutorResponseLost",
     "PlannedAttemptExecutorWorkReported"
@@ -1045,6 +1182,14 @@ const behaviorAssertionsAreConsistent = Schema.makeFilter((cassette: typeof Auth
   cassette.story
     .flatMap((item) => (item._tag === "ExpectedBehavior" ? [expectedBehaviorIssue(item)] : []))
     .find((issue) => issue !== undefined)
+)
+
+const causalAnchorsAndChecksAreDistinct = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+  cassette.story.every(
+    (item) => item._tag !== "DalphSelects" || item.causal === undefined || item.causalAnchor === undefined
+  )
+    ? undefined
+    : "one authored selection cannot be both an accepted causal anchor and an exact causal check"
 )
 
 const minimumItemsAfterCoordinatorDeath = 2
@@ -1165,6 +1310,565 @@ const completionFinalityStoryIsComplete = Schema.makeFilter((cassette: typeof Au
     ? undefined
     : `authored completion finality for ${incompleteTaskId} must be an exact prefix of active-record presence, replacement, two completion-marker presence reads, completion-marker deletion, and completion-marker absence`
 })
+
+/** A fresh-claim selection hold is one whole-set harness control, never one control per task. */
+const freshTaskClaimSelectionHoldIsUnique = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+  cassette.story.filter((item) => item._tag === "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions")
+    .length <= 1
+    ? undefined
+    : "an authored cassette may arm at most one fresh task-claim selection hold"
+)
+
+/** Rejects a globally pre-armed hold that would capture an earlier authored claim selection. */
+export const freshTaskClaimSelectionHoldPlacementIssue = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>
+): string | undefined => {
+  const holdIndex = story.findIndex(
+    (item) => item._tag === "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions"
+  )
+  if (holdIndex < 0) return undefined
+  const hold = story[holdIndex]
+  if (hold?._tag !== "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions") return undefined
+  const earlier = story
+    .slice(0, holdIndex)
+    .find(
+      (
+        item
+      ): item is Extract<AuthoredCassetteStoryItem, { readonly _tag: "DalphSelects" }> & {
+        readonly operation: { readonly _tag: "AcquireTaskClaim" }
+      } =>
+        item._tag === "DalphSelects" &&
+        item.operation._tag === "AcquireTaskClaim" &&
+        hold.taskIds.includes(item.operation.taskId)
+    )
+  return earlier !== undefined
+    ? `fresh task-claim selection hold for ${earlier.operation.taskId} must precede its first matching claim selection`
+    : undefined
+}
+
+const freshTaskClaimSelectionHoldPrecedesMatchingSelections = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) => freshTaskClaimSelectionHoldPlacementIssue(cassette.story)
+)
+
+const targetPromotionGitRequestMatches = (left: TargetPromotionGitRequest, right: TargetPromotionGitRequest): boolean =>
+  left.candidateCommit === right.candidateCommit &&
+  left.expectedTargetHead === right.expectedTargetHead &&
+  left.integrationTarget.repository === right.integrationTarget.repository &&
+  left.integrationTarget.ref === right.integrationTarget.ref
+
+/** Finds authored Integrator candidates that could have produced an exact Git promotion request. */
+const targetPromotionOriginsFor = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  request: TargetPromotionGitRequest,
+  beforeIndex: number
+) => {
+  const origins = story.flatMap((item, integratorIndex) => {
+    if (integratorIndex >= beforeIndex || item._tag !== "IntegratorRequestReceived") return []
+    if (
+      item.correlation.expectedTargetHead !== request.expectedTargetHead ||
+      item.correlation.integrationTarget.repository !== request.integrationTarget.repository ||
+      item.correlation.integrationTarget.ref !== request.integrationTarget.ref
+    ) {
+      return []
+    }
+    const nextIntegratorIndex = story.findIndex(
+      (candidate, candidateIndex) =>
+        candidateIndex > integratorIndex &&
+        candidateIndex < beforeIndex &&
+        candidate._tag === "IntegratorRequestReceived"
+    )
+    const candidate = story
+      .slice(integratorIndex + 1, nextIntegratorIndex < 0 ? beforeIndex : nextIntegratorIndex)
+      .find(
+        (candidateItem) =>
+          candidateItem._tag === "IntegratorGitObservationReturned" &&
+          candidateItem.observation._tag === "Commit" &&
+          candidateItem.observation.commit === request.candidateCommit
+      )
+    return candidate === undefined
+      ? []
+      : [
+          {
+            correlation: item.correlation,
+            integratorIndex,
+            plannedAttempt: item.correlation.plannedAttempt,
+            request: TargetPromotionGitRequest.make({
+              candidateCommit: request.candidateCommit,
+              expectedTargetHead: item.correlation.expectedTargetHead,
+              integrationTarget: item.correlation.integrationTarget
+            })
+          }
+        ]
+  })
+  return origins
+}
+
+/** Returns one exact promotion origin; an alias is deliberately not resolved by arrival order. */
+const targetPromotionOriginFor = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  request: TargetPromotionGitRequest,
+  beforeIndex: number
+) => {
+  const origins = targetPromotionOriginsFor(story, request, beforeIndex)
+  const origin = origins[0]
+  return origins.length === 1 && origin !== undefined && targetPromotionGitRequestMatches(origin.request, request)
+    ? origin
+    : undefined
+}
+
+type TargetPromotionCompareAndSetStoryItem =
+  | Extract<AuthoredCassetteStoryItem, { readonly _tag: "TargetPromotionCompareAndSetReturned" }>
+  | Extract<AuthoredCassetteStoryItem, { readonly _tag: "TargetPromotionCompareAndSetResponseLost" }>
+
+const targetPromotionCompareAndSetItems = (story: ReadonlyArray<AuthoredCassetteStoryItem>) =>
+  story.flatMap(
+    (item, index): ReadonlyArray<readonly [number, TargetPromotionCompareAndSetStoryItem]> =>
+      item._tag === "TargetPromotionCompareAndSetReturned" || item._tag === "TargetPromotionCompareAndSetResponseLost"
+        ? [[index, item]]
+        : []
+  )
+
+const targetPromotionWorkflowKey = (origin: { readonly correlation: IntegratorSessionCorrelation }): string =>
+  JSON.stringify([
+    String(origin.correlation.sessionId),
+    String(origin.correlation.candidateResource),
+    String(origin.correlation.plannedAttempt.attemptId),
+    String(origin.correlation.plannedAttempt.taskId),
+    String(origin.correlation.queuedAt),
+    String(origin.correlation.startedAt),
+    String(origin.correlation.targetLineageObservedAt)
+  ])
+
+/**
+ * A request projection is ambiguous when two distinct Integrator workflows
+ * could still be the owner of the same CAS response. A returned CAS ends its
+ * workflow; a lost response keeps that workflow eligible for reconciliation
+ * and a sequential retry. This permits sequential identical requests while
+ * rejecting concurrent aliases before a response can be assigned by arrival.
+ */
+export const targetPromotionGitRequestAliasIssue = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>
+): string | undefined => {
+  for (const [index, item] of targetPromotionCompareAndSetItems(story)) {
+    const origins = targetPromotionOriginsFor(story, item.request, index).filter((origin) => {
+      const prior = targetPromotionCompareAndSetItems(story).filter(
+        ([priorIndex, priorItem]) =>
+          priorIndex > origin.integratorIndex &&
+          priorIndex < index &&
+          targetPromotionGitRequestMatches(priorItem.request, item.request)
+      )
+      const last = prior[prior.length - 1]?.[1]
+      return last === undefined || last._tag === "TargetPromotionCompareAndSetResponseLost"
+    })
+    const distinctWorkflows = new Set(origins.map(targetPromotionWorkflowKey))
+    if (distinctWorkflows.size > 1) {
+      return `target-promotion request ${JSON.stringify(item.request)} aliases ${distinctWorkflows.size} concurrent Integrator workflows`
+    }
+  }
+  return undefined
+}
+
+const targetPromotionGitRequestsAreUnambiguous = Schema.makeFilter(
+  (cassette: typeof AuthoredScenarioCassetteShape.Type) => targetPromotionGitRequestAliasIssue(cassette.story)
+)
+
+/** Collision-free map identity for one exact cassette task-attempt gate. */
+export const taskWorktreeSelectionHoldKey = (taskId: TaskId, attemptId: AttemptId): string =>
+  JSON.stringify([String(taskId), String(attemptId)])
+
+type StoryClosureTransition<State> =
+  | { readonly _tag: "Continue"; readonly state: State }
+  | { readonly _tag: "Reject"; readonly issue: string }
+
+const continueStoryClosure = <State>(state: State): StoryClosureTransition<State> => ({ _tag: "Continue", state })
+const rejectStoryClosure = <State>(issue: string): StoryClosureTransition<State> => ({ _tag: "Reject", issue })
+
+const foldStoryClosure = <State>(
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  initial: State,
+  step: (state: State, item: AuthoredCassetteStoryItem, index: number) => StoryClosureTransition<State>
+): StoryClosureTransition<State> => {
+  let state = initial
+  for (const [index, item] of story.entries()) {
+    const transition = step(state, item, index)
+    if (transition._tag === "Reject") return transition
+    state = transition.state
+  }
+  return continueStoryClosure(state)
+}
+
+const mapWithoutKey = <Key, Value>(source: ReadonlyMap<Key, Value>, key: Key): ReadonlyMap<Key, Value> =>
+  new Map([...source].filter(([candidate]) => candidate !== key))
+
+type TaskWorktreeSelectionHold = Extract<
+  AuthoredCassetteStoryItem,
+  { readonly _tag: "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion" }
+>
+type TaskWorktreeSelectionRelease = Extract<
+  AuthoredCassetteStoryItem,
+  { readonly _tag: "CassetteReleasesHeldTaskWorktreeSelection" }
+>
+type TaskWorktreeSelectionIdentity = { readonly attemptId: AttemptId; readonly taskId: TaskId }
+type TaskWorktreeSelectionHoldState = {
+  readonly active: ReadonlyMap<string, { readonly hold: TaskWorktreeSelectionHold }>
+  readonly seen: ReadonlySet<string>
+}
+
+const isExactTaskWorktreeSelection = (
+  item: AuthoredCassetteStoryItem,
+  identity: TaskWorktreeSelectionIdentity
+): boolean =>
+  item._tag === "DalphSelects" &&
+  item.operation._tag === "ReconcileTaskWorktree" &&
+  item.operation.taskId === identity.taskId &&
+  item.operation.attemptId === identity.attemptId
+
+const hasExactTaskWorktreeSelection = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  identity: TaskWorktreeSelectionIdentity,
+  fromIndex: number,
+  untilIndex?: number
+): boolean => story.slice(fromIndex, untilIndex).some((item) => isExactTaskWorktreeSelection(item, identity))
+
+const registerTaskWorktreeSelectionHold = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  state: TaskWorktreeSelectionHoldState,
+  hold: TaskWorktreeSelectionHold,
+  index: number
+): StoryClosureTransition<TaskWorktreeSelectionHoldState> => {
+  const key = taskWorktreeSelectionHoldKey(hold.taskId, hold.attemptId)
+  if (state.active.has(key)) return rejectStoryClosure(`task worktree-selection hold ${key} is duplicated`)
+  if (state.seen.has(key)) return rejectStoryClosure(`task worktree-selection hold ${key} is repeated`)
+  if (hasExactTaskWorktreeSelection(story, hold, 0, index)) {
+    return rejectStoryClosure(
+      `task worktree-selection hold ${key} must precede its first exact ReconcileTaskWorktree selection`
+    )
+  }
+  if (!hasExactTaskWorktreeSelection(story, hold, index + 1)) {
+    return rejectStoryClosure(
+      `task worktree-selection hold ${key} must precede its exact ReconcileTaskWorktree selection`
+    )
+  }
+  return continueStoryClosure({
+    active: new Map([...state.active, [key, { hold }]]),
+    seen: new Set([...state.seen, key])
+  })
+}
+
+const guardTaskWorktreeSelection = (
+  state: TaskWorktreeSelectionHoldState,
+  item: AuthoredCassetteStoryItem
+): StoryClosureTransition<TaskWorktreeSelectionHoldState> => {
+  if (item._tag !== "DalphSelects" || item.operation._tag !== "ReconcileTaskWorktree") {
+    return continueStoryClosure(state)
+  }
+  const key = taskWorktreeSelectionHoldKey(item.operation.taskId, item.operation.attemptId)
+  return state.active.has(key)
+    ? rejectStoryClosure(
+        `task worktree-selection hold ${key} must be released before its exact ReconcileTaskWorktree selection`
+      )
+    : continueStoryClosure(state)
+}
+
+const isAppliedTargetPromotion = (
+  item: AuthoredCassetteStoryItem | undefined
+): item is Extract<AuthoredCassetteStoryItem, { readonly _tag: "TargetPromotionCompareAndSetReturned" }> =>
+  item?._tag === "TargetPromotionCompareAndSetReturned" && item.result._tag === "Applied"
+
+const taskWorktreeReleaseMatchesPromotion = (
+  hold: TaskWorktreeSelectionHold,
+  release: TaskWorktreeSelectionRelease,
+  promotion: Extract<AuthoredCassetteStoryItem, { readonly _tag: "TargetPromotionCompareAndSetReturned" }>
+): boolean =>
+  targetPromotionGitRequestMatches(hold.promotionRequest, release.promotionRequest) &&
+  targetPromotionGitRequestMatches(hold.promotionRequest, promotion.request)
+
+const releaseTaskWorktreeSelectionHold = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  state: TaskWorktreeSelectionHoldState,
+  release: TaskWorktreeSelectionRelease,
+  index: number
+): StoryClosureTransition<TaskWorktreeSelectionHoldState> => {
+  const key = taskWorktreeSelectionHoldKey(release.taskId, release.attemptId)
+  const held = state.active.get(key)
+  if (held === undefined) return rejectStoryClosure(`task worktree-selection release ${key} has no matching hold`)
+  const predecessor = story[index - 1]
+  if (!isAppliedTargetPromotion(predecessor)) {
+    return rejectStoryClosure(
+      `task worktree-selection release ${key} must immediately follow an Applied target-promotion compare-and-set`
+    )
+  }
+  if (!taskWorktreeReleaseMatchesPromotion(held.hold, release, predecessor)) {
+    return rejectStoryClosure(
+      `task worktree-selection release ${key} must match its hold and predecessor promotion request`
+    )
+  }
+  if (targetPromotionOriginFor(story, predecessor.request, index) === undefined) {
+    return rejectStoryClosure(
+      `task worktree-selection release ${key} must follow the exact Integrator candidate for its promotion request`
+    )
+  }
+  if (!hasExactTaskWorktreeSelection(story, release, index + 1)) {
+    return rejectStoryClosure(
+      `task worktree-selection release ${key} must precede its exact ReconcileTaskWorktree selection`
+    )
+  }
+  return continueStoryClosure({ ...state, active: mapWithoutKey(state.active, key) })
+}
+
+const taskWorktreeSelectionHoldStep = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  state: TaskWorktreeSelectionHoldState,
+  item: AuthoredCassetteStoryItem,
+  index: number
+): StoryClosureTransition<TaskWorktreeSelectionHoldState> => {
+  if (item._tag === "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion") {
+    return registerTaskWorktreeSelectionHold(story, state, item, index)
+  }
+  if (item._tag === "CassetteReleasesHeldTaskWorktreeSelection") {
+    return releaseTaskWorktreeSelectionHold(story, state, item, index)
+  }
+  return guardTaskWorktreeSelection(state, item)
+}
+
+/**
+ * The authored worktree hold is a harness scheduling seam, not a production
+ * position. It must be armed before its exact ReconcileTaskWorktree
+ * selection, and its exact release must immediately follow an Applied target
+ * promotion CAS carrying the same exact Git request named by both markers;
+ * the release marker itself remains exact and fail-closed.
+ */
+export const taskWorktreeSelectionHoldClosureIssue = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>
+): string | undefined => {
+  const result = foldStoryClosure<TaskWorktreeSelectionHoldState>(
+    story,
+    { active: new Map(), seen: new Set() },
+    (state, item, index) => taskWorktreeSelectionHoldStep(story, state, item, index)
+  )
+  if (result._tag === "Reject") return result.issue
+  return result.state.active.size === 0
+    ? undefined
+    : `task worktree-selection hold ${result.state.active.keys().next().value ?? "unknown"} reaches terminal assertions unreleased`
+}
+
+const taskWorktreeSelectionHoldClosure = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+  taskWorktreeSelectionHoldClosureIssue(cassette.story)
+)
+
+type PromotedCompletionReadHold =
+  typeof AuthoredCassetteStoryItem.cases.CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins.Type
+type PromotedCompletionReadRelease =
+  typeof AuthoredCassetteStoryItem.cases.CassetteReleasesHeldPromotedTaskCompletionClaimRead.Type
+type ActivePromotedCompletionReadHold = {
+  readonly hold: PromotedCompletionReadHold
+  readonly index: number
+  readonly promotionIndex: number
+}
+type PromotedCompletionReadHoldState = {
+  readonly active: ReadonlyMap<string, ActivePromotedCompletionReadHold>
+  readonly seenPromotedTaskIds: ReadonlySet<TaskId>
+}
+
+/** Collision-free map identity for one exact promoted-task/releasing-task cassette gate. */
+export const promotedCompletionReadHoldKey = (item: {
+  readonly promotedAttemptId: AttemptId
+  readonly promotedTaskId: TaskId
+  readonly releasedByAttemptId: AttemptId
+  readonly releasedByTaskId: TaskId
+}): string =>
+  JSON.stringify([
+    String(item.promotedTaskId),
+    String(item.promotedAttemptId),
+    String(item.releasedByTaskId),
+    String(item.releasedByAttemptId)
+  ])
+
+const promotedCompletionPrearmIssue = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  item: AuthoredCassetteStoryItem,
+  index: number
+): string | undefined => {
+  if (item._tag !== "CompletionClaimReadReturned") return undefined
+  const futureHold = story.findIndex(
+    (candidate, candidateIndex) =>
+      candidateIndex > index &&
+      candidate._tag === "CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins" &&
+      candidate.promotedTaskId === item.taskId
+  )
+  return futureHold < 0
+    ? undefined
+    : `promoted completion-claim read for ${item.taskId} precedes its pre-armed hold marker`
+}
+
+const exactIntegratorIndexForPromotedHold = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  hold: PromotedCompletionReadHold,
+  afterIndex: number
+): number =>
+  story.findIndex(
+    (candidate, candidateIndex) =>
+      candidateIndex > afterIndex &&
+      candidate._tag === "IntegratorRequestReceived" &&
+      candidate.correlation.plannedAttempt.taskId === hold.promotedTaskId &&
+      candidate.correlation.plannedAttempt.attemptId === hold.promotedAttemptId
+  )
+
+const promotionOriginMatchesPromotedHold = (
+  origin: ReturnType<typeof targetPromotionOriginFor>,
+  hold: PromotedCompletionReadHold,
+  integratorIndex: number
+): boolean =>
+  origin !== undefined &&
+  origin.integratorIndex === integratorIndex &&
+  origin.plannedAttempt.taskId === hold.promotedTaskId &&
+  origin.plannedAttempt.attemptId === hold.promotedAttemptId
+
+const exactAppliedPromotionIndexForHold = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  hold: PromotedCompletionReadHold,
+  integratorIndex: number
+): number =>
+  story.findIndex((candidate, candidateIndex) => {
+    if (candidateIndex <= integratorIndex || !isAppliedTargetPromotion(candidate)) return false
+    return promotionOriginMatchesPromotedHold(
+      targetPromotionOriginFor(story, candidate.request, candidateIndex),
+      hold,
+      integratorIndex
+    )
+  })
+
+const registerPromotedCompletionReadHold = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  state: PromotedCompletionReadHoldState,
+  hold: PromotedCompletionReadHold,
+  index: number
+): StoryClosureTransition<PromotedCompletionReadHoldState> => {
+  const key = promotedCompletionReadHoldKey(hold)
+  if (state.active.has(key)) return rejectStoryClosure(`promoted completion-claim read hold ${key} is duplicated`)
+  if (state.seenPromotedTaskIds.has(hold.promotedTaskId)) {
+    return rejectStoryClosure(`promoted completion-claim read hold for ${hold.promotedTaskId} is repeated`)
+  }
+  const integratorIndex = exactIntegratorIndexForPromotedHold(story, hold, index)
+  if (integratorIndex < 0) {
+    return rejectStoryClosure(`promoted completion-claim read hold ${key} has no exact integration request`)
+  }
+  const promotionIndex = exactAppliedPromotionIndexForHold(story, hold, integratorIndex)
+  if (promotionIndex < 0) {
+    return rejectStoryClosure(
+      `promoted completion-claim read hold ${key} has no later Applied promotion for its exact promotion request`
+    )
+  }
+  return continueStoryClosure({
+    active: new Map([...state.active, [key, { hold, index, promotionIndex }]]),
+    seenPromotedTaskIds: new Set([...state.seenPromotedTaskIds, hold.promotedTaskId])
+  })
+}
+
+const isExactExecutingBegin = (item: AuthoredCassetteStoryItem | undefined, attemptId: AttemptId): boolean =>
+  item?._tag === "PlannedAttemptExecutorWorkReported" &&
+  item.request === "Begin" &&
+  item.report._tag === "ExecutorWorkExecuting" &&
+  item.report.attemptId === attemptId
+
+const releasePrecedesFirstActivePromotedRead = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  held: ActivePromotedCompletionReadHold,
+  release: PromotedCompletionReadRelease,
+  releaseIndex: number
+): boolean => {
+  const firstPromotedRead = story.findIndex(
+    (candidate, candidateIndex) =>
+      candidateIndex > held.index &&
+      candidate._tag === "CompletionClaimReadReturned" &&
+      candidate.taskId === release.promotedTaskId
+  )
+  const promotedRead = story[firstPromotedRead]
+  return (
+    firstPromotedRead >= releaseIndex &&
+    promotedRead?._tag === "CompletionClaimReadReturned" &&
+    promotedRead.claim === "Active"
+  )
+}
+
+const releasePromotedCompletionReadHold = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  state: PromotedCompletionReadHoldState,
+  release: PromotedCompletionReadRelease,
+  index: number
+): StoryClosureTransition<PromotedCompletionReadHoldState> => {
+  const key = promotedCompletionReadHoldKey(release)
+  const held = state.active.get(key)
+  if (held === undefined)
+    return rejectStoryClosure(`promoted completion-claim read release ${key} has no matching hold`)
+  if (held.promotionIndex >= index) {
+    return rejectStoryClosure(`promoted completion-claim read release ${key} precedes its exact Applied promotion`)
+  }
+  if (!isExactExecutingBegin(story[index - 1], release.releasedByAttemptId)) {
+    return rejectStoryClosure(
+      `promoted completion-claim read release ${key} must immediately follow its exact executing Begin response`
+    )
+  }
+  if (
+    !hasExactTaskWorktreeSelection(
+      story,
+      { attemptId: release.releasedByAttemptId, taskId: release.releasedByTaskId },
+      held.index + 1,
+      index - 1
+    )
+  ) {
+    return rejectStoryClosure(
+      `promoted completion-claim read release ${key} has no exact released-attempt worktree selection`
+    )
+  }
+  if (!releasePrecedesFirstActivePromotedRead(story, held, release, index)) {
+    return rejectStoryClosure(
+      `promoted completion-claim read hold ${key} must release before its first exact Active claim read`
+    )
+  }
+  return continueStoryClosure({ ...state, active: mapWithoutKey(state.active, key) })
+}
+
+const promotedCompletionReadHoldStep = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>,
+  state: PromotedCompletionReadHoldState,
+  item: AuthoredCassetteStoryItem,
+  index: number
+): StoryClosureTransition<PromotedCompletionReadHoldState> => {
+  const prearmIssue = promotedCompletionPrearmIssue(story, item, index)
+  if (prearmIssue !== undefined) return rejectStoryClosure(prearmIssue)
+  if (item._tag === "CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins") {
+    return registerPromotedCompletionReadHold(story, state, item, index)
+  }
+  if (item._tag === "CassetteReleasesHeldPromotedTaskCompletionClaimRead") {
+    return releasePromotedCompletionReadHold(story, state, item, index)
+  }
+  return continueStoryClosure(state)
+}
+
+/**
+ * A completion-read hold describes one cassette-only causal edge. The exact
+ * promoted attempt must reach an Applied promotion, the exact successor must
+ * report Begin, and only then may the promoted task's Active claim read be
+ * consumed. Production scheduling remains unconstrained by this story edge.
+ */
+export const promotedCompletionReadHoldClosureIssue = (
+  story: ReadonlyArray<AuthoredCassetteStoryItem>
+): string | undefined => {
+  const result = foldStoryClosure<PromotedCompletionReadHoldState>(
+    story,
+    { active: new Map(), seenPromotedTaskIds: new Set() },
+    (state, item, index) => promotedCompletionReadHoldStep(story, state, item, index)
+  )
+  if (result._tag === "Reject") return result.issue
+  return result.state.active.size === 0
+    ? undefined
+    : `promoted completion-claim read hold ${result.state.active.keys().next().value ?? "unknown"} reaches terminal assertions unreleased`
+}
+
+const promotedCompletionReadHoldClosure = Schema.makeFilter((cassette: typeof AuthoredScenarioCassetteShape.Type) =>
+  promotedCompletionReadHoldClosureIssue(cassette.story)
+)
 
 const heldPauseOffset = 1
 const heldPauseGraphSelectionOffset = 2
@@ -1366,12 +2070,18 @@ const AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteShape.check(
   )
   .check(startingFactsAreConsistent)
   .check(behaviorAssertionsAreConsistent)
+  .check(causalAnchorsAndChecksAreDistinct)
   .check(coordinatorLifecycleBoundariesHaveFollowingActivationWork)
   .check(finalTrackerReadClosesCurrentActivation)
   .check(ambiguousBoundaryLossesImmediatelyCrash)
   .check(beginResponsesAreExecuting)
   .check(lostExecutorResponsesRequireExplicitProjection)
   .check(completionFinalityStoryIsComplete)
+  .check(freshTaskClaimSelectionHoldIsUnique)
+  .check(freshTaskClaimSelectionHoldPrecedesMatchingSelections)
+  .check(targetPromotionGitRequestsAreUnambiguous)
+  .check(taskWorktreeSelectionHoldClosure)
+  .check(promotedCompletionReadHoldClosure)
   .check(admittedContinuationHoldHasExactAttemptChoiceClosure)
 export const AuthoredScenarioCassette: typeof AuthoredScenarioCassetteSchema = AuthoredScenarioCassetteSchema
 export type AuthoredScenarioCassette = typeof AuthoredScenarioCassette.Type

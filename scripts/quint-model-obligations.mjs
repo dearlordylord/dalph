@@ -180,6 +180,117 @@ export const runActivationObligations = Object.freeze({
   ])
 })
 
+export const freshTaskAdmissionObligations = Object.freeze({
+  invariants: Object.freeze([
+    "everyEntryWasWithinItsObservedCapacity",
+    "stableFreshEntryOrder",
+    "claimCallsRequireAcceptedIntent",
+    "ambiguousClaimIntentRetainsEntryReservation",
+    "ownedClaimsRequireClaimCalls",
+    "specificationsRequireOwnedClaims",
+    "plansRequireSpecifications",
+    "worktreeCallsRequirePlans",
+    "responsibilitiesRequireAcceptedExactWorktreeReady",
+    "responsibilityHandoffNeverCreatesAdmissionGap",
+    "ambiguousResponsibilityAppendRetainsCommitment",
+    "ambiguityRequiresReconciliationBeforeReappend",
+    "durableCommitmentHasExactDisposition",
+    "currentOccupancyHasOneClosedRepresentation",
+    "existingResponsibilityInputIsExactlyCorrelated",
+    "retainedReadyResponsibilityBlocksFreshEntry",
+    "readyResponsibilityEntryRespectsCapacity",
+    "foreignClaimConstraintPreventsOccupancy",
+    "newClaimCycleNeverReusesRejectedOperation",
+    "postOwnershipConstraintRetainsOccupancy",
+    "modelStateIsFiniteAndClosed"
+  ]),
+  witnesses: Object.freeze([
+    "threeFreshEntriesReached",
+    "outsideTaskEnteredReached",
+    "claimIntentReached",
+    "claimOwnedReached",
+    "specificationReached",
+    "planReached",
+    "worktreeIntentReached",
+    "worktreeReadyReached",
+    "executorResponsibilityReached",
+    "conclusiveRejectionReached",
+    "foreignConstraintClearedReached",
+    "postOwnershipConstraintReached",
+    "ambiguousIntentReached",
+    "acceptedIntentResponseLostReached",
+    "acceptedResponsibilityResponseLostReached",
+    "reconstructedResponsibilityAfterLossReached",
+    "readyResponsibilityReached",
+    "readyResponsibilityReservedReached",
+    "processLossReached",
+    "repeatedProcessLossReached",
+    "contractionReached"
+  ])
+})
+
+export const freshTaskAdmissionProofObligations = Object.freeze({
+  capacity: Object.freeze({
+    invariants: Object.freeze([
+      "freshEntryRespectsCapacityAtDecision",
+      "freshEntryUsesStableOrder",
+      "graphCandidateStartsNoOperation",
+      "committedTaskHasExactDisposition",
+      "responsibilityHandoffHasNoGap",
+      "readyExistingPrecedesFresh",
+      "existingEntryRespectsCapacityAtDecision",
+      "contractionRetainsOccupants",
+      "capacityProofTypeOk"
+    ]),
+    witnesses: Object.freeze([
+      "threeOccupantsReached",
+      "outsideCandidateEnteredReached",
+      "foreignRejectionReached",
+      "ownedConstraintReached",
+      "handoffReached",
+      "readyReached",
+      "existingReservationReached",
+      "contractionReached",
+      "expansionReached",
+      "retainedNotReadyReached"
+    ])
+  }),
+  ambiguity: Object.freeze({
+    invariants: Object.freeze([
+      "ambiguousIntentRetainsReservation",
+      "ambiguousResponsibilityRetainsCommitment",
+      "acceptedIntentSurvivesUntilExactDisposition",
+      "acceptedResponsibilityHasNoGap",
+      "postOwnershipConstraintDoesNotRelease",
+      "reconcileBeforeAnyReappend",
+      "retriesKeepExactOperation",
+      "processLossDoesNotRelease",
+      "outsideAuthorizationRequiresDisposition",
+      "plannedWorktreeAndHeldLineageStayExact",
+      "responsibilityRequiresExactReadyWorktreeEvidence",
+      "responsibilityHandoffFollowsReadyWorktree",
+      "ambiguityProofTypeOk"
+    ]),
+    witnesses: Object.freeze([
+      "claimAmbiguityReached",
+      "acceptedClaimAmbiguityReached",
+      "responsibilityAmbiguityReached",
+      "acceptedResponsibilityAmbiguityReached",
+      "reconstructedClaimReached",
+      "reconstructedHeldReached",
+      "rejectedReached",
+      "constrainedReached",
+      "repeatedCrashReached",
+      "claimRetryReached",
+      "worktreeRetryReached",
+      "outsideEnteredReached",
+      "claimUnreadableReached",
+      "worktreeUnreadableReached",
+      "foreignConstraintClearedReached"
+    ])
+  })
+})
+
 export const runCancellationObligations = Object.freeze({
   invariants: Object.freeze([
     "exactRunAndOperatorDirection",

@@ -291,6 +291,7 @@ export const controlledTrackerAuthorityLayer = (
         readOriginalTaskClaim: readTaskClaim,
         readTaskClaim: (request) =>
           Effect.gen(function* () {
+            yield* cursor.awaitPromotedCompletionClaimRead(request.taskId)
             const current = yield* currentCompletionObservation(request.taskId).pipe(Effect.orDie)
             return yield* validateAuthoredCompletionRead(request, current)
           }),
