@@ -155,7 +155,8 @@ later task constraint retains the commitment until an accepted phase-specific
 disposition proves release; issue #316 owns that later liveness protocol.
 → `freshTaskAdmission` continuous occupancy, deterministic entry, exact
 handoff, crash preservation, and candidate-without-capability invariants plus
-production-backed conformance; model and adapter pending under issue #315.
+production-backed conformance through the completed issue #315 model and
+adapter.
 
 **D14 One position per attempt, added and released by the exact holder.** An
 attempt occupies at most one task-work position at a time, and an

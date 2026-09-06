@@ -336,20 +336,20 @@ live action ownership. A graph candidate outside the decision has no proposal.
 | Contraction | Existing occupancy is retained; no entrant at or above the new ceiling | `packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.test.ts` — `retains all holders across contraction and admits only after occupancy falls below the new capacity` | `specs/freshTaskAdmission_proof_test.qnt::contractionRetainsThreeOccupantsTest`; `specs/freshTaskAdmission_negative_test.qnt::contractionEvictionTurnsInvariantRedTest` |
 | Expansion | Exactly the next free-capacity prefix enters | `packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.test.ts` — `admits exactly the next two candidates after capacity expands from one to three` | `specs/freshTaskAdmission_proof_test.qnt::expansionAdmitsNextInStableOrderTest`; `specs/freshTaskAdmission_negative_test.qnt::outOfOrderEntryTurnsInvariantRedTest` |
 | Invalid states | Outside authorization, overlap, duplicate occupancy, over-ranked entry, cross-Run authority, and gap handoff cannot be constructed | `packages/orchestrator/src/coordination/delivery/fresh-task-candidate.test.ts` — `preserves the graph-derived candidate order and rejects duplicate task candidates`; `rejects a reflected copy of genuine complete-frontier authority`; `packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.test.ts` — `rejects a genuine other-Run basis and frontier even at the same accepted position`; `refuses a copied reservation before it can release another action's position`; `rejects a mismatched exact handoff without replacing the reserved correlation` | `specs/freshTaskAdmission_negative_test.qnt::overCapacityEntryTurnsInvariantRedTest`; `outOfOrderEntryTurnsInvariantRedTest`; `handoffGapTurnsInvariantRedTest` |
-| End-to-end return | The cassette-free #268 C2b tracer passes DS-01/DS-02 without a strict cursor | Planned #268 seam after #315 integration (these tests do not exist yet): `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `emits the exact DS01 through DS13 delivery checkpoint table`; `retains exact Run attempt claim and resource identities across DS01 through DS13` | Future production evidence only; neither projection models cassette order or Run return |
+| End-to-end return | The cassette-free #268 C2b tracer passes DS-01/DS-02 without a strict cursor | `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts` — `emits the exact DS01 through DS13 delivery checkpoint table`; `retains exact Run attempt claim and resource identities across DS01 through DS13` | Completed production evidence; neither projection models cassette order or Run return |
 
 Focused #54, #193, and #264 through #269 tests remain regression requirements.
 Aggregate test totals do not replace this mapping.
 
 ## Formal ownership and limitations
 
-A new governed subject model owns fresh-task admission accounting from
+The governed subject model owns fresh-task admission accounting from
 process-local entry reservation through durable commitment and exact
 executor-responsibility handoff or conclusive pre-ownership rejection. The
 `runActivation` model continues to own Run establishment and the
 `plannedAttemptExecutor` model continues to own Begin and exact attempt-position
-lifecycle after the handoff. The new executable conformance adapter must invoke
-the real production planning/admission/runtime decision seam. A research-only
+lifecycle after the handoff. The executable conformance adapter invokes the
+real production planning/admission/runtime decision seam. A research-only
 model or an abstraction bound to no code is insufficient.
 
 The model does not own tracker graph construction, claim-provider internals,
