@@ -58,6 +58,10 @@ import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { WorkflowRunBeganEvent } from "../../workflow/registry/event.js"
 import { invalidTargetPromotionHistory, makeTargetPromotionHistoryIndexes } from "./target-promotion-history.js"
 import { reduceWorkflowJournalHistory } from "./history.js"
+import {
+  deriveTargetPromotionState,
+  targetPromotionReconciliationDeferralIssueFor
+} from "../../workflow/protocols/target-promotion/state.js"
 
 const runId = RunId.make("promotion-history-run")
 const target = IntegrationTarget.make({
@@ -433,6 +437,97 @@ it("rejects deferral without the latest attempt, after the final attempt, or twi
   expect(validationDetail(promotionRecord(9, deferredFor(1)), duplicateIndexes, integratorObservations)).toContain(
     "no exact latest unresolved attempt"
   )
+})
+
+it("pure reconstruction rejects every causally impossible promotion reconciliation deferral", () => {
+  const intent = TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })
+  const attemptFor = (ordinal: number) =>
+    TargetPromotionAttemptIntendedEvent.make({
+      attemptOrdinal: TargetPromotionAttemptOrdinal.make(ordinal),
+      correlation,
+      reason:
+        ordinal === 1
+          ? TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: expectedHead })
+          : TargetPromotionAttemptReason.cases.ReconciledExpectedHead.make({
+              observedHeadSha: expectedHead,
+              previousAttemptOrdinal: TargetPromotionAttemptOrdinal.make(ordinal - 1)
+            }),
+      version: workflowJournalEventVersion
+    })
+  const deferredFor = (ordinal: number) =>
+    TargetPromotionReconciliationDeferredEvent.make({
+      afterAttemptOrdinal: TargetPromotionAttemptOrdinal.make(ordinal),
+      correlation,
+      deferral: TargetPromotionReconciliationDeferral.cases.TargetReadFailed.make({
+        detail: "target read unavailable"
+      }),
+      version: workflowJournalEventVersion
+    })
+  const terminal = TargetPromotionStaleEvent.make({
+    basis: TargetPromotionTerminalBasis.cases.AfterAttempt.make({
+      attemptOrdinal: TargetPromotionAttemptOrdinal.make(1)
+    }),
+    correlation,
+    observation: TargetPromotionStaleObservation.cases.CompareAndSetRejected.make({
+      observedHeadSha: GitCommitSha.make("d".repeat(40))
+    }),
+    version: workflowJournalEventVersion
+  })
+
+  expect(targetPromotionReconciliationDeferralIssueFor([promotionRecord(7, deferredFor(1))], correlation)).toContain(
+    "no prior exact promotion intent"
+  )
+  expect(
+    targetPromotionReconciliationDeferralIssueFor(
+      [promotionRecord(6, intent), promotionRecord(7, deferredFor(1))],
+      correlation
+    )
+  ).toContain("no exact latest unresolved attempt")
+  expect(
+    targetPromotionReconciliationDeferralIssueFor(
+      [
+        promotionRecord(6, intent),
+        promotionRecord(7, attemptFor(1)),
+        promotionRecord(8, terminal),
+        promotionRecord(9, deferredFor(1))
+      ],
+      correlation
+    )
+  ).toContain("follows a terminal promotion result")
+  expect(
+    targetPromotionReconciliationDeferralIssueFor(
+      [
+        promotionRecord(6, intent),
+        promotionRecord(7, attemptFor(1)),
+        promotionRecord(8, attemptFor(2)),
+        promotionRecord(9, deferredFor(1))
+      ],
+      correlation
+    )
+  ).toContain("no exact latest unresolved attempt")
+  expect(
+    targetPromotionReconciliationDeferralIssueFor(
+      [
+        promotionRecord(6, intent),
+        promotionRecord(7, attemptFor(1)),
+        promotionRecord(8, deferredFor(1)),
+        promotionRecord(9, deferredFor(1))
+      ],
+      correlation
+    )
+  ).toContain("duplicates the same promotion attempt")
+
+  const validPrefix = [
+    promotionRecord(6, intent),
+    promotionRecord(7, attemptFor(1)),
+    promotionRecord(8, deferredFor(1))
+  ]
+  expect(targetPromotionReconciliationDeferralIssueFor(validPrefix, correlation)).toBeUndefined()
+  expect(deriveTargetPromotionState(validPrefix, correlation)).toMatchObject({
+    _tag: "PromotionReconciliationDeferred",
+    afterAttemptOrdinal: 1,
+    deferral: { _tag: "TargetReadFailed", detail: "target read unavailable" }
+  })
 })
 
 it("rejects terminal observations that contradict M, H, or their causal basis", () => {

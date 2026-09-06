@@ -10,7 +10,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { ActiveTaskClaim, TaskClaimRelease, UnclaimedTask } from "../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
@@ -27,6 +27,7 @@ import {
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
   TaskClaimAcquisitionRejectedEvent,
+  TaskClaimReleasedEvent,
   TaskWorktreeReconciliationIntendedEvent
 } from "../../workflow/registry/event.js"
 import {
@@ -34,7 +35,26 @@ import {
   makeTaskClaimAcquisitionOperation,
   makeTaskWorktreeReconciliationOperation
 } from "../../workflow/registry/operation.js"
-import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  AttemptChoiceRequestId,
+  AttemptChoiceSubject,
+  AttemptImplementationAbandonedEvent,
+  StoppedAttemptClaimNoReleaseObservedEvent
+} from "../../workflow/protocols/attempt-choice/events.js"
+import { CancelledAttemptClaimNoReleaseObservedEvent } from "../../workflow/protocols/run-cancellation/events.js"
+import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import {
+  CompletionClaimReplacedEvent,
+  CompletionTaskClaim,
+  FocusedCompletedTaskObservation,
+  IntegrationFinalitySettledEvent
+} from "../../workflow/protocols/integration-finality/events.js"
+import { IntegratorRunQualifiedCandidate } from "../../workflow/protocols/integrator/events.js"
+import { targetPromotionCorrelationFor } from "../../workflow/protocols/target-promotion/events.js"
 import { requiredPreStartTaskWorkPositionsOf } from "./required-planned-attempt-positions.js"
 
 const runId = RunId.make("pre-start-reconstruction-run")
@@ -102,6 +122,63 @@ const executorBegan = record(
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId)
 )
 
+const foreignClaim = ActiveTaskClaim.make({
+  ...claim,
+  operationId: OperationId.make("claim-A-foreign"),
+  token: ClaimToken.make("claim-token-A-foreign")
+})
+const choiceRequestId = AttemptChoiceRequestId.make({ nonce: "pre-start-claim-ending", runId })
+const choiceSubject = AttemptChoiceSubject.make({
+  observedTaskRevision: TaskRevision.make("revision-A-changed"),
+  plannedAttempt
+})
+const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
+  ...integrationFinalityFixture.qualifiedCandidate,
+  run: {
+    ...integrationFinalityFixture.qualifiedCandidate.run,
+    session: { ...integrationFinalityFixture.qualifiedCandidate.run.session, plannedAttempt }
+  }
+})
+const completionClaim = CompletionTaskClaim.make({
+  originalClaim: claim,
+  plannedAttempt,
+  promotionCorrelation: targetPromotionCorrelationFor(qualifiedCandidate)
+})
+const completionSuccessObservation = FocusedCompletedTaskObservation.make({
+  ...integrationFinalityFixture.successObservation,
+  claim: completionClaim,
+  taskId,
+  taskRevision: plannedAttempt.taskRevision
+})
+
+const stoppedNoRelease = (
+  expectedClaim: ActiveTaskClaim,
+  observation: ActiveTaskClaim | UnclaimedTask
+): JournalRecord["event"] =>
+  StoppedAttemptClaimNoReleaseObservedEvent.make({
+    expectedClaim,
+    observation,
+    observationOperationId: OperationId.make("pre-start-stopped-claim-read"),
+    occurrenceClassification: "NonActionOccurrence",
+    requestId: choiceRequestId,
+    subject: choiceSubject,
+    version: workflowJournalEventVersion
+  })
+
+const cancelledNoRelease = (
+  expectedClaim: ActiveTaskClaim,
+  observation: ActiveTaskClaim | UnclaimedTask
+): JournalRecord["event"] =>
+  CancelledAttemptClaimNoReleaseObservedEvent.make({
+    cancellationAppliedAt: JournalPosition.make(4),
+    expectedClaim,
+    observation,
+    observationOperationId: OperationId.make("pre-start-cancelled-claim-read"),
+    occurrenceClassification: "NonActionOccurrence",
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+
 const reconstructed = (records: ReadonlyArray<JournalRecord>, entries = []) =>
   requiredPreStartTaskWorkPositionsOf({ runId, responsibility: { entries }, workflowHistory: { records } })
 
@@ -151,6 +228,74 @@ it("does not resurrect a position after conclusive rejection or executor respons
   // The current responsibility projection is intentionally empty: journal history, not a stale map entry,
   // proves that executor responsibility began and therefore ends the pre-start phase.
   expect(reconstructed([claimIntent, claimAcquired, plan, executorBegan])).toEqual([])
+})
+
+it.each([
+  {
+    event: TaskClaimReleasedEvent.make({
+      release: TaskClaimRelease.make({ claim, operationId: OperationId.make("pre-start-claim-release") }),
+      version: workflowJournalEventVersion
+    }),
+    label: "exact claim release"
+  },
+  { event: stoppedNoRelease(claim, UnclaimedTask.make({ taskId })), label: "stopped-attempt unclaimed observation" },
+  { event: stoppedNoRelease(claim, foreignClaim), label: "stopped-attempt foreign-claim observation" },
+  {
+    event: cancelledNoRelease(claim, UnclaimedTask.make({ taskId })),
+    label: "cancelled-attempt unclaimed observation"
+  },
+  { event: cancelledNoRelease(claim, foreignClaim), label: "cancelled-attempt foreign-claim observation" },
+  {
+    event: AttemptImplementationAbandonedEvent.make({
+      expectedClaim: claim,
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      proof: { _tag: "AcceptedReport", reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(1) },
+      requestId: choiceRequestId,
+      subject: choiceSubject,
+      version: workflowJournalEventVersion
+    }),
+    label: "attempt abandonment"
+  },
+  {
+    event: CompletionClaimReplacedEvent.make({
+      claim: completionClaim,
+      operationId: OperationId.make("pre-start-completion-claim-replacement"),
+      version: workflowJournalEventVersion
+    }),
+    label: "completion-claim replacement"
+  },
+  {
+    event: IntegrationFinalitySettledEvent.make({
+      claim: completionClaim,
+      deletionOperationId: OperationId.make("pre-start-completion-claim-deletion"),
+      replacementOperationId: OperationId.make("pre-start-completion-claim-replacement"),
+      successObservation: completionSuccessObservation,
+      version: workflowJournalEventVersion
+    }),
+    label: "integration finality settlement"
+  }
+])("ends the exact pre-start claim after $label", ({ event }) => {
+  expect(
+    reconstructed([claimIntent, claimAcquired, plan, record(6, event, outcomeRecordKey(claimOperationId))])
+  ).toEqual([])
+})
+
+it.each([
+  { event: stoppedNoRelease(foreignClaim, UnclaimedTask.make({ taskId })), label: "a foreign expected claim" },
+  { event: stoppedNoRelease(claim, UnclaimedTask.make({ taskId: TaskId.make("other-task") })), label: "another task" },
+  { event: cancelledNoRelease(claim, claim), label: "the still-current exact claim" }
+])("does not end the pre-start claim from a no-release observation of $label", ({ event }) => {
+  expect(
+    reconstructed([claimIntent, claimAcquired, plan, record(6, event, outcomeRecordKey(claimOperationId))])
+  ).toEqual([
+    {
+      _tag: "PlannedPreStartTaskWorkPosition",
+      claimOperationId,
+      correlation: { attemptId: plannedAttempt.attemptId, runId },
+      taskId
+    }
+  ])
 })
 
 it("does not upgrade a claim position from a foreign-run or unrelated same-run plan", () => {

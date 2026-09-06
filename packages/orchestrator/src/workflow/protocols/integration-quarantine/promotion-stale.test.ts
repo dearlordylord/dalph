@@ -45,6 +45,7 @@ import {
   IntegrationPromotionStaleQuarantineRejected,
   pendingPromotionStaleIntegrationQuarantineFor
 } from "./promotion-stale.js"
+import { promotionStaleQuarantineEvidenceIssue } from "./promotion-stale-evidence.js"
 import { deriveIntegrationQuarantineState } from "./state.js"
 
 const candidate = integrationFinalityFixture.qualifiedCandidate
@@ -110,6 +111,34 @@ it.effect("rejects quarantine after a stale pre-request read or a missing compar
       expect(failure).toBeInstanceOf(IntegrationPromotionStaleQuarantineRejected)
     }
   })
+)
+
+it.effect("rejects non-stale and unchanged-head promotion evidence with exact diagnostics", () =>
+  Effect.gen(function* () {
+    const stale = yield* appendStaleScenario("DirectRejectionAfterAttempt")
+    const journal = yield* JournalStore
+    const records = yield* journal.read(runId)
+    const attempt = records.find(({ event }) => event._tag === "TargetPromotionAttemptIntended")
+    if (stale.event._tag !== "TargetPromotionStale" || attempt === undefined) {
+      return yield* Effect.die("promotion evidence guard fixture lacks its stale result or attempt intent")
+    }
+    const unchangedHead = {
+      ...stale,
+      event: TargetPromotionStaleEvent.make({
+        ...stale.event,
+        observation: TargetPromotionStaleObservation.cases.CompareAndSetRejected.make({
+          observedHeadSha: candidate.run.session.expectedTargetHead
+        })
+      })
+    }
+
+    for (const [label, evidence, expected] of [
+      ["non-stale event", attempt, "evidence is not a target-promotion stale event"],
+      ["unchanged expected head", unchangedHead, "promotion-stale quarantine cannot follow an unchanged expected head"]
+    ] as const) {
+      expect(promotionStaleQuarantineEvidenceIssue(records, evidence), label).toBe(expected)
+    }
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
 it.effect("records one quarantine after Git directly rejects the exact compare-and-set", () =>

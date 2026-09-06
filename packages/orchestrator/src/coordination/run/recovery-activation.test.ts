@@ -647,7 +647,7 @@ const settledSuspensionCommands = (startPosition: number, count: number): Readon
 
 type PausedIntegrationScenario = {
   readonly responsibility: StartedIntegrationResponsibility
-  readonly transitions: readonly [RunnableFrontierTransition]
+  readonly transitions: readonly [RunnableFrontierTransition, RunnableFrontierTransition]
   readonly intents: readonly [JournalRecord["event"]]
 }
 
@@ -691,7 +691,10 @@ const pausedIntegrationScenario = (suffix: string, startedAt: number): PausedInt
   })
   return {
     responsibility,
-    transitions: [RunnableFrontierTransition.RunTargetPromotion({ candidate: qualifiedCandidate, responsibility })],
+    transitions: [
+      RunnableFrontierTransition.RunTargetPromotion({ candidate: qualifiedCandidate, responsibility }),
+      RunnableFrontierTransition.ReconcileTargetPromotionAttempt({ candidate: qualifiedCandidate, responsibility })
+    ],
     intents: [promotionIntent]
   }
 }
@@ -5157,7 +5160,7 @@ it("reconciles each exact pre-Pause integration intent but filters a post-Pause 
     pause: { run: { _tag: "RunPaused" }, tasks: { _tag: "TaskPauses", taskIds: [coverageAttempt.taskId] } }
   }
 
-  for (const index of [0]) {
+  for (const index of [0, 1]) {
     const beforeTransition = Option.getOrThrow(Option.fromUndefinedOr(beforePause.transitions[index]))
     const afterTransition = Option.getOrThrow(Option.fromUndefinedOr(afterPause.transitions[index]))
     const frontier = filterFrontierForActivePauses(

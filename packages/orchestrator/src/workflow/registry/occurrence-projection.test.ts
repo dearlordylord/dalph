@@ -180,6 +180,8 @@ import {
   TargetPromotionIntendedEvent,
   TargetPromotionNonConvergenceEvent,
   TargetPromotionObservedSuccessEvent,
+  TargetPromotionReconciliationDeferredEvent,
+  TargetPromotionReconciliationDeferral,
   TargetPromotionSuccessObservation,
   TargetPromotionStaleEvent,
   targetPromotionCorrelationFor
@@ -2375,6 +2377,27 @@ it.effect("projects valid historical worktree and promotion terminal outcomes", 
       },
       version: workflowJournalEventVersion
     })
+    const deferred = TargetPromotionReconciliationDeferredEvent.make({
+      afterAttemptOrdinal: TargetPromotionAttemptOrdinal.make(1),
+      correlation: prefix.promotionCorrelation,
+      deferral: TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({
+        observedHeadSha: prefix.integratorRun.session.expectedTargetHead
+      }),
+      version: workflowJournalEventVersion
+    })
+    const deferredProjection = yield* projectWorkflowOccurrences([
+      ...prefix.records,
+      historicalRecord(15, intent),
+      historicalRecord(16, attempt),
+      historicalRecord(17, deferred)
+    ])
+    expect(deferredProjection.occurrences.at(-1)).toMatchObject({
+      _tag: "TargetPromotionReconciliationDeferred",
+      afterAttemptOrdinal: 1,
+      correlation: prefix.promotionCorrelation,
+      deferral: { _tag: "RetryAuthorityRequired", observedHeadSha: prefix.integratorRun.session.expectedTargetHead }
+    })
+
     const successProjection = yield* projectWorkflowOccurrences([
       ...prefix.records,
       historicalRecord(15, intent),
@@ -2490,6 +2513,28 @@ it.effect("rejects historical outcomes when exact earlier correlation or chronol
       lastObservation: { _tag: "ExpectedHeadStillObserved", observedHeadSha: session.expectedTargetHead },
       version: workflowJournalEventVersion
     })
+    const reconciliationDeferral = TargetPromotionReconciliationDeferredEvent.make({
+      afterAttemptOrdinal: TargetPromotionAttemptOrdinal.make(1),
+      correlation: prefix.promotionCorrelation,
+      deferral: TargetPromotionReconciliationDeferral.cases.TargetReadFailed.make({
+        detail: "historical target read unavailable"
+      }),
+      version: workflowJournalEventVersion
+    })
+    const foreignExpectedHead = GitCommitSha.make("9".repeat(40))
+    const foreignQualifiedCandidate = IntegratorRunQualifiedCandidate.make({
+      ...prefix.qualifiedCandidate,
+      directParents: [foreignExpectedHead, prefix.qualifiedCandidate.directParents[1]],
+      run: {
+        ...prefix.qualifiedCandidate.run,
+        session: { ...prefix.qualifiedCandidate.run.session, expectedTargetHead: foreignExpectedHead }
+      }
+    })
+    const foreignPromotionCorrelation = targetPromotionCorrelationFor(foreignQualifiedCandidate)
+    const foreignReconciliationDeferral = TargetPromotionReconciliationDeferredEvent.make({
+      ...reconciliationDeferral,
+      correlation: foreignPromotionCorrelation
+    })
     const quarantineBasis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
       detail: IntegrationQuarantineFailureDetail.make("historical invalid successor absence"),
       ownedActivityProvenAbsentAt: JournalPosition.make(11)
@@ -2559,6 +2604,14 @@ it.effect("rejects historical outcomes when exact earlier correlation or chronol
         historicalRecord(15, promotionIntent),
         historicalRecord(16, attempt),
         historicalRecord(17, attempt)
+      ],
+      [historicalRecord(15, reconciliationDeferral)],
+      [...prefix.records, historicalRecord(15, promotionIntent), historicalRecord(16, reconciliationDeferral)],
+      [
+        ...prefix.records,
+        historicalRecord(15, promotionIntent),
+        historicalRecord(16, attempt),
+        historicalRecord(17, foreignReconciliationDeferral)
       ],
       [historicalRecord(15, successAfterAttempt)],
       [...prefix.records, historicalRecord(15, promotionIntent), historicalRecord(16, successAfterAttempt)],
