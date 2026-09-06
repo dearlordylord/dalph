@@ -727,26 +727,38 @@ it.effect(
         )
 
         const terminated = yield* Ref.make(false)
-        const activationDriver = Effect.forEach(
-          Array.from({ length: maxActivationPasses }),
-          () =>
-            Ref.get(terminated).pipe(
-              Effect.flatMap((done) =>
-                done
-                  ? Effect.void
-                  : activate.pipe(
-                      Effect.flatMap((decision) =>
-                        decision._tag === "RunMayTerminate" ? Ref.set(terminated, true) : Effect.void
-                      )
-                    )
-              )
-            ),
-          { discard: true }
-        ).pipe(
-          Effect.provide(application),
-          Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: journalFilename })))
+        // Stop at the next fixture milestone: A/B and the Integrators are
+        // deliberately held by this test, so repeated idle activations cannot
+        // advance them. Retain a hard pass bound for failed convergence.
+        const driveUntil = (phase: string, reached: Effect.Effect<boolean>) =>
+          Effect.gen(function* () {
+            yield* Effect.forEach(
+              Array.from({ length: maxActivationPasses }),
+              () =>
+                reached.pipe(
+                  Effect.flatMap((done) =>
+                    done
+                      ? Effect.void
+                      : activate.pipe(
+                          Effect.flatMap((decision) =>
+                            decision._tag === "RunMayTerminate" ? Ref.set(terminated, true) : Effect.void
+                          )
+                        )
+                  )
+                ),
+              { discard: true }
+            )
+            if (!(yield* reached)) return yield* Effect.die(`hermetic concurrency did not reach ${phase}`)
+          }).pipe(
+            Effect.provide(application),
+            Effect.provide(
+              ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: journalFilename }))
+            )
+          )
+        yield* driveUntil(
+          "both children started",
+          Ref.get(childHandles).pipe(Effect.map((handles) => handles.has("A") && handles.has("B")))
         )
-        yield* activationDriver
         yield* Deferred.await(taskValue(childReady, "A"))
         yield* Deferred.await(taskValue(childReady, "B"))
         const handlesAfterOverlap = yield* Ref.get(childHandles)
@@ -778,7 +790,7 @@ it.effect(
         expect(yield* Ref.get(childTerminalOrder)).toEqual(["B", "A"])
         expect((yield* Ref.get(executorReports)).get("B")?._tag).toBe("ExecutorWorkExecuting")
 
-        const integrationFiber = yield* activationDriver.pipe(Effect.forkScoped)
+        const integrationFiber = yield* driveUntil("dependant started", Ref.get(dStarted)).pipe(Effect.forkScoped)
         yield* Deferred.await(taskValue(integratorStarted, "A"))
 
         // This is the explicit A acceptance barrier: only after Dalph has
@@ -801,7 +813,7 @@ it.effect(
         yield* Deferred.await(dStartedAfterGraph)
         yield* Deferred.await(taskValue(terminalProjectionReady, "D"))
         yield* Fiber.join(integrationFiber)
-        yield* activationDriver
+        yield* driveUntil("Run terminated", Ref.get(terminated))
         expect(yield* Ref.get(terminated)).toBe(true)
 
         const records = yield* Effect.gen(function* () {
