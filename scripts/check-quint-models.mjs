@@ -1,3 +1,4 @@
+import { createRequire } from "node:module"
 import { performance } from "node:perf_hooks"
 
 import { applicationExitCheckRegistry } from "./application-exit-model-registry.mjs"
@@ -22,11 +23,11 @@ import {
 } from "./quint-temporal-gate.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 
-const pnpmEntryPoint = process.env.npm_execpath
-
-if (pnpmEntryPoint === undefined) {
+if (process.env.npm_execpath === undefined) {
   throw new Error("Run this model gate through pnpm")
 }
+
+const quintEntryPoint = createRequire(import.meta.url).resolve("@informalsystems/quint/dist/src/cli.js")
 
 const startedAt = performance.now()
 const completedStageTimings = []
@@ -38,7 +39,7 @@ const run = async (name, args, options = {}) => {
   process.stdout.write(`\n== ${name} ==\n`)
   const stageStartedAt = performance.now()
   const result = await runBoundedCommand({
-    args: [pnpmEntryPoint, "quint", ...args],
+    args: [quintEntryPoint, ...args],
     executable: process.execPath,
     name,
     timeoutMilliseconds: remainingSafetyTimeoutMilliseconds(),
