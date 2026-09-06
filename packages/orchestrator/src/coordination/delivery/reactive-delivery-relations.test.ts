@@ -13,10 +13,13 @@ import {
   TaskId,
   TaskRevision,
   WorktreeLocator,
-  plannedAttemptExecutorCorrelation
+  plannedAttemptExecutorCorrelation,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { Cause, Deferred, Effect, Fiber, Layer, Option, Ref, Stream } from "effect"
 import { expect } from "vitest"
+import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
+import { validSnapshot } from "../../../test/task-dag.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
@@ -25,15 +28,26 @@ import { InitialControlPolicy } from "../../control/policy.js"
 import { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { OperationId } from "../../workflow/identity.js"
-import { TaskAttemptPlannedEvent, taskTrackerReadIntent } from "../../workflow/registry/event.js"
+import {
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
+  taskTrackerReadIntent
+} from "../../workflow/registry/event.js"
 import {
   makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
   makeTaskClaimReleaseOperation,
   makeTrackerGraphObservationOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
   TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { makeTaskTrackerFactsObservedFromRead } from "../../workflow/protocols/task-tracker-read/protocol.js"
@@ -104,6 +118,11 @@ const integrationTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/reactive-delivery.git")
 })
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+const recoveredSpecification = makeTaskWorkSpecification({
+  body: "Continue the recovered reactive-delivery task.",
+  taskId: TaskId.make("recovered-task"),
+  title: "Recovered reactive-delivery task"
+})
 const recoveredAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("reactive-delivery-recovered-attempt"),
   baseSha: GitCommitSha.make("1".repeat(40)),
@@ -111,9 +130,32 @@ const recoveredAttempt = PlannedTaskAttempt.make({
   executor: TaskExecutorLocator.make("executor:reactive-delivery-test"),
   runId,
   taskId: TaskId.make("recovered-task"),
-  taskRevision: TaskRevision.make("reactive-delivery-recovered-revision"),
+  taskRevision: TaskRevision.make(recoveredSpecification.fingerprint),
   worktree: WorktreeLocator.make("/worktrees/reactive-delivery-recovered")
 })
+const recoveredClaim = ActiveTaskClaim.make({
+  operationId: OperationId.make("reactive-delivery-recovered-claim"),
+  owner: ClaimOwner.make("reactive-delivery-test"),
+  taskId: recoveredAttempt.taskId,
+  token: ClaimToken.make("reactive-delivery-recovered-token")
+})
+const recoveredClaimOperation = makeTaskClaimAcquisitionOperation({
+  acquisition: recoveredClaim,
+  predecessorOperationIds: []
+})
+const recoveredGraphOperation = makeTrackerGraphObservationOperation(
+  { _tag: "WorkflowEstablishment" },
+  OperationId.make("reactive-delivery-recovered-graph"),
+  target,
+  [recoveredClaim.operationId],
+  [recoveredAttempt.taskId]
+)
+const recoveredSpecificationOperation = makeTaskWorkSpecificationObservationOperation(
+  OperationId.make("reactive-delivery-recovered-specification"),
+  target,
+  recoveredAttempt.taskId,
+  [recoveredGraphOperation.operationId]
+)
 
 const makeJournalService = Effect.gen(function* () {
   const storage = yield* JournalStore
@@ -129,12 +171,79 @@ const appendExecutorResponsibility = Effect.fn("ReactiveDeliveryTest.appendExecu
   const plan = makeTaskAttemptPlanOperation({
     operationId: OperationId.make("reactive-delivery-recovered-plan"),
     plannedAttempt: recoveredAttempt,
-    predecessorOperationIds: []
+    predecessorOperationIds: [recoveredSpecificationOperation.operationId]
   })
+  const worktree = makeTaskWorktreeReconciliationOperation({
+    operationId: OperationId.make("reactive-delivery-recovered-worktree"),
+    plannedAttempt: recoveredAttempt,
+    predecessorOperationIds: [plan.operationId]
+  })
+  const worktreeProof = PlannedWorktreeReady.make({
+    baseSha: recoveredAttempt.baseSha,
+    branch: recoveredAttempt.branch,
+    headSha: recoveredAttempt.baseSha,
+    worktree: recoveredAttempt.worktree
+  })
+  yield* journal.append(
+    runId,
+    intentRecordKey(recoveredClaim.operationId),
+    TaskClaimAcquisitionIntendedEvent.make({ operation: recoveredClaimOperation, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(recoveredClaim.operationId),
+    TaskClaimAcquiredEvent.make({ claim: recoveredClaim, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    runId,
+    intentRecordKey(recoveredGraphOperation.operationId),
+    taskTrackerReadIntent(recoveredGraphOperation)
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(recoveredGraphOperation.operationId),
+    taskTrackerFactsObservedEvent(
+      recoveredGraphOperation.operationId,
+      makeCompleteTaskTrackerFactsObserved(
+        recoveredGraphOperation,
+        validSnapshot({
+          revision: "reactive-delivery-recovered-graph-revision",
+          tasks: [{ id: recoveredAttempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+        })
+      )
+    )
+  )
+  yield* journal.append(
+    runId,
+    intentRecordKey(recoveredSpecificationOperation.operationId),
+    taskTrackerReadIntent(recoveredSpecificationOperation)
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(recoveredSpecificationOperation.operationId),
+    taskTrackerFactsObservedEvent(
+      recoveredSpecificationOperation.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(recoveredSpecificationOperation, recoveredSpecification)
+    )
+  )
   yield* journal.append(
     runId,
     attemptPlanRecordKey(recoveredAttempt.attemptId),
     TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    runId,
+    intentRecordKey(worktree.operationId),
+    TaskWorktreeReconciliationIntendedEvent.make({ operation: worktree, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(worktree.operationId),
+    TaskWorktreeReadyEvent.make({
+      operationId: worktree.operationId,
+      proof: worktreeProof,
+      version: workflowJournalEventVersion
+    })
   )
   yield* journal.append(
     runId,
@@ -337,7 +446,11 @@ it.effect("records the initial and later exact production bundles without changi
         journal,
         currentProjection(journal.state.get.pipe(Effect.orDie))
       ).pipe(Effect.provideService(DeliveryRelationPublicationObserver, observer))
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("observed-production-bundle"), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("observed-production-bundle"),
+        target
+      )
       const projected = projectTrackerSnapshot({
         revision: "observed-production-revision",
         tasks: [{ id: TaskId.make("A"), lifecycle: { _tag: "Open" as const }, parentTaskId: null, prerequisiteIds: [] }]
@@ -386,7 +499,11 @@ it.effect("keeps foreign tracker facts out of the target-bound public delivery r
         revision: string,
         taskIds: ReadonlyArray<string>
       ) {
-        const operation = makeTrackerGraphObservationOperation(operationId, graphTarget)
+        const operation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          operationId,
+          graphTarget
+        )
         const projected = projectTrackerSnapshot({
           revision,
           tasks: taskIds.map((id) => ({
@@ -434,18 +551,20 @@ it.effect("keeps foreign tracker facts out of the target-bound public delivery r
       }
       expect(evaluation.proposedActions).toMatchObject({
         _tag: "DeliveryProposalsAvailable",
-        proposals: [
+        freshTaskCandidates: [
           {
-            route: {
-              _tag: "FreshWorkflowRoute",
+            _tag: "FreshTaskCandidate",
+            decision: {
               step: {
                 _tag: "ReadCurrentTaskGraph",
                 predecessorOperationId: OperationId.make("reactive-delivery-target-A"),
                 task: { id: TaskId.make("A") }
               }
-            }
+            },
+            taskId: TaskId.make("A")
           }
-        ]
+        ],
+        proposals: []
       })
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
@@ -502,6 +621,40 @@ it.effect("retains the exact task-work position after a safe report when a later
         { attemptId: recoveredAttempt.attemptId, runId, taskId: recoveredAttempt.taskId }
       ])
       expect(current.taskWork.held).toEqual([expectedPosition])
+      const admission = yield* makeDeliveryRuntimeAdmissionController(
+        current.taskWork,
+        yield* makeIntegrationTargetResourceController(),
+        (yield* makeApplicationExitLifecycle()).admission
+      ).pipe(Effect.provide(Layer.fresh(plannedAttemptProtocolControllerLayer)))
+      expect(yield* admission.tryReserve(nextAttemptProposal())).toMatchObject({
+        _tag: "Deferred",
+        reason: "TaskWorkPositionUnavailable"
+      })
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
+it.effect("reconstructs the exact position when the process stops after responsibility and before Begin", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      yield* appendExecutorResponsibility(journal)
+
+      const records = (yield* journal.state.get).records
+      expect(records.some(({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan")).toBe(true)
+      expect(records.some(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toBe(false)
+
+      const recovery = yield* makeRunRecoveryProjection(runId).pipe(Effect.provideService(InRunJournal, journal))
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const current = yield* relation.get
+
+      expect(recovery.reconstructedPlannedAttemptPositions).toEqual([
+        { attemptId: recoveredAttempt.attemptId, runId, taskId: recoveredAttempt.taskId }
+      ])
+      expect(current.taskWork.held).toEqual([
+        { correlation: plannedAttemptExecutorCorrelation(recoveredAttempt), taskId: recoveredAttempt.taskId }
+      ])
       const admission = yield* makeDeliveryRuntimeAdmissionController(
         current.taskWork,
         yield* makeIntegrationTargetResourceController(),
@@ -630,8 +783,16 @@ it.effect("publishes journaled G1 and equal-content G2 through one reactive deli
       const current = yield* signal.get
       expect(current.graph._tag).toBe("GraphNotEstablished")
       const firstDeliverySeen = yield* Deferred.make<void>()
-      const first = makeTrackerGraphObservationOperation(OperationId.make("integrated-G1"), target)
-      const second = makeTrackerGraphObservationOperation(OperationId.make("integrated-G2"), target)
+      const first = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("integrated-G1"),
+        target
+      )
+      const second = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("integrated-G2"),
+        target
+      )
       const observed = yield* signal.changes.pipe(
         Stream.tap((value) =>
           value.graph._tag === "GraphEstablished" && value.graph.observation.operationId === first.operationId
@@ -711,15 +872,27 @@ it.effect("waits for the accepted journal position to reach delivery planning be
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
       const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("publication-handshake"), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("publication-handshake"),
+        target
+      )
 
-      yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+      const accepted = yield* journal.append(
+        runId,
+        intentRecordKey(operation.operationId),
+        taskTrackerReadIntent(operation)
+      )
       yield* Deferred.await(refreshStarted)
       const waiting = yield* publication.awaitCurrent.pipe(Effect.forkChild)
       yield* Effect.yieldNow
       expect(waiting.pollUnsafe()).toBeUndefined()
       yield* Deferred.succeed(projectionBlocked, undefined)
-      yield* Fiber.join(waiting)
+      expect(yield* Fiber.join(waiting)).toEqual({
+        _tag: "DeliveryAcceptedPublicationBoundary",
+        acceptedThrough: accepted.position,
+        runId
+      })
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
 )
@@ -747,7 +920,11 @@ it.effect("removes an interrupted accepted-fact waiter before the next publicati
       }
       const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery)
       const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("interrupted-publication-waiter"), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("interrupted-publication-waiter"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
       yield* Deferred.await(refreshStarted)
 
@@ -781,7 +958,11 @@ it.effect("cancels an accepted-fact waiter after it has crossed the publication 
         currentProjection(journal.state.get.pipe(Effect.orDie))
       )
       const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("cancelled-publication-waiter"), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("cancelled-publication-waiter"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
 
       const waiting = yield* publication.awaitCurrent.pipe(Effect.forkChild)
@@ -840,11 +1021,17 @@ it.effect("keeps a recovered paused Run passive before its first current graph",
       const evaluation = Option.getOrThrow(yield* relation.changes.pipe(Stream.runHead))
 
       expect(evaluation.current.trackerGraph._tag).toBe("GraphNotEstablished")
-      expect(evaluation.proposedActions).toEqual({
+      expect(evaluation.proposedActions).toMatchObject({
         _tag: "DeliveryProposalsAvailable",
+        freshTaskCandidates: [],
         isolatedIssues: [],
         proposals: []
       })
+      if (evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") return
+      const frontier = evaluation.proposedActions.freshTaskCandidateFrontier
+      if (frontier === undefined) return expect.fail("paused delivery should expose a candidate frontier")
+      expect(frontier).toMatchObject({ _tag: "FreshTaskCandidateFrontier", candidates: [] })
+      expect(frontier.entryCapableTaskIds.size).toBe(0)
       expect(evaluation.quiescence).toEqual({ _tag: "QuiescencePassive", reason: "RunPaused" })
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
@@ -891,7 +1078,11 @@ it.effect("retries reconstruction when a journal append lands during recovery pr
       )
 
       yield* Deferred.await(firstProjectionRead)
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("coherent-race-read"), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("coherent-race-read"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
       const projected = projectTrackerSnapshot({ revision: "coherent-race", tasks: [] })
       if (projected._tag === "Invalid") return yield* Effect.die(new Error("race graph must be valid"))
@@ -922,7 +1113,11 @@ it.effect("does not turn an accepted Running report into tracker graph-read auth
   Effect.scoped(
     Effect.gen(function* () {
       const journal = yield* makeJournalService
-      const graphOperation = makeTrackerGraphObservationOperation(OperationId.make("report-authority-graph"), target)
+      const graphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("report-authority-graph"),
+        target
+      )
       const projected = projectTrackerSnapshot({ revision: "report-authority-revision", tasks: [] })
       if (projected._tag === "Invalid") return yield* Effect.die(projected)
       yield* journal.append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
@@ -1111,7 +1306,11 @@ it.effect("publishes a typed relation failure when a later recovery projection f
 
       yield* Ref.set(failProjection, true)
       const failed = yield* relation.changes.pipe(Stream.drop(1), Stream.runHead, Effect.flip, Effect.forkChild)
-      const trigger = makeTrackerGraphObservationOperation(OperationId.make("projection-failure-trigger"), target)
+      const trigger = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("projection-failure-trigger"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(trigger.operationId), taskTrackerReadIntent(trigger))
       const failure = yield* Fiber.join(failed)
       const currentFailure = yield* relation.get.pipe(Effect.flip)
@@ -1135,7 +1334,11 @@ it.effect("derives safely when recovery evidence is unavailable before and after
       const initial = Option.getOrThrow(yield* initialRelation.changes.pipe(Stream.runHead))
       expect(initial.current.trackerGraph._tag).toBe("GraphNotEstablished")
 
-      const operation = makeTrackerGraphObservationOperation(OperationId.make("unavailable-evidence-graph"), target)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("unavailable-evidence-graph"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
       const projected = projectTrackerSnapshot({ revision: "unavailable-evidence", tasks: [] })
       if (projected._tag === "Invalid") return yield* Effect.die("unavailable-evidence graph must be valid")
@@ -1187,7 +1390,11 @@ it.effect("publishes a typed failure when journal-triggered reconciliation canno
       yield* Ref.set(failRead, true)
       const publicationFailure = yield* publication.awaitCurrent.pipe(Effect.flip)
       const failed = yield* relation.changes.pipe(Stream.drop(1), Stream.runHead, Effect.flip, Effect.forkChild)
-      const trigger = makeTrackerGraphObservationOperation(OperationId.make("journal-read-failure-trigger"), target)
+      const trigger = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("journal-read-failure-trigger"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(trigger.operationId), taskTrackerReadIntent(trigger))
       const failure = yield* Fiber.join(failed)
 
@@ -1269,7 +1476,11 @@ it.effect("fails an accepted-fact waiter when the journal signal fails", () =>
         currentProjection(journal.state.get.pipe(Effect.orDie))
       )
       const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
-      const trigger = makeTrackerGraphObservationOperation(OperationId.make("pending-waiter-failure-trigger"), target)
+      const trigger = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("pending-waiter-failure-trigger"),
+        target
+      )
       yield* journal.append(runId, intentRecordKey(trigger.operationId), taskTrackerReadIntent(trigger))
       const waiting = yield* publication.awaitCurrent.pipe(Effect.flip, Effect.forkChild)
       yield* Effect.yieldNow

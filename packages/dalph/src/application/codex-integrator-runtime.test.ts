@@ -1,5 +1,5 @@
 import { AttemptId, RunId } from "@dalph/contracts"
-import { Effect } from "effect"
+import { Effect, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   CodexAppServer,
@@ -23,6 +23,8 @@ const exactThread: CodexThreadSnapshot = {
 
 const appFor = (resume: CodexAppServerService["resumeThread"]): CodexAppServerService =>
   CodexAppServer.of({
+    attachOwnedActivityHints: Effect.succeed(Stream.empty),
+    attachTurnCompletedHints: Effect.succeed(Stream.empty),
     incarnation: CodexServerIncarnation.make("runtime-incarnation"),
     startThread: () => Effect.succeed(exactThread),
     readThread: () => Effect.succeed(exactThread),

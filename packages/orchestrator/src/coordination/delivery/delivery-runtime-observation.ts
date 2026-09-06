@@ -3,17 +3,11 @@ import type { OperationId } from "../../workflow/identity.js"
 import type { DeliveryAdmissionReservation, DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { currentSignalFromCurrentFirstStream, type CurrentSignal, type DeliveryRuntimeEvaluation } from "./relations.js"
 import type { DeliveryActionProposal, DeliveryProposalId } from "./delivery-action-proposal.js"
-import { deliveryProposalOrderTaskId } from "./delivery-action-proposal.js"
 import {
   DeliveryActionProtocolAdmissionMissing,
   type DeliveryActionExecutionLease
 } from "./delivery-action-executor.js"
 import { withPlannedAttemptProtocolPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
-import {
-  failExecutorPlanBinding,
-  failPreStartClaimBinding,
-  failPreStartPlanBinding
-} from "./delivery-runtime-task-work-position.js"
 
 /** The process-local action's intent state after its exact OperationId exists. */
 export type DeliveryRuntimeActionIntent = "IntentNotRecorded" | "IntentRecorded"
@@ -166,59 +160,11 @@ export const makeObservedDeliveryActionLease = (
     owner.reservation.acquiredIntegrationResponsibility === null
       ? Effect.void
       : integrationTargets.publishAcceptedOwnership(owner.reservation.acquiredIntegrationResponsibility),
-  bindPreStartTaskWorkPosition: (claimOperationId) => {
+  bindPlannedAttemptPosition: (plannedAttempt, acceptedResponsibility) => {
     const requirement = owner.proposal.admission.taskWorkPosition
-    const taskId = deliveryProposalOrderTaskId(owner.proposal.order)
-    if (requirement._tag !== "PreStartTaskWorkPositionRequired") {
-      return taskId === null
-        ? Effect.die("pre-start claim binding requires a task-scoped delivery proposal")
-        : failPreStartClaimBinding({ claimOperationId, reason: "UnexpectedPositionPhase", taskId, position: undefined })
-    }
-    if (requirement.mode === "ReuseExisting" && requirement.claimOperationId !== claimOperationId) {
-      return failPreStartClaimBinding({
-        claimOperationId,
-        reason: "ClaimOperationMismatch",
-        taskId: requirement.taskId,
-        position: undefined
-      })
-    }
-    return admission.bindPreStartTaskWorkPosition(requirement.taskId, claimOperationId)
-  },
-  bindPreStartPlannedAttemptPosition: (claimOperationId, correlation) => {
-    const requirement = owner.proposal.admission.taskWorkPosition
-    if (requirement._tag !== "PreStartTaskWorkPositionRequired" || requirement.mode !== "ReuseExisting") {
-      const taskId = deliveryProposalOrderTaskId(owner.proposal.order)
-      return taskId === null
-        ? Effect.die("pre-start plan binding requires a task-scoped delivery proposal")
-        : failPreStartPlanBinding({
-            claimOperationId,
-            correlation,
-            reason: "UnexpectedPositionPhase",
-            taskId,
-            position: undefined
-          })
-    }
-    if (requirement.claimOperationId !== claimOperationId) {
-      return failPreStartPlanBinding({
-        claimOperationId,
-        correlation,
-        reason: "ClaimOperationMismatch",
-        taskId: requirement.taskId,
-        position: undefined
-      })
-    }
-    return admission.bindPreStartPlannedAttemptPosition(requirement.taskId, claimOperationId, correlation)
-  },
-  bindPlannedAttemptPosition: (correlation) => {
-    const requirement = owner.proposal.admission.taskWorkPosition
-    return requirement._tag === "TaskWorkPositionRequired"
-      ? admission.bindPlannedAttemptPosition(requirement.taskId, correlation, owner.proposal.id)
-      : (() => {
-          const taskId = deliveryProposalOrderTaskId(owner.proposal.order)
-          return taskId === null
-            ? Effect.die("executor plan binding requires a task-scoped delivery proposal")
-            : failExecutorPlanBinding({ correlation, reason: "UnexpectedPositionPhase", taskId, position: undefined })
-        })()
+    return requirement._tag === "TaskWorkPositionRequired" && requirement.taskId === plannedAttempt.taskId
+      ? admission.bindPlannedAttemptPosition(owner.reservation, plannedAttempt, acceptedResponsibility)
+      : Effect.die(`planned-attempt position does not match proposal ${owner.proposal.id}`)
   },
   integrationTargets,
   forwardBoundary:
@@ -252,9 +198,6 @@ export interface DeliveryRuntimeReadyObservation extends DeliveryRuntimeReadyFie
   readonly _tag: "Ready"
 }
 
-type DeliveryRuntimeNotReadyObservation = { readonly _tag: "NotReady" }
-type DeliveryRuntimeFinalObservation = DeliveryRuntimeReadyObservation | DeliveryRuntimeNotReadyObservation
-
 interface DeliveryRuntimeObservationObserverService {
   readonly observe: (observation: DeliveryRuntimeReadyObservation) => Effect.Effect<void>
 }
@@ -266,7 +209,7 @@ export const DeliveryRuntimeObservationObserver = Context.Reference<DeliveryRunt
 )
 
 export type DeliveryRuntimeObservationState = Data.TaggedEnum<{
-  Closed: { readonly final: DeliveryRuntimeFinalObservation | null }
+  Closed: { readonly final: DeliveryRuntimeReadyObservation | null }
   NotReady: Record<never, never>
   Ready: DeliveryRuntimeReadyFields
 }>
@@ -304,7 +247,7 @@ export const makeDeliveryRuntimeObservationController = Effect.fn("DeliveryRunti
         DeliveryRuntimeObservationState.Closed({
           final: Match.valueTags(current, {
             Closed: ({ final }) => final,
-            NotReady: () => DeliveryRuntimeObservationState.NotReady(),
+            NotReady: () => null,
             Ready: (ready) => ready
           })
         })

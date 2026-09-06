@@ -13,11 +13,6 @@ import {
 } from "@dalph/contracts"
 import {
   ActiveTaskClaim,
-  ActiveWorkAuthorityRefreshAuthority,
-  ActiveWorkAuthorityRefreshGitReadFailure,
-  ActiveWorkAuthorityRefreshGitReadOperation,
-  ActiveWorkAuthorityRefreshOrdinal,
-  ActiveWorkAuthorityRefreshSource,
   AttemptChoice,
   AttemptQuiescenceProof,
   AttemptChoiceRequestId,
@@ -298,20 +293,6 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     operationId: OperationId,
     requestId: AttemptChoiceRequestId,
     subject: AttemptChoiceSubject
-  },
-  /** A running owner records this exact Git read before crossing the Git boundary. */
-  ActiveWorkAuthorityRefreshGitReadInitiated: {
-    ...initiatedByCoordinator,
-    operation: ActiveWorkAuthorityRefreshGitReadOperation
-  },
-  /** A running owner refresh can fail to read Git without authorizing an executor action. */
-  ActiveWorkAuthorityRefreshGitReadFailed: {
-    authority: ActiveWorkAuthorityRefreshAuthority,
-    failure: ActiveWorkAuthorityRefreshGitReadFailure,
-    ...nonActionOccurrence,
-    operation: ActiveWorkAuthorityRefreshGitReadOperation,
-    ordinal: ActiveWorkAuthorityRefreshOrdinal,
-    source: ActiveWorkAuthorityRefreshSource
   },
   AttemptStoppageIntended: {
     ...initiatedByCoordinator,
@@ -654,13 +635,12 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
 export type RecordedCassetteEntry = typeof RecordedCassetteEntry.Type
 
 /**
- * Provisional recorded format version. Version 13 separates active-refresh
- * Git intent entries from ordinary Git reads and records process-local source
- * only on active-refresh failures.
+ * Provisional recorded format version. Version 14 records active-work
+ * authority refreshes through the ordinary tracker and Git read vocabulary.
  * Recorded cassettes remain fail-closed at the current version; this change
- * does not claim a migration path for version 11.
+ * does not claim a migration path for the unreleased version 13 draft.
  */
-const currentRecordedCassetteVersion = 13
+const currentRecordedCassetteVersion = 14
 export const recordedCassetteVersion = currentRecordedCassetteVersion
 
 export const RecordedCassette = Schema.TaggedStruct("RecordedCassette", {

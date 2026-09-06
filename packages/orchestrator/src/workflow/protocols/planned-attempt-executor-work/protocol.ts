@@ -3,6 +3,7 @@ import {
   type PlannedTaskAttempt,
   PlannedAttemptExecutor,
   plannedAttemptExecutorCorrelation,
+  type PlannedAttemptExecutorProjection,
   type PlannedAttemptExecutorReport,
   plannedTaskAttemptEquivalence,
   samePlannedAttemptExecutorReport
@@ -44,17 +45,16 @@ const lastElementOffset = -1
 /** Distinguishes a newly accepted lifecycle fact from an exact passive replay. */
 export type PlannedAttemptExecutorAcceptedFacts = "Changed" | "UnchangedPassiveObservation"
 
-type PlannedAttemptExecutorObservationResult = {
+export type PlannedAttemptExecutorObservationResult = {
   readonly acceptedFacts: PlannedAttemptExecutorAcceptedFacts
   readonly report: PlannedAttemptExecutorReport
 }
 
-/** Reads current executor authority without issuing another Begin, Resume, or Suspend command. */
-const observePlannedAttemptExecutorStateUnserialized = Effect.fn(
-  "PlannedAttemptExecutorWorkflow.observeStateUnserialized"
-)(function* (plannedAttempt: PlannedTaskAttempt) {
+/** Records and accepts one exact candidate supplied by a read-only observation owner. */
+const publishPlannedAttemptExecutorProjectionResultUnserialized = Effect.fn(
+  "PlannedAttemptExecutorWorkflow.publishProjectionResultUnserialized"
+)(function* (plannedAttempt: PlannedTaskAttempt, projection: Effect.Effect<PlannedAttemptExecutorProjection>) {
   const journal = yield* InRunJournal
-  const executor = yield* PlannedAttemptExecutor
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
   const records = yield* journal.read(plannedAttempt.runId)
   const responsibility = records.find(
@@ -85,6 +85,7 @@ const observePlannedAttemptExecutorStateUnserialized = Effect.fn(
       report: pendingReport
     } satisfies PlannedAttemptExecutorObservationResult
   }
+  const projected = yield* projection
   const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(
     records.filter(
       ({ event }) =>
@@ -92,7 +93,6 @@ const observePlannedAttemptExecutorStateUnserialized = Effect.fn(
         event.plannedAttempt.attemptId === plannedAttempt.attemptId
     ).length + 1
   )
-  const projected = yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
   const invalidProjection = validatePlannedAttemptExecutorProjectionCorrelation(projected, correlation)
   if (invalidProjection !== undefined) {
     return yield* invalidProjection
@@ -170,6 +170,18 @@ const observePlannedAttemptExecutorStateUnserialized = Effect.fn(
   })
 })
 
+/** Reads current executor authority without issuing another Begin, Resume, or Suspend command. */
+const observePlannedAttemptExecutorStateUnserialized = Effect.fn(
+  "PlannedAttemptExecutorWorkflow.observeStateUnserialized"
+)(function* (plannedAttempt: PlannedTaskAttempt) {
+  const executor = yield* PlannedAttemptExecutor
+  const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+  return yield* publishPlannedAttemptExecutorProjectionResultUnserialized(
+    plannedAttempt,
+    executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })
+  )
+})
+
 export const observePlannedAttemptExecutorStateWithPermit = (
   permit: PlannedAttemptProtocolPermit,
   plannedAttempt: PlannedTaskAttempt
@@ -189,6 +201,65 @@ export const observePlannedAttemptExecutorStateResultWithPermit = (
     permit,
     plannedAttemptExecutorCorrelation(plannedAttempt),
     observePlannedAttemptExecutorStateUnserialized(plannedAttempt)
+  )
+
+/**
+ * Publishes a projection already read by the capability-narrow passive owner.
+ * The permit owner alone validates, records, accepts, and orders the candidate.
+ */
+export const publishPlannedAttemptExecutorProjectionResultWithPermit = (
+  permit: PlannedAttemptProtocolPermit,
+  plannedAttempt: PlannedTaskAttempt,
+  projection: PlannedAttemptExecutorProjection
+) =>
+  withPlannedAttemptProtocolPermit(
+    permit,
+    plannedAttemptExecutorCorrelation(plannedAttempt),
+    publishPlannedAttemptExecutorProjectionResultUnserialized(plannedAttempt, Effect.succeed(projection))
+  )
+
+const acceptPendingPlannedAttemptExecutorObservationUnserialized = Effect.fn(
+  "PlannedAttemptExecutorWorkflow.acceptPendingObservationUnserialized"
+)(function* (plannedAttempt: PlannedTaskAttempt) {
+  const journal = yield* InRunJournal
+  const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+  const records = yield* journal.read(plannedAttempt.runId)
+  const responsibility = records.find(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+      event.plannedAttempt.attemptId === plannedAttempt.attemptId
+  )
+  if (responsibility?.event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") {
+    return yield* new PlannedAttemptExecutorResponsibilityMissing({ correlation })
+  }
+  if (!plannedTaskAttemptEquivalence(responsibility.event.plannedAttempt, plannedAttempt)) {
+    return yield* new PlannedAttemptExecutorResponsibilityContradiction({
+      accepted: responsibility.event.plannedAttempt,
+      requested: plannedAttempt
+    })
+  }
+  const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)
+  if (unsettledCommand !== undefined) {
+    return yield* new PlannedAttemptExecutorCommandReconciliationRequired({
+      commandOrdinal: unsettledCommand.ordinal,
+      correlation
+    })
+  }
+  const pending = yield* acceptPendingPlannedAttemptExecutorReport(plannedAttempt)
+  return pending === undefined
+    ? undefined
+    : ({ acceptedFacts: "Changed" as const, report: pending } satisfies PlannedAttemptExecutorObservationResult)
+})
+
+/** Accepts already-recorded observation evidence without contacting or attaching the executor. */
+export const acceptPendingPlannedAttemptExecutorObservationWithPermit = (
+  permit: PlannedAttemptProtocolPermit,
+  plannedAttempt: PlannedTaskAttempt
+) =>
+  withPlannedAttemptProtocolPermit(
+    permit,
+    plannedAttemptExecutorCorrelation(plannedAttempt),
+    acceptPendingPlannedAttemptExecutorObservationUnserialized(plannedAttempt)
   )
 
 const reconcileOrObservePlannedAttemptExecutorStateResultUnserialized = Effect.fn(

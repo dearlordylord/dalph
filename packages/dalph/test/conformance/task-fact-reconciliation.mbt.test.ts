@@ -23,7 +23,8 @@ import {
   TaskExecutorLocator,
   TaskId,
   WorktreeLocator,
-  makeTaskWorkSpecification
+  makeTaskWorkSpecification,
+  plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import {
   ActiveTaskClaim,
@@ -61,6 +62,7 @@ import {
   TrackerRevision,
   workflowJournalEventVersion
 } from "../../../orchestrator/src/index.js"
+import { makeFreshTaskAdmissionBasis } from "../../../orchestrator/src/coordination/admission/fresh-task-admission.js"
 import { Deferred, Effect, Fiber, Layer, Match, Option, Schema } from "effect"
 import { expect } from "vitest"
 import {
@@ -110,6 +112,8 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReconciliationIntendedEvent,
+  TaskWorktreeReadyEvent,
   taskTrackerReadIntent
 } from "../../../orchestrator/src/workflow/registry/event.js"
 import {
@@ -123,6 +127,7 @@ import {
   makeTrackerGraphObservationOperation
 } from "../../../orchestrator/src/workflow/registry/operation.js"
 import {
+  makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
@@ -199,6 +204,21 @@ const independentPlannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/task-fact-model-B")
 })
 const correlation = { attemptId: plannedAttempt.attemptId, runId }
+const bootstrapGraphOperationId = OperationId.make("task-fact-model-bootstrap-graph")
+const initialGraphOperationId = OperationId.make("task-fact-model-initial-graph")
+const initialSpecificationOperationId = OperationId.make("task-fact-model-initial-F1")
+const initialWorktreeOperationId = OperationId.make("task-fact-model-initial-worktree")
+const independentClaimOperation = makeTaskClaimAcquisitionOperation({
+  acquisition: {
+    operationId: OperationId.make("task-fact-model-independent-claim"),
+    owner: ClaimOwner.make("dalph"),
+    taskId: independentTaskId,
+    token: ClaimToken.make("task-fact-model-independent-token")
+  },
+  predecessorOperationIds: [bootstrapGraphOperationId]
+})
+const independentGraphOperationId = OperationId.make("task-fact-model-independent-graph")
+const independentSpecificationOperationId = OperationId.make("task-fact-model-initial-B")
 const successorCorrelation = { attemptId: successorAttempt.attemptId, runId }
 const claimOperation = makeTaskClaimAcquisitionOperation({
   acquisition: {
@@ -219,7 +239,7 @@ const foreignClaim = ActiveTaskClaim.make({
 const planOperation = makeTaskAttemptPlanOperation({
   operationId: OperationId.make("task-fact-model-plan"),
   plannedAttempt,
-  predecessorOperationIds: [exactClaim.operationId]
+  predecessorOperationIds: [initialSpecificationOperationId]
 })
 const continueD1 = AttemptChoiceRequestId.make({ nonce: "continue-D1", runId })
 const stopD2 = AttemptChoiceRequestId.make({ nonce: "stop-D2", runId })
@@ -406,7 +426,7 @@ const continuationProposal = {
   }),
   admission: {
     integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
-    plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+    plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired" as const, correlation },
     taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId }
   },
   id: DeliveryProposalId.make("task-fact-model-continuation")
@@ -764,8 +784,8 @@ const taskFactReconciliationDriver = defineDriver(
       recordTaskAttemptPlan: (operation) =>
         Effect.succeed(TaskAttemptPlanRecordAcknowledged.make({ plannedAttempt: operation.plannedAttempt }))
     })
-    const interpreterLayerFor = (opportunity: RunActivationOpportunityType) =>
-      journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, baseInterpreter), opportunity)
+    const interpreterLayerFor = (_opportunity: RunActivationOpportunityType) =>
+      journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, baseInterpreter))
     const provideJournal = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
       protocolController === undefined
         ? Effect.die("planned-attempt protocol controller not initialized")
@@ -923,6 +943,7 @@ const taskFactReconciliationDriver = defineDriver(
             currentGraphOperationId,
             pause: runState.pause,
             responsibility: runState.responsibility,
+            runId,
             runControlPolicy,
             workflowHistory: runState.workflowHistory
           },
@@ -938,7 +959,8 @@ const taskFactReconciliationDriver = defineDriver(
       if (!snapshot.positions.has(taskId)) {
         const decision = yield* admission.tryReserve(continuationProposal)
         if (decision._tag === "Deferred") return yield* Effect.die("task position must be available")
-        yield* admission.bindPlannedAttemptPosition(taskId, correlation, continuationProposal.id)
+        yield* admission.bindPlannedAttemptPosition(decision.reservation, plannedAttempt)
+        yield* admission.complete(decision.reservation)
       }
     })
     const reserveSuccessorPosition = Effect.fn("TaskFactModel.reserveSuccessorPosition")(function* () {
@@ -1081,145 +1103,44 @@ const taskFactReconciliationDriver = defineDriver(
           return yield* Effect.die(`active lineage failure read returned ${failure._tag}`)
         }
       })
-    const activeRefreshFailureRecordFor = (operationId: OperationId) =>
-      records.findLast(
-        ({ event }) =>
-          event._tag === "ActiveWorkAuthorityRefreshGitReadFailed" && event.operation.operationId === operationId
-      )
-    const activeRefreshIntentRecordFor = (operationId: OperationId) =>
-      records.findLast(
-        ({ event }) =>
-          event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded" &&
-          event.operation.operationId === operationId
-      )
-    const assertActiveRefreshFailure = (
-      operationId: OperationId,
-      expectedOrdinal: number,
-      source: "TrackerNotification" | "Timer",
-      expectedFailure: "GitWorktreeReadFailure" | "GitTargetLineageReadFailure"
-    ) => {
-      const intent = activeRefreshIntentRecordFor(operationId)
-      const failure = activeRefreshFailureRecordFor(operationId)
-      if (intent === undefined || intent.event._tag !== "ActiveWorkAuthorityRefreshGitReadIntentRecorded") {
-        return expect.fail(`missing active-refresh intent for ${operationId}`)
-      }
-      if (failure === undefined || failure.event._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") {
-        return expect.fail(`missing active-refresh failure for ${operationId}`)
-      }
-      const operation = intent.event.operation
-      if (
-        operation.operationId !== operationId ||
-        operation.authority.attemptId !== plannedAttempt.attemptId ||
-        operation.authority.runId !== runId ||
-        operation.ordinal !== expectedOrdinal
-      ) {
-        return expect.fail(`active-refresh intent operation mismatch for ${operationId}`)
-      }
-      if (
-        failure.event.ordinal !== expectedOrdinal ||
-        failure.event.authority.attemptId !== plannedAttempt.attemptId ||
-        failure.event.authority.runId !== runId ||
-        failure.event.source !== source ||
-        failure.event.operation.operationId !== operationId ||
-        failure.event.failure._tag !== expectedFailure ||
-        failure.position <= intent.position
-      ) {
-        return expect.fail(`active-refresh failure mismatch for ${operationId}`)
-      }
-      expect(failure.event.operation).toEqual(operation)
-    }
     const exerciseActiveRefreshGitFailures = (source: "TrackerNotification" | "Timer") =>
       Effect.gen(function* () {
         const commandCount = records.filter(
           ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"
         ).length
-        const activeFailureCount = () =>
-          records.filter(({ event }) => event._tag === "ActiveWorkAuthorityRefreshGitReadFailed").length
-        const initialActiveFailureCount = activeFailureCount()
         const initialWorktreeCalls = worktreeReadCallCount
         const initialLineageCalls = targetLineageReadCallCount
         currentOldWorktree = "Unreadable"
         replacementTargetHeadReadable = false
-        const firstWorktreeOperationId = OperationId.make(`task-fact-model-active-worktree-${source}`)
-        const firstLineageOperationId = OperationId.make(`task-fact-model-active-lineage-${source}`)
-        yield* readActiveWorktreeFailure(firstWorktreeOperationId)
-        yield* readActiveLineageFailure(firstLineageOperationId)
+        const worktreeOperationId = OperationId.make("task-fact-model-worktree-" + source)
+        const lineageOperationId = OperationId.make("task-fact-model-lineage-" + source)
+        yield* readActiveWorktreeFailure(worktreeOperationId)
+        yield* readActiveLineageFailure(lineageOperationId)
         if (
           worktreeReadCallCount !== initialWorktreeCalls + 1 ||
           targetLineageReadCallCount !== initialLineageCalls + 1
         ) {
-          return yield* Effect.die("active-refresh Git failures did not cross each Git boundary once")
+          return yield* Effect.die("ordinary Git failures did not cross each exact boundary once")
         }
-        assertActiveRefreshFailure(firstWorktreeOperationId, 1, source, "GitWorktreeReadFailure")
-        assertActiveRefreshFailure(firstLineageOperationId, 2, source, "GitTargetLineageReadFailure")
-
-        // A fresh layer replays each durable failure by identity, without
-        // crossing the provider boundary or appending another failure event.
-        yield* readActiveWorktreeFailure(firstWorktreeOperationId)
-        yield* readActiveLineageFailure(firstLineageOperationId)
-        if (
-          worktreeReadCallCount !== initialWorktreeCalls + 1 ||
-          targetLineageReadCallCount !== initialLineageCalls + 1 ||
-          activeFailureCount() !== initialActiveFailureCount + 2
-        ) {
-          return yield* Effect.die("active-refresh failure replay crossed Git or duplicated its event")
-        }
-
-        // Re-opening the owner opportunity creates a fresh interpreter layer;
-        // its next operation derives ordinal 3 from the durable intents.
-        yield* activateActiveRefresh(source)
-        const nextWorktreeOperationId = OperationId.make(`task-fact-model-active-worktree-next-${source}`)
-        const nextLineageOperationId = OperationId.make(`task-fact-model-active-lineage-next-${source}`)
-        yield* readActiveWorktreeFailure(nextWorktreeOperationId)
-        yield* readActiveLineageFailure(nextLineageOperationId)
-        if (
-          worktreeReadCallCount !== initialWorktreeCalls + 2 ||
-          targetLineageReadCallCount !== initialLineageCalls + 2
-        ) {
-          return yield* Effect.die("fresh active-refresh opportunity did not cross Git again")
-        }
-        assertActiveRefreshFailure(nextWorktreeOperationId, 3, source, "GitWorktreeReadFailure")
-        assertActiveRefreshFailure(nextLineageOperationId, 4, source, "GitTargetLineageReadFailure")
-
-        // Ordinary journaled reads preserve the original failure surface and
-        // cannot mint the active non-action event.
-        activeInterpreterOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
-        const ordinaryOperationId = OperationId.make(`task-fact-model-ordinary-worktree-${source}`)
-        const ordinaryFailure = yield* Effect.flip(
-          provideInterpreter(
-            Effect.gen(function* () {
-              const interpreter = yield* WorkflowInterpreter
-              return yield* interpreter.readTaskWorktree(
-                makeTaskWorktreeObservationOperation({
-                  operationId: ordinaryOperationId,
-                  plannedAttempt,
-                  predecessorOperationIds: []
-                })
-              )
-            })
-          )
+        const intents = records.filter(
+          ({ event }) =>
+            event._tag === "GitReadIntentRecorded" &&
+            (event.operation.operationId === worktreeOperationId || event.operation.operationId === lineageOperationId)
         )
-        if (
-          ordinaryFailure._tag !== "GitWorktreeReadFailure" ||
-          activeFailureCount() !== initialActiveFailureCount + 4 ||
-          worktreeReadCallCount !== initialWorktreeCalls + 3 ||
-          targetLineageReadCallCount !== initialLineageCalls + 2
-        ) {
-          return yield* Effect.die("ordinary Git failure minted or changed the active event")
-        }
+        if (intents.length !== 2) return yield* Effect.die("ordinary Git failures did not retain unsettled intents")
         if (
           records.some(
             ({ event }) =>
-              event._tag === "ActiveWorkAuthorityRefreshGitReadFailed" &&
-              event.operation.operationId === ordinaryOperationId
+              (event._tag === "PlannedAttemptWorktreeObserved" || event._tag === "TargetLineageObserved") &&
+              (event.operationId === worktreeOperationId || event.operationId === lineageOperationId)
           )
         ) {
-          return yield* Effect.die("ordinary Git failure was projected as active refresh")
+          return yield* Effect.die("typed Git failure incorrectly recorded an authority outcome")
         }
         if (
           records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended").length !== commandCount
         ) {
-          return yield* Effect.die("active-refresh Git failures issued an executor command")
+          return yield* Effect.die("typed Git failures issued an executor command")
         }
       }).pipe(
         Effect.ensuring(
@@ -1527,7 +1448,12 @@ const taskFactReconciliationDriver = defineDriver(
           const freshProtocolController = yield* makePlannedAttemptProtocolController()
           protocolController = freshProtocolController
           controller = yield* makeDeliveryRuntimeAdmissionController(
-            { capacity: TaskWorkCapacity.make(1), held: [], preStart: [] },
+            yield* makeFreshTaskAdmissionBasis({
+              acceptedAt: JournalPosition.make(1),
+              capacity: TaskWorkCapacity.make(1),
+              entries: [],
+              runId
+            }),
             yield* makeIntegrationTargetResourceController(),
             (yield* makeApplicationExitLifecycle()).admission
           ).pipe(Effect.provideService(PlannedAttemptProtocolController, freshProtocolController))
@@ -1535,6 +1461,16 @@ const taskFactReconciliationDriver = defineDriver(
             runId,
             target,
             InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+          )
+          const bootstrapGraphOperation = makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
+            bootstrapGraphOperationId,
+            target
+          )
+          yield* provideInterpreter(
+            Effect.gen(function* () {
+              yield* (yield* WorkflowInterpreter).readTrackerGraph(bootstrapGraphOperation)
+            })
           )
           yield* journal.append(
             runId,
@@ -1546,10 +1482,104 @@ const taskFactReconciliationDriver = defineDriver(
             outcomeRecordKey(exactClaim.operationId),
             TaskClaimAcquiredEvent.make({ claim: exactClaim, version: workflowJournalEventVersion })
           )
+          const graphOperation = makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
+            initialGraphOperationId,
+            target,
+            [exactClaim.operationId],
+            [taskId]
+          )
+          yield* provideInterpreter(
+            Effect.gen(function* () {
+              yield* (yield* WorkflowInterpreter).readTrackerGraph(graphOperation)
+            })
+          )
+          const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+            initialSpecificationOperationId,
+            target,
+            taskId,
+            [graphOperation.operationId]
+          )
+          yield* journal.append(
+            runId,
+            intentRecordKey(specificationOperation.operationId),
+            taskTrackerReadIntent(specificationOperation)
+          )
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(specificationOperation.operationId),
+            taskTrackerFactsObservedEvent(
+              specificationOperation.operationId,
+              makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, plannedSpecification)
+            )
+          )
+          yield* journal.append(
+            runId,
+            intentRecordKey(independentClaimOperation.acquisition.operationId),
+            TaskClaimAcquisitionIntendedEvent.make({
+              operation: independentClaimOperation,
+              version: workflowJournalEventVersion
+            })
+          )
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(independentClaimOperation.acquisition.operationId),
+            TaskClaimAcquiredEvent.make({
+              claim: ActiveTaskClaim.make(independentClaimOperation.acquisition),
+              version: workflowJournalEventVersion
+            })
+          )
+          const independentGraphOperation = makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
+            independentGraphOperationId,
+            target,
+            [independentClaimOperation.acquisition.operationId],
+            [independentTaskId]
+          )
+          yield* journal.append(
+            runId,
+            intentRecordKey(independentGraphOperation.operationId),
+            taskTrackerReadIntent(independentGraphOperation)
+          )
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(independentGraphOperation.operationId),
+            taskTrackerFactsObservedEvent(
+              independentGraphOperation.operationId,
+              makeCompleteTaskTrackerFactsObserved(independentGraphOperation, graphSnapshot)
+            )
+          )
           yield* journal.append(
             runId,
             attemptPlanRecordKey(plannedAttempt.attemptId),
             TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
+          )
+          const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+            operationId: initialWorktreeOperationId,
+            plannedAttempt,
+            predecessorOperationIds: [planOperation.operationId]
+          })
+          yield* journal.append(
+            runId,
+            intentRecordKey(worktreeOperation.operationId),
+            TaskWorktreeReconciliationIntendedEvent.make({
+              operation: worktreeOperation,
+              version: workflowJournalEventVersion
+            })
+          )
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(worktreeOperation.operationId),
+            TaskWorktreeReadyEvent.make({
+              operationId: worktreeOperation.operationId,
+              proof: PlannedWorktreeReady.make({
+                baseSha: plannedAttempt.baseSha,
+                branch: plannedAttempt.branch,
+                headSha: plannedAttempt.baseSha,
+                worktree: plannedAttempt.worktree
+              }),
+              version: workflowJournalEventVersion
+            })
           )
           yield* journal.append(
             runId,
@@ -1631,41 +1661,11 @@ const taskFactReconciliationDriver = defineDriver(
               version: workflowJournalEventVersion
             })
           )
-          const graphOperation = makeTrackerGraphObservationOperation(
-            OperationId.make("task-fact-model-initial-graph"),
-            target,
-            [],
-            []
-          )
-          yield* provideInterpreter(
-            Effect.gen(function* () {
-              yield* (yield* WorkflowInterpreter).readTrackerGraph(graphOperation)
-            })
-          )
-          const specificationOperation = makeTaskWorkSpecificationObservationOperation(
-            OperationId.make("task-fact-model-initial-F1"),
-            target,
-            taskId,
-            []
-          )
-          yield* journal.append(
-            runId,
-            intentRecordKey(specificationOperation.operationId),
-            taskTrackerReadIntent(specificationOperation)
-          )
-          yield* journal.append(
-            runId,
-            outcomeRecordKey(specificationOperation.operationId),
-            taskTrackerFactsObservedEvent(
-              specificationOperation.operationId,
-              makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, plannedSpecification)
-            )
-          )
           const independentSpecificationOperation = makeTaskWorkSpecificationObservationOperation(
-            OperationId.make("task-fact-model-initial-B"),
+            independentSpecificationOperationId,
             target,
             independentTaskId,
-            []
+            [independentGraphOperation.operationId]
           )
           yield* journal.append(
             runId,
@@ -1746,7 +1746,6 @@ const taskFactReconciliationDriver = defineDriver(
           const selected = yield* transition("ObservePlannedAttemptContinuationGraph")
           if (
             selected._tag !== "ObservePlannedAttemptContinuationGraph" ||
-            selected.operation.purpose !== "ActiveWorkAuthorityRefresh" ||
             !plannedTaskAttemptEquivalence(selected.plannedAttempt, plannedAttempt)
           ) {
             return yield* Effect.die("lifecycle closure did not select the exact active graph read")
@@ -1815,6 +1814,7 @@ const taskFactReconciliationDriver = defineDriver(
           const predecessorOperationId =
             predecessorGraphRecord?._tag === "TaskTrackerFactsObserved" ? predecessorGraphRecord.operationId : undefined
           const reopenOperation = makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
             OperationId.make(`task-fact-model-lifecycle-reopen-${records.length}`),
             target,
             predecessorOperationId === undefined ? [] : [predecessorOperationId],
@@ -1942,6 +1942,7 @@ const taskFactReconciliationDriver = defineDriver(
           // start transitions against that same activation baseline.
           const cutoffRecovery = yield* provideJournal(makeRunRecoveryProjection(runId, integrationTarget))
           const graphObservation = makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
             OperationId.make(`task-fact-model-integration-graph-${records.length + 1}`),
             target,
             [],
@@ -2677,10 +2678,14 @@ const taskFactReconciliationDriver = defineDriver(
             positionHeld: (() => {
               const position = admissionSnapshot.positions.get(taskId)
               const positionCorrelation =
-                position !== undefined && "correlation" in position ? position.correlation : undefined
+                position?._tag === "BoundRuntimePosition"
+                  ? position.correlation
+                  : position?._tag === "ExistingResponsibilityReserved" ||
+                      position?._tag === "ExactAttemptHeld" ||
+                      position?._tag === "LocallyAcceptedAttemptPosition"
+                    ? plannedAttemptExecutorCorrelation(position.plannedAttempt)
+                    : undefined
               return (
-                position !== undefined &&
-                position._tag !== "PendingRuntimePosition" &&
                 positionCorrelation?.attemptId === correlation.attemptId &&
                 positionCorrelation.runId === correlation.runId
               )
@@ -2727,10 +2732,14 @@ const taskFactReconciliationDriver = defineDriver(
             successorPositionHeld: (() => {
               const position = admissionSnapshot.positions.get(taskId)
               const positionCorrelation =
-                position !== undefined && "correlation" in position ? position.correlation : undefined
+                position?._tag === "BoundRuntimePosition"
+                  ? position.correlation
+                  : position?._tag === "ExistingResponsibilityReserved" ||
+                      position?._tag === "ExactAttemptHeld" ||
+                      position?._tag === "LocallyAcceptedAttemptPosition"
+                    ? plannedAttemptExecutorCorrelation(position.plannedAttempt)
+                    : undefined
               return (
-                position !== undefined &&
-                position._tag !== "PendingRuntimePosition" &&
                 positionCorrelation?.attemptId === successorCorrelation.attemptId &&
                 positionCorrelation.runId === successorCorrelation.runId
               )
@@ -2878,7 +2887,7 @@ quintIt(
 
 quintIt(
   it.effect,
-  "journals and replays active Git failures from TrackerNotification",
+  "leaves the ordinary Git intent unsettled after a TrackerNotification read failure",
   {
     backend: "typescript",
     driverFactory: taskFactReconciliationDriver,
@@ -2895,7 +2904,7 @@ quintIt(
 
 quintIt(
   it.effect,
-  "journals and replays active Git failures from Timer",
+  "leaves the ordinary Git intent unsettled after a Timer read failure",
   {
     backend: "typescript",
     driverFactory: taskFactReconciliationDriver,

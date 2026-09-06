@@ -1,4 +1,5 @@
 import { expect, it } from "vitest"
+import { Result, Schema } from "effect"
 import {
   AttemptId,
   GitCommitSha,
@@ -17,6 +18,7 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowResponsibilityEntry, WorkflowResponsibilityState } from "../reconstruction/state.js"
+import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/events.js"
 import {
   deriveRunFinalityDecision,
@@ -32,13 +34,18 @@ import {
   makeTaskWorktreeReconciliationOperation,
   TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
-import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import { UnfinishedPrerequisiteTaskIds } from "./fresh-facts.js"
 
 const taskA = TaskId.make("task-A")
 const taskB = TaskId.make("task-B")
 const taskC = TaskId.make("task-C")
 const frontierRunId = RunId.make("frontier-test-run")
 const freshTask = (taskId: TaskId) => ({ taskId, taskRevision: TaskRevision.make(`revision:${taskId}`) })
+
+it("accepts only non-empty unfinished prerequisite identities at the dependency boundary", () => {
+  expect(UnfinishedPrerequisiteTaskIds.make([taskB])).toEqual([taskB])
+  expect(Result.isFailure(Schema.decodeUnknownResult(UnfinishedPrerequisiteTaskIds)([]))).toBe(true)
+})
 
 const executionResponsibilityFor = (taskId: TaskId, operationIdentity: string = taskId) => {
   const plannedAttempt = PlannedTaskAttempt.make({
@@ -99,36 +106,30 @@ it("orders owned work by earliest outstanding journal position before task ident
   expect(frontier.transitions.map(runnableTransitionTaskId)).toEqual([taskA, taskB, taskA])
 })
 
-it("prioritizes a sibling executor safety suspension before observation", () => {
-  const continuingA = { ...executionResponsibilityFor(taskA, "task-A-continuing"), beganAt: JournalPosition.make(1) }
-  const suspendingB = { ...executionResponsibilityFor(taskB, "task-B-suspending"), beganAt: JournalPosition.make(3) }
+it("keeps a retained task out of fresh eligibility while independent work remains eligible", () => {
+  const retainedB = executionResponsibilityFor(taskB, "retained-B1")
   const frontier = deriveRunnableFrontier({
-    freshEligibleTasks: [],
-    responsibility: WorkflowResponsibilityState.make({ entries: [continuingA, suspendingB] }),
+    freshEligibleTasks: [freshTask(taskC), freshTask(taskB)],
+    responsibility: WorkflowResponsibilityState.make({ entries: [retainedB] }),
     responsibilityFacts: [
       {
-        _tag: "PlannedAttemptExecutorFreshFacts" as const,
+        _tag: "PlannedAttemptExecutorFreshFacts",
         disposition: {
-          _tag: "Ready" as const,
-          acceptedProgress: {
-            _tag: "ExecutorReportAccepted" as const,
-            ordinal: PlannedAttemptExecutorReportOrdinal.make(2)
-          }
+          _tag: "Ready",
+          acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(1) }
         },
-        responsibility: continuingA
-      },
-      {
-        _tag: "PlannedAttemptExecutorFreshFacts" as const,
-        disposition: ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested(),
-        responsibility: suspendingB
+        responsibility: retainedB
       }
     ]
   })
 
-  expect(frontier.transitions.map((transition) => [transition._tag, runnableTransitionTaskId(transition)])).toEqual([
-    ["SuspendPlannedAttemptExecutorWork", taskB],
-    ["ObservePlannedAttemptExecutorWork", taskA]
-  ])
+  expect(frontier.transitions.map(runnableTransitionTaskId)).toEqual([taskB, taskC])
+  expect(frontier.transitions).not.toContainEqual(
+    RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+      taskId: taskB,
+      taskRevision: TaskRevision.make(`revision:${taskB}`)
+    })
+  )
 })
 
 it("begins only once and observes already-begun executor work thereafter", () => {
@@ -639,6 +640,16 @@ it("explains each task-authority constraint without changing the planned attempt
         _tag: "PlannedAttemptTaskLifecycleConstraint",
         correlation,
         lifecycle: "TerminalWithoutSuccess",
+        taskId: taskA,
+        wakeCondition: "TaskTrackerFactsObserved"
+      }
+    },
+    {
+      disposition: ResponsibilityDisposition.TaskDependencyConstraint({ prerequisiteTaskIds: [taskB] }),
+      explanation: {
+        _tag: "PlannedAttemptTaskDependencyConstraint",
+        correlation,
+        prerequisiteTaskIds: [taskB],
         taskId: taskA,
         wakeCondition: "TaskTrackerFactsObserved"
       }

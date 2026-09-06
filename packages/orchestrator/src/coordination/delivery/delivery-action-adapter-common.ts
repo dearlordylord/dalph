@@ -46,7 +46,11 @@ export const executeFreshTrackerGraphRead = Effect.fn("DeliveryAction.executeFre
   route: Extract<FreshOperationOnlyRoute, { readonly _tag: "TrackerGraphReadRoute" }>,
   lease: DeliveryActionExecutionLease
 ) {
-  const operation = makeTrackerGraphObservationOperation(action.operationId, route.target)
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    action.operationId,
+    route.target
+  )
   return yield* executeTrackerGraphRead(operation, lease).pipe(
     Effect.map((snapshot) => ({
       _tag: "TrackerGraphObservationPublished" as const,

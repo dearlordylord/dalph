@@ -1,7 +1,7 @@
 /* eslint-disable import/no-nodejs-modules -- The source-boundary test reads its neighboring module. */
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { PlannedAttemptExecutor, RunId, TaskId } from "@dalph/contracts"
+import { PlannedAttemptExecutor, PlannedAttemptExecutorLifecycleObservation, RunId, TaskId } from "@dalph/contracts"
 import { Effect, Layer, Ref, Stream } from "effect"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
@@ -16,7 +16,12 @@ import { RunFinalityDecision } from "../frontier/frontier.js"
 import { TaskClaimAcquisitionPlanner } from "../../workflow/protocols/task-claim-acquisition/plan.js"
 import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { freshWorkflowRunId } from "./fresh-run-identity.js"
-import { JournaledRunBootstrap, runWorkflow } from "./run.js"
+import {
+  JournaledRunBootstrap,
+  runWorkflow,
+  runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh
+} from "./run.js"
+import { RunActivationOpportunity } from "./run-activation-opportunity.js"
 import { runControlledWorkflow } from "./controlled-workflow.js"
 
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
@@ -54,15 +59,63 @@ it.effect("hands every Run activation to one journal establishment boundary", ()
       registerAcceptedRunReactivationObservers: () => Effect.void
     })
 
-    expect(
-      yield* runWorkflow(target, Effect.succeed(policy), runId).pipe(
-        Effect.provideService(JournaledRunBootstrap, bootstrap),
-        Effect.provide(programDependencies)
-      )
-    ).toBe(finality)
+    const dependencies = Layer.merge(programDependencies, Layer.succeed(JournaledRunBootstrap, bootstrap))
+    expect(yield* runWorkflow(target, Effect.succeed(policy), runId).pipe(Effect.provide(dependencies))).toBe(finality)
     expect(seen.slice(0, 3)).toEqual([target, expect.anything(), runId])
     expect(Effect.isEffect(seen[1])).toBe(true)
     expect(seen[3]).toBeDefined()
+  }).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect("hands controlled active refresh to one bootstrap activation without nesting another Run entry", () =>
+  Effect.gen(function* () {
+    const target = FixtureTarget.make("controlled-active-refresh")
+    const runId = yield* freshWorkflowRunId(target)
+    const finality = RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+    let activeCalls = 0
+    let capturedProgram:
+      | ((opportunity: RunActivationOpportunity) => Effect.Effect<unknown, unknown, unknown>)
+      | undefined
+    const bootstrap = JournaledRunBootstrap.of({
+      activate: () => Effect.die("controlled active refresh must not enter ordinary bootstrap activation"),
+      activateActiveWorkAuthorityRefresh: (_target, _policy, _runId, program, source) => {
+        activeCalls += 1
+        capturedProgram = program
+        expect(source).toBe("Timer")
+        return Effect.succeed(finality)
+      },
+      operatorControl: {
+        applyRunCancellation: () => Effect.die("unused"),
+        applyIntegrationQuarantineDirection: () => Effect.die("unused"),
+        applyAttemptChoice: () => Effect.die("unused"),
+        applyControlDirection: () => Effect.die("unused"),
+        applyTaskClaimReacquisition: () => Effect.die("unused"),
+        readAttemptChoice: () => Effect.die("unused"),
+        readIntegrationQuarantineDirection: () => Effect.die("unused"),
+        readTaskWorkCapacity: () => Effect.die("unused"),
+        observePause: () => Stream.empty,
+        setTaskWorkCapacity: () => Effect.die("unused")
+      },
+      readRunReactivationControl: () => Effect.succeed("RunUnpaused" as const),
+      registerAcceptedRunReactivationObservers: () => Effect.void
+    })
+
+    expect(
+      yield* runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh(
+        target,
+        Effect.succeed(policy),
+        runId,
+        () => Effect.die("captured program is not executed by this bootstrap seam test"),
+        "Timer",
+        false
+      ).pipe(Effect.provide(Layer.merge(programDependencies, Layer.succeed(JournaledRunBootstrap, bootstrap))))
+    ).toBe(finality)
+    expect(activeCalls).toBe(1)
+    expect(capturedProgram).toBeDefined()
+    if (capturedProgram !== undefined) {
+      expect(Effect.isEffect(capturedProgram(RunActivationOpportunity.OrdinaryRunEntry()))).toBe(true)
+    }
+    expect(activeCalls).toBe(1)
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
@@ -99,6 +152,7 @@ it.effect("lets the public controlled workflow terminate from its settled curren
           Layer.mock(TaskClaimAcquisitionPlanner, {}),
           Layer.mock(WorkflowInterpreter, { readTrackerGraph: () => Effect.succeed(projected.snapshot) }),
           Layer.mock(PlannedAttemptExecutor, {}),
+          Layer.mock(PlannedAttemptExecutorLifecycleObservation, {}),
           Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
         )
       )

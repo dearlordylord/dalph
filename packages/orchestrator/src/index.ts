@@ -24,6 +24,7 @@ export {
   AttemptChoiceResultNotFound,
   AttemptChoiceRequestIdentityContradiction,
   AttemptChoiceRequestRunMismatch,
+  attemptChoiceControlWithProvidedProtocolLayer,
   attemptChoiceControlLayer
 } from "./workflow/protocols/attempt-choice/control.js"
 export {
@@ -387,7 +388,13 @@ export {
 export * from "./workflow/protocols/planned-attempt-executor-work/events.js"
 export * from "./workflow/protocols/planned-attempt-continuation/events.js"
 export * from "./workflow/protocols/planned-attempt-continuation/protocol.js"
-export * from "./workflow/protocols/active-work-authority-refresh/events.js"
+export {
+  makePassivePlannedAttemptObserver,
+  PassivePlannedAttemptObserver,
+  PassivePlannedAttemptProjectionPublication,
+  type PassivePlannedAttemptObserverService,
+  type PassivePlannedAttemptProjectionPublicationService
+} from "./coordination/run/passive-planned-attempt-observer.js"
 export * from "./workflow/protocols/integration-admission/events.js"
 export * from "./workflow/protocols/integration-admission/protocol.js"
 export * from "./workflow/protocols/evidence-store.js"
@@ -618,6 +625,7 @@ export {
   JournaledRunReactivationObserverAlreadyRegistered,
   runWorkflowWithControlledDeliveryActionExecutor,
   runWorkflowWithControlledActiveWorkAuthorityRefresh,
+  runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh,
   runWorkflowWithActiveWorkAuthorityRefresh,
   runWorkflow
 } from "./coordination/run/run.js"
@@ -774,14 +782,31 @@ export {
 } from "./coordination/delivery/journal.js"
 export { delivery } from "./coordination/delivery/delivery.js"
 export { deliveryActionPlanning } from "./coordination/delivery/delivery-action-planning.js"
-export { DeliveryProposalId, deliveryProposalOrderTaskId } from "./coordination/delivery/delivery-action-proposal.js"
+export {
+  DeliveryProposalId,
+  deliveryProposalOrderTaskId,
+  FreshDecisionPartitionInvalid
+} from "./coordination/delivery/delivery-action-proposal.js"
+export {
+  FreshTaskAdmissionBasisInvalid,
+  FreshTaskAdmissionBasisRunMismatch,
+  FreshTaskAdmissionCommitmentAuthorityInvalid,
+  FreshTaskAdmissionProjectionInvalid,
+  FreshTaskAdmissionReleaseAuthorityInvalid
+} from "./coordination/admission/fresh-task-admission.js"
+export {
+  FreshTaskCandidateFrontierInvalid,
+  FreshTaskCandidateRunMismatch
+} from "./coordination/delivery/fresh-task-candidate.js"
 export { deliveryRuntime } from "./coordination/delivery/delivery-runtime-adapter.js"
 export {
   DeliveryActionExecutor,
   DeliveryActionProtocolAdmissionMissing,
+  type DeliveryActionExecutionError,
   type DeliveryActionExecutorService,
   type MaterializedDeliveryAction
 } from "./coordination/delivery/delivery-action-executor.js"
+export { PlannedAttemptExecutorResponsibilityLineageMissing } from "./workflow/protocols/planned-attempt-executor-work/errors.js"
 export { makeLiveDeliveryActionExecutor } from "./coordination/delivery/live-delivery-action-executor.js"
 export { DeliveryAcceptedFactPublication } from "./coordination/delivery/delivery-accepted-fact-publication.js"
 export {
@@ -844,16 +869,13 @@ export {
   zipCurrentSignals
 } from "./coordination/delivery/relations.js"
 export {
+  DeliveryActionCompletionPublicationMismatch,
+  DeliveryRuntimeAdmissionProgressContradiction,
   DeliveryRuntimeProposalOwnershipConflict,
   DeliveryRuntimeReconfirmationStateInvalid,
+  DeliveryRuntimeRunMismatch,
   runDeliveryRuntime
 } from "./coordination/delivery/run-delivery-runtime.js"
-export {
-  ExecutorPlanTaskWorkPositionBindingContradiction,
-  PreStartClaimTaskWorkPositionBindingContradiction,
-  PreStartPlanTaskWorkPositionBindingContradiction,
-  type DeliveryTaskWorkPositionBindingContradiction
-} from "./coordination/delivery/delivery-runtime-task-work-position.js"
 export { runStabilizedDelivery } from "./coordination/run/run-stabilization.js"
 export {
   makeRunFinalityEvidence,
@@ -867,7 +889,6 @@ export {
   AppliedControlDirection,
   AppliedTaskClaimReacquisitionDirection,
   AppliedTaskWorkCapacity,
-  ActiveWorkAuthorityRefreshGitReadFailed,
   AttemptRestartAuthorityReadFailed,
   decodeWorkflowOccurrence,
   describeWorkflowOccurrence,
@@ -903,6 +924,7 @@ export {
   AuthoritativePlannedAttemptWorktreeObserved,
   AuthoritativeTargetLineageObserved,
   AuthoritativeTaskClaimAcquired,
+  AuthoritativeTaskClaimAcquisitionRejected,
   CompletionClaimCleanupBoundaryCall,
   CompletionClaimCleanupBoundaryCallId,
   CompletionClaimCleanupSequenceId,
@@ -910,6 +932,7 @@ export {
   observePlannedAttemptWorktreeThrough,
   observeTargetLineageThrough,
   TraceItem,
+  type TaskClaimAcquisitionResult,
   WorkflowInterpreter,
   WorkflowTrace
 } from "./workflow/interpretation/interpreter.js"
@@ -929,12 +952,9 @@ export {
   makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorktreeReconciliationOperation,
-  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
   makeTrackerGraphObservationOperation,
-  ActiveWorkAuthorityRefreshTrackerGraphReadOperation,
   TaskClaimAcquisitionAuthority,
   TaskClaimReleaseAuthority,
-  TrackerGraphReadPurpose,
   WorkflowOperation,
   workflowOperationId
 } from "./workflow/registry/operation.js"

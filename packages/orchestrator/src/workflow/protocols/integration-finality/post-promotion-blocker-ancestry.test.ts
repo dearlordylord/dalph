@@ -61,6 +61,7 @@ const graphRecord = (
   snapshot: ReturnType<typeof snapshotFor>
 ): JournalRecord => {
   const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make(operationName),
     fixture.target,
     [],
@@ -137,6 +138,7 @@ describe("post-promotion blocker ancestry chronology", () => {
 
     const priorSnapshot = snapshotFor("post-promotion-missing-reconfirmation-prior", TaskLifecycle.cases.Open.make({}))
     const priorOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("post-promotion-missing-reconfirmation-prior"),
       fixture.target,
       [],
@@ -153,6 +155,7 @@ describe("post-promotion blocker ancestry chronology", () => {
       runId: fixture.runId
     }
     const laterOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("post-promotion-missing-reconfirmation-later"),
       fixture.target,
       [priorOperation.operationId],
@@ -190,6 +193,7 @@ describe("post-promotion blocker ancestry chronology", () => {
     ).toBeUndefined()
 
     const incompleteOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("post-promotion-incomplete"),
       fixture.target,
       [],

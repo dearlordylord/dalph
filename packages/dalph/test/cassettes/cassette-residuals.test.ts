@@ -2,9 +2,21 @@ import { Cause, Effect, Exit, Fiber, Option, Schema } from "effect"
 import { NodeCrypto } from "@effect/platform-node"
 import { expect, it } from "vitest"
 import { AttemptId, GitCommitSha, GitRepositoryLocator, TaskId } from "@dalph/contracts"
-import { TaskWorkCapacity } from "@dalph/orchestrator"
+import {
+  ClaimOwner,
+  ClaimToken,
+  FixtureTarget,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskClaimObservationOperation,
+  OperationId,
+  TaskClaimAcquisition,
+  TaskClaimAcquisitionAuthority,
+  TaskClaimReacquisitionRequestId,
+  TaskWorkCapacity
+} from "@dalph/orchestrator"
 import {
   AuthoredCassetteStoryItem,
+  AuthoredScenarioCassette,
   CassetteIdentityRenaming,
   compareRecordedCassetteCheckpoints,
   foldRecordedCassette,
@@ -21,6 +33,7 @@ import {
   verifyRecordedCassetteRoundTripWithRenaming
 } from "../../src/cassettes/index.js"
 import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
+import { controlledTrace } from "../../src/cassettes/authored-adapters.js"
 import {
   renderAuthoredStoryItemLandmark,
   renderAuthoredStoryItemLyric
@@ -34,6 +47,24 @@ const findStoryItemOf = <Tag extends AuthoredCassetteStoryItem["_tag"]>(tag: Tag
   )
 
 const findStoryItem = findStoryItemOf
+
+const freshTaskClaimOperation = (
+  taskId: TaskId,
+  authority: typeof TaskClaimAcquisitionAuthority.Type = TaskClaimAcquisitionAuthority.cases.TaskSelectionAuthority.make(
+    {}
+  ),
+  label = String(taskId)
+) =>
+  makeTaskClaimAcquisitionOperation({
+    acquisition: TaskClaimAcquisition.make({
+      operationId: OperationId.make(`fresh-selection-${label}-${taskId}`),
+      owner: ClaimOwner.make(`dalph:test:${taskId}`),
+      taskId,
+      token: ClaimToken.make(`fresh-selection-token-${taskId}`)
+    }),
+    authority,
+    predecessorOperationIds: []
+  })
 
 type WorkAuthorizationChronologyItem =
   | { readonly _tag: "CoordinatorProcessDies" }
@@ -112,7 +143,7 @@ const projectRestartAddedTaskChronology = (
       item._tag === "PlannedAttemptExecutorProjectionReturned" &&
       item.report._tag === "ExecutorWorkTerminal" &&
       item.report.result._tag === "Accepted" &&
-      (item.report.attemptId === "attempt:B:1" || item.report.attemptId === "attempt:C:2")
+      (item.report.attemptId === "attempt:B:0" || item.report.attemptId === "attempt:C:1")
     ) {
       return [{ _tag: "ExistingAttemptAccepted" as const, attemptId: item.report.attemptId }]
     }
@@ -120,14 +151,14 @@ const projectRestartAddedTaskChronology = (
       item._tag === "PlannedAttemptExecutorWorkReported" &&
       item.report._tag === "ExecutorWorkTerminal" &&
       item.report.result._tag === "Accepted" &&
-      (item.report.attemptId === "attempt:B:1" || item.report.attemptId === "attempt:C:2")
+      (item.report.attemptId === "attempt:B:0" || item.report.attemptId === "attempt:C:1")
     ) {
       return [{ _tag: "ExistingAttemptAccepted" as const, attemptId: item.report.attemptId }]
     }
     if (
       item._tag === "PlannedAttemptExecutorWorkReported" &&
       item.report._tag === "ExecutorWorkExecuting" &&
-      item.report.attemptId === "attempt:X:3"
+      item.report.attemptId === "attempt:X:0"
     ) {
       return [{ _tag: "RestartAddedAttemptRunning" as const, attemptId: item.report.attemptId }]
     }
@@ -151,13 +182,13 @@ const projectRestartAddedTaskChronology = (
 it("authors restart-added X only after recovered capacity and its own focused specification", () => {
   expect(projectRestartAddedTaskChronology(maintainedAuthoredCassetteCatalog.deliveryInvariantStory.story)).toEqual([
     { _tag: "CoordinatorProcessDies" },
-    { _tag: "ExistingAttemptAccepted", attemptId: "attempt:B:1" },
-    { _tag: "ExistingAttemptAccepted", attemptId: "attempt:C:2" },
+    { _tag: "ExistingAttemptAccepted", attemptId: "attempt:B:0" },
+    { _tag: "ExistingAttemptAccepted", attemptId: "attempt:C:1" },
     { _tag: "RestartAddedTaskClaimSelected", taskId: "X" },
     { _tag: "RestartAddedTaskSpecificationSelected", taskId: "X" },
-    { _tag: "RestartAddedTaskPlanSelected", attemptId: "attempt:X:3" },
-    { _tag: "RestartAddedTaskWorktreeSelected", attemptId: "attempt:X:3" },
-    { _tag: "RestartAddedAttemptRunning", attemptId: "attempt:X:3" }
+    { _tag: "RestartAddedTaskPlanSelected", attemptId: "attempt:X:0" },
+    { _tag: "RestartAddedTaskWorktreeSelected", attemptId: "attempt:X:0" },
+    { _tag: "RestartAddedAttemptRunning", attemptId: "attempt:X:0" }
   ])
 })
 
@@ -251,6 +282,126 @@ it("consumes the authored cursor's optional and terminal public probes", async (
   )
 })
 
+it("rejects empty, duplicate, and late fresh-claim holds at decode and cursor closure boundaries", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const markerTag = "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions" as const
+      expect(Schema.is(AuthoredCassetteStoryItem)({ _tag: markerTag, taskIds: [] })).toBe(false)
+      expect(
+        Schema.is(AuthoredCassetteStoryItem)({ _tag: markerTag, taskIds: [TaskId.make("B"), TaskId.make("B")] })
+      ).toBe(false)
+
+      const marker = AuthoredCassetteStoryItem.cases.CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions.make({
+        taskIds: [TaskId.make("B"), TaskId.make("C")]
+      })
+      const duplicateCursor = yield* Effect.exit(makeStoryCursor([marker, marker]))
+      expect(Exit.isFailure(duplicateCursor)).toBe(true)
+      if (Exit.isFailure(duplicateCursor)) expect(Cause.pretty(duplicateCursor.cause)).toContain("at most one")
+
+      const duplicateCassette = {
+        ...singletonTaskCompletesAuthoredCassette,
+        story: [
+          ...singletonTaskCompletesAuthoredCassette.story.slice(0, 2),
+          marker,
+          marker,
+          ...singletonTaskCompletesAuthoredCassette.story.slice(2)
+        ]
+      }
+      expect(Schema.is(AuthoredScenarioCassette)(duplicateCassette)).toBe(false)
+
+      const firstClaimIndex = singletonTaskCompletesAuthoredCassette.story.findIndex(
+        (item) => item._tag === "DalphSelects" && item.operation._tag === "AcquireTaskClaim"
+      )
+      if (firstClaimIndex < 0) return yield* Effect.die("singleton cassette has no fresh claim selection")
+      const firstClaim = singletonTaskCompletesAuthoredCassette.story[firstClaimIndex]
+      if (firstClaim?._tag !== "DalphSelects" || firstClaim.operation._tag !== "AcquireTaskClaim") {
+        return yield* Effect.die("singleton fresh claim selection changed shape")
+      }
+      const lateMarker =
+        AuthoredCassetteStoryItem.cases.CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions.make({
+          taskIds: [firstClaim.operation.taskId]
+        })
+      const lateMarkerStory = [
+        ...singletonTaskCompletesAuthoredCassette.story.slice(0, firstClaimIndex + 1),
+        lateMarker,
+        ...singletonTaskCompletesAuthoredCassette.story.slice(firstClaimIndex + 1)
+      ]
+      expect(
+        Schema.is(AuthoredScenarioCassette)({ ...singletonTaskCompletesAuthoredCassette, story: lateMarkerStory })
+      ).toBe(false)
+      const lateCursor = yield* Effect.exit(makeStoryCursor(lateMarkerStory))
+      expect(Exit.isFailure(lateCursor)).toBe(true)
+      if (Exit.isFailure(lateCursor)) expect(Cause.pretty(lateCursor.cause)).toContain("must precede")
+    })
+  )
+})
+
+it("parks every marked fresh claim before selection while A, Operator reacquisition, and reads bypass it", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const marker = AuthoredCassetteStoryItem.cases.CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions.make({
+        taskIds: [TaskId.make("B"), TaskId.make("C")]
+      })
+      const expected = findStoryItem("ExpectedBehavior")
+      const aSelection = AuthoredCassetteStoryItem.cases.DalphSelects.make({
+        operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("A") }
+      })
+      const operatorSelection = AuthoredCassetteStoryItem.cases.DalphSelects.make({
+        operation: { _tag: "AcquireTaskClaim", taskId: TaskId.make("A") }
+      })
+      const readSelection = AuthoredCassetteStoryItem.cases.DalphSelects.make({
+        operation: { _tag: "ReadTaskClaim", taskId: TaskId.make("A") }
+      })
+      const cursor = yield* makeStoryCursor([marker, aSelection, operatorSelection, readSelection, expected])
+      const trace = controlledTrace(cursor)
+      expect(Option.isSome(yield* cursor.consumeFreshTaskClaimSelectionHold)).toBe(true)
+      expect(yield* cursor.storyPosition).toBe(1)
+      expect(Option.isNone(yield* cursor.consumeFreshTaskClaimSelectionHold)).toBe(true)
+      expect(yield* cursor.storyPosition).toBe(1)
+
+      const bOperation = freshTaskClaimOperation(TaskId.make("B"))
+      const cOperation = freshTaskClaimOperation(TaskId.make("C"))
+      const aOperation = freshTaskClaimOperation(TaskId.make("A"))
+      const operatorOperation = freshTaskClaimOperation(
+        TaskId.make("A"),
+        TaskClaimAcquisitionAuthority.cases.ExplicitTaskClaimReacquisitionAuthority.make({
+          requestId: TaskClaimReacquisitionRequestId.make("operator-reacquire-A")
+        }),
+        "operator-A"
+      )
+      const readOperation = makeTaskClaimObservationOperation(
+        OperationId.make("read-claim-A"),
+        FixtureTarget.make("fresh-claim-hold"),
+        TaskId.make("A")
+      )
+      const bFiber = yield* trace.emit({ _tag: "OperationSelected", operation: bOperation }).pipe(Effect.forkChild)
+      const cFiber = yield* trace.emit({ _tag: "OperationSelected", operation: cOperation }).pipe(Effect.forkChild)
+      for (let turn = 0; turn < 16; turn += 1) yield* Effect.yieldNow
+      expect(bFiber.pollUnsafe()).toBeUndefined()
+      expect(cFiber.pollUnsafe()).toBeUndefined()
+      expect(yield* cursor.storyPosition).toBe(1)
+
+      yield* trace.emit({ _tag: "OperationSelected", operation: aOperation })
+      expect(yield* cursor.storyPosition).toBe(2)
+      expect(bFiber.pollUnsafe()).toBeUndefined()
+      expect(cFiber.pollUnsafe()).toBeUndefined()
+
+      yield* trace.emit({ _tag: "OperationSelected", operation: operatorOperation })
+      yield* trace.emit({ _tag: "OperationSelected", operation: readOperation })
+      expect(yield* cursor.storyPosition).toBe(4)
+      expect(bFiber.pollUnsafe()).toBeUndefined()
+      expect(cFiber.pollUnsafe()).toBeUndefined()
+
+      expect((yield* cursor.consumeTerminalAssertions)._tag).toBe("ExpectedBehavior")
+      yield* Fiber.interrupt(bFiber)
+      yield* Fiber.interrupt(cFiber)
+      expect(yield* cursor.storyPosition).toBe(5)
+      expect(bFiber.pollUnsafe()).not.toBeUndefined()
+      expect(cFiber.pollUnsafe()).not.toBeUndefined()
+    })
+  )
+})
+
 it("keeps authored promotion Git, control, and executor outcomes correlated at the cursor boundary", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -276,11 +427,13 @@ it("keeps authored promotion Git, control, and executor outcomes correlated at t
 
       const compareAndSetLost = findStoryItemOf("TargetPromotionCompareAndSetResponseLost")
       const compareAndSetLostCursor = yield* makeStoryCursor([compareAndSetLost])
-      const compareAndSetError = yield* compareAndSetLostCursor.consumeTargetPromotionCompareAndSet.pipe(Effect.flip)
+      const compareAndSetError = yield* compareAndSetLostCursor
+        .consumeTargetPromotionCompareAndSet(compareAndSetLost.request)
+        .pipe(Effect.flip)
       expect(compareAndSetError._tag).toBe("AuthoredTargetPromotionCompareAndSetFailure")
       const compareAndSetReturned = findStoryItemOf("TargetPromotionCompareAndSetReturned")
       const compareAndSetCursor = yield* makeStoryCursor([compareAndSetReturned])
-      expect((yield* compareAndSetCursor.consumeTargetPromotionCompareAndSet)._tag).toBe(
+      expect((yield* compareAndSetCursor.consumeTargetPromotionCompareAndSet(compareAndSetReturned.request))._tag).toBe(
         "TargetPromotionCompareAndSetReturned"
       )
 
@@ -319,7 +472,16 @@ it("keeps authored promotion Git, control, and executor outcomes correlated at t
       expect(Option.isSome(yield* inFlightCursor.consumeInFlightExecutorControlDirection())).toBe(true)
       const capacity = yield* makeStoryCursor([findStoryItem("SetTaskExecutionCapacity")])
       expect(Option.isSome(yield* capacity.consumeCapacityChange)).toBe(true)
-      const publicationHoldItem = findStoryItem("DalphHoldsExecutorRequestThroughNextDeliveryPublication")
+      // This synchronization item remains part of the cursor contract, but is
+      // no longer present in the maintained authored catalog. Keep this
+      // residual focused on the cursor operation with a local schema-valid
+      // fixture instead of coupling it to a scenario's chronology.
+      const publicationHoldItem =
+        AuthoredCassetteStoryItem.cases.DalphHoldsExecutorRequestThroughNextDeliveryPublication.make({
+          attemptId: AttemptId.make("attempt:residual-publication-hold"),
+          request: "Begin",
+          taskId: TaskId.make("A")
+        })
       const publicationHold = yield* makeStoryCursor([publicationHoldItem])
       expect(
         Option.isSome(
@@ -369,44 +531,77 @@ it("correlates concurrent operation selections before advancing the authored sto
   )
 })
 
-it("waits for a later sibling selection after its predecessor result advances", async () => {
+it("lets fresh claim selections wait for an actively owned lineage selection and its hold marker", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
-      const story = maintainedAuthoredCassetteCatalog.deliveryInvariantStoryCapstone.story
-      const cSelectionIndex = story.findIndex(
-        (item) =>
-          item._tag === "DalphSelects" &&
-          item.operation._tag === "ReadTaskWorkSpecification" &&
-          item.operation.taskId === "C"
+      const story = maintainedAuthoredCassetteCatalog.taskPauseExecutorAndPromotionBoundaries.story
+      const holdIndex = story.findIndex(
+        (item) => item._tag === "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary"
       )
-      const aPlanIndex = story.findIndex(
-        (item) =>
-          item._tag === "DalphSelects" &&
-          item.operation._tag === "RecordTaskAttemptPlan" &&
-          item.operation.taskId === "A"
-      )
-      const cSelection = story[cSelectionIndex]
-      const cResult = story[cSelectionIndex + 1]
-      const aSelection = story[aPlanIndex]
+      const lineage = story[holdIndex - 1]
+      const a = story[holdIndex + 1]
+      const c = story[holdIndex + 2]
       if (
-        cSelection?._tag !== "DalphSelects" ||
-        cResult?._tag !== "TaskWorkSpecificationReadReturned" ||
-        aSelection?._tag !== "DalphSelects"
+        lineage?._tag !== "DalphSelects" ||
+        lineage.operation._tag !== "ReadTargetLineage" ||
+        a?._tag !== "DalphSelects" ||
+        a.operation._tag !== "AcquireTaskClaim" ||
+        c?._tag !== "DalphSelects" ||
+        c.operation._tag !== "AcquireTaskClaim"
       ) {
-        return yield* Effect.die("missing capstone sibling-selection fixtures")
+        return yield* Effect.die("missing lineage-hold and fresh-claim chronology")
       }
-
-      const cursor = yield* makeStoryCursor([cSelection, cResult, aSelection])
-      const cOperation = yield* cursor.consumeDalphSelectionFor(cSelection.operation).pipe(Effect.forkChild)
+      const hold = story[holdIndex]
+      if (hold?._tag !== "CassetteHoldsTargetPromotionReconciliationReadBeforeBoundary") {
+        return yield* Effect.die("missing target-promotion lineage hold")
+      }
+      const cursor = yield* makeStoryCursor([lineage, hold, a, c])
+      const aSelection = yield* cursor.consumeDalphSelectionFor(a.operation).pipe(Effect.forkChild)
+      const cSelection = yield* cursor.consumeDalphSelectionFor(c.operation).pipe(Effect.forkChild)
       yield* Effect.yieldNow
-      const aOperation = yield* cursor.consumeDalphSelectionFor(aSelection.operation).pipe(Effect.forkChild)
-      yield* Effect.yieldNow
 
-      expect(yield* Fiber.join(cOperation)).toEqual(cSelection)
-      expect((yield* cursor.consumeTaskWorkSpecification).taskId).toBe("C")
-      expect(yield* Fiber.join(aOperation)).toEqual(aSelection)
+      expect(yield* cursor.consumeDalphSelectionFor(lineage.operation)).toEqual(lineage)
+      expect(Option.isSome(yield* cursor.consumeTargetPromotionReconciliationReadBoundaryHold)).toBe(true)
+      expect(yield* Fiber.join(aSelection)).toEqual(a)
+      expect(yield* Fiber.join(cSelection)).toEqual(c)
     })
   )
+})
+
+it("proves task Pause through Suspend and Safe without requiring a redundant pre-Suspend projection", () => {
+  const story = maintainedAuthoredCassetteCatalog.taskPauseExecutorAndPromotionBoundaries.story
+  const observationStartedAt = story.findIndex((item) => item._tag === "OperatorStartsPauseObservation")
+  const suspensionReturnedAt = story.findIndex(
+    (item) =>
+      item._tag === "PlannedAttemptExecutorWorkReported" &&
+      item.request === "Suspend" &&
+      item.report.attemptId === "attempt:A:0"
+  )
+  expect(observationStartedAt).toBeGreaterThan(-1)
+  expect(suspensionReturnedAt).toBeGreaterThan(observationStartedAt)
+  expect(
+    story
+      .slice(observationStartedAt + 1, suspensionReturnedAt)
+      .some(
+        (item) => item._tag === "PlannedAttemptExecutorProjectionReturned" && item.report.attemptId === "attempt:A:0"
+      )
+  ).toBe(false)
+  expect(story[suspensionReturnedAt]).toMatchObject({
+    _tag: "PlannedAttemptExecutorWorkReported",
+    report: { _tag: "ExecutorWorkSafelySuspended", attemptId: "attempt:A:0" },
+    request: "Suspend"
+  })
+  expect(
+    story.some(
+      (item) =>
+        item._tag === "PauseProgressObserved" &&
+        item.result._tag === "PauseConfirmed" &&
+        item.result.atBoundary.some(
+          (responsibility) =>
+            responsibility._tag === "PlannedAttemptExecutorWork" && responsibility.attemptId === "attempt:A:0"
+        )
+    )
+  ).toBe(true)
 })
 
 it("correlates concurrent executor reports when the later request arrives first", async () => {
@@ -589,32 +784,6 @@ it("fails closed when an exact executor report has no permitted immediate predec
   )
 })
 
-it("fails closed instead of skipping an unowned story item to a later executor report", async () => {
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const reports = maintainedAuthoredCassetteCatalog.taskPauseExecutorAndPromotionBoundaries.story.filter(
-        (item) => item._tag === "PlannedAttemptExecutorWorkReported"
-      )
-      const first = reports[0]
-      const second = reports.find((item) => first !== undefined && item.report.attemptId !== first.report.attemptId)
-      const unrelatedSelection = maintainedStoryItems.find(
-        (item) => item._tag === "DalphSelects" && item.operation._tag === "ReadTaskClaim"
-      )
-      if (first === undefined || second === undefined || unrelatedSelection?._tag !== "DalphSelects") {
-        return yield* Effect.die("missing separated executor report fixtures")
-      }
-
-      const cursor = yield* makeStoryCursor([first, unrelatedSelection, second])
-      const exit = yield* Effect.exit(
-        cursor.consumeExecutorReportFor(second.request, second.report.attemptId).pipe(Effect.timeout(100))
-      )
-
-      expect(Exit.isFailure(exit)).toBe(true)
-      if (Exit.isFailure(exit)) expect(Cause.pretty(exit.cause)).toContain("AuthoredCassetteInteractionMismatch")
-    })
-  )
-})
-
 it("lets an exact operation selection wait for an actively owned sibling executor outcome", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -684,6 +853,36 @@ it("round-trips restart, release, worktree, Git, and lost-response histories", a
       if (Exit.isFailure(missingCause)) expect(Cause.hasDies(missingCause.cause)).toBe(true)
     }).pipe(Effect.provide(NodeCrypto.layer))
   )
+})
+
+it("keeps held-Resume Restart authority before the separate final tracker reconfirmation", () => {
+  for (const cassette of [
+    maintainedAuthoredCassetteCatalog.changedAttemptRestartCancelsHeldResume,
+    maintainedAuthoredCassetteCatalog.changedAttemptRestartCancelsHeldResumeBeforeChangedFacts
+  ]) {
+    const choiceAt = cassette.story.findIndex(
+      (item) => item._tag === "OperatorRestartsAttempt" && item.requestNonce === "restart-held-continuation-A"
+    )
+    const authorityGraphAt = cassette.story.findIndex(
+      (item, index) => index > choiceAt && item._tag === "TrackerGraphReadReturned"
+    )
+    const specificationAt = cassette.story.findIndex(
+      (item, index) => index > authorityGraphAt && item._tag === "TaskWorkSpecificationReadReturned"
+    )
+    const finalSelectionAt = cassette.story.findIndex(
+      (item, index) =>
+        index > specificationAt && item._tag === "DalphSelects" && item.operation._tag === "ReadTrackerGraph"
+    )
+    const finalGraphAt = cassette.story.findIndex(
+      (item, index) => index > finalSelectionAt && item._tag === "TrackerGraphReadReturned"
+    )
+
+    expect(choiceAt).toBeGreaterThan(-1)
+    expect(authorityGraphAt).toBe(choiceAt + 1)
+    expect(specificationAt).toBeGreaterThan(authorityGraphAt)
+    expect(finalSelectionAt).toBeGreaterThan(specificationAt)
+    expect(finalGraphAt).toBeGreaterThan(finalSelectionAt)
+  }
 })
 
 it("projects, folds, compares, renders, and alpha-renames a public recorded run", async () => {

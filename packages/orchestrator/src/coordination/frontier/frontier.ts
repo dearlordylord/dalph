@@ -16,7 +16,11 @@ import {
   workflowResponsibilityOperationId,
   type WorkflowResponsibilityState
 } from "../reconstruction/state.js"
-import type { AcceptedPlannedAttemptExecutorProgress, ResponsibilityFreshFacts } from "./fresh-facts.js"
+import type {
+  AcceptedPlannedAttemptExecutorProgress,
+  ResponsibilityFreshFacts,
+  UnfinishedPrerequisiteTaskIds
+} from "./fresh-facts.js"
 import type {
   QueuedIntegrationResponsibility,
   StartedIntegrationResponsibility,
@@ -500,6 +504,13 @@ export type FrontierExplanation = Data.TaggedEnum<{
     readonly taskId: TaskId
     readonly wakeCondition: "TaskTrackerFactsObserved"
   }
+  /** The exact attempt is safely suspended while its current tracker prerequisites remain unfinished. */
+  PlannedAttemptTaskDependencyConstraint: {
+    readonly correlation: PlannedAttemptExecutorCorrelation
+    readonly prerequisiteTaskIds: UnfinishedPrerequisiteTaskIds
+    readonly taskId: TaskId
+    readonly wakeCondition: "TaskTrackerFactsObserved"
+  }
   PlannedAttemptTaskLifecycleConstraint: {
     readonly correlation: PlannedAttemptExecutorCorrelation
     readonly lifecycle: "TerminalWithoutSuccess"
@@ -889,8 +900,16 @@ const executorDecisionFor = (
           wakeCondition: "TaskTrackerFactsObserved"
         })
       }),
+      TaskDependencyConstraint: ({ prerequisiteTaskIds }) => ({
+        explanation: FrontierExplanation.PlannedAttemptTaskDependencyConstraint({
+          correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
+          prerequisiteTaskIds,
+          taskId: facts.responsibility.plannedAttempt.taskId,
+          wakeCondition: "TaskTrackerFactsObserved"
+        })
+      }),
       // A relinquished executor responsibility has no further frontier action;
-      // the accepted disposition is terminal and remains available to passive status.
+      // its accepted terminal disposition remains available to passive status.
       Relinquished: () => ({}),
       Ready: ({ acceptedProgress }) => ({
         transition:
@@ -1033,25 +1052,12 @@ export const deriveRunnableFrontier = (input: RunnableFrontierInput): RunnableFr
     return { ...decision, beganAt: responsibility.beganAt, taskId: workflowResponsibilityTaskId(responsibility) }
   })
   const responsibleTaskIds = new Set(input.responsibility.entries.map(workflowResponsibilityTaskId))
-  const isExecutorTransition = (transition: RunnableFrontierTransition): boolean =>
-    transition._tag === "BeginPlannedAttemptExecutorWork" ||
-    transition._tag === "ObservePlannedAttemptExecutorWork" ||
-    transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts" ||
-    transition._tag === "SuspendPlannedAttemptExecutorWork"
-  const executorTransitionPriority = (transition: RunnableFrontierTransition): number =>
-    transition._tag === "SuspendPlannedAttemptExecutorWork" ? 0 : 1
   const responsibleTransitions = responsibleDecisions
     .filter(
       (decision): decision is typeof decision & { readonly transition: RunnableFrontierTransition } =>
         decision.transition !== undefined
     )
-    .toSorted((left, right) => {
-      if (isExecutorTransition(left.transition) && isExecutorTransition(right.transition)) {
-        const priority = executorTransitionPriority(left.transition) - executorTransitionPriority(right.transition)
-        if (priority !== 0) return priority
-      }
-      return left.beganAt - right.beganAt || left.taskId.localeCompare(right.taskId)
-    })
+    .toSorted((left, right) => left.beganAt - right.beganAt || left.taskId.localeCompare(right.taskId))
     .map(({ transition }) => transition)
   const freshTransitions = input.freshEligibleTasks
     .filter(({ taskId }) => !responsibleTaskIds.has(taskId))

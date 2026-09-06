@@ -78,7 +78,10 @@ jobs:
     needs: change-plan
     if: needs.change-plan.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The bounded check:ci stages allow 68 minutes in total, before setup.
+    # Let their own watchdogs report a failing stage instead of cancelling
+    # healthy coverage after build, diagnostics, lint, and Lab consume time.
+    timeout-minutes: 80
     # Pull requests compare with the target branch tip; pushes compare with
     # the event's previous commit so the changed-line verifier includes the
     # committed change and any worktree changes produced by the gate.

@@ -362,6 +362,7 @@ it.effect("next host invocation recovers the same Run and authority-reads before
         predecessorOperationIds: []
       })
       const graphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make("production-throttle-recovery-graph"),
         target,
         [],
@@ -439,6 +440,8 @@ it.effect("next host invocation recovers the same Run and authority-reads before
       const activationFailures = yield* Ref.make<ReadonlyArray<string>>([])
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-throttle-recovery-incarnation"),
+        attachTurnCompletedHints: Effect.succeed(Stream.empty),
+        attachOwnedActivityHints: Effect.succeed(Stream.empty),
         startThread: () => Effect.die("throttle recovery must not start a Codex thread"),
         readThread: () => Effect.die("throttle recovery must not read a Codex thread"),
         resumeThread: () => Effect.die("throttle recovery must not resume a Codex thread"),
@@ -701,6 +704,8 @@ it.effect("cold production host records one beginning before the first GitHub de
       })
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-host-test-incarnation"),
+        attachTurnCompletedHints: Effect.succeed(Stream.empty),
+        attachOwnedActivityHints: Effect.succeed(Stream.empty),
         startThread: () => Effect.die("no task may start in the empty graph fixture"),
         readThread: () => Effect.die("no task may read a Codex thread in the empty graph fixture"),
         resumeThread: () => Effect.die("no task may resume a Codex thread in the empty graph fixture"),
@@ -813,6 +818,8 @@ it.effect("production host connects supplied Exit request and trace observers", 
       })
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-host-exit-observer-incarnation"),
+        attachTurnCompletedHints: Effect.succeed(Stream.empty),
+        attachOwnedActivityHints: Effect.succeed(Stream.empty),
         startThread: () => Effect.die("Exit observer fixture must not start a Codex thread"),
         readThread: () => Effect.die("Exit observer fixture must not read a Codex thread"),
         resumeThread: () => Effect.die("Exit observer fixture must not resume a Codex thread"),
@@ -922,6 +929,7 @@ const restartHostProcesses = Effect.scoped(
     }
     const acquisitionOperation = makeTaskClaimAcquisitionOperation({ acquisition, predecessorOperationIds: [] })
     const graphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("production-restart-graph-read"),
       target,
       [],
@@ -1116,6 +1124,8 @@ const makeUnsafeDiscoveryGraph = (calls: Ref.Ref<UnsafeDiscoveryBoundaryCalls>) 
   const githubClient = GithubGraphqlClient.of({ execute: () => boundaryFailure("githubGraphqlRequests") })
   const app = CodexAppServer.of({
     incarnation: CodexServerIncarnation.make("production-unsafe-discovery-incarnation"),
+    attachTurnCompletedHints: Effect.succeed(Stream.empty),
+    attachOwnedActivityHints: Effect.succeed(Stream.empty),
     startThread: () => boundaryFailure("executorCalls"),
     readThread: () => boundaryFailure("executorCalls"),
     resumeThread: () => boundaryFailure("executorCalls"),
@@ -1263,6 +1273,8 @@ it.effect("terminal Run is not reactivated", () =>
       })
       const app = CodexAppServer.of({
         incarnation: CodexServerIncarnation.make("production-terminal-test-incarnation"),
+        attachTurnCompletedHints: Effect.succeed(Stream.empty),
+        attachOwnedActivityHints: Effect.succeed(Stream.empty),
         startThread: () => Effect.die("terminal fixture must not start a task thread"),
         readThread: () => Effect.die("terminal fixture must not read a task thread"),
         resumeThread: () => Effect.die("terminal fixture must not resume a task thread"),
@@ -1442,6 +1454,8 @@ it.effect(
         const codexCall = (operation: string) => () => boundaryCall(`codex.${operation}`)
         const app = CodexAppServer.of({
           incarnation: CodexServerIncarnation.make("production-host-ownership-test-incarnation"),
+          attachTurnCompletedHints: Effect.succeed(Stream.empty),
+          attachOwnedActivityHints: Effect.succeed(Stream.empty),
           startThread: codexCall("startThread"),
           readThread: codexCall("readThread"),
           resumeThread: codexCall("resumeThread"),

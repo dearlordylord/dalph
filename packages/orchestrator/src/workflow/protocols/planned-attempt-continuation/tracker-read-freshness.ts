@@ -58,8 +58,25 @@ export const continuationTrackerReadHasExactPlanPredecessor = (
   operation: ContinuationTrackerReadOperation,
   plannedAttempt: PlannedTaskAttempt
 ): boolean => {
+  if (
+    operation._tag === "ReadTrackerGraph" &&
+    operation.cause._tag !== "AttemptContinuation" &&
+    operation.cause._tag !== "ExecutingWorkAuthorityCheck"
+  ) {
+    return false
+  }
   const plans = recordedTaskAttemptPlans(records)
   const namedPlans = plans.filter(({ operationId }) => operation.predecessorOperationIds.includes(operationId))
+  if (operation._tag === "ReadTrackerGraph" && operation.cause._tag === "ExecutingWorkAuthorityCheck") {
+    const coveredTaskIds = [...operation.readShape.explicitlyCoveredTaskIds].toSorted()
+    const namedTaskIds = [...new Set(namedPlans.map(({ plannedAttempt }) => plannedAttempt.taskId))].toSorted()
+    return (
+      namedPlans.some(({ plannedAttempt: candidate }) => plannedTaskAttemptEquivalence(candidate, plannedAttempt)) &&
+      coveredTaskIds.length === namedTaskIds.length &&
+      coveredTaskIds.every((taskId, index) => taskId === namedTaskIds[index]) &&
+      namedPlans.every(({ plannedAttempt: candidate }) => candidate.runId === plannedAttempt.runId)
+    )
+  }
   if (namedPlans.length !== 1) return false
   const namedPlan = namedPlans[0]
   return (

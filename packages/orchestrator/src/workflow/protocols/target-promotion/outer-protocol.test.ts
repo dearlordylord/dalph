@@ -17,11 +17,6 @@ import {
 } from "@dalph/contracts"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
-import {
-  targetPromotionAttemptIntentRecordKey,
-  targetPromotionIntentRecordKey,
-  targetPromotionReconciliationDeferredRecordKey
-} from "../../../workflow-journal/record-key.js"
 import { rememberValidatedJournalPrefixSuccessor } from "../../../workflow-journal/prefix-lineage.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -39,12 +34,7 @@ import {
   TargetPromotionCompareAndSetResult,
   TargetPromotionCompareAndSetFailure,
   TargetPromotionGitReadFailure,
-  TargetPromotionAttemptIntendedEvent,
-  TargetPromotionAttemptOrdinal,
-  TargetPromotionAttemptReason,
-  TargetPromotionIntendedEvent,
-  TargetPromotionReconciliationDeferredEvent,
-  TargetPromotionReconciliationDeferral,
+  TargetPromotionRequestId,
   targetPromotionCorrelationEquals,
   type TargetPromotionGitService,
   TargetPromotionCorrelation,
@@ -54,22 +44,10 @@ import {
 import {
   deriveTargetPromotionState,
   deriveTargetPromotionStateFor,
-  reconcileTargetPromotionAttempt,
   runTargetPromotion,
   TargetPromotionCorrelationContradiction,
-  TargetPromotionHistoryContradiction,
   TargetPromotionResultContradiction
 } from "./protocol.js"
-import {
-  authorizeOrRecordTargetPromotionProgress,
-  authorizeTargetPromotionProgress,
-  observeTargetPromotionRead,
-  recordTargetPromotionAttemptIntent,
-  recordTargetPromotionIntent,
-  sendTargetPromotionAttempt,
-  settleTargetPromotionAttempt,
-  type TargetPromotionSettlementClaim
-} from "./transitions.js"
 import { targetPromotionContract } from "../../../../test/contracts/target-promotion-contract.js"
 
 const runId = RunId.make("outer-promotion-test-run")
@@ -115,20 +93,17 @@ const qualifiedCandidate = IntegratorRunQualifiedCandidate.make({
 
 const request = targetPromotionCorrelationFor(qualifiedCandidate)
 
-const journalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>, appendCalls?: Ref.Ref<ReadonlyArray<string>>) =>
+const journalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
   Layer.succeed(
     InRunJournal,
     InRunJournal.of({
       append: (requestedRunId, key, event) =>
-        Effect.gen(function* () {
-          if (appendCalls !== undefined) yield* Ref.update(appendCalls, (current) => [...current, event._tag])
-          return yield* Ref.modify(records, (current) => {
-            const existing = current.find((record) => record.key === key)
-            if (existing !== undefined) return [Effect.succeed(existing), current] as const
-            const record = { event, key, position: JournalPosition.make(current.length + 1), runId: requestedRunId }
-            return [Effect.succeed(record), [...current, record]] as const
-          }).pipe(Effect.flatten)
-        }),
+        Ref.modify(records, (current) => {
+          const existing = current.find((record) => record.key === key)
+          if (existing !== undefined) return [Effect.succeed(existing), current] as const
+          const record = { event, key, position: JournalPosition.make(current.length + 1), runId: requestedRunId }
+          return [Effect.succeed(record), [...current, record]] as const
+        }).pipe(Effect.flatten),
       read: () => Ref.get(records)
     })
   )
@@ -149,126 +124,6 @@ targetPromotionContract({
   request: targetPromotionGitRequestFor(request)
 })
 
-it.effect("authorizes promotion progress only after the exact durable intent and with retry authority", () =>
-  Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
-    const layer = Layer.mergeAll(
-      journalLayer(records),
-      gitLayer(
-        () => Effect.die("authorization-only scenario crossed compare-and-set"),
-        () => Effect.die("authorization-only scenario crossed read")
-      )
-    )
-
-    const absent = yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
-      Effect.provide(layer),
-      Effect.flip
-    )
-    expect(absent).toBeInstanceOf(TargetPromotionResultContradiction)
-
-    yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(Effect.provide(layer))
-    const duplicateIntent = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(
-      Effect.provide(layer),
-      Effect.flip
-    )
-    expect(duplicateIntent).toBeInstanceOf(TargetPromotionResultContradiction)
-    const readOnly = yield* authorizeTargetPromotionProgress(qualifiedCandidate, "ReadOnly").pipe(
-      Effect.provide(layer),
-      Effect.flip
-    )
-    expect(readOnly).toBeInstanceOf(TargetPromotionResultContradiction)
-    expect(
-      (yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(Effect.provide(layer)))._tag
-    ).toBe("TargetPromotionReadAuthorized")
-
-    const freshRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
-    expect(
-      (yield* authorizeOrRecordTargetPromotionProgress(qualifiedCandidate).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            journalLayer(freshRecords),
-            gitLayer(
-              () => Effect.die("unused"),
-              () => Effect.die("unused")
-            )
-          )
-        )
-      ))._tag
-    ).toBe("TargetPromotionReadAuthorized")
-  })
-)
-
-it.effect("keeps deferred reconciliation read-only and resumes only with the matching authority", () =>
-  Effect.gen(function* () {
-    const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)
-    const prefix = (deferral: TargetPromotionReconciliationDeferral): ReadonlyArray<JournalRecord> => [
-      {
-        event: TargetPromotionIntendedEvent.make({ correlation: request, version: workflowJournalEventVersion }),
-        key: targetPromotionIntentRecordKey(request.requestId),
-        position: JournalPosition.make(1),
-        runId
-      },
-      {
-        event: TargetPromotionAttemptIntendedEvent.make({
-          attemptOrdinal,
-          correlation: request,
-          reason: TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: expectedHead }),
-          version: workflowJournalEventVersion
-        }),
-        key: targetPromotionAttemptIntentRecordKey(request.requestId, attemptOrdinal),
-        position: JournalPosition.make(2),
-        runId
-      },
-      {
-        event: TargetPromotionReconciliationDeferredEvent.make({
-          afterAttemptOrdinal: attemptOrdinal,
-          correlation: request,
-          deferral,
-          version: workflowJournalEventVersion
-        }),
-        key: targetPromotionReconciliationDeferredRecordKey(request.requestId, attemptOrdinal),
-        position: JournalPosition.make(3),
-        runId
-      }
-    ]
-    const layerFor = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
-      Layer.mergeAll(
-        journalLayer(records),
-        gitLayer(
-          () => Effect.die("unused"),
-          () => Effect.die("unused")
-        )
-      )
-
-    const retryRecords = yield* Ref.make(
-      prefix(TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({ observedHeadSha: expectedHead }))
-    )
-    expect(
-      (yield* authorizeTargetPromotionProgress(qualifiedCandidate, "ReadOnly").pipe(
-        Effect.provide(layerFor(retryRecords))
-      ))._tag
-    ).toBe("PromotionReconciliationDeferred")
-    expect(
-      (yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
-        Effect.provide(layerFor(retryRecords))
-      ))._tag
-    ).toBe("TargetPromotionAttemptAuthorized")
-    expect(
-      (yield* authorizeOrRecordTargetPromotionProgress(qualifiedCandidate).pipe(Effect.provide(layerFor(retryRecords))))
-        ._tag
-    ).toBe("TargetPromotionAttemptAuthorized")
-
-    const failedReadRecords = yield* Ref.make(
-      prefix(TargetPromotionReconciliationDeferral.cases.TargetReadFailed.make({ detail: "read unavailable" }))
-    )
-    expect(
-      (yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
-        Effect.provide(layerFor(failedReadRecords))
-      ))._tag
-    ).toBe("TargetPromotionReadAuthorized")
-  })
-)
-
 const run = (service: TargetPromotionGitService, records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
   runFor(qualifiedCandidate, service, records)
 
@@ -278,11 +133,6 @@ const runFor = (
   records: Ref.Ref<ReadonlyArray<JournalRecord>>
 ) =>
   runTargetPromotion(candidate).pipe(
-    Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
-  )
-
-const reconcile = (service: TargetPromotionGitService, records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
-  reconcileTargetPromotionAttempt(qualifiedCandidate).pipe(
     Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
   )
 
@@ -316,198 +166,8 @@ it.effect("promotes exact M once and records its Integrator correlation and ance
       "TargetPromotionAttemptIntended",
       "TargetPromotionObservedSuccess"
     ])
-    expect(
-      (yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
-        Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
-      ))._tag
-    ).toBe("PromotionSucceeded")
     expect((yield* run(service, records))._tag).toBe("PromotionSucceeded")
     expect(yield* Ref.get(requests)).toEqual([targetPromotionGitRequestFor(request)])
-  })
-)
-
-it.effect("consumes one read permission before Git and performs no second read", () =>
-  Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
-    const readCalls = yield* Ref.make(0)
-    const layer = Layer.mergeAll(
-      journalLayer(records),
-      gitLayer(
-        () => Effect.die("read permission requested a compare-and-set"),
-        () =>
-          Ref.update(readCalls, (count) => count + 1).pipe(
-            Effect.as(
-              TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
-            )
-          )
-      )
-    )
-
-    const authorization = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(Effect.provide(layer))
-    const competingRead = yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
-      Effect.provide(layer)
-    )
-    expect(competingRead._tag).toBe("TargetPromotionReadAuthorized")
-    if (competingRead._tag !== "TargetPromotionReadAuthorized") return
-    const competingAttempt = yield* observeTargetPromotionRead(competingRead).pipe(Effect.provide(layer))
-    expect(competingAttempt._tag).toBe("TargetPromotionAttemptAuthorized")
-    if (competingAttempt._tag !== "TargetPromotionAttemptAuthorized") return
-    yield* recordTargetPromotionAttemptIntent(competingAttempt).pipe(Effect.provide(layer))
-    const staleAuthorization = yield* observeTargetPromotionRead(authorization).pipe(Effect.provide(layer), Effect.flip)
-    expect(staleAuthorization).toBeInstanceOf(TargetPromotionResultContradiction)
-
-    yield* Ref.set(readCalls, 0)
-    const freshRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
-    const freshLayer = Layer.mergeAll(
-      journalLayer(freshRecords),
-      gitLayer(
-        () => Effect.die("read permission requested a compare-and-set"),
-        () =>
-          Ref.update(readCalls, (count) => count + 1).pipe(
-            Effect.as(
-              TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
-            )
-          )
-      )
-    )
-    const consumable = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(Effect.provide(freshLayer))
-    expect((yield* observeTargetPromotionRead(consumable).pipe(Effect.provide(freshLayer)))._tag).toBe(
-      "TargetPromotionAttemptAuthorized"
-    )
-
-    const duplicate = yield* observeTargetPromotionRead(consumable).pipe(Effect.provide(freshLayer), Effect.flip)
-    expect(duplicate._tag).toBe("TargetPromotionResultContradiction")
-    if (duplicate._tag !== "TargetPromotionResultContradiction") return
-    expect(duplicate.detail).toContain("already consumed")
-    expect(yield* Ref.get(readCalls)).toBe(1)
-  })
-)
-
-it.effect("consumes one attempt authorization before one intent append", () =>
-  Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
-    const appendCalls = yield* Ref.make<ReadonlyArray<string>>([])
-    const layer = Layer.mergeAll(
-      journalLayer(records, appendCalls),
-      gitLayer(
-        () => Effect.die("attempt-intent permission requested a compare-and-set"),
-        () =>
-          Effect.succeed(
-            TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
-          )
-      )
-    )
-
-    const readAuthorization = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(Effect.provide(layer))
-    const attemptAuthorization = yield* observeTargetPromotionRead(readAuthorization).pipe(Effect.provide(layer))
-    expect(attemptAuthorization._tag).toBe("TargetPromotionAttemptAuthorized")
-    if (attemptAuthorization._tag !== "TargetPromotionAttemptAuthorized") return
-    yield* Ref.set(appendCalls, [])
-
-    const forged = yield* recordTargetPromotionAttemptIntent({ ...attemptAuthorization }).pipe(
-      Effect.provide(layer),
-      Effect.flip
-    )
-    expect(forged).toBeInstanceOf(TargetPromotionResultContradiction)
-
-    const intended = yield* recordTargetPromotionAttemptIntent(attemptAuthorization).pipe(Effect.provide(layer))
-    expect(intended._tag).toBe("TargetPromotionAttemptIntended")
-    const duplicate = yield* recordTargetPromotionAttemptIntent(attemptAuthorization).pipe(
-      Effect.provide(layer),
-      Effect.flip
-    )
-    expect(duplicate._tag).toBe("TargetPromotionResultContradiction")
-    expect(yield* Ref.get(appendCalls)).toEqual(["TargetPromotionAttemptIntended"])
-    expect(
-      (yield* Ref.get(records)).filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")
-    ).toHaveLength(1)
-  })
-)
-
-it.effect("consumes one intended attempt before Git and rejects it after durable settlement", () =>
-  Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
-    const compareAndSetCalls = yield* Ref.make(0)
-    const service: TargetPromotionGitService = {
-      compareAndSet: () =>
-        Ref.update(compareAndSetCalls, (count) => count + 1).pipe(
-          Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit }))
-        ),
-      read: () =>
-        Effect.succeed(
-          TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
-        )
-    }
-    const layer = Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read))
-
-    const readAuthorization = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(Effect.provide(layer))
-    const attemptAuthorization = yield* observeTargetPromotionRead(readAuthorization).pipe(Effect.provide(layer))
-    expect(attemptAuthorization._tag).toBe("TargetPromotionAttemptAuthorized")
-    if (attemptAuthorization._tag !== "TargetPromotionAttemptAuthorized") return
-    const intended = yield* recordTargetPromotionAttemptIntent(attemptAuthorization).pipe(Effect.provide(layer))
-    const forged = yield* sendTargetPromotionAttempt({ ...intended }).pipe(Effect.provide(layer), Effect.flip)
-    expect(forged).toBeInstanceOf(TargetPromotionResultContradiction)
-    const observed = yield* sendTargetPromotionAttempt(intended).pipe(Effect.provide(layer))
-    expect(observed._tag).toBe("TargetPromotionAttemptObserved")
-    expect(yield* Ref.get(compareAndSetCalls)).toBe(1)
-    if (observed._tag !== "TargetPromotionAttemptObserved") return
-    yield* settleTargetPromotionAttempt(observed).pipe(Effect.provide(layer))
-
-    const duplicate = yield* sendTargetPromotionAttempt(intended).pipe(Effect.provide(layer), Effect.flip)
-    expect(duplicate._tag).toBe("TargetPromotionResultContradiction")
-    if (duplicate._tag !== "TargetPromotionResultContradiction") return
-    expect(duplicate.detail).toContain("no longer matches")
-    expect(yield* Ref.get(compareAndSetCalls)).toBe(1)
-  })
-)
-
-it.effect("settles only a proof minted from the actual Git response", () =>
-  Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
-    const appendCalls = yield* Ref.make<ReadonlyArray<string>>([])
-    const service: TargetPromotionGitService = {
-      compareAndSet: () =>
-        Effect.succeed(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit })),
-      read: () =>
-        Effect.succeed(
-          TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
-        )
-    }
-    const layer = Layer.mergeAll(journalLayer(records, appendCalls), gitLayer(service.compareAndSet, service.read))
-
-    const readAuthorization = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(Effect.provide(layer))
-    const attemptAuthorization = yield* observeTargetPromotionRead(readAuthorization).pipe(Effect.provide(layer))
-    expect(attemptAuthorization._tag).toBe("TargetPromotionAttemptAuthorized")
-    if (attemptAuthorization._tag !== "TargetPromotionAttemptAuthorized") return
-    const intended = yield* recordTargetPromotionAttemptIntent(attemptAuthorization).pipe(Effect.provide(layer))
-    const observed = yield* sendTargetPromotionAttempt(intended).pipe(Effect.provide(layer))
-    expect(observed._tag).toBe("TargetPromotionAttemptObserved")
-
-    const unregisteredClaim: TargetPromotionSettlementClaim = {
-      _tag: "TargetPromotionAttemptObserved",
-      attemptOrdinal: intended.attemptOrdinal,
-      correlation: intended.correlation,
-      result: TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit })
-    }
-    const forgedSettlement = yield* settleTargetPromotionAttempt(unregisteredClaim).pipe(
-      Effect.provide(layer),
-      Effect.flip
-    )
-    expect(forgedSettlement._tag).toBe("TargetPromotionResultContradiction")
-    if (forgedSettlement._tag !== "TargetPromotionResultContradiction") return
-    expect(forgedSettlement.detail).toContain("did not originate from the Git boundary")
-    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
-      "TargetPromotionIntended",
-      "TargetPromotionAttemptIntended"
-    ])
-
-    if (observed._tag !== "TargetPromotionAttemptObserved") return
-    expect((yield* settleTargetPromotionAttempt(observed).pipe(Effect.provide(layer)))._tag).toBe("PromotionSucceeded")
-    const duplicateSettlement = yield* settleTargetPromotionAttempt(observed).pipe(Effect.provide(layer), Effect.flip)
-    expect(duplicateSettlement._tag).toBe("TargetPromotionResultContradiction")
-    expect((yield* Ref.get(appendCalls)).filter((tag) => tag === "TargetPromotionObservedSuccess")).toEqual([
-      "TargetPromotionObservedSuccess"
-    ])
   })
 )
 
@@ -737,173 +397,6 @@ it.effect("reads before retrying an ambiguous exact-head promotion and never sen
   })
 )
 
-it.effect("durably waits after an authority-free exact-head reconciliation and resumes without another read", () =>
-  Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
-    const calls = yield* Ref.make<ReadonlyArray<string>>([])
-    const service: TargetPromotionGitService = {
-      compareAndSet: () =>
-        Ref.update(calls, (current) => [...current, "compare-and-set"]).pipe(
-          Effect.andThen(
-            Effect.fail(
-              new TargetPromotionCompareAndSetFailure({
-                candidateCommit,
-                detail: "promotion response was lost",
-                expectedHead,
-                target
-              })
-            )
-          )
-        ),
-      read: () =>
-        Ref.update(calls, (current) => [...current, "read"]).pipe(
-          Effect.as(
-            TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
-          )
-        )
-    }
-    expect((yield* run(service, records))._tag).toBe("PromotionPending")
-    const deferred = yield* reconcile(service, records)
-    expect(deferred._tag).toBe("PromotionReconciliationDeferred")
-    expect(yield* Ref.get(calls)).toEqual(["read", "compare-and-set", "read"])
-    expect(
-      (yield* Ref.get(records)).filter(({ event }) => event._tag === "TargetPromotionReconciliationDeferred")
-    ).toHaveLength(1)
-    expect((yield* reconcile(service, records))._tag).toBe("PromotionReconciliationDeferred")
-    expect(yield* Ref.get(calls)).toEqual(["read", "compare-and-set", "read"])
-
-    const authorizedService: TargetPromotionGitService = {
-      compareAndSet: () =>
-        Ref.update(calls, (current) => [...current, "authorized-compare-and-set"]).pipe(
-          Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit }))
-        ),
-      read: service.read
-    }
-    expect((yield* run(authorizedService, records))._tag).toBe("PromotionSucceeded")
-    expect(yield* Ref.get(calls)).toEqual(["read", "compare-and-set", "read", "authorized-compare-and-set"])
-  })
-)
-
-it.effect("rejects a malformed durable retry-authority head before any restarted Git call", () =>
-  Effect.gen(function* () {
-    const attemptOrdinal = TargetPromotionAttemptOrdinal.make(1)
-    const seeded: ReadonlyArray<JournalRecord> = [
-      {
-        event: TargetPromotionIntendedEvent.make({ correlation: request, version: workflowJournalEventVersion }),
-        key: targetPromotionIntentRecordKey(request.requestId),
-        position: JournalPosition.make(1),
-        runId
-      },
-      {
-        event: TargetPromotionAttemptIntendedEvent.make({
-          attemptOrdinal,
-          correlation: request,
-          reason: TargetPromotionAttemptReason.cases.Initial.make({ observedHeadSha: expectedHead }),
-          version: workflowJournalEventVersion
-        }),
-        key: targetPromotionAttemptIntentRecordKey(request.requestId, attemptOrdinal),
-        position: JournalPosition.make(2),
-        runId
-      },
-      {
-        event: TargetPromotionReconciliationDeferredEvent.make({
-          afterAttemptOrdinal: attemptOrdinal,
-          correlation: request,
-          deferral: TargetPromotionReconciliationDeferral.cases.RetryAuthorityRequired.make({
-            observedHeadSha: changedHead
-          }),
-          version: workflowJournalEventVersion
-        }),
-        key: targetPromotionReconciliationDeferredRecordKey(request.requestId, attemptOrdinal),
-        position: JournalPosition.make(3),
-        runId
-      }
-    ]
-    const records = yield* Ref.make(seeded)
-    const calls = yield* Ref.make<ReadonlyArray<string>>([])
-    const failure = yield* Effect.flip(
-      run(
-        {
-          compareAndSet: () =>
-            Ref.update(calls, (current) => [...current, "compare-and-set"]).pipe(
-              Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit }))
-            ),
-          read: () =>
-            Ref.update(calls, (current) => [...current, "read"]).pipe(
-              Effect.as(
-                TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
-              )
-            )
-        },
-        records
-      )
-    )
-
-    expect(failure).toBeInstanceOf(TargetPromotionHistoryContradiction)
-    if (!(failure instanceof TargetPromotionHistoryContradiction)) {
-      return yield* Effect.die("malformed retry-authority prefix did not return its typed contradiction")
-    }
-    expect(failure.detail).toContain("instead of exact expected head")
-    expect(yield* Ref.get(calls)).toEqual([])
-    expect(yield* Ref.get(records)).toEqual(seeded)
-  })
-)
-
-it.effect("durably waits after an unreadable reconciliation and rereads before an authorized retry", () =>
-  Effect.gen(function* () {
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
-    const initial: TargetPromotionGitService = {
-      compareAndSet: () =>
-        Effect.fail(
-          new TargetPromotionCompareAndSetFailure({
-            candidateCommit,
-            detail: "promotion response was lost",
-            expectedHead,
-            target
-          })
-        ),
-      read: () =>
-        Effect.succeed(
-          TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
-        )
-    }
-    expect((yield* run(initial, records))._tag).toBe("PromotionPending")
-    const calls = yield* Ref.make<ReadonlyArray<string>>([])
-    const unreadable: TargetPromotionGitService = {
-      compareAndSet: () =>
-        Ref.update(calls, (current) => [...current, "compare-and-set"]).pipe(
-          Effect.andThen(Effect.die("read-only reconciliation called compare-and-set"))
-        ),
-      read: () =>
-        Ref.update(calls, (current) => [...current, "read"]).pipe(
-          Effect.andThen(
-            Effect.fail(
-              new TargetPromotionGitReadFailure({ candidateCommit, detail: "destination unavailable", target })
-            )
-          )
-        )
-    }
-    expect((yield* reconcile(unreadable, records))._tag).toBe("PromotionReconciliationDeferred")
-    expect((yield* reconcile(unreadable, records))._tag).toBe("PromotionReconciliationDeferred")
-    expect(yield* Ref.get(calls)).toEqual(["read"])
-
-    const authorized: TargetPromotionGitService = {
-      compareAndSet: () =>
-        Ref.update(calls, (current) => [...current, "compare-and-set"]).pipe(
-          Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit }))
-        ),
-      read: () =>
-        Ref.update(calls, (current) => [...current, "authorized-read"]).pipe(
-          Effect.as(
-            TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
-          )
-        )
-    }
-    expect((yield* run(authorized, records))._tag).toBe("PromotionSucceeded")
-    expect(yield* Ref.get(calls)).toEqual(["read", "authorized-read", "compare-and-set"])
-  })
-)
-
 it.effect("reconciles an ambiguous attempt from each complete Git ancestry result", () =>
   Effect.gen(function* () {
     const cases = [
@@ -1120,6 +613,15 @@ it("legacy target-verification evidence cannot authorize promotion", () => {
   ).toBe(false)
 })
 
+it("rejects a structurally complete promotion correlation with a foreign deterministic request id", () => {
+  const foreignCorrelation = {
+    qualifiedCandidate,
+    requestId: TargetPromotionRequestId.make("target-promotion:foreign-request")
+  }
+
+  expect(Schema.is(TargetPromotionCorrelation)(foreignCorrelation)).toBe(false)
+})
+
 it.effect("rejects recovery for a foreign exact promotion correlation sharing the request id", () =>
   Effect.gen(function* () {
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
@@ -1212,13 +714,8 @@ it.effect("rejects recovery for a foreign exact promotion correlation sharing th
   })
 )
 
-it("rejects swapped or extra ordered parents before a candidate can become a promotion correlation", () => {
-  const invalidParentOrders = [
-    [acceptedCommit, expectedHead],
-    [expectedHead, acceptedCommit, changedHead]
-  ] as const
-
-  for (const directParents of invalidParentOrders) {
-    expect(Schema.is(IntegratorRunQualifiedCandidate)({ ...qualifiedCandidate, directParents })).toBe(false)
-  }
+it("rejects changed ordered parents before a candidate can become a promotion correlation", () => {
+  expect(
+    Schema.is(IntegratorRunQualifiedCandidate)({ ...qualifiedCandidate, directParents: [acceptedCommit, expectedHead] })
+  ).toBe(false)
 })

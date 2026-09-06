@@ -6,7 +6,6 @@ import {
   FixtureTarget,
   GithubIssueTarget,
   InitialControlPolicy,
-  type IntegratorBoundaryUnavailable,
   makeCompleteTaskTrackerFactsObserved,
   makeTrackerGraphObservationOperation,
   OperationSelected,
@@ -80,7 +79,11 @@ const executeGithubDryRun = Effect.fn("Cli.executeGithubDryRun")(function* (targ
   const reader = yield* TrackerGraphReader
   const allocator = yield* OperationIdAllocator
   const trace = yield* WorkflowTrace
-  const operation = makeTrackerGraphObservationOperation(yield* allocator.allocate(), target)
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    yield* allocator.allocate(),
+    target
+  )
   yield* trace.emit(OperationSelected.make({ operation }))
   const snapshot = yield* reader
     .read(target)
@@ -147,14 +150,9 @@ const commandConfiguration = { version: "0.0.0" }
 
 const runCliCommand = Command.runWith(dalphCommand, commandConfiguration)
 
-export const runCli = (input: ReadonlyArray<string>) =>
-  runCliCommand(input).pipe(
-    Effect.catchTag("IntegratorBoundaryUnavailable", (failure: IntegratorBoundaryUnavailable) => Effect.fail(failure))
-  )
+export const runCli = runCliCommand
 
-export const runCliFromStdio = Command.run(dalphCommand, commandConfiguration).pipe(
-  Effect.catchTag("IntegratorBoundaryUnavailable", (failure: IntegratorBoundaryUnavailable) => Effect.fail(failure))
-)
+export const runCliFromStdio = Command.run(dalphCommand, commandConfiguration)
 
 /**
  * Configured production host seam. The repository binary deliberately remains

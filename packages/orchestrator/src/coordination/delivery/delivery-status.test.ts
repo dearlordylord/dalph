@@ -23,6 +23,7 @@ import {
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { TaskLifecycle, TrackerRevision, TrackerSnapshot, type Task } from "../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { makeFreshTaskAdmissionBasis, TaskAdmissionOccupancy } from "../admission/fresh-task-admission.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import {
   ResponsibilityDisposition,
@@ -45,6 +46,7 @@ import {
   DeliveryProposalOrdinal,
   deliveryProposalOrderTaskId,
   trackerGraphReadProposalOf,
+  freshContinuationDecisionOf,
   type DeliveryActionProposal,
   type DeliveryProposalDerivationIssue
 } from "./delivery-action-proposal.js"
@@ -244,7 +246,7 @@ const evaluationOf = ({
   isolatedIssues = [],
   liveOwners = [],
   proposals = [],
-  proposedActions = { _tag: "DeliveryProposalsAvailable", isolatedIssues, proposals },
+  proposedActions = { _tag: "DeliveryProposalsAvailable", freshTaskCandidates: [], isolatedIssues, proposals },
   tasks = [],
   withRunId = true,
   runtimeRunId = runId
@@ -298,6 +300,7 @@ const evaluationOf = ({
   const evaluation: DeliveryRuntimeEvaluation = {
     _tag: "DeliveryRuntimeEvaluation",
     acceptedAt: JournalPosition.make(5),
+    runId: runtimeRunId,
     current,
     pauseCoverage: {
       _tag: "PauseCoverageGraphNotEstablished",
@@ -305,7 +308,23 @@ const evaluationOf = ({
     },
     proposedActions,
     quiescence: { _tag: "TrackerReconfirmationAllowed" },
-    taskWork: { capacity, held, preStart: [] },
+    taskWork: Effect.runSync(
+      makeFreshTaskAdmissionBasis({
+        acceptedAt: JournalPosition.make(5),
+        capacity,
+        entries: held.map(({ correlation, taskId }) =>
+          TaskAdmissionOccupancy.ExactAttemptHeld({
+            plannedAttempt: PlannedTaskAttempt.make({
+              ...integrationFinalityFixture.plannedAttempt,
+              attemptId: correlation.attemptId,
+              runId: correlation.runId,
+              taskId
+            })
+          })
+        ),
+        runId: runtimeRunId
+      })
+    ),
     cancellationApplied: false
   }
   return DeliveryRuntimeObservationState.Ready({ evaluation, liveOwners })
@@ -1049,7 +1068,12 @@ it("fails closed for duplicate or mismatched live-owner snapshots", () => {
   const repeatedFrontierProposal = deliveryStatusOf(
     Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
     evaluationOf({
-      proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [proposal, proposal] }
+      proposedActions: {
+        _tag: "DeliveryProposalsAvailable",
+        freshTaskCandidates: [],
+        isolatedIssues: [],
+        proposals: [proposal, proposal]
+      }
     })
   )
   expect(repeatedFrontierProposal).toBeInstanceOf(DeliveryStatusProjectionConflict)
@@ -2165,10 +2189,12 @@ it("orders all public proposal route and admission families deterministically", 
     taskId: fixture.taskId,
     title: "status proposal route matrix"
   })
-  const freshStart = RunnableFrontierTransition.BeginPlannedAttemptExecutorWork({
+  const freshStart = RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+    acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(5) },
     plannedAttempt: fixture.plannedAttempt
   })
-  const freshStartStep = FreshWorkflowStep.BeginPlannedAttemptExecutorWork({
+  const freshStartStep = FreshWorkflowStep.ObservePlannedAttemptExecutorWork({
+    acceptedProgress: freshStart.acceptedProgress,
     plannedAttempt: fixture.plannedAttempt,
     specification,
     task
@@ -2177,9 +2203,9 @@ it("orders all public proposal route and admission families deterministically", 
     operationId: OperationId.make("status-route-fresh-plan"),
     taskId: fixture.taskId
   })
-  const freshPlanStep = FreshWorkflowStep.RecordTaskAttemptPlan({
-    predecessorOperationId: OperationId.make("status-route-fresh-plan-predecessor"),
-    specification,
+  const freshPlanStep = FreshWorkflowStep.ReadRejectedTaskClaim({
+    predecessorOperationId: freshPlan.operationId,
+    rejectedClaimOperationId: OperationId.make("status-route-rejected-claim"),
     task
   })
   const continuationAttempt = PlannedTaskAttempt.make({
@@ -2240,13 +2266,15 @@ it("orders all public proposal route and admission families deterministically", 
   })
   const startQueued = RunnableFrontierTransition.StartQueuedIntegration({ responsibility: queued })
   const acquireStartedTarget = RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility: started })
+  const freshStartDecision = freshContinuationDecisionOf({ step: freshStartStep, transition: freshStart }, [])
+  const freshPlanDecision = freshContinuationDecisionOf({ step: freshPlanStep, transition: freshPlan }, [])
+  if (freshStartDecision === undefined || freshPlanDecision === undefined) {
+    return expect.fail("status route fixtures must be valid position-free fresh continuations")
+  }
   const contributions = deliveryProposalsOf({
     acceptedAt: JournalPosition.make(5),
     acceptedOperationIds: new Set([acceptedClaimOperationId, acceptedLineageOperation.operationId]),
-    fresh: [
-      { step: freshStartStep, transition: freshStart },
-      { step: freshPlanStep, transition: freshPlan }
-    ],
+    fresh: [freshStartDecision, freshPlanDecision],
     integrationResponsibilities: [started],
     runId: fixture.runId,
     transitions: [
@@ -2323,14 +2351,15 @@ it("retains projection errors when a closed status carries a final ready snapsho
   expect(result).toBeInstanceOf(DeliveryStatusRunMismatch)
 })
 
-it("covers scoped filtering, holder ties, and missing task-order conflicts through public status", () => {
-  const holderTask = TaskId.make("holder-task")
+it("covers scoped filtering, holder ordering, and missing task-order conflicts through public status", () => {
+  const holderTaskA = TaskId.make("holder-a")
+  const holderTaskZ = TaskId.make("holder-z")
   const capacityState = evaluationOf({
-    tasks: [{ id: "A" }, { id: String(holderTask) }, { id: "C" }],
+    tasks: [{ id: "A" }, { id: String(holderTaskZ) }, { id: String(holderTaskA) }, { id: "C" }],
     capacity: TaskWorkCapacity.make(2),
     held: [
-      { taskId: holderTask, correlation: { attemptId: AttemptId.make("holder-z"), runId } },
-      { taskId: holderTask, correlation: { attemptId: AttemptId.make("holder-a"), runId } }
+      { taskId: holderTaskZ, correlation: { attemptId: AttemptId.make("holder-z"), runId } },
+      { taskId: holderTaskA, correlation: { attemptId: AttemptId.make("holder-a"), runId } }
     ]
   })
   const capacityStatus = statusFor(capacityState, { _tag: "Task", runId, taskId: TaskId.make("A") })
@@ -2340,8 +2369,8 @@ it("covers scoped filtering, holder ties, and missing task-order conflicts throu
     expect(capacityWait).toMatchObject({
       _tag: "TaskWorkCapacityWait",
       holders: [
-        { taskId: holderTask, correlation: { attemptId: AttemptId.make("holder-a") } },
-        { taskId: holderTask, correlation: { attemptId: AttemptId.make("holder-z") } }
+        { taskId: holderTaskA, correlation: { attemptId: AttemptId.make("holder-a") } },
+        { taskId: holderTaskZ, correlation: { attemptId: AttemptId.make("holder-z") } }
       ]
     })
   }
@@ -2356,7 +2385,12 @@ it("covers scoped filtering, holder ties, and missing task-order conflicts throu
   const issueState = evaluationOf({
     tasks: [{ id: String(issueTask) }],
     isolatedIssues: [issue],
-    proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [issue], proposals: [] }
+    proposedActions: {
+      _tag: "DeliveryProposalsAvailable",
+      freshTaskCandidates: [],
+      isolatedIssues: [issue],
+      proposals: []
+    }
   })
   if (issueState._tag !== "Ready") return expect.fail("issue ordering fixture must be ready")
   const withoutIssueDelivery = DeliveryRuntimeObservationState.Ready({
@@ -2383,6 +2417,7 @@ it("covers scoped filtering, holder ties, and missing task-order conflicts throu
       isolatedIssues: [{ ...issue, taskId: TaskId.make("B"), operationId: OperationId.make("status-filtered-issue") }],
       proposedActions: {
         _tag: "DeliveryProposalsAvailable",
+        freshTaskCandidates: [],
         isolatedIssues: [
           { ...issue, taskId: TaskId.make("B"), operationId: OperationId.make("status-filtered-issue") }
         ],

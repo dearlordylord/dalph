@@ -14,12 +14,16 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Deferred, Effect, Exit, Fiber, Option, Schema, Stream, SubscriptionRef } from "effect"
+import { Deferred, Effect, Exit, Fiber, Option, Result, Schema, Stream, SubscriptionRef } from "effect"
 import { expect } from "vitest"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TaskLifecycle, TrackerRevision, TrackerSnapshot, type Task } from "../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import {
+  makeFreshTaskAdmissionTestBasis,
+  makeFreshTaskCommitmentForTest
+} from "../../../test/support/fresh-task-admission.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
@@ -53,6 +57,7 @@ import {
   DeliveryProposalOrdinal,
   DeliveryProposalId,
   deliveryProposalsOf,
+  freshContinuationDecisionsOf,
   trackerGraphReadProposalOf,
   type DeliveryProposalContributions
 } from "./delivery-proposal.js"
@@ -103,6 +108,7 @@ const makeDeliveryRelationsLayer = (
     zipCurrentSignals(zipCurrentSignals(input.graph, input.exactEvidence), input.policy),
     ([[graph, exactEvidence], currentPolicy]): DeliveryRelationInputBundle => ({
       actionInputs: {
+        freshTaskCandidates: [],
         proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
         reflectionProposals: [],
         runtimeFacts: {
@@ -113,7 +119,7 @@ const makeDeliveryRelationsLayer = (
             applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
           },
           quiescence: { _tag: "TrackerReconfirmationAllowed" },
-          taskWork: { capacity: currentPolicy.taskExecutionCapacity, held: [], preStart: [] }
+          taskWork: makeFreshTaskAdmissionTestBasis({ capacity: currentPolicy.taskExecutionCapacity })
         },
         trackerGraphProposals: []
       },
@@ -355,7 +361,7 @@ it.effect("keeps a proposed delivery unsettled until ordinary evidence advances 
             ]
           }
         },
-        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        { _tag: "DeliveryProposalsAvailable", freshTaskCandidates: [], isolatedIssues: [], proposals: [] },
         { _tag: "TrackerReconfirmationAllowed" }
       )
     ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
@@ -384,7 +390,7 @@ it.effect("keeps an incomplete graph with no work active without inferring termi
     expect(
       deliveryFinalityOf(
         current,
-        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        { _tag: "DeliveryProposalsAvailable", freshTaskCandidates: [], isolatedIssues: [], proposals: [] },
         { _tag: "TrackerReconfirmationAllowed" }
       )
     ).toEqual({ _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" })
@@ -415,6 +421,7 @@ it.effect("keeps an isolated proposal derivation issue active without inferring 
         current,
         {
           _tag: "DeliveryProposalsAvailable",
+          freshTaskCandidates: [],
           isolatedIssues: [
             { _tag: "FreshRouteProvenanceMissing", taskId, transition: "BeginPlannedAttemptExecutorWork" }
           ],
@@ -459,7 +466,7 @@ it.effect("lets a completed tracker target terminate after exact integration fin
     expect(
       deliveryFinalityOf(
         settledCurrent,
-        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        { _tag: "DeliveryProposalsAvailable", freshTaskCandidates: [], isolatedIssues: [], proposals: [] },
         { _tag: "TrackerReconfirmationAllowed" }
       )
     ).toEqual({ _tag: "RunMayTerminate" })
@@ -510,7 +517,7 @@ it.effect("treats a fully disposed cancelled attempt as settled for Run finality
             deliveries: [{ ...delivery, standings: [{ _tag: "ProposedDelivery" }, cancelledAttemptStanding] }]
           }
         },
-        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        { _tag: "DeliveryProposalsAvailable", freshTaskCandidates: [], isolatedIssues: [], proposals: [] },
         { _tag: "TrackerReconfirmationAllowed" }
       )
     ).toEqual({ _tag: "RunMayTerminate" })
@@ -535,7 +542,7 @@ it.effect("keeps a settled journaled graph active while the Run is paused", () =
     expect(
       deliveryFinalityOf(
         current,
-        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
+        { _tag: "DeliveryProposalsAvailable", freshTaskCandidates: [], isolatedIssues: [], proposals: [] },
         { _tag: "QuiescencePassive", reason: "RunPaused" }
       )
     ).toEqual({ _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" })
@@ -569,7 +576,9 @@ it.effect("keeps every descriptive subscription action-free", () =>
 
     const first = Array.from(yield* Stream.runCollect(relation.changes)).map(({ proposedActions }) => proposedActions)
     const second = Array.from(yield* Stream.runCollect(relation.changes)).map(({ proposedActions }) => proposedActions)
-    expect(first).toEqual([{ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }])
+    expect(first).toEqual([
+      { _tag: "DeliveryProposalsAvailable", freshTaskCandidates: [], isolatedIssues: [], proposals: [] }
+    ])
     expect(second).toEqual(first)
   })
 )
@@ -632,7 +641,12 @@ it.effect("cannot carry an initial graph-read proposal into an established graph
         _tag: "DeliveryProposalsAvailable",
         proposals: [{ id: proposal.id, route: { purpose: "EstablishCurrentGraph" } }]
       })
-      expect(frontiers.at(-1)).toEqual({ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] })
+      expect(frontiers.at(-1)).toEqual({
+        _tag: "DeliveryProposalsAvailable",
+        freshTaskCandidates: [],
+        isolatedIssues: [],
+        proposals: []
+      })
     })
   )
 )
@@ -646,14 +660,20 @@ it.effect("derives one stable proposal from a persistent delivery consequence wi
       prerequisiteIds: []
     }
     const predecessorOperationId = OperationId.make("current-action-predecessor")
-    const step = FreshWorkflowStep.AcquireTaskClaim({ predecessorOperationId, task })
-    const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-      taskId: task.id,
-      taskRevision: TaskRevision.make("current-action-revision")
+    const claimOperationId = OperationId.make("current-action-claim")
+    const step = FreshWorkflowStep.ReadTaskWorkSpecification({ claimOperationId, predecessorOperationId, task })
+    const transition = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+      operationId: predecessorOperationId,
+      taskId: task.id
     })
     const lowerProposal = deliveryProposalsOf({
       acceptedOperationIds: new Set(),
-      fresh: [{ step, transition }],
+      fresh: Result.getOrThrow(
+        freshContinuationDecisionsOf(
+          [{ step, transition }],
+          [makeFreshTaskCommitmentForTest(task.id, claimOperationId, RunId.make("current-action-run"))]
+        )
+      ),
       runId: RunId.make("current-action-run"),
       transitions: [transition]
     }).ticketDelivery[0]
@@ -727,17 +747,21 @@ it.effect("keeps B out of actual proposals after settlement until focused A succ
       parentTaskId: null,
       prerequisiteIds: [fixture.taskId]
     }
-    const step = FreshWorkflowStep.AcquireTaskClaim({
-      predecessorOperationId: OperationId.make("issue-61-releasing-graph"),
-      task
-    })
-    const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-      taskId: taskB,
-      taskRevision: TaskRevision.make("issue-61-dependant-revision")
+    const predecessorOperationId = OperationId.make("issue-61-releasing-graph")
+    const claimOperationId = OperationId.make("issue-61-claim-B")
+    const step = FreshWorkflowStep.ReadTaskWorkSpecification({ claimOperationId, predecessorOperationId, task })
+    const transition = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+      operationId: predecessorOperationId,
+      taskId: taskB
     })
     const proposal = deliveryProposalsOf({
       acceptedOperationIds: new Set(),
-      fresh: [{ step, transition }],
+      fresh: Result.getOrThrow(
+        freshContinuationDecisionsOf(
+          [{ step, transition }],
+          [makeFreshTaskCommitmentForTest(task.id, claimOperationId, fixture.runId)]
+        )
+      ),
       runId: fixture.runId,
       transitions: [transition]
     }).ticketDelivery[0]
@@ -888,17 +912,21 @@ it.effect("changes the proposal frontier when its accepted fact signal changes",
         parentTaskId: null,
         prerequisiteIds: []
       }
-      const step = FreshWorkflowStep.AcquireTaskClaim({
-        predecessorOperationId: OperationId.make("accepted-fact-graph"),
-        task
-      })
-      const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-        taskId: task.id,
-        taskRevision: TaskRevision.make("accepted-fact-revision")
+      const predecessorOperationId = OperationId.make("accepted-fact-graph")
+      const claimOperationId = OperationId.make("accepted-fact-claim")
+      const step = FreshWorkflowStep.ReadTaskWorkSpecification({ claimOperationId, predecessorOperationId, task })
+      const transition = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+        operationId: predecessorOperationId,
+        taskId: task.id
       })
       const proposal = deliveryProposalsOf({
         acceptedOperationIds: new Set(),
-        fresh: [{ step, transition }],
+        fresh: Result.getOrThrow(
+          freshContinuationDecisionsOf(
+            [{ step, transition }],
+            [makeFreshTaskCommitmentForTest(task.id, claimOperationId, RunId.make("accepted-fact-run"))]
+          )
+        ),
         runId: RunId.make("accepted-fact-run"),
         transitions: [transition]
       }).ticketDelivery[0]
@@ -931,25 +959,16 @@ it.effect("changes the proposal frontier when its accepted fact signal changes",
           Stream.runCollect,
           Effect.forkChild
         )
-        const stableCollected = yield* proposals.changesWithinStablePublication.pipe(
-          Stream.take(2),
-          Stream.runCollect,
-          Effect.forkChild
-        )
         yield* Deferred.await(firstObserved)
         yield* SubscriptionRef.set(acceptedFacts, acceptedContributions)
-        return {
-          frontiers: Array.from(yield* Fiber.join(collected)),
-          stableFrontiers: Array.from(yield* Fiber.join(stableCollected))
-        }
+        return Array.from(yield* Fiber.join(collected))
       }).pipe(Effect.provide(layer))
 
       const expected = [
-        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] },
-        { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [proposal] }
+        { _tag: "DeliveryProposalsAvailable", freshTaskCandidates: [], isolatedIssues: [], proposals: [] },
+        { _tag: "DeliveryProposalsAvailable", freshTaskCandidates: [], isolatedIssues: [], proposals: [proposal] }
       ]
-      expect(observed.frontiers).toEqual(expected)
-      expect(observed.stableFrontiers).toEqual(expected)
+      expect(observed).toEqual(expected)
     })
   )
 )
@@ -972,7 +991,9 @@ it.effect("keeps empty settlements action-free after reconstructing the relation
     const beforeStop = yield* evaluate
     const afterRestart = yield* evaluate
 
-    expect(beforeStop.actions).toEqual([{ _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals: [] }])
+    expect(beforeStop.actions).toEqual([
+      { _tag: "DeliveryProposalsAvailable", freshTaskCandidates: [], isolatedIssues: [], proposals: [] }
+    ])
     expect(afterRestart).toEqual(beforeStop)
     expect(afterRestart.current[0]?.settlements.settlements).toEqual([])
   })

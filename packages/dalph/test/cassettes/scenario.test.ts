@@ -20,8 +20,6 @@ import {
 } from "@dalph/contracts"
 import {
   AttemptWorktreeLost,
-  ActiveWorkAuthorityRefreshAuthority,
-  ActiveWorkAuthorityRefreshOrdinal,
   ActiveTaskContinuationRead,
   controlledTrackerMutationLayerFrom,
   ClaimOwner,
@@ -65,7 +63,6 @@ import {
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskClaimFactsUnreadable,
   makeCompleteTaskTrackerFactsObserved,
-  makeActiveWorkAuthorityRefreshGitReadOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
   makeTaskClaimReleaseOperation,
@@ -205,6 +202,39 @@ import { makeStoryCursor } from "../../src/cassettes/authored-cursor.js"
 import { assertAuthoredExpectedBehavior } from "../../src/cassettes/authored-outcomes.js"
 
 const evidenceDigestHexLength = 64
+
+const expectCompleteCurrentGraphReadsBeforeFirstClaim = (
+  records: ReadonlyArray<JournalRecord>,
+  exactTaskSubjects: ReadonlyArray<TaskId>
+): void => {
+  const firstClaimAt = records.findIndex(({ event }) => event._tag === "TaskClaimAcquisitionIntended")
+  expect(firstClaimAt).toBeGreaterThan(0)
+  const reads = records
+    .slice(0, firstClaimAt)
+    .flatMap(({ event }) =>
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation._tag === "ReadTrackerGraph" &&
+      event.operation.cause._tag === "WorkflowEstablishment"
+        ? [event.operation]
+        : []
+    )
+  expect(reads.map(({ readShape }) => readShape.explicitlyCoveredTaskIds)).toEqual([
+    [],
+    ...exactTaskSubjects.map((taskId) => [taskId])
+  ])
+  expect(
+    reads.every(({ operationId }) => {
+      const event = records
+        .slice(0, firstClaimAt)
+        .find(({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operationId)?.event
+      return (
+        event?._tag === "TaskTrackerFactsObserved" &&
+        (event.observation._tag === "CompleteTaskTrackerFacts" ||
+          event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
+      )
+    })
+  ).toBe(true)
+}
 
 const expectFocusedCompletionReadCorrelation = (
   records: ReadonlyArray<JournalRecord>,
@@ -1243,7 +1273,8 @@ it.effect("pauses A and its grouping child while recording only A's direction", 
         event._tag === "ControlDirectionApplied" ? [{ direction: event.direction, subject: event.subject }] : []
       )
     ).toEqual([{ direction: "Pause", subject: { _tag: "Task", runId: run.runId, taskId: "A" } }])
-    expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A"])
+    expect(run.observedBehavior.plannedWorkUndertakenFor).toEqual(["A", "B"])
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A")])
     expect(waiting).toEqual({
       _tag: "PauseProgressObserved",
       result: {
@@ -1270,6 +1301,40 @@ it.effect("pauses A and its grouping child while recording only A's direction", 
               beganAt: 17,
               coverage: { _tag: "ExactTaskPauseCoverage" },
               taskId: "A"
+            }
+          },
+          {
+            blockers: [
+              { _tag: "ExecutorSafeSuspensionRequired", attemptId: "attempt:B:1" },
+              {
+                _tag: "ProposedDeliveryAction",
+                proposal: {
+                  _tag: "IdentityFreeWorkflowRoute",
+                  correlation: { _tag: "PlannedAttempt", attemptId: "attempt:B:1" },
+                  proposalId:
+                    '["IdentityFreeWorkflowRoute","SuspendPlannedAttemptExecutorWork","attempt:B:1",null,"B"]',
+                  taskId: "B"
+                }
+              },
+              {
+                _tag: "LiveDeliveryAction",
+                owner: {
+                  _tag: "AdmittedDeliveryAction",
+                  proposal: {
+                    _tag: "FreshExecutorWorkflowRoute",
+                    attemptId: "attempt:B:1",
+                    proposalId: '["FreshExecutorWorkflowRoute","BeginPlannedAttemptExecutorWork","attempt:B:1","B"]',
+                    taskId: "B"
+                  }
+                }
+              }
+            ],
+            responsibility: {
+              _tag: "PlannedAttemptExecutorWork",
+              attemptId: "attempt:B:1",
+              beganAt: 30,
+              coverage: { _tag: "GroupingDescendantPauseCoverage", groupingObservedAt: 35, pausedTaskId: "A" },
+              taskId: "B"
             }
           }
         ]
@@ -1417,15 +1482,38 @@ it.effect("stops before the next forward operation after Alice pauses the Run", 
     const afterPause = run.records.slice(pauseAt + 1)
 
     expect(pauseAt).toBeGreaterThan(0)
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A")])
     expect(
-      run.records.some(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(
+      afterPause.some(
         ({ event }) => event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.taskId === TaskId.make("B")
       )
     ).toBe(false)
     expect(
-      run.records.some(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "TaskWorktreeReconciliationIntended" &&
+          event.operation.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(afterPause.some(({ event }) => event._tag === "TaskWorktreeReady")).toBe(false)
+    expect(
+      afterPause.some(
         ({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          event.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandIntended" &&
+          event.command === "Begin" &&
           event.plannedAttempt.taskId === TaskId.make("B")
       )
     ).toBe(false)
@@ -1495,6 +1583,7 @@ it.effect("Alice unpauses task A before its Pause observation confirms", () =>
     expect(taskPauseObservationUnpausedAuthoredCassette.name).toBe(
       "Alice unpauses task A before its Pause observation confirms"
     )
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A")])
     expect(
       run.records
         .filter(({ event }) => event._tag === "ControlDirectionApplied")
@@ -1564,6 +1653,41 @@ it.effect("restarts a confirmed paused Run without selecting new forward progres
 
     expect(run.activationOrdinals).toEqual([1, 2])
     expect(pauseAt).toBeGreaterThan(0)
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A")])
+    expect(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(
+      afterPause.some(
+        ({ event }) => event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "TaskWorktreeReconciliationIntended" &&
+          event.operation.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(afterPause.some(({ event }) => event._tag === "TaskWorktreeReady")).toBe(false)
+    expect(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+          event.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
+    expect(
+      afterPause.some(
+        ({ event }) =>
+          event._tag === "PlannedAttemptExecutorCommandIntended" &&
+          event.command === "Begin" &&
+          event.plannedAttempt.taskId === TaskId.make("B")
+      )
+    ).toBe(false)
     expect(afterPause.some(({ event }) => event._tag === "TaskTrackerFactsObserved")).toBe(false)
     expect(
       afterPause.flatMap(({ event }) =>
@@ -1778,6 +1902,7 @@ it.effect("A tracker client changes A while Dalph's completion request is pendin
         event.observation.purpose._tag === "Confirmation" &&
         event.observation.facts.lifecycle === "TerminalWithoutSuccess"
     )
+    expectCompleteCurrentGraphReadsBeforeFirstClaim(run.records, [TaskId.make("A")])
     expect(rejection).toBeDefined()
     expect(terminalRead).toBeDefined()
     expect(run.records.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toHaveLength(1)
@@ -1837,7 +1962,7 @@ it.effect("A tracker client changes A while Dalph's completion request is pendin
       run.records.some(
         ({ event }) =>
           event._tag === "PlannedAttemptExecutorWorkReported" &&
-          event.report.correlation.attemptId === AttemptId.make("attempt:C:1") &&
+          event.report.correlation.attemptId === AttemptId.make("attempt:C:0") &&
           event.report._tag === "ExecutorWorkTerminal" &&
           event.report.result._tag === "Completed"
       )
@@ -2868,8 +2993,37 @@ it.effect(
         })
       const settledAt = new Map(positions("IntegrationFinalitySettled"))
       const beganAt = new Map(positions("PlannedAttemptExecutorWorkResponsibilityBegan"))
+      const aSettledAt = settledAt.get(TaskId.make("A")) ?? -1
+      const bClaimAt = run.records.findIndex(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("B")
+      )
+      const eClaimAt = run.records.findIndex(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === TaskId.make("E")
+      )
+      const eSpecificationAt = run.records.findIndex(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTaskWorkSpecification" &&
+          event.operation.taskId === TaskId.make("E")
+      )
+      const eGraphReads = run.records.flatMap(({ event }, position) =>
+        event._tag === "TaskTrackerReadIntentRecorded" &&
+        event.operation._tag === "ReadTrackerGraph" &&
+        event.operation.cause._tag === "WorkflowEstablishment" &&
+        event.operation.readShape.explicitlyCoveredTaskIds.length === 1 &&
+        event.operation.readShape.explicitlyCoveredTaskIds[0] === TaskId.make("E")
+          ? [position]
+          : []
+      )
 
       expect([...settledAt.keys()]).toEqual(["A", "B", "C", "E", "D"])
+      expect(bClaimAt).toBeGreaterThan(aSettledAt)
+      expect(eGraphReads).toHaveLength(2)
+      expect(eGraphReads[0]).toBeLessThan(eClaimAt)
+      expect(eGraphReads[1]).toBeGreaterThan(eClaimAt)
+      expect(eGraphReads[1]).toBeLessThan(eSpecificationAt)
       expect(beganAt.get(TaskId.make("D"))).toBeGreaterThan(settledAt.get(TaskId.make("B")) ?? Number.POSITIVE_INFINITY)
       expect(beganAt.get(TaskId.make("D"))).toBeGreaterThan(settledAt.get(TaskId.make("C")) ?? Number.POSITIVE_INFINITY)
       expect(beganAt.get(TaskId.make("D"))).toBeGreaterThan(settledAt.get(TaskId.make("E")) ?? Number.POSITIVE_INFINITY)
@@ -2916,6 +3070,7 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
       blockerLifecycle: "Open" | "CompletedSuccessfully"
     ) => {
       const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make(`post-promotion-blocker:${revision}`),
         graph.observation.target,
         [],
@@ -3959,7 +4114,6 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
         },
         ...read(initialGraph),
         ...read(initialGraph),
-        ...read(membershipChangedGraph),
         { _tag: "DalphSelects", operation: { _tag: "AcquireTaskClaim", taskId: "A" } },
         ...read(membershipChangedGraph),
         { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "A" } },
@@ -3983,6 +4137,7 @@ it.effect("later complete reads add newly selected D and keep removed unstarted 
         { _tag: "TaskWorkSpecificationReadReturned", body: "Complete D.", taskId: "D", title: "Complete D" },
         { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", attemptId: "attempt:D:1", taskId: "D" } },
         { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", attemptId: "attempt:D:1", taskId: "D" } },
+        { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
         {
           _tag: "PlannedAttemptExecutorWorkReported",
           report: { _tag: "ExecutorWorkExecuting", attemptId: "attempt:D:1" },
@@ -4804,20 +4959,6 @@ it.effect("safely suspends A after membership removal while independent B contin
           )
         }
       })
-      .flatMap((item) =>
-        item._tag === "PlannedAttemptExecutorProjectionReturned" &&
-        "report" in item &&
-        item.report._tag === "ExecutorWorkTerminal" &&
-        item.report.attemptId === bAttemptId
-          ? [
-              {
-                _tag: "PlannedAttemptExecutorProjectionReturned" as const,
-                report: { _tag: "ExecutorWorkExecuting" as const, attemptId: aAttemptId }
-              },
-              item
-            ]
-          : [item]
-      )
     const changedInstructionsCassette = {
       ...localizedCassette,
       name: "A instructions change while independent B continues",
@@ -6313,41 +6454,6 @@ it.effect(
       if (executorResponsibilityEntry?._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") {
         return yield* Effect.die("missing executor responsibility entry")
       }
-      const activeRefreshAuthority = ActiveWorkAuthorityRefreshAuthority.make({
-        attemptId: executorResponsibilityEntry.plannedAttempt.attemptId,
-        runId: executorResponsibilityEntry.plannedAttempt.runId
-      })
-      const activeRefreshOrdinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
-      const activeRefreshBaseOperation = makeTaskWorktreeObservationOperation({
-        operationId: OperationId.make(`cassette-active-refresh-read:${run.runId}`),
-        plannedAttempt: executorResponsibilityEntry.plannedAttempt,
-        predecessorOperationIds: []
-      })
-      const activeRefreshOperation = makeActiveWorkAuthorityRefreshGitReadOperation(
-        activeRefreshBaseOperation,
-        activeRefreshAuthority,
-        activeRefreshOrdinal
-      )
-      const activeRefreshEntries: ReadonlyArray<RecordedCassetteEntry> = [
-        {
-          _tag: "ActiveWorkAuthorityRefreshGitReadInitiated",
-          initiatedBy: { _tag: "DalphCoordinator" },
-          occurrenceClassification: "InitiatedAction",
-          operation: activeRefreshOperation
-        },
-        {
-          _tag: "ActiveWorkAuthorityRefreshGitReadFailed",
-          authority: activeRefreshAuthority,
-          failure: new GitWorktreeReadFailure({
-            detail: "alpha-renaming fixture active-refresh worktree read failed",
-            worktree: activeRefreshOperation.plannedAttempt.worktree
-          }),
-          occurrenceClassification: "NonActionOccurrence",
-          operation: activeRefreshOperation,
-          ordinal: activeRefreshOrdinal,
-          source: "Timer"
-        }
-      ]
       const acquiredClaimEntry = projected.entries.find((entry) => entry._tag === "TaskClaimAcquired")
       if (acquiredClaimEntry?._tag !== "TaskClaimAcquired") {
         return yield* Effect.die("missing acquired claim entry")
@@ -6356,29 +6462,6 @@ it.effect(
       if (runBeganEntry?._tag !== "WorkflowRunBegan") {
         return yield* Effect.die("missing workflow run entry")
       }
-      const runningEntryIndex = projected.entries.findIndex(
-        (entry) => entry._tag === "PlannedAttemptExecutorWorkReported" && entry.report._tag === "ExecutorWorkExecuting"
-      )
-      if (runningEntryIndex < 0) {
-        return yield* Effect.die("active-refresh alpha-renaming fixture requires a Running report")
-      }
-      const activeRefreshRecorded = RecordedCassette.make({
-        ...projected,
-        entries: [
-          ...projected.entries.slice(0, runningEntryIndex + 1),
-          ...activeRefreshEntries,
-          ...projected.entries.slice(runningEntryIndex + 1)
-        ]
-      })
-      const activeRefreshHistory = foldRecordedCassette(activeRefreshRecorded)
-      if (activeRefreshHistory._tag !== "ValidWorkflowJournalHistory") {
-        return yield* Effect.die(
-          `active-refresh alpha-renaming fixture must remain valid: ${activeRefreshHistory.issues
-            .map((issue) => JSON.stringify(issue))
-            .join("; ")}`
-        )
-      }
-      expectRecordedRoundTrip(activeRefreshHistory.records, activeRefreshRecorded)
       const acceptedResult = AcceptedResult.make({
         commit: GitCommitSha.make("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
         evidenceManifest: EvidenceReference.make({
@@ -6626,6 +6709,7 @@ it.effect(
         }
       ] satisfies ReadonlyArray<RecordedCassetteEntry>
       const trackerGraphFailureOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make(`cassette-tracker-failure:${run.runId}`),
         runBeganEntry.target
       )
@@ -6733,7 +6817,6 @@ it.effect(
             from: operationId,
             to: `renamed-operation:${ordinal}`
           })),
-          { from: activeRefreshOperation.operationId, to: "renamed-active-refresh-operation" },
           { from: `cassette-release:${run.runId}`, to: "renamed-operation:claim-release" },
           { from: rejectedClaimOperationId, to: "renamed-rejected-claim-operation" },
           { from: `cassette-worktree-read:${run.runId}`, to: "renamed-operation:worktree-read" },
@@ -6746,55 +6829,6 @@ it.effect(
         worktreeLocators: [{ from: "/dalph/cassettes/attempt-A-0", to: "/dalph/cassettes/renamed-attempt-A" }]
       })
       const renamed = yield* renameRecordedCassette(recorded, renaming)
-      const renamedActiveRefresh = yield* renameRecordedCassette(activeRefreshRecorded, renaming)
-      const renamedActiveRefreshIntent = renamedActiveRefresh.entries.find(
-        (
-          entry
-        ): entry is Extract<RecordedCassetteEntry, { readonly _tag: "ActiveWorkAuthorityRefreshGitReadInitiated" }> =>
-          entry._tag === "ActiveWorkAuthorityRefreshGitReadInitiated" &&
-          entry.operation.operationId === "renamed-active-refresh-operation"
-      )
-      const renamedActiveRefreshFailure = renamedActiveRefresh.entries.find(
-        (
-          entry
-        ): entry is Extract<RecordedCassetteEntry, { readonly _tag: "ActiveWorkAuthorityRefreshGitReadFailed" }> =>
-          entry._tag === "ActiveWorkAuthorityRefreshGitReadFailed"
-      )
-      if (
-        renamedActiveRefreshIntent === undefined ||
-        renamedActiveRefreshIntent.operation._tag !== "ReadTaskWorktree" ||
-        renamedActiveRefreshFailure === undefined ||
-        renamedActiveRefreshFailure.operation._tag !== "ReadTaskWorktree" ||
-        renamedActiveRefreshFailure.failure._tag !== "GitWorktreeReadFailure"
-      ) {
-        return yield* Effect.die("active-refresh alpha-renaming fixture lost its typed intent or failure")
-      }
-      expect(renamedActiveRefreshIntent.operation.operationId).toBe("renamed-active-refresh-operation")
-      expect(renamedActiveRefreshIntent.operation.plannedAttempt.attemptId).toBe("renamed-attempt-A")
-      expect(renamedActiveRefreshIntent.operation.plannedAttempt.runId).toBe("renamed-run")
-      expect(renamedActiveRefreshIntent.operation.plannedAttempt.branch).toBe("refs/heads/dalph/renamed-attempt-A")
-      expect(renamedActiveRefreshIntent.operation.plannedAttempt.worktree).toBe("/dalph/cassettes/renamed-attempt-A")
-      expect(renamedActiveRefreshIntent.operation.authority.attemptId).toBe("renamed-attempt-A")
-      expect(renamedActiveRefreshIntent.operation.authority.runId).toBe("renamed-run")
-      expect(renamedActiveRefreshIntent.operation.ordinal).toBe(activeRefreshOrdinal)
-      expect(renamedActiveRefreshFailure.authority.attemptId).toBe("renamed-attempt-A")
-      expect(renamedActiveRefreshFailure.authority.runId).toBe("renamed-run")
-      expect(renamedActiveRefreshFailure.ordinal).toBe(activeRefreshOrdinal)
-      expect(renamedActiveRefreshFailure.source).toBe("Timer")
-      expect(renamedActiveRefreshFailure.operation.operationId).toBe("renamed-active-refresh-operation")
-      expect(renamedActiveRefreshFailure.operation.plannedAttempt.branch).toBe("refs/heads/dalph/renamed-attempt-A")
-      expect(renamedActiveRefreshFailure.operation.plannedAttempt.worktree).toBe("/dalph/cassettes/renamed-attempt-A")
-      expect(renamedActiveRefreshFailure.failure.worktree).toBe("/dalph/cassettes/renamed-attempt-A")
-      expect(
-        (yield* verifyRecordedCassetteRoundTripWithRenaming(
-          activeRefreshHistory.records,
-          renamedActiveRefresh,
-          invertCassetteIdentityRenaming(renaming)
-        )).every(
-          ({ operationalStateEquivalent, pureSelectionEquivalent, workflowHistoryEquivalent }) =>
-            workflowHistoryEquivalent && operationalStateEquivalent && pureSelectionEquivalent
-        )
-      ).toBe(true)
       const renamedRejectedEntry = renamed.entries.find((entry) => entry._tag === "TaskClaimAcquisitionRejected")
       if (renamedRejectedEntry?._tag !== "TaskClaimAcquisitionRejected") {
         return yield* Effect.die("alpha-renaming fixture requires the rejected claim entry")
@@ -6818,9 +6852,6 @@ it.effect(
         invertCassetteIdentityRenaming(renaming)
       )
       const encodedAfter = JSON.stringify(yield* Schema.encodeUnknownEffect(RecordedCassette)(renamed))
-      const encodedActiveRefreshAfter = JSON.stringify(
-        yield* Schema.encodeUnknownEffect(RecordedCassette)(renamedActiveRefresh)
-      )
       const allRenamings = [
         ...renaming.attemptIds,
         ...renaming.claimTokens,
@@ -6831,8 +6862,6 @@ it.effect(
         ...renaming.worktreeLocators
       ]
       const entryVariants = {
-        ActiveWorkAuthorityRefreshGitReadInitiated: true,
-        ActiveWorkAuthorityRefreshGitReadFailed: true,
         AttemptChoiceApplied: true,
         AttemptImplementationAbandoned: true,
         AttemptRestartAuthorityReadFailed: true,
@@ -6953,7 +6982,7 @@ it.effect(
 
       expect(checkpoints.every((checkpoint) => checkpoint.workflowHistoryEquivalent)).toBe(true)
       for (const { from, to } of allRenamings) {
-        const encodedRenamedFixtures = `${encodedAfter}${encodedActiveRefreshAfter}`
+        const encodedRenamedFixtures = encodedAfter
         expect(encodedRenamedFixtures).not.toContain(`"${from}"`)
         expect(encodedRenamedFixtures).toContain(`"${to}"`)
       }
@@ -7310,7 +7339,6 @@ it.effect(
         new Set(
           [
             ...recorded.entries,
-            ...activeRefreshRecorded.entries,
             ...stoppageRecorded.entries,
             ...noReleaseRecorded.entries,
             ...foreignNoReleaseRecorded.entries,
@@ -7486,7 +7514,7 @@ it.effect("has no recording for an empty unidentified journal", () =>
 )
 
 it.effect(
-  "detects responsibility and ExecutorWorkExecuting before worktree readiness even when final operational state converges",
+  "rejects responsibility and ExecutorWorkExecuting before worktree readiness even when later entries match",
   () =>
     Effect.gen(function* () {
       const run = yield* runAuthoredScenarioCassette(singleton)
@@ -7533,8 +7561,8 @@ it.effect(
       const checkpoints = compareRecordedCassetteCheckpoints(expected, actual)
 
       expect(foldRecordedCassette(expected)._tag).toBe("ValidWorkflowJournalHistory")
-      expect(foldRecordedCassette(actual)._tag).toBe("ValidWorkflowJournalHistory")
-      expect(checkpoints.at(-1)?.operationalStateEquivalent).toBe(true)
+      expect(foldRecordedCassette(actual)._tag).toBe("InvalidWorkflowJournalHistory")
+      expect(checkpoints.at(-1)?.operationalStateEquivalent).toBe(false)
       expect(checkpoints.at(-1)?.workflowHistoryEquivalent).toBe(false)
       expect(checkpoints.some((checkpoint) => !checkpoint.pureSelectionEquivalent)).toBe(true)
     })

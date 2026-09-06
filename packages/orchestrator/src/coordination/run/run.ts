@@ -54,11 +54,17 @@ import type { IntegratorCandidateCleanupEvidenceReadFailure } from "../../workfl
 import type { AppliedRunCancellation } from "../../workflow/protocols/run-cancellation/events.js"
 import type { ActiveWorkAuthorityRefreshSource } from "./run-activation-opportunity.js"
 import { RunActivationOpportunity } from "./run-activation-opportunity.js"
+import type {
+  PassivePlannedAttemptObserver,
+  PassivePlannedAttemptProjectionPublication
+} from "./passive-planned-attempt-observer.js"
 
 export type JournaledRunProcessServices =
   | DeliveryRuntimeResourceCapabilityPair
   | DeliveryRuntimeResources
   | DeliveryRuntimeObservationPublication
+  | PassivePlannedAttemptObserver
+  | PassivePlannedAttemptProjectionPublication
 
 /**
  * The accepted Run-level control fact that a later reactivation check reads
@@ -299,6 +305,7 @@ const runDeliveryComposition = Effect.fn("Delivery.runComposition")(function* <
   RExecutor
 >(
   target: TrackerTarget,
+  expectedRunId: RunId,
   relationsEffect: Effect.Effect<Relations, ERelations, RRelations>,
   executorOf: (relations: Relations) => Effect.Effect<DeliveryActionExecutorService, EExecutor, RExecutor>,
   opportunity: RunActivationOpportunity
@@ -311,7 +318,7 @@ const runDeliveryComposition = Effect.fn("Delivery.runComposition")(function* <
         const consequences = yield* delivery
         const relation = yield* deliveryRuntimeFrom(consequences)
 
-        return yield* runStabilizedDelivery(target, relation, opportunity).pipe(
+        return yield* runStabilizedDelivery(target, expectedRunId, relation, opportunity).pipe(
           Effect.provideService(DeliveryActionExecutor, executor)
         )
       }).pipe(Effect.provide(relations))
@@ -348,6 +355,7 @@ const runJournaledDelivery = <E, R>(
       yield* cleanup.run
       return yield* runDeliveryComposition(
         target,
+        runId,
         makeJournaledDeliveryRelations(runId, target, opportunity),
         () => executorFactory(runId, target),
         opportunity
@@ -356,6 +364,7 @@ const runJournaledDelivery = <E, R>(
   }
   return runDeliveryComposition(
     target,
+    runId,
     makeJournaledDeliveryRelations(runId, target, opportunity),
     () => executorFactory(runId, target),
     opportunity
@@ -425,13 +434,31 @@ export const runWorkflowWithActiveWorkAuthorityRefresh = <EInitial, RInitial>(
   runId: AllocatedWorkflowRunId,
   source: ActiveWorkAuthorityRefreshSource
 ) =>
+  runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh(
+    target,
+    initialControlPolicySource,
+    runId,
+    liveDeliveryActionExecutorFactory,
+    source,
+    true
+  )
+
+/** Explicit controlled composition for one active-work authority refresh activation. */
+export const runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh = <EInitial, RInitial, E, R>(
+  target: TrackerTarget,
+  initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
+  runId: AllocatedWorkflowRunId,
+  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
+  source: ActiveWorkAuthorityRefreshSource,
+  activateCleanup = true
+) =>
   Effect.gen(function* () {
     const bootstrap = yield* JournaledRunBootstrap
     return yield* bootstrap.activateActiveWorkAuthorityRefresh(
       target,
       initialControlPolicySource,
       runId,
-      (opportunity) => runJournaledDelivery(runId, target, liveDeliveryActionExecutorFactory, true, opportunity),
+      (opportunity) => runJournaledDelivery(runId, target, executorFactory, activateCleanup, opportunity),
       source
     )
   })

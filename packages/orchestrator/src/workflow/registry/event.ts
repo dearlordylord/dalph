@@ -51,11 +51,6 @@ import {
   RunCancellationAppliedEvent
 } from "../protocols/run-cancellation/events.js"
 import { RunFinalityEvidence } from "../../coordination/frontier/run-finality.js"
-import {
-  ActiveWorkAuthorityRefreshGitReadFailedEvent,
-  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent
-} from "../protocols/active-work-authority-refresh/events.js"
-export { ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent } from "../protocols/active-work-authority-refresh/events.js"
 
 const ResponsibilityJournalEvent = Schema.Union([
   PlannedAttemptExecutorCommandIntendedEvent,
@@ -220,10 +215,8 @@ export const WorkflowJournalEvent = Schema.Union([
   TaskWorktreeReconciliationIntendedEvent,
   TaskWorktreeReadyEvent,
   GitReadIntentRecordedEvent,
-  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
   TargetLineageObservedEvent,
-  ActiveWorkAuthorityRefreshGitReadFailedEvent,
   ResponsibilityJournalEvent,
   PlannedAttemptContinuationAuthorizedEvent
 ]).check(

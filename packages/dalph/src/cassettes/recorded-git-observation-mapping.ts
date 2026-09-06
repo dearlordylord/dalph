@@ -1,6 +1,5 @@
 import { Match } from "effect"
 import {
-  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
   GitReadIntentRecordedEvent,
   PlannedAttemptWorktreeObservedEvent,
   TargetLineageObservedEvent,
@@ -12,17 +11,10 @@ import type { RecordedCassetteEntry } from "./recorded-domain.js"
 
 export type RecordedGitObservationEntry = Extract<
   RecordedCassetteEntry,
-  {
-    readonly _tag:
-      | "ActiveWorkAuthorityRefreshGitReadInitiated"
-      | "GitReadInitiated"
-      | "PlannedAttemptWorktreeObserved"
-      | "TargetLineageObserved"
-  }
+  { readonly _tag: "GitReadInitiated" | "PlannedAttemptWorktreeObserved" | "TargetLineageObserved" }
 >
 
 const recordedGitObservationEntryTags = {
-  ActiveWorkAuthorityRefreshGitReadInitiated: true,
   GitReadInitiated: true,
   PlannedAttemptWorktreeObserved: true,
   TargetLineageObserved: true
@@ -36,89 +28,63 @@ export const isRecordedGitObservationEntry = <Value extends { readonly _tag: str
   value: Value
 ): value is Extract<
   Value,
-  {
-    readonly _tag:
-      | "ActiveWorkAuthorityRefreshGitReadInitiated"
-      | "GitReadInitiated"
-      | "PlannedAttemptWorktreeObserved"
-      | "TargetLineageObserved"
-  }
+  { readonly _tag: "GitReadInitiated" | "PlannedAttemptWorktreeObserved" | "TargetLineageObserved" }
 > => Object.hasOwn(recordedGitObservationEntryTags, value._tag)
 
 export const recordGitObservationEntry = (
   event: Extract<
     WorkflowJournalEvent,
-    {
-      readonly _tag:
-        | "ActiveWorkAuthorityRefreshGitReadIntentRecorded"
-        | "GitReadIntentRecorded"
-        | "PlannedAttemptWorktreeObserved"
-        | "TargetLineageObserved"
-    }
+    { readonly _tag: "GitReadIntentRecorded" | "PlannedAttemptWorktreeObserved" | "TargetLineageObserved" }
   >
 ): RecordedGitObservationEntry =>
-  event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded"
+  event._tag === "GitReadIntentRecorded"
     ? {
-        _tag: "ActiveWorkAuthorityRefreshGitReadInitiated",
+        _tag: "GitReadInitiated",
         initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
         occurrenceClassification: "InitiatedAction",
         operation: event.operation
       }
-    : event._tag === "GitReadIntentRecorded"
+    : event._tag === "PlannedAttemptWorktreeObserved"
       ? {
-          _tag: "GitReadInitiated",
-          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-          occurrenceClassification: "InitiatedAction",
-          operation: event.operation
+          _tag: "PlannedAttemptWorktreeObserved",
+          observation: event.observation,
+          occurrenceClassification: "NonActionOccurrence",
+          originatingActionOperationId: event.operationId
         }
-      : event._tag === "PlannedAttemptWorktreeObserved"
-        ? {
-            _tag: "PlannedAttemptWorktreeObserved",
-            observation: event.observation,
-            occurrenceClassification: "NonActionOccurrence",
-            originatingActionOperationId: event.operationId
-          }
-        : {
-            _tag: "TargetLineageObserved",
-            observation: event.observation,
-            occurrenceClassification: "NonActionOccurrence",
-            originatingActionOperationId: event.operationId,
-            plannedAttempt: event.plannedAttempt
-          }
+      : {
+          _tag: "TargetLineageObserved",
+          observation: event.observation,
+          occurrenceClassification: "NonActionOccurrence",
+          originatingActionOperationId: event.operationId,
+          plannedAttempt: event.plannedAttempt
+        }
 
 export const eventForGitObservationEntry = (entry: RecordedGitObservationEntry): WorkflowJournalEvent =>
-  entry._tag === "ActiveWorkAuthorityRefreshGitReadInitiated"
-    ? ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
+  entry._tag === "GitReadInitiated"
+    ? GitReadIntentRecordedEvent.make({
         initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
         occurrenceClassification: "InitiatedAction",
         operation: entry.operation,
         version: workflowJournalEventVersion
       })
-    : entry._tag === "GitReadInitiated"
-      ? GitReadIntentRecordedEvent.make({
-          initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-          occurrenceClassification: "InitiatedAction",
-          operation: entry.operation,
+    : entry._tag === "PlannedAttemptWorktreeObserved"
+      ? PlannedAttemptWorktreeObservedEvent.make({
+          observation: entry.observation,
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: entry.originatingActionOperationId,
           version: workflowJournalEventVersion
         })
-      : entry._tag === "PlannedAttemptWorktreeObserved"
-        ? PlannedAttemptWorktreeObservedEvent.make({
-            observation: entry.observation,
-            occurrenceClassification: "NonActionOccurrence",
-            operationId: entry.originatingActionOperationId,
-            version: workflowJournalEventVersion
-          })
-        : TargetLineageObservedEvent.make({
-            observation: entry.observation,
-            occurrenceClassification: "NonActionOccurrence",
-            operationId: entry.originatingActionOperationId,
-            plannedAttempt: entry.plannedAttempt,
-            version: workflowJournalEventVersion
-          })
+      : TargetLineageObservedEvent.make({
+          observation: entry.observation,
+          occurrenceClassification: "NonActionOccurrence",
+          operationId: entry.originatingActionOperationId,
+          plannedAttempt: entry.plannedAttempt,
+          version: workflowJournalEventVersion
+        })
 
 // eslint-disable-next-line complexity -- Each distinct Git reconciliation fact must remain visibly distinct in recorded lyrics.
 export const lyricForGitObservationEntry = (entry: RecordedGitObservationEntry): string => {
-  if (entry._tag === "GitReadInitiated" || entry._tag === "ActiveWorkAuthorityRefreshGitReadInitiated") {
+  if (entry._tag === "GitReadInitiated") {
     return entry.operation._tag === "ReadTaskWorktree"
       ? `Dalph coordinator initiated a Git read for planned worktree ${entry.operation.plannedAttempt.worktree}.`
       : `Dalph coordinator initiated a target-lineage read for Base ${entry.operation.plannedAttempt.baseSha}.`

@@ -1,4 +1,4 @@
-import { PlannedAttemptExecutor, type RunId } from "@dalph/contracts"
+import { PlannedAttemptExecutor, PlannedAttemptExecutorLifecycleObservation, type RunId } from "@dalph/contracts"
 import { Effect, Layer } from "effect"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
@@ -9,7 +9,7 @@ import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { controlDirectionApplicationLayer } from "../../workflow/protocols/control-direction-application/protocol.js"
 import { taskClaimReacquisitionControlLayer } from "../../workflow/protocols/task-claim-reacquisition/control.js"
-import { attemptChoiceControlLayer } from "../../workflow/protocols/attempt-choice/control.js"
+import { attemptChoiceControlWithProvidedProtocolLayer } from "../../workflow/protocols/attempt-choice/control.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
 import { journaledRunBootstrapLayer, type JournaledRuntimeLayerInput } from "./journaled-run-bootstrap.js"
 import { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
@@ -33,11 +33,12 @@ const controlledJournaledRunLayer = (runId: RunId) =>
       const interpreter = yield* WorkflowInterpreter
       const operationIdAllocator = yield* OperationIdAllocator
       const executor = yield* PlannedAttemptExecutor
+      const lifecycleObservation = yield* PlannedAttemptExecutorLifecycleObservation
       const trace = yield* WorkflowTrace
       const applicationExit = yield* makeApplicationExitShell(controlledOwnership, { requestEnd: () => Effect.void })
       const runtimeLayer = ({ opportunity, runId: activeRunId }: JournaledRuntimeLayerInput) => {
         const controls = Layer.mergeAll(
-          attemptChoiceControlLayer,
+          attemptChoiceControlWithProvidedProtocolLayer,
           controlDirectionApplicationLayer,
           taskClaimReacquisitionControlLayer,
           taskWorkCapacityControlLayer
@@ -54,7 +55,7 @@ const controlledJournaledRunLayer = (runId: RunId) =>
           opportunity
         ).pipe(
           Layer.provide(
-            journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter), opportunity)
+            journaledWorkflowInterpreterLayer(activeRunId, Layer.succeed(WorkflowInterpreter, interpreter))
           ),
           Layer.provide(controls),
           Layer.provide(Layer.succeed(OperationIdAllocator, operationIdAllocator)),
@@ -65,7 +66,8 @@ const controlledJournaledRunLayer = (runId: RunId) =>
       return Layer.merge(
         journaledRunBootstrapLayer(runId, runtimeLayer, applicationExit, defaultJournalMaintenanceObservation).pipe(
           Layer.provide(memoryJournalStoreLayer),
-          Layer.provide(controlledOwnershipLayer)
+          Layer.provide(controlledOwnershipLayer),
+          Layer.provide(Layer.succeed(PlannedAttemptExecutorLifecycleObservation, lifecycleObservation))
         ),
         Layer.succeed(ApplicationExitRequestBoundary, applicationExit.requestBoundary)
       )

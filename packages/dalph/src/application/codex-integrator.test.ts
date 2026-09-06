@@ -17,7 +17,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Context, Effect, FileSystem, Layer, Option, Ref, Schema } from "effect"
+import { Context, Effect, FileSystem, Layer, Option, Ref, Schema, Stream } from "effect"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { codexIntegratorLayer, nodeCodexIntegratorLayer } from "./codex-integrator.js"
 import {
@@ -261,6 +261,8 @@ const fixtureLayer = (
           )
         )
       const app: CodexAppServerService = {
+        attachOwnedActivityHints: Effect.succeed(Stream.empty),
+        attachTurnCompletedHints: Effect.succeed(Stream.empty),
         get incarnation() {
           return options.appIncarnation?.value ?? fixtureIncarnation
         },

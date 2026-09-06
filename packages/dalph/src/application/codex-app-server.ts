@@ -5,6 +5,7 @@ import nodePath from "node:path"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import type { ChildProcessHandle } from "effect/unstable/process/ChildProcessSpawner"
 import { PlannedAttemptExecutorCorrelation } from "@dalph/contracts"
+import type { Scope } from "effect"
 import {
   Context,
   Deferred,
@@ -12,6 +13,7 @@ import {
   Effect,
   Layer,
   Option,
+  PubSub,
   Redacted,
   Ref,
   Result,
@@ -354,6 +356,10 @@ export interface CodexAppServerService {
   readonly incarnation: CodexServerIncarnation
   /** Exact process root used only by the Node execution-substrate activity census. */
   readonly serverPid?: number
+  /** Broadcast provider completion hints; consumers must reread exact thread state. */
+  readonly attachTurnCompletedHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
+  /** Broadcast owned-activity hints; consumers must reread the exact process/activity census. */
+  readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   readonly startThread: (
     cwd: string,
     ownedThreadToken?: CodexThreadOwnershipToken
@@ -1552,6 +1558,8 @@ const normalizeBackgroundTerminals = (
 
 // eslint-disable-next-line functional/no-mixed-types -- The private JSON-RPC transport closes as an effect value after request methods finish.
 interface JsonRpcClient {
+  readonly attachTurnCompletedHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
+  readonly attachOwnedActivityHints: Effect.Effect<Stream.Stream<void>, never, Scope.Scope>
   readonly request: (
     operation: CodexAppServerOperation,
     method: string,
@@ -1590,6 +1598,12 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
   const writes = yield* Semaphore.make(1)
   const closed = yield* Ref.make(false)
   const pending = yield* Ref.make<ReadonlyMap<number, PendingJsonRpcRequest>>(new Map())
+  // Provider notifications are wake hints only; one pending wake is enough
+  // because every consumer rereads the provider-owned state.
+  const turnCompletedHints = yield* PubSub.sliding<void>(1)
+  const ownedActivityHints = yield* PubSub.sliding<void>(1)
+  yield* Effect.addFinalizer(() => PubSub.shutdown(turnCompletedHints))
+  yield* Effect.addFinalizer(() => PubSub.shutdown(ownedActivityHints))
   const encoder = new TextEncoder()
   const failPending = (failure: CodexAppServerFailure) =>
     Ref.modify(
@@ -1616,7 +1630,14 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
         ),
         Effect.flatMap((message) => {
           const id = message["id"]
-          if (id === undefined) return Effect.void
+          if (id === undefined) {
+            if (message["method"] === "turn/completed") {
+              return PubSub.publish(turnCompletedHints, undefined).pipe(Effect.asVoid)
+            }
+            return message["method"] === "item/completed"
+              ? PubSub.publish(ownedActivityHints, undefined).pipe(Effect.asVoid)
+              : Effect.void
+          }
           if (typeof id !== "number") {
             return failPending(operationFailure("initialize", "Protocol", "JSON-RPC response id is invalid"))
           }
@@ -1709,7 +1730,21 @@ const makeJsonRpcClient = Effect.fn("CodexAppServer.makeJsonRpcClient")(function
     if (!shouldClose) return
     yield* failPending(operationFailure("close", "Unavailable", `app-server ${incarnation} closed`))
   })
-  return { request, notify, close } satisfies JsonRpcClient
+  return {
+    attachOwnedActivityHints: PubSub.subscribe(ownedActivityHints).pipe(
+      Effect.map((subscription) =>
+        Stream.unfold(undefined, () => PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const)))
+      )
+    ),
+    attachTurnCompletedHints: PubSub.subscribe(turnCompletedHints).pipe(
+      Effect.map((subscription) =>
+        Stream.unfold(undefined, () => PubSub.take(subscription).pipe(Effect.map((hint) => [hint, undefined] as const)))
+      )
+    ),
+    request,
+    notify,
+    close
+  } satisfies JsonRpcClient
 })
 
 const responseObject = (
@@ -1810,6 +1845,8 @@ const unavailableAppServer = (failure: CodexAppServerFailure): CodexAppServerSer
     )
   return {
     incarnation: newIncarnation(),
+    attachTurnCompletedHints: Effect.succeed(Stream.empty),
+    attachOwnedActivityHints: Effect.succeed(Stream.empty),
     startThread: () => fail("thread/start"),
     readThread: () => fail("thread/read"),
     resumeThread: () => fail("thread/resume"),
@@ -2882,6 +2919,8 @@ export const codexAppServerLayer = (
         return response["terminated"]
       })
       return {
+        attachTurnCompletedHints: rpc.attachTurnCompletedHints,
+        attachOwnedActivityHints: rpc.attachOwnedActivityHints,
         incarnation: liveIncarnation,
         serverPid: childPid,
         startThread,

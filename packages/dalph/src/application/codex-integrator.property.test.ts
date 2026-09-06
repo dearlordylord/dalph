@@ -19,7 +19,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import * as fc from "fast-check"
-import { Context, Effect, FileSystem, Layer, Ref, Schema } from "effect"
+import { Context, Effect, FileSystem, Layer, Ref, Schema, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import { codexIntegratorLayer } from "./codex-integrator.js"
 import {
@@ -280,6 +280,8 @@ const authorityFixtureLayer = (
       const threadToken = yield* Ref.make<CodexThreadOwnershipToken | undefined>(undefined)
       const activityReads = yield* Ref.make(0)
       const app: CodexAppServerService = {
+        attachOwnedActivityHints: Effect.succeed(Stream.empty),
+        attachTurnCompletedHints: Effect.succeed(Stream.empty),
         incarnation: CodexServerIncarnation.make("property-incarnation"),
         listThreads: () => Effect.succeed([]),
         listThreadsComplete: true,

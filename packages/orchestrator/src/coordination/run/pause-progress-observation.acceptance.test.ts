@@ -5,6 +5,7 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   type RunId,
@@ -13,7 +14,8 @@ import {
   TaskId,
   TaskRevision,
   WorktreeLocator,
-  plannedAttemptExecutorCorrelation
+  plannedAttemptExecutorCorrelation,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
@@ -22,6 +24,8 @@ import { expect } from "vitest"
 import { makeApplicationExitShell } from "../application-exit/application-shell.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
+import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
+import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot, type TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
@@ -32,7 +36,11 @@ import { TaskWorkCapacity } from "../admission/capacity.js"
 import { DeliveryActionExecutor } from "../delivery/delivery-action-executor.js"
 import { DeliveryAcceptedFactPublication } from "../delivery/delivery-accepted-fact-publication.js"
 import { deliveryRuntime } from "../delivery/delivery-runtime-adapter.js"
-import { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runtime-observation.js"
+import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
+import {
+  DeliveryRuntimeObservationObserver,
+  DeliveryRuntimeObservationPublication
+} from "../delivery/delivery-runtime-observation.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
 import { DeliveryRelationPublicationObserver } from "../delivery/delivery-publication-observer.js"
 import { makeDeliveryRelationsLayer } from "../delivery/in-memory-relations.js"
@@ -99,13 +107,22 @@ import {
 import {
   taskTrackerReadIntent,
   TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
   TaskWorktreeReconciliationIntendedEvent
 } from "../../workflow/registry/event.js"
 import {
   makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
+import {
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../workflow/task-tracker-facts/observation.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
   attemptPlanRecordKey,
@@ -154,31 +171,116 @@ const snapshot = (revision: string, dParent: "A" | null): TaskDagSnapshot => {
   return projected.snapshot
 }
 
-const plannedAttempt = (runId: RunId, taskId: TaskId): PlannedTaskAttempt =>
-  PlannedTaskAttempt.make({
+const plannedAttempt = (runId: RunId, taskId: TaskId): PlannedTaskAttempt => {
+  const specification = makeTaskWorkSpecification({ body: `Pause ${taskId}.`, taskId, title: `Pause ${taskId}` })
+  return PlannedTaskAttempt.make({
     attemptId: AttemptId.make(`pause-public-${taskId}`),
     baseSha: GitCommitSha.make("1".repeat(40)),
     branch: TaskBranchRef.make(`refs/heads/pause-public-${taskId}`),
     executor: TaskExecutorLocator.make("executor:pause-public"),
     runId,
     taskId,
-    taskRevision: TaskRevision.make(`pause-public-revision-${taskId}`),
+    taskRevision: TaskRevision.make(specification.fingerprint),
     worktree: WorktreeLocator.make(`/pause-public/${taskId}`)
   })
+}
 
 const appendExecutingAttempt = Effect.fn("PauseProgressAcceptance.appendExecutingAttempt")(function* (
   journal: Journal["Service"],
   attempt: PlannedTaskAttempt
 ) {
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make(`pause-public-restart-claim-${attempt.taskId}`),
+    owner: ClaimOwner.make("pause-progress-acceptance-test"),
+    taskId: attempt.taskId,
+    token: ClaimToken.make(`pause-public-restart-token-${attempt.taskId}`)
+  })
+  const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+  const graphRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make(`pause-public-restart-graph-${attempt.taskId}`),
+    target,
+    [claim.operationId],
+    [attempt.taskId]
+  )
+  const specification = makeTaskWorkSpecification({
+    body: `Pause ${attempt.taskId}.`,
+    taskId: attempt.taskId,
+    title: `Pause ${attempt.taskId}`
+  })
+  const specificationRead = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make(`pause-public-restart-specification-${attempt.taskId}`),
+    target,
+    attempt.taskId,
+    [graphRead.operationId]
+  )
   const plan = makeTaskAttemptPlanOperation({
     operationId: OperationId.make(`pause-public-restart-plan-${attempt.taskId}`),
     plannedAttempt: attempt,
-    predecessorOperationIds: []
+    predecessorOperationIds: [specificationRead.operationId]
   })
+  const worktree = makeTaskWorktreeReconciliationOperation({
+    operationId: OperationId.make(`pause-public-restart-worktree-${attempt.taskId}`),
+    plannedAttempt: attempt,
+    predecessorOperationIds: [plan.operationId]
+  })
+  const worktreeProof = PlannedWorktreeReady.make({
+    baseSha: attempt.baseSha,
+    branch: attempt.branch,
+    headSha: attempt.baseSha,
+    worktree: attempt.worktree
+  })
+  yield* journal.append(
+    attempt.runId,
+    intentRecordKey(claim.operationId),
+    TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    attempt.runId,
+    outcomeRecordKey(claim.operationId),
+    TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(attempt.runId, intentRecordKey(graphRead.operationId), taskTrackerReadIntent(graphRead))
+  yield* journal.append(
+    attempt.runId,
+    outcomeRecordKey(graphRead.operationId),
+    makeTaskTrackerFactsObservedFromRead(
+      yield* journal.read(attempt.runId),
+      graphRead,
+      snapshot(`pause-public-restart-graph-${attempt.taskId}`, null)
+    )
+  )
+  yield* journal.append(
+    attempt.runId,
+    intentRecordKey(specificationRead.operationId),
+    taskTrackerReadIntent(specificationRead)
+  )
+  yield* journal.append(
+    attempt.runId,
+    outcomeRecordKey(specificationRead.operationId),
+    taskTrackerFactsObservedEvent(
+      specificationRead.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(specificationRead, specification)
+    )
+  )
   yield* journal.append(
     attempt.runId,
     attemptPlanRecordKey(attempt.attemptId),
     TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    attempt.runId,
+    intentRecordKey(worktree.operationId),
+    TaskWorktreeReconciliationIntendedEvent.make({ operation: worktree, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    attempt.runId,
+    outcomeRecordKey(worktree.operationId),
+    TaskWorktreeReadyEvent.make({
+      operationId: worktree.operationId,
+      proof: worktreeProof,
+      version: workflowJournalEventVersion
+    })
   )
   yield* journal.append(
     attempt.runId,
@@ -315,6 +417,7 @@ const graphState = (graph: TaskDagSnapshot, recordedAt: JournalPosition) =>
   })
 
 interface BundleInput {
+  readonly runId: RunId
   readonly acceptedAt: JournalPosition
   readonly evidence: DeliveryRelationInputBundle["publication"]["exactEvidence"]
   readonly graph: TaskDagSnapshot
@@ -323,9 +426,10 @@ interface BundleInput {
   readonly taskWork?: DeliveryRuntimeEvaluation["taskWork"]
 }
 
-const bundle = ({ acceptedAt, evidence, graph, paused, proposals = [], taskWork }: BundleInput) =>
+const bundle = ({ acceptedAt, evidence, graph, paused, proposals = [], runId, taskWork }: BundleInput) =>
   ({
     actionInputs: {
+      freshTaskCandidates: [],
       proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: proposals },
       reflectionProposals: [],
       runtimeFacts: {
@@ -344,7 +448,7 @@ const bundle = ({ acceptedAt, evidence, graph, paused, proposals = [], taskWork 
           snapshot: graph
         },
         quiescence: { _tag: "QuiescencePassive" as const, reason: "RunPaused" as const },
-        taskWork: taskWork ?? { capacity: policy.taskExecutionCapacity, held: [], preStart: [] }
+        taskWork: taskWork ?? makeFreshTaskAdmissionTestBasis({ capacity: policy.taskExecutionCapacity, runId })
       },
       trackerGraphProposals: []
     },
@@ -460,7 +564,8 @@ const buildBootstrap = Effect.fn("PauseProgressAcceptance.buildBootstrap")(funct
   graph: TaskDagSnapshot,
   storage: JournalStore["Service"],
   calls: Ref.Ref<BoundaryCalls>,
-  reconcileTaskWorktree?: WorkflowInterpreter["Service"]["reconcileTaskWorktree"]
+  reconcileTaskWorktree?: WorkflowInterpreter["Service"]["reconcileTaskWorktree"],
+  runtimeObservationObserver?: (typeof DeliveryRuntimeObservationObserver)["Service"]
 ) {
   const capabilities = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, storage)))
   const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
@@ -474,7 +579,12 @@ const buildBootstrap = Effect.fn("PauseProgressAcceptance.buildBootstrap")(funct
       Layer.mergeAll(
         Layer.succeed(JournalStore, storage),
         Layer.succeed(RunLifecycleJournal, Context.get(capabilities, RunLifecycleJournal)),
-        Layer.succeed(CoordinatorOwnership, ownership)
+        Layer.succeed(CoordinatorOwnership, ownership),
+        Layer.succeed(
+          DeliveryRuntimeObservationObserver,
+          runtimeObservationObserver ?? DeliveryRuntimeObservationObserver.of({ observe: () => Effect.void })
+        ),
+        Layer.mock(PlannedAttemptExecutorLifecycleObservation, {})
       )
     )
   )
@@ -514,7 +624,7 @@ const startRelationRuntime = Effect.fn("PauseProgressAcceptance.startRelationRun
   },
   runtimeAccepted?: ReadonlyArray<{ readonly acceptedAt: JournalPosition; readonly observed: Deferred.Deferred<void> }>,
   beforeRuntime?: Effect.Effect<void, never, Journal>,
-  livePublication: Effect.Effect<void> = Effect.void
+  livePublication: Effect.Effect<JournalPosition> = Effect.succeed(JournalPosition.make(1))
 ) {
   return yield* bootstrap
     .activate(
@@ -560,15 +670,25 @@ const startRelationRuntime = Effect.fn("PauseProgressAcceptance.startRelationRun
                 Effect.provideService(
                   TaskClaimAcquisitionPlanner,
                   TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("unexpected claim planning") })
-                ),
-                Effect.provideService(
-                  DeliveryAcceptedFactPublication,
-                  DeliveryAcceptedFactPublication.of({ awaitCurrent: livePublication })
                 )
               )
             : executor
         yield* Deferred.succeed(entered, undefined)
-        yield* runDeliveryRuntime(relation).pipe(Effect.provideService(DeliveryActionExecutor, actionExecutor))
+        yield* runDeliveryRuntime(runId, relation).pipe(
+          Effect.provideService(DeliveryActionExecutor, actionExecutor),
+          Effect.provideService(
+            DeliveryAcceptedFactPublication,
+            DeliveryAcceptedFactPublication.of({
+              awaitCurrent: livePublication.pipe(
+                Effect.map((acceptedThrough) => ({
+                  _tag: "DeliveryAcceptedPublicationBoundary",
+                  acceptedThrough,
+                  runId
+                }))
+              )
+            })
+          )
+        )
         yield* Deferred.await(keepActivationOpen)
         return {
           acceptedAt: JournalPosition.make(1),
@@ -590,7 +710,23 @@ it.effect("shows Alice the exact Suspend changing from proposed to live before i
       const graph = snapshot("pause-public-live-owner", null)
       const calls = yield* Ref.make(noBoundaryCalls)
       const memory = Context.get(yield* Layer.build(memoryJournalStoreLayer), JournalStore)
-      const bootstrap = yield* buildBootstrap(runId, graph, countingStore(memory, calls), calls)
+      const initialRuntimePublished = yield* Deferred.make<void>()
+      const allowAdmission = yield* Deferred.make<void>()
+      const bootstrap = yield* buildBootstrap(
+        runId,
+        graph,
+        countingStore(memory, calls),
+        calls,
+        undefined,
+        DeliveryRuntimeObservationObserver.of({
+          observe: ({ liveOwners }) =>
+            liveOwners.length === 0
+              ? Deferred.succeed(initialRuntimePublished, undefined).pipe(
+                  Effect.andThen(Deferred.await(allowAdmission))
+                )
+              : Effect.void
+        })
+      )
       const acceptedAt = JournalPosition.make(20)
       const proposal = suspensionProposal(runId, TaskId.make("A"), acceptedAt)
       const facts = executorFacts(
@@ -600,21 +736,17 @@ it.effect("shows Alice the exact Suspend changing from proposed to live before i
       )
       const relation = yield* dynamicBundle(
         bundle({
+          runId,
           acceptedAt,
           evidence: [{ _tag: "ResponsibilityFacts", facts }],
           graph,
           paused: "Task",
           proposals: [proposal],
-          taskWork: {
+          taskWork: makeFreshTaskAdmissionTestBasis({
             capacity: policy.taskExecutionCapacity,
-            preStart: [],
-            held: [
-              {
-                correlation: plannedAttemptExecutorCorrelation(facts.responsibility.plannedAttempt),
-                taskId: facts.responsibility.plannedAttempt.taskId
-              }
-            ]
-          }
+            held: [facts.responsibility.plannedAttempt],
+            runId
+          })
         })
       )
       const beforeRuntimeEntered = yield* Deferred.make<void>()
@@ -647,10 +779,19 @@ it.effect("shows Alice the exact Suspend changing from proposed to live before i
         direction: "Pause",
         subject: { _tag: "Task", runId, taskId: TaskId.make("A") }
       })
+      const proposedObserved = yield* Deferred.make<void>()
       const observed = yield* bootstrap.operatorControl
         .observePause({ _tag: "Task", runId, taskId: TaskId.make("A") })
-        .pipe(Stream.take(2), Stream.runCollect, Effect.forkChild)
+        .pipe(
+          Stream.tap(() => Deferred.succeed(proposedObserved, undefined)),
+          Stream.take(2),
+          Stream.runCollect,
+          Effect.forkChild
+        )
       yield* Deferred.succeed(allowRuntime, undefined)
+      yield* Deferred.await(initialRuntimePublished)
+      yield* Deferred.await(proposedObserved)
+      yield* Deferred.succeed(allowAdmission, undefined)
       yield* Effect.raceFirst(
         Deferred.await(runtimeEntered),
         Fiber.join(activation).pipe(Effect.andThen(Effect.die("activation ended before delivery runtime")))
@@ -736,6 +877,7 @@ it.effect("updates Alice's public task Pause view as accepted executor and Git f
         retry: TargetPromotionPendingRetry.cases.NeedInitialReconciliationRead.make({})
       })
       const initial = bundle({
+        runId,
         acceptedAt,
         evidence: [
           {
@@ -798,6 +940,7 @@ it.effect("updates Alice's public task Pause view as accepted executor and Git f
       yield* Effect.yieldNow
       yield* relation.publish(
         bundle({
+          runId,
           acceptedAt: JournalPosition.make(51),
           evidence: [
             {
@@ -880,6 +1023,7 @@ it.effect("adds G2's newly grouped running descendant and rejects its pre-G2 saf
       const aProposal = suspensionProposal(runId, TaskId.make("A"), g1AcceptedAt)
       const relation = yield* dynamicBundle(
         bundle({
+          runId,
           acceptedAt: g1AcceptedAt,
           evidence: [aRequested, dSafeBeforeG2],
           graph: g1,
@@ -907,6 +1051,7 @@ it.effect("adds G2's newly grouped running descendant and rejects its pre-G2 saf
       })
       yield* relation.publish(
         bundle({
+          runId,
           acceptedAt: g1AcceptedAt,
           evidence: [aRequested, dSafeBeforeG2],
           graph: g1,
@@ -935,6 +1080,7 @@ it.effect("adds G2's newly grouped running descendant and rejects its pre-G2 saf
       const g2AcceptedAt = JournalPosition.make(61)
       yield* relation.publish(
         bundle({
+          runId,
           acceptedAt: g2AcceptedAt,
           evidence: [aRequested, dSafeBeforeG2],
           graph: g2,
@@ -946,6 +1092,7 @@ it.effect("adds G2's newly grouped running descendant and rejects its pre-G2 saf
       yield* Deferred.await(g2Observed)
       yield* relation.publish(
         bundle({
+          runId,
           acceptedAt: JournalPosition.make(62),
           evidence: [
             {
@@ -1021,6 +1168,7 @@ it.effect("keeps Alice's subscription through a later activation that confirms G
             const resources = yield* DeliveryRuntimeResources
             yield* Deferred.succeed(firstIntegrationTargets, resources.integrationTargets)
             const graphRead = makeTrackerGraphObservationOperation(
+              { _tag: "WorkflowEstablishment" },
               OperationId.make("pause-public-across-activation-read-G1"),
               target
             )
@@ -1089,6 +1237,7 @@ it.effect("keeps Alice's subscription through a later activation that confirms G
             const resources = yield* DeliveryRuntimeResources
             expect(resources.integrationTargets).toBe(yield* Deferred.await(firstIntegrationTargets))
             const graphRead = makeTrackerGraphObservationOperation(
+              { _tag: "WorkflowEstablishment" },
               OperationId.make("pause-public-across-activation-read-G2"),
               target
             )
@@ -1176,10 +1325,35 @@ it.effect("Alice disconnects while Run R reaches its existing planned-worktree s
       )
       const acceptedAt = JournalPosition.make(70)
       const planOperationId = OperationId.make("pause-public-disconnect-plan")
+      const claim = ActiveTaskClaim.make({
+        operationId: OperationId.make("pause-public-disconnect-claim"),
+        owner: ClaimOwner.make("pause-progress-acceptance-test"),
+        taskId: attempt.taskId,
+        token: ClaimToken.make("pause-public-disconnect-token")
+      })
+      const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+      const graphRead = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("pause-public-disconnect-graph"),
+        target,
+        [claim.operationId],
+        [attempt.taskId]
+      )
+      const specification = makeTaskWorkSpecification({
+        body: `Pause ${attempt.taskId}.`,
+        taskId: attempt.taskId,
+        title: `Pause ${attempt.taskId}`
+      })
+      const specificationRead = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("pause-public-disconnect-specification"),
+        target,
+        attempt.taskId,
+        [graphRead.operationId]
+      )
       const plan = makeTaskAttemptPlanOperation({
         operationId: planOperationId,
         plannedAttempt: attempt,
-        predecessorOperationIds: []
+        predecessorOperationIds: [specificationRead.operationId]
       })
       const operationId = OperationId.make(`pause-progress-public:${runId}:0`)
       const operation = makeTaskWorktreeReconciliationOperation({
@@ -1211,7 +1385,7 @@ it.effect("Alice disconnects while Run R reaches its existing planned-worktree s
       }).ticketDelivery[0]
       if (proposal === undefined) return yield* Effect.die("the ordinary delivery relation must propose OW")
       const relation = yield* dynamicBundle(
-        bundle({ acceptedAt, evidence: [unresolved], graph, paused: "Unpaused", proposals: [proposal] })
+        bundle({ runId, acceptedAt, evidence: [unresolved], graph, paused: "Unpaused", proposals: [proposal] })
       )
       const entered = yield* Deferred.make<void>()
       const keepOpen = yield* Deferred.make<void>()
@@ -1234,6 +1408,35 @@ it.effect("Alice disconnects while Run R reaches its existing planned-worktree s
           const journal = yield* Journal
           yield* journal.append(
             runId,
+            intentRecordKey(claim.operationId),
+            TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+          )
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(claim.operationId),
+            TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+          )
+          yield* journal.append(runId, intentRecordKey(graphRead.operationId), taskTrackerReadIntent(graphRead))
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(graphRead.operationId),
+            makeTaskTrackerFactsObservedFromRead(yield* journal.read(runId), graphRead, graph)
+          )
+          yield* journal.append(
+            runId,
+            intentRecordKey(specificationRead.operationId),
+            taskTrackerReadIntent(specificationRead)
+          )
+          yield* journal.append(
+            runId,
+            outcomeRecordKey(specificationRead.operationId),
+            taskTrackerFactsObservedEvent(
+              specificationRead.operationId,
+              makeFocusedTaskWorkSpecificationFactsObserved(specificationRead, specification)
+            )
+          )
+          yield* journal.append(
+            runId,
             attemptPlanRecordKey(attempt.attemptId),
             TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
           )
@@ -1244,12 +1447,12 @@ it.effect("Alice disconnects while Run R reaches its existing planned-worktree s
           )
         }).pipe(Effect.orDie),
         relation
-          .publish(bundle({ acceptedAt: JournalPosition.make(72), evidence: [], graph, paused: "Run" }))
-          .pipe(Effect.andThen(Deferred.succeed(outcomePublished, undefined)))
+          .publish(bundle({ runId, acceptedAt: JournalPosition.make(72), evidence: [], graph, paused: "Run" }))
+          .pipe(Effect.andThen(Deferred.succeed(outcomePublished, undefined)), Effect.as(JournalPosition.make(72)))
       )
       yield* Deferred.await(entered)
       yield* relation.publish(
-        bundle({ acceptedAt, evidence: [unresolved], graph, paused: "Unpaused", proposals: [proposal] })
+        bundle({ runId, acceptedAt, evidence: [unresolved], graph, paused: "Unpaused", proposals: [proposal] })
       )
       yield* Effect.raceFirst(
         Deferred.await(gitEntered),
@@ -1266,6 +1469,7 @@ it.effect("Alice disconnects while Run R reaches its existing planned-worktree s
       yield* bootstrap.operatorControl.applyControlDirection({ direction: "Pause", subject: { _tag: "Run", runId } })
       yield* relation.publish(
         bundle({
+          runId,
           acceptedAt: JournalPosition.make(71),
           evidence: [unresolved],
           graph,
@@ -1377,7 +1581,7 @@ it.effect(
         }
         const pending = suspensionProposal(runId, TaskId.make("A"), acceptedAt)
         const relation = yield* dynamicBundle(
-          bundle({ acceptedAt, evidence: [requested], graph, paused: "Unpaused", proposals: [pending] })
+          bundle({ runId, acceptedAt, evidence: [requested], graph, paused: "Unpaused", proposals: [pending] })
         )
         const entered = yield* Deferred.make<void>()
         const keepOpen = yield* Deferred.make<void>()
@@ -1395,7 +1599,7 @@ it.effect(
           subject: { _tag: "Task", runId, taskId: TaskId.make("A") }
         })
         yield* relation.publish(
-          bundle({ acceptedAt, evidence: [requested], graph, paused: "Task", proposals: [pending] })
+          bundle({ runId, acceptedAt, evidence: [requested], graph, paused: "Task", proposals: [pending] })
         )
 
         const waiting = yield* Deferred.make<void>()
@@ -1414,6 +1618,7 @@ it.effect(
         })
         yield* relation.publish(
           bundle({
+            runId,
             acceptedAt: JournalPosition.make(81),
             evidence: [requested],
             graph,
@@ -1478,6 +1683,7 @@ it.effect("ends Alice's old subscription on coordinator death, then restarts G2 
             yield* appendExecutingAttempt(journal, aAttempt)
             yield* appendExecutingAttempt(journal, dAttempt)
             const graphRead = makeTrackerGraphObservationOperation(
+              { _tag: "WorkflowEstablishment" },
               OperationId.make("pause-public-restart-read-G2"),
               target
             )
@@ -1536,6 +1742,7 @@ it.effect("ends Alice's old subscription on coordinator death, then restarts G2 
           Effect.gen(function* () {
             const journal = yield* Journal
             const restartedGraphRead = makeTrackerGraphObservationOperation(
+              { _tag: "WorkflowEstablishment" },
               OperationId.make("pause-public-restart-read-G2-after-restart"),
               target
             )
@@ -1559,6 +1766,7 @@ it.effect("ends Alice's old subscription on coordinator death, then restarts G2 
               resources.integrationTargets
             )
             const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
+            const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))
             const observeReady = yield* resources.runtimeObservation.changes.pipe(
               Stream.filter(({ _tag }) => _tag === "Ready"),
               Stream.take(1),
@@ -1566,8 +1774,9 @@ it.effect("ends Alice's old subscription on coordinator death, then restarts G2 
               Effect.andThen(Deferred.succeed(runtimeReady, undefined)),
               Effect.forkChild
             )
-            const runtime = yield* runDeliveryRuntime(relation).pipe(
+            const runtime = yield* runDeliveryRuntime(runId, relation).pipe(
               Effect.provideService(DeliveryActionExecutor, DeliveryActionExecutor.of({ execute: () => Effect.never })),
+              Effect.provideService(DeliveryAcceptedFactPublication, acceptedFactPublication),
               Effect.forkChild
             )
             yield* Deferred.await(runtimeReady)

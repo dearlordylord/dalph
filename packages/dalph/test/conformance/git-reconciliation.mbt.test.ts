@@ -315,6 +315,7 @@ const makeProductionReconciliationTrace = () => {
     const blockerId = TaskId.make("git-reconciliation-production-B")
     const independentId = TaskId.make("git-reconciliation-production-C")
     const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make(`git-reconciliation-production-graph-${revision}-${++operationOrdinal}`),
       target,
       [],
@@ -351,6 +352,7 @@ const makeProductionReconciliationTrace = () => {
   }
   const readIncompleteTrackerGraph = () => {
     const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make(`git-reconciliation-production-incomplete-${++operationOrdinal}`),
       target,
       [],
@@ -376,6 +378,7 @@ const makeProductionReconciliationTrace = () => {
     applyResourceTransition()
     Effect.runSync(Ref.set(graphReadMode, "Complete"))
     const recovery = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make(`git-reconciliation-production-recovery-${++operationOrdinal}`),
       target,
       [operation.operationId]

@@ -90,6 +90,7 @@ import {
 } from "./operation.js"
 import { AttemptWorktreeLost } from "../protocols/planned-attempt-worktree-observation/protocol.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../interpretation/interpreter.js"
+import type { WorkflowOccurrence } from "./occurrence-projection.js"
 import {
   AppliedControlDirection,
   decodeWorkflowOccurrence,
@@ -103,7 +104,6 @@ import {
   presentWorkflowOccurrence,
   projectWorkflowOccurrences,
   WorkflowActor,
-  WorkflowOccurrence,
   WorkflowOccurrenceProjection,
   workflowOccurrenceProjectionVersion
 } from "./occurrence-projection.js"
@@ -135,14 +135,6 @@ import {
   PlannedAttemptReplacedEvent,
   PlannedAttemptReplacementWitness
 } from "../protocols/attempt-choice/replacement-events.js"
-import {
-  ActiveWorkAuthorityRefreshAuthority,
-  ActiveWorkAuthorityRefreshGitReadOperation,
-  ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent,
-  ActiveWorkAuthorityRefreshGitReadFailedEvent,
-  ActiveWorkAuthorityRefreshOrdinal,
-  makeActiveWorkAuthorityRefreshGitReadOperation
-} from "../protocols/active-work-authority-refresh/events.js"
 import {
   TaskClaimReacquisitionDirectedEvent,
   TaskClaimReacquisitionRequestId
@@ -188,7 +180,6 @@ import {
   TargetPromotionIntendedEvent,
   TargetPromotionNonConvergenceEvent,
   TargetPromotionObservedSuccessEvent,
-  TargetPromotionReconciliationDeferredEvent,
   TargetPromotionSuccessObservation,
   TargetPromotionStaleEvent,
   targetPromotionCorrelationFor
@@ -196,6 +187,7 @@ import {
 
 const runId = RunId.make("occurrence-run")
 const operation = makeTrackerGraphObservationOperation(
+  { _tag: "WorkflowEstablishment" },
   OperationId.make("read-target-closure"),
   FixtureTarget.make("occurrence-fixture")
 )
@@ -916,362 +908,6 @@ it.effect("rejects each Git outcome without its distinct earlier same-run read i
   })
 )
 
-it.effect("projects active-refresh Git failures as non-action trace occurrences", () =>
-  Effect.gen(function* () {
-    const gitRead = makeTaskWorktreeObservationOperation({
-      operationId: OperationId.make("active-refresh-occurrence-read"),
-      plannedAttempt,
-      predecessorOperationIds: []
-    })
-    const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: plannedAttempt.attemptId, runId })
-    const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
-    const activeRead = makeActiveWorkAuthorityRefreshGitReadOperation(gitRead, authority, ordinal)
-    const activeIntent = ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
-      initiatedBy: { _tag: "DalphCoordinator" },
-      occurrenceClassification: "InitiatedAction",
-      operation: activeRead,
-      version: workflowJournalEventVersion
-    })
-    const failure = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
-      authority,
-      failure: new GitWorktreeReadFailure({
-        detail: "Git is temporarily unreadable",
-        worktree: plannedAttempt.worktree
-      }),
-      occurrenceClassification: "NonActionOccurrence",
-      operation: activeRead,
-      ordinal,
-      source: "TrackerNotification",
-      version: workflowJournalEventVersion
-    })
-    const projection = yield* projectWorkflowOccurrences([record(1, activeIntent), record(2, failure)])
-
-    expect(projection.occurrences).toHaveLength(2)
-    const occurrence = projection.occurrences[1]
-    if (occurrence === undefined) return yield* Effect.die("active-refresh occurrence is missing")
-    expect(occurrence).toMatchObject({
-      _tag: "ActiveWorkAuthorityRefreshGitReadFailed",
-      authority,
-      failure: failure.failure,
-      operation: activeRead,
-      ordinal,
-      occurrenceClassification: "NonActionOccurrence",
-      recordedAt: JournalPosition.make(2),
-      runId
-    })
-    expect(describeWorkflowOccurrence(occurrence)).toEqual({
-      actorLabel: "no actor is proven",
-      presentation: { classification: "NonActionOccurrence" },
-      text: "active-work authority refresh Git read failed; no actor is proven"
-    })
-    const encodedOccurrence = Schema.encodeUnknownSync(WorkflowOccurrence)(occurrence)
-    if (encodedOccurrence._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") {
-      return yield* Effect.die("encoded active-refresh occurrence changed variants")
-    }
-    const malformed = yield* decodeWorkflowOccurrence({
-      ...encodedOccurrence,
-      failure: {
-        _tag: "GitWorktreeReadFailure",
-        detail: "the decoded occurrence names another worktree",
-        worktree: WorktreeLocator.make("/worktrees/another-active-refresh-worktree")
-      }
-    }).pipe(Effect.flip)
-    expect(String(malformed)).toContain(
-      "active-refresh worktree failure occurrence must name the exact planned worktree"
-    )
-  })
-)
-
-it.effect("rejects a coordinator's active-refresh failure when its Run, authority, or Git subject changes", () =>
-  Effect.gen(function* () {
-    const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: plannedAttempt.attemptId, runId })
-    const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
-    const worktreeRead = makeActiveWorkAuthorityRefreshGitReadOperation(
-      makeTaskWorktreeObservationOperation({
-        operationId: OperationId.make("active-refresh-schema-worktree"),
-        plannedAttempt,
-        predecessorOperationIds: []
-      }),
-      authority,
-      ordinal
-    )
-    const worktreeIntent = ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
-      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-      occurrenceClassification: "InitiatedAction",
-      operation: worktreeRead,
-      version: workflowJournalEventVersion
-    })
-    const worktreeFailure = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
-      authority,
-      failure: new GitWorktreeReadFailure({ detail: "worktree read failed", worktree: plannedAttempt.worktree }),
-      occurrenceClassification: "NonActionOccurrence",
-      operation: worktreeRead,
-      ordinal,
-      source: "Timer",
-      version: workflowJournalEventVersion
-    })
-    const worktreeProjection = yield* projectWorkflowOccurrences([
-      record(1, worktreeIntent),
-      record(2, worktreeFailure)
-    ])
-    const worktreeOccurrence = worktreeProjection.occurrences[1]
-    if (worktreeOccurrence?._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") {
-      return yield* Effect.die("active-refresh worktree failure occurrence is missing")
-    }
-    const encodedWorktreeOccurrence = Schema.encodeUnknownSync(WorkflowOccurrence)(worktreeOccurrence)
-    if (encodedWorktreeOccurrence._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") {
-      return yield* Effect.die("encoded active-refresh worktree occurrence changed variants")
-    }
-    yield* decodeWorkflowOccurrence(encodedWorktreeOccurrence)
-
-    const foreignRunId = RunId.make("active-refresh-schema-foreign-run")
-    const foreignAttempt = PlannedTaskAttempt.make({
-      ...plannedAttempt,
-      attemptId: AttemptId.make("active-refresh-schema-foreign-attempt"),
-      branch: TaskBranchRef.make("refs/heads/dalph/active-refresh-schema-foreign-attempt"),
-      worktree: WorktreeLocator.make("/worktrees/active-refresh-schema-foreign-attempt")
-    })
-    const foreignRunAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, runId: foreignRunId })
-    const foreignAuthority = { attemptId: foreignAttempt.attemptId, runId }
-    const contradictoryWorktreeIdentities: ReadonlyArray<{ readonly detail: string; readonly value: unknown }> = [
-      {
-        detail: "active-refresh Git failure occurrence must bind one exact attempt, authority, run, and ordinal",
-        value: { ...encodedWorktreeOccurrence, authority: foreignAuthority }
-      },
-      {
-        detail: "an active-refresh Git intent must bind its exact planned attempt",
-        value: {
-          ...encodedWorktreeOccurrence,
-          operation: {
-            ...encodedWorktreeOccurrence.operation,
-            authority: { attemptId: authority.attemptId, runId: foreignRunId }
-          }
-        }
-      },
-      {
-        detail: "active-refresh Git failure occurrence must bind one exact attempt, authority, run, and ordinal",
-        value: { ...encodedWorktreeOccurrence, ordinal: ActiveWorkAuthorityRefreshOrdinal.make(2) }
-      },
-      {
-        detail: "an active-refresh Git intent must bind its exact planned attempt",
-        value: {
-          ...encodedWorktreeOccurrence,
-          operation: { ...encodedWorktreeOccurrence.operation, plannedAttempt: foreignAttempt }
-        }
-      },
-      {
-        detail: "an active-refresh Git intent must bind its exact planned attempt",
-        value: {
-          ...encodedWorktreeOccurrence,
-          operation: { ...encodedWorktreeOccurrence.operation, plannedAttempt: foreignRunAttempt }
-        }
-      }
-    ]
-    const contradictoryWorktreeSubjects: ReadonlyArray<unknown> = [
-      {
-        ...encodedWorktreeOccurrence,
-        failure: {
-          _tag: "GitTargetLineageReadFailure",
-          detail: "the failure belongs to another Git boundary",
-          plannedBaseSha: plannedAttempt.baseSha,
-          target: integrationTarget
-        }
-      }
-    ]
-
-    const runMismatchFailure = yield* decodeWorkflowOccurrence({
-      ...encodedWorktreeOccurrence,
-      runId: foreignRunId
-    }).pipe(Effect.flip)
-    expect(String(runMismatchFailure)).toContain(
-      "active-refresh Git failure occurrence must bind one exact attempt, authority, run, and ordinal"
-    )
-
-    const encodedWorktreeRead = Schema.encodeUnknownSync(ActiveWorkAuthorityRefreshGitReadOperation)(worktreeRead)
-    for (const { detail, value } of [
-      {
-        detail: "an operation cannot causally precede itself",
-        value: { ...encodedWorktreeRead, predecessorOperationIds: [encodedWorktreeRead.operationId] }
-      },
-      {
-        detail: "an active-refresh Git intent must bind its exact planned attempt",
-        value: { ...encodedWorktreeRead, authority: foreignAuthority }
-      }
-    ]) {
-      const failure = yield* Schema.decodeUnknownEffect(ActiveWorkAuthorityRefreshGitReadOperation)(value).pipe(
-        Effect.flip
-      )
-      expect(String(failure)).toContain(detail)
-    }
-    const encodedFailureEvent = Schema.encodeUnknownSync(WorkflowJournalEvent)(worktreeFailure)
-    if (encodedFailureEvent._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") {
-      return yield* Effect.die("encoded active-refresh failure event changed variants")
-    }
-    const eventFailure = yield* Schema.decodeUnknownEffect(WorkflowJournalEvent)({
-      ...encodedFailureEvent,
-      authority: foreignAuthority
-    }).pipe(Effect.flip)
-    expect(String(eventFailure)).toContain(
-      "active-refresh Git failure must bind one exact attempt, authority, and ordinal"
-    )
-
-    const targetRead = makeActiveWorkAuthorityRefreshGitReadOperation(
-      makeTargetLineageObservationOperation({
-        integrationTarget,
-        operationId: OperationId.make("active-refresh-schema-target"),
-        plannedAttempt,
-        predecessorOperationIds: []
-      }),
-      authority,
-      ordinal
-    )
-    const targetIntent = ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
-      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-      occurrenceClassification: "InitiatedAction",
-      operation: targetRead,
-      version: workflowJournalEventVersion
-    })
-    const targetFailure = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
-      authority,
-      failure: new GitTargetLineageReadFailure({
-        detail: "target lineage read failed",
-        plannedBaseSha: plannedAttempt.baseSha,
-        target: integrationTarget
-      }),
-      occurrenceClassification: "NonActionOccurrence",
-      operation: targetRead,
-      ordinal,
-      source: "TrackerNotification",
-      version: workflowJournalEventVersion
-    })
-    const targetProjection = yield* projectWorkflowOccurrences([record(1, targetIntent), record(2, targetFailure)])
-    const targetOccurrence = targetProjection.occurrences[1]
-    if (targetOccurrence?._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") {
-      return yield* Effect.die("active-refresh target-lineage failure occurrence is missing")
-    }
-    const encodedTargetOccurrence = Schema.encodeUnknownSync(WorkflowOccurrence)(targetOccurrence)
-    if (encodedTargetOccurrence._tag !== "ActiveWorkAuthorityRefreshGitReadFailed") {
-      return yield* Effect.die("encoded active-refresh target occurrence changed variants")
-    }
-    const foreignRepositoryTarget = IntegrationTarget.make({
-      ...integrationTarget,
-      repository: GitRepositoryLocator.make("/foreign/repository.git")
-    })
-    const foreignRefTarget = IntegrationTarget.make({
-      ...integrationTarget,
-      ref: IntegrationTargetRef.make("refs/heads/foreign")
-    })
-    const contradictoryTargetOccurrences: ReadonlyArray<unknown> = [
-      {
-        ...encodedTargetOccurrence,
-        failure: { ...encodedTargetOccurrence.failure, plannedBaseSha: GitCommitSha.make("9".repeat(40)) }
-      },
-      { ...encodedTargetOccurrence, failure: { ...encodedTargetOccurrence.failure, target: foreignRepositoryTarget } },
-      { ...encodedTargetOccurrence, failure: { ...encodedTargetOccurrence.failure, target: foreignRefTarget } },
-      {
-        ...encodedTargetOccurrence,
-        failure: {
-          _tag: "GitWorktreeReadFailure",
-          detail: "the failure belongs to another Git boundary",
-          worktree: plannedAttempt.worktree
-        }
-      }
-    ]
-
-    for (const { detail, value } of contradictoryWorktreeIdentities) {
-      const failure = yield* decodeWorkflowOccurrence(value).pipe(Effect.flip)
-      expect(String(failure)).toContain(detail)
-    }
-    for (const contradictory of contradictoryWorktreeSubjects) {
-      const failure = yield* decodeWorkflowOccurrence(contradictory).pipe(Effect.flip)
-      expect(String(failure)).toContain(
-        "active-refresh worktree failure occurrence must name the exact planned worktree"
-      )
-    }
-    for (const contradictory of contradictoryTargetOccurrences) {
-      const failure = yield* decodeWorkflowOccurrence(contradictory).pipe(Effect.flip)
-      expect(String(failure)).toContain(
-        "active-refresh target-lineage failure occurrence must name the exact target and planned Base SHA"
-      )
-    }
-  })
-)
-
-it.effect("rejects a coordinator's active-refresh failure when its exact Git intent is absent", () =>
-  Effect.gen(function* () {
-    const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: plannedAttempt.attemptId, runId })
-    const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
-    const operationId = OperationId.make("active-refresh-exact-intent")
-    const read = makeActiveWorkAuthorityRefreshGitReadOperation(
-      makeTaskWorktreeObservationOperation({ operationId, plannedAttempt, predecessorOperationIds: [] }),
-      authority,
-      ordinal
-    )
-    const failure = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
-      authority,
-      failure: new GitWorktreeReadFailure({ detail: "worktree read failed", worktree: plannedAttempt.worktree }),
-      occurrenceClassification: "NonActionOccurrence",
-      operation: read,
-      ordinal,
-      source: "Timer",
-      version: workflowJournalEventVersion
-    })
-    const mismatchedRead = makeActiveWorkAuthorityRefreshGitReadOperation(
-      makeTaskWorktreeObservationOperation({
-        operationId,
-        plannedAttempt,
-        predecessorOperationIds: [OperationId.make("active-refresh-foreign-predecessor")]
-      }),
-      authority,
-      ordinal
-    )
-    const mismatchedIntent = ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
-      initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-      occurrenceClassification: "InitiatedAction",
-      operation: mismatchedRead,
-      version: workflowJournalEventVersion
-    })
-
-    for (const records of [[record(1, failure)], [record(1, mismatchedIntent), record(2, failure)]]) {
-      const projectionFailure = yield* projectWorkflowOccurrences(records).pipe(Effect.flip)
-      expect(projectionFailure).toMatchObject({ _tag: "GitOutcomeWithoutReadIntent", operationId, runId })
-    }
-  })
-)
-
-it.effect("rejects an active-refresh failure whose persisted intent is positioned afterward", () =>
-  Effect.gen(function* () {
-    const gitRead = makeTaskWorktreeObservationOperation({
-      operationId: OperationId.make("active-refresh-late-intent-read"),
-      plannedAttempt,
-      predecessorOperationIds: []
-    })
-    const authority = ActiveWorkAuthorityRefreshAuthority.make({ attemptId: plannedAttempt.attemptId, runId })
-    const ordinal = ActiveWorkAuthorityRefreshOrdinal.make(1)
-    const activeRead = makeActiveWorkAuthorityRefreshGitReadOperation(gitRead, authority, ordinal)
-    const activeIntent = ActiveWorkAuthorityRefreshGitReadIntentRecordedEvent.make({
-      initiatedBy: { _tag: "DalphCoordinator" },
-      occurrenceClassification: "InitiatedAction",
-      operation: activeRead,
-      version: workflowJournalEventVersion
-    })
-    const failure = ActiveWorkAuthorityRefreshGitReadFailedEvent.make({
-      authority,
-      failure: new GitWorktreeReadFailure({
-        detail: "Git is temporarily unreadable",
-        worktree: plannedAttempt.worktree
-      }),
-      occurrenceClassification: "NonActionOccurrence",
-      operation: activeRead,
-      ordinal,
-      source: "Timer",
-      version: workflowJournalEventVersion
-    })
-    const invalid = yield* projectWorkflowOccurrences([record(2, activeIntent), record(1, failure)]).pipe(Effect.flip)
-    expect(invalid._tag).toBe("SchemaError")
-  })
-)
-
 it.effect("requires exact claim and worktree payloads at historical outcome boundaries", () =>
   Effect.gen(function* () {
     const acquisition = {
@@ -1513,6 +1149,7 @@ it.effect("projects a large journal without rescanning each retained prefix", ()
     const pairCount = 3_000
     const records = Array.from({ length: pairCount }, (_, index) => {
       const pairOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make(`large-journal-read-${index}`),
         FixtureTarget.make("large-journal-fixture")
       )
@@ -1538,6 +1175,7 @@ it.effect("projects a large journal without rescanning each retained prefix", ()
 it.effect("does not infer a tracker-edit action from changed observed facts", () =>
   Effect.gen(function* () {
     const laterOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("reread-target-closure"),
       FixtureTarget.make("occurrence-fixture"),
       [operation.operationId]
@@ -2041,6 +1679,7 @@ it.effect("rejects an observation whose exact initiating action is absent, later
 it.effect("rejects a Restart read failure without one exact earlier authority read", () =>
   Effect.gen(function* () {
     const restartRead = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("restart-authority-read"),
       operation.target,
       [],
@@ -2166,6 +1805,7 @@ it.effect("accepts specification Restart failures only from the exact focused re
     )
 
     const uncoveredGraph = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("restart-specification-failure-uncovered-graph"),
       operation.target,
       [],
@@ -2393,6 +2033,7 @@ it.effect("projects an atomic replacement occurrence while ignoring lifecycle ro
       token: ClaimToken.make("occurrence-replacement-token")
     })
     const graphRead = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("occurrence-replacement-graph"),
       operation.target,
       [],
@@ -2708,12 +2349,6 @@ it.effect("projects valid historical worktree and promotion terminal outcomes", 
       }),
       version: workflowJournalEventVersion
     })
-    const deferred = TargetPromotionReconciliationDeferredEvent.make({
-      afterAttemptOrdinal: TargetPromotionAttemptOrdinal.make(1),
-      correlation: prefix.promotionCorrelation,
-      deferral: { _tag: "TargetReadFailed", detail: "ambiguous compare-and-set reconciliation read failed" },
-      version: workflowJournalEventVersion
-    })
     const stale = TargetPromotionStaleEvent.make({
       basis: { _tag: "AfterAttempt", attemptOrdinal: TargetPromotionAttemptOrdinal.make(1) },
       correlation: prefix.promotionCorrelation,
@@ -2755,14 +2390,6 @@ it.effect("projects valid historical worktree and promotion terminal outcomes", 
       historicalRecord(17, stale)
     ])
     expect(staleProjection.occurrences.at(-1)?._tag).toBe("TargetPromotionStale")
-
-    const deferredProjection = yield* projectWorkflowOccurrences([
-      ...prefix.records,
-      historicalRecord(15, intent),
-      historicalRecord(16, attempt),
-      historicalRecord(17, deferred)
-    ])
-    expect(deferredProjection.occurrences.at(-1)?._tag).toBe("TargetPromotionReconciliationDeferred")
 
     const nonConvergenceProjection = yield* projectWorkflowOccurrences([
       ...prefix.records,
@@ -2863,12 +2490,6 @@ it.effect("rejects historical outcomes when exact earlier correlation or chronol
       lastObservation: { _tag: "ExpectedHeadStillObserved", observedHeadSha: session.expectedTargetHead },
       version: workflowJournalEventVersion
     })
-    const deferredWithoutAttempt = TargetPromotionReconciliationDeferredEvent.make({
-      afterAttemptOrdinal: TargetPromotionAttemptOrdinal.make(1),
-      correlation: prefix.promotionCorrelation,
-      deferral: { _tag: "TargetReadFailed", detail: "missing exact attempt" },
-      version: workflowJournalEventVersion
-    })
     const quarantineBasis = IntegrationQuarantineBasis.cases.ProviderRunFailure.make({
       detail: IntegrationQuarantineFailureDetail.make("historical invalid successor absence"),
       ownedActivityProvenAbsentAt: JournalPosition.make(11)
@@ -2945,7 +2566,6 @@ it.effect("rejects historical outcomes when exact earlier correlation or chronol
       [...prefix.records, historicalRecord(15, promotionIntent), historicalRecord(16, staleAfterAttempt)],
       [historicalRecord(15, nonConvergence)],
       [...prefix.records, historicalRecord(15, promotionIntent), historicalRecord(16, nonConvergence)],
-      [...prefix.records, historicalRecord(15, promotionIntent), historicalRecord(16, deferredWithoutAttempt)],
       [...prefix.records, historicalRecord(15, missingPredecessor)],
       [...prefix.records, historicalRecord(13, successor)]
     ]
@@ -2985,7 +2605,6 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
     AttemptImplementationAbandoned: true,
     AttemptRestartAuthorityReadFailed: true,
     AttemptStoppageIntended: true,
-    ActiveWorkAuthorityRefreshGitReadFailed: true,
     BranchCleanupOccurred: true,
     CancelledAttemptClaimNoReleaseObserved: true,
     CancelledAttemptImplementationResponsibilityRelinquished: true,
@@ -3014,7 +2633,6 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
     TargetPromotionAttemptRequested: true,
     TargetPromotionNonConvergent: true,
     TargetPromotionRequested: true,
-    TargetPromotionReconciliationDeferred: true,
     TargetPromotionStale: true,
     TargetPromotionSucceeded: true,
     TaskAttemptPlanned: true,
@@ -3025,6 +2643,7 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
     TaskWorktreeReconciliationInitiated: true,
     TaskWorktreeReady: true,
     TargetLineageObserved: true,
+    TargetPromotionReconciliationDeferred: true,
     TaskTrackerFactsObserved: true,
     TaskTrackerReadInitiated: true,
     RunCancellationApplied: true,
@@ -3032,6 +2651,6 @@ it("compile-time exhaustive fixtures cover every occurrence and actor variant", 
   } satisfies Record<WorkflowOccurrence["_tag"], true>
   const actorVariants = { DalphCoordinator: true, Operator: true } satisfies Record<WorkflowActor["_tag"], true>
 
-  expect(Object.keys(occurrenceVariants)).toHaveLength(51)
+  expect(Object.keys(occurrenceVariants)).toHaveLength(50)
   expect(Object.keys(actorVariants)).toHaveLength(2)
 })

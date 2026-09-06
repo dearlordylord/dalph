@@ -151,6 +151,7 @@ const responsibilityStatusMeaningByTag = {
   WorkflowOperationGitConstraint: "UnavailableEvidence",
   TaskLifecycleConstraint: "UnavailableEvidence",
   TaskMembershipConstraint: "UnavailableEvidence",
+  TaskDependencyConstraint: "UnavailableEvidence",
   TaskSpecificationChangeConstraint: "UnavailableEvidence",
   ForeignClaimIsolation: "TrackerFact",
   MissingClaim: "TrackerFact",

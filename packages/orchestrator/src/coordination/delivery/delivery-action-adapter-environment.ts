@@ -8,11 +8,17 @@ import type {
   OperationIdAllocator,
   PlannedTaskAttemptPlanner
 } from "../../workflow/protocols/task-attempt-planning/plan.js"
+import type {
+  PassivePlannedAttemptObserver,
+  PassivePlannedAttemptProjectionPublication
+} from "../run/passive-planned-attempt-observer.js"
 
 /** Services captured once by the closed executor and interpreted only by route-specific leaves. */
 export type DeliveryActionAdapterEnvironment =
   | InRunJournal
   | OperationIdAllocator
+  | PassivePlannedAttemptObserver
+  | PassivePlannedAttemptProjectionPublication
   | PlannedAttemptExecutor
   | PlannedTaskAttemptPlanner
   | TaskClaimAcquisitionPlanner

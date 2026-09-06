@@ -17,6 +17,7 @@ import {
 import { Effect, Option, Stream } from "effect"
 import { expect } from "vitest"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import {
   currentSignalOf,
@@ -121,6 +122,7 @@ const coherentBundle = (
   exactEvidence: ReadonlyArray<TicketDeliveryEvidence>
 ): DeliveryRelationInputBundle => ({
   actionInputs: {
+    freshTaskCandidates: [],
     proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
     reflectionProposals: [],
     runtimeFacts: {
@@ -131,7 +133,7 @@ const coherentBundle = (
         applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
       },
       quiescence: { _tag: "TrackerReconfirmationAllowed" },
-      taskWork: { capacity: currentPolicy.taskExecutionCapacity, held: [], preStart: [] }
+      taskWork: makeFreshTaskAdmissionTestBasis({ capacity: currentPolicy.taskExecutionCapacity })
     },
     trackerGraphProposals: []
   },

@@ -17,16 +17,40 @@ own executable conformance adapter under
 | `specs/runActivation.qnt` | one idempotent Run-entry boundary: exact target and Run identity, lazy first policy versus the latest durable policy, reduction of exactly one unfinished history, independent reconstruction of every retained task-work position before new admission, and identical quiescence/finality handling after a new or reconstructed beginning. Process loss clears only process-local activation state; the same ordinary entry establishes the Run again from durable history. Executable seam: `packages/dalph/test/conformance/run-activation.mbt.test.ts` invokes production lifecycle, startup inspection, history reduction, recovery projection, the ordinary delivery relation's admission basis, admission, planned-attempt ambiguity reconciliation, and finality seams. | 195 |
 | `specs/applicationExit.qnt` | one process-local graceful application Exit decision boundary: cutoff-linearized admission, joined requests, typed owner disposition, exact executor evidence, enumerated quick drain actions, five monotonic ticks, distinct success/failure/timeout/unexpected-death outcomes, forced termination, no Run-journal Exit facts, and fresh restart state. Executable seam: `packages/dalph/test/conformance/application-exit.mbt.test.ts` invokes the production lifecycle-decision kernel without becoming a second runtime. | 203 |
 
-One additional model is accepted by issue #102 but does not exist until that
-issue's Phase 2 implementation:
+The following additional subject models are accepted. Their production-backed
+conformance adapters remain part of their owning implementation phases:
 
-| Planned model | Owns | Issue |
+| Model | Owns | Issue |
 |---|---|---|
 | `specs/runCancellation.qnt` | one durable Run cancellation direction, forward-admission cutoff, settlement or durable relinquishment of exact executor, claim, integration, reconciliation, and cleanup responsibilities, crash recovery, and handoff to fresh Run classification. Its executable seam will be `packages/dalph/test/conformance/run-cancellation.mbt.test.ts`. It does not own final disposition classification or application Exit. | 102 |
+| `specs/freshTaskAdmission.qnt` | one narrow multi-task admission-accounting boundary: process-local fresh-entry reservation, Journal-derived admission commitment from the ordinary selection claim intent through claim/specification/plan/worktree stages, atomic handoff to the exact executor responsibility, pre-ownership foreign-claim rejection, current capacity, existing ready-responsibility priority, and admission rederivation from already-established accepted history supplied by `runActivation`. `freshTaskAdmission_proof.qnt` exhaustively enumerates separate capacity/order and ambiguity/handoff projections after the richer five-task canonical product exceeded the gate budget. Its executable seam is `packages/dalph/test/conformance/fresh-task-admission.mbt.test.ts`, which invokes the production candidate/admission/proposal/runtime decision seam. It does not own Run bootstrap, tracker/Git protocol internals, Begin command semantics, exact held-position lifetime after handoff, post-ownership cleanup, integration, finality, or cassette order. | 315 |
 
 `specs/runActivation.qnt` continues to own fresh final classification, terminal
 history, and restart behavior. Issue #102 extends that existing ownership from
 `Completed` alone to `Completed`, `Blocked`, and `Cancelled`.
+
+The #315 exhaustive artifact is one file with two deliberately different
+projections. `freshTaskAdmissionCapacityProof` keeps the five stable task
+identities A through E and collapses each task only to candidate, occupied,
+retained-not-ready, ready-existing, existing-reserved, or foreign-blocked. It
+therefore still proves which task enters, not merely how many enter.
+`freshTaskAdmissionAmbiguityProof` keeps one exact selected task, one
+outside-task sentinel, and the selected task's full admission, Journal append,
+claim/worktree authority, retry, lineage, responsibility-handoff, crash, and
+release stages. It proves that uncertainty and intermediate completion cannot
+authorize the sentinel. Combining those two state spaces would multiply five
+task identities by every boundary outcome and repeated recovery cycle; the
+canonical product did not complete within the repository's exhaustive gate.
+
+This split is accepted only with the refinement mapping and test ownership in
+`docs/scenarios/issue-315-preserve-bounded-fresh-admission.md`. Every canonical
+state and action must map to an action in each relevant projection or to an
+explicit stutter that cannot change the projected property. A counter-only
+capacity projection is not an acceptable substitute because it cannot express
+D-before-E, ready-subject priority, or release of only the task with the
+foreign claim. The projection is also not registered as a mutation target:
+the canonical model and production-backed conformance adapter remain the only
+sources of runtime vocabulary and behavior.
 
 ## Why subject scope rather than composition scope
 
@@ -37,10 +61,13 @@ recovery, and every ambiguity-crossing boundary in one state space — cannot be
 checked exhaustively at a useful size, and its adapter reaches production only
 through a whole run.
 
-The cost is that no model owns composition. Nothing checks the interaction
+The cost is that no model owns the complete composition. Nothing checks every interaction
 between capacity, pause, crash recovery, and graph change, and nothing binds
-`runDeliveryRuntime` — the loop where those interactions are decided. That gap
-is deliberate under this decision and is recorded as a TODO on that function.
+the whole `runDeliveryRuntime` loop where those interactions are decided. That
+general gap is deliberate under this decision and is recorded as a TODO on that
+function. Issue #315 narrows the gap only for fresh-task admission accounting
+and binds that subject to the production runtime seam; it does not create one
+model for the whole delivery composition.
 
 ## Adding a model
 

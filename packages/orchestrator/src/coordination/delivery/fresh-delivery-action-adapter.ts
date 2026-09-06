@@ -10,6 +10,7 @@ import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretatio
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
+  makeTaskClaimObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation
@@ -42,11 +43,14 @@ const acquireTaskClaim = Effect.fn("DeliveryAction.acquireTaskClaim")(function* 
   })
   yield* trace.emit(OperationSelected.make({ operation }))
   yield* trace.emit(TaskClaimAcquisitionIntended.make({ operation }))
-  const recordClaimIntent = lease
-    .recordIntent(action.operationId)
-    .pipe(Effect.andThen(lease.bindPreStartTaskWorkPosition(operation.acquisition.operationId)))
-  const result = yield* interpreter.acquireTaskClaim(operation, recordClaimIntent, interruptibleBoundaryOf(lease))
-  yield* trace.emit(TaskClaimAcquiredTrace.make({ claim: result.claim, operation }))
+  const result = yield* interpreter.acquireTaskClaim(
+    operation,
+    lease.recordIntent(action.operationId),
+    interruptibleBoundaryOf(lease)
+  )
+  if (result._tag === "AuthoritativeTaskClaimAcquired") {
+    yield* trace.emit(TaskClaimAcquiredTrace.make({ claim: result.claim, operation }))
+  }
 })
 
 const reconcileTaskWorktree = Effect.fn("DeliveryAction.reconcileTaskWorktree")(function* (
@@ -82,7 +86,13 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
   return yield* Match.valueTags(step, {
     ReadCurrentTaskGraph: (step) =>
       Effect.gen(function* () {
-        const operation = makeTrackerGraphObservationOperation(action.operationId, target, [], [step.task.id])
+        const operation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          action.operationId,
+          target,
+          [],
+          [step.task.id]
+        )
         yield* executeTrackerGraphRead(operation, lease)
         return deliveryActionCompleted(action.proposal.id)
       }),
@@ -94,6 +104,7 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
     ReadPostClaimGraph: (step) =>
       Effect.gen(function* () {
         const operation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
           action.operationId,
           target,
           [step.predecessorOperationId],
@@ -105,6 +116,20 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
             TrackerExecutionAdmitted.make({ claimOperation: step.claimOperation, observationOperation: operation })
           )
         }
+        return deliveryActionCompleted(action.proposal.id)
+      }),
+    ReadRejectedTaskClaim: (step) =>
+      Effect.gen(function* () {
+        const operation = makeTaskClaimObservationOperation(action.operationId, target, step.task.id, [
+          step.predecessorOperationId,
+          step.rejectedClaimOperationId
+        ])
+        yield* trace.emit(OperationSelected.make({ operation }))
+        yield* interpreter.readTaskClaim(
+          operation,
+          lease.recordIntent(action.operationId),
+          interruptibleBoundaryOf(lease)
+        )
         return deliveryActionCompleted(action.proposal.id)
       }),
     ReadTaskWorkSpecification: (step) =>
@@ -129,8 +154,7 @@ export const executeFreshWorkflowOperation = Effect.fn("DeliveryAction.executeFr
 })
 
 export const executeFreshAttemptPlanning = Effect.fn("DeliveryAction.executeFreshAttemptPlanning")(function* (
-  action: Extract<MaterializedDeliveryAction, { readonly _tag: "FreshAttemptAction" }>,
-  lease: DeliveryActionExecutionLease
+  action: Extract<MaterializedDeliveryAction, { readonly _tag: "FreshAttemptAction" }>
 ) {
   const trace = yield* WorkflowTrace
   const interpreter = yield* WorkflowInterpreter
@@ -142,18 +166,6 @@ export const executeFreshAttemptPlanning = Effect.fn("DeliveryAction.executeFres
   })
   yield* trace.emit(OperationSelected.make({ operation }))
   yield* interpreter.recordTaskAttemptPlan(operation)
-  const requirement = action.proposal.admission.taskWorkPosition
-  if (requirement._tag === "PreStartTaskWorkPositionRequired" && requirement.mode === "ReuseExisting") {
-    yield* lease.bindPreStartPlannedAttemptPosition(requirement.claimOperationId, {
-      attemptId: action.plannedAttempt.attemptId,
-      runId: action.plannedAttempt.runId
-    })
-  } else {
-    yield* lease.bindPlannedAttemptPosition({
-      attemptId: action.plannedAttempt.attemptId,
-      runId: action.plannedAttempt.runId
-    })
-  }
   yield* trace.emit(TaskAttemptPlanAcknowledged.make({ operation }))
   return deliveryActionCompleted(action.proposal.id)
 })

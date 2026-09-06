@@ -245,7 +245,7 @@ type HostAction =
   | "association-cut"
   | "pre-thread-cut"
   | "create"
-  | "turn"
+  | "resume"
   | "project"
   | "suspend"
   | "settle"
@@ -910,10 +910,6 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         }
         expect(threadIdOf(await attemptRecord(fixture))).toBe(originalThread)
 
-        const continued = await spawnHost(fixture, "turn")
-        hosts.push(continued)
-        const continuation = await continued.waitForReport(1)
-        if (continuation.event === "report") expect(continuation.report?._tag).not.toBe("ExecutorWorkTerminal")
         expect(fixture.model.calls).toHaveLength(1)
       } finally {
         await dispose(fixture, hosts)
@@ -961,9 +957,11 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(report.report?._tag).toBe("ExecutorWorkSafelySuspended")
         expect(fixture.model.calls).toHaveLength(1)
 
-        const resumed = await spawnHost(fixture, "turn")
+        const resumed = await spawnHost(fixture, "resume")
         hosts.push(resumed)
-        expect(requireEvent(await resumed.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        const resumedReport = requireEvent(await resumed.waitForReport(1), "report")
+        expect(resumedReport.command).toBe("Resume")
+        expect(resumedReport.report?._tag).toBe("ExecutorWorkExecuting")
         expect(threadIdOf(await attemptRecord(fixture))).toBe(originalThread)
         expect(fixture.model.calls).toHaveLength(1)
       } finally {
@@ -1044,9 +1042,11 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(await exited.waitForExit()).toEqual({ code: 0, signal: null })
         if (appServerPid !== null && appServerPid !== undefined) await waitForProcessAbsence(appServerPid)
 
-        const resumed = await spawnHost(fixture, "turn")
+        const resumed = await spawnHost(fixture, "resume")
         hosts.push(resumed)
-        expect(requireEvent(await resumed.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        const resumedReport = requireEvent(await resumed.waitForReport(1), "report")
+        expect(resumedReport.command).toBe("Resume")
+        expect(resumedReport.report?._tag).toBe("ExecutorWorkExecuting")
         expect(threadIdOf(await attemptRecord(fixture))).toBe(originalThread)
         expect(fixture.model.calls).toHaveLength(1)
       } finally {

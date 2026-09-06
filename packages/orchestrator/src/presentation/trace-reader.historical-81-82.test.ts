@@ -294,6 +294,7 @@ const preservationRecords = (): ReadonlyArray<JournalRecord> => {
     predecessorOperationIds: []
   })
   const restartRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("historical-81-82-task-conflict-read"),
     trackerTarget,
     [],
@@ -1642,6 +1643,7 @@ it.effect("#81/#82 reject invalid historical relationship tables and property mu
 
     const blockedTaskId = TaskId.make("historical-dependant-blocker")
     const blockedTargetOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("historical-dependant-blocked-graph"),
       integrationFinalityFixture.target,
       [],
@@ -1679,6 +1681,7 @@ it.effect("#81/#82 reject invalid historical relationship tables and property mu
 
     const inconsistentTarget = FixtureTarget.make("historical-inconsistent-target")
     const inconsistentOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("historical-dependant-inconsistent-graph"),
       inconsistentTarget,
       [],
@@ -2156,6 +2159,7 @@ it.effect("#82 rejects a bare settlement and duplicate nested finality operation
     }
 
     const topLevelCollision = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       settlementEvent.replacementOperationId,
       integrationFinalityFixture.target
     )
@@ -2332,7 +2336,11 @@ it.effect("#81 names the exact operation family for unfinished tracker and Git r
     }
 
     const trackerOperations = [
-      makeTrackerGraphObservationOperation(OperationId.make("facet-gap-graph"), trackerTarget),
+      makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("facet-gap-graph"),
+        trackerTarget
+      ),
       makeTaskClaimObservationOperation(OperationId.make("facet-gap-claim"), trackerTarget, plannedAttempt.taskId),
       makeTaskWorkSpecificationObservationOperation(
         OperationId.make("facet-gap-specification"),
@@ -2382,6 +2390,7 @@ it.effect("#81 preserves focused tracker task identity for specification claim u
       taskId
     )
     const graphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("historical-focused-failed-graph"),
       trackerTarget
     )
@@ -2577,6 +2586,7 @@ it.effect("#82 retains post-promotion Git intent and unreadable outcome with exa
     }
     const blockerTaskId = TaskId.make("post-promotion-blocker")
     const blockedOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("historical-post-promotion-blocked"),
       integrationFinalityFixture.target,
       [],
@@ -2596,6 +2606,7 @@ it.effect("#82 retains post-promotion Git intent and unreadable outcome with exa
     })
     if (blockedProjection._tag !== "Valid") return yield* Effect.die("blocked graph fixture is invalid")
     const clearOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make("historical-post-promotion-cleared"),
       integrationFinalityFixture.target,
       [],

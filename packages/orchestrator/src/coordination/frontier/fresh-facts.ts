@@ -1,8 +1,8 @@
-import { Data } from "effect"
+import { Data, Schema } from "effect"
 import {
   type IntegrationTarget,
   type PlannedTaskAttempt,
-  type TaskId,
+  TaskId,
   type TaskRevision,
   type PlannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorReport
@@ -28,6 +28,10 @@ import type {
 } from "../../workflow/protocols/attempt-choice/restart-reasons.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { PlannedAttemptExecutorProjectionWaitReason } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+
+/** The exact unfinished prerequisites blocking one executing task; an empty set is not a dependency constraint. */
+export const UnfinishedPrerequisiteTaskIds = Schema.NonEmptyArray(TaskId)
+export type UnfinishedPrerequisiteTaskIds = typeof UnfinishedPrerequisiteTaskIds.Type
 
 /** Exact accepted executor fact that identifies one durable observation proposal. */
 export type AcceptedPlannedAttemptExecutorProgress =
@@ -136,6 +140,8 @@ export type ResponsibilityDisposition = Data.TaggedEnum<{
   WorkflowOperationGitConstraint: { readonly gitState: "WorktreeLost" }
   TaskLifecycleConstraint: { readonly lifecycle: "TerminalWithoutSuccess" }
   TaskMembershipConstraint: Record<never, never>
+  /** A current complete tracker graph makes this executing task ineligible because exact prerequisites are unfinished. */
+  TaskDependencyConstraint: { readonly prerequisiteTaskIds: UnfinishedPrerequisiteTaskIds }
   TaskSpecificationChangeConstraint: {
     readonly observedFingerprint: TaskRevision
     readonly plannedFingerprint: TaskRevision
@@ -198,6 +204,7 @@ export type PlannedAttemptExecutorDisposition =
           | "AppliedTaskClaimReacquisitionDirection"
           | "TaskLifecycleConstraint"
           | "TaskMembershipConstraint"
+          | "TaskDependencyConstraint"
           | "TaskSpecificationChangeConstraint"
           | "UnreadableFactWait"
       }
@@ -244,6 +251,7 @@ type WorkflowOperationDisposition = Exclude<
       | "TaskForeignClaimIsolation"
       | "AppliedTaskClaimReacquisitionDirection"
       | "TaskLifecycleConstraint"
+      | "TaskDependencyConstraint"
       | "TaskSpecificationChangeConstraint"
   }
 >

@@ -6,28 +6,23 @@ import { deriveIntegrationAdmission } from "../../workflow/protocols/integration
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
+import { makeFreshTaskAdmissionBasis } from "../admission/fresh-task-admission.js"
+import { projectFreshTaskAdmission } from "../admission/fresh-task-admission-projection.js"
 import {
   runnableTransitionTaskId,
   transitionTrackerGraphRequirement,
   type RunnableFrontierTransition
 } from "../frontier/frontier.js"
-import {
-  pendingActiveRefreshGitReadOperationsFor,
-  readDeliveryProjectionFrom,
-  type RunRecoveryProjectionSource
-} from "../run/recovery-activation.js"
-import {
-  requiredPlannedAttemptPositionsOf,
-  requiredPreStartTaskWorkPositionsOf
-} from "../run/required-planned-attempt-positions.js"
+import { readDeliveryProjectionFrom, type RunRecoveryProjectionSource } from "../run/recovery-activation.js"
 import { journaledCurrentDeliveryFrameOf, type CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
-import { deriveFreshWorkflowDecisions } from "../run/fresh-workflow.js"
 import {
   acceptedOperationIdsOf,
+  pendingReadOperationIdsOf,
   ticketDeliveryEvidenceOf,
   journaledIntegrationEvidenceOf
 } from "./delivery-evidence.js"
-import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import { deliveryProposalsOf, freshContinuationDecisionsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
+import { deriveFreshTaskCandidateEvaluation } from "./fresh-task-candidate.js"
 import { DeliveryRuntimeResources } from "./delivery-runtime-resources.js"
 import { makeDeliveryRelationsLayer } from "./in-memory-relations.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
@@ -133,20 +128,14 @@ const activeRefreshNeedsCurrentGraph = (
 
 const trackerGraphProposalsOf = (
   journal: JournalProjection,
-  recoveredTransitions: ReadonlyArray<RunnableFrontierTransition>,
+  recoveredTransitionCount: number,
   runIsPaused: boolean,
   runId: RunId,
   target: TrackerTarget,
   currentGraphRequired: boolean
 ): ReadonlyArray<TrackerGraphActionProposal> => {
   if (runIsPaused) return []
-  const recoveredTransitionsNeedOnlyCurrentGraph =
-    recoveredTransitions.length > 0 &&
-    recoveredTransitions.every((transition) => transition._tag === "ObservePlannedAttemptContinuationGraph")
-  if (
-    journal.graph._tag === "GraphNotEstablished" &&
-    (recoveredTransitions.length === 0 || recoveredTransitionsNeedOnlyCurrentGraph || currentGraphRequired)
-  ) {
+  if (journal.graph._tag === "GraphNotEstablished" && (recoveredTransitionCount === 0 || currentGraphRequired)) {
     return [
       trackerGraphReadProposalOf({ acceptedAt: journal.position, purpose: "EstablishCurrentGraph", runId, target })
     ]
@@ -192,23 +181,29 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const frame =
       journal.graph._tag === "GraphEstablished" ? yield* journaledCurrentDeliveryFrameOf(journal) : undefined
     const activeRefreshBoundaryReached = projection.activeRefreshBoundary !== undefined
-    const freshCandidates = frame === undefined ? [] : deriveFreshWorkflowDecisions(frame, recoveredAttemptIds, target)
-    /**
-     * A completed active refresh suppresses only the exact Running subjects
-     * that reached its boundary. Fresh tasks revealed by the mandatory G2
-     * remain ordinary work and must still enter the same proposal algebra.
-     */
-    const fresh =
-      !activeRefreshBoundaryReached || opportunity._tag !== "ActiveWorkAuthorityRefresh"
-        ? freshCandidates
-        : freshCandidates.filter(
-            ({ transition }) =>
-              !transitionHasPlannedAttempt(transition) ||
-              !activeWorkAuthorityRefreshSubjectsContain(opportunity.subjects, transition.plannedAttempt)
-          )
+    /** A complete evaluation derives decisions and admission authority from the same coherent frame. */
+    const freshEvaluation = yield* deriveFreshTaskCandidateEvaluation({
+      acceptedAt: journal.position,
+      activeRefreshBoundaryReached,
+      frame,
+      opportunity,
+      recoveredAttemptIds,
+      runId,
+      target
+    })
+    const fresh = freshEvaluation.decisions
     const freshTaskIds = new Set(fresh.map(({ transition }) => runnableTransitionTaskId(transition)))
+    const freshTaskCandidates = freshEvaluation.frontier
+    const freshAdmission = projectFreshTaskAdmission(runId, journal.records)
+    if (freshAdmission._tag === "FreshTaskAdmissionProjectionInvalid") return yield* freshAdmission
+    const admittedFreshResult = freshContinuationDecisionsOf(
+      fresh,
+      freshAdmission.commitments.map(({ commitment }) => commitment)
+    )
+    const admittedFresh =
+      admittedFreshResult._tag === "Success" ? admittedFreshResult.success : yield* admittedFreshResult.failure
     const currentGraphRequired = activeRefreshNeedsCurrentGraph(journal, opportunity)
-    const recoveredCandidates = eligibleRecoveredTransitions(journal, projection, freshTaskIds).filter((transition) => {
+    const recovered = eligibleRecoveredTransitions(journal, projection, freshTaskIds).filter((transition) => {
       if (
         !currentGraphRequired ||
         opportunity._tag !== "ActiveWorkAuthorityRefresh" ||
@@ -218,31 +213,15 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       }
       return !activeWorkAuthorityRefreshSubjectsContain(opportunity.subjects, transition.plannedAttempt)
     })
-    const exactActiveRefreshGraphReadAvailable =
-      opportunity._tag === "ActiveWorkAuthorityRefresh" &&
-      recoveredCandidates.some(
-        (transition) =>
-          transition._tag === "ObservePlannedAttemptContinuationGraph" &&
-          transition.operation.purpose === "ActiveWorkAuthorityRefresh"
-      )
-    const establishCurrentGraph =
-      journal.graph._tag === "GraphNotEstablished" &&
-      !exactActiveRefreshGraphReadAvailable &&
-      (currentGraphRequired ||
-        recoveredCandidates.length === 0 ||
-        recoveredCandidates.every((transition) => transition._tag === "ObservePlannedAttemptContinuationGraph"))
-    const recovered = recoveredCandidates.filter(
-      (transition) => !(establishCurrentGraph && transition._tag === "ObservePlannedAttemptContinuationGraph")
-    )
-    const transitions = [...recovered, ...fresh.map(({ transition }) => transition)]
+    const transitions = [...recovered, ...admittedFresh.map(({ transition }) => transition)]
     const records = journal.records
     const integrationResponsibilities = deriveIntegrationAdmission(records).responsibilities
     const proposalContributions = deliveryProposalsOf({
       acceptedAt: journal.position,
       acceptedOperationIds: acceptedOperationIdsOf(records),
-      activeRefreshPendingGitReadOperations: pendingActiveRefreshGitReadOperationsFor(records, runId, opportunity),
-      fresh,
+      fresh: admittedFresh,
       integrationResponsibilities,
+      pendingReadOperationIds: pendingReadOperationIdsOf(records),
       responsibilities: journal.reconstructed.responsibility.entries,
       runId,
       transitions
@@ -250,18 +229,20 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     const exactEvidence = exactDeliveryEvidenceOf(frame, projection, records)
     const runIsPaused = journal.reconstructed.pause.run._tag === "RunPaused"
     const trackerGraphProposals =
-      (!activeRefreshBoundaryReached || currentGraphRequired) && !exactActiveRefreshGraphReadAvailable
-        ? trackerGraphProposalsOf(
-            journal,
-            establishCurrentGraph ? recoveredCandidates : recovered,
-            runIsPaused,
-            runId,
-            target,
-            currentGraphRequired
-          )
+      !activeRefreshBoundaryReached || (currentGraphRequired && journal.graph._tag === "GraphNotEstablished")
+        ? trackerGraphProposalsOf(journal, recovered.length, runIsPaused, runId, target, currentGraphRequired)
         : []
+    const taskWork = yield* makeFreshTaskAdmissionBasis({
+      acceptedAt: journal.position,
+      capacity: policy.taskExecutionCapacity,
+      entries: [],
+      projection: freshAdmission,
+      runId
+    })
     return {
       actionInputs: {
+        freshTaskCandidateFrontier: freshTaskCandidates,
+        freshTaskCandidates: freshTaskCandidates.candidates,
         proposalContributions,
         reflectionProposals: [],
         runtimeFacts: {
@@ -271,14 +252,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
           quiescence: runIsPaused
             ? { _tag: "QuiescencePassive", reason: "RunPaused" }
             : { _tag: "TrackerReconfirmationAllowed" },
-          taskWork: {
-            capacity: policy.taskExecutionCapacity,
-            preStart: requiredPreStartTaskWorkPositionsOf(journal.reconstructed),
-            held: requiredPlannedAttemptPositionsOf(journal.reconstructed).map(({ attemptId, runId, taskId }) => ({
-              correlation: { attemptId, runId },
-              taskId
-            }))
-          },
+          taskWork,
           cancellationApplied: journal.reconstructed.cancellation._tag === "RunCancellationApplied",
           ...(projection.activeRefreshBoundary === undefined
             ? {}
@@ -403,12 +377,14 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
           return true
         })
       )
-      if (!awaiting) return
-      yield* Deferred.await(completed).pipe(
-        Effect.onInterrupt(() =>
-          Ref.update(publicationWaiters, (waiters) => waiters.filter((waiter) => waiter.completed !== completed))
+      if (awaiting) {
+        yield* Deferred.await(completed).pipe(
+          Effect.onInterrupt(() =>
+            Ref.update(publicationWaiters, (waiters) => waiters.filter((waiter) => waiter.completed !== completed))
+          )
         )
-      )
+      }
+      return { _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough: targetPosition, runId }
     })
   })
   return Layer.merge(

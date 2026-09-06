@@ -80,13 +80,25 @@ separately and are not current implementation authority.
 | `issue-71-qualify-real-github-graph-membership-claims.md` | 71 |
 | `issue-88-crash-after-target-promotion.md` | 88 |
 
-**Accepted implementation corrections awaiting integration** — these files
-are current behavior authority for an acknowledged acceptance gap. They do not
-claim that the correction is already shipped.
+**Accepted implementation corrections on `integrate/issues-264-268`** — these
+files describe the four corrections composed on the integration branch. This
+table does not claim that the corrections are on `master` or shipped.
 
 | File | Owning issue | Status |
 |---|---:|---|
-| `issue-281-active-work-authority-refresh.md` | 281 | Accepted correction; implementation and integration pending |
+| `issue-265-passive-executor-observation-through-restart.md` | 265 | Complete and integrated through `acdf5a715`; issue closed |
+| `issue-266-active-work-authority-refresh.md` | 266 | Complete and integrated through `437238a878`; issue closed |
+| `issue-269-independent-work-retained-priority.md` | 269 | Complete and composed through `a1b81c4fb`; issue closed |
+| `issue-267-exact-causal-active-work-cassette.md` | 267 | Complete and composed through `a1b81c4fb`; issue closed |
+
+**Accepted recovery behavior; completion evidence pending** — these files are
+the current authority for open recovery work. They do not claim that the whole
+owning issue is complete.
+
+| File | Owning issue | Status |
+|---|---:|---|
+| `issue-315-preserve-bounded-fresh-admission.md` | 315 | Implemented and verified at recovery base `b8a63ef8e`; #268 must independently re-prove its composed DS-02 result |
+| `issue-268-controlled-delivery-story.md` | 268 | Thirteen outcomes and the C2b observed order at `7100fe3af` accepted; C3--C5 proceed under the recorded stop rules |
 
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state

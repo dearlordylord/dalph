@@ -13,13 +13,16 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  TaskRevision,
+  makeTaskWorkSpecification,
   WorktreeLocator
 } from "@dalph/contracts"
 import { Context, Deferred, Effect, Fiber, Layer, Match, Option, Queue, Schema, Scope, Stream } from "effect"
 import { expect } from "vitest"
 import {
   InitialControlPolicy,
+  ActiveTaskClaim,
+  ClaimOwner,
+  ClaimToken,
   JournalPosition,
   JournalRecordKey,
   type JournalRecord,
@@ -36,7 +39,15 @@ import {
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   RunPolicyRevision,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskClaimRelease,
+  TaskClaimReleaseAuthority,
+  TaskClaimReleasedEvent,
+  TaskClaimReleaseIntendedEvent,
   TaskAttemptPlannedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
   TaskWorkCapacity,
   TaskWorkCapacityChangedEvent,
   workflowJournalEventVersion,
@@ -61,12 +72,14 @@ import {
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
 import { deliveryRuntime } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-adapter.js"
 import { DeliveryActionExecutor } from "../../../orchestrator/src/coordination/delivery/delivery-action-executor.js"
+import { DeliveryAcceptedFactPublication } from "../../../orchestrator/src/coordination/delivery/delivery-accepted-fact-publication.js"
 import { makeReactiveDeliveryRelationsLayer } from "../../../orchestrator/src/coordination/delivery/reactive-delivery-relations.js"
 import { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { AllocatedWorkflowRunId } from "../../../orchestrator/src/coordination/run/fresh-run-identity.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
+import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { validatedRunActivationLayer } from "../../../orchestrator/src/coordination/run/startup-recovery.js"
 import { preservingDispositionCleanupBoundaryLayer } from "../../../orchestrator/src/workflow/protocols/disposition-cleanup/boundaries.js"
@@ -78,6 +91,8 @@ import {
 } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import {
   attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorStateObservedRecordKey,
@@ -98,8 +113,19 @@ import {
 } from "../../../orchestrator/src/workflow/protocols/task-attempt-planning/plan.js"
 import {
   makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskClaimReleaseOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation
 } from "../../../orchestrator/src/workflow/registry/operation.js"
+import { taskTrackerReadIntent } from "../../../orchestrator/src/workflow/registry/event.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
+import { PlannedWorktreeReady } from "../../../orchestrator/src/authorities/git/worktree.js"
 import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/workflow-journal/journaled-interpreter.js"
 import { attemptChoiceControlLayer } from "../../../orchestrator/src/workflow/protocols/attempt-choice/control.js"
 import { controlDirectionApplicationLayer } from "../../../orchestrator/src/workflow/protocols/control-direction-application/protocol.js"
@@ -246,17 +272,35 @@ const earlierPolicy = initialPolicy
 const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
 const ownershipLayer = Layer.succeed(CoordinatorOwnership, ownership)
 
-const attemptFor = (taskId: TaskId, suffix: string) =>
-  PlannedTaskAttempt.make({
-    attemptId: AttemptId.make(`run-activation-${suffix}`),
-    baseSha: GitCommitSha.make("1".repeat(40)),
-    branch: TaskBranchRef.make(`refs/heads/dalph/run-activation-${suffix}`),
-    executor: TaskExecutorLocator.make("executor:run-activation"),
-    runId,
+const specificationForTask = (taskId: TaskId) =>
+  makeTaskWorkSpecification({
+    body: `run-activation fixture instructions for ${taskId}`,
     taskId,
-    taskRevision: TaskRevision.make(`run-activation-revision-${suffix}`),
-    worktree: WorktreeLocator.make(`/worktrees/run-activation-${suffix}`)
+    title: `Run activation fixture ${taskId}`
   })
+
+const claimForAttempt = (plannedAttempt: PlannedTaskAttempt) =>
+  ActiveTaskClaim.make({
+    operationId: OperationId.make(`claim-${plannedAttempt.attemptId}`),
+    owner: ClaimOwner.make("dalph"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make(`token-${plannedAttempt.attemptId}`)
+  })
+
+const attemptFor = (taskId: TaskId, suffix: string) =>
+  (() => {
+    const attemptId = AttemptId.make(`run-activation-${suffix}`)
+    return PlannedTaskAttempt.make({
+      attemptId,
+      baseSha: GitCommitSha.make("1".repeat(40)),
+      branch: TaskBranchRef.make(`refs/heads/dalph/run-activation-${suffix}`),
+      executor: TaskExecutorLocator.make("executor:run-activation"),
+      runId,
+      taskId,
+      taskRevision: specificationForTask(taskId).fingerprint,
+      worktree: WorktreeLocator.make(`/worktrees/run-activation-${suffix}`)
+    })
+  })()
 
 const attemptA = attemptFor(taskA, "A")
 const attemptB = attemptFor(taskB, "B")
@@ -287,6 +331,20 @@ const snapshotForGraphOutcome = (outcome: "GraphAllSucceeded" | "GraphBlocked" |
   const projected = projectTrackerSnapshot({ revision: `run-activation-${outcome}`, rootTaskId: taskA, tasks })
   if (projected._tag !== "Valid") {
     expect.fail(`invalid finality fixture graph: ${JSON.stringify(projected.issues)}`)
+  }
+  return projected.snapshot
+}
+
+const snapshotForFreshAttempt = (plannedAttempt: PlannedTaskAttempt) => {
+  const projected = projectTrackerSnapshot({
+    revision: `run-activation-lineage-${plannedAttempt.attemptId}`,
+    rootTaskId: plannedAttempt.taskId,
+    tasks: [
+      { id: plannedAttempt.taskId, lifecycle: { _tag: "Open" as const }, parentTaskId: null, prerequisiteIds: [] }
+    ]
+  })
+  if (projected._tag !== "Valid") {
+    expect.fail(`invalid fresh-attempt fixture graph: ${JSON.stringify(projected.issues)}`)
   }
   return projected.snapshot
 }
@@ -537,15 +595,98 @@ const makeRunActivationDriverImplementation = () => {
   }
 
   const appendResponsibility = (plannedAttempt: PlannedTaskAttempt): void => {
+    const claimOperation = makeTaskClaimAcquisitionOperation({
+      acquisition: {
+        operationId: OperationId.make(`claim-${plannedAttempt.attemptId}`),
+        owner: ClaimOwner.make("dalph"),
+        taskId: plannedAttempt.taskId,
+        token: ClaimToken.make(`token-${plannedAttempt.attemptId}`)
+      },
+      predecessorOperationIds: []
+    })
+    append(
+      runId,
+      intentRecordKey(claimOperation.acquisition.operationId),
+      TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
+    )
+    append(
+      runId,
+      outcomeRecordKey(claimOperation.acquisition.operationId),
+      TaskClaimAcquiredEvent.make({
+        claim: ActiveTaskClaim.make(claimOperation.acquisition),
+        version: workflowJournalEventVersion
+      })
+    )
+    const graphOperation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
+      OperationId.make(`graph-${plannedAttempt.attemptId}`),
+      target,
+      [claimOperation.acquisition.operationId],
+      [plannedAttempt.taskId]
+    )
+    append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
+    append(
+      runId,
+      outcomeRecordKey(graphOperation.operationId),
+      taskTrackerFactsObservedEvent(
+        graphOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(graphOperation, snapshotForFreshAttempt(plannedAttempt))
+      )
+    )
+    const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make(`specification-${plannedAttempt.attemptId}`),
+      target,
+      plannedAttempt.taskId,
+      [graphOperation.operationId]
+    )
+    append(runId, intentRecordKey(specificationOperation.operationId), taskTrackerReadIntent(specificationOperation))
+    append(
+      runId,
+      outcomeRecordKey(specificationOperation.operationId),
+      taskTrackerFactsObservedEvent(
+        specificationOperation.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(
+          specificationOperation,
+          specificationForTask(plannedAttempt.taskId)
+        )
+      )
+    )
     const operation = makeTaskAttemptPlanOperation({
       operationId: OperationId.make(`plan-${plannedAttempt.attemptId}`),
       plannedAttempt,
-      predecessorOperationIds: []
+      predecessorOperationIds: [specificationOperation.operationId]
     })
     append(
       runId,
       attemptPlanRecordKey(plannedAttempt.attemptId),
       TaskAttemptPlannedEvent.make({ operation, version: workflowJournalEventVersion })
+    )
+    const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+      operationId: OperationId.make(`worktree-${plannedAttempt.attemptId}`),
+      plannedAttempt,
+      predecessorOperationIds: [operation.operationId]
+    })
+    append(
+      runId,
+      intentRecordKey(worktreeOperation.operationId),
+      TaskWorktreeReconciliationIntendedEvent.make({
+        operation: worktreeOperation,
+        version: workflowJournalEventVersion
+      })
+    )
+    append(
+      runId,
+      outcomeRecordKey(worktreeOperation.operationId),
+      TaskWorktreeReadyEvent.make({
+        operationId: worktreeOperation.operationId,
+        proof: PlannedWorktreeReady.make({
+          baseSha: plannedAttempt.baseSha,
+          branch: plannedAttempt.branch,
+          headSha: plannedAttempt.baseSha,
+          worktree: plannedAttempt.worktree
+        }),
+        version: workflowJournalEventVersion
+      })
     )
     append(
       runId,
@@ -642,6 +783,9 @@ const makeRunActivationDriverImplementation = () => {
   ) =>
     Effect.scoped(
       Effect.gen(function* () {
+        const executorLayer = controlledSynchronousPlannedAttemptExecutorLayer(
+          Layer.succeed(PlannedAttemptExecutor, executor)
+        )
         const journalContext = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, journal)))
         const dependencies = Layer.mergeAll(
           Layer.succeed(JournalStore, journal),
@@ -678,7 +822,7 @@ const makeRunActivationDriverImplementation = () => {
                 worktreeRoot: WorktreeLocator.make("/worktrees/run-activation-planner")
               })
             ),
-            Layer.provide(Layer.succeed(PlannedAttemptExecutor, executor)),
+            Layer.provide(executorLayer),
             Layer.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })))
           )
         }
@@ -688,7 +832,7 @@ const makeRunActivationDriverImplementation = () => {
             runtimeLayer,
             yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void }),
             noopJournalMaintenanceObservation
-          ).pipe(Layer.provide(dependencies))
+          ).pipe(Layer.provide(dependencies), Layer.provide(executorLayer))
         )
         return yield* use(Context.get(context, JournaledRunBootstrap))
       })
@@ -761,7 +905,10 @@ const makeRunActivationDriverImplementation = () => {
     ...proposalForC,
     admission: {
       integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
-      plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+      plannedAttemptProtocol: {
+        _tag: "PlannedAttemptProtocolRequired" as const,
+        correlation: { attemptId: attemptC.attemptId, runId }
+      },
       taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId: taskC }
     },
     id: DeliveryProposalId.make("run-activation-capacity-sentinel")
@@ -808,6 +955,7 @@ const makeRunActivationDriverImplementation = () => {
               integrationTargets
             )
             const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
+            const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))
             const productionAdmissionBasis = Option.getOrThrow(yield* relation.changes.pipe(Stream.runHead)).taskWork
             const reconstructedAdmissionBasis = {
               capacity: policy.taskExecutionCapacity,
@@ -862,6 +1010,7 @@ const makeRunActivationDriverImplementation = () => {
               const allocator = yield* OperationIdAllocator
               const snapshot = snapshotForGraphOutcome(graphOutcome)
               const operation = makeTrackerGraphObservationOperation(
+                { _tag: "WorkflowEstablishment" },
                 yield* allocator.allocate(),
                 target,
                 [],
@@ -882,15 +1031,109 @@ const makeRunActivationDriverImplementation = () => {
 
             const appendResponsibilityThroughJournal = (plannedAttempt: PlannedTaskAttempt) =>
               Effect.gen(function* () {
+                const claimOperation = makeTaskClaimAcquisitionOperation({
+                  acquisition: {
+                    operationId: OperationId.make(`claim-${plannedAttempt.attemptId}`),
+                    owner: ClaimOwner.make("dalph"),
+                    taskId: plannedAttempt.taskId,
+                    token: ClaimToken.make(`token-${plannedAttempt.attemptId}`)
+                  },
+                  predecessorOperationIds: []
+                })
+                yield* journal.append(
+                  runId,
+                  intentRecordKey(claimOperation.acquisition.operationId),
+                  TaskClaimAcquisitionIntendedEvent.make({
+                    operation: claimOperation,
+                    version: workflowJournalEventVersion
+                  })
+                )
+                yield* journal.append(
+                  runId,
+                  outcomeRecordKey(claimOperation.acquisition.operationId),
+                  TaskClaimAcquiredEvent.make({
+                    claim: ActiveTaskClaim.make(claimOperation.acquisition),
+                    version: workflowJournalEventVersion
+                  })
+                )
+                const graphOperation = makeTrackerGraphObservationOperation(
+                  { _tag: "WorkflowEstablishment" },
+                  OperationId.make(`graph-${plannedAttempt.attemptId}`),
+                  target,
+                  [claimOperation.acquisition.operationId],
+                  [plannedAttempt.taskId]
+                )
+                yield* journal.append(
+                  runId,
+                  intentRecordKey(graphOperation.operationId),
+                  taskTrackerReadIntent(graphOperation)
+                )
+                yield* journal.append(
+                  runId,
+                  outcomeRecordKey(graphOperation.operationId),
+                  taskTrackerFactsObservedEvent(
+                    graphOperation.operationId,
+                    makeCompleteTaskTrackerFactsObserved(graphOperation, snapshotForFreshAttempt(plannedAttempt))
+                  )
+                )
+                const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+                  OperationId.make(`specification-${plannedAttempt.attemptId}`),
+                  target,
+                  plannedAttempt.taskId,
+                  [graphOperation.operationId]
+                )
+                yield* journal.append(
+                  runId,
+                  intentRecordKey(specificationOperation.operationId),
+                  taskTrackerReadIntent(specificationOperation)
+                )
+                yield* journal.append(
+                  runId,
+                  outcomeRecordKey(specificationOperation.operationId),
+                  taskTrackerFactsObservedEvent(
+                    specificationOperation.operationId,
+                    makeFocusedTaskWorkSpecificationFactsObserved(
+                      specificationOperation,
+                      specificationForTask(plannedAttempt.taskId)
+                    )
+                  )
+                )
                 const operation = makeTaskAttemptPlanOperation({
                   operationId: OperationId.make(`plan-${plannedAttempt.attemptId}`),
                   plannedAttempt,
-                  predecessorOperationIds: []
+                  predecessorOperationIds: [specificationOperation.operationId]
                 })
                 yield* journal.append(
                   runId,
                   attemptPlanRecordKey(plannedAttempt.attemptId),
                   TaskAttemptPlannedEvent.make({ operation, version: workflowJournalEventVersion })
+                )
+                const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+                  operationId: OperationId.make(`worktree-${plannedAttempt.attemptId}`),
+                  plannedAttempt,
+                  predecessorOperationIds: [operation.operationId]
+                })
+                yield* journal.append(
+                  runId,
+                  intentRecordKey(worktreeOperation.operationId),
+                  TaskWorktreeReconciliationIntendedEvent.make({
+                    operation: worktreeOperation,
+                    version: workflowJournalEventVersion
+                  })
+                )
+                yield* journal.append(
+                  runId,
+                  outcomeRecordKey(worktreeOperation.operationId),
+                  TaskWorktreeReadyEvent.make({
+                    operationId: worktreeOperation.operationId,
+                    proof: PlannedWorktreeReady.make({
+                      baseSha: plannedAttempt.baseSha,
+                      branch: plannedAttempt.branch,
+                      headSha: plannedAttempt.baseSha,
+                      worktree: plannedAttempt.worktree
+                    }),
+                    version: workflowJournalEventVersion
+                  })
                 )
                 yield* journal.append(
                   runId,
@@ -912,6 +1155,29 @@ const makeRunActivationDriverImplementation = () => {
                     plannedAttempt,
                     version: workflowJournalEventVersion
                   })
+                )
+              })
+
+            const appendClaimReleaseThroughJournal = (plannedAttempt: PlannedTaskAttempt) =>
+              Effect.gen(function* () {
+                const release = TaskClaimRelease.make({
+                  claim: claimForAttempt(plannedAttempt),
+                  operationId: OperationId.make(`external-success-release:claim-${plannedAttempt.attemptId}`)
+                })
+                const operation = makeTaskClaimReleaseOperation({
+                  authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+                  predecessorOperationIds: [release.claim.operationId],
+                  release
+                })
+                yield* journal.append(
+                  runId,
+                  intentRecordKey(release.operationId),
+                  TaskClaimReleaseIntendedEvent.make({ operation, version: workflowJournalEventVersion })
+                )
+                yield* journal.append(
+                  runId,
+                  outcomeRecordKey(release.operationId),
+                  TaskClaimReleasedEvent.make({ release, version: workflowJournalEventVersion })
                 )
               })
 
@@ -1047,8 +1313,9 @@ const makeRunActivationDriverImplementation = () => {
                 ),
                 Match.when("SettleRetainedAttempt", () =>
                   Effect.gen(function* () {
-                    yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptA.attemptId, runId })
                     yield* appendTerminalReportThroughJournal(attemptA)
+                    yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptA.attemptId, runId })
+                    yield* appendClaimReleaseThroughJournal(attemptA)
                     heldPosition = "NoTaskPosition"
                     executorCalls += 1
                     if (otherHeldPositions > 0) {
@@ -1063,8 +1330,9 @@ const makeRunActivationDriverImplementation = () => {
                 ),
                 Match.when("SettleOtherRetainedAttempt", () =>
                   Effect.gen(function* () {
-                    yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptB.attemptId, runId })
                     yield* appendTerminalReportThroughJournal(attemptB)
+                    yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptB.attemptId, runId })
+                    yield* appendClaimReleaseThroughJournal(attemptB)
                     otherHeldPositions -= 1
                     executorCalls += 1
                     yield* Deferred.succeed(command.acknowledged, undefined)
@@ -1077,12 +1345,9 @@ const makeRunActivationDriverImplementation = () => {
                     if (decision._tag === "Deferred") {
                       return yield* Effect.die("independent task must fit released capacity")
                     }
-                    yield* activeController.bindPlannedAttemptPosition(
-                      taskC,
-                      { attemptId: attemptC.attemptId, runId },
-                      admissionProposalC.id
-                    )
+                    yield* activeController.bindPlannedAttemptPosition(decision.reservation, attemptC)
                     yield* appendResponsibilityThroughJournal(attemptC)
+                    yield* activeController.complete(decision.reservation)
                     heldPosition = "AttemptC"
                     independentTaskAdmitted = true
                     executorCalls += 1
@@ -1092,8 +1357,9 @@ const makeRunActivationDriverImplementation = () => {
                 ),
                 Match.when("SettleIndependentTask", () =>
                   Effect.gen(function* () {
-                    yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptC.attemptId, runId })
                     yield* appendTerminalReportThroughJournal(attemptC)
+                    yield* activeController.releasePlannedAttemptPosition({ attemptId: attemptC.attemptId, runId })
+                    yield* appendClaimReleaseThroughJournal(attemptC)
                     heldPosition = "NoTaskPosition"
                     independentTaskAdmitted = false
                     independentTaskSettled = true
@@ -1125,8 +1391,9 @@ const makeRunActivationDriverImplementation = () => {
                     const trackerObservationsBefore = records.filter(
                       ({ event }) => event._tag === "TaskTrackerFactsObserved"
                     ).length
-                    finalityProof = yield* runStabilizedDelivery(target, relation).pipe(
+                    finalityProof = yield* runStabilizedDelivery(target, runId, relation).pipe(
                       Effect.provideService(DeliveryActionExecutor, finalityExecutor),
+                      Effect.provideService(DeliveryAcceptedFactPublication, acceptedFactPublication),
                       Effect.provideService(PlannedTaskAttemptPlanner, finalityPlanner)
                     )
                     trackerCalls +=

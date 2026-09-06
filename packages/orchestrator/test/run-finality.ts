@@ -19,6 +19,7 @@ export const completedRunFinalityFixture = (input: {
 }) => {
   const observedJournalPosition = 3
   const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make(`completed-finality:${input.runId}`),
     input.target
   )

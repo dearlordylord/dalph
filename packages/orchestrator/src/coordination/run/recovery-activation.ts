@@ -3,6 +3,7 @@ import { Context, Effect, Match, Option, Schema } from "effect"
 import {
   TaskWorkSpecification,
   type IntegrationTarget,
+  type PlannedAttemptExecutorReport,
   type PlannedTaskAttempt,
   plannedTaskAttemptEquivalence,
   RunId,
@@ -61,6 +62,7 @@ import {
 } from "../admission/integration-target-resource.js"
 import { OperationId } from "../../workflow/identity.js"
 import { isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { isDependencySatisfied } from "../../authorities/task-tracker/task.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import {
   latestTaskClaimReacquisitionDirection,
@@ -69,6 +71,7 @@ import {
 import { targetPromotionRequestIdForCandidate } from "../../workflow/protocols/target-promotion/events.js"
 import type { TargetPromotionRuntimeInput } from "../../workflow/protocols/target-promotion/runtime.js"
 import {
+  currentAcceptedPlannedAttemptExecutorLifecycleFor,
   latestPlannedAttemptExecutorEvidence,
   latestAcceptedPlannedAttemptExecutorEvidence,
   latestPlannedAttemptExecutorProjectionIssue,
@@ -82,6 +85,10 @@ import {
   sameAttemptChoiceRequestId,
   sameAttemptChoiceSubject
 } from "../../workflow/protocols/attempt-choice/events.js"
+import {
+  appliedContinueChoicePositionForExactRevision,
+  latestAppliedContinueChoicePositionForAttempt
+} from "../../workflow/protocols/attempt-choice/continue-choice-authority.js"
 import {
   restartChoiceWasInvalidatedByLaterSpecification,
   restartClaimAuthorityAtApplication
@@ -102,15 +109,9 @@ import {
   makeTargetLineageObservationOperation,
   makeTaskWorktreeObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
-  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
   makeTrackerGraphObservationOperation,
   TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
-import {
-  activeWorkAuthorityRefreshGitReadOperationMatchesIntent,
-  ordinaryGitReadOperationFor,
-  type ActiveWorkAuthorityRefreshGitReadOperation
-} from "../../workflow/protocols/active-work-authority-refresh/events.js"
 import { currentTaskClaimAuthority } from "../frontier/task-claim-authority.js"
 import { decideTargetLineage } from "../../workflow/protocols/git-reconciliation/decision.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -131,21 +132,14 @@ type FocusedTaskClaim = Extract<
   Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>["observation"],
   { readonly _tag: "FocusedTaskClaimFacts" }
 >["observation"]
-type ContinuationGitReadIntentEvent = Extract<
-  JournalRecord["event"],
-  { readonly _tag: "GitReadIntentRecorded" | "ActiveWorkAuthorityRefreshGitReadIntentRecorded" }
->
-
-type ActiveRefreshGitReadIntentRecord = Omit<JournalRecord, "event"> & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "ActiveWorkAuthorityRefreshGitReadIntentRecorded" }>
+type ContinuationGitReadIntentEvent = Extract<JournalRecord["event"], { readonly _tag: "GitReadIntentRecorded" }>
+type TrackerReadIntentRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerReadIntentRecorded" }>
 }
 
-/** Both ordinary and active-refresh Git intents authorize one observed read. */
+/** An ordinary Git intent authorizes one observed read. */
 const isContinuationGitReadIntentEvent = (event: JournalRecord["event"]): event is ContinuationGitReadIntentEvent =>
-  event._tag === "GitReadIntentRecorded" || event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded"
-
-const isActiveRefreshGitReadIntentRecord = (record: JournalRecord): record is ActiveRefreshGitReadIntentRecord =>
-  record.event._tag === "ActiveWorkAuthorityRefreshGitReadIntentRecorded"
+  event._tag === "GitReadIntentRecorded"
 
 /**
  * A tracker notification or timer selects one exact currently-running
@@ -197,20 +191,6 @@ const isExecutorReportFor = (event: JournalRecord["event"], plannedAttempt: Plan
   event._tag === "PlannedAttemptExecutorWorkReported" &&
   event.report.correlation.runId === plannedAttempt.runId &&
   event.report.correlation.attemptId === plannedAttempt.attemptId
-
-/** The Operator's Continue authority names the immutable plan and one exact changed authored fingerprint. */
-const appliedContinueChoicePositionFor = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
-  plannedAttempt: PlannedTaskAttempt,
-  observedTaskRevision?: PlannedTaskAttempt["taskRevision"]
-): JournalPosition | undefined =>
-  records.findLast(
-    ({ event }) =>
-      event._tag === "AttemptChoiceApplied" &&
-      event.choice === "ContinueExistingAttempt" &&
-      plannedTaskAttemptEquivalence(event.subject.plannedAttempt, plannedAttempt) &&
-      (observedTaskRevision === undefined || event.subject.observedTaskRevision === observedTaskRevision)
-  )?.position
 
 type AppliedStopRecord = Omit<JournalRecord, "event"> & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptChoiceApplied" }> & {
@@ -1396,6 +1376,19 @@ type WorkflowOperationResponsibility = Exclude<
 >
 
 /** Derives which journaled responsibilities are still unfinished. */
+const anyAttemptDispositionApplied = (
+  dispositions: ReadonlyArray<PlannedAttemptExecutorDisposition | undefined>
+): boolean => dispositions.some((disposition) => disposition !== undefined)
+
+const terminalTaskStateDisposition = (
+  report: Extract<PlannedAttemptExecutorReport, { readonly _tag: "ExecutorWorkTerminal" }>,
+  explicitAttemptDispositionApplied: boolean,
+  externalSuccess: PlannedAttemptExecutorDisposition | undefined
+): PlannedAttemptExecutorDisposition =>
+  explicitAttemptDispositionApplied || report.result._tag === "Accepted" || externalSuccess === undefined
+    ? ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({ report })
+    : externalSuccess
+
 export const deriveJournalResponsibilityFacts = (
   runState: ReconstructedRunState,
   activationBaselinePosition: Option.Option<JournalPosition> = Option.none(),
@@ -1461,6 +1454,19 @@ export const deriveJournalResponsibilityFacts = (
   const taskCompletedSuccessfully = (taskId: TaskId, graph: TaskDagSnapshot | undefined = ordinaryTaskGraph): boolean =>
     Option.getOrUndefined(Option.fromUndefinedOr(graph).pipe(Option.flatMap((current) => current.lifecycleOf(taskId))))
       ?._tag === "CompletedSuccessfully"
+  const unfinishedPrerequisiteTaskIds = (
+    taskId: TaskId,
+    graph: TaskDagSnapshot | undefined = ordinaryTaskGraph
+  ): ReadonlyArray<TaskId> =>
+    graph === undefined
+      ? []
+      : graph
+          .prerequisitesOf(taskId)
+          .filter((prerequisiteTaskId) => {
+            const lifecycle = Option.getOrUndefined(graph.lifecycleOf(prerequisiteTaskId))
+            return lifecycle === undefined || !isDependencySatisfied(lifecycle)
+          })
+          .toSorted((left, right) => left.localeCompare(right))
   const changedTaskSpecification = (plannedAttempt: PlannedTaskAttempt) => {
     const attempt = attemptOpportunity(plannedAttempt)
     const activeSpecificationRecord =
@@ -1597,7 +1603,7 @@ export const deriveJournalResponsibilityFacts = (
     const changedSpecification = changedTaskSpecification(responsibility.plannedAttempt)
     const exactChangedSpecificationMayContinue = () =>
       Option.isSome(changedSpecification) &&
-      appliedContinueChoicePositionFor(
+      appliedContinueChoicePositionForExactRevision(
         records,
         responsibility.plannedAttempt,
         changedSpecification.value.fingerprint
@@ -1756,37 +1762,7 @@ export const deriveJournalResponsibilityFacts = (
         event.plannedAttempt.baseSha === responsibility.plannedAttempt.baseSha &&
         positionIsAfter(position, gitAuthorityBaseline)
     )
-    const latestActiveRefreshWorktreeFailure = records.findLast(
-      ({ event, position }) =>
-        attemptRefreshOpportunity._tag === "ActiveWorkAuthorityRefresh" &&
-        event._tag === "ActiveWorkAuthorityRefreshGitReadFailed" &&
-        event.operation._tag === "ReadTaskWorktree" &&
-        plannedTaskAttemptEquivalence(event.operation.plannedAttempt, responsibility.plannedAttempt) &&
-        positionIsAfter(position, gitAuthorityBaseline)
-    )
-    const latestActiveRefreshTargetLineageFailure = records.findLast(
-      ({ event, position }) =>
-        attemptRefreshOpportunity._tag === "ActiveWorkAuthorityRefresh" &&
-        event._tag === "ActiveWorkAuthorityRefreshGitReadFailed" &&
-        event.operation._tag === "ReadTargetLineage" &&
-        plannedTaskAttemptEquivalence(event.operation.plannedAttempt, responsibility.plannedAttempt) &&
-        positionIsAfter(position, gitAuthorityBaseline)
-    )
     const deriveGitConstraint = (): PlannedAttemptExecutorDisposition | undefined => {
-      if (
-        latestActiveRefreshWorktreeFailure !== undefined &&
-        (latestWorktreeObservation === undefined ||
-          latestWorktreeObservation.position < latestActiveRefreshWorktreeFailure.position)
-      ) {
-        return ResponsibilityDisposition.UnreadableFactWait({ boundary: "Git" })
-      }
-      if (
-        latestActiveRefreshTargetLineageFailure !== undefined &&
-        (latestTargetLineageObservation === undefined ||
-          latestTargetLineageObservation.position < latestActiveRefreshTargetLineageFailure.position)
-      ) {
-        return ResponsibilityDisposition.UnreadableFactWait({ boundary: "Git" })
-      }
       if (
         latestWorktreeObservation?.event._tag === "PlannedAttemptWorktreeObserved" &&
         latestWorktreeObservation.event.observation._tag !== "PlannedWorktreeReady"
@@ -1806,8 +1782,15 @@ export const deriveJournalResponsibilityFacts = (
       return undefined
     }
     const gitConstraint = deriveGitConstraint()
+    const acquiredClaimWasSettledByIntegration =
+      acquiredClaim?._tag === "TaskClaimAcquired" &&
+      records.some(
+        ({ event }) =>
+          event._tag === "IntegrationFinalitySettled" &&
+          isExactTaskClaim(event.claim.originalClaim, acquiredClaim.claim)
+      )
     const deriveExternalSuccessRelease = () =>
-      acquiredClaim?._tag === "TaskClaimAcquired"
+      acquiredClaim?._tag === "TaskClaimAcquired" && !acquiredClaimWasSettledByIntegration
         ? makeTaskClaimReleaseOperation({
             authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
             predecessorOperationIds: [acquiredClaim.claim.operationId],
@@ -1862,9 +1845,15 @@ export const deriveJournalResponsibilityFacts = (
       immutableRunTarget
     )
     const suspensionRequested = () => ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested()
+    const executorWorkStopped = safelySuspended || report?.report._tag === "ExecutorWorkTerminal"
+    const explicitAttemptDispositionApplied = anyAttemptDispositionApplied([
+      restartDisposition,
+      stopDisposition,
+      cancellationDisposition
+    ])
     const externalSuccessDisposition = (): PlannedAttemptExecutorDisposition | undefined => {
       if (!taskCompletedSuccessfully(responsibility.plannedAttempt.taskId, attemptTaskGraph)) return undefined
-      if (!safelySuspended) return suspensionRequested()
+      if (!executorWorkStopped) return suspensionRequested()
       if (externalSuccessRelease === undefined || externalSuccessReleaseSettled()) {
         return ResponsibilityDisposition.TaskExternalSuccessSettled()
       }
@@ -1881,11 +1870,24 @@ export const deriveJournalResponsibilityFacts = (
           ? ResponsibilityDisposition.TaskLifecycleConstraint({ lifecycle: "TerminalWithoutSuccess" })
           : suspensionRequested()
       }
+      const prerequisiteTaskIds = unfinishedPrerequisiteTaskIds(responsibility.plannedAttempt.taskId, attemptTaskGraph)
+      const [firstPrerequisiteTaskId, ...remainingPrerequisiteTaskIds] = prerequisiteTaskIds
+      if (firstPrerequisiteTaskId !== undefined) {
+        return safelySuspended
+          ? ResponsibilityDisposition.TaskDependencyConstraint({
+              prerequisiteTaskIds: [firstPrerequisiteTaskId, ...remainingPrerequisiteTaskIds]
+            })
+          : suspensionRequested()
+      }
       return externalSuccessDisposition()
     }
     const taskStateDisposition = (): PlannedAttemptExecutorDisposition | undefined => {
       if (report?.report._tag === "ExecutorWorkTerminal") {
-        return ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({ report: report.report })
+        return terminalTaskStateDisposition(
+          report.report,
+          explicitAttemptDispositionApplied,
+          externalSuccessDisposition()
+        )
       }
       if (restartDisposition !== undefined) return restartDisposition
       if (stopDisposition !== undefined) return stopDisposition
@@ -1906,6 +1908,12 @@ export const deriveJournalResponsibilityFacts = (
     }
     const constraintDisposition = (): PlannedAttemptExecutorDisposition | undefined => {
       if (claimConstraint !== undefined) {
+        if (
+          attemptRefreshOpportunity._tag === "ActiveWorkAuthorityRefresh" &&
+          claimConstraint._tag === "TaskClaimUnreadableWait"
+        ) {
+          return claimConstraint
+        }
         return safelySuspended ? (appliedReacquisitionDirection ?? claimConstraint) : suspensionRequested()
       }
       if (gitConstraint?._tag === "UnreadableFactWait") return gitConstraint
@@ -2095,7 +2103,7 @@ const activeWorkAuthorityRefreshFreshnessBaselineForAttempt = (
     activationBaselinePosition.value,
     latestCompletedRunPauseCyclePosition(runState),
     latestCompletedTaskPauseCyclePositionFor(runState, plannedAttempt.taskId, currentGraph),
-    appliedContinueChoicePositionFor(runState.workflowHistory.records, plannedAttempt)
+    latestAppliedContinueChoicePositionForAttempt(runState.workflowHistory.records, plannedAttempt)
   ].filter((position): position is JournalPosition => position !== undefined)
   return Option.some({
     _tag: "AttemptAuthorityFreshnessBaseline",
@@ -2130,7 +2138,7 @@ const attemptAuthorityFreshnessBaseline = (
     executingEstablishedAt === undefined ? Option.getOrUndefined(taskBaseline) : undefined,
     latestCompletedRunPauseCyclePosition(runState),
     latestCompletedTaskPauseCyclePositionFor(runState, plannedAttempt.taskId, currentGraph),
-    appliedContinueChoicePositionFor(runState.workflowHistory.records, plannedAttempt)
+    latestAppliedContinueChoicePositionForAttempt(runState.workflowHistory.records, plannedAttempt)
   ].filter((position): position is JournalPosition => position !== undefined)
   return positions.length === 0
     ? Option.none()
@@ -2493,12 +2501,7 @@ const exactContinuationTrackerReadIntentFor = (
       operation._tag === family &&
       operation.operationId === operationId &&
       record.key === intentRecordKey(operationId) &&
-      (operation._tag === "ReadTrackerGraph" && operation.purpose === "ActiveWorkAuthorityRefresh"
-        ? (() => {
-            const exactPlan = recordedTaskAttemptPlanFor(records, plannedAttempt)
-            return exactPlan !== undefined && operation.predecessorOperationIds.includes(exactPlan.operationId)
-          })()
-        : continuationTrackerReadHasExactPlanPredecessor(records, operation, plannedAttempt))
+      continuationTrackerReadHasExactPlanPredecessor(records, operation, plannedAttempt)
     )
   })
   if (intent?.event._tag !== "TaskTrackerReadIntentRecorded") return undefined
@@ -2577,8 +2580,10 @@ type ContinuationDecision = {
   readonly transition?: RunnableFrontierTransition
 }
 
-const continuationTrackerReadNeedsRefresh = (status: ContinuationTrackerReadStatus): boolean =>
-  status._tag === "Pending" || status._tag === "Unreadable"
+const continuationTrackerReadNeedsRefresh = (
+  status: ContinuationTrackerReadStatus,
+  activeWorkAuthorityCheck: boolean
+): boolean => status._tag === "Pending" || (!activeWorkAuthorityCheck && status._tag === "Unreadable")
 
 const continuationTrackerReadRefreshPosition = (status: ContinuationTrackerReadStatus): JournalPosition =>
   status._tag === "Pending" ? status.intent.position : status.outcome.position
@@ -2597,6 +2602,7 @@ const continuationTrackerReadRefreshTransition = (
       status._tag === "Pending" && status.intent.event.operation._tag === "ReadTrackerGraph"
         ? status.intent.event.operation
         : makeTrackerGraphObservationOperation(
+            { _tag: "AttemptContinuation" },
             OperationId.make(
               `continuation:${plannedAttempt.attemptId}:after:${continuationTrackerReadRefreshPosition(status)}:${operationSuffix}`
             ),
@@ -2651,10 +2657,10 @@ const trackerGraphReadHasOutcome = (records: ReadonlyArray<JournalRecord>, opera
 
 /**
  * Finds the one complete graph read that stabilization started after its
- * accepted first graph. The intent is the only durable purpose marker for
- * this second read: it has no explicitly covered task subset and names every
- * graph-read operation known before the intent, including the accepted first
- * graph. A still-pending intent is recoverable; any typed tracker outcome
+ * accepted first graph. Its ordinary operation carries the typed
+ * post-quiescence cause and names the exact quiescent graph, has no explicitly
+ * covered task subset, and names every graph-read operation known before the
+ * intent. A still-pending intent is recoverable; any typed tracker outcome
  * settles it and therefore forces a new operation on a later activation.
  */
 export const pendingActiveRefreshG2OperationFor = (
@@ -2669,7 +2675,8 @@ export const pendingActiveRefreshG2OperationFor = (
       record.runId !== runId ||
       event._tag !== "TaskTrackerReadIntentRecorded" ||
       event.operation._tag !== "ReadTrackerGraph" ||
-      event.operation.purpose !== "ActiveWorkAuthorityRefresh" ||
+      event.operation.cause._tag !== "PostQuiescenceReconfirmation" ||
+      event.operation.cause.quiescentGraphOperationId !== currentGraph.operationId ||
       record.position <= currentGraph.recordedAt ||
       taskTrackerTargetKey(event.operation.target) !== taskTrackerTargetKey(target) ||
       event.operation.readShape.explicitlyCoveredTaskIds.length !== 0 ||
@@ -2697,14 +2704,10 @@ export const pendingActiveRefreshG2OperationFor = (
   })?.event.operation
 
 /**
- * Reuses the exact graph operation whose active-refresh intent survived a
- * process boundary. The current journal position is not an operation
- * identity: appending the intent necessarily moves it. This first active
- * graph read keeps its established deterministic identity; its typed purpose,
- * current run record, covered task set, target, and plan predecessors identify
- * the selected active subjects. Historical graph intents without that purpose
- * are ordinary reads and fail closed here, even when their human-readable
- * operation ID uses the active-refresh prefix.
+ * Reuses the exact ordinary authority-check graph operation that survived a
+ * process boundary. Its typed cause, current run record, covered task set,
+ * target, and exact plan predecessors distinguish it from continuation and
+ * post-quiescence reads.
  */
 export const pendingActiveRefreshGraphReadFor = (
   records: ReadonlyArray<JournalRecord>,
@@ -2722,8 +2725,8 @@ export const pendingActiveRefreshGraphReadFor = (
   return records.findLast((record): record is TrackerGraphReadIntentRecord => {
     const { event } = record
     if (event._tag !== "TaskTrackerReadIntentRecorded" || event.operation._tag !== "ReadTrackerGraph") return false
+    if (event.operation.cause._tag !== "ExecutingWorkAuthorityCheck") return false
     if (record.runId !== runId) return false
-    if (event.operation.purpose !== "ActiveWorkAuthorityRefresh") return false
     if (trackerGraphReadHasOutcome(records, event.operation.operationId)) return false
     if (taskTrackerTargetKey(event.operation.target) !== taskTrackerTargetKey(target)) return false
     if (!sameStringSequence([...event.operation.readShape.explicitlyCoveredTaskIds].toSorted(), expectedTaskIds)) {
@@ -2745,6 +2748,7 @@ type ActiveRefreshGraphReadSelection = {
   readonly _tag: "ActiveRefreshGraphReadSelection"
   readonly baseline: JournalPosition
   readonly operation: TrackerGraphObservationOperation
+  readonly representativeAttempt: PlannedTaskAttempt
 }
 
 const activeRefreshGraphReadSelectionFor = (
@@ -2762,11 +2766,12 @@ const activeRefreshGraphReadSelectionFor = (
       (plannedAttempt, index, candidates) =>
         plannedAttempt.runId === runState.runId &&
         activeWorkAuthorityRefreshSubjectsContain(opportunity.subjects, plannedAttempt) &&
-        latestPlannedAttemptExecutorEvidence(records, plannedAttempt)?.report._tag === "ExecutorWorkExecuting" &&
+        currentAcceptedPlannedAttemptExecutorLifecycleFor(records, plannedAttempt)._tag === "Executing" &&
         candidates.findIndex((candidate) => plannedTaskAttemptEquivalence(candidate, plannedAttempt)) === index
     )
     .toSorted((left, right) => left.runId.localeCompare(right.runId) || left.attemptId.localeCompare(right.attemptId))
-  if (activeAttempts.length === 0) return undefined
+  const representativeAttempt = activeAttempts[0]
+  if (representativeAttempt === undefined) return undefined
   const baseline = activationBaselinePosition.value
   const predecessorOperationIds = activeAttempts.flatMap((plannedAttempt) => {
     const plan = recordedTaskAttemptPlanFor(records, plannedAttempt)
@@ -2776,9 +2781,11 @@ const activeRefreshGraphReadSelectionFor = (
   return {
     _tag: "ActiveRefreshGraphReadSelection",
     baseline,
+    representativeAttempt,
     operation:
       pendingOperation ??
-      makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
+      makeTrackerGraphObservationOperation(
+        { _tag: "ExecutingWorkAuthorityCheck" },
         OperationId.make(`active-refresh:${runState.runId}:after:${baseline}:graph`),
         target,
         predecessorOperationIds,
@@ -2814,6 +2821,7 @@ const decisionWithoutCurrentGraph = (
       operation:
         activeRefreshGraphOperation ??
         makeTrackerGraphObservationOperation(
+          { _tag: "AttemptContinuation" },
           OperationId.make(`continuation:${plannedAttempt.attemptId}:after:${baseline}:graph`),
           target,
           /* v8 ignore next -- @preserve A recovered executor responsibility always has its durable plan operation. */
@@ -2832,7 +2840,8 @@ const decisionAfterCurrentSpecification = (
   records: ReadonlyArray<JournalRecord>,
   currentGraphObservation: CurrentGraphObservation,
   currentSpecificationRecord: TrackerFactsRecord,
-  integrationTarget: Option.Option<IntegrationTarget>
+  integrationTarget: Option.Option<IntegrationTarget>,
+  activeWorkAuthorityCheck: boolean
 ): ContinuationDecision => {
   const plannedAttempt = transition.plannedAttempt
   const authorizedClaim = authorizedClaimForAttempt(records, plannedAttempt)
@@ -2859,7 +2868,7 @@ const decisionAfterCurrentSpecification = (
     plannedAttempt.taskId,
     plannedAttempt
   )
-  if (claimRefresh !== undefined && continuationTrackerReadNeedsRefresh(claimRefresh)) {
+  if (claimRefresh !== undefined && continuationTrackerReadNeedsRefresh(claimRefresh, activeWorkAuthorityCheck)) {
     return {
       transition: continuationTrackerReadRefreshTransition(
         claimRefresh,
@@ -2946,7 +2955,7 @@ const decisionAfterCurrentSpecification = (
             worktreeObservationOperationId: currentWorktreeEvent.operationId
           }
         })
-      const appliedContinueChoicePosition = appliedContinueChoicePositionFor(records, plannedAttempt)
+      const appliedContinueChoicePosition = latestAppliedContinueChoicePositionForAttempt(records, plannedAttempt)
       if (Option.isNone(integrationTarget)) {
         return {
           explanation: FrontierExplanation.IntegrationConfigurationWait({
@@ -2994,36 +3003,71 @@ const decisionAfterCurrentSpecification = (
         /* v8 ignore next -- @preserve A valid applied Continue choice is authorized only by its exact safely-suspended executor evidence. */
         return currentExecutorEvidence.report._tag === "ExecutorWorkSafelySuspended" ? { transition: continuation } : {}
       }
+      const pendingTargetLineageOperation = records.findLast(({ event, position }) => {
+        if (
+          position <= currentWorktreeRecord.position ||
+          event._tag !== "GitReadIntentRecorded" ||
+          event.operation._tag !== "ReadTargetLineage" ||
+          !plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plannedAttempt) ||
+          event.operation.integrationTarget.repository !== integrationTarget.value.repository ||
+          event.operation.integrationTarget.ref !== integrationTarget.value.ref ||
+          !sameStringSequence(event.operation.predecessorOperationIds, [currentWorktreeEvent.operationId])
+        ) {
+          return false
+        }
+        return !gitReadIntentHasOutcome(records, event.operation.operationId)
+      })
       return {
         transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
-          operation: makeTargetLineageObservationOperation({
-            integrationTarget: integrationTarget.value,
-            operationId: OperationId.make(
-              `continuation:${plannedAttempt.attemptId}:after:${currentWorktreeRecord.position}:target-lineage`
-            ),
-            plannedAttempt,
-            predecessorOperationIds: [currentWorktreeEvent.operationId]
-          }),
+          operation:
+            pendingTargetLineageOperation?.event._tag === "GitReadIntentRecorded" &&
+            pendingTargetLineageOperation.event.operation._tag === "ReadTargetLineage"
+              ? pendingTargetLineageOperation.event.operation
+              : makeTargetLineageObservationOperation({
+                  integrationTarget: integrationTarget.value,
+                  operationId: OperationId.make(
+                    `continuation:${plannedAttempt.attemptId}:after:${currentWorktreeRecord.position}:target-lineage`
+                  ),
+                  plannedAttempt,
+                  predecessorOperationIds: [currentWorktreeEvent.operationId]
+                }),
           plannedAttempt
         })
       }
     }
     if (currentWorktreeRecord !== undefined) return { transition }
+    const worktreePredecessorOperationIds = [
+      /* v8 ignore next -- @preserve A recovered executor responsibility always has its durable plan operation. */
+      ...(planOperationId === undefined ? [] : [planOperationId]),
+      currentGraphObservation.event.operationId,
+      currentSpecificationRecord.event.operationId,
+      currentClaimRecord.event.operationId
+    ].toSorted()
+    const pendingWorktreeOperation = records.findLast(({ event, position }) => {
+      if (
+        position <= currentClaimRecord.position ||
+        event._tag !== "GitReadIntentRecorded" ||
+        event.operation._tag !== "ReadTaskWorktree" ||
+        !plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plannedAttempt) ||
+        !sameStringSequence([...event.operation.predecessorOperationIds].toSorted(), worktreePredecessorOperationIds)
+      ) {
+        return false
+      }
+      return !gitReadIntentHasOutcome(records, event.operation.operationId)
+    })
     return {
       transition: RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
-        operation: makeTaskWorktreeObservationOperation({
-          operationId: OperationId.make(
-            `continuation:${plannedAttempt.attemptId}:after:${currentClaimRecord.position}:worktree`
-          ),
-          plannedAttempt,
-          predecessorOperationIds: [
-            /* v8 ignore next -- @preserve A recovered executor responsibility always has its durable plan operation. */
-            ...(planOperationId === undefined ? [] : [planOperationId]),
-            currentGraphObservation.event.operationId,
-            currentSpecificationRecord.event.operationId,
-            currentClaimRecord.event.operationId
-          ]
-        }),
+        operation:
+          pendingWorktreeOperation?.event._tag === "GitReadIntentRecorded" &&
+          pendingWorktreeOperation.event.operation._tag === "ReadTaskWorktree"
+            ? pendingWorktreeOperation.event.operation
+            : makeTaskWorktreeObservationOperation({
+                operationId: OperationId.make(
+                  `continuation:${plannedAttempt.attemptId}:after:${currentClaimRecord.position}:worktree`
+                ),
+                plannedAttempt,
+                predecessorOperationIds: worktreePredecessorOperationIds
+              }),
         plannedAttempt
       })
     }
@@ -3097,67 +3141,58 @@ const unsettledExecutorCommandFor = (
 }
 
 /**
- * A restart may reconcile a persisted Suspend intent to an exact executing
- * report. The same active refresh performs one later stabilization pass; that
- * pass must retain the executing responsibility instead of appending a second
- * Suspend intent. A later activation may reconsider the still-live constraint
- * once this projection is before its new read boundary.
+ * A restart may reconcile a persisted Suspend intent to an exact Executing,
+ * Safe, or Terminal report. The same active refresh performs one later
+ * stabilization pass before admitting independent work. A later activation
+ * may reconsider any still-live constraint once this projection is before its
+ * new read boundary.
  */
-const isExecutingCommandProjectionAfter =
+const isExactCommandBoundaryEvidenceAfter =
   (activationBaselinePosition: Option.Option<JournalPosition>) =>
   (candidate: ReturnType<typeof plannedAttemptExecutorEvidence>[number]): boolean =>
     [
-      candidate.source._tag === "CommandProjection",
-      candidate.report._tag === "ExecutorWorkExecuting",
+      candidate.source._tag === "BoundaryCommandResponse" || candidate.source._tag === "CommandProjection",
       positionIsAfter(candidate.observedAt, activationBaselinePosition)
     ].every(Boolean)
 
 const isSuspendCommandIntent = (record: JournalRecord | undefined): boolean =>
   record?.event._tag === "PlannedAttemptExecutorCommandIntended" && record.event.command === "Suspend"
 
-const suspensionWasReconciledToExecutingDuringActiveRefresh = (
+const suspensionWasReconciledDuringActiveRefresh = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
   activationBaselinePosition: Option.Option<JournalPosition>
 ): boolean => {
-  const currentEvidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
-  if (currentEvidence === undefined || currentEvidence.report._tag !== "ExecutorWorkExecuting") {
+  // A later accepted lifecycle report can supersede this exact command
+  // response or projection. The activation-local boundary still needs its
+  // historical provenance after Safe or Terminal.
+  const evidence = plannedAttemptExecutorEvidence(records, plannedAttempt).findLast(
+    isExactCommandBoundaryEvidenceAfter(activationBaselinePosition)
+  )
+  if (
+    evidence === undefined ||
+    (evidence.source._tag !== "BoundaryCommandResponse" && evidence.source._tag !== "CommandProjection")
+  ) {
     return false
   }
-  // `latestPlannedAttemptExecutorEvidence` intentionally prefers an accepted
-  // lifecycle report when a newer projection repeats the same report. The
-  // refresh boundary needs the projection's provenance even in that unchanged
-  // case, so select the newest exact command projection explicitly.
-  const evidence = plannedAttemptExecutorEvidence(records, plannedAttempt).findLast(
-    isExecutingCommandProjectionAfter(activationBaselinePosition)
-  )
-  if (evidence === undefined || evidence.source._tag !== "CommandProjection") return false
-  const { commandOrdinal, projectionOrdinal } = evidence.source
-  const projection = records.findLast(
-    ({ event, position }) =>
-      position === evidence.observedAt &&
-      event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-      event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
-      event.commandOrdinal === commandOrdinal &&
-      event.projectionOrdinal === projectionOrdinal
-  )
-  if (projection?.event._tag !== "PlannedAttemptExecutorCommandProjectionObserved") return false
-  const { commandOrdinal: projectionCommandOrdinal } = projection.event
+  const { commandOrdinal } = evidence.source
   const intent = records.findLast(
     ({ event, position }) =>
-      position < projection.position &&
+      position < evidence.observedAt &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      event.plannedAttempt.runId === plannedAttempt.runId &&
       event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
-      Number(event.ordinal) === Number(projectionCommandOrdinal)
+      Number(event.ordinal) === Number(commandOrdinal)
   )
   return isSuspendCommandIntent(intent)
 }
 
 /**
- * The process-local boundary reached when every reconstructed executing attempt
- * has reconciled a persisted Suspend intent to an exact executing report. The
- * runtime uses this typed fact to admit no further transition until the
- * enclosing stabilization performs its mandatory complete G2 read.
+ * The process-local boundary contains either the exact active-refresh
+ * opportunity subjects with a qualifying post-baseline exact Suspend
+ * reconciliation, retained until G2,
+ * or every captured active subject while replaying an already-journaled pending
+ * G2 intent.
  */
 export type ActiveRefreshRuntimeBoundary = {
   readonly _tag: "ActiveRefreshRuntimeBoundary"
@@ -3209,24 +3244,29 @@ const belongsToActiveRefreshBoundary = (
 }
 
 const activeRefreshRuntimeBoundaryFor = (
-  runState: Pick<ReconstructedRunState, "runId" | "responsibility" | "workflowHistory">,
+  runState: Pick<ReconstructedRunState, "runId" | "workflowHistory">,
   baseline: Option.Option<JournalPosition>,
   opportunity: RunActivationOpportunity
 ): ActiveRefreshRuntimeBoundary | undefined => {
   if (opportunity._tag !== "ActiveWorkAuthorityRefresh") return undefined
   const records = runState.workflowHistory.records
-  /** Only the reducer's unfinished entries may become active subjects; historical plans are not responsibilities. */
-  const plannedAttempts = runState.responsibility.entries
-    .flatMap((entry) => (entry._tag === "PlannedAttemptExecutorWorkResponsibility" ? [entry.plannedAttempt] : []))
+  /**
+   * The immutable opportunity can retain an exact subject after Safe or
+   * Terminal changes its current executor disposition. Reconstruct only
+   * attempts with durable responsibility history; unrelated historical plans
+   * never become boundary subjects.
+   */
+  const activeAttempts = records
+    .flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+      isActiveRefreshSubject(runState.runId, event.plannedAttempt, opportunity)
+        ? [event.plannedAttempt]
+        : []
+    )
     .filter(
       (plannedAttempt, index, all) =>
         all.findIndex((candidate) => plannedTaskAttemptEquivalence(candidate, plannedAttempt)) === index
     )
-  const runningAttempts = plannedAttempts.filter(
-    (plannedAttempt) =>
-      isActiveRefreshSubject(runState.runId, plannedAttempt, opportunity) &&
-      latestPlannedAttemptExecutorEvidence(records, plannedAttempt)?.report._tag === "ExecutorWorkExecuting"
-  )
   const currentGraph = currentCompleteGraphObservationAfter(records, Option.none())
   const pendingG2Operation =
     currentGraph === undefined
@@ -3235,19 +3275,10 @@ const activeRefreshRuntimeBoundaryFor = (
           operationId: currentGraph.event.operationId,
           recordedAt: currentGraph.position
         })
-  const reconciledAttempts = runningAttempts.filter((plannedAttempt) =>
-    suspensionWasReconciledToExecutingDuringActiveRefresh(records, plannedAttempt, baseline)
+  const reconciledAttempts = activeAttempts.filter((plannedAttempt) =>
+    suspensionWasReconciledDuringActiveRefresh(records, plannedAttempt, baseline)
   )
-  if (
-    runningAttempts.length === 0 ||
-    (pendingG2Operation === undefined &&
-      !runningAttempts.every((plannedAttempt) =>
-        reconciledAttempts.some((reconciled) => plannedTaskAttemptEquivalence(reconciled, plannedAttempt))
-      ))
-  ) {
-    return undefined
-  }
-  const boundaryAttempts = pendingG2Operation === undefined ? reconciledAttempts : runningAttempts
+  const boundaryAttempts = pendingG2Operation === undefined ? reconciledAttempts : activeAttempts
   const runId = boundaryAttempts[0]?.runId
   if (runId === undefined) return undefined
   return {
@@ -3319,7 +3350,7 @@ const observedSafeContinuationDecision = (
     plannedAttempt.taskId,
     plannedAttempt
   )
-  if (refresh !== undefined && continuationTrackerReadNeedsRefresh(refresh)) {
+  if (refresh !== undefined && continuationTrackerReadNeedsRefresh(refresh, activeRefreshSubject)) {
     return {
       transition: continuationTrackerReadRefreshTransition(refresh, "ReadTrackerGraph", target, plannedAttempt, [
         /* v8 ignore next -- @preserve A recovered executor responsibility always retains its exact task-plan operation. */
@@ -3327,6 +3358,7 @@ const observedSafeContinuationDecision = (
       ])
     }
   }
+  if (activeRefreshSubject && refresh?._tag === "Unreadable") return {}
   if (currentGraphObservation === undefined) {
     return decisionWithoutCurrentGraph(plannedAttempt, planOperationId, records, activationBaselinePosition)
   }
@@ -3338,7 +3370,10 @@ const observedSafeContinuationDecision = (
     plannedAttempt.taskId,
     plannedAttempt
   )
-  if (specificationRefresh !== undefined && continuationTrackerReadNeedsRefresh(specificationRefresh)) {
+  if (
+    specificationRefresh !== undefined &&
+    continuationTrackerReadNeedsRefresh(specificationRefresh, activeRefreshSubject)
+  ) {
     return {
       transition: continuationTrackerReadRefreshTransition(
         specificationRefresh,
@@ -3353,6 +3388,7 @@ const observedSafeContinuationDecision = (
       )
     }
   }
+  if (activeRefreshSubject && specificationRefresh?._tag === "Unreadable") return {}
   const currentSpecificationRecord = records.findLast(
     (record): record is TrackerFactsRecord =>
       record.event._tag === "TaskTrackerFactsObserved" &&
@@ -3377,7 +3413,8 @@ const observedSafeContinuationDecision = (
           records,
           currentGraphObservation,
           currentSpecificationRecord,
-          integrationTarget
+          integrationTarget,
+          activeRefreshSubject
         )
   return activeRefreshSubject &&
     (decision.transition?._tag === "ObservePlannedAttemptExecutorWork" ||
@@ -3421,85 +3458,132 @@ export const gitReadIntentHasOutcome = (records: ReadonlyArray<JournalRecord>, o
     ({ event }) =>
       (event._tag === "PlannedAttemptWorktreeObserved" && event.operationId === operationId) ||
       (event._tag === "TargetLineageObserved" && event.operationId === operationId) ||
-      (event._tag === "ActiveWorkAuthorityRefreshGitReadFailed" && event.operation.operationId === operationId) ||
       (event._tag === "AttemptRestartAuthorityReadFailed" &&
         event.failure._tag !== "AttemptRestartTaskFactsReadFailure" &&
         event.operationId === operationId)
   )
 
 /**
- * An active-refresh intent is a distinct journal authority from an ordinary
- * Git intent. Only its exact active failure or matching read observation can
- * settle it; an ordinary intent with the same operation identity is never
- * allowed to make the active read look complete.
+ * Proves that an ordinary Git intent belongs to the planned-attempt
+ * continuation chain. The Git intent itself establishes identity, not its
+ * controller; ownership comes from the exact plan, graph cause, and focused
+ * predecessor chain.
  */
-const activeRefreshGitReadIntentHasOutcome = (
+const continuationGitReadIntentHasExactCausalOwner = (
   records: ReadonlyArray<JournalRecord>,
-  intent: ActiveRefreshGitReadIntentRecord
+  event: ContinuationGitReadIntentEvent
 ): boolean => {
-  const activeOperation = intent.event.operation
-  const ordinaryIntentSharesIdentity = records.some(
-    ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation.operationId === activeOperation.operationId
-  )
-  if (ordinaryIntentSharesIdentity) return false
-  const ordinaryOperation = ordinaryGitReadOperationFor(activeOperation)
-  return records.some(({ event }) => {
-    if (event._tag === "ActiveWorkAuthorityRefreshGitReadFailed") {
-      return activeWorkAuthorityRefreshGitReadOperationMatchesIntent(event.operation, activeOperation)
-    }
-    if (ordinaryOperation._tag === "ReadTaskWorktree") {
-      return event._tag === "PlannedAttemptWorktreeObserved" && event.operationId === ordinaryOperation.operationId
-    }
-    return (
-      event._tag === "TargetLineageObserved" &&
-      event.operationId === ordinaryOperation.operationId &&
-      plannedTaskAttemptEquivalence(event.plannedAttempt, ordinaryOperation.plannedAttempt)
+  const operation = event.operation
+  if (operation._tag === "ReadTargetLineage") {
+    const lineageIntent = records.findLast(
+      ({ event: candidate }) =>
+        candidate._tag === "GitReadIntentRecorded" &&
+        candidate.operation._tag === "ReadTargetLineage" &&
+        candidate.operation.operationId === operation.operationId
     )
-  })
-}
-
-/**
- * A process can die after an active Git intent but before its provider call.
- * Recover only the latest still-unsettled active intent for each exact
- * RunId/AttemptId subject, preserving its read kind, ordinal, and operation
- * identity. Ordinary Git intents are deliberately handled by a separate path
- * below.
- */
-const pendingActiveRefreshGitReadIntentsFor = (
-  records: ReadonlyArray<JournalRecord>,
-  runId: RunId,
-  opportunity: RunActivationOpportunity
-): ReadonlyArray<ActiveRefreshGitReadIntentRecord> => {
-  if (opportunity._tag !== "ActiveWorkAuthorityRefresh") return []
-  const pending = records.filter(
-    (record): record is ActiveRefreshGitReadIntentRecord =>
-      isActiveRefreshGitReadIntentRecord(record) &&
-      record.event.operation.authority.runId === runId &&
-      record.event.operation.plannedAttempt.runId === runId &&
-      activeWorkAuthorityRefreshSubjectsContain(opportunity.subjects, record.event.operation.plannedAttempt) &&
-      !activeRefreshGitReadIntentHasOutcome(records, record)
-  )
-  return pending.filter(
-    (record, index, candidates) =>
-      candidates.findLastIndex(
+    if (lineageIntent === undefined) return false
+    return operation.predecessorOperationIds.some((operationId) => {
+      const worktreeIntent = records.findLast(
         ({ event: candidate }) =>
-          candidate.operation.authority.runId === record.event.operation.authority.runId &&
-          candidate.operation.authority.attemptId === record.event.operation.authority.attemptId
-      ) === index
+          candidate._tag === "GitReadIntentRecorded" &&
+          candidate.operation._tag === "ReadTaskWorktree" &&
+          candidate.operation.operationId === operationId &&
+          plannedTaskAttemptEquivalence(candidate.operation.plannedAttempt, operation.plannedAttempt)
+      )
+      const worktreeObservation = records.findLast(
+        ({ event: candidate, position }) =>
+          candidate._tag === "PlannedAttemptWorktreeObserved" &&
+          candidate.operationId === operationId &&
+          worktreeIntent !== undefined &&
+          position > worktreeIntent.position &&
+          position < lineageIntent.position
+      )
+      return (
+        worktreeIntent?.event._tag === "GitReadIntentRecorded" &&
+        worktreeObservation?.event._tag === "PlannedAttemptWorktreeObserved" &&
+        continuationGitReadIntentHasExactCausalOwner(records, worktreeIntent.event)
+      )
+    })
+  }
+  const exactPlan = recordedTaskAttemptPlanFor(records, operation.plannedAttempt)
+  if (exactPlan === undefined || !operation.predecessorOperationIds.includes(exactPlan.operationId)) return false
+  const worktreeIntent = records.findLast(
+    ({ event: candidate }) =>
+      candidate._tag === "GitReadIntentRecorded" &&
+      candidate.operation._tag === "ReadTaskWorktree" &&
+      candidate.operation.operationId === operation.operationId &&
+      plannedTaskAttemptEquivalence(candidate.operation.plannedAttempt, operation.plannedAttempt)
+  )
+  if (worktreeIntent === undefined) return false
+  const trackerIntents = records.filter(
+    (candidate): candidate is TrackerReadIntentRecord =>
+      candidate.event._tag === "TaskTrackerReadIntentRecorded" &&
+      candidate.position < worktreeIntent.position &&
+      operation.predecessorOperationIds.includes(candidate.event.operation.operationId)
+  )
+  const graphIntent = trackerIntents.findLast(
+    ({ event: { operation: candidate } }) =>
+      candidate._tag === "ReadTrackerGraph" &&
+      (candidate.cause._tag === "AttemptContinuation" || candidate.cause._tag === "ExecutingWorkAuthorityCheck") &&
+      candidate.predecessorOperationIds.includes(exactPlan.operationId) &&
+      candidate.readShape.explicitlyCoveredTaskIds.includes(operation.plannedAttempt.taskId)
+  )
+  if (graphIntent?.event.operation._tag !== "ReadTrackerGraph") return false
+  const graph = graphIntent.event.operation
+  const graphOutcome = records.findLast(
+    ({ event: candidate, position }) =>
+      candidate._tag === "TaskTrackerFactsObserved" &&
+      candidate.operationId === graph.operationId &&
+      position > graphIntent.position &&
+      position < worktreeIntent.position &&
+      (candidate.observation._tag === "CompleteTaskTrackerFacts" ||
+        candidate.observation._tag === "UnchangedTaskTrackerFactsReconfirmed") &&
+      taskTrackerObservationMatchesRead(candidate.observation, graph)
+  )
+  if (graphOutcome === undefined) return false
+  const specificationIntent = trackerIntents.findLast(
+    ({ event: { operation: candidate }, position }) =>
+      candidate._tag === "ReadTaskWorkSpecification" &&
+      position > graphOutcome.position &&
+      candidate.taskId === operation.plannedAttempt.taskId &&
+      taskTrackerTargetKey(candidate.target) === taskTrackerTargetKey(graph.target) &&
+      candidate.predecessorOperationIds.includes(exactPlan.operationId) &&
+      candidate.predecessorOperationIds.includes(graph.operationId)
+  )
+  if (specificationIntent?.event.operation._tag !== "ReadTaskWorkSpecification") return false
+  const specification = specificationIntent.event.operation
+  const specificationOutcome = records.findLast(
+    ({ event: candidate, position }) =>
+      candidate._tag === "TaskTrackerFactsObserved" &&
+      candidate.operationId === specification.operationId &&
+      position > specificationIntent.position &&
+      position < worktreeIntent.position &&
+      candidate.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
+      taskTrackerObservationMatchesRead(candidate.observation, specification)
+  )
+  if (specificationOutcome === undefined) return false
+  const claimIntent = trackerIntents.findLast(
+    ({ event: { operation: candidate }, position }) =>
+      candidate._tag === "ReadTaskClaim" &&
+      position > specificationOutcome.position &&
+      candidate.taskId === operation.plannedAttempt.taskId &&
+      taskTrackerTargetKey(candidate.target) === taskTrackerTargetKey(graph.target) &&
+      candidate.predecessorOperationIds.includes(exactPlan.operationId) &&
+      candidate.predecessorOperationIds.includes(graph.operationId) &&
+      candidate.predecessorOperationIds.includes(specification.operationId)
+  )
+  if (claimIntent?.event.operation._tag !== "ReadTaskClaim") return false
+  const claim = claimIntent.event.operation
+  return records.some(
+    ({ event: candidate, position }) =>
+      candidate._tag === "TaskTrackerFactsObserved" &&
+      candidate.operationId === claim.operationId &&
+      position > claimIntent.position &&
+      position < worktreeIntent.position &&
+      candidate.observation._tag === "FocusedTaskClaimFacts" &&
+      taskTrackerObservationMatchesRead(candidate.observation, claim)
   )
 }
-
-/**
- * The exact active Git reads still awaiting an outcome at this evaluation.
- * Delivery uses these process-local facts only to distinguish an active
- * recovery replay from the ordinary accepted continuation it projects.
- */
-export const pendingActiveRefreshGitReadOperationsFor = (
-  records: ReadonlyArray<JournalRecord>,
-  runId: RunId,
-  opportunity: RunActivationOpportunity
-): ReadonlyArray<ActiveWorkAuthorityRefreshGitReadOperation> =>
-  pendingActiveRefreshGitReadIntentsFor(records, runId, opportunity).map(({ event }) => event.operation)
 
 const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecoveredRunState")(function* (
   runState: ReconstructedRunState,
@@ -3634,17 +3718,13 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     activationBaselinePosition,
     opportunity
   )
-  const pendingGitReadIntents = runState.workflowHistory.records
+  const pendingContinuationGitReadIntents = runState.workflowHistory.records
     .filter(
-      (
-        record
-      ): record is JournalRecord & {
-        readonly event: Extract<JournalRecord["event"], { readonly _tag: "GitReadIntentRecorded" }>
-      } => {
-        if (record.event._tag !== "GitReadIntentRecorded") return false
-        const operationId = record.event.operation.operationId
-        return !gitReadIntentHasOutcome(runState.workflowHistory.records, operationId)
-      }
+      (record): record is JournalRecord & { readonly event: ContinuationGitReadIntentEvent } =>
+        record.event._tag === "GitReadIntentRecorded" &&
+        !positionIsAfter(record.position, activationBaselinePosition) &&
+        !gitReadIntentHasOutcome(runState.workflowHistory.records, record.event.operation.operationId) &&
+        continuationGitReadIntentHasExactCausalOwner(runState.workflowHistory.records, record.event)
     )
     .filter(
       (record, index, pending) =>
@@ -3652,47 +3732,52 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           plannedTaskAttemptEquivalence(event.operation.plannedAttempt, record.event.operation.plannedAttempt)
         ) === index
     )
-  const pendingActiveRefreshGitReadIntents = pendingActiveRefreshGitReadIntentsFor(
-    runState.workflowHistory.records,
-    runState.runId,
-    opportunity
+  const pendingContinuationAttemptIds = new Set(
+    pendingContinuationGitReadIntents.map(({ event }) => event.operation.plannedAttempt.attemptId)
   )
-  const pendingAttemptIds = new Set([
-    ...pendingGitReadIntents.map(({ event }) => event.operation.plannedAttempt.attemptId),
-    ...pendingActiveRefreshGitReadIntents.map(({ event }) => event.operation.plannedAttempt.attemptId)
-  ])
-  const pendingTargetLineageAttemptIds = new Set([
-    ...pendingGitReadIntents.flatMap(({ event }) =>
-      event.operation._tag === "ReadTargetLineage" ? [event.operation.plannedAttempt.attemptId] : []
-    ),
-    ...pendingActiveRefreshGitReadIntents.flatMap(({ event }) =>
-      event.operation._tag === "ReadTargetLineage" ? [event.operation.plannedAttempt.attemptId] : []
+  const pendingContinuationGitReadTransitions = pendingContinuationGitReadIntents.map(({ event }) =>
+    event.operation._tag === "ReadTaskWorktree"
+      ? RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
+          operation: event.operation,
+          plannedAttempt: event.operation.plannedAttempt
+        })
+      : RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
+          operation: event.operation,
+          plannedAttempt: event.operation.plannedAttempt
+        })
+  )
+  const activeReadyTransitions = responsibilityFacts.flatMap((facts) =>
+    facts._tag === "PlannedAttemptExecutorFreshFacts" &&
+    facts.disposition._tag === "Ready" &&
+    isActiveRefreshSubject(settlementRunState.runId, facts.responsibility.plannedAttempt, opportunity)
+      ? [
+          RunnableFrontierTransition.ObservePlannedAttemptExecutorWork({
+            acceptedProgress: facts.disposition.acceptedProgress,
+            plannedAttempt: facts.responsibility.plannedAttempt
+          })
+        ]
+      : []
+  )
+  const activeReadyAttemptIds = new Set(activeReadyTransitions.map(({ plannedAttempt }) => plannedAttempt.attemptId))
+  const activeRefreshHasSettledUnreadableGraph =
+    activeRefreshGraphSelection !== undefined &&
+    activeReadyTransitions.some(
+      ({ plannedAttempt }) =>
+        latestContinuationTrackerReadStatusAfter(
+          runState.workflowHistory.records,
+          activeRefreshGraphSelection.baseline,
+          "ReadTrackerGraph",
+          establishedRunTarget,
+          plannedAttempt.taskId,
+          plannedAttempt
+        )?._tag === "Unreadable"
     )
-  ])
-  const pendingGitReadTransitions = [
-    ...pendingGitReadIntents.map(({ event }) =>
-      event.operation._tag === "ReadTaskWorktree"
-        ? RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
-            operation: event.operation,
-            plannedAttempt: event.operation.plannedAttempt
-          })
-        : RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
-            operation: event.operation,
-            plannedAttempt: event.operation.plannedAttempt
-          })
+  const continuationInputs = [
+    ...ordinary.transitions.filter(
+      (transition) =>
+        !("plannedAttempt" in transition && activeReadyAttemptIds.has(transition.plannedAttempt.attemptId))
     ),
-    ...pendingActiveRefreshGitReadIntents.map(({ event }) => {
-      const operation = ordinaryGitReadOperationFor(event.operation)
-      return operation._tag === "ReadTaskWorktree"
-        ? RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({
-            operation,
-            plannedAttempt: operation.plannedAttempt
-          })
-        : RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({
-            operation,
-            plannedAttempt: operation.plannedAttempt
-          })
-    })
+    ...activeReadyTransitions
   ]
   /**
    * A complete graph is one activation boundary, even when several captured
@@ -3700,7 +3785,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
    * focused decision subject-local, but expose only the one shared graph
    * action selected from the activation's immutable baseline.
    */
-  const continuationDecisions = ordinary.transitions.reduce<ReadonlyArray<ContinuationDecision>>(
+  const continuationDecisions = continuationInputs.reduce<ReadonlyArray<ContinuationDecision>>(
     (decisions, transition) => {
       const decision =
         transition._tag !== "ObservePlannedAttemptExecutorWork"
@@ -3712,7 +3797,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
               integrationTarget,
               opportunity
             )
-          : pendingAttemptIds.has(transition.plannedAttempt.attemptId)
+          : pendingContinuationAttemptIds.has(transition.plannedAttempt.attemptId)
             ? {}
             : continuationDecisionFor(
                 transition,
@@ -3746,32 +3831,40 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     },
     []
   )
+  const activeRefreshGraphBootstrapTransitions =
+    activeRefreshGraphSelection !== undefined &&
+    activeRefreshGraphObservation === undefined &&
+    !activeRefreshHasSettledUnreadableGraph &&
+    !continuationDecisions.some(({ transition }) => transition?._tag === "ObservePlannedAttemptContinuationGraph")
+      ? [
+          RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+            operation: activeRefreshGraphSelection.operation,
+            plannedAttempt: activeRefreshGraphSelection.representativeAttempt
+          })
+        ]
+      : []
   /**
-   * A prior activation may have recorded a non-exact executor projection while
-   * its command remained unmatched. A later ordinary Run entry is itself a
-   * bounded reread boundary, so ask the opaque executor again before declaring
-   * the responsibility a permanent wait. The position gate prevents a fresh
-   * temporary/unreadable result from immediately retrying in the same entry.
+   * A non-exact projection recorded while a command is still unsettled is
+   * ambiguous command evidence and must be reconciled on a later Run entry.
+   * Passive projection evidence has no such retry authority.
    */
-  const projectionRetryDecisions = responsibilityFacts.flatMap((facts) => {
+  const commandProjectionRetryDecisions = responsibilityFacts.flatMap((facts) => {
     if (
       facts._tag !== "PlannedAttemptExecutorFreshFacts" ||
       facts.disposition._tag !== "PlannedAttemptExecutorProjectionWait"
     ) {
       return []
     }
-    const issue = latestPlannedAttemptExecutorProjectionIssue(
+    const plannedAttempt = facts.responsibility.plannedAttempt
+    const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(
       runState.workflowHistory.records,
-      facts.responsibility.plannedAttempt
+      plannedAttempt
     )
-    return issue !== undefined && !positionIsAfter(issue.observedAt, activationBaselinePosition)
-      ? [
-          {
-            transition: RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({
-              plannedAttempt: facts.responsibility.plannedAttempt
-            })
-          }
-        ]
+    const issue = latestPlannedAttemptExecutorProjectionIssue(runState.workflowHistory.records, plannedAttempt)
+    return unsettledCommand !== undefined &&
+      issue !== undefined &&
+      !positionIsAfter(issue.observedAt, activationBaselinePosition)
+      ? [RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt })]
       : []
   })
   const integrationResourceSnapshot = currentIntegrationResources ?? (yield* integrationResources.snapshot)
@@ -3822,7 +3915,6 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   })
   const targetLineageByAttemptId = new Map(activationTargetLineage)
   const targetLineageRefreshRequiredAttemptIds = new Set([
-    ...pendingTargetLineageAttemptIds,
     ...recordedTaskAttemptPlans(runState.workflowHistory.records).flatMap(({ plannedAttempt }) => {
       const graphObservedAt = currentGraphObservationForTask(plannedAttempt.taskId)?.position
       const lineageObservedAt = runState.workflowHistory.records.findLast(
@@ -3929,7 +4021,6 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           !integrationResourceSnapshot.activeResponsibilityPositions.has(responsibility.queuedAt) &&
           graphWasCheckedAfterClaim &&
           claimIsExact &&
-          !pendingAttemptIds.has(responsibility.plannedAttempt.attemptId) &&
           targetLineageReadIsRequired &&
           !integration.transitions.some(
             (transition) =>
@@ -4003,15 +4094,36 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
       ...integration.explanations
     ],
     transitions: [
-      ...pendingGitReadTransitions,
+      ...pendingContinuationGitReadTransitions,
       ...claimObservationTransitions,
+      ...activeRefreshGraphBootstrapTransitions,
       ...continuationDecisions.flatMap(({ transition }) => (transition === undefined ? [] : [transition])),
-      ...projectionRetryDecisions.map(({ transition }) => transition),
+      ...commandProjectionRetryDecisions,
       ...integrationLineageTransitions,
       ...integration.transitions
     ]
   }
-  const pendingGitReadReconciliations = new Set<RunnableFrontierTransition>(pendingGitReadTransitions)
+  const activeAuthorityReadTags = new Set<RunnableFrontierTransition["_tag"]>([
+    "ObservePlannedAttemptContinuationGraph",
+    "ObservePlannedAttemptContinuationSpecification",
+    "ObservePlannedAttemptContinuationClaim",
+    "ObservePlannedAttemptContinuationWorktree",
+    "ObservePlannedAttemptContinuationTargetLineage"
+  ])
+  const activeAuthorityReadsPending =
+    opportunity._tag === "ActiveWorkAuthorityRefresh" &&
+    frontier.transitions.some((transition) => activeAuthorityReadTags.has(transition._tag))
+  const sequencedFrontier = activeAuthorityReadsPending
+    ? {
+        ...frontier,
+        transitions: frontier.transitions.filter(
+          (transition) =>
+            transition._tag !== "SuspendPlannedAttemptExecutorWork" ||
+            !isActiveRefreshSubject(transition.plannedAttempt.runId, transition.plannedAttempt, opportunity)
+        )
+      }
+    : frontier
+  const pendingGitReadReconciliations = new Set<RunnableFrontierTransition>(pendingContinuationGitReadTransitions)
   const heldIntegrationTaskIds = new Set(
     deriveIntegrationAdmission(runState.workflowHistory.records).responsibilities.flatMap((responsibility) =>
       responsibility._tag === "StartedIntegrationResponsibility" &&
@@ -4024,7 +4136,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     acceptedAt: runState.appliedThrough,
     activeRefreshBoundary: activeRefreshRuntimeBoundaryFor(settlementRunState, activationBaselinePosition, opportunity),
     frontier: filterFrontierForActivePauses(
-      frontier,
+      sequencedFrontier,
       settlementRunState,
       currentTaskGraph,
       pendingGitReadReconciliations,
@@ -4045,10 +4157,11 @@ export const frontierForActivationOpportunity = (
   if (opportunity._tag === "OrdinaryRunEntry") return frontier
 
   /**
-   * Once every executing subject has reconciled its persisted Suspend intent
-   * to executing, suppress only those exact subjects until the enclosing
-   * stabilization performs its mandatory G2. Independent task transitions
-   * remain visible to the ordinary runtime phase after G2.
+   * Once an exact subject has reconciled its persisted Suspend intent to
+   * Executing, the activation-local boundary retains that subject through a
+   * later Safe or Terminal report until the enclosing stabilization performs
+   * its mandatory G2. Independent task transitions remain visible to the
+   * ordinary runtime phase after G2.
    */
   if (activeRefreshBoundary !== undefined) {
     return {
@@ -4062,13 +4175,6 @@ export const frontierForActivationOpportunity = (
   return {
     ...frontier,
     transitions: frontier.transitions.filter((transition) => {
-      if (
-        "plannedAttempt" in transition &&
-        isActiveRefreshSubject(transition.plannedAttempt.runId, transition.plannedAttempt, opportunity) &&
-        suspensionWasReconciledToExecutingDuringActiveRefresh(records, transition.plannedAttempt, baseline)
-      ) {
-        return false
-      }
       if (transition._tag !== "SuspendPlannedAttemptExecutorWork") return true
       if (
         latestPlannedAttemptExecutorEvidence(records, transition.plannedAttempt)?.report._tag !==

@@ -35,19 +35,18 @@ interface DeliveryStoryAcceptanceTest {
     | "prototypes/reducer-lab/src/cassette-lab.smoke.ts"
 }
 
+type DeliveryStoryCassetteKey = `authored:${string}` | `controlled:${string}` | `integration-finality:${string}`
+
 type DeliveryStoryBeatCoverage =
   | {
       readonly _tag: "DemonstratedBySpine"
       readonly acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
-      readonly cassetteKeys: readonly ["authored:deliveryInvariantStoryCapstone"]
+      readonly cassetteKeys: readonly ["authored:deliveryInvariantStory"]
     }
   | {
       readonly _tag: "DemonstratedByMaintainedSlice"
       readonly acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
-      readonly cassetteKeys: readonly [
-        `authored:${string}` | `integration-finality:${string}`,
-        ...ReadonlyArray<`authored:${string}` | `integration-finality:${string}`>
-      ]
+      readonly cassetteKeys: readonly [DeliveryStoryCassetteKey, ...ReadonlyArray<DeliveryStoryCassetteKey>]
     }
   | {
       readonly _tag: "NotImplemented"
@@ -61,26 +60,32 @@ interface DeliveryStoryBeatManifestEntry {
   readonly coverage: DeliveryStoryBeatCoverage
 }
 
+const scenarioTest = (name: string): DeliveryStoryAcceptanceTest => ({
+  declaration: "it.effect",
+  name,
+  sourceFile: "packages/dalph/test/cassettes/scenario.test.ts"
+})
+
 const capstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
   declaration: "it.effect",
   name,
   sourceFile: "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
 })
 
-const chronologyTest = capstoneTest("executes DS01 through DS13 in one maintained chronology")
-const finalityTest = capstoneTest(
-  "executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality"
-)
-const ds16NegativeTest = capstoneTest(
-  "rejects DS16 evidence without the rejected CAS attempt or with a pre-request stale read"
-)
+const topologyTest = capstoneTest("consumes a staggered graph while restart-added X waits for recovered capacity")
+const restartTest = capstoneTest("preserves the double-diamond middle positions across coordinator restart")
+const issue268CheckpointTable = capstoneTest("emits the exact DS01 through DS13 delivery checkpoint table")
+const issue268OccurrenceCassette = capstoneTest("consumes exactly the accepted issue 268 occurrence inventory")
+const issue268CassetteKeys = ["controlled:issue268Ds01ThroughDs13"] as const
+const issue268BeatIds = deliveryStoryBeatIds.slice(0, deliveryStoryBeatIds.indexOf("DS-13") + 1)
 
-const spine = (
+const slice = (
   beatId: DeliveryStoryBeatId,
+  cassetteKeys: readonly [DeliveryStoryCassetteKey, ...ReadonlyArray<DeliveryStoryCassetteKey>],
   ...acceptanceTests: readonly [DeliveryStoryAcceptanceTest, ...ReadonlyArray<DeliveryStoryAcceptanceTest>]
 ): DeliveryStoryBeatManifestEntry => ({
   beatId,
-  coverage: { _tag: "DemonstratedBySpine", acceptanceTests, cassetteKeys: ["authored:deliveryInvariantStoryCapstone"] }
+  coverage: { _tag: "DemonstratedByMaintainedSlice", acceptanceTests, cassetteKeys }
 })
 
 const missing = (beatId: DeliveryStoryBeatId, reason: string): DeliveryStoryBeatManifestEntry => ({
@@ -89,32 +94,35 @@ const missing = (beatId: DeliveryStoryBeatId, reason: string): DeliveryStoryBeat
 })
 
 /**
- * Machine-readable coverage for the prose story. The maintained capstone proves
- * the accepted DS01-DS17 chronology; later unsupported behavior remains explicit
- * instead of fabricated.
+ * Machine-readable coverage for the prose story. The long spine proves the
+ * double-diamond graph/restart path; one maintained story proves one narrower beat;
+ * unsupported combined behavior remains explicit instead of fabricated.
  */
 export const deliveryStoryManifest = {
-  cassetteKey: "authored:deliveryInvariantStoryCapstone" as const,
-  cassetteAcceptanceTests: [chronologyTest, finalityTest, ds16NegativeTest],
+  cassetteKey: "authored:deliveryInvariantStory" as const,
+  cassetteAcceptanceTests: [topologyTest, restartTest],
   sourceDocument: "docs/DELIVERY-STORY.md" as const,
   beats: [
-    spine("DS-01", chronologyTest),
-    spine("DS-02", chronologyTest),
-    spine("DS-03", chronologyTest),
-    spine("DS-04", chronologyTest),
-    spine("DS-05", chronologyTest),
-    spine("DS-06", chronologyTest),
-    spine("DS-07", chronologyTest),
-    spine("DS-08", chronologyTest),
-    spine("DS-09", chronologyTest),
-    spine("DS-10", chronologyTest),
-    spine("DS-11", chronologyTest),
-    spine("DS-12", chronologyTest),
-    spine("DS-13", chronologyTest),
-    spine("DS-14", finalityTest),
-    spine("DS-15", finalityTest),
-    spine("DS-16", finalityTest),
-    spine("DS-17", finalityTest),
+    ...issue268BeatIds.map((beatId) =>
+      slice(beatId, issue268CassetteKeys, issue268CheckpointTable, issue268OccurrenceCassette)
+    ),
+    slice(
+      "DS-14",
+      ["authored:acceptedResultRestartsIntoIntegration"],
+      scenarioTest("continues an accepted result after process death and crosses its integration cutoff once")
+    ),
+    missing(
+      "DS-15",
+      "No named acceptance test proves the candidate's exact ordered expected-head and accepted-result parents for this beat."
+    ),
+    missing(
+      "DS-16",
+      "The maintained stale-head cassette detects H2 before compare-and-set; it does not send the beat's rejected exact-head offer."
+    ),
+    missing(
+      "DS-17",
+      "The separate A-finality spine settles A, but does not first reconcile a stale head and rebuild its successor candidate."
+    ),
     missing(
       "DS-18",
       "No maintained run reopens a tracker lifecycle wait for C; Operator task Unpause is a different phenomenon."

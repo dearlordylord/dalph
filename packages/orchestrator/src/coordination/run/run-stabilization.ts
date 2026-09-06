@@ -1,3 +1,4 @@
+import type { RunId } from "@dalph/contracts"
 import { Effect, Option, Stream } from "effect"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import {
@@ -18,15 +19,13 @@ import {
 } from "../frontier/run-finality.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationIdAllocator } from "../../workflow/protocols/task-attempt-planning/plan.js"
-import {
-  makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation,
-  makeTrackerGraphObservationOperation
-} from "../../workflow/registry/operation.js"
+import { makeTrackerGraphObservationOperation } from "../../workflow/registry/operation.js"
 import { executeTrackerGraphRead } from "../delivery/delivery-action-adapter-common.js"
 import { RunFinalityDecision } from "../frontier/frontier.js"
 import { InRunJournal, type InRunJournalService, type JournalRecord } from "../../workflow-journal/store.js"
 import type { RunActivationOpportunity } from "./run-activation-opportunity.js"
 import { pendingActiveRefreshG2OperationFor } from "./recovery-activation.js"
+import { currentAcceptedPlannedAttemptExecutorLifecycleFor } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 
 type EstablishedTrackerGraph = Extract<
   DeliveryRuntimeQuiescence["current"]["trackerGraph"],
@@ -119,6 +118,7 @@ const proofOf = (target: TrackerTarget, quiescence: DeliveryRuntimeQuiescence): 
  */
 const proofOfAcceptedActiveRefreshG2 = <E>(
   target: TrackerTarget,
+  expectedRunId: RunId,
   evaluations: DeliveryRuntimeInput<E>,
   accepted: DeliveryRuntimeEvaluation,
   subjects: ReadonlyArray<ActiveRefreshPreG2Subject>
@@ -131,7 +131,11 @@ const proofOfAcceptedActiveRefreshG2 = <E>(
     if (accepted.proposedActions._tag === "DeliveryProposalOwnershipConflict") {
       return unsettledProof(accepted.acceptedAt)
     }
-    const phaseTwo = yield* runDeliveryRuntimePhase(evaluations, DeliveryRuntimePhase.ActiveRefreshPostG2(subjects))
+    const phaseTwo = yield* runDeliveryRuntimePhase(
+      expectedRunId,
+      evaluations,
+      DeliveryRuntimePhase.ActiveRefreshPostG2(subjects)
+    )
     return proofOf(target, phaseTwo)
   })
 
@@ -165,6 +169,7 @@ const awaitAcceptedObservation = Effect.fn("RunStabilization.awaitAcceptedObserv
 })
 
 const shouldReturnInitialProof = (quiescence: DeliveryRuntimeQuiescence): boolean => {
+  if (quiescence._tag === "TaskWorkAdmissionStalledRuntimeQuiescence") return true
   if (quiescence._tag === "PassiveRuntimeQuiescence") return !passiveCancellationApplied(quiescence)
   return false
 }
@@ -200,6 +205,7 @@ const distinctOperationIds = <OperationId>(operationIds: ReadonlyArray<Operation
  */
 export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function* <E>(
   target: TrackerTarget,
+  expectedRunId: RunId,
   evaluations: DeliveryRuntimeInput<E>,
   opportunity: RunActivationOpportunity = { _tag: "OrdinaryRunEntry" }
 ) {
@@ -209,7 +215,7 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
         opportunity._tag === "ActiveWorkAuthorityRefresh"
           ? DeliveryRuntimePhase.ActiveRefreshPreG2([...opportunity.subjects])
           : DeliveryRuntimePhase.Ordinary
-      const firstQuiescence = yield* runDeliveryRuntimePhase(evaluations, firstPhase)
+      const firstQuiescence = yield* runDeliveryRuntimePhase(expectedRunId, evaluations, firstPhase)
       if (shouldReturnInitialProof(firstQuiescence)) {
         return proofOf(target, firstQuiescence)
       }
@@ -221,17 +227,29 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
       if (currentGraph === undefined) return proofOf(target, firstQuiescence)
 
       const journal = yield* InRunJournal
+      const currentGraphOperationId = currentGraph.observation.operationId
+      const reconstructedRunId = firstQuiescence.current.runId
+      let journalRecords: ReadonlyArray<JournalRecord> = []
+      if (reconstructedRunId !== undefined) journalRecords = yield* journal.read(reconstructedRunId)
+      if (
+        opportunity._tag === "ActiveWorkAuthorityRefresh" &&
+        currentGraph.observation.cause._tag !== "ExecutingWorkAuthorityCheck"
+      ) {
+        const everyActiveSubjectSettled = [...opportunity.subjects].every(
+          (subject) => currentAcceptedPlannedAttemptExecutorLifecycleFor(journalRecords, subject)._tag === "Settled"
+        )
+        if (everyActiveSubjectSettled) {
+          return proofOf(target, yield* runDeliveryRuntimePhase(expectedRunId, evaluations))
+        }
+        return proofOf(target, firstQuiescence)
+      }
+
       const applicationExitAdmission = (yield* DeliveryRuntimeResources).applicationExitAdmission
       const owner = yield* applicationExitAdmission.acquireForwardOwner("InterruptibleBoundary").pipe(Effect.option)
       if (Option.isNone(owner)) return proofOf(target, firstQuiescence)
-
-      const currentGraphOperationId = currentGraph.observation.operationId
-      const runId = firstQuiescence.current.runId
-      let journalRecords: ReadonlyArray<JournalRecord> = []
-      if (runId !== undefined) journalRecords = yield* journal.read(runId)
       const pendingOperation =
-        opportunity._tag === "ActiveWorkAuthorityRefresh" && runId !== undefined
-          ? pendingActiveRefreshG2OperationFor(journalRecords, runId, target, {
+        opportunity._tag === "ActiveWorkAuthorityRefresh" && reconstructedRunId !== undefined
+          ? pendingActiveRefreshG2OperationFor(journalRecords, reconstructedRunId, target, {
               operationId: currentGraphOperationId,
               recordedAt: currentGraph.observation.recordedAt
             })
@@ -241,15 +259,14 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
         (yield* Effect.gen(function* () {
           const allocator = yield* OperationIdAllocator
           const operationId = yield* allocator.allocate()
-          const journaledPredecessors = yield* journaledPredecessorOperationIds(journal, runId, target)
+          const journaledPredecessors = yield* journaledPredecessorOperationIds(journal, reconstructedRunId, target)
           const predecessorOperationIds = distinctOperationIds([...journaledPredecessors, currentGraphOperationId])
-          return opportunity._tag === "ActiveWorkAuthorityRefresh"
-            ? makeActiveWorkAuthorityRefreshTrackerGraphObservationOperation(
-                operationId,
-                target,
-                predecessorOperationIds
-              )
-            : makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
+          return makeTrackerGraphObservationOperation(
+            { _tag: "PostQuiescenceReconfirmation", quiescentGraphOperationId: currentGraphOperationId },
+            operationId,
+            target,
+            predecessorOperationIds
+          )
         }))
       const operationId = operation.operationId
       const accepted = yield* executeTrackerGraphRead(operation).pipe(
@@ -263,9 +280,11 @@ export const runStabilizedDelivery = Effect.fn("RunStabilization.run")(function*
         }
       }
       if (opportunity._tag === "ActiveWorkAuthorityRefresh") {
-        return yield* proofOfAcceptedActiveRefreshG2(target, evaluations, accepted, [...opportunity.subjects])
+        return yield* proofOfAcceptedActiveRefreshG2(target, expectedRunId, evaluations, accepted, [
+          ...opportunity.subjects
+        ])
       }
-      return proofOf(target, yield* runDeliveryRuntimePhase(evaluations))
+      return proofOf(target, yield* runDeliveryRuntimePhase(expectedRunId, evaluations))
     })
   ).pipe(
     Effect.ensuring(Effect.flatMap(DeliveryRuntimeResources, ({ integrationTargets }) => integrationTargets.releaseAll))

@@ -145,6 +145,12 @@ export class PlannedAttemptExecutorResponsibilityContradiction extends Schema.Ta
   { accepted: PlannedTaskAttemptSchema, requested: PlannedTaskAttemptSchema }
 ) {}
 
+/** An ordinary fresh attempt has no exact accepted plan-to-worktree lineage, so executor ownership cannot begin. */
+export class PlannedAttemptExecutorResponsibilityLineageMissing extends Schema.TaggedError<PlannedAttemptExecutorResponsibilityLineageMissing>()(
+  "PlannedAttemptExecutorResponsibilityLineageMissing",
+  { correlation: PlannedAttemptExecutorCorrelationSchema }
+) {}
+
 /** A read-only executor observation has no exact journaled workflow responsibility to observe. */
 export class PlannedAttemptExecutorResponsibilityMissing extends Schema.TaggedError<PlannedAttemptExecutorResponsibilityMissing>()(
   "PlannedAttemptExecutorResponsibilityMissing",

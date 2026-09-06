@@ -45,17 +45,20 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       CassetteKillsCoordinatorAtTargetPromotionReconciliationRead: noLandmark,
       CassetteReleasesHeldTargetPromotionReconciliationRead: noLandmark,
       CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: noLandmark,
+      CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion: noLandmark,
+      CassetteReleasesHeldTaskWorktreeSelection: noLandmark,
+      CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins: noLandmark,
+      CassetteReleasesHeldPromotedTaskCompletionClaimRead: noLandmark,
+      CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions: noLandmark,
+      CassetteOffersRunReactivationHints: noLandmark,
+      CassettePublishesCurrentTrackerNotification: noLandmark,
       CassetteReleasesHeldTaskWorkSpecificationRead: noLandmark,
-      CassetteHoldsTargetLineageReadBeforeBoundary: noLandmark,
-      CassetteKillsCoordinatorWithTargetLineageReadHeld: () =>
-        "The coordinator dies while an exact target-lineage read remains held before Git",
-      CassetteReleasesHeldTargetLineageRead: noLandmark,
+      ConcurrentTrackerReadBatch: noLandmark,
       DalphSelects: noLandmark,
       ExpectedBehavior: noLandmark,
       GitWorktreeObservationChanged: noLandmark,
       GitPlannedWorktreeCreateResponseLost: noLandmark,
       IntegratorRequestReceived: noLandmark,
-      OperatorAppliesIntegrationQuarantineDirection: noLandmark,
       IntegratorResultReturned: noLandmark,
       IntegratorGitObservationReturned: noLandmark,
       IntegratorGitObservationFailed: noLandmark,
@@ -87,6 +90,7 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       OperatorRacesContinueAndStop: noLandmark,
       OperatorRestartsAttempt: noLandmark,
       OperatorStopsAttempt: noLandmark,
+      PlannedAttemptExecutorPassiveLifecycleChanged: noLandmark,
       PlannedAttemptExecutorProjectionReturned: noLandmark,
       PlannedAttemptExecutorResponseLost: noLandmark,
       PlannedAttemptExecutorWorkReported: (item) =>
@@ -306,7 +310,6 @@ type OperatorStoryItem = Extract<
       | "OperatorAppliesControlDirection"
       | "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
       | "OperatorAppliesControlDirectionWhileExecutorRequestInFlight"
-      | "OperatorAppliesIntegrationQuarantineDirection"
       | "OperatorAppliesRunCancellation"
       | "OperatorAppliesRunCancellationWhileExecutorRequestInFlight"
       | "OperatorControlDirectionFailed"
@@ -323,7 +326,6 @@ const operatorStoryItemTags: ReadonlySet<RemainingCoordinatorStoryItem["_tag"]> 
   "OperatorAppliesControlDirection",
   "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
   "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
-  "OperatorAppliesIntegrationQuarantineDirection",
   "OperatorAppliesRunCancellation",
   "OperatorAppliesRunCancellationWhileExecutorRequestInFlight",
   "OperatorControlDirectionFailed",
@@ -385,53 +387,25 @@ const controlDirectionOperatorLyric = (item: ControlDirectionOperatorItem): stri
         : ""
   }.`
 
-type DirectOperatorStoryItem = Extract<
-  OperatorStoryItem,
-  {
-    readonly _tag:
-      | "SetTaskExecutionCapacity"
-      | "OperatorControlDirectionFailed"
-      | "OperatorAppliesRunCancellation"
-      | "OperatorAppliesRunCancellationWhileExecutorRequestInFlight"
-      | "OperatorAppliesIntegrationQuarantineDirection"
-  }
->
-
-type TaskClaimReacquisitionOperatorItem = Extract<
-  OperatorStoryItem,
-  { readonly _tag: "OperatorDirectsTaskClaimReacquisition" }
->
-
-const unreachableOperatorStoryItem = (item: never): never => item
-
-const directOperatorLyric = (item: DirectOperatorStoryItem): string => {
-  switch (item._tag) {
-    case "SetTaskExecutionCapacity":
-      return `Operator applies task-execution capacity ${item.capacity} to the Run.`
-    case "OperatorControlDirectionFailed":
-      return `Dalph rejects Operator ${item.direction} for task ${item.subject.taskId}: ${item.reason}.`
-    case "OperatorAppliesRunCancellation":
-      return "Operator applies whole-Run cancellation."
-    case "OperatorAppliesRunCancellationWhileExecutorRequestInFlight":
-      return `Operator applies whole-Run cancellation while executor attempt ${item.duringAttemptId} is in flight.`
-    case "OperatorAppliesIntegrationQuarantineDirection":
-      return `Alice applies ${item.request.fingerprint.direction} to the Integrator quarantine at ${item.request.fingerprint.quarantineAt}.`
-    default:
-      return unreachableOperatorStoryItem(item)
-  }
-}
-
-const taskClaimReacquisitionOperatorLyric = (item: TaskClaimReacquisitionOperatorItem): string =>
-  `Operator request ${item.requestId} directs Dalph to reacquire the claim for task ${item.taskId}.`
-
 const operatorLyric = (item: OperatorStoryItem): string => {
+  if (item._tag === "SetTaskExecutionCapacity") {
+    return `Operator applies task-execution capacity ${item.capacity} to the Run.`
+  }
+  if (item._tag === "OperatorControlDirectionFailed") {
+    return `Dalph rejects Operator ${item.direction} for task ${item.subject.taskId}: ${item.reason}.`
+  }
+  if (item._tag === "OperatorAppliesRunCancellation") {
+    return "Operator applies whole-Run cancellation."
+  }
+  if (item._tag === "OperatorAppliesRunCancellationWhileExecutorRequestInFlight") {
+    return `Operator applies whole-Run cancellation while executor attempt ${item.duringAttemptId} is in flight.`
+  }
   if (isAttemptChoiceOperatorItem(item)) return attemptChoiceOperatorLyric(item)
   if (item._tag === "OperatorRacesContinueAndStop") {
     return `Alice concurrently submits Continue ${item.continueRequestNonce} and Stop ${item.stopRequestNonce} for task ${item.taskId}, attempt ${item.attemptId}; exactly one journaled request wins.`
   }
   if (isControlDirectionOperatorItem(item)) return controlDirectionOperatorLyric(item)
-  if (item._tag === "OperatorDirectsTaskClaimReacquisition") return taskClaimReacquisitionOperatorLyric(item)
-  return directOperatorLyric(item)
+  return `Operator request ${item.requestId} directs Dalph to reacquire the claim for task ${item.taskId}.`
 }
 
 // eslint-disable-next-line complexity -- Every remaining authored story variant is rendered at this exhaustive presentation boundary.
@@ -461,14 +435,24 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         "The cassette releases the exact held target-promotion reconciliation read.",
       CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: (item) =>
         `The cassette holds task ${item.taskId}'s specification read before its boundary.`,
+      CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion: (item) =>
+        `The cassette holds task ${item.taskId} attempt ${item.attemptId}'s worktree selection until the exact promotion boundary succeeds.`,
+      CassetteReleasesHeldTaskWorktreeSelection: (item) =>
+        `The cassette releases task ${item.taskId} attempt ${item.attemptId}'s held worktree selection after successful promotion.`,
+      CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins: (item) =>
+        `The cassette parks completion-claim reading for promoted task ${item.promotedTaskId} attempt ${item.promotedAttemptId} until task ${item.releasedByTaskId} attempt ${item.releasedByAttemptId} begins.`,
+      CassetteReleasesHeldPromotedTaskCompletionClaimRead: (item) =>
+        `The cassette releases completion-claim reading for promoted task ${item.promotedTaskId} after task ${item.releasedByTaskId} attempt ${item.releasedByAttemptId} begins.`,
+      CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions: (item) =>
+        `The cassette parks fresh task-claim selections for ${item.taskIds.join(", ")} until terminal assertions.`,
+      CassetteOffersRunReactivationHints: (item) =>
+        `The cassette offers ${item.hints.length} tracker-notification or timer hints while active refresh is already running.`,
+      CassettePublishesCurrentTrackerNotification: () =>
+        "The tracker notification source publishes its current value when the restarted Run reactivation owner attaches.",
       CassetteReleasesHeldTaskWorkSpecificationRead: (item) =>
         `The cassette releases task ${item.taskId}'s held specification read.`,
-      CassetteHoldsTargetLineageReadBeforeBoundary: (item) =>
-        `The cassette holds task ${item.taskId} attempt ${item.attemptId}'s target-lineage read before Git.`,
-      CassetteKillsCoordinatorWithTargetLineageReadHeld: (item) =>
-        `The cassette kills the coordinator while task ${item.taskId} attempt ${item.attemptId}'s target-lineage read is held.`,
-      CassetteReleasesHeldTargetLineageRead: (item) =>
-        `The cassette releases task ${item.taskId} attempt ${item.attemptId}'s held target-lineage read.`,
+      ConcurrentTrackerReadBatch: (item) =>
+        `The cassette accepts ${item.members.length} causally named tracker reads in either completion order.`,
       DalphSelects: (item) => `Dalph selects ${item.operation._tag}.`,
       GitWorktreeObservationChanged: (item) =>
         `Git changes the planned worktree observation to ${item.observation._tag}.`,
@@ -490,7 +474,7 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
       GitPlannedWorktreeCreateResponseLost: (item) =>
         `Git creates the exact planned worktree, but Dalph loses the response: ${item.detail}`,
       IntegratorRequestReceived: (item) =>
-        `The outer Integrator receives run ${item.correlation.ordinal} of session ${item.correlation.session.sessionId} for target ${item.correlation.session.integrationTarget.ref} at head ${item.correlation.session.expectedTargetHead}.`,
+        `The outer Integrator receives session ${item.correlation.session.sessionId}, run ${item.correlation.ordinal}, for target ${item.correlation.session.integrationTarget.ref} at head ${item.correlation.session.expectedTargetHead}.`,
       IntegratorResultReturned: (item) =>
         `The outer Integrator returns ${item.result._tag}${item.result._tag === "NotPrepared" ? `: ${item.result.detail}` : ` ${item.result.candidateText}`}.`,
       IntegratorGitObservationReturned: (item) =>
@@ -499,6 +483,8 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         `Git cannot observe reported candidate ${item.candidateText}: ${item.detail}`,
       PlannedAttemptExecutorWorkReported: (item) =>
         `The executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`,
+      PlannedAttemptExecutorPassiveLifecycleChanged: (item) =>
+        `The attached passive owner observes ${item.report._tag} for attempt ${item.report.attemptId}.`,
       PlannedAttemptExecutorProjectionReturned: (item) =>
         `A read-only executor projection returns ${item.report._tag} for attempt ${item.report.attemptId}.`,
       PlannedAttemptExecutorResponseLost: (item) =>
@@ -536,7 +522,9 @@ export const renderAuthoredStoryItemLyric = (item: AuthoredCassetteStoryItem): s
   if (item._tag === "CoordinatorActivationReturned") {
     return item.decision._tag === "RunMayTerminate"
       ? "The coordinator activation returns RunMayTerminate at this authored lifecycle boundary."
-      : `The coordinator activation returns RunMustRemainActive because ${item.decision.reason} at this authored lifecycle boundary.`
+      : item.decision._tag === "RunMustRemainActiveReasonUnasserted"
+        ? "The coordinator activation returns RunMustRemainActive at this authored lifecycle boundary; this scenario does not assert the diagnostic reason."
+        : `The coordinator activation returns RunMustRemainActive because ${item.decision.reason} at this authored lifecycle boundary.`
   }
   if (item._tag === "CoordinatorProcessDies") {
     return "The coordinator process and its same-process executor session die; durable and authority facts remain."

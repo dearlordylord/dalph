@@ -22,6 +22,7 @@ import {
   makeTaskWorktreeObservationOperation
 } from "../../workflow/registry/operation.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { deliveryProposalsOf, trackerGraphReadProposalOf } from "./delivery-proposal.js"
@@ -87,6 +88,7 @@ const baseEvaluation = Effect.gen(function* () {
         ...deterministicDeliveryRuntimeSupport(policy),
         coherent: currentSignalOf({
           actionInputs: {
+            freshTaskCandidates: [],
             proposalContributions: { deliverySettlement: [], issues: [], ticketDelivery: [] },
             reflectionProposals: [],
             runtimeFacts: {
@@ -97,7 +99,7 @@ const baseEvaluation = Effect.gen(function* () {
                 applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
               },
               quiescence: { _tag: "TrackerReconfirmationAllowed" },
-              taskWork: { capacity, held: [], preStart: [] }
+              taskWork: makeFreshTaskAdmissionTestBasis({ capacity })
             },
             trackerGraphProposals: []
           },
@@ -114,7 +116,7 @@ const withProposals = (
   proposals: ReadonlyArray<DeliveryActionProposal>
 ): DeliveryRuntimeEvaluation => ({
   ...evaluation,
-  proposedActions: { _tag: "DeliveryProposalsAvailable", isolatedIssues: [], proposals }
+  proposedActions: { _tag: "DeliveryProposalsAvailable", freshTaskCandidates: [], isolatedIssues: [], proposals }
 })
 
 const worktreeOperation = makeTaskWorktreeObservationOperation({

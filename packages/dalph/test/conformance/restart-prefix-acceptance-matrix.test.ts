@@ -1,5 +1,10 @@
 import { it } from "@effect/vitest"
-import { GitCommitSha, PlannedAttemptExecutorReport } from "@dalph/contracts"
+import {
+  GitCommitSha,
+  PlannedAttemptExecutorReport,
+  PlannedTaskAttempt,
+  makeTaskWorkSpecification
+} from "@dalph/contracts"
 import { Context, Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
@@ -62,6 +67,8 @@ import {
   type JournalRecord,
   makeIntegrationTargetResourceController,
   makeTaskAttemptPlanOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTaskClaimAcquisitionOperation,
   makeTargetLineageObservationOperation,
   PlannedAttemptExecutorCommandIntendedEvent,
@@ -76,12 +83,21 @@ import {
   TargetLineageObservation,
   TargetLineageObservedEvent,
   TaskAttemptPlannedEvent,
+  TaskWorktreeReconciliationIntendedEvent,
+  TaskWorktreeReadyEvent,
+  PlannedWorktreeReady,
   WorkflowRunBeganEvent,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
-import { TaskLifecycle } from "../../../orchestrator/src/authorities/task-tracker/task.js"
+import { TaskLifecycle, TrackerRevision } from "../../../orchestrator/src/authorities/task-tracker/task.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
+import { taskTrackerReadIntent } from "../../../orchestrator/src/workflow/registry/event.js"
 import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { integrationFinalityFixture } from "../../../orchestrator/src/workflow/protocols/integration-finality/fixtures.js"
@@ -191,18 +207,25 @@ const restartPrefixesFrom = (records: ReadonlyArray<JournalRecord>): RestartPref
 
 const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
   const fixture = integrationFinalityFixture
+  const specification = makeTaskWorkSpecification({
+    body: "Complete the integration finality task.",
+    taskId: fixture.taskId,
+    title: "Complete integration finality"
+  })
+  const plannedAttempt = PlannedTaskAttempt.make({ ...fixture.plannedAttempt, taskRevision: specification.fingerprint })
   const candidateText = IntegratorCandidateText.make(fixture.qualifiedCandidate.candidateText)
   const session = IntegratorSessionCorrelation.make({
     ...fixture.qualifiedCandidate.run.session,
-    queuedAt: JournalPosition.make(11),
-    startedAt: JournalPosition.make(12),
-    targetLineageObservedAt: JournalPosition.make(14)
+    plannedAttempt,
+    queuedAt: JournalPosition.make(17),
+    startedAt: JournalPosition.make(18),
+    targetLineageObservedAt: JournalPosition.make(20)
   })
   const integratorRun = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
   const candidate = IntegratorRunQualifiedCandidate.make({
     ...fixture.qualifiedCandidate,
     candidateText,
-    qualifiedAt: JournalPosition.make(19),
+    qualifiedAt: JournalPosition.make(25),
     run: integratorRun
   })
   const correlation = targetPromotionCorrelationFor(candidate)
@@ -211,13 +234,13 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
   const lineageOperation = makeTargetLineageObservationOperation({
     integrationTarget: fixture.integrationTarget,
     operationId: OperationId.make("restart-prefix-direct-target-lineage"),
-    plannedAttempt: fixture.plannedAttempt,
+    plannedAttempt,
     predecessorOperationIds: []
   })
   const planOperation = makeTaskAttemptPlanOperation({
     operationId: OperationId.make("restart-prefix-direct-plan"),
-    plannedAttempt: fixture.plannedAttempt,
-    predecessorOperationIds: [fixture.activeClaim.operationId]
+    plannedAttempt,
+    predecessorOperationIds: [OperationId.make("restart-prefix-direct-specification")]
   })
   const claimOperation = makeTaskClaimAcquisitionOperation({
     acquisition: TaskClaimAcquisition.make({
@@ -228,6 +251,31 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
     }),
     predecessorOperationIds: []
   })
+  const postClaimGraphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("restart-prefix-direct-post-claim-graph"),
+    fixture.target,
+    [claimOperation.acquisition.operationId],
+    [fixture.taskId]
+  )
+  const graphProjection = projectTrackerSnapshot({
+    revision: TrackerRevision.make("restart-prefix-direct-graph"),
+    tasks: [
+      { id: fixture.taskId, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }
+    ]
+  })
+  if (graphProjection._tag === "Invalid") return expect.fail("restart-prefix direct graph must be valid")
+  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("restart-prefix-direct-specification"),
+    fixture.target,
+    fixture.taskId,
+    [postClaimGraphOperation.operationId]
+  )
+  const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+    operationId: OperationId.make("restart-prefix-direct-worktree"),
+    plannedAttempt,
+    predecessorOperationIds: [planOperation.operationId]
+  })
   const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
     event,
     key: describeJournalEvent(event).expectedKey,
@@ -235,14 +283,14 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
     runId: fixture.runId
   })
   const terminalReport = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
-    correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId },
+    correlation: { attemptId: plannedAttempt.attemptId, runId: fixture.runId },
     result: { _tag: "Accepted", acceptedResult: session.acceptedResult }
   })
   const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-    correlation: { attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId }
+    correlation: { attemptId: plannedAttempt.attemptId, runId: fixture.runId }
   })
   const stale = record(
-    22,
+    28,
     TargetPromotionStaleEvent.make({
       basis: TargetPromotionTerminalBasis.cases.AfterAttempt.make({ attemptOrdinal }),
       correlation,
@@ -271,37 +319,70 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
     ),
     record(3, TaskClaimAcquiredEvent.make({ claim: fixture.activeClaim, version: workflowJournalEventVersion })),
-    record(4, TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })),
+    record(4, taskTrackerReadIntent(postClaimGraphOperation)),
     record(
       5,
-      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-        plannedAttempt: fixture.plannedAttempt,
+      taskTrackerFactsObservedEvent(
+        postClaimGraphOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(postClaimGraphOperation, graphProjection.snapshot)
+      )
+    ),
+    record(6, taskTrackerReadIntent(specificationOperation)),
+    record(
+      7,
+      taskTrackerFactsObservedEvent(
+        specificationOperation.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification)
+      )
+    ),
+    record(8, TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })),
+    record(
+      9,
+      TaskWorktreeReconciliationIntendedEvent.make({
+        operation: worktreeOperation,
         version: workflowJournalEventVersion
       })
     ),
     record(
-      6,
+      10,
+      TaskWorktreeReadyEvent.make({
+        operationId: worktreeOperation.operationId,
+        proof: PlannedWorktreeReady.make({
+          baseSha: plannedAttempt.baseSha,
+          branch: plannedAttempt.branch,
+          headSha: plannedAttempt.baseSha,
+          worktree: plannedAttempt.worktree
+        }),
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(
+      11,
+      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+    ),
+    record(
+      12,
       PlannedAttemptExecutorCommandIntendedEvent.make({
         command: "Begin",
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
         ordinal: PlannedAttemptExecutorCommandOrdinal.make(1),
-        plannedAttempt: fixture.plannedAttempt,
+        plannedAttempt,
         version: workflowJournalEventVersion
       })
     ),
     record(
-      7,
+      13,
       PlannedAttemptExecutorCommandResponseObservedEvent.make({
         commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(1),
         occurrenceClassification: "NonActionOccurrence",
-        plannedAttempt: fixture.plannedAttempt,
+        plannedAttempt,
         report: executingReport,
         version: workflowJournalEventVersion
       })
     ),
     record(
-      8,
+      14,
       PlannedAttemptExecutorWorkReportedEvent.make({
         ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
         report: executingReport,
@@ -309,17 +390,17 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      9,
+      15,
       PlannedAttemptExecutorStateObservedEvent.make({
         observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: terminalReport }),
         occurrenceClassification: "NonActionOccurrence",
         ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
-        plannedAttempt: fixture.plannedAttempt,
+        plannedAttempt,
         version: workflowJournalEventVersion
       })
     ),
     record(
-      10,
+      16,
       PlannedAttemptExecutorWorkReportedEvent.make({
         ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
         report: terminalReport,
@@ -327,26 +408,26 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      11,
+      17,
       IntegrationResponsibilityBeganEvent.make({
         acceptedResult: session.acceptedResult,
         integrationTarget: fixture.integrationTarget,
-        plannedAttempt: fixture.plannedAttempt,
+        plannedAttempt,
         version: workflowJournalEventVersion
       })
     ),
     record(
-      12,
+      18,
       IntegrationStartedEvent.make({
         acceptedResult: session.acceptedResult,
         integrationTarget: fixture.integrationTarget,
-        plannedAttempt: fixture.plannedAttempt,
-        responsibilityBeganAt: JournalPosition.make(11),
+        plannedAttempt,
+        responsibilityBeganAt: JournalPosition.make(17),
         version: workflowJournalEventVersion
       })
     ),
     record(
-      13,
+      19,
       GitReadIntentRecordedEvent.make({
         initiatedBy: { _tag: "DalphCoordinator" },
         occurrenceClassification: "InitiatedAction",
@@ -355,23 +436,23 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      14,
+      20,
       TargetLineageObservedEvent.make({
         observation: TargetLineageObservation.make({
           plannedBaseIsAncestorOfTargetHead: true,
-          plannedBaseSha: fixture.plannedAttempt.baseSha,
+          plannedBaseSha: plannedAttempt.baseSha,
           targetHeadSha: session.expectedTargetHead
         }),
         occurrenceClassification: "NonActionOccurrence",
         operationId: lineageOperation.operationId,
-        plannedAttempt: fixture.plannedAttempt,
+        plannedAttempt,
         version: workflowJournalEventVersion
       })
     ),
-    record(15, IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })),
-    record(16, IntegratorRunStartedEvent.make({ run: integratorRun, version: workflowJournalEventVersion })),
+    record(21, IntegratorSessionFixedEvent.make({ correlation: session, version: workflowJournalEventVersion })),
+    record(22, IntegratorRunStartedEvent.make({ run: integratorRun, version: workflowJournalEventVersion })),
     record(
-      17,
+      23,
       IntegratorRunResultRecordedEvent.make({
         result: IntegratorResult.cases.PreparedCandidate.make({ candidateText, correlation: integratorRun }),
         run: integratorRun,
@@ -379,7 +460,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      18,
+      24,
       IntegratorRunCandidateGitReadIntendedEvent.make({
         candidateText,
         run: integratorRun,
@@ -387,7 +468,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
       })
     ),
     record(
-      19,
+      25,
       IntegratorRunCandidateGitObservedEvent.make({
         candidateText,
         observation: IntegratorGitObservation.cases.Commit.make({
@@ -399,9 +480,9 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
         version: workflowJournalEventVersion
       })
     ),
-    record(20, TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })),
+    record(26, TargetPromotionIntendedEvent.make({ correlation, version: workflowJournalEventVersion })),
     record(
-      21,
+      27,
       TargetPromotionAttemptIntendedEvent.make({
         attemptOrdinal,
         correlation,
@@ -411,7 +492,7 @@ const directPromotionRestartRecords = (): ReadonlyArray<JournalRecord> => {
     ),
     stale,
     record(
-      23,
+      29,
       IntegrationQuarantinedEvent.make({
         basis: quarantineBasis,
         correlation: session,
@@ -532,8 +613,6 @@ const identityFreeActionFor = (
 
 const executionLeaseFor = (integrationTargets: IntegrationTargetResourceController): DeliveryActionExecutionLease => ({
   acceptIntegrationTargetOwnership: Effect.void,
-  bindPreStartTaskWorkPosition: () => Effect.void,
-  bindPreStartPlannedAttemptPosition: () => Effect.void,
   bindPlannedAttemptPosition: () => Effect.void,
   forwardBoundary: { _tag: "AtomicBoundary", execution: { run: (effect) => effect } },
   integrationTargets,
@@ -657,7 +736,11 @@ const productionRestartProjection = (
           const unrelatedOperationId = OperationId.make(
             `restart-reconciliation-stability:${reconciliationMode}:${lane}`
           )
-          const unrelatedOperation = makeTrackerGraphObservationOperation(unrelatedOperationId, began.event.target)
+          const unrelatedOperation = makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
+            unrelatedOperationId,
+            began.event.target
+          )
           yield* storage.append(
             began.runId,
             intentRecordKey(unrelatedOperationId),

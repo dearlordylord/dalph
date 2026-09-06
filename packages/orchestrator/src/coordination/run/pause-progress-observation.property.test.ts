@@ -26,6 +26,7 @@ import { makeTestJournaledTrackerGraphObservation } from "../../../test/journale
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
+import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import { makeDeliveryReflection } from "../delivery/relations.js"
 import {
   boundedParallelTicketsOf,
@@ -219,11 +220,13 @@ const evaluation = (
     },
     proposedActions: {
       _tag: "DeliveryProposalsAvailable",
+      freshTaskCandidates: [],
       isolatedIssues: [],
       proposals: options.proposals ?? [proposalFor(TaskId.make("A"))]
     },
     quiescence: { _tag: "QuiescencePassive", reason: "RunPaused" },
-    taskWork: { capacity: policy.taskExecutionCapacity, held: [], preStart: [] }
+    runId,
+    taskWork: makeFreshTaskAdmissionTestBasis({ capacity: policy.taskExecutionCapacity })
   }
 }
 
@@ -429,6 +432,7 @@ it.effect("does not let a safe report from before grouping coverage confirm the 
           ...afterGrouping,
           proposedActions: {
             _tag: "DeliveryProposalsAvailable",
+            freshTaskCandidates: [],
             isolatedIssues: [],
             proposals: [proposalFor(TaskId.make("D"))]
           }
@@ -629,12 +633,7 @@ it.effect("does not let a late runtime publication reopen a closed observation",
 
     const state = yield* controller.signal.get
     expect(state._tag).toBe("Closed")
-    if (state._tag === "Closed") {
-      expect(state.final?._tag).toBe("Ready")
-    }
-    if (state._tag === "Closed" && state.final?._tag === "Ready") {
-      expect(state.final.evaluation).toEqual(finalEvaluation)
-    }
+    if (state._tag === "Closed") expect(state.final?.evaluation).toEqual(finalEvaluation)
     yield* integrationTargets.releaseAll
   })
 )

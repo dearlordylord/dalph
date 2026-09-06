@@ -3,6 +3,7 @@ import {
   acceptedResultFixture,
   registerAcceptedResultEvidence
 } from "../../../test/support/evidence.js"
+import { appendAcceptedExecutingExecutorHistory } from "../../../test/support/planned-attempt-executor-history.js"
 import {
   AttemptId,
   GitCommitSha,
@@ -15,14 +16,15 @@ import {
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { it } from "@effect/vitest"
 import { Effect, Layer, Option, Stream } from "effect"
 import { expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
+import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { InitialControlPolicy } from "../../control/policy.js"
@@ -31,28 +33,29 @@ import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
   makeTaskClaimObservationOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import {
-  PlannedAttemptExecutorCommandIntendedEvent,
-  PlannedAttemptExecutorCommandOrdinal,
-  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorStateObservationOrdinal,
   PlannedAttemptExecutorStateObservedEvent,
-  PlannedAttemptExecutorWorkReportedEvent,
-  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+  PlannedAttemptExecutorWorkReportedEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskClaimFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
 import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
@@ -60,11 +63,8 @@ import {
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
-  plannedAttemptExecutorCommandIntendedRecordKey,
-  plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorStateObservedRecordKey,
-  plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
+  plannedAttemptExecutorWorkReportedRecordKey
 } from "../../workflow-journal/record-key.js"
 import { JournalStore } from "../../workflow-journal/store.js"
 import { OperationId } from "../../workflow/identity.js"
@@ -81,6 +81,11 @@ const trackerTarget = FixtureTarget.make("recovered-settlement-target")
 const taskId = TaskId.make("A")
 const baseSha = GitCommitSha.make("1".repeat(40))
 const acceptedCommit = GitCommitSha.make("3".repeat(40))
+const specification = makeTaskWorkSpecification({
+  body: "Implement recovered settlement.",
+  taskId,
+  title: "Recovered settlement"
+})
 const integrationTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/recovered-settlement.git"),
   ref: IntegrationTargetRef.make("refs/heads/master")
@@ -92,7 +97,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
   executor: TaskExecutorLocator.make("executor:recovered-settlement"),
   runId,
   taskId,
-  taskRevision: TaskRevision.make("recovered-settlement-revision"),
+  taskRevision: specification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/recovered-settlement")
 })
 const claim = ActiveTaskClaim.make({
@@ -112,6 +117,29 @@ const seedTerminalAccepted = Effect.gen(function* () {
     InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
   )
   const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+  const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("recovered-settlement-graph-history"),
+    trackerTarget,
+    [claim.operationId],
+    [taskId]
+  )
+  const graph = projectTrackerSnapshot({
+    revision: "recovered-settlement-history-graph",
+    tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  if (graph._tag === "Invalid") return yield* Effect.die("expected a valid historical graph")
+  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("recovered-settlement-specification-history"),
+    trackerTarget,
+    taskId,
+    [graphOperation.operationId]
+  )
+  const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+    operationId: OperationId.make("recovered-settlement-worktree-history"),
+    plannedAttempt,
+    predecessorOperationIds: [OperationId.make("recovered-settlement-plan")]
+  })
   yield* journal.append(
     runId,
     intentRecordKey(claim.operationId),
@@ -122,6 +150,28 @@ const seedTerminalAccepted = Effect.gen(function* () {
     outcomeRecordKey(claim.operationId),
     TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
   )
+  yield* journal.append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(graphOperation.operationId),
+    taskTrackerFactsObservedEvent(
+      graphOperation.operationId,
+      makeCompleteTaskTrackerFactsObserved(graphOperation, graph.snapshot)
+    )
+  )
+  yield* journal.append(
+    runId,
+    intentRecordKey(specificationOperation.operationId),
+    taskTrackerReadIntent(specificationOperation)
+  )
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(specificationOperation.operationId),
+    taskTrackerFactsObservedEvent(
+      specificationOperation.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification)
+    )
+  )
   yield* journal.append(
     runId,
     attemptPlanRecordKey(plannedAttempt.attemptId),
@@ -129,53 +179,31 @@ const seedTerminalAccepted = Effect.gen(function* () {
       operation: makeTaskAttemptPlanOperation({
         operationId: OperationId.make("recovered-settlement-plan"),
         plannedAttempt,
-        predecessorOperationIds: [claim.operationId]
+        predecessorOperationIds: [specificationOperation.operationId]
       }),
       version: workflowJournalEventVersion
     })
   )
   yield* journal.append(
     runId,
-    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+    intentRecordKey(worktreeOperation.operationId),
+    TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: workflowJournalEventVersion })
   )
-  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
   yield* journal.append(
     runId,
-    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-    PlannedAttemptExecutorCommandIntendedEvent.make({
-      command: "Begin",
-      initiatedBy: { _tag: "DalphCoordinator" },
-      occurrenceClassification: "InitiatedAction",
-      ordinal: commandOrdinal,
-      plannedAttempt,
+    outcomeRecordKey(worktreeOperation.operationId),
+    TaskWorktreeReadyEvent.make({
+      operationId: worktreeOperation.operationId,
+      proof: PlannedWorktreeReady.make({
+        baseSha: plannedAttempt.baseSha,
+        branch: plannedAttempt.branch,
+        headSha: plannedAttempt.baseSha,
+        worktree: plannedAttempt.worktree
+      }),
       version: workflowJournalEventVersion
     })
   )
-  const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-    correlation: { attemptId: plannedAttempt.attemptId, runId }
-  })
-  yield* journal.append(
-    runId,
-    plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-    PlannedAttemptExecutorCommandResponseObservedEvent.make({
-      commandOrdinal,
-      occurrenceClassification: "NonActionOccurrence",
-      plannedAttempt,
-      report: executingReport,
-      version: workflowJournalEventVersion
-    })
-  )
-  const ordinal = PlannedAttemptExecutorReportOrdinal.make(1)
-  yield* journal.append(
-    runId,
-    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, ordinal),
-    PlannedAttemptExecutorWorkReportedEvent.make({
-      ordinal,
-      report: executingReport,
-      version: workflowJournalEventVersion
-    })
-  )
+  yield* appendAcceptedExecutingExecutorHistory(plannedAttempt)
   const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
     correlation: { attemptId: plannedAttempt.attemptId, runId },
     result: { _tag: "Accepted", acceptedResult }
@@ -208,7 +236,11 @@ const seedTerminalAccepted = Effect.gen(function* () {
 const installFreshTrackerFacts = Effect.fn("RecoveredSettlementTest.installFreshTrackerFacts")(function* (
   journalService: Effect.Success<ReturnType<typeof makeJournal>>
 ) {
-  const graphRead = makeTrackerGraphObservationOperation(OperationId.make("recovered-settlement-graph"), trackerTarget)
+  const graphRead = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("recovered-settlement-graph"),
+    trackerTarget
+  )
   const projected = projectTrackerSnapshot({
     revision: "recovered-settlement-current",
     tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]

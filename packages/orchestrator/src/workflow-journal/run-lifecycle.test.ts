@@ -82,7 +82,11 @@ it("rejects terminal storage when the exact graph read is absent", () => {
 })
 
 it("rejects Cancelled termination evidence observed before cancellation", () => {
-  const operation = makeTrackerGraphObservationOperation(OperationId.make("cancelled-finality"), target)
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("cancelled-finality"),
+    target
+  )
   const snapshot = validSnapshot({
     revision: "cancelled-finality",
     rootTaskId: "root",
@@ -225,7 +229,11 @@ it("accepts Completed when termination wins before cancellation is applied", () 
 })
 
 it("rejects a different parentless task standing in for the selected Run root", () => {
-  const operation = makeTrackerGraphObservationOperation(OperationId.make("exact-root-finality"), target)
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("exact-root-finality"),
+    target
+  )
   const snapshot = validSnapshot({
     revision: "exact-root-finality",
     rootTaskId: "root",
@@ -278,7 +286,11 @@ it("rejects a different parentless task standing in for the selected Run root", 
 })
 
 it("rejects terminal evidence naming the graph intent position instead of its observation", () => {
-  const operation = makeTrackerGraphObservationOperation(OperationId.make("wrong-position-finality"), target)
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("wrong-position-finality"),
+    target
+  )
   const snapshot = validSnapshot({
     revision: "wrong-position-finality",
     rootTaskId: "root",
@@ -431,6 +443,7 @@ it("rejects every independently mismatched terminal evidence dimension at storag
 
 it("rejects finality evidence superseded by a later complete graph observation", () => {
   const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("lifecycle-initial-complete-observation"),
     target
   )
@@ -440,6 +453,7 @@ it("rejects finality evidence superseded by a later complete graph observation",
     tasks: [{ id: "root", lifecycle: { _tag: "CompletedSuccessfully" }, parentTaskId: null, prerequisiteIds: [] }]
   })
   const laterOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("lifecycle-later-complete-observation"),
     target,
     [operation.operationId]
@@ -502,6 +516,7 @@ it("rejects finality evidence superseded by a later complete graph observation",
 
 it("keeps target-A termination evidence current when a later graph belongs to target B", () => {
   const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("lifecycle-target-a-terminal-observation"),
     target
   )
@@ -512,6 +527,7 @@ it("keeps target-A termination evidence current when a later graph belongs to ta
   })
   const foreignTarget = FixtureTarget.make("lifecycle-target-b-later-observation")
   const foreignOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("lifecycle-target-b-later-observation"),
     foreignTarget
   )
@@ -563,6 +579,7 @@ it("keeps target-A termination evidence current when a later graph belongs to ta
 it("does not refresh terminal evidence from a later graph when the Run target was never begun", () => {
   const fixture = completedRunFinalityFixture({ runId, target })
   const laterOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("lifecycle-no-begin-later-complete-observation"),
     target,
     [fixture.operation.operationId]
@@ -606,8 +623,13 @@ it("does not refresh terminal evidence from a later graph when the Run target wa
 })
 
 it("rejects unchanged finality evidence whose named complete observation is absent", () => {
-  const fullOperation = makeTrackerGraphObservationOperation(OperationId.make("lifecycle-absent-full-read"), target)
+  const fullOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("lifecycle-absent-full-read"),
+    target
+  )
   const unchangedOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("lifecycle-unfounded-reconfirmation"),
     target,
     [fullOperation.operationId]

@@ -19,8 +19,6 @@ import {
   ContradictoryWorktreeState,
   type ClaimOwner,
   type ClaimToken,
-  ActiveWorkAuthorityRefreshAuthority,
-  ActiveWorkAuthorityRefreshGitReadOperation,
   AttemptChoiceRequestId,
   type ControlDirectionApplicationOrdinal,
   type FixtureTarget,
@@ -83,8 +81,6 @@ import {
   type IntegratorCandidateCleanupMutationResult,
   type IntegratorCandidateCleanupObservation,
   type PlannedAttemptCleanupDisposition,
-  type ActiveWorkAuthorityRefreshGitReadFailure,
-  type ActiveWorkAuthorityRefreshOrdinal,
   type WorktreeCleanupAuthorization,
   type WorktreeCleanupMutationResult,
   type WorktreeCleanupObservation,
@@ -100,7 +96,6 @@ import {
   type TaskTrackerFactsObservation,
   type TrackerRevision,
   type WorkflowOperation,
-  GitTargetLineageReadFailure,
   GitWorktreeReadFailure,
   UntrackedWorktreePath,
   WorktreeBaseMismatch
@@ -189,7 +184,6 @@ type PreservedCassetteBrand =
   | CleanupObservationOrdinal
   | IntegratorCandidateCleanupEvidenceRevision
   | WorktreeCleanupEvidenceRevision
-  | ActiveWorkAuthorityRefreshOrdinal
 
 type ContainsGeneratedOrUnclassifiedBrand<Value> = Value extends GeneratedCassetteIdentity
   ? true
@@ -278,59 +272,6 @@ const renameActiveTaskClaim = (claim: ActiveTaskClaim, maps: IdentityRenamingMap
   operationId: renamed(claim.operationId, maps.operationIds),
   token: renamed(claim.token, maps.claimTokens)
 })
-
-const renameActiveWorkAuthorityRefreshAuthority = (
-  authority: ActiveWorkAuthorityRefreshAuthority,
-  maps: IdentityRenamingMaps
-): ActiveWorkAuthorityRefreshAuthority =>
-  ActiveWorkAuthorityRefreshAuthority.make({
-    attemptId: renamed(authority.attemptId, maps.attemptIds),
-    runId: renamed(authority.runId, maps.runIds)
-  })
-
-const renameActiveWorkAuthorityRefreshGitReadOperation = (
-  operation: ActiveWorkAuthorityRefreshGitReadOperation,
-  maps: IdentityRenamingMaps
-): ActiveWorkAuthorityRefreshGitReadOperation => {
-  const authority = renameActiveWorkAuthorityRefreshAuthority(operation.authority, maps)
-  const plannedAttempt = renamePlannedAttempt(operation.plannedAttempt, maps)
-  const predecessorOperationIds = operation.predecessorOperationIds.map((operationId) =>
-    renamed(operationId, maps.operationIds)
-  )
-  return operation._tag === "ReadTaskWorktree"
-    ? ActiveWorkAuthorityRefreshGitReadOperation.make({
-        _tag: operation._tag,
-        authority,
-        operationId: renamed(operation.operationId, maps.operationIds),
-        ordinal: preserveCassetteValue(operation.ordinal),
-        plannedAttempt,
-        predecessorOperationIds
-      })
-    : ActiveWorkAuthorityRefreshGitReadOperation.make({
-        _tag: operation._tag,
-        authority,
-        integrationTarget: preserveCassetteValue(operation.integrationTarget),
-        operationId: renamed(operation.operationId, maps.operationIds),
-        ordinal: preserveCassetteValue(operation.ordinal),
-        plannedAttempt,
-        predecessorOperationIds
-      })
-}
-
-const renameActiveWorkAuthorityRefreshGitReadFailure = (
-  failure: ActiveWorkAuthorityRefreshGitReadFailure,
-  maps: IdentityRenamingMaps
-): ActiveWorkAuthorityRefreshGitReadFailure =>
-  failure._tag === "GitWorktreeReadFailure"
-    ? new GitWorktreeReadFailure({
-        detail: preserveCassetteValue(failure.detail),
-        worktree: renamed(failure.worktree, maps.worktreeLocators)
-      })
-    : new GitTargetLineageReadFailure({
-        detail: preserveCassetteValue(failure.detail),
-        plannedBaseSha: preserveCassetteValue(failure.plannedBaseSha),
-        target: preserveCassetteValue(failure.target)
-      })
 
 const renameTaskClaimObservation = (
   observation: TaskClaimObservation,
@@ -825,18 +766,10 @@ const renameTrackerFactsObservation = (
     })
   )
 
-type RecordedOperationEntry = Exclude<
-  Extract<RecordedCassetteEntryType, { readonly operation: WorkflowOperation }>,
-  { readonly _tag: "ActiveWorkAuthorityRefreshGitReadFailed" | "ActiveWorkAuthorityRefreshGitReadInitiated" }
->
+type RecordedOperationEntry = Extract<RecordedCassetteEntryType, { readonly operation: WorkflowOperation }>
 type WithoutOperation<Value> = Value extends unknown ? Omit<Value, "operation"> : never
 const RecordedOperationEntrySchema = RecordedCassetteEntry.pipe(
-  Schema.refine(
-    (entry): entry is RecordedOperationEntry =>
-      entry._tag !== "ActiveWorkAuthorityRefreshGitReadFailed" &&
-      entry._tag !== "ActiveWorkAuthorityRefreshGitReadInitiated" &&
-      "operation" in entry
-  )
+  Schema.refine((entry): entry is RecordedOperationEntry => "operation" in entry)
 )
 
 const recordedOperationEntryFieldsWithoutOperationArePreservable: PreservableProof<
@@ -1531,10 +1464,7 @@ const renameRecordedCassetteEntry = (
 ): RecordedCassetteEntryType =>
   Match.value(entry).pipe(
     Match.when(
-      (candidate): candidate is RecordedOperationEntry =>
-        candidate._tag !== "ActiveWorkAuthorityRefreshGitReadFailed" &&
-        candidate._tag !== "ActiveWorkAuthorityRefreshGitReadInitiated" &&
-        "operation" in candidate,
+      (candidate): candidate is RecordedOperationEntry => "operation" in candidate,
       (operationEntry) => renameRecordedOperationEntry(operationEntry, maps)
     ),
     Match.when(isRecordedIntegrationEntry, (integrationEntry) =>
@@ -1924,23 +1854,6 @@ const renameRecordedCassetteEntry = (
             observedTaskRevision: preserveCassetteValue(failureEntry.subject.observedTaskRevision),
             plannedAttempt: renamePlannedAttempt(failureEntry.subject.plannedAttempt, maps)
           })
-        }),
-      ActiveWorkAuthorityRefreshGitReadFailed: (failureEntry) =>
-        completeFields<typeof failureEntry>({
-          _tag: "ActiveWorkAuthorityRefreshGitReadFailed",
-          authority: renameActiveWorkAuthorityRefreshAuthority(failureEntry.authority, maps),
-          failure: renameActiveWorkAuthorityRefreshGitReadFailure(failureEntry.failure, maps),
-          occurrenceClassification: preserveCassetteValue(failureEntry.occurrenceClassification),
-          operation: renameActiveWorkAuthorityRefreshGitReadOperation(failureEntry.operation, maps),
-          ordinal: preserveCassetteValue(failureEntry.ordinal),
-          source: preserveCassetteValue(failureEntry.source)
-        }),
-      ActiveWorkAuthorityRefreshGitReadInitiated: (intentEntry) =>
-        completeFields<typeof intentEntry>({
-          _tag: "ActiveWorkAuthorityRefreshGitReadInitiated",
-          initiatedBy: preserveCassetteValue(intentEntry.initiatedBy),
-          occurrenceClassification: preserveCassetteValue(intentEntry.occurrenceClassification),
-          operation: renameActiveWorkAuthorityRefreshGitReadOperation(intentEntry.operation, maps)
         }),
       AttemptStoppageIntended: (intentEntry) =>
         completeFields<typeof intentEntry>({

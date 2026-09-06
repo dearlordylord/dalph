@@ -1,9 +1,11 @@
 import { AttemptId, PlannedTaskAttempt, RunId, TaskId } from "@dalph/contracts"
 import * as fc from "fast-check"
+import { Effect } from "effect"
 import { expect, it } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { makeFreshTaskAdmissionBasis, TaskAdmissionOccupancy } from "../admission/fresh-task-admission.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
@@ -158,6 +160,7 @@ const stateOf = (
   const evaluation: DeliveryRuntimeEvaluation = {
     _tag: "DeliveryRuntimeEvaluation",
     acceptedAt: JournalPosition.make(2),
+    runId,
     current,
     pauseCoverage: {
       _tag: "PauseCoverageGraphNotEstablished",
@@ -165,11 +168,19 @@ const stateOf = (
     },
     proposedActions: {
       _tag: "DeliveryProposalsAvailable",
+      freshTaskCandidates: [],
       isolatedIssues: reverseIssues ? issues.toReversed() : issues,
       proposals
     },
     quiescence: { _tag: "TrackerReconfirmationAllowed" },
-    taskWork: { capacity: policy.taskExecutionCapacity, held: [], preStart: [] },
+    taskWork: Effect.runSync(
+      makeFreshTaskAdmissionBasis({
+        acceptedAt: JournalPosition.make(2),
+        capacity: policy.taskExecutionCapacity,
+        entries: [],
+        runId
+      })
+    ),
     cancellationApplied: false
   }
   return DeliveryRuntimeObservationState.Ready({ evaluation, liveOwners })
@@ -381,16 +392,35 @@ const allPhenomenaStateOf = (permutation: PhenomenonPermutation): DeliveryRuntim
     current,
     proposedActions: {
       _tag: "DeliveryProposalsAvailable" as const,
+      freshTaskCandidates: [],
       isolatedIssues: permutation.issues ? issues.toReversed() : issues,
       proposals: permutation.proposals ? proposals.toReversed() : proposals
     },
-    taskWork: {
-      ...base.evaluation.taskWork,
-      held: [
-        { taskId: TaskId.make("A"), correlation: { attemptId: AttemptId.make("property-holder-A"), runId } },
-        { taskId: TaskId.make("B"), correlation: { attemptId: AttemptId.make("property-holder-B"), runId } }
-      ]
-    }
+    taskWork: Effect.runSync(
+      makeFreshTaskAdmissionBasis({
+        acceptedAt: base.evaluation.acceptedAt,
+        capacity: base.evaluation.taskWork.capacity,
+        entries: [
+          TaskAdmissionOccupancy.ExactAttemptHeld({
+            plannedAttempt: PlannedTaskAttempt.make({
+              ...fixture.plannedAttempt,
+              attemptId: AttemptId.make("property-holder-A"),
+              runId,
+              taskId: TaskId.make("A")
+            })
+          }),
+          TaskAdmissionOccupancy.ExactAttemptHeld({
+            plannedAttempt: PlannedTaskAttempt.make({
+              ...fixture.plannedAttempt,
+              attemptId: AttemptId.make("property-holder-B"),
+              runId,
+              taskId: TaskId.make("B")
+            })
+          })
+        ],
+        runId
+      })
+    )
   }
   const orderedOwners = permutation.owners ? liveOwners.toReversed() : liveOwners
   const orderedDeliveries = permutation.standings

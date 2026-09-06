@@ -4,6 +4,7 @@ import {
   Context,
   type Crypto,
   Deferred,
+  Duration,
   Effect,
   Exit,
   Fiber,
@@ -29,10 +30,10 @@ import {
   type TaskRevision
 } from "@dalph/contracts"
 import {
+  ApplicationExitShell,
   AuthoritativeTaskWorktreeReady,
-  ApplyIntegrationQuarantineDirectionRequest,
   type AttemptChoiceApplicationResult,
-  attemptChoiceControlLayer,
+  attemptChoiceControlWithProvidedProtocolLayer,
   AttemptChoiceRequestId,
   controlDirectionApplicationLayer,
   taskClaimReacquisitionControlLayer,
@@ -42,7 +43,6 @@ import {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
   deterministicTaskClaimAcquisitionPlannerLayer,
-  PlannedTaskAttemptPlanner,
   CompletionClaimBoundary,
   CompletionTaskBoundary,
   type CompletionTaskRequest,
@@ -89,7 +89,11 @@ import {
   reduceWorkflowJournalHistory,
   runGitWorktreeReconciliation,
   runWorkflowWithControlledDeliveryActionExecutor,
-  runWorkflowWithControlledActiveWorkAuthorityRefresh,
+  runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh,
+  RunReactivationHint,
+  RunReactivationOwner,
+  runReactivationOwnerLayer,
+  WorkflowRunAlreadyTerminated,
   validatedRunActivationLayer,
   preservingDispositionCleanupBoundaryLayer,
   taskWorkCapacityControlLayer,
@@ -130,6 +134,10 @@ import {
   type AuthoredScenarioCassette as ScenarioCassette
 } from "./authored-domain.js"
 import { controlledExecutorLayer, controlledTrace, controlledTrackerGraphReaderLayer } from "./authored-adapters.js"
+import {
+  consumeControlledTaskWorkSpecification,
+  consumeControlledTrackerGraph
+} from "./authored-tracker-read-results.js"
 import {
   AuthoredCassetteInteractionMismatch,
   AuthoredCoordinatorProcessDies,
@@ -444,7 +452,7 @@ const authoredTargetPromotionRequestOf = (request: TargetPromotionRequest, runId
   })
 }
 
-/** Authored stories use the cassette Run placeholder while preserving the exact Integrator session and run ordinal. */
+/** Authored stories use the cassette run placeholder while preserving every other Integrator request fact exactly. */
 const authoredIntegratorRunCorrelationOf = (
   correlation: IntegratorRunCorrelation,
   runId: RunId
@@ -846,6 +854,7 @@ const proposalActionLabels = {
   QueueAcceptedResultIntegrationResponsibility: "Queue the accepted result for integration",
   ReadCurrentTaskGraph: "Read the tracker graph for the selected task",
   ReadPostClaimGraph: "Read the tracker graph after creating the task claim",
+  ReadRejectedTaskClaim: "Check whether a previously rejected task claim is still foreign",
   ReadTargetLineage: "Read current target lineage from Git",
   ReadTaskClaim: "Read the current task claim from the tracker",
   ReadTaskWorkSpecification: "Read the task's work instructions from the tracker",
@@ -904,10 +913,6 @@ const taskWorkAdmissionSummary = (proposal: DeliveryProposal): string => {
   const requirement = proposal.admission.taskWorkPosition
   return Match.valueTags(requirement, {
     NoTaskWorkPosition: () => "needs no task-work position",
-    PreStartTaskWorkPositionRequired: (value) =>
-      value.mode === "AcquireFresh"
-        ? "must acquire and retain a fresh pre-start task-work position"
-        : `must reuse the pre-start task-work position held by claim operation ${value.claimOperationId}`,
     TaskWorkPositionRequired: (value) =>
       Match.value(value.mode).pipe(
         Match.when("Existing", () => "requires the existing task-work position"),
@@ -979,8 +984,6 @@ const authoredActionIssueFactOf = (issue: DeliveryProposalIssue): AuthoredAction
     AcceptedOperationEvidenceMissing: () =>
       `Dalph cannot ${action.toLowerCase()} because accepted journal evidence is missing`,
     FreshRouteProvenanceMissing: () => `Dalph cannot ${action.toLowerCase()} because fresh route provenance is missing`,
-    PreStartClaimProvenanceMissing: () =>
-      `Dalph cannot ${action.toLowerCase()} because the exact pre-start claim provenance is missing`,
     TypedRoutePolicyContradiction: () =>
       `Dalph cannot ${action.toLowerCase()} because the typed route policy contradicts this transition`
   })
@@ -1147,8 +1150,6 @@ export const evaluateAuthoredObservationCapture: (
 
 const latestArrayElementIndex = -1
 const authoredSettlementYieldTurns = 10
-/** A maintained authored run must either consume a story item or fail with its exact stalled boundary. */
-const authoredProgressWatchdogTurns = 100_000
 
 const operatorControlFailureMatches = (
   failure: unknown,
@@ -1278,6 +1279,7 @@ const coordinatorFinalityMatches = (
   expected: (typeof AuthoredCassetteStoryItem.cases.CoordinatorActivationReturned.Type)["decision"],
   actual: CoordinatorFinalityDecision
 ): boolean => {
+  if (expected._tag === "RunMustRemainActiveReasonUnasserted") return actual._tag === "RunMustRemainActive"
   if (expected._tag !== actual._tag) return false
   /* v8 ignore start -- @preserve Authored activation boundaries separate incomplete returns that must remain active; terminal runs have no following activation boundary. */
   if (expected._tag === "RunMayTerminate") return true
@@ -1429,6 +1431,9 @@ const runAuthoredScenarioCassetteWith = (request: {
             AuthoredStoryPosition.make(storyPosition)
           ).pipe(Effect.asVoid)
       })
+      const offerRunReactivationHint = yield* Ref.make<(hint: "TrackerNotification" | "Timer") => Effect.Effect<void>>(
+        () => Effect.die("the authored Run reactivation owner is not active")
+      )
       const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<AuthoredDeliveryPublication>>([])
       const deliveryPublicationSignals = yield* Queue.unbounded<AuthoredDeliveryPublication>()
       const lastRuntimeOwners = yield* Ref.make<string | null>(null)
@@ -1478,14 +1483,17 @@ const runAuthoredScenarioCassetteWith = (request: {
       })
       const admittedContinuationChoiceApplied = yield* Deferred.make<void>()
       const targetPromotionStory = cassette.story.some((item) => item._tag.startsWith("TargetPromotion"))
+      const exactCausalTrackerReadStory = cassette.story.some((item) => item._tag === "ConcurrentTrackerReadBatch")
+      const runReactivationHintStory = cassette.story.some(
+        (item) =>
+          item._tag === "CassetteOffersRunReactivationHints" ||
+          item._tag === "CassettePublishesCurrentTrackerNotification"
+      )
       const initial = yield* cursor.consumeInitialPolicy
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
       const coordinatorLifecycleBoundaryCount = cassette.story.filter(
-        (item) =>
-          item._tag === "CoordinatorActivationReturned" ||
-          item._tag === "CoordinatorProcessDies" ||
-          item._tag === "CassetteKillsCoordinatorWithTargetLineageReadHeld"
+        (item) => item._tag === "CoordinatorActivationReturned" || item._tag === "CoordinatorProcessDies"
       ).length
       const operatorControlGraphReadGate = yield* Ref.make<
         Option.Option<{ readonly release: Deferred.Deferred<void>; readonly taskId: TaskId }>
@@ -1509,7 +1517,6 @@ const runAuthoredScenarioCassetteWith = (request: {
         )
       )
       const sharedJournal = Context.get(sharedContext, JournalStore)
-      const promotionStaleQuarantineDurable = yield* Deferred.make<void>()
       const evidenceStoreContext = yield* Layer.build(memoryEvidenceStoreLayer)
       const evidenceStore = Context.get(evidenceStoreContext, EvidenceStore)
       const acceptedEvidencePublicationFailure = yield* Ref.make<EvidenceStoreFailure | undefined>(undefined)
@@ -1545,7 +1552,7 @@ const runAuthoredScenarioCassetteWith = (request: {
       })
       const targetPromotionGit = {
         compareAndSet: (request: Parameters<TargetPromotionGitService["compareAndSet"]>[0]) =>
-          cursor.consumeTargetPromotionCompareAndSet.pipe(
+          cursor.consumeTargetPromotionCompareAndSet(request).pipe(
             Effect.map(({ result }) =>
               result._tag === "Applied"
                 ? TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: request.candidateCommit })
@@ -1646,10 +1653,6 @@ const runAuthoredScenarioCassetteWith = (request: {
         event: AuthoredJournalAppendEvent
       ): Effect.Effect<void> =>
         Effect.gen(function* () {
-          // The FullRerun operator action owns an explicit cursor gate until
-          // its journal append returns; pausing on that append would wait on
-          // the same gate and deadlock the direction before the crash seam.
-          if (event._tag === "IntegrationQuarantineDirectionApplied") return
           yield* pauseAtAuthoredJournalBoundary(event)
           if (!isExecutorLifecycleAppend(event)) return
           const firstDurableAppend = yield* Ref.modify(observedExecutorLifecycleKeys, (observed) => {
@@ -1675,9 +1678,6 @@ const runAuthoredScenarioCassetteWith = (request: {
                       event
                     })
                     if (taskClaimHandled) return
-                    if (event._tag === "IntegrationQuarantined" && String(event.basis._tag) === "PromotionStale") {
-                      yield* Deferred.succeed(promotionStaleQuarantineDurable, undefined)
-                    }
                     yield* pauseAfterJournalAppend(key, event)
                   })
                 )
@@ -1716,11 +1716,11 @@ const runAuthoredScenarioCassetteWith = (request: {
         if (
           Option.isNone(hold) ||
           plannedAttempt.attemptId !== hold.value.attemptId ||
-          plannedAttempt.taskId !== hold.value.taskId
+          plannedAttempt.taskId !== hold.value.taskId ||
+          request !== "Suspend"
         ) {
           return
         }
-        if (request !== "Suspend") return
         yield* Deferred.await(hold.value.release)
       })
 
@@ -1900,6 +1900,20 @@ const runAuthoredScenarioCassetteWith = (request: {
           const gitWorktree = yield* GitWorktree
           return WorkflowInterpreter.of({
             ...interpreter,
+            ...(exactCausalTrackerReadStory
+              ? {
+                  readTrackerGraph: (operation) =>
+                    consumeControlledTrackerGraph(cursor, operation.target, {
+                      operationId: operation.operationId,
+                      predecessorOperationIds: operation.predecessorOperationIds
+                    }),
+                  readTaskWorkSpecification: (operation) =>
+                    consumeControlledTaskWorkSpecification(cursor, operation.taskId, {
+                      operationId: operation.operationId,
+                      predecessorOperationIds: operation.predecessorOperationIds
+                    })
+                }
+              : {}),
             readTaskWorktree: (operation) =>
               Effect.gen(function* () {
                 const change = yield* cursor.consumeGitWorktreeObservationChange
@@ -1908,14 +1922,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 }
                 return yield* observePlannedAttemptWorktreeThrough(gitWorktree, operation)
               }),
-            readTargetLineage: (operation) =>
-              Effect.gen(function* () {
-                yield* cursor.awaitTargetLineageReadBoundary(
-                  operation.plannedAttempt.taskId,
-                  operation.plannedAttempt.attemptId
-                )
-                return yield* observeTargetLineageThrough(authoredGitTargetLineage, operation)
-              }),
+            readTargetLineage: (operation) => observeTargetLineageThrough(authoredGitTargetLineage, operation),
             reconcileTaskWorktree: (operation) =>
               runGitWorktreeReconciliation(gitWorktree, operation.plannedAttempt).pipe(
                 Effect.map((proof) => AuthoritativeTaskWorktreeReady.make({ proof }))
@@ -1925,23 +1932,11 @@ const runAuthoredScenarioCassetteWith = (request: {
       ).pipe(Layer.provide(ordinaryInterpreterLayer), Layer.provide(gitWorktreeLayer))
       const baseControlPolicyLayer = taskWorkCapacityControlLayer
       const operatorControlLayer = Layer.mergeAll(
-        attemptChoiceControlLayer,
+        attemptChoiceControlWithProvidedProtocolLayer,
         controlDirectionApplicationLayer,
         taskClaimReacquisitionControlLayer
       )
       const controlPolicyLayer = Layer.merge(baseControlPolicyLayer, operatorControlLayer)
-      const plannedTaskAttemptContext = yield* Layer.build(
-        deterministicPlannedTaskAttemptLayer({
-          baseSha: command.baseSha,
-          executor: command.executor,
-          runId,
-          worktreeRoot: command.worktreeRoot
-        })
-      )
-      const plannedTaskAttemptLayer = Layer.succeed(
-        PlannedTaskAttemptPlanner,
-        Context.get(plannedTaskAttemptContext, PlannedTaskAttemptPlanner)
-      )
       const planningLayer = (activationOrdinal: AuthoredRunActivationOrdinalType) =>
         Layer.mergeAll(
           deterministicOperationIdAllocatorLayer(`cassette:${runId}:activation:${activationOrdinal}:operation`),
@@ -1949,7 +1944,12 @@ const runAuthoredScenarioCassetteWith = (request: {
             owner: command.claimOwner,
             tokenPrefix: command.claimTokenPrefix
           }),
-          plannedTaskAttemptLayer
+          deterministicPlannedTaskAttemptLayer({
+            baseSha: command.baseSha,
+            executor: command.executor,
+            runId,
+            worktreeRoot: command.worktreeRoot
+          })
         )
       const integratorLayer = Layer.merge(
         Layer.succeed(
@@ -1997,20 +1997,20 @@ const runAuthoredScenarioCassetteWith = (request: {
       const latestRuntimeActivationOrdinal = yield* Ref.make(0)
       const survivingExecutorReports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
       const unresolvedLostExecutorResponses = yield* Ref.make<ReadonlySet<string>>(new Set())
+      const executorLayer = controlledExecutorLayer(
+        cursor,
+        runId,
+        applyNextControlDirection,
+        survivingExecutorReports,
+        unresolvedLostExecutorResponses,
+        prepareExecutorReport
+      )
       const runtimeLayerFor = (
         activationOrdinal: AuthoredRunActivationOrdinalType,
         opportunity: RunActivationOpportunityValue
       ) => {
-        const interpreterLayer = journaledWorkflowInterpreterLayer(runId, boundaryAdjustedInterpreterLayer, opportunity)
+        const interpreterLayer = journaledWorkflowInterpreterLayer(runId, boundaryAdjustedInterpreterLayer)
         const planning = planningLayer(activationOrdinal)
-        const executorLayer = controlledExecutorLayer(
-          cursor,
-          runId,
-          applyNextControlDirection,
-          survivingExecutorReports,
-          unresolvedLostExecutorResponses,
-          prepareExecutorReport
-        ).pipe(Layer.provide(controlPolicyLayer))
         const activationLayer = validatedRunActivationLayer(
           runId,
           command.integrationTarget,
@@ -2027,10 +2027,11 @@ const runAuthoredScenarioCassetteWith = (request: {
           Layer.provide(controlPolicyLayer),
           Layer.provide(executorLayer),
           Layer.provide(Layer.succeed(WorkflowTrace, trace)),
-          Layer.provide(planning)
+          Layer.provideMerge(planning)
         )
         return Layer.effectContext(
           Effect.gen(function* () {
+            yield* Ref.set(activeDeliveryActivation, activationOrdinal)
             const context = yield* Layer.build(activationLayer)
             yield* Ref.set(beforeCompletionTask, (_request) =>
               Effect.gen(function* () {
@@ -2049,24 +2050,26 @@ const runAuthoredScenarioCassetteWith = (request: {
             Effect.map((ordinal) => runtimeLayerFor(AuthoredRunActivationOrdinal.make(ordinal), opportunity))
           )
         )
-      const applicationExit = yield* makeApplicationExitShell(coordinatorOwnership, {
-        /* v8 ignore next -- @preserve Authored cassettes observe exit chronology without terminating the test process. */
-        requestEnd: () => Effect.void
-      })
       const operatorControlGraphReadBoundary = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         Effect.gen(function* () {
           yield* Ref.set(operatorControlGraphReadActive, true)
           const result = yield* effect
           return result
         }).pipe(Effect.ensuring(Ref.set(operatorControlGraphReadActive, false)))
-      const application = journaledRunBootstrapLayer(
-        runId,
-        runtimeLayer,
-        applicationExit,
-        noopJournalMaintenanceObservation,
-        operatorControlGraphReadBoundary
-      ).pipe(Layer.provide(journalLayer), Layer.provide(coordinatorOwnershipLayer))
-
+      const makeApplicationProcess = Effect.gen(function* () {
+        const applicationExit = yield* makeApplicationExitShell(coordinatorOwnership, {
+          /* v8 ignore next -- @preserve Authored cassettes observe exit chronology without terminating the test process. */
+          requestEnd: () => Effect.void
+        })
+        const application = journaledRunBootstrapLayer(
+          runId,
+          runtimeLayer,
+          applicationExit,
+          noopJournalMaintenanceObservation,
+          operatorControlGraphReadBoundary
+        ).pipe(Layer.provide(journalLayer), Layer.provide(coordinatorOwnershipLayer), Layer.provide(executorLayer))
+        return { application, applicationExit }
+      })
       const withAuthoredOperatorDriver = <A, E, R>(program: Effect.Effect<A, E, R>) =>
         Effect.scoped(
           Effect.gen(function* () {
@@ -2146,6 +2149,13 @@ const runAuthoredScenarioCassetteWith = (request: {
                 expectedRevision: current.revision,
                 runId
               })
+            }).pipe(Effect.orDie)
+            const driveRunReactivationHints = Effect.gen(function* () {
+              const authored = yield* cursor.consumeRunReactivationHints
+              /* v8 ignore next -- @preserve The tag-selected driver consumes only the current hint burst. */
+              if (Option.isNone(authored)) return
+              const offer = yield* Ref.get(offerRunReactivationHint)
+              yield* Effect.forEach(authored.value.hints, offer, { discard: true })
             }).pipe(Effect.orDie)
             const requirePlannedAttempt = Effect.fn("AuthoredCassette.requirePlannedAttempt")(function* (item: {
               readonly attemptId: AuthoredAttemptChoiceItem["attemptId"]
@@ -2346,45 +2356,6 @@ const runAuthoredScenarioCassetteWith = (request: {
                   yield* cursor.completeControlDirectionBeforeDeliveryActionAdmission
                 }
               }).pipe(Effect.ensuring(releaseOperatorGraphReadGate), Effect.orDie)
-            const driveIntegrationQuarantineDirection = Effect.gen(function* () {
-              const authored = yield* cursor.consumeIntegrationQuarantineDirection
-              /* v8 ignore next -- @preserve The direct-item dispatcher invokes this consumer only for the exact FullRerun choice tag. */
-              if (Option.isNone(authored)) return
-              /* v8 ignore stop -- @preserve */
-              const request = Schema.decodeUnknownSync(ApplyIntegrationQuarantineDirectionRequest)(
-                JSON.parse(JSON.stringify(authored.value.request).replaceAll("$authored-run", String(runId)))
-              )
-              yield* Deferred.await(promotionStaleQuarantineDurable)
-              // The stale-Q signal is emitted by the storage tap immediately
-              // after raw append; yield once so the enclosing Journal can
-              // publish that append before the Operator control rereads it.
-              yield* Effect.yieldNow
-              const quarantineObserved = (yield* sharedJournal.read(runId)).some(
-                (record) =>
-                  record.position === request.fingerprint.quarantineAt &&
-                  record.event._tag === "IntegrationQuarantined" &&
-                  record.event.correlation.sessionId === request.fingerprint.sessionId
-              )
-              if (!quarantineObserved) {
-                const quarantinePositions = (yield* sharedJournal.read(runId))
-                  .filter((record) => record.event._tag === "IntegrationQuarantined")
-                  .map((record) => `${record.position}`)
-                return yield* Effect.die(
-                  `authored FullRerun choice reached before quarantine ${request.fingerprint.quarantineAt} was durable; observed=${quarantinePositions.join(",")}`
-                )
-              }
-              const applied = yield* bootstrap.operatorControl.applyIntegrationQuarantineDirection(request)
-              if (
-                applied.application.event.fingerprint.direction !== request.fingerprint.direction ||
-                applied.application.event.fingerprint.quarantineAt !== request.fingerprint.quarantineAt ||
-                applied.application.event.fingerprint.sessionId !== request.fingerprint.sessionId
-              ) {
-                return yield* Effect.die(
-                  `authored quarantine direction expected ${request.fingerprint.direction} at ${request.fingerprint.quarantineAt}`
-                )
-              }
-              yield* cursor.completeIntegrationQuarantineDirection
-            }).pipe(Effect.orDie)
             const driveRunCancellation = Effect.gen(function* () {
               const authored = yield* cursor.consumeRunCancellation
               /* v8 ignore next -- @preserve The exhaustive direct-item dispatcher invokes this driver only for the current cancellation tag. */
@@ -2592,11 +2563,23 @@ const runAuthoredScenarioCassetteWith = (request: {
             )
             const driveTaskWorkSpecificationReadBoundaryRelease =
               cursor.consumeTaskWorkSpecificationReadBoundaryRelease.pipe(Effect.asVoid, Effect.orDie)
-            const driveTargetLineageReadBoundaryHold = cursor.consumeTargetLineageReadBoundaryHold.pipe(
+            const driveTaskWorktreeSelectionHold = cursor.consumeTaskWorktreeSelectionHold.pipe(
               Effect.asVoid,
               Effect.orDie
             )
-            const driveTargetLineageReadBoundaryRelease = cursor.consumeTargetLineageReadBoundaryRelease.pipe(
+            const driveTaskWorktreeSelectionRelease = cursor.consumeTaskWorktreeSelectionRelease.pipe(
+              Effect.asVoid,
+              Effect.orDie
+            )
+            const drivePromotedCompletionReadHold = cursor.consumePromotedCompletionReadHold.pipe(
+              Effect.asVoid,
+              Effect.orDie
+            )
+            const drivePromotedCompletionReadRelease = cursor.consumePromotedCompletionReadRelease.pipe(
+              Effect.asVoid,
+              Effect.orDie
+            )
+            const driveFreshTaskClaimSelectionHold = cursor.consumeFreshTaskClaimSelectionHold.pipe(
               Effect.asVoid,
               Effect.orDie
             )
@@ -2606,17 +2589,20 @@ const runAuthoredScenarioCassetteWith = (request: {
                 readonly _tag:
                   | "OperatorAppliesControlDirection"
                   | "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
-                  | "OperatorAppliesIntegrationQuarantineDirection"
                   | "OperatorAppliesRunCancellation"
                   | "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary"
+                  | "CassetteOffersRunReactivationHints"
                   | "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"
                   | "CassetteReleasesHeldPlannedAttemptSuspension"
                   | "CassetteReleasesHeldPlannedAttemptContinuation"
                   | "CassetteReleasesHeldTargetPromotionReconciliationRead"
                   | "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary"
                   | "CassetteReleasesHeldTaskWorkSpecificationRead"
-                  | "CassetteHoldsTargetLineageReadBeforeBoundary"
-                  | "CassetteReleasesHeldTargetLineageRead"
+                  | "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion"
+                  | "CassetteReleasesHeldTaskWorktreeSelection"
+                  | "CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins"
+                  | "CassetteReleasesHeldPromotedTaskCompletionClaimRead"
+                  | "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions"
                   | "OperatorContinuesAttempt"
                   | "OperatorDirectsTaskClaimReacquisition"
                   | "OperatorRacesContinueAndStop"
@@ -2633,17 +2619,20 @@ const runAuthoredScenarioCassetteWith = (request: {
             const directlyDrivenTags: ReadonlySet<AuthoredCassetteStoryItem["_tag"]> = new Set([
               "OperatorAppliesControlDirection",
               "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
-              "OperatorAppliesIntegrationQuarantineDirection",
               "OperatorAppliesRunCancellation",
               "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
+              "CassetteOffersRunReactivationHints",
               "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
               "CassetteReleasesHeldPlannedAttemptSuspension",
               "CassetteReleasesHeldPlannedAttemptContinuation",
               "CassetteReleasesHeldTargetPromotionReconciliationRead",
               "CassetteHoldsTaskWorkSpecificationReadBeforeBoundary",
               "CassetteReleasesHeldTaskWorkSpecificationRead",
-              "CassetteHoldsTargetLineageReadBeforeBoundary",
-              "CassetteReleasesHeldTargetLineageRead",
+              "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion",
+              "CassetteReleasesHeldTaskWorktreeSelection",
+              "CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins",
+              "CassetteReleasesHeldPromotedTaskCompletionClaimRead",
+              "CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions",
               "OperatorContinuesAttempt",
               "OperatorDirectsTaskClaimReacquisition",
               "OperatorRacesContinueAndStop",
@@ -2663,10 +2652,10 @@ const runAuthoredScenarioCassetteWith = (request: {
               Match.valueTags(item, {
                 OperatorAppliesControlDirection: (item) => driveControlDirection(item),
                 OperatorAppliesControlDirectionBeforeDeliveryActionAdmission: (item) => driveControlDirection(item),
-                OperatorAppliesIntegrationQuarantineDirection: () => driveIntegrationQuarantineDirection,
                 OperatorAppliesRunCancellation: () => driveRunCancellation,
                 CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: () =>
                   drivePlannedSuspensionExecutorBoundaryHold,
+                CassetteOffersRunReactivationHints: () => driveRunReactivationHints,
                 CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: () =>
                   drivePlannedContinuationExecutorBoundaryHold,
                 CassetteReleasesHeldPlannedAttemptSuspension: () => drivePlannedSuspensionExecutorBoundaryRelease,
@@ -2675,8 +2664,11 @@ const runAuthoredScenarioCassetteWith = (request: {
                   driveTargetPromotionReconciliationReadBoundaryRelease,
                 CassetteHoldsTaskWorkSpecificationReadBeforeBoundary: () => driveTaskWorkSpecificationReadBoundaryHold,
                 CassetteReleasesHeldTaskWorkSpecificationRead: () => driveTaskWorkSpecificationReadBoundaryRelease,
-                CassetteHoldsTargetLineageReadBeforeBoundary: () => driveTargetLineageReadBoundaryHold,
-                CassetteReleasesHeldTargetLineageRead: () => driveTargetLineageReadBoundaryRelease,
+                CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion: () => driveTaskWorktreeSelectionHold,
+                CassetteReleasesHeldTaskWorktreeSelection: () => driveTaskWorktreeSelectionRelease,
+                CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins: () => drivePromotedCompletionReadHold,
+                CassetteReleasesHeldPromotedTaskCompletionClaimRead: () => drivePromotedCompletionReadRelease,
+                CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions: () => driveFreshTaskClaimSelectionHold,
                 OperatorContinuesAttempt: () => driveAttemptChoice,
                 OperatorDirectsTaskClaimReacquisition: () => driveClaimReacquisition,
                 OperatorRacesContinueAndStop: () => driveAttemptChoiceRace,
@@ -2746,18 +2738,10 @@ const runAuthoredScenarioCassetteWith = (request: {
 
           const awaitAdmittedContinuationChoice = Effect.fn("AuthoredCassette.awaitAdmittedContinuationChoice")(
             function* (action: ControlledDeliveryAction) {
+              const plannedAttempt = resumedPlannedAttempt(action)
+              if (plannedAttempt === undefined) return
               const hold = yield* cursor.consumeAdmittedContinuationExecutorIntentHold
               if (Option.isNone(hold)) return
-              const plannedAttempt = resumedPlannedAttempt(action)
-              /* v8 ignore start -- @preserve Hold closure validation places this synchronization only before the exact admitted Resume action. */
-              if (plannedAttempt === undefined) {
-                return yield* Effect.die(
-                  new Error(
-                    `authored continuation hold expected ResumePlannedAttemptExecutorWorkAfterCurrentFacts, received ${action.proposal.route._tag}`
-                  )
-                )
-              }
-              /* v8 ignore stop -- @preserve */
               /* v8 ignore start -- @preserve Hold closure validation binds the admitted continuation to this exact planned attempt. */
               if (plannedAttempt.attemptId !== hold.value.attemptId || plannedAttempt.taskId !== hold.value.taskId) {
                 return yield* Effect.die(
@@ -2777,7 +2761,11 @@ const runAuthoredScenarioCassetteWith = (request: {
             if (plannedAttempt === undefined) return
             const key = `${plannedAttempt.taskId}:${plannedAttempt.attemptId}`
             const current = yield* cursor.currentStoryItem
-            if (current?._tag === "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary") {
+            if (
+              current?._tag === "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary" &&
+              current.attemptId === plannedAttempt.attemptId &&
+              current.taskId === plannedAttempt.taskId
+            ) {
               yield* cursor.awaitCurrentStoryAdvance
             }
             const gate = (yield* Ref.get(plannedContinuationExecutorBoundaryGate)).get(key)
@@ -2803,35 +2791,110 @@ const runAuthoredScenarioCassetteWith = (request: {
             : Effect.die("an authored Run must not reevaluate its initial control-policy source")
         )
       )
-      const activateRun = (activationOrdinal: AuthoredRunActivationOrdinalType, activeRefresh: boolean) =>
+      const activateRun = (activationOrdinal: AuthoredRunActivationOrdinalType) =>
         Ref.set(activeDeliveryActivation, activationOrdinal).pipe(
           Effect.andThen(
             withAuthoredOperatorDriver(
-              (activeRefresh
-                ? runWorkflowWithControlledActiveWorkAuthorityRefresh(
-                    command.target,
-                    initialControlPolicySource,
-                    runId,
-                    controlledExecutorFactory,
-                    "Timer",
-                    false
-                  )
-                : runWorkflowWithControlledDeliveryActionExecutor(
-                    command.target,
-                    initialControlPolicySource,
-                    runId,
-                    controlledExecutorFactory,
-                    false
-                  )
+              runWorkflowWithControlledDeliveryActionExecutor(
+                command.target,
+                initialControlPolicySource,
+                runId,
+                controlledExecutorFactory,
+                false
               ).pipe(Effect.provide(planningLayer(activationOrdinal)))
             )
           )
         )
+      const activateRunInNewApplicationProcess = (activationOrdinal: AuthoredRunActivationOrdinalType) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const { application } = yield* makeApplicationProcess
+            return yield* activateRun(activationOrdinal).pipe(Effect.provide(application))
+          })
+        )
+      const runThroughProductionReactivationOwner = Effect.gen(function* () {
+        const { application, applicationExit } = yield* makeApplicationProcess
+        const applicationContext = yield* Layer.build(application)
+        const bootstrap = Context.get(applicationContext, JournaledRunBootstrap)
+        const failure = yield* Deferred.make<unknown>()
+        const quietInterval = Duration.hours(1)
+        const trackerNotificationSource = {
+          attach: Effect.gen(function* () {
+            const authored = yield* cursor.consumeCurrentTrackerNotification
+            if (Option.isNone(authored)) {
+              return yield* Effect.die("the authored current-first tracker source requires one exact notification")
+            }
+            return { changes: Stream.empty, current: { _tag: "AuthoredTrackerNotification" as const } }
+          }),
+          changes: Stream.empty,
+          get: Effect.succeed(undefined)
+        }
+        const ownerLayer = runReactivationOwnerLayer({
+          activate: (opportunity) =>
+            Ref.get(latestRuntimeActivationOrdinal).pipe(
+              Effect.flatMap((ordinal) =>
+                runWorkflowWithControlledDeliveryActionExecutor(
+                  command.target,
+                  initialControlPolicySource,
+                  runId,
+                  controlledExecutorFactory,
+                  false,
+                  opportunity
+                ).pipe(
+                  Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
+                  Effect.provideService(JournaledRunBootstrap, bootstrap)
+                )
+              )
+            ),
+          activateActiveWorkAuthorityRefresh: (source) =>
+            Ref.get(latestRuntimeActivationOrdinal).pipe(
+              Effect.flatMap((ordinal) =>
+                runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh(
+                  command.target,
+                  initialControlPolicySource,
+                  runId,
+                  controlledExecutorFactory,
+                  source,
+                  false
+                ).pipe(
+                  Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
+                  Effect.provideService(JournaledRunBootstrap, bootstrap)
+                )
+              )
+            ),
+          activationInterval: quietInterval,
+          failureCooldown: quietInterval,
+          installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
+            bootstrap.registerAcceptedRunReactivationObservers({
+              control,
+              acceptedFactPublication: () => acceptedFactPublication
+            }),
+          isTerminationFailure: (cause) => cause instanceof WorkflowRunAlreadyTerminated,
+          onFailure: (cause) => Deferred.succeed(failure, cause).pipe(Effect.asVoid),
+          readControl: bootstrap.readRunReactivationControl(command.target, runId),
+          runId,
+          trackerNotificationSource
+        }).pipe(Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)))
+        const ownerContext = yield* Layer.build(ownerLayer)
+        const processContext = Context.merge(applicationContext, ownerContext)
+        yield* withAuthoredOperatorDriver(
+          Effect.gen(function* () {
+            const owner = yield* RunReactivationOwner
+            yield* Ref.set(offerRunReactivationHint, (hint) =>
+              owner.hint(
+                hint === "TrackerNotification" ? RunReactivationHint.TrackerNotification() : RunReactivationHint.Timer()
+              )
+            )
+            yield* Effect.raceFirst(
+              cursor.awaitTerminalAssertions,
+              Deferred.await(failure).pipe(Effect.flatMap((cause) => Effect.die(cause)))
+            )
+          })
+        ).pipe(Effect.provide(processContext))
+      })
       const runAcrossActivations = Effect.gen(function* () {
         const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
-        const alternatesActiveRefresh = cassette.name.startsWith("DS01-17")
-        let activeRefresh = false
-        let coordinator = yield* Effect.forkScoped(activateRun(firstActivationOrdinal, activeRefresh))
+        let coordinator = yield* Effect.forkScoped(activateRun(firstActivationOrdinal))
         const activationOrdinals: Array<AuthoredRunActivationOrdinalType> = [firstActivationOrdinal]
         let consumedLifecycleBoundaries = 0
         let activationOrdinal = firstActivationOrdinal
@@ -2841,8 +2904,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           if (interactionFailure !== undefined) return yield* interactionFailure
           const boundary = { _tag: "CoordinatorActivationReturned" as const, exit: boundaryExit }
           consumedLifecycleBoundaries += 1
-          const processDied = isAuthoredCoordinatorProcessDeath(boundary.exit)
-          if (processDied) {
+          if (isAuthoredCoordinatorProcessDeath(boundary.exit)) {
             // The exact production action fiber raised the typed cassette
             // control. Its scoped activation has already unwound; do not
             // synthesize an interrupt, journal event, or recovery attempt.
@@ -2851,10 +2913,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           }
           if (yield* cursor.atTerminalAssertions) break
           activationOrdinal = AuthoredRunActivationOrdinal.make(activationOrdinal + 1)
-          activeRefresh = alternatesActiveRefresh && !processDied ? !activeRefresh : false
-          coordinator = yield* activateRun(activationOrdinal, activeRefresh).pipe(
-            Effect.forkScoped({ startImmediately: true })
-          )
+          coordinator = yield* activateRun(activationOrdinal).pipe(Effect.forkScoped({ startImmediately: true }))
           activationOrdinals.push(activationOrdinal)
         }
         yield* Effect.raceFirst(
@@ -2881,44 +2940,47 @@ const runAuthoredScenarioCassetteWith = (request: {
         yield* Fiber.interrupt(coordinator)
         return { activationOrdinals, coordinatorExitAtAssertions, records: yield* sharedJournal.read(runId) }
       })
+      const runReactivationOwnerStory = Effect.gen(function* () {
+        const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
+        const coordinator = yield* Effect.forkScoped(activateRunInNewApplicationProcess(firstActivationOrdinal))
+        const boundaryExit = yield* Fiber.await(coordinator)
+        const interactionFailure = yield* Ref.get(authoredInteractionFailure)
+        if (interactionFailure !== undefined) return yield* interactionFailure
+        if (!isAuthoredCoordinatorProcessDeath(boundaryExit)) {
+          return yield* Effect.die(
+            "the authored current-first reactivation story requires one coordinator process death"
+          )
+        }
+        yield* runThroughProductionReactivationOwner
+        const activationCount = yield* Ref.get(latestRuntimeActivationOrdinal)
+        return {
+          activationOrdinals: Array.from({ length: activationCount }, (_, index) =>
+            AuthoredRunActivationOrdinal.make(index + 1)
+          ),
+          coordinatorExitAtAssertions: undefined,
+          records: yield* sharedJournal.read(runId)
+        }
+      })
       const runSingleActivation = Effect.gen(function* () {
         const activationOrdinal = AuthoredRunActivationOrdinal.make(1)
-        const activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType> = [activationOrdinal]
-        yield* activateRun(activationOrdinal, false)
+        const activationOrdinals: Array<AuthoredRunActivationOrdinalType> = [activationOrdinal]
+        yield* activateRun(activationOrdinal)
         return { activationOrdinals, coordinatorExitAtAssertions: undefined, records: yield* sharedJournal.read(runId) }
       })
-      const coordinatorExecution = Effect.gen(function* () {
+      const ordinaryCoordinatorExecution = Effect.gen(function* () {
         if (coordinatorLifecycleBoundaryCount > 0) return yield* runAcrossActivations
         return yield* runSingleActivation
       })
-      const authoredProgressWatchdog = Effect.gen(function* () {
-        let lastPosition = yield* cursor.storyPosition
-        let stagnantTurns = 0
-        for (;;) {
-          yield* Effect.yieldNow
-          const position = yield* cursor.storyPosition
-          if (position !== lastPosition) {
-            lastPosition = position
-            stagnantTurns = 0
-            continue
-          }
-          stagnantTurns += 1
-          if (stagnantTurns < authoredProgressWatchdogTurns) continue
-          const current = yield* cursor.currentStoryItem
-          return yield* Effect.die(
-            `authored scenario progress stalled at story position ${position}: ${JSON.stringify(current ?? "EndOfStory")}`
-          )
-        }
+      const standardCoordinatorExecution = Effect.gen(function* () {
+        const { application } = yield* makeApplicationProcess
+        return yield* ordinaryCoordinatorExecution.pipe(Effect.provide(application))
       })
-      // The maintained DS01-17 capstone is the long-running concurrency
-      // witness; keep its bounded progress assertion local so ordinary
-      // authored cassettes retain their existing asynchronous boundaries.
-      const guardedCoordinatorExecution = cassette.name.startsWith("DS01-17")
-        ? Effect.raceFirst(coordinatorExecution, authoredProgressWatchdog)
-        : coordinatorExecution
+      const processProvidedCoordinatorExecution = Effect.gen(function* () {
+        if (runReactivationHintStory) return yield* runReactivationOwnerStory
+        return yield* standardCoordinatorExecution
+      })
       const execution = yield* Effect.scoped(
-        guardedCoordinatorExecution.pipe(
-          Effect.provide(application),
+        processProvidedCoordinatorExecution.pipe(
           Effect.provideService(DeliveryRelationPublicationObserver, publicationObserver),
           Effect.provideService(DeliveryRuntimeObservationObserver, runtimeObservationObserver)
         )
@@ -2964,10 +3026,16 @@ export interface AuthoredScenarioCassetteRunFailure {
   readonly _tag: string
 }
 
+const isAuthoredScenarioCassetteRunFailure = (failure: unknown): failure is AuthoredScenarioCassetteRunFailure =>
+  typeof failure === "object" && failure !== null && "_tag" in failure && typeof failure._tag === "string"
+
+const authoredScenarioCassetteRunFailureOf = (failure: unknown): AuthoredScenarioCassetteRunFailure =>
+  isAuthoredScenarioCassetteRunFailure(failure) ? failure : { _tag: "AuthoredScenarioCassetteUnknownFailure" }
+
 export const runAuthoredScenarioCassette: (
   input: unknown,
   options?: AuthoredScenarioCassetteRunOptions
 ) => Effect.Effect<AuthoredScenarioCassetteRun, AuthoredScenarioCassetteRunFailure, Crypto.Crypto> = (
   input,
   options = {}
-) => runAuthoredScenarioCassetteWith({ input, options })
+) => runAuthoredScenarioCassetteWith({ input, options }).pipe(Effect.mapError(authoredScenarioCassetteRunFailureOf))

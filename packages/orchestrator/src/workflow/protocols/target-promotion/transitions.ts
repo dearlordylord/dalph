@@ -79,7 +79,7 @@ export type TargetPromotionIntendedAttempt = {
 }
 
 /** An untrusted structural settlement claim; only a registered Git response can settle it. */
-export type TargetPromotionSettlementClaim = {
+type TargetPromotionSettlementClaim = {
   readonly _tag: "TargetPromotionAttemptObserved"
   readonly attemptOrdinal: TargetPromotionAttemptOrdinal
   readonly correlation: TargetPromotionCorrelation

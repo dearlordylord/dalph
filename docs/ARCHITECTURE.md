@@ -421,9 +421,14 @@ and [Attempt Delivery and Integration](architecture/attempt-delivery-and-integra
 When an activation ends with an executing report, the next independently
 selected observation contacts only the executor's passive state boundary; it
 does not reread tracker or Git facts as permission for the already autonomous
-work. If responsibility is durable but no later report is accepted, the next
+work. If responsibility is durable, no later report is accepted, and no
+pending or unresolved executor-state observation evidence exists, the next
 activation reconstructs that exact responsibility through the ordinary Run
 entry and observes the executor that owns the exact `(RunId, AttemptId)`.
+Recorded absent, unavailable, unreadable, or foreign-correlation evidence is
+unresolved and non-authoritative: responsibility and position remain, but
+restart neither reprojects nor reattaches until a separately accepted rule
+defines how that evidence is resolved and admits another passive read.
 Process loss does not prove that work stopped and does not authorize another
 Begin. If a command response was ambiguous, that passive projection reconciles
 the exact command before any bounded retry. Only an accepted safely suspended

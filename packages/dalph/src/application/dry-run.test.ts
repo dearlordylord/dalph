@@ -143,7 +143,7 @@ it.effect("selects the default production GitHub reader and reports its missing 
     )
 
     expect(failure).toBeInstanceOf(GithubTokenRequiredError)
-    if (failure._tag !== "Cli.GithubTokenRequired") return
+    if (!(failure instanceof GithubTokenRequiredError)) return
     expect(failure.variable).toBe("GITHUB_TOKEN")
   })
 )

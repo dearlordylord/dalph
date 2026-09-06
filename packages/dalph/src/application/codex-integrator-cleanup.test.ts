@@ -40,7 +40,7 @@ import {
   GitCommandInvocationFailure,
   type GitCommandService
 } from "@dalph/orchestrator"
-import { Effect, FileSystem, Option, Ref, Schema } from "effect"
+import { Effect, FileSystem, Option, Ref, Schema, Stream } from "effect"
 import { describe, expect, it } from "vitest"
 import {
   CodexOwnedTurnToken,
@@ -259,6 +259,8 @@ const runCase = <A>(
         const failure = (operation: "thread/resume" | "thread/backgroundTerminals/list") =>
           new CodexAppServerFailure({ operation, kind: "Unavailable", detail: "cleanup boundary unavailable" })
         const app: CodexAppServerService = CodexAppServer.of({
+          attachOwnedActivityHints: Effect.succeed(Stream.empty),
+          attachTurnCompletedHints: Effect.succeed(Stream.empty),
           incarnation: CodexServerIncarnation.make("cleanup-incarnation"),
           startThread: () => Effect.succeed(thread),
           readThread: () => Effect.succeed(thread),

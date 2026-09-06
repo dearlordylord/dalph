@@ -62,8 +62,6 @@ const appendableJournal = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
 
 const inertLease: DeliveryActionExecutionLease = {
   acceptIntegrationTargetOwnership: Effect.void,
-  bindPreStartTaskWorkPosition: () => Effect.void,
-  bindPreStartPlannedAttemptPosition: () => Effect.void,
   bindPlannedAttemptPosition: () => Effect.void,
   forwardBoundary: { _tag: "AtomicBoundary", execution: { run: (effect) => effect } },
   integrationTargets: {

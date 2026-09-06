@@ -705,6 +705,30 @@ describe("capability registration gate", () => {
     )
   })
 
+  it("does not retain a removed fixture's Layer binding in the next source audit", () => {
+    const provider: CapabilitySourceFile = {
+      path: "scripts/fixtures/transient-provider.ts",
+      source: "export const temporaryProviderLayer = Layer.succeed(UnknownService, {})"
+    }
+    const composition: CapabilitySourceFile = {
+      path: "scripts/fixtures/transient-composition.ts",
+      source:
+        'import { temporaryProviderLayer } from "./transient-provider.js"\nexport const assembled = temporaryProviderLayer'
+    }
+    const inventory = {
+      ...capabilityRegistrationInventory,
+      compositionSources: [
+        ...capabilityRegistrationInventory.compositionSources,
+        { role: "production" as const, source: composition.path }
+      ]
+    }
+    const issue = "production uses unregistered exported Layer temporaryProviderLayer"
+
+    expect(runCapabilityRegistrationGate(inventory, [...sourceFiles, provider, composition])).toContain(issue)
+    expect(runCapabilityRegistrationGate(inventory, [...sourceFiles, composition])).not.toContain(issue)
+    expect(runCapabilityRegistrationGate(inventory, [...sourceFiles, provider, composition])).toContain(issue)
+  })
+
   it("audits exported Layer values without a Layer suffix and through re-exports", () => {
     const layerSource: CapabilitySourceFile = {
       path: "scripts/fixtures/issue-79-layer-source.ts",
@@ -1052,5 +1076,14 @@ describe("capability registration gate", () => {
     timeout: withoutQuint ? 60 * SECOND : 2 * 60 * SECOND
   }`)
     expect(qualityGate).toContain("runBoundedCommand")
+  })
+
+  it("relays parent signals for every bounded quality-gate stage", () => {
+    const qualityGate = readFileSync("scripts/run-quality-gate.mjs", "utf8")
+
+    expect(qualityGate).toMatch(
+      /name: `Quality gate '\$\{gate\.name\}'`,\n\s*relayParentSignals: true,\n\s*terminationGraceMilliseconds: gate\.terminationGrace,/u
+    )
+    expect(qualityGate).not.toContain("relayParentSignals: gate.relayParentSignals")
   })
 })

@@ -14,22 +14,39 @@ export type FreshWorkflowStep = Data.TaggedEnum<{
     readonly predecessorOperationId: OperationId
     readonly task: Task
   }
-  ReadTaskWorkSpecification: {
+  /**
+   * A later complete graph observation wakes one focused claim reread for a
+   * task whose exact fresh-entry acquisition was conclusively rejected.
+   * Neither observation alone clears the foreign-claim constraint.
+   */
+  ReadRejectedTaskClaim: {
     readonly predecessorOperationId: OperationId
-    readonly purpose: "PreStart"
+    readonly rejectedClaimOperationId: OperationId
+    readonly task: Task
+  }
+  ReadTaskWorkSpecification: {
+    /** Exact fresh claim operation whose durable commitment authorizes this continuation. */
+    readonly claimOperationId: OperationId
+    readonly predecessorOperationId: OperationId
     readonly task: Task
   }
   RecordTaskAttemptPlan: {
+    /** Exact fresh claim operation whose durable commitment authorizes this continuation. */
+    readonly claimOperationId: OperationId
     readonly predecessorOperationId: OperationId
     readonly specification: TaskWorkSpecification
     readonly task: Task
   }
   ReconcileTaskWorktree: {
+    /** Exact fresh claim operation whose durable commitment authorizes this continuation. */
+    readonly claimOperationId: OperationId
     readonly plannedAttempt: PlannedTaskAttempt
     readonly predecessorOperationId: OperationId
     readonly task: Task
   }
   BeginPlannedAttemptExecutorWork: {
+    /** Exact TaskSelection claim operation whose commitment this attempt replaces. */
+    readonly claimOperationId: OperationId
     readonly plannedAttempt: PlannedTaskAttempt
     readonly specification: TaskWorkSpecification
     readonly task: Task

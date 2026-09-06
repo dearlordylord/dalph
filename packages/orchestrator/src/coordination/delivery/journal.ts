@@ -31,6 +31,7 @@ import type {
   TaskTrackerFactsObservedEvent,
   UnchangedTaskTrackerFactsReconfirmed
 } from "../../workflow/task-tracker-facts/observation.js"
+import type { TrackerGraphReadCause } from "../../workflow/registry/operation.js"
 
 const lastElementOffset = -1
 
@@ -40,6 +41,7 @@ const JournaledTrackerGraphObservationTypeId: unique symbol = Symbol("JournaledT
 /** Journaled graph observation evidence is privately branded inside this journal boundary. */
 export interface JournaledTrackerGraphObservation extends JournaledGraphObservationFields {
   readonly [JournaledTrackerGraphObservationTypeId]: typeof JournaledTrackerGraphObservationTypeId
+  readonly cause: typeof TrackerGraphReadCause.Type
 }
 
 /** The journal prefix and its process-local projections at one exact position. */
@@ -98,6 +100,7 @@ type JournaledGraphRecord = Pick<JournalRecord, "position"> & { readonly event: 
 interface JournaledGraphReceipt {
   readonly [JournaledGraphReceiptTypeId]: typeof JournaledGraphReceiptTypeId
   readonly event: JournaledGraphEvent
+  readonly cause: typeof TrackerGraphReadCause.Type
   readonly position: JournalPosition
   readonly snapshot: TaskDagSnapshot
 }
@@ -109,11 +112,13 @@ const isJournaledGraphEvent = (event: TaskTrackerFactsObservedEvent): event is J
 /** Mints a receipt only after this journal has selected a complete/reconfirmed event. */
 const journaledGraphReceiptFromEvent = (input: {
   readonly event: JournaledGraphEvent
+  readonly cause: typeof TrackerGraphReadCause.Type
   readonly position: JournalPosition
   readonly snapshot: TaskDagSnapshot
 }): JournaledGraphReceipt => ({
   [JournaledGraphReceiptTypeId]: JournaledGraphReceiptTypeId,
   event: input.event,
+  cause: input.cause,
   position: input.position,
   snapshot: input.snapshot
 })
@@ -127,7 +132,11 @@ const journaledTrackerGraphObservationFromReceipt = (
       position,
       snapshot
     })),
-    (fields) => ({ [JournaledTrackerGraphObservationTypeId]: JournaledTrackerGraphObservationTypeId, ...fields })
+    (fields) => ({
+      [JournaledTrackerGraphObservationTypeId]: JournaledTrackerGraphObservationTypeId,
+      cause: receipt.cause,
+      ...fields
+    })
   )
 
 const latestGraphObservationFrom = (
@@ -144,7 +153,22 @@ const latestGraphObservationFrom = (
     latest = { event: record.event, position: record.position }
   }
   return Option.flatMap(Option.fromUndefinedOr(latest), ({ event, position }) =>
-    journaledTrackerGraphObservationFromReceipt(journaledGraphReceiptFromEvent({ event, position, snapshot }))
+    Option.flatMap(
+      Option.fromUndefinedOr(
+        records.findLast(
+          ({ event: candidate }) =>
+            candidate._tag === "TaskTrackerReadIntentRecorded" &&
+            candidate.operation._tag === "ReadTrackerGraph" &&
+            candidate.operation.operationId === event.operationId
+        )
+      ),
+      (intent) =>
+        intent.event._tag === "TaskTrackerReadIntentRecorded" && intent.event.operation._tag === "ReadTrackerGraph"
+          ? journaledTrackerGraphObservationFromReceipt(
+              journaledGraphReceiptFromEvent({ cause: intent.event.operation.cause, event, position, snapshot })
+            )
+          : Option.none()
+    )
   )
 }
 

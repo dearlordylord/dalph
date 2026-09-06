@@ -7,7 +7,7 @@ import {
   WorkflowTrace,
   type GithubGraphqlRequest
 } from "@dalph/orchestrator"
-import { Deferred, Effect, Layer, Ref, Result, Schema } from "effect"
+import { Deferred, Effect, Layer, Ref, Result, Schema, Stream } from "effect"
 import nodeProcess from "node:process"
 import { join } from "node:path"
 import { productionRepositoryHostGraph, withProductionRepositoryHost } from "../src/application/production-host.js"
@@ -130,6 +130,8 @@ const makeGithubClient = (
 
 const fakeCodexAppServer = CodexAppServerService.of({
   incarnation: CodexServerIncarnation.make("production-restart-child-incarnation"),
+  attachTurnCompletedHints: Effect.succeed(Stream.empty),
+  attachOwnedActivityHints: Effect.succeed(Stream.empty),
   startThread: () => Effect.die("restart fixture must not start a Codex thread"),
   readThread: () => Effect.die("restart fixture must not read a Codex thread"),
   resumeThread: () => Effect.die("restart fixture must not resume a Codex thread"),

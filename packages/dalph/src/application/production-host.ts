@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Production host composition keeps one scoped lifecycle and its qualification seams auditable. */
 import { NodeCrypto, NodeHttpClient, NodeServices } from "@effect/platform-node"
-import { IntegrationTarget, PlannedAttemptExecutor } from "@dalph/contracts"
+import { IntegrationTarget, PlannedAttemptExecutor, PlannedAttemptExecutorLifecycleObservation } from "@dalph/contracts"
 import {
   type GithubGraphqlClient,
   type RunReactivationOwner,
@@ -247,7 +247,7 @@ const observedPlannedAttemptExecutor = (
   })
 
 const observedPlannedAttemptExecutorLayer = <E, R>(
-  layer: Layer.Layer<PlannedAttemptExecutor, E, R>,
+  layer: Layer.Layer<PlannedAttemptExecutor | PlannedAttemptExecutorLifecycleObservation, E, R>,
   observe: ProductionRepositoryHostBoundaryObserver | undefined
 ) => {
   if (observe === undefined) return layer
@@ -431,6 +431,7 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
         const completionTask = Context.get(services, CompletionTaskBoundary)
         const evidence = Context.get(services, EvidenceStore)
         const executor = Context.get(services, PlannedAttemptExecutor)
+        const executorLifecycle = Context.get(services, PlannedAttemptExecutorLifecycleObservation)
         const integrator = Context.get(services, Integrator)
         const candidateAuthority = Context.get(services, IntegratorCandidateProviderAuthority)
         const trace = Context.get(services, WorkflowTrace)
@@ -447,7 +448,10 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
           GitCommonDirectoryTarget.make(configuration.commonDirectory),
           IntegrationTarget.make({ repository: configuration.repository, ref: configuration.integrationRef }),
           Layer.succeed(TrackerMutation, tracker),
-          Layer.succeed(PlannedAttemptExecutor, executor),
+          Layer.merge(
+            Layer.succeed(PlannedAttemptExecutor, executor),
+            Layer.succeed(PlannedAttemptExecutorLifecycleObservation, executorLifecycle)
+          ),
           candidateAuthority,
           {
             acceptedResultEvidenceStore: evidence,

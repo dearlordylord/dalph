@@ -10,12 +10,18 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { Effect, Layer, Option } from "effect"
 import { expect } from "vitest"
+import { ActiveTaskClaim } from "../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
+import { PlannedWorktreeReady } from "../authorities/git/worktree.js"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
+import { validSnapshot } from "../../test/task-dag.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
+import { makeFreshTaskAdmissionBasis, TaskAdmissionOccupancy } from "../coordination/admission/fresh-task-admission.js"
 import { makeIntegrationTargetResourceController } from "../coordination/admission/integration-target-resource.js"
 import { makeDeliveryRuntimeAdmissionController } from "../coordination/delivery/delivery-runtime-admission.js"
 import { makeApplicationExitLifecycle } from "../coordination/application-exit/lifecycle.js"
@@ -26,16 +32,42 @@ import { memoryJournalTestLayer } from "../workflow-journal/adapters/memory-stor
 import { InRunJournal, JournalStore } from "../workflow-journal/store.js"
 import { JournalPosition } from "../workflow-journal/identity.js"
 import { OperationId } from "../workflow/identity.js"
-import { TaskAttemptPlannedEvent, TaskWorkCapacityChangedEvent } from "../workflow/registry/event.js"
-import { makeTaskAttemptPlanOperation } from "../workflow/registry/operation.js"
+import {
+  TaskAttemptPlannedEvent,
+  TaskClaimAcquiredEvent,
+  TaskClaimAcquisitionIntendedEvent,
+  TaskWorkCapacityChangedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
+  taskTrackerReadIntent
+} from "../workflow/registry/event.js"
+import {
+  makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
+  makeTrackerGraphObservationOperation
+} from "../workflow/registry/operation.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../workflow/task-tracker-facts/observation.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import {
   attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
+  plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../workflow-journal/record-key.js"
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorStateObservationOrdinal,
   PlannedAttemptExecutorStateObservedEvent,
@@ -193,7 +225,7 @@ it.effect("rereads the winning policy when another writer commits the requested 
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
-it.effect("restart reconstructs the latest applied capacity and both unfinished task positions", () =>
+it.effect("restart reconstructs three unfinished task positions without an admission snapshot", () =>
   Effect.gen(function* () {
     const runId = RunId.make("restart-capacity-run")
     const target = FixtureTarget.make("restart-capacity-target")
@@ -204,34 +236,150 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
       InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
     )
     const control = yield* TaskWorkCapacityControl
-    yield* control.apply({ capacity: 1, expectedRevision: initialRunPolicyRevision, runId })
-    const attempts = ["A", "B"].map((task) =>
-      PlannedTaskAttempt.make({
+    yield* control.apply({ capacity: 3, expectedRevision: initialRunPolicyRevision, runId })
+    const attempts = ["A", "B", "C"].map((task) => {
+      const taskId = TaskId.make(task)
+      const specification = makeTaskWorkSpecification({
+        body: `Complete task ${task}.`,
+        taskId,
+        title: `Complete ${task}`
+      })
+      return PlannedTaskAttempt.make({
         attemptId: AttemptId.make(`restart-capacity-${task}`),
         baseSha: GitCommitSha.make("1".repeat(40)),
         branch: TaskBranchRef.make(`refs/heads/dalph/restart-capacity-${task}`),
         executor: TaskExecutorLocator.make("executor:controlled-fake"),
         runId,
-        taskId: TaskId.make(task),
-        taskRevision: TaskRevision.make(`revision-${task}`),
+        taskId,
+        taskRevision: TaskRevision.make(specification.fingerprint),
         worktree: WorktreeLocator.make(`/worktrees/restart-capacity-${task}`)
       })
-    )
+    })
     yield* Effect.forEach(
       attempts,
       (plannedAttempt) => {
+        const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+        const report = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+          correlation: { attemptId: plannedAttempt.attemptId, runId }
+        })
+        const claim = ActiveTaskClaim.make({
+          operationId: OperationId.make(`claim-${plannedAttempt.attemptId}`),
+          owner: ClaimOwner.make("task-work-capacity-test"),
+          taskId: plannedAttempt.taskId,
+          token: ClaimToken.make(`token-${plannedAttempt.attemptId}`)
+        })
+        const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+        const graphOperation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          OperationId.make(`graph-${plannedAttempt.attemptId}`),
+          target,
+          [claim.operationId],
+          [plannedAttempt.taskId]
+        )
+        const specification = makeTaskWorkSpecification({
+          body: `Complete task ${plannedAttempt.taskId}.`,
+          taskId: plannedAttempt.taskId,
+          title: `Complete ${plannedAttempt.taskId}`
+        })
+        const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+          OperationId.make(`specification-${plannedAttempt.attemptId}`),
+          target,
+          plannedAttempt.taskId,
+          [graphOperation.operationId]
+        )
         const operation = makeTaskAttemptPlanOperation({
           operationId: OperationId.make(`plan-${plannedAttempt.attemptId}`),
           plannedAttempt,
-          predecessorOperationIds: []
+          predecessorOperationIds: [specificationOperation.operationId]
+        })
+        const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+          operationId: OperationId.make(`worktree-${plannedAttempt.attemptId}`),
+          plannedAttempt,
+          predecessorOperationIds: [operation.operationId]
+        })
+        const graph = validSnapshot({
+          revision: `graph-${plannedAttempt.attemptId}`,
+          rootTaskId: plannedAttempt.taskId,
+          tasks: [{ id: plannedAttempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+        })
+        const worktreeProof = PlannedWorktreeReady.make({
+          baseSha: plannedAttempt.baseSha,
+          branch: plannedAttempt.branch,
+          headSha: plannedAttempt.baseSha,
+          worktree: plannedAttempt.worktree
         })
         return journal
           .append(
             runId,
-            attemptPlanRecordKey(plannedAttempt.attemptId),
-            TaskAttemptPlannedEvent.make({ operation, version: workflowJournalEventVersion })
+            intentRecordKey(claim.operationId),
+            TaskClaimAcquisitionIntendedEvent.make({ operation: claimOperation, version: workflowJournalEventVersion })
           )
           .pipe(
+            Effect.andThen(
+              journal.append(
+                runId,
+                outcomeRecordKey(claim.operationId),
+                TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+              )
+            ),
+            Effect.andThen(
+              journal.append(runId, intentRecordKey(graphOperation.operationId), taskTrackerReadIntent(graphOperation))
+            ),
+            Effect.andThen(
+              journal.append(
+                runId,
+                outcomeRecordKey(graphOperation.operationId),
+                taskTrackerFactsObservedEvent(
+                  graphOperation.operationId,
+                  makeCompleteTaskTrackerFactsObserved(graphOperation, graph)
+                )
+              )
+            ),
+            Effect.andThen(
+              journal.append(
+                runId,
+                intentRecordKey(specificationOperation.operationId),
+                taskTrackerReadIntent(specificationOperation)
+              )
+            ),
+            Effect.andThen(
+              journal.append(
+                runId,
+                outcomeRecordKey(specificationOperation.operationId),
+                taskTrackerFactsObservedEvent(
+                  specificationOperation.operationId,
+                  makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification)
+                )
+              )
+            ),
+            Effect.andThen(
+              journal.append(
+                runId,
+                attemptPlanRecordKey(plannedAttempt.attemptId),
+                TaskAttemptPlannedEvent.make({ operation, version: workflowJournalEventVersion })
+              )
+            ),
+            Effect.andThen(
+              journal.append(
+                runId,
+                intentRecordKey(worktreeOperation.operationId),
+                TaskWorktreeReconciliationIntendedEvent.make({
+                  operation: worktreeOperation,
+                  version: workflowJournalEventVersion
+                })
+              )
+            ),
+            Effect.andThen(
+              journal.append(
+                runId,
+                outcomeRecordKey(worktreeOperation.operationId),
+                TaskWorktreeReadyEvent.make({
+                  operationId: worktreeOperation.operationId,
+                  proof: worktreeProof,
+                  version: workflowJournalEventVersion
+                })
+              )
+            ),
             Effect.andThen(
               journal.append(
                 runId,
@@ -241,11 +389,95 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
                   version: workflowJournalEventVersion
                 })
               )
+            ),
+            Effect.andThen(
+              journal.append(
+                runId,
+                plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+                PlannedAttemptExecutorCommandIntendedEvent.make({
+                  command: "Begin",
+                  initiatedBy: { _tag: "DalphCoordinator" },
+                  occurrenceClassification: "InitiatedAction",
+                  ordinal: commandOrdinal,
+                  plannedAttempt,
+                  version: workflowJournalEventVersion
+                })
+              )
+            ),
+            Effect.andThen(
+              journal.append(
+                runId,
+                plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+                PlannedAttemptExecutorCommandResponseObservedEvent.make({
+                  commandOrdinal,
+                  occurrenceClassification: "NonActionOccurrence",
+                  plannedAttempt,
+                  report,
+                  version: workflowJournalEventVersion
+                })
+              )
+            ),
+            Effect.andThen(
+              journal.append(
+                runId,
+                plannedAttemptExecutorWorkReportedRecordKey(
+                  plannedAttempt.attemptId,
+                  PlannedAttemptExecutorReportOrdinal.make(1)
+                ),
+                PlannedAttemptExecutorWorkReportedEvent.make({
+                  ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+                  report,
+                  version: workflowJournalEventVersion
+                })
+              )
             )
           )
       },
       { discard: true }
     )
+    expect((yield* journal.read(runId)).map(({ event }) => event._tag)).toEqual([
+      "WorkflowRunBegan",
+      "TaskWorkCapacityChanged",
+      "TaskClaimAcquisitionIntended",
+      "TaskClaimAcquired",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorktreeReady",
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorCommandIntended",
+      "PlannedAttemptExecutorCommandResponseObserved",
+      "PlannedAttemptExecutorWorkReported",
+      "TaskClaimAcquisitionIntended",
+      "TaskClaimAcquired",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorktreeReady",
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorCommandIntended",
+      "PlannedAttemptExecutorCommandResponseObserved",
+      "PlannedAttemptExecutorWorkReported",
+      "TaskClaimAcquisitionIntended",
+      "TaskClaimAcquired",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "TaskTrackerReadIntentRecorded",
+      "TaskTrackerFactsObserved",
+      "TaskAttemptPlanned",
+      "TaskWorktreeReconciliationIntended",
+      "TaskWorktreeReady",
+      "PlannedAttemptExecutorWorkResponsibilityBegan",
+      "PlannedAttemptExecutorCommandIntended",
+      "PlannedAttemptExecutorCommandResponseObserved",
+      "PlannedAttemptExecutorWorkReported"
+    ])
     const recovery = yield* makeRunRecoveryProjection(runId).pipe(
       Effect.provideService(
         PlannedAttemptExecutor,
@@ -273,21 +505,30 @@ it.effect("restart reconstructs the latest applied capacity and both unfinished 
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
     )
     const current = yield* control.read(runId)
+    const exactReconstructedPositions = [
+      { attemptId: AttemptId.make("restart-capacity-A"), runId, taskId: TaskId.make("A") },
+      { attemptId: AttemptId.make("restart-capacity-B"), runId, taskId: TaskId.make("B") },
+      { attemptId: AttemptId.make("restart-capacity-C"), runId, taskId: TaskId.make("C") }
+    ]
+    expect(recovery.reconstructedPlannedAttemptPositions).toEqual(exactReconstructedPositions)
+    const admissionBasis = yield* makeFreshTaskAdmissionBasis({
+      capacity: current.taskExecutionCapacity,
+      entries: attempts.map((plannedAttempt) => TaskAdmissionOccupancy.ExactAttemptHeld({ plannedAttempt })),
+      runId
+    })
     const controller = yield* makeDeliveryRuntimeAdmissionController(
-      {
-        capacity: current.taskExecutionCapacity,
-        preStart: [],
-        held: recovery.reconstructedPlannedAttemptPositions.map(({ attemptId, runId, taskId }) => ({
-          correlation: { attemptId, runId },
-          taskId
-        }))
-      },
+      admissionBasis,
       yield* makeIntegrationTargetResourceController(),
       (yield* makeApplicationExitLifecycle()).admission
     )
 
-    expect(current).toEqual({ revision: 2, taskExecutionCapacity: 1 })
-    expect([...(yield* controller.snapshot).positions.keys()]).toEqual([TaskId.make("A"), TaskId.make("B")])
+    expect(current).toEqual({ revision: 2, taskExecutionCapacity: 3 })
+    expect([...(yield* controller.snapshot).positions]).toEqual(
+      attempts.map((plannedAttempt) => [
+        plannedAttempt.taskId,
+        TaskAdmissionOccupancy.ExactAttemptHeld({ plannedAttempt })
+      ])
+    )
   }).pipe(
     Effect.provide(taskWorkCapacityControlLayer),
     Effect.provide(memoryJournalTestLayer),

@@ -50,6 +50,7 @@ const generatedValidHistory = (segments: ReadonlyArray<string>, terminated = fal
     ...segments.flatMap((segment) => {
       const taskId = TaskId.make(`task-${segment}`)
       const observation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make(`observation-${segment}`),
         FixtureTarget.make(`target-${segment}`)
       )
@@ -115,6 +116,7 @@ it("never creates responsibility from generated graph membership", () => {
       const responsibleTaskId = Option.getOrThrow(Option.fromUndefinedOr(taskIds[0]))
 
       const observation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make(`observation-${firstSegment}`),
         FixtureTarget.make(`target-${firstSegment}`)
       )
@@ -203,6 +205,7 @@ it("keeps a prior prefix correct when a linear successor is rejected, then accep
   if (prior._tag !== "ValidWorkflowJournalHistory") return
 
   const nextOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("observation-rejected-successor-next"),
     FixtureTarget.make("target-rejected-successor-next")
   )
@@ -230,6 +233,7 @@ it("preserves persistent immutable branching after one sibling successor advance
 
   const makeSuccessor = (suffix: string) => {
     const operation = makeTrackerGraphObservationOperation(
+      { _tag: "WorkflowEstablishment" },
       OperationId.make(`observation-branching-prefix-${suffix}`),
       FixtureTarget.make(`target-branching-prefix-${suffix}`)
     )
@@ -264,6 +268,7 @@ it("reuses a graph projection and safely replays an accepted prefix without proc
   if (cold._tag !== "ValidWorkflowJournalHistory") return
   expect(reconstructedTaskGraphFor(cold.runState.graphKnowledge, target)).toEqual(firstGraph)
   const nextOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
     OperationId.make("observation-fallback-next"),
     FixtureTarget.make("target-fallback-next")
   )
@@ -291,6 +296,7 @@ it("rejects generated malformed successors with the same issues as complete repl
         expect(prior._tag).toBe("ValidWorkflowJournalHistory")
         if (prior._tag !== "ValidWorkflowJournalHistory") return
         const nextOperation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
           OperationId.make(`observation-${nextSegment}`),
           FixtureTarget.make(`target-${nextSegment}`)
         )
@@ -338,6 +344,7 @@ it("isolates a semantically rejected predecessor index from immutable sibling br
 
       const missingPredecessor = OperationId.make(`missing-predecessor-${nextSegment}`)
       const malformedOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make(`malformed-predecessor-${nextSegment}`),
         FixtureTarget.make(`target-${nextSegment}`),
         [missingPredecessor]
@@ -354,6 +361,7 @@ it("isolates a semantically rejected predecessor index from immutable sibling br
       expect(malformedIncremental._tag).toBe("InvalidWorkflowJournalHistory")
 
       const branchOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
         OperationId.make(`branch-after-malformed-${nextSegment}`),
         FixtureTarget.make(`branch-target-${nextSegment}`),
         [malformedOperation.operationId]

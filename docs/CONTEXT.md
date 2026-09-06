@@ -351,6 +351,30 @@ task A, retains it while A is executing, and requires none for a tracker-only
 read.
 _Avoid_: Executor-declared capacity, review capacity, operation-name capacity
 
+**Fresh-task candidate**:
+One graph-described task, with stable derived rank, that may be considered for
+new work. It is not a delivery action proposal and grants no permission to
+claim, read a focused specification, plan, prepare a worktree, or begin
+executor work. Admission may later materialize its first exact proposal.
+_Avoid_: Admitted task, bounded ticket as capability, queued action, proposal
+
+**Fresh-task admission commitment**:
+The one task-level capacity occupancy reconstructed after Dalph accepts the
+exact `TaskClaimAcquisitionIntended` record and retained through claim,
+post-claim graph, specification, plan, and worktree stages. It is neither a
+second workflow responsibility nor a task-work position. The exact
+executor-responsibility handoff atomically replaces it with the attempt-held
+position; only a conclusive pre-ownership rejection can end it earlier.
+_Avoid_: Persisted admission event, claim ownership, task-work position, queue token
+
+**Fresh-task admission basis**:
+The process-local result of one coherent evaluation of current graph
+candidates, Run policy, Journal-derived commitments, exact held attempts,
+existing ready responsibilities, and live entry reservations. It derives free
+capacity and the deterministic next candidates; no basis, queue, or capacity
+snapshot is persisted as authority.
+_Avoid_: Durable scheduler snapshot, tracker frontier, stored queue, semaphore authority
+
 **Initial control policy**:
 The schema-decoded values Dalph evaluates and records only when Run
 establishment finds no history for the exact Run. The current production slice
@@ -585,40 +609,6 @@ only the matching observation or typed failure proves what that authority
 returned. One system's observation never becomes another system's authority by
 being copied into a derived view.
 _Avoid_: Copied authority, inferred provider result, journal position as current fact
-
-**Active Work Authority Refresh**:
-A tracker notification or configured timer asks Dalph to reread the task-tracker
-and Git authorities for an exact task attempt whose executor report already
-proves `Running`. The reread may reconcile a proven changed fact, but by itself
-it neither continues nor suspends the executor. A successful Git read keeps its
-refresh source process-local; an unreadable Git read is a durable typed
-non-action outcome. Every matching worktree or target-lineage read intent in
-that owner activation receives a strictly increasing ordinal, whether the
-authority returns a fact or a failure.
-_Avoid_: Restart, executor continuation, tracker cache, durable wake request
-
-**Activation Read Baseline**:
-The journal boundary at which one owner begins an active-work authority refresh.
-Current task-tracker, worktree, and lineage facts used by that refresh must be
-accepted after this boundary. Earlier observations remain historical context and
-cannot stand in for the current reread.
-_Avoid_: Startup position, latest cached observation, provider timestamp
-
-**Attempt Authority Evidence Baseline**:
-The lower boundary for authority evidence belonging to one exact planned
-attempt. Ordinary crash reconstruction may reuse the latest proven `Running`
-evidence to retain an already-established constraint, while an Active Work
-Authority Refresh must obtain current owner facts after its Activation Read
-Baseline and may not treat that older evidence as a fresh read.
-_Avoid_: Attempt version, executor heartbeat, current external state
-
-**Unreadable Fact Wait**:
-The task-local disposition selected when a required tracker or Git authority
-cannot provide a complete fact. Dalph keeps the exact responsibility and task
-position, performs no executor continuation or suspension on that uncertainty,
-and leaves independent work eligible; a later tracker notification or timer can
-start a fresh bounded read.
-_Avoid_: Missing fact, failed attempt, automatic suspension, retry proof
 
 **Normalized task-graph read result**:
 The provider-independent boundary value a task-tracker adapter assembles with
@@ -861,6 +851,16 @@ A fresh task-tracker claim observation proves that the exact intended owner and
 token currently own the task. It does not prove that the task remains open or
 inside the Run's current Run task graph.
 _Avoid_: Claim request acknowledged, claimed task eligibility observed
+
+**Rejected fresh-task claim constraint**:
+The task-local constraint established when the tracker conclusively reports a
+different exact active claim for one fresh-entry acquisition intent and Dalph
+durably accepts that rejection. It ends that task's admission without changing
+the foreign claim and prevents another acquisition while the constraint
+remains. A later complete graph observation may wake one focused claim read,
+but only a focused authoritative `UnclaimedTask` observation clears the
+constraint.
+_Avoid_: Provider failure, acquisition retry, graph-observed claim, foreign-claim cleanup
 
 **Task-tracker mutation throttled**:
 The typed boundary failure returned when the task tracker conclusively refuses
@@ -1266,11 +1266,11 @@ _Avoid_: Task version, version number, tracker revision, Git commit, journal
 position
 
 **Active-work tracker refresh opportunity**:
-A non-authoritative tracker notification or configured bounded timer occurrence
-selected and coalesced by the one Run reactivation owner while executor work is
-active. It enters the existing tracker-observation coordination and graph-read
-stack without starting a concurrent activation. Executor reports, caches, and
-the later post-quiescence finality read do not create or replace it.
+A tracker notification or configured timer occurrence that lets Dalph check
+current tracker and Git facts for exact attempts whose accepted report is
+`ExecutorWorkExecuting`. It is not evidence that those facts changed,
+permission to command the executor, a durable wake fact, or the later
+post-quiescence read.
 _Avoid_: Executor-progress read requirement, report coverage, per-executor poll,
 second scheduler
 

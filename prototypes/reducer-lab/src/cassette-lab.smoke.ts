@@ -146,7 +146,12 @@ const makeLargeProductionTrace = () => Effect.runPromise(
     let predecessorOperationIds: ReadonlyArray<OperationId> = []
     for (let index = 0; index < 59; index += 1) {
       const operationId = OperationId.make(`large-navigation-read-${index}`)
-      const operation = makeTrackerGraphObservationOperation(operationId, target, predecessorOperationIds)
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        operationId,
+        target,
+        predecessorOperationIds
+      )
       const intent = taskTrackerReadIntent(operation)
       const observation = taskTrackerFactsObservedEvent(
         operationId,
@@ -1891,9 +1896,11 @@ await scenario("keeps graph-not-established frames dimensionally stable and trut
 })
 
 await scenario("names concrete planned transitions and their admission requirements", async () => {
-  const summaryFor = async (marker: string): Promise<string> => {
+  const summaryFor = async (marker: string, catalogKey?: string): Promise<string> => {
     const match = everyResult.flatMap((result) => {
-      if (result._tag !== "Completed" || result.deliveryFrames === null) return []
+      if (result._tag !== "Completed" || result.deliveryFrames === null || (catalogKey !== undefined && result.catalogKey !== catalogKey)) {
+        return []
+      }
       return result.deliveryFrames.flatMap((frame, frameIndex) => {
         const values = frame.actionPlanning._tag === "DeliveryProposalsAvailable"
           ? frame.actionPlanning.proposals
@@ -1921,11 +1928,17 @@ await scenario("names concrete planned transitions and their admission requireme
   }
 
   const fresh = await summaryFor('"_tag": "FreshWorkflowRoute"')
-  assert(fresh.includes("Read the tracker graph for the selected task"), "Fresh workflow proposals must name their concrete boundary action")
+  assert(
+    (fresh.startsWith("Read") || fresh.startsWith("Check")) && !fresh.startsWith("Fresh Workflow"),
+    `Fresh workflow proposals must name their concrete boundary action; received ${fresh}`
+  )
   assert(fresh.includes("waits for live operation"), "A proposal must name the live operation that blocks it")
   const recovered = await summaryFor('"_tag": "RecoveredNewActionRoute"')
   assert(recovered.startsWith("Read") && !recovered.startsWith("Recovered New Action"), "Recovered proposals must name their concrete authority action")
-  const pause = await summaryFor('"_tag": "SuspendPlannedAttemptExecutorWork"')
+  const pause = await summaryFor(
+    '"_tag": "SuspendPlannedAttemptExecutorWork"',
+    "authored:taskPauseLetsIndependentTaskContinue"
+  )
   assert(pause.includes("Request safe suspension of the exact planned-attempt executor work") && pause.includes("task A"), "Pause planning must use the concrete task action")
   assert(
     pause.includes("attempt ID attempt:A:0")

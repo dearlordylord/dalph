@@ -1042,7 +1042,11 @@ const readGraphAndFacts = Effect.fn("GithubQualification.readGraphAndFacts")(fun
   records: ReadonlyArray<{ readonly event: unknown }>
 ) {
   const snapshot = yield* reader.read(target)
-  const operation = makeTrackerGraphObservationOperation(OperationId.make(operationId), target)
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make(operationId),
+    target
+  )
   const event = makeTaskTrackerFactsObservedFromRead(records, operation, snapshot)
   return { event, snapshot }
 })

@@ -11,10 +11,14 @@ import {
   TaskId,
   TaskRevision,
   WorktreeLocator,
-  PlannedAttemptExecutor
+  PlannedAttemptExecutor,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
+import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { validSnapshot } from "../../../test/task-dag.js"
 import { JournalDatabaseLocator, JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
@@ -28,10 +32,24 @@ import { InRunJournal, JournalRecord, JournalStore } from "../../workflow-journa
 import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
-  TaskClaimAcquisitionIntendedEvent
+  TaskClaimAcquisitionIntendedEvent,
+  TaskWorktreeReadyEvent,
+  TaskWorktreeReconciliationIntendedEvent,
+  taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-import { makeTaskAttemptPlanOperation, makeTaskClaimAcquisitionOperation } from "../../workflow/registry/operation.js"
+import {
+  makeTaskAttemptPlanOperation,
+  makeTaskClaimAcquisitionOperation,
+  makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeReconciliationOperation,
+  makeTrackerGraphObservationOperation
+} from "../../workflow/registry/operation.js"
+import {
+  makeCompleteTaskTrackerFactsObserved,
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../workflow/task-tracker-facts/observation.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { sqliteJournalTestLayer } from "../../workflow-journal/adapters/sqlite-store.js"
 import { causalClaimForAttempt } from "./recovery-authority.js"
@@ -41,28 +59,132 @@ const runId = RunId.make("duplicate-attempt-production-recovery")
 const taskId = TaskId.make("A")
 
 const plannedAttempt = (attemptId: string) =>
-  PlannedTaskAttempt.make({
-    attemptId: AttemptId.make(attemptId),
-    baseSha: GitCommitSha.make("1".repeat(40)),
-    branch: TaskBranchRef.make(`refs/heads/dalph/${attemptId}`),
-    executor: TaskExecutorLocator.make("executor:controlled-fake"),
-    runId,
-    taskId,
-    taskRevision: TaskRevision.make("task-A-revision"),
-    worktree: WorktreeLocator.make(`/worktrees/${attemptId}`)
-  })
+  (() => {
+    const specification = makeTaskWorkSpecification({ body: "Complete task A.", taskId, title: "Complete task A" })
+    return PlannedTaskAttempt.make({
+      attemptId: AttemptId.make(attemptId),
+      baseSha: GitCommitSha.make("1".repeat(40)),
+      branch: TaskBranchRef.make(`refs/heads/dalph/${attemptId}`),
+      executor: TaskExecutorLocator.make("executor:controlled-fake"),
+      runId,
+      taskId,
+      taskRevision: TaskRevision.make(specification.fingerprint),
+      worktree: WorktreeLocator.make(`/worktrees/${attemptId}`)
+    })
+  })()
 
 const planAndStart = (attempt: PlannedTaskAttempt, firstPosition: number): ReadonlyArray<JournalRecord> => {
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make(`claim-${attempt.attemptId}`),
+    owner: ClaimOwner.make("duplicate-attempt-production-recovery"),
+    taskId: attempt.taskId,
+    token: ClaimToken.make(`token-${attempt.attemptId}`)
+  })
+  const claimOperation = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+  const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make(`graph-${attempt.attemptId}`),
+    FixtureTarget.make(`duplicate-attempt-${attempt.attemptId}`),
+    [claim.operationId],
+    [attempt.taskId]
+  )
+  const specification = makeTaskWorkSpecification({ body: "Complete task A.", taskId, title: "Complete task A" })
+  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make(`specification-${attempt.attemptId}`),
+    graphOperation.target,
+    attempt.taskId,
+    [graphOperation.operationId]
+  )
   const operation = makeTaskAttemptPlanOperation({
     operationId: OperationId.make(`plan-${attempt.attemptId}`),
     plannedAttempt: attempt,
-    predecessorOperationIds: []
+    predecessorOperationIds: [specificationOperation.operationId]
+  })
+  const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+    operationId: OperationId.make(`worktree-${attempt.attemptId}`),
+    plannedAttempt: attempt,
+    predecessorOperationIds: [operation.operationId]
+  })
+  const graph = validSnapshot({
+    revision: `duplicate-attempt-${attempt.attemptId}-graph`,
+    rootTaskId: attempt.taskId,
+    tasks: [{ id: attempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  const worktreeProof = PlannedWorktreeReady.make({
+    baseSha: attempt.baseSha,
+    branch: attempt.branch,
+    headSha: attempt.baseSha,
+    worktree: attempt.worktree
   })
   return [
     {
+      event: TaskClaimAcquisitionIntendedEvent.make({
+        operation: claimOperation,
+        version: workflowJournalEventVersion
+      }),
+      key: intentRecordKey(claim.operationId),
+      position: JournalPosition.make(firstPosition),
+      runId
+    },
+    {
+      event: TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion }),
+      key: outcomeRecordKey(claim.operationId),
+      position: JournalPosition.make(firstPosition + 1),
+      runId
+    },
+    {
+      event: taskTrackerReadIntent(graphOperation),
+      key: intentRecordKey(graphOperation.operationId),
+      position: JournalPosition.make(firstPosition + 2),
+      runId
+    },
+    {
+      event: taskTrackerFactsObservedEvent(
+        graphOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(graphOperation, graph)
+      ),
+      key: outcomeRecordKey(graphOperation.operationId),
+      position: JournalPosition.make(firstPosition + 3),
+      runId
+    },
+    {
+      event: taskTrackerReadIntent(specificationOperation),
+      key: intentRecordKey(specificationOperation.operationId),
+      position: JournalPosition.make(firstPosition + 4),
+      runId
+    },
+    {
+      event: taskTrackerFactsObservedEvent(
+        specificationOperation.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, specification)
+      ),
+      key: outcomeRecordKey(specificationOperation.operationId),
+      position: JournalPosition.make(firstPosition + 5),
+      runId
+    },
+    {
       event: TaskAttemptPlannedEvent.make({ operation, version: workflowJournalEventVersion }),
       key: attemptPlanRecordKey(attempt.attemptId),
-      position: JournalPosition.make(firstPosition),
+      position: JournalPosition.make(firstPosition + 6),
+      runId
+    },
+    {
+      event: TaskWorktreeReconciliationIntendedEvent.make({
+        operation: worktreeOperation,
+        version: workflowJournalEventVersion
+      }),
+      key: intentRecordKey(worktreeOperation.operationId),
+      position: JournalPosition.make(firstPosition + 7),
+      runId
+    },
+    {
+      event: TaskWorktreeReadyEvent.make({
+        operationId: worktreeOperation.operationId,
+        proof: worktreeProof,
+        version: workflowJournalEventVersion
+      }),
+      key: outcomeRecordKey(worktreeOperation.operationId),
+      position: JournalPosition.make(firstPosition + 8),
       runId
     },
     {
@@ -71,7 +193,7 @@ const planAndStart = (attempt: PlannedTaskAttempt, firstPosition: number): Reado
         version: workflowJournalEventVersion
       }),
       key: plannedAttemptExecutorWorkResponsibilityBeganRecordKey(attempt.attemptId),
-      position: JournalPosition.make(firstPosition + 1),
+      position: JournalPosition.make(firstPosition + 9),
       runId
     }
   ]
@@ -79,7 +201,7 @@ const planAndStart = (attempt: PlannedTaskAttempt, firstPosition: number): Reado
 
 const firstAttempt = plannedAttempt("attempt-A-3")
 const secondAttempt = plannedAttempt("attempt-A-4")
-const invalidRecords = [...planAndStart(firstAttempt, 1), ...planAndStart(secondAttempt, 3)]
+const invalidRecords = [...planAndStart(firstAttempt, 1), ...planAndStart(secondAttempt, 11)]
 
 it("fails closed when a planned attempt or one of its causal predecessors is absent", () => {
   expect(causalClaimForAttempt([], firstAttempt.attemptId)).toBeUndefined()
@@ -232,9 +354,9 @@ it.effect(
         issues: [
           expect.objectContaining({
             _tag: "DuplicateUnfinishedTaskAttemptIssue",
-            first: { attemptId: firstAttempt.attemptId, position: 2, runId },
+            first: { attemptId: firstAttempt.attemptId, position: 10, runId },
             runId,
-            second: { attemptId: secondAttempt.attemptId, position: 4, runId },
+            second: { attemptId: secondAttempt.attemptId, position: 20, runId },
             taskId
           })
         ],

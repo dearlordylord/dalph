@@ -6,6 +6,7 @@ import {
 } from "@dalph/contracts"
 import { Context, Effect, Schema } from "effect"
 import type { InRunJournalService } from "../../workflow-journal/store.js"
+import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
   InterruptibleWorkflowBoundaryExecution,
   WorkflowInterpreterServiceFailure,
@@ -23,6 +24,7 @@ import type {
   PlannedAttemptExecutorProjectionNoCurrentReport,
   PlannedAttemptExecutorResponsibilityAbandoned,
   PlannedAttemptExecutorResponsibilityContradiction,
+  PlannedAttemptExecutorResponsibilityLineageMissing,
   PlannedAttemptExecutorResponsibilityMissing,
   PlannedAttemptExecutorResumeNotAuthorized,
   PlannedAttemptExecutorStateNoCurrentReport,
@@ -44,6 +46,7 @@ import type {
   PlannedAttemptExecutorWorkAlreadyTerminal
 } from "../../workflow/protocols/planned-attempt-executor-work/errors.js"
 import type { PlannedAttemptProtocolPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import type { AcceptedPlannedAttemptExecutorResponsibility } from "../../workflow/protocols/planned-attempt-executor-work/responsibility.js"
 import type {
   AcceptedResultEvidenceConflict,
   AcceptedResultEvidenceUnavailable,
@@ -78,7 +81,6 @@ import type {
   CompletionTaskPreconditionConflict
 } from "../../workflow/protocols/integration-finality/completion-task-protocol.js"
 import type { OperationId } from "../../workflow/identity.js"
-import type { DeliveryTaskWorkPositionBindingContradiction } from "./delivery-runtime-task-work-position.js"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import type { AtomicBoundaryExecution } from "../application-exit/lifecycle.js"
@@ -128,16 +130,10 @@ export type DeliveryActionForwardBoundary =
 
 export interface DeliveryActionExecutionLease {
   readonly acceptIntegrationTargetOwnership: Effect.Effect<void>
-  readonly bindPreStartTaskWorkPosition: (
-    claimOperationId: OperationId
-  ) => Effect.Effect<void, DeliveryTaskWorkPositionBindingContradiction>
-  readonly bindPreStartPlannedAttemptPosition: (
-    claimOperationId: OperationId,
-    correlation: PlannedAttemptExecutorCorrelation
-  ) => Effect.Effect<void, DeliveryTaskWorkPositionBindingContradiction>
   readonly bindPlannedAttemptPosition: (
-    correlation: PlannedAttemptExecutorCorrelation
-  ) => Effect.Effect<void, DeliveryTaskWorkPositionBindingContradiction>
+    plannedAttempt: PlannedTaskAttempt,
+    acceptedResponsibility?: AcceptedPlannedAttemptExecutorResponsibility
+  ) => Effect.Effect<void>
   readonly forwardBoundary: DeliveryActionForwardBoundary
   readonly integrationTargets: IntegrationTargetResourceController
   readonly recordIntent: (operationId: OperationId) => Effect.Effect<void>
@@ -229,7 +225,6 @@ type EffectFunctionFailure<F> = F extends (...args: infer _Args) => Effect.Effec
 /** Exact typed protocol failures preserved by the action-coloured executor port. */
 export type DeliveryActionExecutionError =
   | DeliveryActionProtocolAdmissionMissing
-  | DeliveryTaskWorkPositionBindingContradiction
   | EffectFunctionFailure<typeof advanceAttemptRestart>
   | EffectFunctionFailure<typeof advanceAttemptStoppage>
   | EffectFunctionFailure<typeof recordStoppedAttemptClaimNoRelease>
@@ -268,6 +263,7 @@ export type DeliveryActionExecutionError =
   | PlannedAttemptExecutorProjectionNoCurrentReport
   | PlannedAttemptExecutorResponsibilityAbandoned
   | PlannedAttemptExecutorResponsibilityContradiction
+  | PlannedAttemptExecutorResponsibilityLineageMissing
   | PlannedAttemptExecutorResponsibilityMissing
   | PlannedAttemptExecutorStateNoCurrentReport
   | PlannedAttemptExecutorStateTemporarilyUnavailable
@@ -295,6 +291,12 @@ export class DeliveryActionExecutor extends Context.Service<DeliveryActionExecut
 
 export type DeliverySemanticTraceEvent =
   | { readonly _tag: "ActionOutcome"; readonly result: DeliveryActionResult }
+  /** One successful action remains owned until the runtime consumes its accepted publication prefix. */
+  | {
+      readonly _tag: "ActionCompletionPublicationPending"
+      readonly acceptedThrough: JournalPosition
+      readonly proposalId: DeliveryProposalId
+    }
   | { readonly _tag: "ProposalAdmitted"; readonly proposalId: DeliveryProposalId }
   | {
       readonly _tag: "ProposalDeferred"
