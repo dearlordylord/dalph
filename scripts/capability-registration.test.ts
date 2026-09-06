@@ -647,17 +647,16 @@ describe("capability registration gate", () => {
         'import { temporaryProviderLayer } from "./transient-provider.js"\nexport const assembled = temporaryProviderLayer'
     }
     const inventory = {
-      ...capabilityRegistrationInventory,
-      compositionSources: [
-        ...capabilityRegistrationInventory.compositionSources,
-        { role: "production" as const, source: composition.path }
-      ]
+      capabilities: [],
+      compositionSources: [{ role: "production" as const, source: composition.path }],
+      compositionSupportBindings: [],
+      requiredFamilies: []
     }
     const issue = "production uses unregistered exported Layer temporaryProviderLayer"
 
-    expect(runCapabilityRegistrationGate(inventory, [...sourceFiles, provider, composition])).toContain(issue)
-    expect(runCapabilityRegistrationGate(inventory, [...sourceFiles, composition])).not.toContain(issue)
-    expect(runCapabilityRegistrationGate(inventory, [...sourceFiles, provider, composition])).toContain(issue)
+    expect(runCapabilityRegistrationGate(inventory, [provider, composition])).toContain(issue)
+    expect(runCapabilityRegistrationGate(inventory, [composition])).not.toContain(issue)
+    expect(runCapabilityRegistrationGate(inventory, [provider, composition])).toContain(issue)
   })
 
   it("audits exported Layer values without a Layer suffix and through re-exports", () => {
