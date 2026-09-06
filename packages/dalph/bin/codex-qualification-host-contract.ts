@@ -9,7 +9,7 @@ export const CodexQualificationAction = Schema.Literals([
   "association-cut",
   "pre-thread-cut",
   "create",
-  "turn",
+  "resume",
   "project",
   "read",
   "suspend",

@@ -2319,7 +2319,7 @@ it.effect("sends the first turn on a freshly associated thread without treating 
   }).pipe(Effect.provide(layerFor(harness)))
 })
 
-it.effect("does not replace a conclusively absent recovered pre-turn thread", () => {
+it.effect("replaces only a conclusively absent recovered pre-turn thread before sending the first turn", () => {
   const harness = makeHarness({ missingEmptyThread: true })
   return Effect.gen(function* () {
     const lostEmptyThread = yield* harness.app.startThread(worktree)
@@ -2329,6 +2329,52 @@ it.effect("does not replace a conclusively absent recovered pre-turn thread", ()
         correlationAttemptId: attempt.attemptId,
         correlationRunId: attempt.runId,
         threadId: lostEmptyThread.id,
+        worktree
+      })
+    )
+    const executor = yield* PlannedAttemptExecutor
+    expect(yield* executor.begin(request)).toEqual(
+      PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+    )
+    expect(harness.threadStarts()).toBe(2)
+    expect(harness.turnCount()).toBe(1)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("reuses an exact idle recovered pre-turn thread before sending its first turn", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const existingThread = yield* harness.app.startThread(worktree)
+    harness.setRecord(
+      CodexAttemptRecord.cases.AssociatedPreTurn.make({
+        attemptId: attempt.attemptId,
+        correlationAttemptId: attempt.attemptId,
+        correlationRunId: attempt.runId,
+        threadId: existingThread.id,
+        worktree
+      })
+    )
+    const executor = yield* PlannedAttemptExecutor
+    expect((yield* executor.begin(request))._tag).toBe("ExecutorWorkExecuting")
+    expect(harness.threadStarts()).toBe(1)
+    expect(harness.turnCount()).toBe(1)
+    const association = harness.associationAtTurn()
+    expect(association?._tag).toBe("AssociatedPreTurn")
+    if (association?._tag === "AssociatedPreTurn") expect(association.threadId).toBe(existingThread.id)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+it.effect("rejects recovered pre-turn state when the associated thread already contains a turn", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const existingThread = yield* harness.app.startThread(worktree)
+    harness.addManualTurn("after")
+    harness.setRecord(
+      CodexAttemptRecord.cases.AssociatedPreTurn.make({
+        attemptId: attempt.attemptId,
+        correlationAttemptId: attempt.attemptId,
+        correlationRunId: attempt.runId,
+        threadId: existingThread.id,
         worktree
       })
     )

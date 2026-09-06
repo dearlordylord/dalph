@@ -71,7 +71,7 @@ class QualificationConfigurationFailure extends Schema.TaggedError<Qualification
 ) {}
 
 const usage =
-  "dalph-codex-qualification-host <allocate|associate|association-cut|pre-thread-cut|create|turn|project|read|suspend|interrupt|settle|exercise-suspension|exercise-terminal-suspension|exit|exit-stuck|close|wait>; requires qualification paths, base SHA, and CODEX_HOME"
+  "dalph-codex-qualification-host <allocate|associate|association-cut|pre-thread-cut|create|resume|project|read|suspend|interrupt|settle|exercise-suspension|exercise-terminal-suspension|exit|exit-stuck|close|wait>; requires qualification paths, base SHA, and CODEX_HOME"
 
 const envValue = (name: string): string | undefined => nodeProcess.env[name]
 
@@ -251,12 +251,10 @@ const configurationProgram = Effect.gen(function* () {
           const thread = yield* app.startThread(configuration.worktree)
           yield* store.writeAttempt(threadRecordFor(configuration, thread.id))
           yield* writeEvent({ event: "associated", threadMaterialized: true, worktree: thread.cwd })
-        } else if (
-          configuration.action === "create" ||
-          configuration.action === "turn" ||
-          configuration.action === "association-cut"
-        ) {
+        } else if (configuration.action === "create" || configuration.action === "association-cut") {
           yield* writeEvent(reportEvent("Begin", yield* executor.begin(request)))
+        } else if (configuration.action === "resume") {
+          yield* writeEvent(reportEvent("Resume", yield* executor.resume(request)))
         } else if (configuration.action === "project" || configuration.action === "read") {
           yield* writeEvent(
             projectionEvent(

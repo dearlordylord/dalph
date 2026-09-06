@@ -916,8 +916,10 @@ const makeCodexPlannedAttemptExecutorContext = (
         ? Effect.fail(new CodexTurnBoundaryUnknown({}))
         : Effect.succeed(reconciliation.turn)
 
+    // An AssociatedPreTurn record says Dalph has not authorized turn/start.
+    // Any provider turn therefore contradicts the private pre-turn state.
     const reconcileAssociatedThread = (thread: CodexThreadSnapshot) => {
-      if (thread.turns.some((turn) => turn.ownedTurnToken !== undefined) || thread.status === "active") {
+      if (thread.turns.length > 0 || thread.status === "active") {
         return Effect.fail(new CodexTurnBoundaryUnknown({}))
       }
       return Effect.succeed<ThreadReconciliation>({ _tag: "Idle", thread, turn: undefined })
@@ -1389,6 +1391,32 @@ const makeCodexPlannedAttemptExecutorContext = (
       return { _tag: "Recovered" as const, record } satisfies LoadedBeginRecord
     })
 
+    const reconcileAssociatedBegin = Effect.fn("CodexPlannedAttemptExecutor.reconcileAssociatedBegin")(function* (
+      attempt: PlannedTaskAttempt,
+      correlation: PlannedAttemptExecutorCorrelation,
+      record: Extract<CodexAttemptRecord, { readonly _tag: "AssociatedPreTurn" }>
+    ) {
+      const reconciliation = yield* reconcile(attempt, correlation, record).pipe(
+        Effect.catch((error: unknown) =>
+          error instanceof CodexAppServerFailure && error.kind === "NotFound"
+            ? Effect.succeed<ThreadReconciliation | undefined>(undefined)
+            : Effect.fail(error)
+        )
+      )
+      if (reconciliation === undefined) {
+        // The durable association proves turn/start was not yet authorized, so
+        // a conclusively absent empty thread can be replaced within this Begin.
+        return yield* allocateThread(attempt, correlation)
+      }
+      /* v8 ignore next -- @preserve Associated pre-turn state carries no owned turn that can be Running or Terminal. */
+      if (reconciliation._tag === "Running" || reconciliation._tag === "Terminal") {
+        return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
+      }
+      /* v8 ignore next -- @preserve Associated pre-turn reconciliation is idle, unresolved, or conclusively absent. */
+      if (reconciliation._tag === "Unresolved") return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
+      return record
+    })
+
     const saveExecutingResumeRecord = Effect.fn("CodexPlannedAttemptExecutor.saveExecutingResumeRecord")(function* (
       attempt: PlannedTaskAttempt,
       correlation: PlannedAttemptExecutorCorrelation,
@@ -1437,8 +1465,13 @@ const makeCodexPlannedAttemptExecutorContext = (
       const attempt = request.plannedAttempt
       const correlation = plannedAttemptExecutorCorrelation(attempt)
       const loaded = yield* loadBeginRecord(attempt, correlation)
-      if (loaded._tag === "Recovered") return yield* new CodexTurnBoundaryUnknown({})
-      const report = yield* sendTurn(attempt, request.specification, correlation, loaded.record)
+      let record = loaded.record
+      if (loaded._tag === "Recovered" && record._tag === "AssociatedPreTurn") {
+        record = yield* reconcileAssociatedBegin(attempt, correlation, record)
+      } else if (loaded._tag === "Recovered") {
+        return yield* new CodexTurnBoundaryUnknown({})
+      }
+      const report = yield* sendTurn(attempt, request.specification, correlation, record)
       // Begin acknowledges that the autonomous turn was established. Even
       // when Codex finishes before turn/start returns, its exact Terminal
       // report remains in the private attempt record for the next passive
