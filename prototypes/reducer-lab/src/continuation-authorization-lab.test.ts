@@ -33,25 +33,25 @@ assert.deepEqual(
 const beforeAuthorization = projection.prefixes.find(({ _tag }) => _tag === "BeforeAuthorization")
 assert.notEqual(beforeAuthorization, undefined)
 if (beforeAuthorization === undefined) throw new Error("The pre-authorization prefix is missing")
-assert.equal(beforeAuthorization.throughPosition, 39)
+assert.equal(beforeAuthorization.throughPosition, 37)
 assert.equal(beforeAuthorization.authorizationPosition, null)
 assert.equal(beforeAuthorization.executorReport, null)
-assert.equal(beforeAuthorization.witnesses?.activeTask.graph.intentPosition, 30)
-assert.equal(beforeAuthorization.witnesses?.activeTask.graph.observationPosition, 31)
-assert.equal(beforeAuthorization.witnesses?.activeTask.specification.intentPosition, 32)
-assert.equal(beforeAuthorization.witnesses?.activeTask.specification.observationPosition, 33)
-assert.equal(beforeAuthorization.witnesses?.activeTask.claim.intentPosition, 34)
-assert.equal(beforeAuthorization.witnesses?.activeTask.claim.observationPosition, 35)
-assert.equal(beforeAuthorization.witnesses?.worktree.intentPosition, 36)
-assert.equal(beforeAuthorization.witnesses?.worktree.observationPosition, 37)
-assert.equal(beforeAuthorization.witnesses?.targetLineage.intentPosition, 38)
-assert.equal(beforeAuthorization.witnesses?.targetLineage.observationPosition, 39)
+assert.equal(beforeAuthorization.witnesses?.activeTask.graph.intentPosition, 28)
+assert.equal(beforeAuthorization.witnesses?.activeTask.graph.observationPosition, 29)
+assert.equal(beforeAuthorization.witnesses?.activeTask.specification.intentPosition, 30)
+assert.equal(beforeAuthorization.witnesses?.activeTask.specification.observationPosition, 31)
+assert.equal(beforeAuthorization.witnesses?.activeTask.claim.intentPosition, 32)
+assert.equal(beforeAuthorization.witnesses?.activeTask.claim.observationPosition, 33)
+assert.equal(beforeAuthorization.witnesses?.worktree.intentPosition, 34)
+assert.equal(beforeAuthorization.witnesses?.worktree.observationPosition, 35)
+assert.equal(beforeAuthorization.witnesses?.targetLineage.intentPosition, 36)
+assert.equal(beforeAuthorization.witnesses?.targetLineage.observationPosition, 37)
 
 const afterAuthorization = projection.prefixes.find(({ _tag }) => _tag === "AfterAuthorizationBeforeReport")
 assert.notEqual(afterAuthorization, undefined)
 if (afterAuthorization === undefined) throw new Error("The post-authorization prefix is missing")
-assert.equal(afterAuthorization.throughPosition, 40)
-assert.equal(afterAuthorization.authorizationPosition, 40)
+assert.equal(afterAuthorization.throughPosition, 38)
+assert.equal(afterAuthorization.authorizationPosition, 38)
 assert.equal(afterAuthorization.executorReport, null)
 assert.equal(afterAuthorization.runId, projection.runId)
 assert.equal(afterAuthorization.attemptId, projection.attemptId)
@@ -59,11 +59,11 @@ assert.equal(afterAuthorization.attemptId, projection.attemptId)
 const terminal = projection.prefixes.find(({ _tag }) => _tag === "AfterTerminalReport")
 assert.notEqual(terminal, undefined)
 if (terminal === undefined) throw new Error("The terminal prefix is missing")
-assert.deepEqual(terminal.executorReport, { _tag: "ExecutorWorkTerminal", position: 43 })
-assert.equal(terminal.authorizationPosition, 40)
+assert.deepEqual(terminal.executorReport, { _tag: "ExecutorWorkTerminal", position: 41 })
+assert.equal(terminal.authorizationPosition, 38)
 assert.equal(terminal.runId, projection.runId)
 assert.equal(terminal.attemptId, projection.attemptId)
-assert.deepEqual(projection.executorBoundary, { _tag: "ExecutorReportObserved", position: 43 })
+assert.deepEqual(projection.executorBoundary, { _tag: "ExecutorReportObserved", position: 41 })
 
 assert.equal(projection.identity.responsibilityCount, 1)
 assert.equal(projection.identity.authorizationCount, 1)
@@ -146,7 +146,7 @@ assert.notEqual(acceptedSafeReport, undefined)
 if (acceptedSafeReport === undefined || acceptedSafeReport.event._tag !== "PlannedAttemptExecutorWorkReported") {
   throw new Error("The continuation fixture must retain its accepted safely suspended authority")
 }
-assert.equal(acceptedSafeReport.position, 29)
+assert.equal(acceptedSafeReport.position, 27)
 assert.deepEqual(acceptedSafeReport.event.report.correlation, {
   attemptId: projection.attemptId,
   runId: projection.runId
@@ -165,7 +165,7 @@ if (authorizedDecision._tag === "ExecutorContactAvailable") {
 const observedExecutorReportDecision = continuationAuthorizationContactDecision(records, plannedAttempt, witness)
 assert.equal(observedExecutorReportDecision._tag, "ExecutorContactUnavailable")
 if (observedExecutorReportDecision._tag === "ExecutorContactUnavailable") {
-  assert.deepEqual(observedExecutorReportDecision.executorBoundary, { _tag: "ExecutorReportObserved", position: 43 })
+  assert.deepEqual(observedExecutorReportDecision.executorBoundary, { _tag: "ExecutorReportObserved", position: 41 })
 }
 const commandIntentOnlyDecision = continuationAuthorizationContactDecision(
   records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended"),
@@ -174,7 +174,7 @@ const commandIntentOnlyDecision = continuationAuthorizationContactDecision(
 )
 assert.equal(commandIntentOnlyDecision._tag, "ExecutorContactUnavailable")
 if (commandIntentOnlyDecision._tag === "ExecutorContactUnavailable") {
-  assert.deepEqual(commandIntentOnlyDecision.executorBoundary, { _tag: "CommandIntentRecorded", position: 41 })
+  assert.deepEqual(commandIntentOnlyDecision.executorBoundary, { _tag: "CommandIntentRecorded", position: 39 })
 }
 assert.equal(
   taskUnpauseAfterSafeSuspensionAuthoredCassette.story.some(
