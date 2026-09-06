@@ -391,26 +391,6 @@ export const runWorkflowWithControlledDeliveryActionExecutor = <EInitial, RIniti
     )
   })
 
-/** Explicit controlled active-refresh composition for maintained cassettes and focused protocol tests. */
-export const runWorkflowWithControlledActiveWorkAuthorityRefresh = <EInitial, RInitial, E, R>(
-  target: TrackerTarget,
-  initialControlPolicySource: InitialControlPolicySource<EInitial, RInitial>,
-  runId: AllocatedWorkflowRunId,
-  executorFactory: ControlledDeliveryActionExecutorFactory<E, R>,
-  source: ActiveWorkAuthorityRefreshSource,
-  activateCleanup = true
-) =>
-  Effect.gen(function* () {
-    const bootstrap = yield* JournaledRunBootstrap
-    return yield* bootstrap.activateActiveWorkAuthorityRefresh(
-      target,
-      initialControlPolicySource,
-      runId,
-      (opportunity) => runJournaledDelivery(runId, target, executorFactory, activateCleanup, opportunity),
-      source
-    )
-  })
-
 /** Establishes one exact Run and performs one bounded ordinary delivery activation. */
 export const runWorkflow = <EInitial, RInitial>(
   target: TrackerTarget,

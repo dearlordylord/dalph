@@ -624,7 +624,6 @@ export {
   type AcceptedRunReactivationObservers,
   JournaledRunReactivationObserverAlreadyRegistered,
   runWorkflowWithControlledDeliveryActionExecutor,
-  runWorkflowWithControlledActiveWorkAuthorityRefresh,
   runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh,
   runWorkflowWithActiveWorkAuthorityRefresh,
   runWorkflow

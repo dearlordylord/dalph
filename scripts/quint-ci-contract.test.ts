@@ -62,7 +62,8 @@ describe("hosted formal-model contract", () => {
       "\n      matrix:\n        node-version: ${{ fromJSON(needs.change-plan.outputs.versions) }}"
     )
     expect(jobs.get("quality")?.join("\n")).not.toContain("pnpm check:quint")
-    expect(quintGate).toContain("runWithQuintGateTiming")
+    expect(quintGate).toContain("remainingSafetyTimeoutMilliseconds")
+    expect(quintGate).toContain("completedStageTimings")
     expect(profileEvidence).toContain("| 22.22.2 |")
     expect(profileEvidence).toContain("| 24.15.0 |")
     expect(profileEvidence).toContain("| 24.15.0 | final post-change |")
@@ -81,9 +82,9 @@ describe("hosted formal-model contract", () => {
     expect(qualityGate).toContain('args: ["test:mbt"]')
   })
 
-  it("uses the provisional ten-minute regression budget without a dead safety export", () => {
-    expect(quintPolicy).toContain("quintGateRegressionBudgetMilliseconds = 600 * second")
-    expect(quintPolicy).not.toContain("quintGateSafetyTimeoutMilliseconds")
+  it("uses the hosted regression budget with a distinct safety stop", () => {
+    expect(quintPolicy).toContain("quintGateRegressionBudgetMilliseconds = 750 * second")
+    expect(quintPolicy).toContain("quintGateSafetyTimeoutMilliseconds = 960 * second")
   })
 
   it(
