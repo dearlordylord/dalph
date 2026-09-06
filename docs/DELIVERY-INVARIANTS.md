@@ -470,6 +470,20 @@ which is a statement about tractability rather than about expressiveness.
 
 ## Run boundaries
 
+**D37a Complete host configuration validation precedes every live boundary.**
+The production host decodes and cross-validates its complete raw configuration
+before it constructs or acquires a coordinator lock, Journal, GitHub, Git,
+executor, Integrator, worktree, or provider-private boundary. Configured path
+locators are invalid when equal or when either is a real filesystem ancestor
+of the other, including the filesystem root and ancestor spellings with a
+trailing separator; a shared text prefix between sibling names is not an
+overlap. Rejected configuration produces one typed, credential-free failure
+and no external call or durable effect.
+→ `production-configuration.test.ts` checks `rejects filesystem-root and
+trailing-separator parent overlaps before any live-boundary continuation`,
+`accepts disjoint paths whose names share only a text prefix`, and the broader
+`rejects %s before any live-boundary continuation` table.
+
 **D38 Exactly one discovered unfinished Run may receive one activation.** One
 successful establishment feeds exactly one bounded activation for that
 invocation. When durable history holds more than one unfinished Run, startup

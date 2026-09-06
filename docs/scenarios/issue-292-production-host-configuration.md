@@ -7,10 +7,46 @@ issue #292's accepted configuration boundary.
 
 ## Governing behavior
 
-This scenario refines issue #259's **Invalid configuration opens no live
-boundary** scenario and its #292 planned-attempt codec amendment. It makes the
-already-accepted overlapping-path case literal; it does not add a filesystem
-operation, mutation, retry protocol, or new location authority.
+The decision here is whether one complete raw production-host configuration may
+continue past decoding when its path fields are equal or stand in an ancestor
+relationship. It is governed by [Scenario 1: Invalid configuration opens no
+live boundary](https://github.com/dearlordylord/dalph/issues/259): that accepted
+scenario requires the whole value to be decoded before an acquired production
+Layer exists, with one typed safe failure and no durable or external effect.
+The issue page has no stable `#issue-*` section anchor, so the issue URL and the
+scenario name are the direct reference.
+
+The boundary-specific owner is [D37a Complete host configuration validation
+precedes every live boundary](../DELIVERY-INVARIANTS.md#run-boundaries): it
+requires the complete value to be checked before a live boundary exists,
+rejects equal or real-ancestor paths, accepts sibling text prefixes, and
+forbids external or durable effects during validation. Its executable evidence
+is the exact path tests named below.
+
+The adjacent planned-attempt codec amendment preserves [D1 Exact identity on
+every action](../DELIVERY-INVARIANTS.md#identity) and [D2 Attempt
+immutability](../DELIVERY-INVARIANTS.md#identity): equal `(RunId, TaskId,
+ordinal)` inputs keep one exact location set, distinct identities do not alias,
+and workflow-owned attempt facts remain unchanged. This scenario does not reach
+attempt planning, reinterpret either invariant, or create a second location
+authority.
+
+The governing executable evidence is [`production-configuration.test.ts`](../../packages/dalph/src/application/production-configuration.test.ts):
+`rejects filesystem-root and trailing-separator parent overlaps before any
+live-boundary continuation`, `accepts disjoint paths whose names share only a
+text prefix`, `derives equal locations for equal Run/task/ordinal inputs
+strictly beneath the root`, `does not alias distinct Run, task, or task-local
+ordinal identities`, and `keeps fresh ordinals task-local and consumes exact
+replacement Base and ordinal`. No separate model law covers host path
+semantics.
+
+This #292 scenario preserves #259's fail-before-live-boundary, safe-error, and
+retry-as-a-new-invocation behavior; it refines that behavior only by making
+filesystem-component overlap (including `/` and a trailing separator) and
+sibling-prefix acceptance concrete; and it supersedes nothing. The added scope
+is the pure cross-field path predicate and its positive/negative test cases. It
+adds no filesystem operation, mutation, retry protocol, or new location
+authority.
 
 ## A containing path spelling cannot bypass startup validation
 
@@ -47,8 +83,24 @@ overlap and a successful decode for disjoint siblings. Dalph must not treat
 one sibling solely because its name begins with the other's text, or open any
 live boundary after an overlapping value.
 
+### Forbidden-result mapping
+
+[D37a Complete host configuration validation precedes every live
+boundary](../DELIVERY-INVARIANTS.md#run-boundaries) owns all four prohibitions:
+the schema cross-field check `hostPathRelationships` rejects `/` and trailing
+separator ancestors, accepts sibling text prefixes, and leaves the live
+continuation unopened for every real overlap. The exact tests `rejects
+filesystem-root and trailing-separator parent overlaps before any live-boundary
+continuation` and `accepts disjoint paths whose names share only a text prefix`
+prove those negative and positive cases. D37a also owns the
+no-external-call/no-durable-write result. The credential-free error is the
+#259 safe-error rule and is enforced by `rejects %s before any live-boundary
+continuation` and `decodes one complete value with branded locations and
+redacted credentials` in the linked test file. The adjacent exact-location and
+attempt-fact constraints are the named D1/D2 rules and the codec tests listed
+in Governing behavior, not new rules in this scenario.
+
 ### Acceptance-test mapping
 
 - `rejects filesystem-root and trailing-separator parent overlaps before any live-boundary continuation`
 - `accepts disjoint paths whose names share only a text prefix`
-
