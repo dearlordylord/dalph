@@ -1,7 +1,7 @@
 /* eslint-disable import/no-nodejs-modules -- this test launches only local protocol fixtures. */
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, FileSystem, Layer, Option, Path, Redacted, Stream } from "effect"
 import { expect } from "vitest"
 import {
   CodexAppServer,
@@ -41,6 +41,20 @@ const validTurn = {
 const write = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n")
 const writeError = (id) => process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message: "fixture failure" } }) + "\n")
 const responseFor = (method, params = {}) => {
+  if (mode === "non-openai-provider-credential" && method === "initialize") {
+    const argumentsAreExact = process.argv.slice(2).join("\n") === [
+      "app-server",
+      "-c",
+      'model_provider="fixture-provider"',
+      "-c",
+      'model_providers.fixture-provider.env_key="DALPH_CODEX_PROVIDER_CREDENTIAL"'
+    ].join("\n")
+    return process.env.DALPH_CODEX_PROVIDER_CREDENTIAL === "fixture-provider-key" &&
+      process.env.OPENAI_API_KEY === "ambient-openai-key" &&
+      argumentsAreExact
+      ? { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "unix", platformOs: "linux" }
+      : { userAgent: "", codexHome: "", platformFamily: "unix", platformOs: "linux" }
+  }
   if (mode === "initialize-rpc-error" && method === "initialize") return { error: true }
   if (mode === "initialize-family-contradiction" && method === "initialize") {
     return { userAgent: "fixture-codex/protocol", codexHome: "/tmp/fixture-codex", platformFamily: "windows", platformOs: "linux" }
@@ -74,6 +88,9 @@ const responseFor = (method, params = {}) => {
   }
   if (mode === "thread-list-invalid-token" && method === "thread/list") {
     return { data: [{ ...validThread, ownedThreadToken: 42 }] }
+  }
+  if (mode === "thread-list-malformed-nested-item" && method === "thread/list") {
+    return { data: [{ ...validThread, turns: [{ ...validTurn, items: [{ type: null }] }] }] }
   }
   if (mode === "thread-list-valid" && method === "thread/list") return { data: [validThread] }
   if (mode === "thread-list-threads-key" && method === "thread/list") return { threads: [validThread] }
@@ -141,6 +158,10 @@ const responseFor = (method, params = {}) => {
   if (mode === "invalid-thread-fields" && method === "thread/start") {
     return { thread: { id: "", cwd: "", status: "unknown", turns: [] } }
   }
+  if (mode === "thread-start-missing-status" && method === "thread/start") {
+    const { status: _status, ...threadWithoutStatus } = validThread
+    return { thread: threadWithoutStatus }
+  }
   if (mode === "thread-turns-not-array" && method === "thread/start") {
     return { thread: { ...validThread, turns: {} } }
   }
@@ -203,6 +224,25 @@ const responseFor = (method, params = {}) => {
       thread: {
         ...validThread,
         turns: [{ ...validTurn, items: [{ type: "userMessage", content: [{ type: "input_text", text: 42 }] }] }]
+      }
+    }
+  }
+  if (mode === "turn-marker-malformed-item-discriminator" && method === "thread/start") {
+    return { thread: { ...validThread, turns: [{ ...validTurn, items: [{ type: null }] }] } }
+  }
+  if (mode === "turn-marker-malformed-content-discriminator" && method === "thread/start") {
+    return {
+      thread: {
+        ...validThread,
+        turns: [{ ...validTurn, items: [{ type: "userMessage", content: [{ type: null }] }] }]
+      }
+    }
+  }
+  if (mode === "turn-marker-non-input-content" && method === "thread/start") {
+    return {
+      thread: {
+        ...validThread,
+        turns: [{ ...validTurn, items: [{ type: "userMessage", content: [{ type: "output_text", text: "ignored" }] }] }]
       }
     }
   }
@@ -415,7 +455,12 @@ const expectAppFailure = (exit: Exit.Exit<unknown, unknown>, operation: string):
 
 const withFixture = <A>(
   mode: string,
-  action: (app: CodexAppServerService, root: string) => Effect.Effect<A, unknown, FileSystem.FileSystem | Path.Path>
+  action: (app: CodexAppServerService, root: string) => Effect.Effect<A, unknown, FileSystem.FileSystem | Path.Path>,
+  config: {
+    readonly environment?: Readonly<Record<string, string>>
+    readonly modelProvider?: string
+    readonly providerCredential?: Redacted.Redacted<string>
+  } = {}
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -425,7 +470,7 @@ const withFixture = <A>(
       const executable = path.join(root, mode)
       yield* fileSystem.writeFileString(executable, protocolFixture)
       yield* fileSystem.chmod(executable, 0o755)
-      const layer = codexAppServerNodeLayer({ executable }, isolatedCodexProcessNativeService).pipe(
+      const layer = codexAppServerNodeLayer({ ...config, executable }, isolatedCodexProcessNativeService).pipe(
         Layer.provide(memoryCodexAttemptStoreLayer())
       )
       return yield* Effect.gen(function* () {
@@ -469,6 +514,30 @@ it.effect("maps malformed thread and turn state to typed protocol failures", () 
         )
       )
   )
+)
+
+it.effect("rejects schema-valid envelopes whose nested Codex identity fields are malformed", () =>
+  Effect.gen(function* () {
+    for (const [mode, operation, detail] of [
+      ["turn-marker-malformed-item-discriminator", "thread/start", "turn item discriminator is invalid"],
+      ["turn-marker-malformed-content-discriminator", "thread/start", "turn content discriminator is invalid"],
+      ["thread-start-missing-status", "thread/start", "thread id, cwd, or status is invalid"],
+      ["invalid-turn-token", "thread/start", "thread payload is invalid"],
+      ["thread-list-malformed-nested-item", "thread/list", "turn item discriminator is invalid"]
+    ] as const) {
+      const failure = yield* withFixture(mode, (app) =>
+        Effect.gen(function* () {
+          if (operation === "thread/list") {
+            if (app.listThreads === undefined) return yield* Effect.die("Node app-server did not expose thread/list")
+            return yield* app.listThreads().pipe(Effect.flip)
+          }
+          return yield* app.startThread("/fixture/worktree").pipe(Effect.flip)
+        })
+      )
+      expect(failure).toMatchObject({ kind: "Malformed", operation })
+      expect(failure.detail).toContain(detail)
+    }
+  })
 )
 
 it.effect("reconciles valid turn markers, metadata, status, and correlation through public reads", () =>
@@ -560,7 +629,8 @@ it.effect("accepts ownership markers only from schema-decoded user-authored inpu
     for (const mode of [
       "turn-marker-top-level-input-text",
       "turn-marker-assistant-message",
-      "turn-marker-provider-prose"
+      "turn-marker-provider-prose",
+      "turn-marker-non-input-content"
     ] as const) {
       const token = yield* withFixture(mode, (app) =>
         Effect.map(app.startThread("/fixture/worktree"), (thread) => thread.turns[0]?.ownedTurnToken)
@@ -568,6 +638,18 @@ it.effect("accepts ownership markers only from schema-decoded user-authored inpu
       expect(token).toBeUndefined()
     }
   })
+)
+
+it.effect("keeps a non-OpenAI provider credential scoped to its selected environment key", () =>
+  withFixture(
+    "non-openai-provider-credential",
+    (app) => Effect.map(app.startThread("/fixture/worktree"), (thread) => expect(thread.id).toBe("protocol-thread")),
+    {
+      environment: { OPENAI_API_KEY: "ambient-openai-key" },
+      modelProvider: "fixture-provider",
+      providerCredential: Redacted.make("fixture-provider-key")
+    }
+  )
 )
 
 it.effect("reads a complete persistent thread list and preserves malformed-list failures", () =>

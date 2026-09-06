@@ -120,6 +120,7 @@ import {
 import { deliveryProposalsOf } from "./delivery-proposal-derivation.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
+import { makeFreshTaskCommitmentForTest } from "../../../test/support/fresh-task-admission.js"
 
 type StatusProjectionHasOnlyObservationInputs =
   Parameters<typeof deliveryStatusOf> extends [DeliveryStatusSubject, DeliveryRuntimeObservationState] ? true : false
@@ -2176,6 +2177,12 @@ it("filters run-wide and task-scoped action status by the passive subject", () =
   })
 })
 
+/**
+ * Scenario mapping: issue #192's accepted-fact publication makes the four
+ * proposal owners describe one inert frontier. The fresh attempt identifiers
+ * remain unallocated and the recovered lineage read retains its preselected
+ * OperationId; status orders both descriptions without admitting either one.
+ */
 it("orders all public proposal route and admission families deterministically", () => {
   const { accepted, fixture, queued, started } = integrationFactsOf()
   const task: Task = {
@@ -2206,6 +2213,17 @@ it("orders all public proposal route and admission families deterministically", 
   const freshPlanStep = FreshWorkflowStep.ReadRejectedTaskClaim({
     predecessorOperationId: freshPlan.operationId,
     rejectedClaimOperationId: OperationId.make("status-route-rejected-claim"),
+    task
+  })
+  const freshAttemptClaimOperationId = OperationId.make("status-route-fresh-attempt-claim")
+  const freshAttemptPlan = RunnableFrontierTransition.ContinueFreshWorkflowOperation({
+    operationId: OperationId.make("status-route-fresh-attempt-plan"),
+    taskId: fixture.taskId
+  })
+  const freshAttemptPlanStep = FreshWorkflowStep.RecordTaskAttemptPlan({
+    claimOperationId: freshAttemptClaimOperationId,
+    predecessorOperationId: freshAttemptPlan.operationId,
+    specification,
     task
   })
   const continuationAttempt = PlannedTaskAttempt.make({
@@ -2268,18 +2286,24 @@ it("orders all public proposal route and admission families deterministically", 
   const acquireStartedTarget = RunnableFrontierTransition.AcquireStartedIntegrationTarget({ responsibility: started })
   const freshStartDecision = freshContinuationDecisionOf({ step: freshStartStep, transition: freshStart }, [])
   const freshPlanDecision = freshContinuationDecisionOf({ step: freshPlanStep, transition: freshPlan }, [])
-  if (freshStartDecision === undefined || freshPlanDecision === undefined) {
+  const freshAttemptPlanDecision = freshContinuationDecisionOf(
+    { step: freshAttemptPlanStep, transition: freshAttemptPlan },
+    [makeFreshTaskCommitmentForTest(fixture.taskId, freshAttemptClaimOperationId, fixture.runId)]
+  )
+  if (freshStartDecision === undefined || freshPlanDecision === undefined || freshAttemptPlanDecision === undefined) {
     return expect.fail("status route fixtures must be valid position-free fresh continuations")
   }
   const contributions = deliveryProposalsOf({
     acceptedAt: JournalPosition.make(5),
     acceptedOperationIds: new Set([acceptedClaimOperationId, acceptedLineageOperation.operationId]),
-    fresh: [freshStartDecision, freshPlanDecision],
+    fresh: [freshStartDecision, freshPlanDecision, freshAttemptPlanDecision],
     integrationResponsibilities: [started],
+    pendingReadOperationIds: new Set([recoveredLineageOperation.operationId]),
     runId: fixture.runId,
     transitions: [
       freshStart,
       freshPlan,
+      freshAttemptPlan,
       continuation,
       acceptedClaim,
       acceptedLineage,
@@ -2313,9 +2337,10 @@ it("orders all public proposal route and admission families deterministically", 
     (entry): entry is Extract<DeliveryStatusEntry, { readonly _tag: "ProposedDeliveryAction" }> =>
       entry._tag === "ProposedDeliveryAction"
   )
-  expect(proposals).toHaveLength(12)
+  expect(proposals).toHaveLength(13)
   expect(proposals.map(({ proposal }) => proposal.order._tag)).toEqual([
     "TrackerGraphOrder",
+    "FreshWorkflowOrder",
     "FreshWorkflowOrder",
     "FreshWorkflowOrder",
     "RecoveredWorkflowOrder",
@@ -2328,6 +2353,22 @@ it("orders all public proposal route and admission families deterministically", 
     "IntegrationOrder",
     "UnqueuedAcceptedResultOrder"
   ])
+  const freshAttempt = proposals.find(
+    ({ proposal }) =>
+      proposal.route._tag === "FreshWorkflowRoute" && proposal.route.step._tag === "RecordTaskAttemptPlan"
+  )
+  expect(freshAttempt?.proposal.actionIdentity).toEqual({ _tag: "FreshOperationAndAttemptIdsRequired" })
+  const preservedLineageRead = proposals.find(
+    ({ proposal }) =>
+      proposal.actionIdentity._tag === "FreshOperationIdRequired" && proposal.actionIdentity.source._tag === "Preserve"
+  )
+  expect(preservedLineageRead?.proposal).toMatchObject({
+    actionIdentity: {
+      _tag: "FreshOperationIdRequired",
+      source: { _tag: "Preserve", operationId: recoveredLineageOperation.operationId }
+    },
+    route: { _tag: "RecoveredNewActionRoute", action: { _tag: "ReadTargetLineage" } }
+  })
 })
 
 it.effect("fails the passive status signal when its current projection has a run mismatch", () =>

@@ -675,36 +675,41 @@ it.effect("reconciles a lost predecessor-candidate response after restart withou
   )
 )
 
-it.effect("preserves a candidate when the mutation response names a foreign session", () =>
+it.effect("preserves a candidate when the mutation response names a foreign locator or session", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-foreign-response"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
-    const result = yield* runIntegratorCandidateCleanup(authorization)
-    const boundary = yield* TestIntegratorCandidateCleanupBoundary
-    const records = yield* journal.read(runId)
-    expect(result._tag).toBe("Preserved")
-    expect((yield* boundary.calls()).map((call) => call._tag)).toEqual(["Observe", "Remove"])
-    expect(records.map(({ event }) => event._tag)).toContain("IntegratorCandidateCleanupContradicted")
-  }).pipe(
-    Effect.provide(
-      integratorCandidateCleanupTestLayer({
-        observations: [present],
-        mutations: [
-          IntegratorCandidateCleanupMutationResult.cases.Removed.make({
-            locator: predecessor.candidateResource,
-            revision: IntegratorCandidateCleanupEvidenceRevision.make(1),
-            sessionId: IntegratorSessionId.make("session:issue-69-foreign")
-          })
-        ]
+    const cases = [
+      IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+        locator: IntegratorCandidateResourceLocator.make("candidate:issue-69-foreign"),
+        revision: IntegratorCandidateCleanupEvidenceRevision.make(1),
+        sessionId: predecessor.sessionId
+      }),
+      IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+        locator: predecessor.candidateResource,
+        revision: IntegratorCandidateCleanupEvidenceRevision.make(1),
+        sessionId: IntegratorSessionId.make("session:issue-69-foreign")
       })
-    ),
-    Effect.provide(memoryJournalTestLayer)
-  )
+    ]
+    for (const mutation of cases) {
+      const result = yield* Effect.gen(function* () {
+        const journal = yield* JournalStore
+        yield* journal.beginRun(
+          runId,
+          FixtureTarget.make("issue-69-candidate-foreign-response"),
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        )
+        yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+        const outcome = yield* runIntegratorCandidateCleanup(authorization)
+        const boundary = yield* TestIntegratorCandidateCleanupBoundary
+        return { calls: yield* boundary.calls(), outcome, records: yield* journal.read(runId) }
+      }).pipe(
+        Effect.provide(integratorCandidateCleanupTestLayer({ observations: [present], mutations: [mutation] })),
+        Effect.provide(memoryJournalTestLayer)
+      )
+      expect(result.outcome._tag).toBe("Preserved")
+      expect(result.calls.map((call) => call._tag)).toEqual(["Observe", "Remove"])
+      expect(result.records.map(({ event }) => event._tag)).toContain("IntegratorCandidateCleanupContradicted")
+    }
+  })
 )
 
 it.effect("stops candidate mutation retries at the exact three-request bound", () =>

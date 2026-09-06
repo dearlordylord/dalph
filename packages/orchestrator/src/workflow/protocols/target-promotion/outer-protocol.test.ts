@@ -50,6 +50,14 @@ import {
   TargetPromotionResultContradiction
 } from "./protocol.js"
 import { targetPromotionContract } from "../../../../test/contracts/target-promotion-contract.js"
+import {
+  authorizeTargetPromotionProgress,
+  observeTargetPromotionRead,
+  recordTargetPromotionAttemptIntent,
+  recordTargetPromotionIntent,
+  sendTargetPromotionAttempt,
+  settleTargetPromotionAttempt
+} from "./transitions.js"
 
 const runId = RunId.make("outer-promotion-test-run")
 const target = IntegrationTarget.make({
@@ -542,6 +550,176 @@ it.effect("read-only reconciliation cannot turn an unattempted intent into Git a
     expect(yield* Effect.flip(reconcile(service, records))).toBeInstanceOf(TargetPromotionResultContradiction)
     expect(yield* Ref.get(calls)).toEqual(["read"])
     expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual(["TargetPromotionIntended"])
+  })
+)
+
+it.effect("records one exact promotion intent and denies read-only progress before any attempt", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+
+    const missingIntent = yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
+      Effect.provide(journalLayer(records)),
+      Effect.flip
+    )
+    expect(missingIntent).toBeInstanceOf(TargetPromotionResultContradiction)
+
+    const initialRead = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(
+      Effect.provide(journalLayer(records))
+    )
+    expect(initialRead).toMatchObject({
+      _tag: "TargetPromotionReadAuthorized",
+      authority: "RetryAuthorized",
+      durableBasis: "PendingInitial",
+      previousAttemptOrdinal: undefined
+    })
+
+    const duplicateIntent = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(
+      Effect.provide(journalLayer(records)),
+      Effect.flip
+    )
+    expect(duplicateIntent).toBeInstanceOf(TargetPromotionResultContradiction)
+
+    const readOnly = yield* authorizeTargetPromotionProgress(qualifiedCandidate, "ReadOnly").pipe(
+      Effect.provide(journalLayer(records)),
+      Effect.flip
+    )
+    expect(readOnly).toBeInstanceOf(TargetPromotionResultContradiction)
+
+    const retryAuthorized = yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
+      Effect.provide(journalLayer(records))
+    )
+    expect(retryAuthorized).toMatchObject({
+      _tag: "TargetPromotionReadAuthorized",
+      authority: "RetryAuthorized",
+      durableBasis: "PendingInitial",
+      previousAttemptOrdinal: undefined
+    })
+    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual(["TargetPromotionIntended"])
+  })
+)
+
+it.effect("rejects copied and consumed read permission before another Git read", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const reads = yield* Ref.make(0)
+    const readFailure = new TargetPromotionGitReadFailure({
+      candidateCommit,
+      detail: "initial target read unavailable",
+      target
+    })
+    const service: TargetPromotionGitService = {
+      compareAndSet: () =>
+        Effect.succeed(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit })),
+      read: () => Ref.update(reads, (count) => count + 1).pipe(Effect.andThen(Effect.fail(readFailure)))
+    }
+    const layer = Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read))
+    const authorization = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(
+      Effect.provide(journalLayer(records))
+    )
+
+    const copiedPermission = yield* observeTargetPromotionRead({ ...authorization }).pipe(
+      Effect.provide(layer),
+      Effect.flip
+    )
+    expect(copiedPermission).toBeInstanceOf(TargetPromotionResultContradiction)
+    expect(yield* Ref.get(reads)).toBe(0)
+
+    expect(yield* observeTargetPromotionRead(authorization).pipe(Effect.provide(layer), Effect.flip)).toBe(readFailure)
+    const consumedPermission = yield* observeTargetPromotionRead(authorization).pipe(Effect.provide(layer), Effect.flip)
+    expect(consumedPermission).toBeInstanceOf(TargetPromotionResultContradiction)
+    expect(yield* Ref.get(reads)).toBe(1)
+    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual(["TargetPromotionIntended"])
+  })
+)
+
+it.effect("rejects copied reused and stale promotion capabilities before their next boundary", () =>
+  Effect.gen(function* () {
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    const service: TargetPromotionGitService = {
+      compareAndSet: () =>
+        Ref.update(calls, (current) => [...current, "compare-and-set"]).pipe(
+          Effect.as(TargetPromotionCompareAndSetResult.cases.Applied.make({ newHeadSha: candidateCommit }))
+        ),
+      read: () =>
+        Ref.update(calls, (current) => [...current, "read"]).pipe(
+          Effect.as(
+            TargetPromotionGitReadObservation.cases.CandidateNotInAncestry.make({ currentHeadSha: expectedHead })
+          )
+        )
+    }
+    const layer = Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read))
+    const staleRead = yield* recordTargetPromotionIntent(qualifiedCandidate).pipe(Effect.provide(journalLayer(records)))
+    const readOne = yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
+      Effect.provide(journalLayer(records))
+    )
+    const readTwo = yield* authorizeTargetPromotionProgress(qualifiedCandidate, "RetryAuthorized").pipe(
+      Effect.provide(journalLayer(records))
+    )
+    if (readOne._tag !== "TargetPromotionReadAuthorized" || readTwo._tag !== "TargetPromotionReadAuthorized") {
+      return yield* Effect.die("exact initial promotion reads were not authorized")
+    }
+    const attemptOne = yield* observeTargetPromotionRead(readOne).pipe(Effect.provide(layer))
+    const staleAttempt = yield* observeTargetPromotionRead(readTwo).pipe(Effect.provide(layer))
+    if (
+      attemptOne._tag !== "TargetPromotionAttemptAuthorized" ||
+      staleAttempt._tag !== "TargetPromotionAttemptAuthorized"
+    ) {
+      return yield* Effect.die("exact initial promotion attempts were not authorized")
+    }
+
+    const copiedAttempt = yield* recordTargetPromotionAttemptIntent({ ...attemptOne }).pipe(
+      Effect.provide(journalLayer(records)),
+      Effect.flip
+    )
+    expect(copiedAttempt).toBeInstanceOf(TargetPromotionResultContradiction)
+
+    const intended = yield* recordTargetPromotionAttemptIntent(attemptOne).pipe(Effect.provide(journalLayer(records)))
+    for (const failure of [
+      yield* observeTargetPromotionRead(staleRead).pipe(Effect.provide(layer), Effect.flip),
+      yield* recordTargetPromotionAttemptIntent(staleAttempt).pipe(Effect.provide(journalLayer(records)), Effect.flip),
+      yield* recordTargetPromotionAttemptIntent(attemptOne).pipe(Effect.provide(journalLayer(records)), Effect.flip)
+    ]) {
+      expect(failure).toBeInstanceOf(TargetPromotionResultContradiction)
+    }
+
+    const copiedIntended = yield* sendTargetPromotionAttempt({ ...intended }).pipe(Effect.provide(layer), Effect.flip)
+    expect(copiedIntended).toBeInstanceOf(TargetPromotionResultContradiction)
+
+    const observed = yield* sendTargetPromotionAttempt(intended).pipe(Effect.provide(layer))
+    if (observed._tag !== "TargetPromotionAttemptObserved") {
+      return yield* Effect.die("controlled Git result did not produce an observed promotion attempt")
+    }
+    const consumedIntended = yield* sendTargetPromotionAttempt(intended).pipe(Effect.provide(layer), Effect.flip)
+    expect(consumedIntended).toBeInstanceOf(TargetPromotionResultContradiction)
+
+    const copiedObservation = yield* settleTargetPromotionAttempt({ ...observed }).pipe(
+      Effect.provide(journalLayer(records)),
+      Effect.flip
+    )
+    expect(copiedObservation).toBeInstanceOf(TargetPromotionResultContradiction)
+
+    expect((yield* settleTargetPromotionAttempt(observed).pipe(Effect.provide(journalLayer(records))))._tag).toBe(
+      "PromotionSucceeded"
+    )
+    for (const failure of [
+      yield* settleTargetPromotionAttempt(observed).pipe(Effect.provide(journalLayer(records)), Effect.flip),
+      yield* sendTargetPromotionAttempt(intended).pipe(Effect.provide(layer), Effect.flip)
+    ]) {
+      expect(failure).toBeInstanceOf(TargetPromotionResultContradiction)
+    }
+
+    expect(
+      yield* authorizeTargetPromotionProgress(qualifiedCandidate, "ReadOnly").pipe(
+        Effect.provide(journalLayer(records))
+      )
+    ).toMatchObject({ _tag: "PromotionSucceeded" })
+    expect(yield* Ref.get(calls)).toEqual(["read", "read", "compare-and-set"])
+    expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
+      "TargetPromotionIntended",
+      "TargetPromotionAttemptIntended",
+      "TargetPromotionObservedSuccess"
+    ])
   })
 )
 

@@ -1488,6 +1488,50 @@ describe("Codex Integrator", () => {
     expect(threadStarts.value).toBe(1)
   })
 
+  it("reuses a same-incarnation thread-start intent after a complete empty thread census", async () => {
+    const config = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(
+        "/tmp/dalph-integrator-test/same-incarnation-thread-intent-store.json"
+      ),
+      repository
+    })
+    const intent = CodexIntegratorPrivateRecord.cases.ThreadStartIntentRecorded.make({
+      appServerIncarnation: CodexServerIncarnation.make("fixture-incarnation"),
+      candidatePath,
+      correlation: session,
+      initialRun: requestFor(1).correlation,
+      revision: revision(4),
+      threadToken: CodexThreadOwnershipToken.make("same-incarnation-thread-token")
+    })
+    const privateWrites: Array<CodexIntegratorPrivateRecord> = []
+    const threadStarts = { value: 0 }
+    const turnStarts = { value: 0 }
+    const prepared = await Effect.runPromise(
+      Effect.gen(function* () {
+        const integrator = yield* Integrator
+        return yield* integrator.prepare(requestFor(1))
+      }).pipe(
+        Effect.provide(
+          providerLayer(config, {
+            initialRecords: [intent],
+            preRegisteredWorktree: true,
+            preRegisteredWorktreePathExists: true,
+            privateWrites,
+            threadStarts,
+            turnStarts
+          })
+        )
+      )
+    )
+    expect(prepared._tag).toBe("PreparedCandidate")
+    expect(threadStarts.value).toBe(1)
+    expect(turnStarts.value).toBe(1)
+    expect(privateWrites[0]?._tag).toBe("ThreadReady")
+    expect(privateWrites.map((record) => record._tag)).not.toContain("ThreadStartIntentRecorded")
+  })
+
   it("reissues the same turn token after a proved complete absence", async () => {
     const config = CodexIntegratorConfiguration.make({
       candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make("/tmp/dalph-integrator-test"),

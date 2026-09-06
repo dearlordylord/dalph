@@ -309,6 +309,52 @@ it.effect("does not expose a provider-neutral candidate remove command", () =>
   })
 )
 
+it.effect("reports unavailable candidate evidence when the provider omits its revision reader", () =>
+  Effect.gen(function* () {
+    const providerAuthorityLayer = Layer.succeed(
+      IntegratorCandidateProviderAuthority,
+      IntegratorCandidateProviderAuthority.of({
+        observe: (subject) =>
+          Effect.succeed(
+            IntegratorCandidateCleanupObservation.cases.Present.make({
+              locator: subject.locator,
+              revision: subject.evidenceRevision,
+              sessionId: subject.owner.sessionId,
+              writerQuiescent: true
+            })
+          ),
+        remove: (subject) =>
+          Effect.succeed(
+            IntegratorCandidateCleanupMutationResult.cases.Removed.make({
+              locator: subject.locator,
+              revision: subject.evidenceRevision,
+              sessionId: subject.owner.sessionId
+            })
+          )
+      })
+    )
+    const candidate = yield* Effect.gen(function* () {
+      return yield* IntegratorCandidateCleanupBoundary
+    }).pipe(
+      Effect.provide(gitDispositionCleanupBoundaryLayer(target, providerAuthorityLayer)),
+      Effect.provide(commandLayer(yield* Ref.make(0))),
+      Effect.provide(
+        Layer.succeed(
+          CoordinatorOwnership,
+          CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
+        )
+      ),
+      Effect.provide(NodeServices.layer)
+    )
+    const reader = candidate.readEvidenceRevision
+    if (reader === undefined) return yield* Effect.die("production candidate boundary omitted its evidence reader")
+    const failure = yield* reader({ locator: candidateAuthorization.locator, predecessor: candidatePredecessor }).pipe(
+      Effect.flip
+    )
+    expect(failure).toBe("candidate evidence is unavailable")
+  })
+)
+
 it.effect("production candidate cleanup uses provider ownership and quiescence before mutation", () =>
   Effect.gen(function* () {
     const providerMutations = yield* Ref.make(0)

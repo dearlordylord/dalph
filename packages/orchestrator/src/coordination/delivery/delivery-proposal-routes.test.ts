@@ -2280,6 +2280,29 @@ describe("delivery proposal route matrix", () => {
           Effect.flip
         )
       ).toBeInstanceOf(TargetPromotionRuntimeUnavailable)
+
+      const reconciliation = RunnableFrontierTransition.ReconcileTargetPromotionAttempt({
+        candidate: integrationFinalityFixture.qualifiedCandidate,
+        responsibility: started
+      })
+      const reconciliationProposal = proposalsFor(reconciliation).proposals[0]
+      if (reconciliationProposal === undefined || !isIdentityFreeProposal(reconciliationProposal)) {
+        return yield* Effect.die("missing target-promotion reconciliation proposal")
+      }
+      const reconciliationAction = { _tag: "IdentityFreeAction" as const, proposal: reconciliationProposal }
+      expect(
+        yield* executeIntegrationAction(reconciliationAction, reconciliation, inertLease, target).pipe(
+          Effect.provideService(InRunJournal, acceptedJournal),
+          Effect.flip
+        )
+      ).toBeInstanceOf(TargetPromotionRuntimeUnavailable)
+      expect(
+        yield* executeIntegrationAction(reconciliationAction, reconciliation, inertLease, target).pipe(
+          Effect.provideService(TargetPromotionRuntime, completionPromotionRuntime),
+          Effect.provideService(InRunJournal, acceptedJournal),
+          Effect.flip
+        )
+      ).toBeInstanceOf(TargetPromotionRuntimeUnavailable)
     })
   )
 
