@@ -37,6 +37,10 @@ export const quintGateCommandManifest = Object.freeze([
   ...proof("application Exit result proof"),
   ...exhaustiveModel("control-direction application"),
   ...exhaustiveModel("Run activation"),
+  ...model("fresh-task admission"),
+  command("typecheck", "fresh-task admission proof projection typecheck"),
+  ...proof("fresh-task admission capacity proof"),
+  ...proof("fresh-task admission ambiguity proof"),
   ...exhaustiveModel("Run cancellation"),
   ...model("task-fact reconciliation"),
   command("typecheck", "task-fact proof projection typecheck"),
@@ -50,6 +54,15 @@ export const quintGateCommandManifest = Object.freeze([
   ...proof("accepted-result integration quarantine proof"),
   ...exhaustiveModel("integration finality")
 ])
+
+/**
+ * Issue #153's original inventory predates #315. Keep those 92 identities as
+ * an explicit subset while the complete gate also retains #315's 13 accepted
+ * fresh-admission commands.
+ */
+export const legacyQuintGateCommandManifest = Object.freeze(
+  quintGateCommandManifest.filter(({ name }) => !name.startsWith("fresh-task admission"))
+)
 
 const manifestKeys = quintGateCommandManifest.map(({ kind, name }) => `${kind}\u0000${name}`)
 if (new Set(manifestKeys).size !== manifestKeys.length)

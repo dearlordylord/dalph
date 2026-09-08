@@ -6,3 +6,4 @@ export interface QuintManifestCommand {
 }
 
 export declare const quintGateCommandManifest: ReadonlyArray<QuintManifestCommand>
+export declare const legacyQuintGateCommandManifest: ReadonlyArray<QuintManifestCommand>

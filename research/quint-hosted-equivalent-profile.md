@@ -9,10 +9,27 @@ retained stressed 36.26s prefix before mutation detection by 23.74s. Its 90s
 Vitest budget leaves a further 30s for child termination, temporary-copy
 cleanup, and runner overhead.
 
-## What was measured
+## Current qualification target
 
-The profile repeated the formal job's repository-local sequence on the same
-Linux arm64 machine:
+The supported runtime is the exact package-engine range `^24.20.0`. The hosted
+formal job derives its matrix from that range, so current qualification is on
+Node 24.20 and does not reintroduce Node 22. The Node 22.22.2 and Node 24.15.0
+profiles below are retained historical evidence from before the runtime and
+formal-command inventory advanced; they are not the current support matrix.
+
+The freshness-correct gate selects 105 commands: 15 typechecks, 46 tests, 23
+sampled runs, and 21 verifies. It retains all 92 legacy identities as an exact
+ordered subset and adds all 13 fresh-task admission identities. A local
+Node 24.20.0 run of that current inventory completed in 501.72 seconds against
+the unchanged 750-second regression budget; its phase totals were 26.28,
+209.08, 240.31, and 198.01 seconds respectively. This is local runner evidence,
+not hosted timing evidence. A dedicated hosted run and a separately stressed
+Node 24.20 run remain exact-SHA qualification work after this branch is pushed.
+
+## Historical measurements
+
+The historical profile repeated the formal job's repository-local sequence on
+the same Linux arm64 machine:
 
 ```text
 mise exec node@<supported-version> -- pnpm install --frozen-lockfile
@@ -27,10 +44,14 @@ ordinary selected commands exited 0; the one expected temporal-mutant verify
 exited 1 and was accepted and checked by the gate, whose outer command exited
 0.
 
-The emitted command rows and reported phase totals are retained in
+The emitted command rows and reported phase totals are retained immutably in
 [`quint-hosted-equivalent-profile.raw.json`](./quint-hosted-equivalent-profile.raw.json).
-That artifact was generated from the five retained run logs with this command
-(the profile arguments are `id|node|repeat|install-seconds|log-path`):
+That artifact was generated from the five retained run logs by the then-current
+92-command generator. The current generator intentionally validates the
+freshness-correct 105-command inventory and therefore rejects those old logs;
+the command below records the historical inputs rather than promising current
+regeneration (the profile arguments are
+`id|node|repeat|install-seconds|log-path`):
 
 ```text
 node scripts/generate-quint-profile-evidence.mjs --output research/quint-hosted-equivalent-profile.raw.json \
@@ -48,12 +69,9 @@ portable files; the checked-in JSON is the retained measurement artifact.
 The machine is Linux arm64 rather than GitHub's hosted Ubuntu runner. Cold
 hosted action setup, cache-hit/miss behavior, and checkout/network timing were
 not measured and cannot be observed until the workflow is pushed, so this
-record does not present local timings as hosted timings. The workflow reserves
-300 seconds for checkout, action setup, cache and network variance, and other
-hosted startup work; that allowance is reserved, not measured, and is added to
-the measured install and the gate's 600-second internal deadline.
+record does not present local timings as hosted timings.
 
-## Repeated profiles
+## Historical repeated profiles
 
 All durations are wall-clock seconds. Phase values come from the gate's own
 per-command timing report; the total includes pnpm and process startup around
@@ -143,24 +161,23 @@ violation before continuing. A deliberately broken selected model in the
 negative-control test instead makes the outer `check:ci:formal` command exit
 nonzero.
 
-## Bound selected from the evidence
+## Current bound
 
-`check:quint` retains a 600-second decreasing internal deadline. The hosted
-formal job uses a 16-minute (`960` second) GitHub job timeout:
+`check:quint` retains a decreasing 960-second safety deadline and fails the
+gate if the complete inventory exceeds its 750-second regression budget. The
+hosted formal job uses the same 16-minute (`960` second) outer timeout:
 
 ```text
-600.000s internal gate budget
-  + 1.535s slowest measured frozen install
-  + 300.000s explicit hosted checkout/setup/network allowance
-  + 58.465s final reporting margin
+750.000s complete-gate regression budget
+  + 210.000s hosted checkout/setup/network/final-reporting allowance
 = 960.000s job timeout
 ```
 
-This bound cannot expire before the complete inner budget plus the measured
-install and the stated hosted-startup allowance. The 600-second bound remains
-well above the repeated local maximum; a later hosted run that exceeds it
-must fail with the gate's accumulated command and phase timings rather than
-silently omit formal checking.
+The allowance is reserved, not measured. Each child receives only the
+decreasing remainder of the safety deadline, so no late command can restart a
+fresh timeout. A later hosted run that exceeds the regression budget must fail
+with accumulated command and phase timings rather than silently omit formal
+checking.
 
 ## Scenario-to-test mapping
 
@@ -173,6 +190,11 @@ exemption applies. The concrete tooling outcomes are covered by:
   that must make the formal gate fail;
 - `scripts/quint-gate-timing.test.ts`: command/phase accumulation, including
   timing output from `finally` while preserving the original failure; and
-- the five passing gate runs recorded above: the same `check:quint` command
-  exercised on both supported Node versions with all four phase families (four
-  with a separately measured frozen install and one final post-change run).
+- `scripts/quint-gate-command-contract.test.ts`: exact current 105-command and
+  15/46/23/21 phase accounting, plus the ordered legacy 92-command subset;
+- `scripts/quint-gate-concurrency.test.ts`: the installation-critical first
+  evaluator command completes before bounded parallel family work is admitted;
+  and
+- the five historical passing runs recorded above, plus the current local
+  Node 24.20.0 run. Hosted Node 24.20 qualification remains the workflow's
+  authoritative environment-specific result.

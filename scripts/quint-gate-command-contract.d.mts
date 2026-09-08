@@ -9,6 +9,7 @@ export interface QuintGateCommandCounts {
 }
 
 export declare const quintGateExpectedCommandCounts: Readonly<QuintGateCommandCounts>
+export declare const legacyQuintGateExpectedCommandCounts: Readonly<QuintGateCommandCounts>
 export declare const assertQuintGateCommandContract: (args: {
   readonly manifest: ReadonlyArray<QuintManifestCommand>
   readonly executed: QuintGateCommandCounts

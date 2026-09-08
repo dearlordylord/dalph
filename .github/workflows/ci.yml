@@ -130,9 +130,8 @@ jobs:
     needs: change-plan
     if: needs.change-plan.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
-    # The gate's inner deadline is 600s. The 16-minute job bound reserves the
-    # measured frozen-install time plus a 300s checkout/action/network margin
-    # and still leaves a small final-reporting margin.
+    # The gate's regression budget is 750s. The 16-minute safety bound reserves
+    # another 210s for checkout, setup, network variance, and final reporting.
     timeout-minutes: 16
     env:
       NODE_OPTIONS: --max-old-space-size=8192

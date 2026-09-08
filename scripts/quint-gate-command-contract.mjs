@@ -1,4 +1,12 @@
 export const quintGateExpectedCommandCounts = Object.freeze({
+  total: 105,
+  typecheck: 15,
+  test: 46,
+  "sampled-run": 23,
+  verify: 21
+})
+
+export const legacyQuintGateExpectedCommandCounts = Object.freeze({
   total: 92,
   typecheck: 13,
   test: 40,
@@ -18,8 +26,8 @@ const countManifestCommands = (manifest) => {
 
 /**
  * Keep the selected command count independent from the manifest and the
- * execution path. Both representations must retain the accepted 92-command
- * phase contract even when an omission changes them together.
+ * execution path. Both representations must retain the freshness-corrected
+ * 105-command phase contract even when an omission changes them together.
  */
 export const assertQuintGateCommandContract = ({ executed, manifest }) => {
   const manifestCounts = countManifestCommands(manifest)

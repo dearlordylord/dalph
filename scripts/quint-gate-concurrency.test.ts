@@ -84,6 +84,34 @@ describe("Quint gate family scheduler", () => {
     expect(results).toEqual(["first", "second", "third", "fourth"])
   })
 
+  it("finishes an installation-critical prefix before admitting bounded parallel work", async () => {
+    const startedCommands: Array<string> = []
+    const releases = controlledCommands(["installer", "second", "third"])
+    const started = controlledCommands(["installer", "second", "third"])
+    const execution = runQuintGateFamily({
+      commands: ["installer", "second", "third"],
+      serializedPrefix: 1,
+      run: async (command) => {
+        startedCommands.push(command)
+        controlledCommand(started, command).resolve()
+        await controlledCommand(releases, command).promise
+        return `${command} result`
+      }
+    })
+
+    await controlledCommand(started, "installer").promise
+    await Promise.resolve()
+    expect(startedCommands).toEqual(["installer"])
+
+    controlledCommand(releases, "installer").resolve()
+    await Promise.all([controlledCommand(started, "second").promise, controlledCommand(started, "third").promise])
+    expect(startedCommands).toEqual(["installer", "second", "third"])
+
+    controlledCommand(releases, "second").resolve()
+    controlledCommand(releases, "third").resolve()
+    await expect(execution).resolves.toEqual(["installer result", "second result", "third result"])
+  })
+
   it("aborts running siblings and does not admit work after the first failure", async () => {
     const started: Array<string> = []
     const aborted: Array<string> = []
