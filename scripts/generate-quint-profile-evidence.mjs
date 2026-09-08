@@ -8,7 +8,8 @@ import { quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
 const usage = () =>
   "Usage: node scripts/generate-quint-profile-evidence.mjs --output FILE --profile ID|NODE|REPEAT|INSTALL_SECONDS|LOG_PATH [...]"
 const commandKinds = ["typecheck", "test", "sampled-run", "verify"]
-const timingPattern = /^Quint command timing: (typecheck|test|sampled-run|verify) (.*?) ([0-9.]+)s$/gm
+const timingPattern =
+  /^Quint command timing: (typecheck|test|sampled-run|verify) (.*?) ([0-9.]+)s result=(exit:\d+|failed|cancelled|timed-out|interrupted|launch-failed)$/gm
 const phasePattern = /^Quint phase timing: (typecheck|test|sampled-run|verify) (\d+) command\(s\), ([0-9.]+)s$/gm
 const totalPattern = /^Complete Quint model gate: ([0-9.]+)s \(budget ([0-9.]+)s\)$/m
 
@@ -61,7 +62,8 @@ export const parseProfileLog = ({ id, installSeconds, log, node, repeat, sourceP
   const commands = [...log.matchAll(timingPattern)].map((match) => ({
     kind: match[1],
     name: match[2],
-    durationSeconds: Number(match[3])
+    durationSeconds: Number(match[3]),
+    result: match[4]
   }))
   const phases = [...log.matchAll(phasePattern)].map((match) => ({
     kind: match[1],

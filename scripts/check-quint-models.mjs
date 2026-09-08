@@ -7,7 +7,6 @@ import {
   acceptedResultIntegrationQuarantineProofObligations,
   freshTaskAdmissionObligations,
   freshTaskAdmissionProofObligations,
-  plannedAttemptExecutorObligations,
   plannedAttemptExecutorProofObligations,
   runCancellationObligations,
   runActivationObligations,
@@ -25,9 +24,10 @@ import {
   runPreparedTemporalCheck
 } from "./quint-temporal-gate.mjs"
 import { quintGateBatchResults, runQuintGateFamily } from "./quint-gate-concurrency.mjs"
+import { plannedAttemptExecutorInitialFamily } from "./quint-gate-production-plan.mjs"
 import { createQuintGateTiming, quintCommandKindForArgs, runWithQuintGateTiming } from "./quint-gate-timing.mjs"
 import { runBoundedCommand } from "./run-bounded-command.mjs"
-import { assertRequiredWitnessesObserved } from "./quint-witness-coverage.mjs"
+import { assertQuintSampledCommandWitnessesObserved } from "./quint-witness-coverage.mjs"
 
 if (process.env.npm_execpath === undefined) {
   throw new Error("Run this model gate through pnpm")
@@ -74,15 +74,21 @@ const executeCommand = (command, options = {}) => {
     kind: command.kind,
     name: command.name,
     order: command.position,
-    run: () =>
-      runBoundedCommand({
+    run: async () => {
+      const result = await runBoundedCommand({
         ...command.options,
         ...commandOptions,
         args: [quintEntryPoint, ...command.args],
+        captureOutput: command.kind === "sampled-run" || commandOptions.captureOutput === true,
         executable: process.execPath,
         name: command.name,
         timeoutMilliseconds: remainingSafetyTimeoutMilliseconds()
       })
+      if (command.kind === "sampled-run") {
+        assertQuintSampledCommandWitnessesObserved({ args: command.args, name: command.name, output: result.output })
+      }
+      return result
+    }
   })
 }
 
@@ -103,11 +109,12 @@ const renderFamily = (commands, outcomes) => {
   }
 }
 
-const runFamily = async (commands, { serializedPrefix = 0 } = {}) => {
+const runFamily = async (commands, { concurrency, serializedPrefix = 0 } = {}) => {
   const reserved = commands.map(({ args, name, options = {} }) => reserveCommand(name, args, options))
   try {
     const values = await runQuintGateFamily({
       commands: reserved,
+      concurrency,
       serializedPrefix,
       run: (command, signal) =>
         executeCommand(command, {
@@ -133,43 +140,7 @@ await runWithQuintGateTiming({
   timing,
   run: async () => {
     await run("planned-attempt executor model typecheck", ["typecheck", "specs/plannedAttemptExecutor.qnt"])
-    const plannedAttemptExecutorInvariants = plannedAttemptExecutorObligations.invariants
-    const plannedAttemptExecutorWitnesses = plannedAttemptExecutorObligations.witnesses
-    await runFamily(
-      [
-        {
-          name: "planned-attempt executor deterministic tests",
-          args: ["test", "specs/plannedAttemptExecutor_test.qnt", "--main", "plannedAttemptExecutorTest"]
-        },
-        {
-          name: "planned-attempt executor negative mutation profile",
-          args: [
-            "test",
-            "specs/plannedAttemptExecutor_negative_test.qnt",
-            "--main",
-            "plannedAttemptExecutorNegativeTest"
-          ]
-        },
-        {
-          name: "planned-attempt executor sampled model",
-          args: [
-            "run",
-            "specs/plannedAttemptExecutor.qnt",
-            "--invariants",
-            ...plannedAttemptExecutorInvariants,
-            "--witnesses",
-            ...plannedAttemptExecutorWitnesses,
-            "--max-steps",
-            "45",
-            "--max-samples",
-            "10000",
-            "--verbosity",
-            "1"
-          ]
-        }
-      ],
-      { serializedPrefix: 1 }
-    )
+    await runFamily(plannedAttemptExecutorInitialFamily.commands, plannedAttemptExecutorInitialFamily)
     process.stdout.write(`${renderQuintEvaluatorProvenance(await readQuintEvaluatorProvenance())}\n`)
     await runPreparedTemporalCheck({
       assertArtifactPrepared: () => assertTlcArtifactPrepared(),
@@ -982,7 +953,7 @@ await runWithQuintGateTiming({
       acceptedResultIntegrationQuarantineProofObligations.witnesses
 
     await run("accepted-result integration model typecheck", ["typecheck", "specs/acceptedResultIntegration.qnt"])
-    const acceptedResultIntegrationResults = await runFamily([
+    await runFamily([
       {
         name: "accepted-result integration deterministic tests",
         args: ["test", "specs/acceptedResultIntegration_test.qnt", "--main", "acceptedResultIntegrationTest"]
@@ -1018,7 +989,6 @@ await runWithQuintGateTiming({
         ]
       }
     ])
-    assertRequiredWitnessesObserved(acceptedResultIntegrationResults[2].output, acceptedResultIntegrationWitnesses)
     // The canonical model retains the full accepted-result vocabulary, collected
     // scenarios, and sampled obligations. Its issue #68 quarantine product is
     // exhaustively enumerated by the subject-scoped projection below, as allowed

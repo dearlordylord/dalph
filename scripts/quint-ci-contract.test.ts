@@ -67,7 +67,6 @@ describe("hosted formal-model contract", () => {
     expect(quintGate).toContain("remainingSafetyTimeoutMilliseconds")
     expect(quintGate).toContain("createQuintGateTiming")
     expect(quintGate).toContain("assertQuintGateCommandContract")
-    expect(quintGate).toContain("serializedPrefix: 1")
     expect(profileEvidence).toContain("Node 22.22.2 and Node 24.15.0")
     expect(profileEvidence).toContain("retained historical evidence")
     expect(profileEvidence).toContain("Node 24.20.0 run")

@@ -4,6 +4,7 @@ export interface QuintTimingRecord {
   readonly durationMilliseconds: number
   readonly kind: QuintCommandKind
   readonly name: string
+  readonly result: `exit:${number}` | "failed" | "cancelled" | "timed-out" | "interrupted" | "launch-failed" | "invalid"
 }
 
 export interface QuintTimingAggregate {
@@ -17,7 +18,7 @@ export interface QuintGateTiming {
     readonly kind: QuintCommandKind
     readonly name: string
     readonly order?: number
-    readonly run: () => Promise<A> | A
+    readonly run: () => Promise<A & { readonly exitCode: number }> | (A & { readonly exitCode: number })
   }) => Promise<A>
   readonly records: () => ReadonlyArray<QuintTimingRecord>
 }

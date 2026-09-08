@@ -1,3 +1,5 @@
+import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
+
 export const quintGateExpectedCommandCounts = Object.freeze({
   total: 105,
   typecheck: 15,
@@ -20,6 +22,19 @@ export const legacyQuintGateExpectedCommandCounts = Object.freeze({
 export const quintGateSampleThreadCount = 4
 
 const commandKinds = Object.freeze(["typecheck", "test", "sampled-run", "verify"])
+const commandKey = ({ kind, name }) => `${kind}\u0000${name}`
+
+/** Compare the retained pre-#315 commands with the independently accepted order. */
+export const assertAcceptedLegacyQuintGateCommands = (manifest) => {
+  const retained = manifest.filter(({ name }) => !name.startsWith("fresh-task admission")).map(commandKey)
+  const mismatch = retained.findIndex((key, index) => key !== acceptedLegacyQuintGateCommandKeys[index])
+  if (retained.length === acceptedLegacyQuintGateCommandKeys.length && mismatch < 0) return
+
+  const index = mismatch < 0 ? Math.min(retained.length, acceptedLegacyQuintGateCommandKeys.length) : mismatch
+  throw new Error(
+    `accepted legacy Quint command mismatch at ${index}: expected ${String(acceptedLegacyQuintGateCommandKeys[index])}, received ${String(retained[index])}`
+  )
+}
 
 const countManifestCommands = (manifest) => {
   const counts = Object.fromEntries(commandKinds.map((kind) => [kind, 0]))
@@ -35,6 +50,7 @@ const countManifestCommands = (manifest) => {
  * 105-command phase contract even when an omission changes them together.
  */
 export const assertQuintGateCommandContract = ({ executed, manifest }) => {
+  assertAcceptedLegacyQuintGateCommands(manifest)
   const manifestCounts = countManifestCommands(manifest)
   const mismatches = []
   for (const key of ["total", ...commandKinds]) {

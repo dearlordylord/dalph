@@ -55,15 +55,6 @@ export const quintGateCommandManifest = Object.freeze([
   ...exhaustiveModel("integration finality")
 ])
 
-/**
- * Issue #153's original inventory predates #315. Keep those 92 identities as
- * an explicit subset while the complete gate also retains #315's 13 accepted
- * fresh-admission commands.
- */
-export const legacyQuintGateCommandManifest = Object.freeze(
-  quintGateCommandManifest.filter(({ name }) => !name.startsWith("fresh-task admission"))
-)
-
 const manifestKeys = quintGateCommandManifest.map(({ kind, name }) => `${kind}\u0000${name}`)
 if (new Set(manifestKeys).size !== manifestKeys.length)
   throw new Error("Quint gate command manifest contains duplicates")

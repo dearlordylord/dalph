@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest"
 
-import { legacyQuintGateCommandManifest, quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
+import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
+import { type QuintManifestCommand, quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
 import {
+  assertAcceptedLegacyQuintGateCommands,
   assertQuintGateCommandContract,
   assertQuintGateSampleThreadContract,
   legacyQuintGateExpectedCommandCounts,
@@ -9,6 +11,12 @@ import {
   quintGateExpectedCommandCounts,
   withQuintGateSampleThreadContract
 } from "./quint-gate-command-contract.mjs"
+
+const commandAt = (manifest: ReadonlyArray<QuintManifestCommand>, index: number) => {
+  const command = manifest[index]
+  if (command === undefined) throw new Error(`missing command ${index}`)
+  return command
+}
 
 describe("Quint gate command contract", () => {
   it("accepts the independent 105-command phase contract", () => {
@@ -30,20 +38,39 @@ describe("Quint gate command contract", () => {
       "sampled-run": 20,
       verify: 19
     })
-    expect(legacyQuintGateCommandManifest).toHaveLength(legacyQuintGateExpectedCommandCounts.total)
-    expect(
-      Object.fromEntries(
-        ["typecheck", "test", "sampled-run", "verify"].map((kind) => [
-          kind,
-          legacyQuintGateCommandManifest.filter((command) => command.kind === kind).length
-        ])
-      )
-    ).toEqual({ typecheck: 13, test: 40, "sampled-run": 20, verify: 19 })
-    expect(legacyQuintGateCommandManifest.every((command) => quintGateCommandManifest.includes(command))).toBe(true)
+    expect(acceptedLegacyQuintGateCommandKeys).toHaveLength(legacyQuintGateExpectedCommandCounts.total)
+    expect(() => assertAcceptedLegacyQuintGateCommands(quintGateCommandManifest)).not.toThrow()
+  })
+
+  it.each([
+    ["omission", (manifest: Array<QuintManifestCommand>) => manifest.filter((_command, index) => index !== 1)],
+    [
+      "reorder",
+      (manifest: Array<QuintManifestCommand>) =>
+        manifest.map((command, index) =>
+          index === 0 ? commandAt(manifest, 1) : index === 1 ? commandAt(manifest, 0) : command
+        )
+    ],
+    [
+      "duplication",
+      (manifest: Array<QuintManifestCommand>) =>
+        manifest.map((command, index) => (index === 1 ? commandAt(manifest, 0) : command))
+    ],
+    [
+      "substitution",
+      (manifest: Array<QuintManifestCommand>) =>
+        manifest.map((command, index) => (index === 1 ? { ...command, name: "substituted command" } : command))
+    ]
+  ])("rejects legacy command %s against the independent accepted oracle", (_case, mutate) => {
+    expect(() =>
+      assertAcceptedLegacyQuintGateCommands(mutate(quintGateCommandManifest.map((command) => ({ ...command }))))
+    ).toThrow("accepted legacy Quint command")
   })
 
   it("rejects one omission when execution and manifest omit the same command", () => {
-    const omittedManifest = quintGateCommandManifest.slice(0, -1)
+    const omittedManifest = quintGateCommandManifest.filter(
+      (command) => command.name !== "fresh-task admission ambiguity proof exhaustive model"
+    )
     const omittedExecution = { ...quintGateExpectedCommandCounts, total: 104, verify: 20 }
 
     expect(() => assertQuintGateCommandContract({ manifest: omittedManifest, executed: omittedExecution })).toThrow(
