@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 import {
   capabilityRegistrationInventory,
@@ -11,6 +10,8 @@ import {
   runCapabilityRegistrationGate,
   type CapabilitySourceFile
 } from "./capability-registration-gate.js"
+// @ts-expect-error The quality-gate policy is an executable JavaScript module.
+import { boundedQualityGateCommand } from "./quality-gate-stage-policy.mjs"
 
 const sourceFiles = repositoryCapabilitySourceFiles()
 const githubTrackerMutationContractCall = `trackerMutationContract({
@@ -996,11 +997,12 @@ describe("capability registration gate", () => {
   })
 
   it("relays parent signals for every bounded quality-gate stage", () => {
-    const qualityGate = readFileSync("scripts/run-quality-gate.mjs", "utf8")
-
-    expect(qualityGate).toMatch(
-      /name: `Quality gate '\$\{gate\.name\}'`,\n\s*relayParentSignals: true,\n\s*terminationGraceMilliseconds: gate\.terminationGrace,/u
-    )
-    expect(qualityGate).not.toContain("relayParentSignals: gate.relayParentSignals")
+    expect(
+      boundedQualityGateCommand({
+        gate: { args: ["fixture"], name: "fixture", terminationGrace: 15_000, timeout: 60_000 },
+        nodeExecutable: "/fixture/node",
+        pnpmEntryPoint: "/fixture/pnpm.cjs"
+      })
+    ).toMatchObject({ relayParentSignals: true, terminationGraceMilliseconds: 15_000 })
   })
 })

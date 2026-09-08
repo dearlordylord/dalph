@@ -1,5 +1,6 @@
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
+import { boundedQualityGateCommand, recordedCatalogQualityGate } from "./quality-gate-stage-policy.mjs"
 
 const SECOND = 1_000
 const maximumSuccessfulOutputLines = 550
@@ -34,6 +35,7 @@ const gates = [
   ...(withoutQuint
     ? []
     : [{ args: ["test:mbt"], name: "Quint-connected model-based tests", timeout: 8 * 60 * SECOND }]),
+  recordedCatalogQualityGate,
   // The supported-Node hosted matrix is slower than local coverage after the
   // real process-boundary suites; keep the command bounded without cutting
   // off Vitest before it can report a concrete failure.
@@ -44,16 +46,9 @@ const gates = [
 let successfulOutputLines = 0
 
 for (const gate of gates) {
-  const result = await runBoundedCommand({
-    // Omit pnpm lifecycle banners; retain the child tool's output and exit status.
-    args: [pnpmEntryPoint, "--silent", ...gate.args],
-    environment: gate.environment,
-    executable: process.execPath,
-    name: `Quality gate '${gate.name}'`,
-    relayParentSignals: true,
-    terminationGraceMilliseconds: gate.terminationGrace,
-    timeoutMilliseconds: gate.timeout
-  })
+  const result = await runBoundedCommand(
+    boundedQualityGateCommand({ gate, nodeExecutable: process.execPath, pnpmEntryPoint })
+  )
   successfulOutputLines = addSuccessfulOutputLines({
     currentOutputLines: successfulOutputLines,
     maximumOutputLines: maximumSuccessfulOutputLines,

@@ -30,6 +30,7 @@
     "check:duplicates": "jscpd .",
     "test:capability-registration": "vitest run scripts/capability-registration.test.ts",
     "test:issue-268-c4": "vitest run packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts -t '^repeats the complete issue 268 cassette twenty times with one identical order$'",
+    "test:recorded-catalog": "vitest run packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts",
     "check:lab": "pnpm --filter @dalph/reducer-lab-prototype check",
     "check:lab:browser": "pnpm --filter @dalph/reducer-lab-prototype check:browser",
     "check:package-boundary": "node scripts/check-package-boundaries.mjs",

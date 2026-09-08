@@ -14,6 +14,7 @@ const acceptedResultIntegrationMbtTestPattern =
 const coverageExcludedMbtTestPattern =
   "packages/**/!(run-activation|run-cancellation|task-fact-reconciliation).mbt.test.ts"
 const performanceTestPattern = "packages/**/*.performance.test.ts"
+const recordedCatalogCoverageTestPattern = "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
 const ordinaryTestTimeoutMilliseconds = 10_000
 const coverageTestTimeoutMilliseconds = 30_000
 const ordinaryWorkerCount = 4
@@ -49,7 +50,9 @@ export default defineConfig(({ mode }) => ({
     exclude: [
       "**/node_modules/**",
       "**/dist/**",
-      ...(mode === "coverage" ? [coverageExcludedMbtTestPattern, performanceTestPattern] : [])
+      ...(mode === "coverage"
+        ? [coverageExcludedMbtTestPattern, performanceTestPattern, recordedCatalogCoverageTestPattern]
+        : [])
     ],
     include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
     maxWorkers: mode === "coverage" ? coverageWorkerCount : ordinaryWorkerCount,
