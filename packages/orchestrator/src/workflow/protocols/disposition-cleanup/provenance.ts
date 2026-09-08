@@ -57,10 +57,8 @@ import {
   IntegrationQuarantineDirectionFingerprint,
   integrationQuarantineDirectionSubject
 } from "../integration-quarantine/events.js"
-import {
-  quarantineRecordForFingerprint,
-  validateProviderRunActivityAbsent
-} from "../integration-quarantine/canonical-provenance.js"
+import { validateProviderRunActivityAbsent } from "../integration-quarantine/canonical-provenance.js"
+import { quarantineRecordForFingerprint } from "../integration-quarantine/state.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/observation-match.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
@@ -714,30 +712,27 @@ export const validateIntegratorCandidateCleanupProvenance = (
   ) {
     return invalid("candidate cleanup quarantine is not the latest canonical predecessor quarantine")
   }
-  const providerFailure = quarantine.event.basis
-  /* v8 ignore next -- @preserve quarantineRecordForFingerprint returns only a quarantine whose basis passed its explicit ProviderRunFailure tag check above. */
-  if (providerFailure._tag !== "ProviderRunFailure") {
-    return invalid("candidate cleanup requires canonical provider-activity absence evidence for the quarantine")
-  }
-
-  const absence = records.find(
-    (
-      record
-    ): record is JournalRecord & {
-      readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegrationProviderRunActivityAbsent" }>
-    } =>
-      record.position === providerFailure.ownedActivityProvenAbsentAt &&
-      record.event._tag === "IntegrationProviderRunActivityAbsent"
-  )
-  /* v8 ignore next -- @preserve quarantineRecordForFingerprint selects this same position only after validating it as IntegrationProviderRunActivityAbsent. */
-  const absenceValidation = absence === undefined ? undefined : validateProviderRunActivityAbsent(records, absence)
-  if (
-    absenceValidation?._tag !== "Valid" ||
-    absenceValidation.record.position >= quarantine.position ||
-    !integratorCorrelationsEqual(absenceValidation.run.session, disposition.predecessor) ||
-    absenceValidation.record.event.detail !== providerFailure.detail
-  ) {
-    return invalid("candidate cleanup quarantine lacks the exact provider activity-absence witness")
+  const quarantineBasis = quarantine.event.basis
+  if (quarantineBasis._tag === "ProviderRunFailure") {
+    const absence = records.find(
+      (
+        record
+      ): record is JournalRecord & {
+        readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegrationProviderRunActivityAbsent" }>
+      } =>
+        record.position === quarantineBasis.ownedActivityProvenAbsentAt &&
+        record.event._tag === "IntegrationProviderRunActivityAbsent"
+    )
+    /* v8 ignore next -- @preserve quarantineRecordForFingerprint selects this same position only after validating it as IntegrationProviderRunActivityAbsent. */
+    const absenceValidation = absence === undefined ? undefined : validateProviderRunActivityAbsent(records, absence)
+    if (
+      absenceValidation?._tag !== "Valid" ||
+      absenceValidation.record.position >= quarantine.position ||
+      !integratorCorrelationsEqual(absenceValidation.run.session, disposition.predecessor) ||
+      absenceValidation.record.event.detail !== quarantineBasis.detail
+    ) {
+      return invalid("candidate cleanup quarantine lacks the exact provider activity-absence witness")
+    }
   }
 
   if (!operationIdsEqual(authorization.causalPredecessors, [direction.event.requestId.nonce])) {
@@ -790,7 +785,7 @@ export const validateIntegratorCandidateCleanupProvenance = (
   }
   const canonical = validateIntegratorSuccessorSessionFixed(records, disposition.predecessor, disposition.successor)
   return canonical._tag === "Valid"
-    ? valid("durable S1, canonical provider absence, FullRerun direction, and S2 prove candidate disposition")
+    ? valid("durable S1 terminal evidence, FullRerun direction, and S2 prove candidate disposition")
     : invalid(canonical.detail)
 }
 

@@ -317,7 +317,11 @@ export {
 } from "./workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 export * from "./workflow/protocols/git-reconciliation/decision.js"
 export { responsibilityDispositionForTargetLineage } from "./workflow/protocols/git-reconciliation/frontier-adapter.js"
-export { memoryJournalTestLayer, memoryJournalStoreLayer } from "./workflow-journal/adapters/memory-store.js"
+export {
+  memoryJournalTestLayer,
+  memoryJournalTestLayerFromPartitionRecords,
+  memoryJournalStoreLayer
+} from "./workflow-journal/adapters/memory-store.js"
 export { journaledWorkflowInterpreterLayer } from "./workflow-journal/journaled-interpreter.js"
 export {
   coordinatorOwnedGitWorktreeLayer,

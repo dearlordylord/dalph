@@ -54,7 +54,10 @@ import {
   appendReplacementProvenance,
   branchCleanupTestLayer,
   integratorCandidateCleanupTestLayer,
+  makeDispositionCleanupActivation,
   memoryJournalTestLayer,
+  memoryJournalTestLayerFromPartitionRecords,
+  type DispositionCleanupLoopResult,
   runDispositionCleanupLoop,
   TestBranchCleanupBoundary,
   TestIntegratorCandidateCleanupBoundary,
@@ -861,6 +864,66 @@ export interface DispositionCleanupCassetteRun {
   readonly transcriptWitnesses: ReadonlyArray<typeof DispositionCleanupTranscriptWitness.Type>
   readonly version: 1
 }
+
+/**
+ * Inputs at the real candidate boundary when an already-completed delivery
+ * history is reactivated before normal Run termination.
+ */
+export interface FullRerunPredecessorCleanupFromHistoryInput {
+  readonly activations: number
+  readonly evidenceRevision: IntegratorCandidateCleanupEvidenceRevision
+  readonly history: ReadonlyArray<JournalRecord>
+  readonly mutations?: ReadonlyArray<IntegratorCandidateCleanupMutationResult>
+  readonly observations: ReadonlyArray<IntegratorCandidateCleanupObservation>
+}
+
+/** Evidence retained by the delivery-story test after ordinary cleanup activation. */
+export interface FullRerunPredecessorCleanupFromHistoryRun {
+  readonly boundaryCalls: ReadonlyArray<IntegratorCandidateCleanupBoundaryCall>
+  readonly outcomes: ReadonlyArray<DispositionCleanupLoopResult>
+  readonly records: ReadonlyArray<JournalRecord>
+  readonly upstreamAfter: ReadonlyArray<JournalRecord>
+  readonly upstreamBefore: ReadonlyArray<JournalRecord>
+}
+
+/**
+ * Reopens the exact pre-termination prefix and invokes the same ordinary
+ * activation capability used by production. The controlled boundary supplies
+ * observations only; authorization is still derived from the durable
+ * S1/quarantine/FullRerun/S2 history by the generic issue-69 protocol.
+ */
+export const runFullRerunPredecessorCleanupFromHistory = Effect.fn(
+  "DispositionCleanupCassette.runFullRerunPredecessorCleanupFromHistory"
+)(function* (input: FullRerunPredecessorCleanupFromHistoryInput) {
+  const activeHistory = input.history.filter(({ event }) => event._tag !== "WorkflowRunTerminated")
+  const upstreamBefore = upstreamRecords(activeHistory)
+  const layers = Layer.mergeAll(
+    memoryJournalTestLayerFromPartitionRecords({ hot: activeHistory }),
+    worktreeCleanupTestLayer({ observations: [] }),
+    branchCleanupTestLayer({ observations: [] }),
+    integratorCandidateCleanupTestLayer({
+      evidenceRevision: input.evidenceRevision,
+      ...(input.mutations === undefined ? {} : { mutations: input.mutations }),
+      observations: input.observations
+    })
+  )
+  return yield* Effect.gen(function* () {
+    const runId = activeHistory[0]?.runId
+    if (runId === undefined) return yield* Effect.die("delivery cleanup history is empty")
+    const outcomes = yield* Effect.forEach(Array.from({ length: input.activations }), () =>
+      makeDispositionCleanupActivation(runId).pipe(Effect.flatMap((activation) => activation.run))
+    )
+    const records = yield* (yield* JournalStore).read(runId)
+    const boundaryCalls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
+    return {
+      boundaryCalls,
+      outcomes,
+      records,
+      upstreamAfter: upstreamRecords(records),
+      upstreamBefore
+    } satisfies FullRerunPredecessorCleanupFromHistoryRun
+  }).pipe(Effect.provide(layers))
+})
 
 export const DispositionCleanupCassetteRun: Schema.Schema<DispositionCleanupCassetteRun> = Schema.Struct({
   boundaryCalls: Schema.Array(DispositionCleanupBoundaryCall),

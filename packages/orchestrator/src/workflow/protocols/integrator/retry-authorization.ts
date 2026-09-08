@@ -31,6 +31,7 @@ import {
 } from "./events.js"
 import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./state.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
+import { promotionStaleQuarantineEvidenceIssue } from "../integration-quarantine/promotion-stale-evidence.js"
 import { evaluateIntegratorFullRerunSuccessor } from "./successor-history.js"
 
 type SessionRecord = JournalRecord & {
@@ -48,6 +49,9 @@ type RunResultRecord = JournalRecord & {
 }
 type CandidateObservationRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorRunCandidateGitObserved" }>
+}
+type PromotionStaleRecord = JournalRecord & {
+  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TargetPromotionStale" }>
 }
 type ProviderAbsenceRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegrationProviderRunActivityAbsent" }>
@@ -68,6 +72,13 @@ type IntegratorRetryOrdinalOneEvidence =
       readonly run: RunStartedRecord
       readonly result: RunResultRecord
       readonly candidateObservation?: CandidateObservationRecord
+    }
+  | {
+      readonly _tag: "PromotionStale"
+      readonly run: RunStartedRecord
+      readonly result: RunResultRecord
+      readonly candidateObservation: CandidateObservationRecord
+      readonly stale: PromotionStaleRecord
     }
   | { readonly _tag: "ProviderRunFailure"; readonly run: RunStartedRecord; readonly absence: ProviderAbsenceRecord }
 
@@ -120,6 +131,8 @@ const isRunResultRecord = (record: JournalRecord): record is RunResultRecord =>
   record.event._tag === "IntegratorRunResultRecorded"
 const isCandidateObservationRecord = (record: JournalRecord): record is CandidateObservationRecord =>
   record.event._tag === "IntegratorRunCandidateGitObserved"
+const isPromotionStaleRecord = (record: JournalRecord): record is PromotionStaleRecord =>
+  record.event._tag === "TargetPromotionStale"
 const isProviderAbsenceRecord = (record: JournalRecord): record is ProviderAbsenceRecord =>
   record.event._tag === "IntegrationProviderRunActivityAbsent"
 const isQuarantineRecord = (record: JournalRecord): record is QuarantineRecord =>
@@ -332,6 +345,69 @@ const providerFailureEvidence = (
     : undefined
 }
 
+/**
+ * A rejected exact-head promotion is terminal provider evidence too: the
+ * provider already returned and Git qualified its exact candidate before the
+ * compare-and-set became stale. Cleanup still rereads provider-private owner,
+ * revision, and writer facts before any removal.
+ */
+const promotionStaleEvidence = (
+  records: ReadonlyArray<JournalRecord>,
+  run: IntegratorRunCorrelation,
+  start: RunStartedRecord,
+  quarantine: QuarantineRecord
+): IntegratorRetryOrdinalOneEvidence | undefined => {
+  if (quarantine.event.basis._tag !== "PromotionStale") return undefined
+  const basis = quarantine.event.basis
+  const stale = oneRecordAt(records, basis.targetPromotionStaleAt)
+  if (
+    stale === undefined ||
+    !isPromotionStaleRecord(stale) ||
+    stale.position >= quarantine.position ||
+    promotionStaleQuarantineEvidenceIssue(records, stale) !== undefined
+  ) {
+    return undefined
+  }
+  const qualified = stale.event.correlation.qualifiedCandidate
+  if (
+    !integratorRunCorrelationsEqual(qualified.run, run) ||
+    qualified.candidateCommit !== basis.candidateCommit ||
+    stale.event.observation.observedHeadSha !== basis.observedTargetHead
+  ) {
+    return undefined
+  }
+  const results = records.filter(
+    (record): record is RunResultRecord =>
+      runResultMatches(record, run, start, stale.position) &&
+      record.event.result._tag === "PreparedCandidate" &&
+      record.event.result.candidateText === qualified.candidateText
+  )
+  const result = results.length === 1 ? results[0] : undefined
+  if (result === undefined) return undefined
+  const observation = exactCandidateObservation(
+    records,
+    run,
+    start,
+    result,
+    qualified.candidateText,
+    qualified.qualifiedAt,
+    stale.position
+  )
+  if (
+    observation?.event.observation._tag !== "Commit" ||
+    observation.event.observation.commit !== qualified.candidateCommit ||
+    !integratorGitObservationEquivalence(observation.event.observation, {
+      _tag: "Commit",
+      candidateText: qualified.candidateText,
+      commit: qualified.candidateCommit,
+      directParents: qualified.directParents
+    })
+  ) {
+    return undefined
+  }
+  return { _tag: "PromotionStale", candidateObservation: observation, result, run: start, stale }
+}
+
 const providerAbsenceIdentityMatches = (
   record: JournalRecord,
   run: IntegratorRunCorrelation,
@@ -375,6 +451,7 @@ const ordinalOneEvidence = (
   return start === undefined
     ? undefined
     : (conclusiveResultEvidence(records, runOne, start, quarantine) ??
+        promotionStaleEvidence(records, runOne, start, quarantine) ??
         providerFailureEvidence(records, runOne, start, quarantine))
 }
 
