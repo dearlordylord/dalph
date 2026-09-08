@@ -47,6 +47,9 @@ if (command === process.env.DALPH_QUALITY_GATE_FAILURE_COMMAND) process.exit(23)
         ...process.env,
         DALPH_QUALITY_GATE_FAILURE_COMMAND: failureCommand,
         DALPH_QUALITY_GATE_INVOCATIONS: invocationLog,
+        // The fixture intentionally exercises the complete stage list, so it
+        // acknowledges the same full-gate boundary required of a local caller.
+        DALPH_FULL_GATE: "1",
         npm_execpath: entryPoint
       },
       executable: process.execPath,

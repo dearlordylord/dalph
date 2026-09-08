@@ -28,8 +28,8 @@ Dalph runtime behavior changes. Aggregate gate totals cannot replace this proof.
   the existing issue/specification/scenario. Link it from parent issues. Record
   deadlines with units and timezone; dependencies, reviews, and renamed
   checkpoints do not reset the parent budget or its accepted stop rule.
-- Develop with focused checks. Repair a failed stage and check affected behavior
-  before rerunning the full gate. Reconcile the accepted scenario-to-test mapping
+- Develop with `pnpm check:fast` and focused tests. Repair a failed stage and
+  check affected behavior before rerunning the full gate. Reconcile the accepted scenario-to-test mapping
   and close [scoped reviews](CODE_REVIEW.md#review-closure) before the final gate.
   Freeze that candidate, then run `pnpm check:all` and applicable
   `pnpm check:quint`. Intermediate commits need no handoff ceremony; earlier
@@ -76,8 +76,11 @@ All commands below use `pnpm`. Script definitions live in
 | `check:artifacts` | Clean-build production packages in dependency order, then validate normal exports, declarations, bins, package boundaries, and packed contents. |
 | `vitest run <test-file>` | Focused development check; `test` runs deterministic Vitest. |
 | `typecheck` | Strict TypeScript-Go with Effect errors; suggestions remain nonfatal. |
-| `typecheck:effect` | Dedicated strict Effect pass; errors and warnings fail, JSON output. |
+| `typecheck:effect` | Dedicated strict Effect pass over the whole project; errors and warnings fail, JSON output. |
+| `typecheck:effect:changed` | Effect pass over files changed against `origin/master`; falls back to the project pass above twelve changed files. |
 | `lint:code` | Type-aware Oxlint, compatibility ESLint, dprint; warnings fail. Staged runs also check the full compatibility graph. |
+| `lint:changed` | Oxlint and dprint over files changed against `origin/master`; the compatibility pass belongs to repository runs. |
+| `check:fast` | Development-loop tier: `typecheck`, `lint:changed`, `typecheck:effect:changed`. |
 | `check:circular` | Reject runtime dependency cycles. |
 | `check:complexity` | Reject increased per-file counts of production functions above complexity eight. |
 | `check:duplicates` | Enforce the configured duplication budget. |
@@ -90,7 +93,7 @@ All commands below use `pnpm`. Script definitions live in
 | `qualify:codex` | Opt-in real app-server contract; prerequisites below. |
 | `check:quint` | Deterministic, sampled, exhaustive model checks. Run after final relevant changes and before integration; during development only for model, conformance-adapter, or governed-behavior changes. |
 | `check:secrets` | Scan Git history with gitleaks. |
-| `check:all` | Bounded handoff gate, including MBT and non-browser Lab; excludes exhaustive model checks. |
+| `check:all` | Bounded handoff gate for a frozen candidate, including MBT and non-browser Lab; excludes exhaustive model checks. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
 | `check:ci` | Hosted gate; currently omits only Quint-connected MBT. |
 
 ### Current source and built artifacts

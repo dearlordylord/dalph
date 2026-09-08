@@ -48,8 +48,13 @@ questions. Reuse guidance already read unless it changed or scope changed.
 
 - Use minimal live-provider fixtures, controlled tests for bulk behavior, and
   never retry throttled mutations.
-- Develop with focused checks. Target repositories' application-specific
-  typecheck, model-checking, and MBT gates are not Dalph implementation gates.
+- Develop with `pnpm check:fast` and focused tests. The full gate belongs to a
+  frozen candidate and to hosted verification, and states its candidate:
+  `pnpm check:all --candidate=<base sha>`. The compatibility lint and the
+  project-wide Effect pass build the entire program, so run them through the
+  repository commands rather than per edited file. Target repositories'
+  application-specific typecheck, model-checking, and MBT gates are not Dalph
+  implementation gates.
 - Before the final `pnpm check:all`, close domain/spec, architecture/connascence,
   and code-correctness reviews under the scoped closure rules in
   [CODE_REVIEW.md](docs/CODE_REVIEW.md). Passing the final gate remains required
