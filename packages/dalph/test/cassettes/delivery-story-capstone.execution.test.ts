@@ -4,11 +4,20 @@ import { plannedAttemptExecutorCorrelation } from "@dalph/contracts"
 import {
   deliveryProposalOrderTaskId,
   deriveRunnableFrontier,
+  CompletionTaskConfirmationReadOrdinal,
   evaluateDeliveryRuntimeInputBundle,
+  integratorRunCorrelationForSession,
+  integratorSuccessorCorrelationFor,
+  IntegratorRunOrdinal,
+  type JournalRecord,
+  JournalPosition,
+  reduceWorkflowJournalHistory,
+  TargetLineageObservation,
+  TrackerRevision,
   type DeliveryRelationInputBundle,
   WorkflowResponsibilityState
 } from "@dalph/orchestrator"
-import { Effect } from "effect"
+import { Cause, Effect, Exit, Schema } from "effect"
 import { expect } from "vitest"
 // @ts-expect-error The C4 subprocess runner is an executable JavaScript test-support module.
 import { runIssue268C4 } from "../../../../scripts/run-issue-268-c4.mjs"
@@ -54,7 +63,13 @@ import {
   type Issue268OccurrenceSource,
   type Issue268RequiredEdge
 } from "../../test-support/issue-268-controlled-occurrences.js"
-import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
+import {
+  AuthoredScenarioCassette,
+  maintainedAuthoredCassetteCatalog,
+  runAuthoredScenarioCassette,
+  type AuthoredObservationCapture,
+  type AuthoredScenarioCassetteRun
+} from "../../src/cassettes/index.js"
 
 const lastItemIndex = -1
 const capstoneTimeout = 600_000
@@ -72,11 +87,1130 @@ const cachedRun = Effect.runSync(
     )
   )
 )
+const cachedDs14ThroughDs17Run = Effect.runSync(
+  Effect.cached(
+    runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17).pipe(
+      Effect.provide(NodeCrypto.layer)
+    )
+  )
+)
 
 const contributedTaskIds = (publications: ReadonlyArray<DeliveryRelationInputBundle>) =>
   publications.flatMap(({ actionInputs }) =>
     actionInputs.proposalContributions.ticketDelivery.flatMap(({ order }) => ("taskId" in order ? [order.taskId] : []))
   )
+
+type JournalEvent = JournalRecord["event"]
+type JournalEventTag = JournalEvent["_tag"]
+type JournalRecordFor<Tag extends JournalEventTag> = JournalRecord & {
+  readonly event: Extract<JournalEvent, { readonly _tag: Tag }>
+}
+type AuthoredStoryOccurrence = Extract<
+  AuthoredObservationCapture,
+  { readonly _tag: "AuthoredStoryOccurrenceCaptured" }
+>["occurrence"]
+type AuthoredStoryOccurrenceTag = AuthoredStoryOccurrence["_tag"]
+
+const eventRecords = <Tag extends JournalEventTag>(
+  run: AuthoredScenarioCassetteRun,
+  tag: Tag
+): ReadonlyArray<JournalRecordFor<Tag>> =>
+  run.records.filter((record): record is JournalRecordFor<Tag> => record.event._tag === tag)
+
+const storyOccurrences = <Tag extends AuthoredStoryOccurrenceTag>(
+  run: AuthoredScenarioCassetteRun,
+  tag: Tag
+): ReadonlyArray<Extract<AuthoredStoryOccurrence, { readonly _tag: Tag }>> =>
+  run.observationCaptures.flatMap((capture) =>
+    capture._tag === "AuthoredStoryOccurrenceCaptured" && capture.occurrence._tag === tag
+      ? [capture.occurrence as Extract<AuthoredStoryOccurrence, { readonly _tag: Tag }>]
+      : []
+  )
+
+type DeliveryStoryRestartAuthorityRead = "ReadTargetLineage" | "ReadTaskClaim" | "ReadTrackerGraph"
+
+const generatedAuthorityReadJournalWidth = (
+  run: AuthoredScenarioCassetteRun,
+  operationTag: DeliveryStoryRestartAuthorityRead
+): number | undefined => {
+  if (operationTag === "ReadTargetLineage") {
+    const intents = eventRecords(run, "GitReadIntentRecorded").filter(
+      ({ event }) => event.operation._tag === operationTag
+    )
+    const widths = intents.flatMap((intent) => {
+      const observations = eventRecords(run, "TargetLineageObserved").filter(
+        ({ event }) => event.operationId === intent.event.operation.operationId
+      )
+      return observations.length === 1 && observations[0] !== undefined && observations[0].position > intent.position
+        ? [Number(observations[0].position) - Number(intent.position) + 1]
+        : []
+    })
+    const distinctWidths = new Set(widths)
+    return intents.length > 0 && widths.length === intents.length && distinctWidths.size === 1 ? widths[0] : undefined
+  }
+  const intents = eventRecords(run, "TaskTrackerReadIntentRecorded").filter(
+    ({ event }) => event.operation._tag === operationTag
+  )
+  const widths = intents.flatMap((intent) => {
+    const observations = eventRecords(run, "TaskTrackerFactsObserved").filter(
+      ({ event }) => event.operationId === intent.event.operation.operationId
+    )
+    return observations.length === 1 && observations[0] !== undefined && observations[0].position > intent.position
+      ? [Number(observations[0].position) - Number(intent.position) + 1]
+      : []
+  })
+  const distinctWidths = new Set(widths)
+  return intents.length > 0 && widths.length === intents.length && distinctWidths.size === 1 ? widths[0] : undefined
+}
+
+const one = <Value>(values: ReadonlyArray<Value>, label: string, issues: Array<string>): Value | undefined => {
+  if (values.length === 1) return values[0]
+  issues.push(`${label}: expected exactly one, observed ${values.length}`)
+  return undefined
+}
+
+const canonicalValue = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(canonicalValue)
+    : typeof value === "object" && value !== null
+      ? Object.fromEntries(
+          Object.entries(value)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, nested]) => [key, canonicalValue(nested)])
+        )
+      : value
+
+const sameValue = (left: unknown, right: unknown): boolean =>
+  JSON.stringify(canonicalValue(left)) === JSON.stringify(canonicalValue(right))
+
+const recordIssueUnless = (issues: Array<string>, condition: boolean, issue: string): void => {
+  if (!condition) issues.push(issue)
+}
+
+const issue272AdmissionAndSessionIssues = (run: AuthoredScenarioCassetteRun): ReadonlyArray<string> => {
+  const issues: Array<string> = []
+  const accepted = one(
+    eventRecords(run, "PlannedAttemptExecutorWorkReported").filter(
+      ({ event }) =>
+        event.report._tag === "ExecutorWorkTerminal" &&
+        event.report.correlation.attemptId === "attempt:A:0" &&
+        event.report.result._tag === "Accepted"
+    ),
+    "accepted A result",
+    issues
+  )
+  const queued = one(eventRecords(run, "IntegrationResponsibilityBegan"), "integration queue entry", issues)
+  const started = one(eventRecords(run, "IntegrationStarted"), "integration start", issues)
+  const predecessor = one(eventRecords(run, "IntegratorSessionFixed"), "predecessor session", issues)
+  const successor = one(eventRecords(run, "IntegratorSuccessorSessionFixed"), "successor session", issues)
+  if (accepted === undefined || queued === undefined || started === undefined || predecessor === undefined)
+    return issues
+  if (accepted.event.report._tag !== "ExecutorWorkTerminal" || accepted.event.report.result._tag !== "Accepted") {
+    issues.push("accepted A result lost its terminal accepted shape")
+    return issues
+  }
+  recordIssueUnless(
+    issues,
+    accepted.position < queued.position && queued.position < started.position,
+    "A < queue < start"
+  )
+  recordIssueUnless(
+    issues,
+    sameValue(queued.event.acceptedResult, accepted.event.report.result.acceptedResult) &&
+      sameValue(started.event.acceptedResult, queued.event.acceptedResult) &&
+      sameValue(started.event.plannedAttempt, queued.event.plannedAttempt) &&
+      sameValue(started.event.integrationTarget, queued.event.integrationTarget) &&
+      started.event.responsibilityBeganAt === queued.position,
+    "queue and start must retain exact accepted result, attempt, target, and queue position"
+  )
+  recordIssueUnless(
+    issues,
+    sameValue(predecessor.event.correlation.acceptedResult, queued.event.acceptedResult) &&
+      sameValue(predecessor.event.correlation.plannedAttempt, queued.event.plannedAttempt) &&
+      sameValue(predecessor.event.correlation.integrationTarget, queued.event.integrationTarget) &&
+      predecessor.event.correlation.queuedAt === queued.position &&
+      predecessor.event.correlation.startedAt === started.position &&
+      predecessor.event.correlation.expectedTargetHead === "1111111111111111111111111111111111111111",
+    "S1 must bind the exact queue, target, attempt, H, and responsibility positions"
+  )
+  if (successor !== undefined) {
+    recordIssueUnless(issues, sameValue(successor.event.predecessor, predecessor.event.correlation), "S2 predecessor")
+    recordIssueUnless(
+      issues,
+      sameValue(successor.event.successor.acceptedResult, predecessor.event.correlation.acceptedResult) &&
+        sameValue(successor.event.successor.plannedAttempt, predecessor.event.correlation.plannedAttempt) &&
+        sameValue(successor.event.successor.integrationTarget, predecessor.event.correlation.integrationTarget) &&
+        successor.event.successor.queuedAt === predecessor.event.correlation.queuedAt &&
+        successor.event.successor.startedAt === predecessor.event.correlation.startedAt,
+      "S2 must preserve the same queued responsibility"
+    )
+    recordIssueUnless(
+      issues,
+      successor.event.successor.sessionId !== predecessor.event.correlation.sessionId &&
+        successor.event.successor.candidateResource !== predecessor.event.correlation.candidateResource &&
+        successor.event.successor.expectedTargetHead === "2222222222222222222222222222222222222222",
+      "S2 must use fresh identities fixed at exact H2"
+    )
+  }
+  return issues
+}
+
+const issue272PromotionIssues = (
+  run: AuthoredScenarioCassetteRun,
+  expectedRejectedAttemptOrdinal: 1 | 2 = 1,
+  expectedFreshLineagePairCount: 1 | 2 = 1
+): ReadonlyArray<string> => {
+  const issues: Array<string> = []
+  const predecessor = one(eventRecords(run, "IntegratorSessionFixed"), "predecessor session", issues)
+  const successor = one(eventRecords(run, "IntegratorSuccessorSessionFixed"), "successor session", issues)
+  const stale = one(eventRecords(run, "TargetPromotionStale"), "promotion stale fact", issues)
+  const quarantine = one(eventRecords(run, "IntegrationQuarantined"), "integration quarantine", issues)
+  const direction = one(
+    eventRecords(run, "IntegrationQuarantineDirectionApplied"),
+    "Operator FullRerun direction",
+    issues
+  )
+  const candidates = eventRecords(run, "IntegratorRunCandidateGitObserved").filter(
+    ({ event }) => event.observation._tag === "Commit"
+  )
+  const compareAndSets = storyOccurrences(run, "TargetPromotionCompareAndSetReturned")
+  recordIssueUnless(
+    issues,
+    candidates.length === 2,
+    `candidate observations: expected 2, observed ${candidates.length}`
+  )
+  recordIssueUnless(
+    issues,
+    sameValue(
+      candidates.map(({ event }) => (event.observation._tag === "Commit" ? event.observation.directParents : [])),
+      [
+        ["1111111111111111111111111111111111111111", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+        ["2222222222222222222222222222222222222222", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
+      ]
+    ),
+    "M and M2 must have exact ordered parents [H, C] and [H2, C]"
+  )
+  if (predecessor !== undefined && successor !== undefined) {
+    recordIssueUnless(
+      issues,
+      candidates.length === 2 &&
+        sameValue(candidates[0]?.event.run.session, predecessor.event.correlation) &&
+        sameValue(candidates[1]?.event.run.session, successor.event.successor),
+      "M and M2 must bind exactly to S1 and S2"
+    )
+  }
+  recordIssueUnless(
+    issues,
+    compareAndSets.length === 2,
+    `promotion CAS results: expected 2, observed ${compareAndSets.length}`
+  )
+  recordIssueUnless(
+    issues,
+    sameValue(
+      compareAndSets.map(({ request, result }) => ({ request, result })),
+      [
+        {
+          request: {
+            candidateCommit: "cccccccccccccccccccccccccccccccccccccccc",
+            expectedTargetHead: "1111111111111111111111111111111111111111",
+            integrationTarget: { ref: "refs/heads/master", repository: "/dalph/cassettes/integration.git" }
+          },
+          result: { _tag: "RejectedExpectedHead", observedHeadSha: "2222222222222222222222222222222222222222" }
+        },
+        {
+          request: {
+            candidateCommit: "dddddddddddddddddddddddddddddddddddddddd",
+            expectedTargetHead: "2222222222222222222222222222222222222222",
+            integrationTarget: { ref: "refs/heads/master", repository: "/dalph/cassettes/integration.git" }
+          },
+          result: { _tag: "Applied" }
+        }
+      ]
+    ),
+    "promotion must use one rejected exact-head CAS followed by one applied successor CAS, never force-update"
+  )
+  if (stale === undefined || quarantine === undefined || direction === undefined || successor === undefined)
+    return issues
+  recordIssueUnless(
+    issues,
+    stale.position < quarantine.position &&
+      quarantine.position < direction.position &&
+      direction.position < successor.position,
+    "stale < quarantine < FullRerun < S2"
+  )
+  recordIssueUnless(
+    issues,
+    stale.event.basis._tag === "AfterAttempt" &&
+      stale.event.basis.attemptOrdinal === expectedRejectedAttemptOrdinal &&
+      stale.event.observation._tag === "CompareAndSetRejected" &&
+      stale.event.observation.observedHeadSha === "2222222222222222222222222222222222222222" &&
+      sameValue(stale.event.correlation.qualifiedCandidate.run.session, successor.event.predecessor),
+    "stale must be the exact rejected S1/H attempt"
+  )
+  recordIssueUnless(
+    issues,
+    quarantine.event.basis._tag === "PromotionStale" &&
+      quarantine.event.basis.observedTargetHead === "2222222222222222222222222222222222222222" &&
+      sameValue(quarantine.event.correlation, successor.event.predecessor) &&
+      successor.event.quarantineAt === quarantine.position,
+    "quarantine must bind the exact stale predecessor"
+  )
+  recordIssueUnless(
+    issues,
+    direction.event.fingerprint.direction === "FullRerun" &&
+      direction.event.fingerprint.quarantineAt === quarantine.position &&
+      direction.event.fingerprint.sessionId === successor.event.predecessor.sessionId &&
+      successor.event.directionAppliedAt === direction.position &&
+      direction.event.requestId.runId === run.runId,
+    "Operator direction must bind exact Run, Q, S1, and FullRerun"
+  )
+  const freshLineageIntents = eventRecords(run, "GitReadIntentRecorded").filter(
+    ({ event, position }) =>
+      position > direction.position &&
+      position < successor.position &&
+      event.operation._tag === "ReadTargetLineage" &&
+      event.operation.plannedAttempt.attemptId === "attempt:A:0" &&
+      event.operation.plannedAttempt.taskId === "A"
+  )
+  const freshLineageResults = eventRecords(run, "TargetLineageObserved").filter(
+    ({ position }) => position > direction.position && position < successor.position
+  )
+  recordIssueUnless(
+    issues,
+    freshLineageIntents.length === expectedFreshLineagePairCount &&
+      freshLineageResults.length === expectedFreshLineagePairCount,
+    `fresh-H2 lineage pairs: expected ${expectedFreshLineagePairCount}, observed ${freshLineageIntents.length} intents and ${freshLineageResults.length} results`
+  )
+  recordIssueUnless(
+    issues,
+    freshLineageIntents.every((intent, index) => {
+      const result = freshLineageResults[index]
+      const precedingResult = freshLineageResults[index - 1]
+      return (
+        result !== undefined &&
+        (precedingResult === undefined || precedingResult.position < intent.position) &&
+        direction.position < intent.position &&
+        intent.position < result.position &&
+        result.position < successor.position &&
+        intent.event.operation.operationId === result.event.operationId &&
+        result.event.observation.targetHeadSha === "2222222222222222222222222222222222222222" &&
+        result.event.observation.plannedBaseSha === "1111111111111111111111111111111111111111" &&
+        result.event.observation.plannedBaseIsAncestorOfTargetHead
+      )
+    }) && successor.event.successor.targetLineageObservedAt === freshLineageResults.at(-1)?.position,
+    "every fresh lineage intent/result must prove H2 after D and before S2, which binds the final proof"
+  )
+  return issues
+}
+
+const issue272FinalityIssues = (run: AuthoredScenarioCassetteRun): ReadonlyArray<string> => {
+  const issues: Array<string> = []
+  const promotion = one(eventRecords(run, "TargetPromotionObservedSuccess"), "successor promotion", issues)
+  const replacement = one(eventRecords(run, "CompletionClaimReplaced"), "completion-claim replacement", issues)
+  const completionAttempt = one(eventRecords(run, "CompletionTaskAttemptIntended"), "completion attempt", issues)
+  const completionAck = one(eventRecords(run, "CompletionTaskAcknowledged"), "completion acknowledgement", issues)
+  const focusedSuccess = one(
+    eventRecords(run, "TaskTrackerFactsObserved").filter(
+      ({ event }) =>
+        event.observation._tag === "FocusedTaskCompletionFacts" &&
+        event.observation.facts.taskId === "A" &&
+        event.observation.facts.lifecycle === "CompletedSuccessfully"
+    ),
+    "focused A success",
+    issues
+  )
+  const focusedSuccessIntent = one(
+    eventRecords(run, "TaskTrackerReadIntentRecorded").filter(
+      ({ event }) =>
+        event.operation._tag === "ReadCompletionTaskFacts" &&
+        focusedSuccess !== undefined &&
+        event.operation.operationId === focusedSuccess.event.operationId
+    ),
+    "focused A success read intent",
+    issues
+  )
+  const releaseIntent = one(eventRecords(run, "TaskClaimReleaseIntended"), "original-claim release intent", issues)
+  const released = one(eventRecords(run, "TaskClaimReleased"), "original-claim release", issues)
+  const deletion = one(eventRecords(run, "CompletionClaimDeleted"), "completion-marker deletion", issues)
+  const settled = one(eventRecords(run, "IntegrationFinalitySettled"), "finality settlement", issues)
+  const activeClaimReads = eventRecords(run, "TaskTrackerFactsObserved").filter(
+    ({ event, position }) =>
+      replacement !== undefined &&
+      position < replacement.position &&
+      event.observation._tag === "FocusedTaskClaimFacts" &&
+      event.observation.observation._tag === "ActiveTaskClaim"
+  )
+  if (activeClaimReads.length === 0) issues.push("original active claim: expected at least one exact read")
+  const activeClaimRead = activeClaimReads.at(-1)
+  if (
+    promotion === undefined ||
+    replacement === undefined ||
+    completionAttempt === undefined ||
+    completionAck === undefined ||
+    focusedSuccess === undefined ||
+    releaseIntent === undefined ||
+    released === undefined ||
+    deletion === undefined ||
+    settled === undefined ||
+    activeClaimRead === undefined ||
+    focusedSuccessIntent === undefined ||
+    focusedSuccessIntent.event.operation._tag !== "ReadCompletionTaskFacts" ||
+    activeClaimRead.event.observation._tag !== "FocusedTaskClaimFacts" ||
+    activeClaimRead.event.observation.observation._tag !== "ActiveTaskClaim" ||
+    focusedSuccess.event.observation._tag !== "FocusedTaskCompletionFacts"
+  ) {
+    return issues
+  }
+  const originalClaim = activeClaimRead.event.observation.observation
+  const focusedRead = focusedSuccessIntent.event.operation
+  const focusedObservation = focusedSuccess.event.observation
+  const focusedFacts = focusedObservation.facts
+  const successObservation = deletion.event.successObservation
+  recordIssueUnless(
+    issues,
+    promotion.position < replacement.position &&
+      replacement.position < completionAttempt.position &&
+      completionAttempt.position < completionAck.position &&
+      completionAck.position < focusedSuccess.position &&
+      focusedSuccess.position < releaseIntent.position &&
+      releaseIntent.position < released.position &&
+      released.position < deletion.position &&
+      deletion.position < settled.position,
+    "promotion < replacement < completion Q < focused success < original release < marker deletion < settlement"
+  )
+  recordIssueUnless(
+    issues,
+    completionAck.position < focusedSuccessIntent.position &&
+      focusedSuccessIntent.position < focusedSuccess.position &&
+      focusedRead.operationId === focusedSuccess.event.operationId &&
+      focusedObservation.operationId === focusedRead.operationId &&
+      focusedFacts.operationId === focusedRead.operationId &&
+      sameValue(focusedRead.request, completionAck.event.request) &&
+      sameValue(focusedObservation.request, focusedRead.request) &&
+      sameValue(focusedObservation.purpose, focusedRead.purpose) &&
+      sameValue(focusedObservation.target, focusedRead.target) &&
+      focusedObservation.purpose._tag === "Confirmation" &&
+      focusedObservation.purpose.attemptOrdinal === completionAck.event.attemptOrdinal &&
+      focusedObservation.purpose.confirmationOrdinal === CompletionTaskConfirmationReadOrdinal.make(1) &&
+      focusedFacts.currentClaim._tag === "CompletionTaskClaim" &&
+      sameValue(focusedFacts.currentClaim, replacement.event.claim) &&
+      focusedFacts.lifecycle === "CompletedSuccessfully" &&
+      focusedFacts.taskId === completionAck.event.request.taskId &&
+      focusedFacts.taskRevision === completionAck.event.request.taskRevision &&
+      sameValue(focusedFacts.target, focusedRead.target),
+    "focused success must be the exact post-acknowledgement confirmation read for Q and its replacement claim"
+  )
+  recordIssueUnless(
+    issues,
+    successObservation.observedAt === focusedSuccess.position &&
+      successObservation.operationId === focusedRead.operationId &&
+      successObservation.taskId === focusedFacts.taskId &&
+      successObservation.taskRevision === focusedFacts.taskRevision &&
+      successObservation.trackerRevision === focusedFacts.trackerRevision &&
+      sameValue(successObservation.target, focusedFacts.target) &&
+      sameValue(successObservation.claim, focusedFacts.currentClaim),
+    "cleanup success authority must be derived from the exact focused read record and causal position"
+  )
+  recordIssueUnless(
+    issues,
+    sameValue(replacement.event.claim.originalClaim, originalClaim) &&
+      activeClaimReads.every(
+        ({ event }) =>
+          event.observation._tag === "FocusedTaskClaimFacts" &&
+          event.observation.observation._tag === "ActiveTaskClaim" &&
+          sameValue(event.observation.observation, originalClaim)
+      ) &&
+      sameValue(completionAttempt.event.request.claim, replacement.event.claim) &&
+      sameValue(completionAck.event.request, completionAttempt.event.request) &&
+      sameValue(releaseIntent.event.operation.release.claim, originalClaim) &&
+      sameValue(released.event.release.claim, originalClaim) &&
+      sameValue(successObservation.claim, replacement.event.claim) &&
+      sameValue(deletion.event.claim, replacement.event.claim) &&
+      sameValue(settled.event.claim, replacement.event.claim) &&
+      sameValue(settled.event.successObservation, successObservation),
+    "replacement, Q, success, original release, deletion, and settlement must retain one exact claim chain"
+  )
+  const deletionReads = eventRecords(run, "CompletionClaimDeletionReadObserved")
+  recordIssueUnless(
+    issues,
+    sameValue(
+      deletionReads.map(({ event }) => ({ observation: event.observation._tag, purpose: event.purpose._tag })),
+      [
+        { observation: "CompletionTaskClaim", purpose: "BeforeOriginalClaimRelease" },
+        { observation: "CompletionTaskClaim", purpose: "BeforeDeletionAttempt" },
+        { observation: "UnclaimedTask", purpose: "ConfirmOriginalClaimReleased" },
+        { observation: "CompletionClaimMarkerAbsent", purpose: "BeforeDeletionAttempt" },
+        { observation: "UnclaimedTask", purpose: "ConfirmNoActiveClaimAfterMarkerAbsent" }
+      ]
+    ) &&
+      deletionReads.every(({ event }) => sameValue(event.request.claim, replacement.event.claim)) &&
+      deletionReads[3] !== undefined &&
+      deletionReads[3].position < deletion.position &&
+      deletionReads[4] !== undefined &&
+      deletionReads[4].position < deletion.position,
+    "cleanup must observe the exact marker/active sequence and prove both absences before recording deletion"
+  )
+  return issues
+}
+
+const issue272AcceptanceIssues = (
+  run: AuthoredScenarioCassetteRun,
+  expectedRejectedAttemptOrdinal: 1 | 2 = 1,
+  expectedFreshLineagePairCount: 1 | 2 = 1
+): ReadonlyArray<string> => [
+  ...issue272AdmissionAndSessionIssues(run),
+  ...issue272PromotionIssues(run, expectedRejectedAttemptOrdinal, expectedFreshLineagePairCount),
+  ...issue272FinalityIssues(run)
+]
+
+const deliveryStoryIntegrationRestartCheckpoints = [
+  "TargetPromotionAttemptIntended",
+  "TargetPromotionStale",
+  "IntegrationQuarantined",
+  "IntegrationQuarantineDirectionApplied",
+  "TargetLineageObserved",
+  "IntegratorSuccessorSessionFixed"
+] as const
+
+const deliveryStoryFinalityRestartCheckpoints = [
+  "TargetPromotionObservedSuccess",
+  "CompletionClaimReplaced",
+  "CompletionTaskAcknowledged",
+  "CompletionClaimDeleted",
+  "IntegrationFinalitySettled"
+] as const
+
+const deliveryStoryRestartCheckpoints = [
+  ...deliveryStoryIntegrationRestartCheckpoints,
+  ...deliveryStoryFinalityRestartCheckpoints
+] as const
+
+type DeliveryStoryRestartCheckpoint = (typeof deliveryStoryRestartCheckpoints)[number]
+
+it("distinguishes legacy and exact targeted coordinator deaths at the cassette boundary", () => {
+  const base = maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17
+  const decodeStrict = Schema.decodeUnknownSync(AuthoredScenarioCassette, { onExcessProperty: "error" })
+  const withFirstDeathReplacedBy = (replacement: unknown) => {
+    let replaced = false
+    return {
+      ...base,
+      story: base.story.map((item) => {
+        if (replaced || item._tag !== "CoordinatorProcessDies") return item
+        replaced = true
+        return replacement
+      })
+    }
+  }
+
+  expect(() =>
+    decodeStrict(
+      withFirstDeathReplacedBy({ _tag: "CoordinatorProcessDies", afterJournalEvent: "TargetPromotionStale" })
+    )
+  ).toThrow()
+  expect(() =>
+    decodeStrict(
+      withFirstDeathReplacedBy({
+        _tag: "CoordinatorProcessDiesAfterJournalEvent",
+        afterJournalEvent: "TargetPromotionStale"
+      })
+    )
+  ).not.toThrow()
+  expect(() => decodeStrict(withFirstDeathReplacedBy({ _tag: "CoordinatorProcessDiesAfterJournalEvent" }))).toThrow()
+  expect(() =>
+    decodeStrict(
+      withFirstDeathReplacedBy({
+        _tag: "CoordinatorProcessDiesAfterJournalEvent",
+        afterJournalEvent: "ExpectedBehavior"
+      })
+    )
+  ).toThrow()
+})
+
+const deliveryStoryFinalityRestartInsertionAt = (
+  story: ReadonlyArray<AuthoredStoryOccurrence>,
+  checkpoint: (typeof deliveryStoryFinalityRestartCheckpoints)[number]
+): number => {
+  if (checkpoint === "TargetPromotionObservedSuccess") {
+    return story.findIndex(
+      (item) => item._tag === "TargetPromotionCompareAndSetReturned" && item.result._tag === "Applied"
+    )
+  }
+  if (checkpoint === "CompletionClaimReplaced") {
+    return story.findIndex((item) => item._tag === "CompletionClaimReplacementApplied")
+  }
+  if (checkpoint === "CompletionTaskAcknowledged") {
+    return story.findIndex(
+      (item) => item._tag === "CompletionTaskRequestReturned" && item.taskId === "A" && item.outcome === "Acknowledged"
+    )
+  }
+  return story.findIndex((item) => item._tag === "ExpectedBehavior") - 1
+}
+
+const deliveryStoryWithRestartAfter = (
+  afterJournalEvent: DeliveryStoryRestartCheckpoint,
+  baselineRun: AuthoredScenarioCassetteRun
+) => {
+  const base = maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17
+  const story = [...base.story]
+  const originalDeathAt = story.findIndex((item) => item._tag === "CoordinatorProcessDies")
+  const originalRestartIntegratorRequestAt = story.findIndex(
+    (item, index) => index > originalDeathAt && item._tag === "IntegratorRequestReceived"
+  )
+  const originalRestartAuthorityReads = story.slice(originalDeathAt + 1, originalRestartIntegratorRequestAt)
+  // A recovered accepted attempt rereads the tracker graph and exact claim
+  // before it resumes an already-started integration protocol.
+  const restartAuthorityReads = originalRestartAuthorityReads.slice(0, 4)
+  const restartGraphAuthorityReads = restartAuthorityReads.slice(0, 2)
+  const restartPostProtocolGraphRead = originalRestartAuthorityReads.slice(4, 6)
+  const rejectedCompareAndSetAt = story.findIndex(
+    (item) => item._tag === "TargetPromotionCompareAndSetReturned" && item.result._tag === "RejectedExpectedHead"
+  )
+  const directionAt = story.findIndex((item) => item._tag === "OperatorAppliesIntegrationQuarantineDirection")
+  const freshLineageSelectionAt = story.findIndex(
+    (item, index) => index > directionAt && item._tag === "DalphSelects" && item.operation._tag === "ReadTargetLineage"
+  )
+  const successorRequestAt = story.findIndex(
+    (item, index) => index > directionAt && item._tag === "IntegratorRequestReceived"
+  )
+  const predecessorRequestIndices = story.flatMap((item, index) =>
+    index < rejectedCompareAndSetAt && item._tag === "IntegratorRequestReceived" ? [index] : []
+  )
+  const predecessorRequest = story[predecessorRequestIndices[0] ?? lastItemIndex]
+  const successorRequest = story[successorRequestAt]
+  const operatorDirection = story[directionAt]
+  const baselineSuccessorRecords = eventRecords(baselineRun, "IntegratorSuccessorSessionFixed")
+  const baselineSuccessor = baselineSuccessorRecords.length === 1 ? baselineSuccessorRecords[0] : undefined
+  if (
+    predecessorRequestIndices.length !== 1 ||
+    predecessorRequest?._tag !== "IntegratorRequestReceived" ||
+    successorRequest?._tag !== "IntegratorRequestReceived" ||
+    baselineSuccessor === undefined ||
+    operatorDirection?._tag !== "OperatorAppliesIntegrationQuarantineDirection" ||
+    restartGraphAuthorityReads[0]?._tag !== "DalphSelects" ||
+    restartGraphAuthorityReads[0].operation._tag !== "ReadTrackerGraph" ||
+    restartGraphAuthorityReads[1]?._tag !== "TrackerGraphReadReturned"
+  ) {
+    return { ...base, name: `${base.name}; invalid restart fixture`, story: [] }
+  }
+  const completedGraphAuthorityReads = [
+    restartGraphAuthorityReads[0],
+    {
+      ...restartGraphAuthorityReads[1],
+      graph: {
+        ...restartGraphAuthorityReads[1].graph,
+        revision: TrackerRevision.make(`${restartGraphAuthorityReads[1].graph.revision}:completed`),
+        tasks: restartGraphAuthorityReads[1].graph.tasks.map((task) =>
+          task.id === "A" ? { ...task, lifecycle: { _tag: "CompletedSuccessfully" as const } } : task
+        )
+      }
+    }
+  ]
+  const restartCheckpointIndex = deliveryStoryIntegrationRestartCheckpoints.findIndex(
+    (checkpoint) => checkpoint === afterJournalEvent
+  )
+  const restartPrecedes = (checkpoint: (typeof deliveryStoryIntegrationRestartCheckpoints)[number]): boolean =>
+    restartCheckpointIndex >= 0 &&
+    restartCheckpointIndex < deliveryStoryIntegrationRestartCheckpoints.indexOf(checkpoint)
+  const authorityReadJournalWidths = {
+    ReadTargetLineage: generatedAuthorityReadJournalWidth(baselineRun, "ReadTargetLineage"),
+    ReadTaskClaim: generatedAuthorityReadJournalWidth(baselineRun, "ReadTaskClaim"),
+    ReadTrackerGraph: generatedAuthorityReadJournalWidth(baselineRun, "ReadTrackerGraph")
+  }
+  const journalRecordsForSelectedReads = (items: ReadonlyArray<AuthoredStoryOccurrence>): number | undefined => {
+    let width = 0
+    for (const item of items) {
+      if (item._tag !== "DalphSelects") continue
+      if (
+        item.operation._tag !== "ReadTargetLineage" &&
+        item.operation._tag !== "ReadTaskClaim" &&
+        item.operation._tag !== "ReadTrackerGraph"
+      ) {
+        return undefined
+      }
+      const operationWidth = authorityReadJournalWidths[item.operation._tag]
+      if (operationWidth === undefined) return undefined
+      width += operationWidth
+    }
+    return width
+  }
+  const recoveredAuthorityShift = journalRecordsForSelectedReads(restartAuthorityReads)
+  const postProtocolGraphShift = journalRecordsForSelectedReads(restartPostProtocolGraphRead)
+  const replacementLineageShift = journalRecordsForSelectedReads(originalRestartAuthorityReads)
+  if (
+    recoveredAuthorityShift === undefined ||
+    postProtocolGraphShift === undefined ||
+    replacementLineageShift === undefined
+  ) {
+    return { ...base, name: `${base.name}; invalid generated authority-read widths`, story: [] }
+  }
+  const reconciledPriorIntentOutcomeShift = afterJournalEvent === "TargetPromotionAttemptIntended" ? 1 : 0
+  const quarantineShift =
+    (restartPrecedes("IntegrationQuarantined") ? recoveredAuthorityShift : 0) + reconciledPriorIntentOutcomeShift
+  const directionShift =
+    (restartPrecedes("IntegrationQuarantineDirectionApplied") ? recoveredAuthorityShift : 0) +
+    reconciledPriorIntentOutcomeShift
+  const lineageShift =
+    afterJournalEvent === "TargetLineageObserved"
+      ? replacementLineageShift
+      : (restartPrecedes("TargetLineageObserved") ? recoveredAuthorityShift + postProtocolGraphShift : 0) +
+        reconciledPriorIntentOutcomeShift
+  const quarantineAt = JournalPosition.make(Number(baselineSuccessor.event.quarantineAt) + quarantineShift)
+  const directionAppliedAt = JournalPosition.make(Number(baselineSuccessor.event.directionAppliedAt) + directionShift)
+  const targetLineageObservedAt = JournalPosition.make(
+    Number(baselineSuccessor.event.successor.targetLineageObservedAt) + lineageShift
+  )
+  const successorSession = integratorSuccessorCorrelationFor({
+    directionAppliedAt,
+    predecessor: predecessorRequest.correlation.session,
+    quarantineAt,
+    targetLineage: TargetLineageObservation.make({
+      plannedBaseIsAncestorOfTargetHead: true,
+      plannedBaseSha: predecessorRequest.correlation.session.expectedTargetHead,
+      targetHeadSha: successorRequest.correlation.session.expectedTargetHead
+    }),
+    targetLineageObservedAt
+  })
+  story[directionAt] = {
+    ...operatorDirection,
+    request: { ...operatorDirection.request, fingerprint: { ...operatorDirection.request.fingerprint, quarantineAt } }
+  }
+  story[successorRequestAt] = {
+    ...successorRequest,
+    correlation: integratorRunCorrelationForSession(successorSession, IntegratorRunOrdinal.make(1))
+  }
+  const death = { _tag: "CoordinatorProcessDiesAfterJournalEvent" as const, afterJournalEvent }
+
+  if (afterJournalEvent === "TargetPromotionAttemptIntended") {
+    const rejected = story[rejectedCompareAndSetAt]
+    if (rejected?._tag !== "TargetPromotionCompareAndSetReturned") {
+      return { ...base, name: `${base.name}; missing rejected CAS fixture`, story: [] }
+    }
+    story.splice(rejectedCompareAndSetAt, 0, death, ...restartAuthorityReads, {
+      _tag: "TargetPromotionGitReadReturned",
+      candidateCommit: rejected.request.candidateCommit,
+      observation: { _tag: "CandidateNotInAncestry", currentHeadSha: rejected.request.expectedTargetHead },
+      repository: rejected.request.integrationTarget.repository
+    })
+    const resumedDirectionAt = story.findIndex((item) => item._tag === "OperatorAppliesIntegrationQuarantineDirection")
+    const resumedFreshLineageAt = story.findIndex(
+      (item, index) =>
+        index > resumedDirectionAt && item._tag === "DalphSelects" && item.operation._tag === "ReadTargetLineage"
+    )
+    story.splice(resumedFreshLineageAt, 0, ...restartPostProtocolGraphRead)
+  } else if (afterJournalEvent === "TargetPromotionStale" || afterJournalEvent === "IntegrationQuarantined") {
+    story.splice(rejectedCompareAndSetAt + 1, 0, death, ...restartAuthorityReads)
+    const resumedDirectionAt = story.findIndex((item) => item._tag === "OperatorAppliesIntegrationQuarantineDirection")
+    const resumedFreshLineageAt = story.findIndex(
+      (item, index) =>
+        index > resumedDirectionAt && item._tag === "DalphSelects" && item.operation._tag === "ReadTargetLineage"
+    )
+    story.splice(resumedFreshLineageAt, 0, ...restartPostProtocolGraphRead)
+  } else if (afterJournalEvent === "IntegrationQuarantineDirectionApplied") {
+    story.splice(directionAt + 1, 0, death, ...restartAuthorityReads, ...restartPostProtocolGraphRead)
+  } else if (afterJournalEvent === "TargetLineageObserved") {
+    story.splice(freshLineageSelectionAt + 1, 0, death, ...originalRestartAuthorityReads)
+  } else if (afterJournalEvent === "IntegratorSuccessorSessionFixed") {
+    story.splice(successorRequestAt, 0, death, ...restartAuthorityReads)
+    const resumedSuccessorRequestAt = story.findIndex(
+      (item, index) => index > directionAt && item._tag === "IntegratorRequestReceived"
+    )
+    const resumedPromotionLineageAt = story.findIndex(
+      (item, index) =>
+        index > resumedSuccessorRequestAt && item._tag === "DalphSelects" && item.operation._tag === "ReadTargetLineage"
+    )
+    story.splice(resumedPromotionLineageAt, 0, ...restartPostProtocolGraphRead)
+  } else {
+    const insertionAt = deliveryStoryFinalityRestartInsertionAt(story, afterJournalEvent)
+    const taskAlreadyCompleted =
+      afterJournalEvent === "CompletionTaskAcknowledged" ||
+      afterJournalEvent === "CompletionClaimDeleted" ||
+      afterJournalEvent === "IntegrationFinalitySettled"
+    story.splice(
+      insertionAt + 1,
+      0,
+      death,
+      ...(taskAlreadyCompleted ? completedGraphAuthorityReads : restartGraphAuthorityReads)
+    )
+    const expectedBehaviorAt = story.findIndex((item) => item._tag === "ExpectedBehavior")
+    story.splice(expectedBehaviorAt, 0, ...completedGraphAuthorityReads)
+  }
+
+  return {
+    ...base,
+    name: `${base.name}; restart after ${afterJournalEvent}`,
+    startingFacts: {
+      ...base.startingFacts,
+      targetLineageObservations: [
+        ...(base.startingFacts.targetLineageObservations ?? []),
+        ...(afterJournalEvent === "IntegratorSuccessorSessionFixed"
+          ? []
+          : [
+              {
+                plannedBaseIsAncestorOfTargetHead: true as const,
+                plannedBaseSha: "1111111111111111111111111111111111111111",
+                targetHeadSha: "2222222222222222222222222222222222222222"
+              }
+            ])
+      ]
+    },
+    story
+  }
+}
+
+it.effect(
+  "fails closed when an armed targeted coordinator death passes its exact journal event",
+  () =>
+    Effect.gen(function* () {
+      const baselineRun = yield* cachedDs14ThroughDs17Run
+      const exactTarget = deliveryStoryWithRestartAfter("TargetPromotionStale", baselineRun)
+      const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+        ...exactTarget,
+        name: `${exactTarget.name}; mistargeted coordinator death`,
+        story: exactTarget.story.map((item) =>
+          item._tag === "CoordinatorProcessDiesAfterJournalEvent" && item.afterJournalEvent === "TargetPromotionStale"
+            ? { ...item, afterJournalEvent: "CompletionClaimDeleted" as const }
+            : item
+        )
+      })
+      const outcome = yield* Effect.exit(runAuthoredScenarioCassette(cassette).pipe(Effect.provide(NodeCrypto.layer)))
+
+      expect(Exit.isFailure(outcome)).toBe(true)
+      if (Exit.isFailure(outcome)) {
+        expect(Cause.pretty(outcome.cause)).toContain(
+          "targeted coordinator death after CompletionClaimDeleted became impossible"
+        )
+      }
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "resumes the composed DS-14 through DS-17 path after every CAS-to-successor durable checkpoint",
+  () =>
+    Effect.gen(function* () {
+      for (const checkpoint of deliveryStoryIntegrationRestartCheckpoints) {
+        const baselineRun = yield* cachedDs14ThroughDs17Run
+        const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)(
+          deliveryStoryWithRestartAfter(checkpoint, baselineRun)
+        )
+        const run = yield* runAuthoredScenarioCassette(cassette).pipe(Effect.provide(NodeCrypto.layer))
+        const resumedOccurrences = run.observationCaptures.flatMap((capture) =>
+          capture._tag === "AuthoredStoryOccurrenceCaptured" && capture.activationOrdinal === 3
+            ? [capture.occurrence]
+            : []
+        )
+
+        expect(run.activationOrdinals).toEqual([1, 2, 3])
+        expect(resumedOccurrences.slice(0, 4).map(({ _tag }) => _tag)).toEqual([
+          "DalphSelects",
+          "TrackerGraphReadReturned",
+          "DalphSelects",
+          "TaskClaimCurrentReadReturned"
+        ])
+        expect(resumedOccurrences[0]).toMatchObject({ _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph" } })
+        expect(resumedOccurrences[2]).toMatchObject({
+          _tag: "DalphSelects",
+          operation: { _tag: "ReadTaskClaim", taskId: "A" }
+        })
+        if (checkpoint === "TargetPromotionAttemptIntended") {
+          const gitReconciliationAt = resumedOccurrences.findIndex(
+            ({ _tag }) => _tag === "TargetPromotionGitReadReturned"
+          )
+          const compareAndSetAt = resumedOccurrences.findIndex(
+            ({ _tag }) => _tag === "TargetPromotionCompareAndSetReturned"
+          )
+          expect(gitReconciliationAt).toBeGreaterThan(3)
+          expect(compareAndSetAt).toBeGreaterThan(gitReconciliationAt)
+        }
+        expect(
+          issue272AcceptanceIssues(
+            run,
+            checkpoint === "TargetPromotionAttemptIntended" ? 2 : 1,
+            checkpoint === "TargetLineageObserved" ? 2 : 1
+          )
+        ).toEqual([])
+        expect(run.records.filter(({ event }) => event._tag === "TargetPromotionStale")).toHaveLength(1)
+        expect(run.records.filter(({ event }) => event._tag === "IntegrationQuarantined")).toHaveLength(1)
+        expect(run.records.filter(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied")).toHaveLength(
+          1
+        )
+        expect(run.records.filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")).toHaveLength(1)
+        expect(run.records.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess")).toHaveLength(1)
+        expect(run.records.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended")).toHaveLength(1)
+        expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
+      }
+    }),
+  capstoneTimeout
+)
+
+const verifyDeliveryStoryFinalityRestart = (checkpoint: (typeof deliveryStoryFinalityRestartCheckpoints)[number]) =>
+  Effect.gen(function* () {
+    const baselineRun = yield* cachedDs14ThroughDs17Run
+    const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)(
+      deliveryStoryWithRestartAfter(checkpoint, baselineRun)
+    )
+    const run = yield* runAuthoredScenarioCassette(cassette).pipe(Effect.provide(NodeCrypto.layer))
+    const resumedOccurrences = run.observationCaptures.flatMap((capture) =>
+      capture._tag === "AuthoredStoryOccurrenceCaptured" && capture.activationOrdinal === 3 ? [capture.occurrence] : []
+    )
+
+    expect(run.activationOrdinals).toEqual([1, 2, 3])
+    expect(resumedOccurrences.slice(0, 2).map(({ _tag }) => _tag)).toEqual(["DalphSelects", "TrackerGraphReadReturned"])
+    expect(resumedOccurrences[1]).toMatchObject({
+      _tag: "TrackerGraphReadReturned",
+      graph: {
+        tasks: [
+          {
+            id: "A",
+            lifecycle: {
+              _tag:
+                checkpoint === "TargetPromotionObservedSuccess" || checkpoint === "CompletionClaimReplaced"
+                  ? "Open"
+                  : "CompletedSuccessfully"
+            }
+          }
+        ]
+      }
+    })
+    const expectedContinuation =
+      checkpoint === "TargetPromotionObservedSuccess"
+        ? { _tag: "CompletionClaimReadReturned", claim: "Active", taskId: "A" }
+        : checkpoint === "CompletionClaimReplaced"
+          ? { _tag: "CompletionTaskFocusedReadReturned", lifecycle: "Open", taskId: "A" }
+          : checkpoint === "CompletionTaskAcknowledged"
+            ? { _tag: "CompletionTaskFocusedReadReturned", lifecycle: "CompletedSuccessfully", taskId: "A" }
+            : { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } }
+    expect(resumedOccurrences[2]).toMatchObject(expectedContinuation)
+    expect(issue272AcceptanceIssues(run)).toEqual([])
+    expect(storyOccurrences(run, "CompletionClaimReplacementApplied")).toHaveLength(1)
+    expect(storyOccurrences(run, "CompletionTaskRequestReturned")).toHaveLength(1)
+    expect(storyOccurrences(run, "CompletionClaimDeletionApplied")).toHaveLength(1)
+    expect(
+      storyOccurrences(run, "DalphSelects").filter(({ operation }) => operation._tag === "ReleaseTaskClaim")
+    ).toHaveLength(1)
+    expect(eventRecords(run, "IntegrationFinalitySettled")).toHaveLength(1)
+    expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
+  })
+
+it.effect(
+  "resumes exact DS-17 finality after TargetPromotionObservedSuccess durable checkpoint",
+  () => verifyDeliveryStoryFinalityRestart("TargetPromotionObservedSuccess"),
+  capstoneTimeout
+)
+
+it.effect(
+  "resumes exact DS-17 finality after CompletionClaimReplaced durable checkpoint",
+  () => verifyDeliveryStoryFinalityRestart("CompletionClaimReplaced"),
+  capstoneTimeout
+)
+
+it.effect(
+  "resumes exact DS-17 finality after CompletionTaskAcknowledged durable checkpoint",
+  () => verifyDeliveryStoryFinalityRestart("CompletionTaskAcknowledged"),
+  capstoneTimeout
+)
+
+it.effect(
+  "resumes exact DS-17 finality after CompletionClaimDeleted durable checkpoint",
+  () => verifyDeliveryStoryFinalityRestart("CompletionClaimDeleted"),
+  capstoneTimeout
+)
+
+it.effect(
+  "resumes exact DS-17 finality after IntegrationFinalitySettled durable checkpoint",
+  () => verifyDeliveryStoryFinalityRestart("IntegrationFinalitySettled"),
+  capstoneTimeout
+)
+
+it.effect(
+  "executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* cachedDs14ThroughDs17Run
+      expect(issue272AcceptanceIssues(run)).toEqual([])
+      expect(run.history._tag).toBe("ValidWorkflowJournalHistory")
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "rejects DS-15 evidence when M or M2 lacks exact ordered head-then-C parents",
+  () =>
+    Effect.gen(function* () {
+      const base = maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17
+      const malformedCandidates = [
+        {
+          candidateText: "refs/heads/dalph/integrator-candidate-A",
+          candidateCommit: "cccccccccccccccccccccccccccccccccccccccc",
+          directParents: ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "1111111111111111111111111111111111111111"]
+        },
+        {
+          candidateText: "refs/heads/dalph/integrator-candidate-A-successor",
+          candidateCommit: "dddddddddddddddddddddddddddddddddddddddd",
+          directParents: [
+            "2222222222222222222222222222222222222222",
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          ]
+        }
+      ] as const
+
+      for (const { candidateCommit, candidateText, directParents } of malformedCandidates) {
+        const cassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+          ...base,
+          name: `DS-15 malformed ${candidateText} parents ${directParents.join("-")}`,
+          story: base.story.map((item) =>
+            item._tag === "IntegratorGitObservationReturned" && item.candidateText === candidateText
+              ? { ...item, observation: { ...item.observation, directParents } }
+              : item
+          )
+        })
+        const captures: Array<AuthoredObservationCapture> = []
+        const outcome = yield* Effect.exit(
+          runAuthoredScenarioCassette(cassette, { onObservationCapture: (capture) => captures.push(capture) }).pipe(
+            Effect.provide(NodeCrypto.layer)
+          )
+        )
+        const occurrences = captures.flatMap((capture) =>
+          capture._tag === "AuthoredStoryOccurrenceCaptured" ? [capture.occurrence] : []
+        )
+        expect(outcome._tag).toBe("Failure")
+        expect(
+          occurrences.filter(
+            (occurrence) =>
+              occurrence._tag === "IntegratorGitObservationReturned" && occurrence.candidateText === candidateText
+          )
+        ).toHaveLength(1)
+        expect(
+          occurrences.filter(
+            (occurrence) =>
+              (occurrence._tag === "TargetPromotionCompareAndSetReturned" ||
+                occurrence._tag === "TargetPromotionCompareAndSetResponseLost") &&
+              occurrence.request.candidateCommit === candidateCommit
+          )
+        ).toHaveLength(0)
+        expect(
+          occurrences.filter(
+            (occurrence) =>
+              occurrence._tag === "TargetPromotionCompareAndSetReturned" && occurrence.result._tag === "Applied"
+          )
+        ).toHaveLength(0)
+      }
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "rejects DS16 evidence without the rejected CAS attempt or with a pre-request stale read",
+  () =>
+    Effect.gen(function* () {
+      const base = maintainedAuthoredCassetteCatalog.deliveryStoryDs14ThroughDs17
+      const responseLostCassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)({
+        ...base,
+        name: `${base.name}; rejected CAS evidence substituted with response loss`,
+        story: base.story.flatMap(
+          (item): ReadonlyArray<unknown> =>
+            item._tag === "TargetPromotionCompareAndSetReturned" && item.result._tag === "RejectedExpectedHead"
+              ? [
+                  {
+                    _tag: "TargetPromotionCompareAndSetResponseLost",
+                    detail: "the rejected exact-head CAS response was lost",
+                    request: item.request
+                  },
+                  {
+                    _tag: "TargetPromotionGitReadReturned",
+                    candidateCommit: item.request.candidateCommit,
+                    observation: {
+                      _tag: "CandidateNotInAncestry",
+                      currentHeadSha: "2222222222222222222222222222222222222222"
+                    },
+                    repository: item.request.integrationTarget.repository
+                  }
+                ]
+              : [item]
+        )
+      })
+      const responseLostRun = yield* runAuthoredScenarioCassette(responseLostCassette).pipe(
+        Effect.provide(NodeCrypto.layer)
+      )
+      expect(storyOccurrences(responseLostRun, "TargetPromotionCompareAndSetResponseLost")).toHaveLength(1)
+      expect(
+        storyOccurrences(responseLostRun, "TargetPromotionCompareAndSetReturned").filter(
+          ({ result }) => result._tag === "RejectedExpectedHead"
+        )
+      ).toHaveLength(0)
+      expect(issue272AcceptanceIssues(responseLostRun)).toContain(
+        "promotion must use one rejected exact-head CAS followed by one applied successor CAS, never force-update"
+      )
+
+      const preRequest = yield* runAuthoredScenarioCassette(
+        maintainedAuthoredCassetteCatalog.targetPromotionStaleBeforeCompareAndSet
+      ).pipe(Effect.provide(NodeCrypto.layer))
+      expect(preRequest.records.filter(({ event }) => event._tag === "TargetPromotionAttemptIntended")).toHaveLength(0)
+      expect(eventRecords(preRequest, "TargetPromotionStale")).toHaveLength(1)
+      expect(eventRecords(preRequest, "TargetPromotionStale")[0]?.event.basis._tag).toBe("BeforeFirstAttempt")
+      expect(
+        preRequest.observationCaptures.filter(
+          (capture) =>
+            capture._tag === "AuthoredStoryOccurrenceCaptured" &&
+            capture.occurrence._tag === "TargetPromotionCompareAndSetReturned"
+        )
+      ).toHaveLength(0)
+      expect(preRequest.records.filter(({ event }) => event._tag === "IntegrationQuarantined")).toHaveLength(0)
+      expect(
+        preRequest.records.filter(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied")
+      ).toHaveLength(0)
+      expect(preRequest.records.filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")).toHaveLength(0)
+    }),
+  capstoneTimeout
+)
+
+it.effect(
+  "accepts every DS-14 through DS-17 checkpoint prefix as valid history with at most one recorded successor, promotion, and completion attempt",
+  () =>
+    Effect.gen(function* () {
+      const run = yield* cachedDs14ThroughDs17Run
+      const records = run.records
+      const directionAt = records.find(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied")?.position
+      const checkpoints = [
+        records.find(({ event }) => event._tag === "IntegrationStarted"),
+        records.find(({ event }) => event._tag === "IntegratorRunCandidateGitObserved"),
+        records.find(({ event }) => event._tag === "TargetPromotionAttemptIntended"),
+        records.find(({ event }) => event._tag === "TargetPromotionStale"),
+        records.find(({ event }) => event._tag === "IntegrationQuarantined"),
+        records.find(({ event }) => event._tag === "IntegrationQuarantineDirectionApplied"),
+        records.find(
+          ({ event, position }) =>
+            event._tag === "TargetLineageObserved" && position > (directionAt ?? Number.MAX_SAFE_INTEGER)
+        ),
+        records.find(({ event }) => event._tag === "IntegratorSuccessorSessionFixed"),
+        records.find(({ event }) => event._tag === "TargetPromotionObservedSuccess"),
+        records.find(({ event }) => event._tag === "CompletionClaimReplaced"),
+        records.find(({ event }) => event._tag === "CompletionTaskAttemptIntended"),
+        records.find(({ event }) => event._tag === "CompletionTaskAcknowledged"),
+        records.find(({ event }) => event._tag === "TaskClaimReleased"),
+        records.find(({ event }) => event._tag === "CompletionClaimDeleted"),
+        records.find(({ event }) => event._tag === "IntegrationFinalitySettled")
+      ]
+
+      expect(checkpoints.every((checkpoint) => checkpoint !== undefined)).toBe(true)
+      for (const checkpoint of checkpoints) {
+        if (checkpoint === undefined) return
+        const prefix = records.filter(({ position }) => position <= checkpoint.position)
+        expect(reduceWorkflowJournalHistory(run.runId, prefix)._tag).toBe("ValidWorkflowJournalHistory")
+        expect(
+          prefix.filter(({ event }) => event._tag === "IntegratorSuccessorSessionFixed").length
+        ).toBeLessThanOrEqual(1)
+        expect(prefix.filter(({ event }) => event._tag === "CompletionTaskAttemptIntended").length).toBeLessThanOrEqual(
+          1
+        )
+        expect(
+          prefix.filter(({ event }) => event._tag === "TargetPromotionObservedSuccess").length
+        ).toBeLessThanOrEqual(1)
+      }
+    }),
+  capstoneTimeout
+)
 
 it.effect("DS-01 derives A, B, and C inside capacity while D and E stay outside", () =>
   Effect.gen(function* () {

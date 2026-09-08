@@ -13,7 +13,9 @@ const acceptedResultIntegrationMbtTestPattern =
 // Quint traces remain mode-gated by quintIt itself.
 const coverageExcludedMbtTestPattern =
   "packages/**/!(run-activation|run-cancellation|task-fact-reconciliation).mbt.test.ts"
-const performanceTestPattern = "packages/**/*.performance.test.ts"
+const capabilityRegistrationTestPattern = "scripts/capability-registration.test.ts"
+const performanceTestPattern = "**/*.performance.test.ts"
+const recordedCatalogCoverageTestPattern = "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
 const ordinaryTestTimeoutMilliseconds = 10_000
 const coverageTestTimeoutMilliseconds = 30_000
 const ordinaryWorkerCount = 4
@@ -49,7 +51,14 @@ export default defineConfig(({ mode }) => ({
     exclude: [
       "**/node_modules/**",
       "**/dist/**",
-      ...(mode === "coverage" ? [coverageExcludedMbtTestPattern, performanceTestPattern] : [])
+      ...(mode === "coverage"
+        ? [
+            coverageExcludedMbtTestPattern,
+            capabilityRegistrationTestPattern,
+            performanceTestPattern,
+            recordedCatalogCoverageTestPattern
+          ]
+        : [])
     ],
     include: mode === "mbt" ? [mbtTestPattern] : ordinaryTestIncludes,
     maxWorkers: mode === "coverage" ? coverageWorkerCount : ordinaryWorkerCount,

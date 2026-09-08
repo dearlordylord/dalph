@@ -2,10 +2,24 @@ import { extname } from "node:path"
 
 const typedExtensions = new Set([".ts", ".tsx"])
 
-export const selectCompatibilityFiles = ({ allFiles, selectedFiles, staged }) => {
+/**
+ * The compatibility pass builds the complete TypeScript program whatever file list it receives, so a file-scoped run
+ * pays whole-repository cost for a fraction of the coverage. Explicit, changed, and staged runs therefore skip it
+ * unless they ask for it; whole-repository runs keep the full compatibility graph.
+ */
+export const selectCompatibilityFiles = ({
+  allFiles,
+  compatibility = false,
+  scoped = false,
+  selectedFiles,
+  withoutCompatibility = false
+}) => {
   const allCompatibilityFiles = allFiles.filter((file) => typedExtensions.has(extname(file)))
   const compatibilityFileSet = new Set(allCompatibilityFiles)
   const selectedCompatibilityFiles = selectedFiles.filter((file) => compatibilityFileSet.has(file))
 
-  return { compatibilityFiles: staged ? allCompatibilityFiles : selectedCompatibilityFiles, selectedCompatibilityFiles }
+  if (withoutCompatibility) return { compatibilityFiles: [], selectedCompatibilityFiles }
+  if (scoped && !compatibility) return { compatibilityFiles: [], selectedCompatibilityFiles }
+
+  return { compatibilityFiles: selectedCompatibilityFiles, selectedCompatibilityFiles }
 }

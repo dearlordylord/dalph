@@ -31,6 +31,7 @@ import {
 } from "@dalph/contracts"
 import {
   ApplicationExitShell,
+  ApplyIntegrationQuarantineDirectionRequest,
   AuthoritativeTaskWorktreeReady,
   type AttemptChoiceApplicationResult,
   attemptChoiceControlWithProvidedProtocolLayer,
@@ -1493,7 +1494,10 @@ const runAuthoredScenarioCassetteWith = (request: {
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
       const coordinatorLifecycleBoundaryCount = cassette.story.filter(
-        (item) => item._tag === "CoordinatorActivationReturned" || item._tag === "CoordinatorProcessDies"
+        (item) =>
+          item._tag === "CoordinatorActivationReturned" ||
+          item._tag === "CoordinatorProcessDies" ||
+          item._tag === "CoordinatorProcessDiesAfterJournalEvent"
       ).length
       const operatorControlGraphReadGate = yield* Ref.make<
         Option.Option<{ readonly release: Deferred.Deferred<void>; readonly taskId: TaskId }>
@@ -1517,6 +1521,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         )
       )
       const sharedJournal = Context.get(sharedContext, JournalStore)
+      const promotionStaleQuarantineDurable = yield* Deferred.make<void>()
       const evidenceStoreContext = yield* Layer.build(memoryEvidenceStoreLayer)
       const evidenceStore = Context.get(evidenceStoreContext, EvidenceStore)
       const acceptedEvidencePublicationFailure = yield* Ref.make<EvidenceStoreFailure | undefined>(undefined)
@@ -1627,6 +1632,35 @@ const runAuthoredScenarioCassetteWith = (request: {
       const observedExecutorLifecycleKeys = yield* Ref.make<ReadonlySet<string>>(new Set())
       type AuthoredJournalAppendKey = JournalRecord["key"]
       type AuthoredJournalAppendEvent = JournalRecord["event"]
+      type AuthoredJournalAppendEventTag = AuthoredJournalAppendEvent["_tag"]
+      type AuthoredTargetedDeathJournalEvent =
+        typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDiesAfterJournalEvent.Type.afterJournalEvent
+      const targetedDeathAllowedPrefixSequences = {
+        TargetPromotionAttemptIntended: [[]],
+        TargetPromotionStale: [[]],
+        IntegrationQuarantined: [["TargetPromotionStale"]],
+        IntegrationQuarantineDirectionApplied: [
+          ["TargetPromotionStale", "IntegrationQuarantined"],
+          ["IntegrationQuarantined"]
+        ],
+        TargetLineageObserved: [["GitReadIntentRecorded"]],
+        IntegratorSuccessorSessionFixed: [["GitReadIntentRecorded", "TargetLineageObserved"]],
+        TargetPromotionObservedSuccess: [[]],
+        CompletionClaimReplaced: [[]],
+        CompletionTaskAcknowledged: [[]],
+        CompletionClaimDeleted: [["CompletionClaimDeletionReadObserved"]],
+        IntegrationFinalitySettled: [["CompletionClaimDeletionReadObserved", "CompletionClaimDeleted"]]
+      } as const satisfies Readonly<
+        Record<AuthoredTargetedDeathJournalEvent, ReadonlyArray<ReadonlyArray<AuthoredJournalAppendEventTag>>>
+      >
+      const targetedDeathPrefix = yield* Ref.make<{
+        readonly events: ReadonlyArray<AuthoredJournalAppendEventTag>
+        readonly storyPosition: number
+      }>({ events: [], storyPosition: -1 })
+      const eventSequencesEqual = (
+        left: ReadonlyArray<AuthoredJournalAppendEventTag>,
+        right: ReadonlyArray<AuthoredJournalAppendEventTag>
+      ): boolean => left.length === right.length && left.every((tag, index) => tag === right[index])
       const isExecutorLifecycleAppend = (event: AuthoredJournalAppendEvent): boolean =>
         event._tag === "PlannedAttemptReplaced" ||
         event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ||
@@ -1639,15 +1673,54 @@ const runAuthoredScenarioCassetteWith = (request: {
         event._tag === "IntegratorRunResultRecorded" ||
         event._tag === "IntegratorRunCandidateGitReadIntended" ||
         event._tag === "IntegratorRunCandidateGitObserved"
-      const pauseAtAuthoredJournalBoundary = (event: AuthoredJournalAppendEvent): Effect.Effect<void> => {
-        // A tracker observation may be durable before the coordinator process
-        // dies. Authored Integrator boundaries and replacement appends use the
-        // same exact death seam.
-        if (shouldPauseAfterTrackerFactsAppend(event)) return cursor.pauseAtCoordinatorProcessDeath
-        if (event._tag === "PlannedAttemptReplaced") return cursor.pauseAtCoordinatorProcessDeath
-        if (isIntegratorBoundaryAppend(event)) return cursor.pauseAtCoordinatorProcessDeath
-        return Effect.void
-      }
+      const isLegacyAuthoredDeathBoundary = (event: AuthoredJournalAppendEvent): boolean =>
+        shouldPauseAfterTrackerFactsAppend(event) ||
+        event._tag === "PlannedAttemptReplaced" ||
+        isIntegratorBoundaryAppend(event)
+      const targetedDeathEffect = (event: AuthoredJournalAppendEvent): Effect.Effect<void> =>
+        event._tag === "IntegrationQuarantineDirectionApplied"
+          ? cursor.pauseAfterIntegrationQuarantineDirectionAppend
+          : cursor.pauseAtCoordinatorProcessDeathAfterJournalEvent
+      const pauseAtAuthoredJournalBoundary = (event: AuthoredJournalAppendEvent): Effect.Effect<void> =>
+        Effect.gen(function* () {
+          const next = yield* cursor.currentStoryItem
+          if (next?._tag === "CoordinatorProcessDiesAfterJournalEvent") {
+            const storyPosition = yield* cursor.storyPosition
+            const observedPrefix = yield* Ref.modify(targetedDeathPrefix, (current) => {
+              const events = current.storyPosition === storyPosition ? current.events : []
+              return [events, { events, storyPosition }]
+            })
+            const allowedPrefixes: ReadonlyArray<ReadonlyArray<AuthoredJournalAppendEventTag>> =
+              targetedDeathAllowedPrefixSequences[next.afterJournalEvent]
+            if (next.afterJournalEvent === event._tag) {
+              if (!allowedPrefixes.some((allowed) => eventSequencesEqual(allowed, observedPrefix))) {
+                return yield* Effect.die(
+                  `authored targeted coordinator death after ${next.afterJournalEvent} observed invalid prefix ${observedPrefix.join(" -> ") || "<empty>"}`
+                )
+              }
+              yield* targetedDeathEffect(event)
+              return
+            }
+            const advancedPrefix = [...observedPrefix, event._tag]
+            if (
+              allowedPrefixes.some(
+                (allowed) =>
+                  advancedPrefix.length <= allowed.length &&
+                  advancedPrefix.every((tag, index) => tag === allowed[index])
+              )
+            ) {
+              yield* Ref.set(targetedDeathPrefix, { events: advancedPrefix, storyPosition })
+              return
+            }
+            return yield* Effect.die(
+              `authored targeted coordinator death after ${next.afterJournalEvent} became impossible at ${[...advancedPrefix, next.afterJournalEvent].join(" -> ")}`
+            )
+          }
+          // A tracker observation may be durable before the coordinator process
+          // dies. Authored Integrator boundaries and replacement appends use the
+          // same exact death seam.
+          if (isLegacyAuthoredDeathBoundary(event)) yield* cursor.pauseAtCoordinatorProcessDeath
+        })
       const pauseAfterJournalAppend = (
         key: AuthoredJournalAppendKey,
         event: AuthoredJournalAppendEvent
@@ -1678,6 +1751,9 @@ const runAuthoredScenarioCassetteWith = (request: {
                       event
                     })
                     if (taskClaimHandled) return
+                    if (event._tag === "IntegrationQuarantined" && event.basis._tag === "PromotionStale") {
+                      yield* Deferred.succeed(promotionStaleQuarantineDurable, undefined)
+                    }
                     yield* pauseAfterJournalAppend(key, event)
                   })
                 )
@@ -2356,6 +2432,38 @@ const runAuthoredScenarioCassetteWith = (request: {
                   yield* cursor.completeControlDirectionBeforeDeliveryActionAdmission
                 }
               }).pipe(Effect.ensuring(releaseOperatorGraphReadGate), Effect.orDie)
+            const driveIntegrationQuarantineDirection = Effect.gen(function* () {
+              const authored = yield* cursor.consumeIntegrationQuarantineDirection
+              /* v8 ignore next -- @preserve The direct-item dispatcher invokes this only for the exact FullRerun item. */
+              if (Option.isNone(authored)) return
+              const request = yield* Schema.decodeUnknownEffect(ApplyIntegrationQuarantineDirectionRequest)(
+                JSON.parse(JSON.stringify(authored.value.request).replaceAll("$authored-run", String(runId)))
+              ).pipe(Effect.orDie)
+              yield* Deferred.await(promotionStaleQuarantineDurable)
+              yield* Effect.yieldNow
+              const quarantineObserved = (yield* sharedJournal.read(runId)).some(
+                (record) =>
+                  record.position === request.fingerprint.quarantineAt &&
+                  record.event._tag === "IntegrationQuarantined" &&
+                  record.event.correlation.sessionId === request.fingerprint.sessionId
+              )
+              if (!quarantineObserved) {
+                return yield* Effect.die(
+                  `authored FullRerun choice reached before quarantine ${request.fingerprint.quarantineAt} was durable`
+                )
+              }
+              const applied = yield* bootstrap.operatorControl.applyIntegrationQuarantineDirection(request)
+              if (
+                applied.application.event.fingerprint.direction !== request.fingerprint.direction ||
+                applied.application.event.fingerprint.quarantineAt !== request.fingerprint.quarantineAt ||
+                applied.application.event.fingerprint.sessionId !== request.fingerprint.sessionId
+              ) {
+                return yield* Effect.die(
+                  `authored quarantine direction expected ${request.fingerprint.direction} at ${request.fingerprint.quarantineAt}`
+                )
+              }
+              yield* cursor.completeIntegrationQuarantineDirection
+            }).pipe(Effect.orDie)
             const driveRunCancellation = Effect.gen(function* () {
               const authored = yield* cursor.consumeRunCancellation
               /* v8 ignore next -- @preserve The exhaustive direct-item dispatcher invokes this driver only for the current cancellation tag. */
@@ -2589,6 +2697,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 readonly _tag:
                   | "OperatorAppliesControlDirection"
                   | "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission"
+                  | "OperatorAppliesIntegrationQuarantineDirection"
                   | "OperatorAppliesRunCancellation"
                   | "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary"
                   | "CassetteOffersRunReactivationHints"
@@ -2619,6 +2728,7 @@ const runAuthoredScenarioCassetteWith = (request: {
             const directlyDrivenTags: ReadonlySet<AuthoredCassetteStoryItem["_tag"]> = new Set([
               "OperatorAppliesControlDirection",
               "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
+              "OperatorAppliesIntegrationQuarantineDirection",
               "OperatorAppliesRunCancellation",
               "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
               "CassetteOffersRunReactivationHints",
@@ -2652,6 +2762,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               Match.valueTags(item, {
                 OperatorAppliesControlDirection: (item) => driveControlDirection(item),
                 OperatorAppliesControlDirectionBeforeDeliveryActionAdmission: (item) => driveControlDirection(item),
+                OperatorAppliesIntegrationQuarantineDirection: () => driveIntegrationQuarantineDirection,
                 OperatorAppliesRunCancellation: () => driveRunCancellation,
                 CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: () =>
                   drivePlannedSuspensionExecutorBoundaryHold,

@@ -13,6 +13,7 @@ import {
 } from "@dalph/contracts"
 import {
   ActiveTaskClaim,
+  ApplyIntegrationQuarantineDirectionRequest,
   ClaimOwner,
   ControlDirection,
   InitialControlPolicy,
@@ -707,6 +708,21 @@ const AuthoredPauseObservationReconnectFields = {
   subject: AuthoredPauseSubject
 }
 
+/** One exact durable journal event after which the cassette kills the owning coordinator process. */
+const AuthoredCoordinatorDeathJournalEvent = Schema.Literals([
+  "TargetPromotionAttemptIntended",
+  "TargetPromotionStale",
+  "IntegrationQuarantined",
+  "IntegrationQuarantineDirectionApplied",
+  "TargetLineageObserved",
+  "IntegratorSuccessorSessionFixed",
+  "TargetPromotionObservedSuccess",
+  "CompletionClaimReplaced",
+  "CompletionTaskAcknowledged",
+  "CompletionClaimDeleted",
+  "IntegrationFinalitySettled"
+])
+
 /**
  * One chronological authored story. Schema version 1 is provisional until the
  * project owner explicitly removes this comment; adding tags does not imply a
@@ -727,8 +743,10 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
       RunMustRemainActiveReasonUnasserted: {}
     })
   },
-  /** Harness lifecycle: dispose one coordinator and its same-process executor session without journaling an occurrence. */
+  /** Harness lifecycle: dispose one coordinator and its same-process executor session at the legacy action boundary. */
   CoordinatorProcessDies: {},
+  /** Harness lifecycle: dispose one coordinator only after this required exact durable journal append. */
+  CoordinatorProcessDiesAfterJournalEvent: { afterJournalEvent: AuthoredCoordinatorDeathJournalEvent },
   /** The tracker applied deletion of the exact promotion-correlated completion claim. */
   CompletionClaimDeletionApplied: { taskId: TaskId },
   /** The tracker reports one exact active-record or completion-marker state for finality reconciliation. */
@@ -846,6 +864,11 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   GitPlannedWorktreeCreateResponseLost: { detail: Schema.String },
   /** The fake outer Integrator receives this exact session and run ordinal. */
   IntegratorRequestReceived: { correlation: IntegratorRunCorrelation },
+  /** Alice authorizes the exact FullRerun direction for one durable Integrator quarantine. */
+  OperatorAppliesIntegrationQuarantineDirection: {
+    expected: Schema.Literal("Applied"),
+    request: ApplyIntegrationQuarantineDirectionRequest
+  },
   /** The fake outer Integrator returns only its public prepared/not-prepared result. */
   IntegratorResultReturned: { result: AuthoredOuterIntegratorResult },
   /** Git returns object-kind and ordered-parent facts for the explicitly reported candidate text. */
@@ -1019,6 +1042,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "OperatorAppliesControlDirection",
     "OperatorAppliesControlDirectionBeforeDeliveryActionAdmission",
     "OperatorAppliesControlDirectionWhileExecutorRequestInFlight",
+    "OperatorAppliesIntegrationQuarantineDirection",
     "OperatorAppliesRunCancellationWhileExecutorRequestInFlight",
     "OperatorUnpausesWhileExecutorRequestInFlightAfterQueuedPauseWaiting",
     "OperatorStartsPauseObservation",
@@ -1034,7 +1058,11 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "RunCoordinator",
     "SetTaskExecutionCapacity"
   ],
-  CassetteLifecycle: ["CoordinatorActivationReturned", "CoordinatorProcessDies"],
+  CassetteLifecycle: [
+    "CoordinatorActivationReturned",
+    "CoordinatorProcessDies",
+    "CoordinatorProcessDiesAfterJournalEvent"
+  ],
   CassetteObservation: ["PauseProgressObserved", "PauseProgressObservedCancelledAndReconnected"],
   DeliverySynchronization: [
     "DalphHoldsAdmittedContinuationBeforeExecutorIntent",
@@ -1197,7 +1225,8 @@ const coordinatorLifecycleBoundariesHaveFollowingActivationWork = Schema.makeFil
   (cassette: typeof AuthoredScenarioCassetteShape.Type) =>
     cassette.story.every(
       (item, index) =>
-        item._tag !== "CoordinatorProcessDies" || index < cassette.story.length - minimumItemsAfterCoordinatorDeath
+        (item._tag !== "CoordinatorProcessDies" && item._tag !== "CoordinatorProcessDiesAfterJournalEvent") ||
+        index < cassette.story.length - minimumItemsAfterCoordinatorDeath
     )
       ? undefined
       : "each authored coordinator process death must leave a later activation interaction before terminal assertions"

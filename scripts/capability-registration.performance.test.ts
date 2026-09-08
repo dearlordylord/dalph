@@ -14,7 +14,9 @@ interface MeasurementExpectation {
   readonly compilerDiagnosticCount: number
   readonly issueCount: number
   readonly issueIncludes?: string
+  readonly rebuiltDependencyPaths: ReadonlyArray<string>
   readonly rebuiltPaths: ReadonlyArray<string>
+  readonly reusedDependencyPaths: ReadonlyArray<string>
   readonly reusedPaths: ReadonlyArray<string>
 }
 
@@ -30,8 +32,10 @@ const measured = (
   const diagnostics = inspectCapabilitySourceProgram(sources)
   expect(issues).toHaveLength(expected.issueCount)
   expect(diagnostics.compilerDiagnostics).toHaveLength(expected.compilerDiagnosticCount)
+  expect(new Set(diagnostics.rebuiltDependencyPaths)).toEqual(new Set(expected.rebuiltDependencyPaths))
   expect(diagnostics.rebuiltSourcePaths).toHaveLength(expected.rebuiltPaths.length)
   expect(diagnostics.rebuiltSourcePaths).toEqual(expect.arrayContaining([...expected.rebuiltPaths]))
+  expect(new Set(diagnostics.reusedDependencyPaths)).toEqual(new Set(expected.reusedDependencyPaths))
   expect(new Set(diagnostics.reusedSourcePaths)).toEqual(new Set(expected.reusedPaths))
   if (expected.issueIncludes !== undefined) expect(issues.join("\n")).toContain(expected.issueIncludes)
   return {
@@ -39,7 +43,9 @@ const measured = (
     elapsedMilliseconds: Math.round(elapsedMilliseconds),
     issueCount: issues.length,
     name,
+    rebuiltDependencyCount: diagnostics.rebuiltDependencyPaths.length,
     rebuiltSourceCount: diagnostics.rebuiltSourcePaths.length,
+    reusedDependencyCount: diagnostics.reusedDependencyPaths.length,
     reusedSourceCount: diagnostics.reusedSourcePaths.length
   }
 }
@@ -100,14 +106,20 @@ describe("capability registration performance evidence", () => {
     const baselineRow = measured("baseline", capabilityRegistrationInventory, baseline, {
       compilerDiagnosticCount: 0,
       issueCount: 0,
+      rebuiltDependencyPaths: repositorySources.map(({ path }) => path),
       rebuiltPaths: repositorySources.map(({ path }) => path),
+      reusedDependencyPaths: [],
       reusedPaths: []
     })
     const identicalSources = baseline.map((file) => ({ ...file }))
     const identicalDiagnostics = inspectCapabilitySourceProgram(identicalSources)
     expect(inspectCapabilitySourceProgram(identicalSources)).toBe(identicalDiagnostics)
     expect(identicalDiagnostics.compilerDiagnostics).toHaveLength(0)
+    expect(identicalDiagnostics.rebuiltDependencyPaths).toHaveLength(0)
     expect(identicalDiagnostics.rebuiltSourcePaths).toHaveLength(0)
+    expect(new Set(identicalDiagnostics.reusedDependencyPaths)).toEqual(
+      new Set(repositorySources.map(({ path }) => path))
+    )
     expect(new Set(identicalDiagnostics.reusedSourcePaths)).toEqual(new Set(repositorySources.map(({ path }) => path)))
 
     inspectCapabilitySourceProgram([...baseline, validSamePathSource])
@@ -119,7 +131,9 @@ describe("capability registration performance evidence", () => {
         compilerDiagnosticCount: 1,
         issueCount: 1,
         issueIncludes: `in ${samePath}:`,
+        rebuiltDependencyPaths: [samePath],
         rebuiltPaths: [samePath],
+        reusedDependencyPaths: repositorySources.map(({ path }) => path),
         reusedPaths: repositorySources.map(({ path }) => path)
       }
     )
@@ -134,7 +148,11 @@ describe("capability registration performance evidence", () => {
           compilerDiagnosticCount: 0,
           issueCount: 1,
           issueIncludes: "production uses unregistered exported Layer reexportedLayer",
+          rebuiltDependencyPaths: [...repositorySources, addedLayer, addedReexport, addedComposition].map(
+            ({ path }) => path
+          ),
           rebuiltPaths: [addedLayer.path, addedReexport.path, addedComposition.path],
+          reusedDependencyPaths: [],
           reusedPaths: repositorySources.map(({ path }) => path)
         }
       ),
@@ -142,7 +160,9 @@ describe("capability registration performance evidence", () => {
         compilerDiagnosticCount: 0,
         issueCount: 1,
         issueIncludes: "production uses unregistered exported Layer benchmarkProviderLayer",
+        rebuiltDependencyPaths: [...repositorySources, providerLayer, providerComposition].map(({ path }) => path),
         rebuiltPaths: [providerLayer.path, providerComposition.path],
+        reusedDependencyPaths: [],
         reusedPaths: repositorySources.map(({ path }) => path)
       })
     ]
