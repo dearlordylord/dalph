@@ -1,4 +1,9 @@
 {
+  "packages/dalph/src/application/production-cli.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
   "packages/dalph/src/cassettes/disposition-cleanup-cassette.ts": {
     "complexity": {
       "count": 6
@@ -40,6 +45,11 @@
     }
   },
   "packages/orchestrator/src/coordination/frontier/task-claim-authority.ts": {
+    "complexity": {
+      "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/run/journaled-run-bootstrap.ts": {
     "complexity": {
       "count": 1
     }
