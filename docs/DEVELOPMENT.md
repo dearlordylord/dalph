@@ -78,7 +78,7 @@ All commands below use `pnpm`. Script definitions live in
 | `typecheck` | Strict TypeScript-Go with Effect errors; suggestions remain nonfatal. |
 | `typecheck:effect` | Dedicated strict Effect pass over the whole project; errors and warnings fail, JSON output. |
 | `typecheck:effect:changed` | Effect pass over files changed against `origin/master`; falls back to the project pass above twelve changed files. |
-| `lint:code` | Type-aware Oxlint, compatibility ESLint, dprint; warnings fail. Staged runs also check the full compatibility graph. |
+| `lint:code` | Type-aware Oxlint, compatibility ESLint, dprint; warnings fail. File-scoped runs check the compatibility graph only with `--compatibility`. |
 | `lint:changed` | Oxlint and dprint over files changed against `origin/master`; the compatibility pass belongs to repository runs. |
 | `check:fast` | Development-loop tier: `typecheck`, `lint:changed`, `typecheck:effect:changed`. |
 | `check:circular` | Reject runtime dependency cycles. |
@@ -92,6 +92,7 @@ All commands below use `pnpm`. Script definitions live in
 | `check:lab:browser` | Host an ephemeral Lab, run Chromium against every maintained cassette, stop the host. |
 | `qualify:codex` | Opt-in real app-server contract; prerequisites below. |
 | `check:quint` | Deterministic, sampled, exhaustive model checks. Run after final relevant changes and before integration; during development only for model, conformance-adapter, or governed-behavior changes. |
+| `check:quint:changed` | Report model-governed changes against `origin/master` and run `check:quint` for them; report and stop when there are none. |
 | `check:secrets` | Scan Git history with gitleaks. |
 | `check:all` | Bounded handoff gate for a frozen candidate, including MBT and non-browser Lab; excludes exhaustive model checks. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
 | `check:ci` | Hosted gate; currently omits only Quint-connected MBT. |
@@ -201,8 +202,8 @@ DALPH_COVERAGE_BASE_SHA="$(git merge-base origin/master HEAD)" pnpm test:coverag
 CI installs with `--frozen-lockfile`; pnpm enforces strict peers, allowlisted
 lifecycle scripts (`onlyBuiltDependencies`), and a 24-hour release delay unless
 explicitly excepted. Install gitleaks before committing. Pre-commit formats and
-lints staged code, checks the full compatibility graph, typechecks the workspace,
-checks cycles, and scans staged secrets.
+lints staged code and scans staged secrets. The compatibility graph, workspace
+typecheck, and cycle check belong to `pnpm check:fast` and the candidate gate.
 
 Only exact diffs containing allowlisted documentation paths use the single
 Ubuntu docs gate: whitespace, classifier controls, changed-commit secrets.

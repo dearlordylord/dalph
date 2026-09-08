@@ -155,7 +155,7 @@ describe.sequential("quality lint integration", () => {
   )
 
   it.effect(
-    "staged lint selects the discovered project for compatibility policy",
+    "staged lint keeps the selected compatibility files without the whole graph",
     () =>
       withFixtures((fixtureDirectory) =>
         Effect.gen(function* () {
@@ -166,13 +166,12 @@ describe.sequential("quality lint integration", () => {
           const allFiles = yield* Effect.tryPromise(() => discoverQualityFiles())
           const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({
             allFiles,
-            selectedFiles,
-            staged: true
+            scoped: true,
+            selectedFiles
           })
 
           expect(selectedCompatibilityFiles).toEqual([relativeToRepository(functionalFile)])
-          expect(compatibilityFiles).toContain(relativeToRepository(functionalFile))
-          expect(compatibilityFiles.length).toBeGreaterThan(selectedCompatibilityFiles.length)
+          expect(compatibilityFiles).toEqual([])
         })
       ),
     30_000
@@ -183,30 +182,28 @@ describe("compatibility lint policy", () => {
   const allFiles = ["packages/dalph/src/index.ts", "packages/dalph/src/run.ts", "scripts/run.mjs"]
 
   it("keeps the whole compatibility graph for a repository run", () => {
-    const { compatibilityFiles } = selectCompatibilityFiles({ allFiles, selectedFiles: allFiles, staged: false })
+    const { compatibilityFiles } = selectCompatibilityFiles({ allFiles, selectedFiles: allFiles })
 
     expect(compatibilityFiles).toEqual(["packages/dalph/src/index.ts", "packages/dalph/src/run.ts"])
   })
 
-  it("skips the compatibility pass for an explicit-file run", () => {
+  it("skips the compatibility pass for a scoped run", () => {
     const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({
       allFiles,
-      explicit: true,
-      selectedFiles: ["packages/dalph/src/run.ts"],
-      staged: false
+      scoped: true,
+      selectedFiles: ["packages/dalph/src/run.ts"]
     })
 
     expect(compatibilityFiles).toEqual([])
     expect(selectedCompatibilityFiles).toEqual(["packages/dalph/src/run.ts"])
   })
 
-  it("runs the compatibility pass for an explicit-file run that asks for it", () => {
+  it("runs the compatibility pass for a scoped run that asks for it", () => {
     const { compatibilityFiles } = selectCompatibilityFiles({
       allFiles,
       compatibility: true,
-      explicit: true,
-      selectedFiles: ["packages/dalph/src/run.ts"],
-      staged: false
+      scoped: true,
+      selectedFiles: ["packages/dalph/src/run.ts"]
     })
 
     expect(compatibilityFiles).toEqual(["packages/dalph/src/run.ts"])
@@ -216,7 +213,6 @@ describe("compatibility lint policy", () => {
     const { compatibilityFiles } = selectCompatibilityFiles({
       allFiles,
       selectedFiles: allFiles,
-      staged: false,
       withoutCompatibility: true
     })
 

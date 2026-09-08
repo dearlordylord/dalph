@@ -39,6 +39,7 @@
     "check:package-boundary": "node scripts/check-package-boundaries.mjs",
     "check:artifacts": "node scripts/workspace-artifacts.mjs",
     "check:quint": "node scripts/check-quint-models.mjs",
+    "check:quint:changed": "node scripts/run-changed-quint-gate.mjs",
     "check:secrets": "gitleaks git --redact --no-banner",
     "qualify:codex": "node scripts/qualify-codex-app-server.mjs",
     "test:codex-integrator-qualification": "pnpm --filter @dalph/dalph... build && DALPH_RUN_REAL_CODEX_QUALIFICATION=1 vitest run packages/dalph/src/application/codex-integrator-real-qualification.test.ts --pool=forks",
