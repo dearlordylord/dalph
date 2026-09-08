@@ -28,6 +28,7 @@ import {
 } from "../integrator/retry-authorization.js"
 import { exactTargetLineageRecord } from "./canonical-lineage.js"
 import { evaluateIntegratorFullRerunSuccessor } from "../integrator/successor-history.js"
+import { validatePromotionStaleQuarantineEvidence } from "./promotion-stale-evidence.js"
 
 type AbsenceRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegrationProviderRunActivityAbsent" }>
@@ -311,7 +312,7 @@ export const validateProviderRunActivityAbsent = (
   return { _tag: "Valid", run, record, runStart: predecessors.value.runStart }
 }
 
-/** Finds only a quarantine whose provider-failure basis has passed the canonical absence proof. */
+/** Finds cleanup provenance after the provider-absence or stale-promotion proof has passed. */
 export const quarantineRecordForFingerprint = (
   records: ReadonlyArray<JournalRecord>,
   fingerprint: IntegrationQuarantineDirectionFingerprint
@@ -326,6 +327,9 @@ export const quarantineRecordForFingerprint = (
       return false
     }
     const basis = record.event.basis
+    if (basis._tag === "PromotionStale") {
+      return validatePromotionStaleQuarantineEvidence(records, record)._tag === "Valid"
+    }
     if (basis._tag !== "ProviderRunFailure") return false
     const absence = records.find((candidate) => candidate.position === basis.ownedActivityProvenAbsentAt)
     const validation = absence === undefined ? undefined : validateProviderRunActivityAbsent(records, absence)

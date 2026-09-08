@@ -57,8 +57,10 @@ import {
   IntegrationQuarantineDirectionFingerprint,
   integrationQuarantineDirectionSubject
 } from "../integration-quarantine/events.js"
-import { validateProviderRunActivityAbsent } from "../integration-quarantine/canonical-provenance.js"
-import { quarantineRecordForFingerprint } from "../integration-quarantine/state.js"
+import {
+  quarantineRecordForFingerprint,
+  validateProviderRunActivityAbsent
+} from "../integration-quarantine/canonical-provenance.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/observation-match.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
