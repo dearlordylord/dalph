@@ -831,13 +831,9 @@ export {
   type CurrentDeliveryStatus,
   type DeliveryStatusClassification,
   type DeliveryStatusEntry,
-  type DeliveryStatusEvidenceConflictEntry,
-  type DeliveryStatusEvidenceUnavailableEntry,
   type DeliveryStatusGraphSource,
   type DeliveryStatusProjectionError,
-  type DeliveryStatusSnapshot,
   type DeliveryStatusTrackerFact,
-  type DeliveryStatusTrackerFactWait,
   type DeliveryStatusUnavailableEvidence,
   type DeliveryStatusWakeCondition
 } from "./coordination/delivery/delivery-status.js"
