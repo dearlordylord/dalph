@@ -19,10 +19,11 @@ const recordedCatalogCoverageTestPattern = "packages/dalph/test/cassettes/record
 const ordinaryTestTimeoutMilliseconds = 10_000
 const coverageTestTimeoutMilliseconds = 30_000
 const ordinaryWorkerCount = 4
-// V8 instrumentation and project-audit tests compete for CPU and memory. Two
+// V8 instrumentation and project-audit tests compete for CPU and memory. Four
 // workers keep individual 30-second test budgets meaningful on the supported
-// local/hosted runners instead of timing out otherwise passing tests.
-const coverageWorkerCount = 2
+// local/hosted runners now that the maintained-catalog proof runs once outside
+// coverage.
+const coverageWorkerCount = 4
 const ordinaryTestIncludes = [
   "src/**/*.test.ts",
   "packages/**/*.test.ts",
