@@ -37,6 +37,9 @@ import {
   taskClaimAcquisitionPlannerLayer,
   type ProductionRunSelection,
   type TraceCursor,
+  TraceReader,
+  TraceReaderLayer,
+  type TraceReaderService,
   asApplicationExitShellService,
   makeProductionHostApplicationExitShell,
   selectProductionRun
@@ -68,6 +71,8 @@ export interface ProductionHostObservation {
   readonly acceptedHistory: CurrentSignal<TraceCursor>
   readonly current: CurrentSignal<DeliveryRuntimeObservationState>
   readonly selection: ProductionRunSelection
+  /** Read-only projection of an acknowledged cursor; it cannot append or poll an outside authority. */
+  readonly traceReader: Pick<TraceReaderService, "readAt">
   /** Exact lifecycle result reported before this host scope finalizes resources and ownership. */
   readonly applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
 }
@@ -518,6 +523,8 @@ export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFounda
       const configuration = yield* decodeProductionRepositoryHostConfiguration(input)
       const foundation = yield* Layer.build(graph.foundation(configuration))
       const selection = yield* selectProductionRun(configuration.target).pipe(Effect.provide(foundation))
+      const traceReaderContext = yield* Layer.build(TraceReaderLayer).pipe(Effect.provide(foundation))
+      const traceReader = Context.get(traceReaderContext, TraceReader)
       const applicationExit = yield* graph.makeApplicationExit()
       const activationFailure = yield* Deferred.make<never, EActivation>()
       const run = yield* Layer.build(
@@ -534,6 +541,7 @@ export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFounda
         acceptedHistory: source.acceptedHistory,
         current: source.current,
         selection,
+        traceReader,
         applicationExitRequestBoundary: applicationExit.requestBoundary
       } satisfies ProductionHostObservation
       // The caller reports the exact lifecycle result and returns from this

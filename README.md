@@ -17,18 +17,13 @@ The delivery workflow and its live orchestration state, side by side:
 
 ## Status
 
-Production implementation is split across the packages described below. The current
-vertical slice reads a controlled tracker fixture, validates and projects its
-task DAG, derives a bounded runnable frontier, and executes that frontier
-through a read-only dry-run interpreter. Dry-run completion timing is
-reproducible, while the semantic trace preserves the order in which concurrent
-outcomes are observed.
-
-The current CLI is deliberately fixture-only and requires `--dry`. The
-production package now contains the complete GitHub graph reader and an atomic
-label-backed task-claim adapter, while CLI registration of those live adapters
-remains separate work. The CLI does not yet create worktrees, run real task
-work, integrate accepted results, or establish a terminal run disposition.
+Production implementation is split across the packages described below. The
+CLI requires Alice to choose `--dry` or `--production` explicitly. Dry-run
+retains the controlled/read-only interpreter. Production accepts one GitHub
+issue target and a decoded repository-host configuration, then reports the
+exact allocated or recovered Run and immutable historical snapshots. Passive
+current-status attachment, public recovery races, and OS-signal transport are
+delivered by the follow-on CLI slices.
 
 ## Repository map
 
@@ -60,6 +55,21 @@ fixture you can witness one tracker-graph observation, bounded admission of the
 currently eligible tasks, and simulated task outcomes. The larger retained
 fixture is available at
 `packages/orchestrator/fixtures/wayfinder-105.json`.
+
+Production is selected only with an explicit GitHub target and normalized
+absolute configuration path:
+
+```sh
+GITHUB_TOKEN=... DALPH_CODEX_PROVIDER_CREDENTIAL=... \
+  node packages/dalph/dist/bin/dalph.js \
+  run github:OWNER/REPOSITORY#ISSUE --production \
+  --config /absolute/dalph-production.json
+```
+
+The JSON document contains the non-secret repository/ref, capacity/cadence,
+Journal/evidence, worktree, and Codex settings accepted by the production-host
+schema. Credential values stay in the two named environment inputs and are
+redacted from public validation records and help.
 
 For a visual preview of the intended experience, run the disposable historical
 execution-trace prototype:
