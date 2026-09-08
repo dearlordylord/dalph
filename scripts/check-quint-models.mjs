@@ -1,5 +1,6 @@
 import { createRequire } from "node:module"
 import { performance } from "node:perf_hooks"
+import { readFile } from "node:fs/promises"
 
 import { applicationExitCheckRegistry } from "./application-exit-model-registry.mjs"
 import {
@@ -12,7 +13,13 @@ import {
   runActivationObligations,
   taskFactReconciliationObligations
 } from "./quint-model-obligations.mjs"
-import { quintGateRegressionBudgetMilliseconds, quintGateSafetyTimeoutMilliseconds } from "./quint-gate-policy.mjs"
+import {
+  assertQuintHostedDeadlineContract,
+  createQuintGateDeadline,
+  quintGateProcessGroupAbsenceTimeoutMilliseconds,
+  quintGateRegressionBudgetMilliseconds,
+  quintGateTerminationGraceMilliseconds
+} from "./quint-gate-policy.mjs"
 import { quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
 import { assertQuintGateCommandContract, withQuintGateSampleThreadContract } from "./quint-gate-command-contract.mjs"
 import { readQuintEvaluatorProvenance, renderQuintEvaluatorProvenance } from "./quint-evaluator-provenance.mjs"
@@ -36,11 +43,10 @@ if (process.env.npm_execpath === undefined) {
 const quintEntryPoint = createRequire(import.meta.url).resolve("@informalsystems/quint/dist/src/cli.js")
 
 const startedAt = performance.now()
+const remainingSafetyTimeoutMilliseconds = createQuintGateDeadline({ startedAt })
+assertQuintHostedDeadlineContract(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))
 const timing = createQuintGateTiming()
 let manifestPosition = 0
-
-const remainingSafetyTimeoutMilliseconds = () =>
-  Math.max(1, quintGateSafetyTimeoutMilliseconds - (performance.now() - startedAt))
 
 const reserveCommand = (name, args, options = {}) => {
   const kind = quintCommandKindForArgs(args)
@@ -82,7 +88,9 @@ const executeCommand = (command, options = {}) => {
         captureOutput: command.kind === "sampled-run" || commandOptions.captureOutput === true,
         executable: process.execPath,
         name: command.name,
-        timeoutMilliseconds: remainingSafetyTimeoutMilliseconds()
+        processGroupAbsenceTimeoutMilliseconds: quintGateProcessGroupAbsenceTimeoutMilliseconds,
+        terminationGraceMilliseconds: quintGateTerminationGraceMilliseconds,
+        timeoutMilliseconds: remainingSafetyTimeoutMilliseconds(command.name)
       })
       if (command.kind === "sampled-run") {
         assertQuintSampledCommandWitnessesObserved({ args: command.args, name: command.name, output: result.output })

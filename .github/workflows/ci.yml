@@ -130,8 +130,8 @@ jobs:
     needs: change-plan
     if: needs.change-plan.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
-    # The gate's regression budget is 750s. The 16-minute safety bound reserves
-    # another 210s for checkout, setup, network variance, and final reporting.
+    # quint-gate-policy.mjs checks this literal against 720s execution + 7s
+    # termination + 210s setup/reporting reserve < this 960s outer cutoff.
     timeout-minutes: 16
     env:
       NODE_OPTIONS: --max-old-space-size=8192

@@ -211,21 +211,32 @@ nonzero.
 
 ## Current bound
 
-`check:quint` retains a decreasing 960-second safety deadline and fails the
-gate if the complete inventory exceeds its 750-second regression budget. The
-hosted formal job uses the same 16-minute (`960` second) outer timeout:
+The previous 960-second inner deadline started after checkout and installation,
+so it could not protect reporting before the hosted job's own 960-second cutoff.
+The repaired policy retains the 750-second regression threshold and 16-minute
+outer job limit, but stops command execution after one decreasing 720-second
+deadline. This stricter execution stop also leaves room for child termination:
 
 ```text
-750.000s complete-gate regression budget
+720.000s absolute command-execution deadline
+  +   5.000s child SIGTERM-to-SIGKILL grace
+  +   2.000s process-group absence confirmation
   + 210.000s hosted checkout/setup/network/final-reporting allowance
-= 960.000s job timeout
+= 937.000s < 960.000s job timeout (23.000s additional slack)
 ```
 
-The allowance is reserved, not measured. Each child receives only the
-decreasing remainder of the safety deadline, so no late command can restart a
-fresh timeout. A later hosted run that exceeds the regression budget must fail
-with accumulated command and phase timings rather than silently omit formal
-checking.
+The allowance is reserved, not measured. It bounds the setup/reporting time
+assumed by this relationship; it does not claim that GitHub setup or network
+delays cannot exceed it. The policy derives the execution deadline by rounding
+down to a 30-second interval after subtracting the reserve and termination
+limits. Before any model command, it reads the formal workflow's literal cutoff
+and rejects missing, malformed, duplicated, or changed linkage. Each child gets
+only the remaining execution time and the policy's explicit termination limits;
+an expired deadline rejects admission rather than starting a new timeout.
+A late wedged command therefore fails with its exact identity and `timed-out`
+result while the reporting wrapper retains previously completed rows and phase
+accounting. The unchanged regression threshold is an additional check, not
+permission to extend the stricter execution deadline.
 
 ## Scenario-to-test mapping
 
@@ -238,6 +249,10 @@ exemption applies. The concrete tooling outcomes are covered by:
   that must make the formal gate fail;
 - `scripts/quint-gate-timing.test.ts`: command/phase accumulation, including
   timing output from `finally` while preserving the original failure; and
+- `scripts/quint-gate-policy.test.ts`: the strict execution/termination/reserve
+  inequality against the literal hosted cutoff, rejected missing or malformed
+  workflow linkage, and a real late wedged child retaining a completed row and
+  exact timeout accounting without receiving a fresh full deadline;
 - `scripts/quint-gate-command-contract.test.ts`: exact current 105-command and
   15/46/23/21 phase accounting, the ordered legacy 92-command subset, and a
   negative control that rejects omitted or changed four-thread sampling;

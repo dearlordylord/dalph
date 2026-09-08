@@ -4,6 +4,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it } from "vitest"
+import {
+  assertQuintHostedDeadlineContract,
+  quintGateRegressionBudgetMilliseconds,
+  quintGateSafetyTimeoutMilliseconds
+} from "./quint-gate-policy.mjs"
 
 // @ts-expect-error The production quality-gate helper is an executable JavaScript module.
 import { runBoundedCommand } from "./run-bounded-command.mjs"
@@ -14,7 +19,6 @@ const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.me
 }
 const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8")
 const qualityGate = readFileSync(new URL("./run-quality-gate.mjs", import.meta.url), "utf8")
-const quintPolicy = readFileSync(new URL("./quint-gate-policy.mjs", import.meta.url), "utf8")
 const quintGate = readFileSync(new URL("./check-quint-models.mjs", import.meta.url), "utf8")
 const profileEvidence = readFileSync(new URL("../research/quint-hosted-equivalent-profile.md", import.meta.url), "utf8")
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url))
@@ -67,6 +71,11 @@ describe("hosted formal-model contract", () => {
     expect(quintGate).toContain("remainingSafetyTimeoutMilliseconds")
     expect(quintGate).toContain("createQuintGateTiming")
     expect(quintGate).toContain("assertQuintGateCommandContract")
+    expect(quintGate).toContain(
+      'assertQuintHostedDeadlineContract(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"))'
+    )
+    expect(quintGate).toContain("createQuintGateDeadline({ startedAt })")
+    expect(quintGate).toContain("remainingSafetyTimeoutMilliseconds(command.name)")
     expect(profileEvidence).toContain("Node 22.22.2 and Node 24.15.0")
     expect(profileEvidence).toContain("retained historical evidence")
     expect(profileEvidence).toContain("Node 24.20.0 run")
@@ -88,8 +97,9 @@ describe("hosted formal-model contract", () => {
   })
 
   it("uses the hosted regression budget with a distinct safety stop", () => {
-    expect(quintPolicy).toContain("quintGateRegressionBudgetMilliseconds = 750 * second")
-    expect(quintPolicy).toContain("quintGateSafetyTimeoutMilliseconds = 960 * second")
+    expect(quintGateRegressionBudgetMilliseconds).toBe(750_000)
+    expect(quintGateSafetyTimeoutMilliseconds).toBe(720_000)
+    expect(() => assertQuintHostedDeadlineContract(ciWorkflow)).not.toThrow()
   })
 
   it(
@@ -109,6 +119,7 @@ describe("hosted formal-model contract", () => {
         await cp(join(repositoryRoot, "package.json"), join(directory, "package.json"))
         await cp(join(repositoryRoot, "pnpm-lock.yaml"), join(directory, "pnpm-lock.yaml"))
         await cp(join(repositoryRoot, "scripts"), join(directory, "scripts"), { recursive: true })
+        await cp(join(repositoryRoot, ".github"), join(directory, ".github"), { recursive: true })
         await cp(join(repositoryRoot, "specs"), join(directory, "specs"), { recursive: true })
         await symlink(join(repositoryRoot, "node_modules"), join(directory, "node_modules"), "dir")
 
