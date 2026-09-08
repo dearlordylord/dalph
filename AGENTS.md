@@ -60,8 +60,9 @@ questions. Reuse guidance already read unless it changed or scope changed.
   [CODE_REVIEW.md](docs/CODE_REVIEW.md). Passing the final gate remains required
   before handoff.
 - Run `pnpm check:quint` after final relevant changes and before integration.
-  During development, run it for model, conformance-adapter, or model-governed
-  behavior changes. It is separate from `check:all`. Uncollected tests,
+  During development, run `pnpm check:quint:changed`, which runs the gate for
+  specification, gate-script, and conformance-adapter changes and reports when
+  there are none. It is separate from `check:all`. Uncollected tests,
   undefined behavior, and unreachable actions can appear green: require a
   negative control.
 - Before declaring Playwright environment-blocked, try the documented

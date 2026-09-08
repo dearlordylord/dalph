@@ -42,9 +42,8 @@ if (nativeFiles.length > 0) {
 const { compatibilityFiles } = selectCompatibilityFiles({
   allFiles,
   compatibility,
-  explicit: changedOnly || explicitFiles.length > 0,
+  scoped: staged || changedOnly || explicitFiles.length > 0,
   selectedFiles,
-  staged,
   withoutCompatibility
 })
 const runCompatibility = (files, shouldFix) => {
