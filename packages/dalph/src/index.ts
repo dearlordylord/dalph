@@ -23,6 +23,7 @@ export {
   type ProductionRepositoryHostAdapters,
   type ProductionRepositoryHostGraph,
   productionRepositoryHostGraph,
+  withDecodedProductionRepositoryHost,
   withProductionRepositoryHost
 } from "./application/production-host.js"
 export {

@@ -278,8 +278,8 @@ export const isNonRetryableProductionActivationFailure = (failure: unknown): fai
  * Supported production composition for one exact Run. It acquires one scoped
  * owner, re-enters the ordinary `runWorkflow` boundary for each hint/timer,
  * initializes pause state from the Journal, and wires accepted Run controls
- * only after their Journal append succeeds. The repository's CLI remains a
- * dry-run host; this Layer is the production application entry seam.
+ * only after their Journal append succeeds. The explicit production CLI enters
+ * this Layer through its one host callback; it does not create another Run path.
  */
 export const productionRunReactivationLayer = <EInitial, RInitial>(
   target: TrackerTarget,

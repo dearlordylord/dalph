@@ -4,6 +4,9 @@ import { RunId } from "@dalph/contracts"
 import {
   ApplicationExitResult,
   AllocatedWorkflowRunId,
+  CoordinatorLockHeld,
+  CoordinatorLockUnavailable,
+  currentSignalFromCurrentFirstStream,
   currentSignalOf,
   deterministicOperationIdAllocatorLayer,
   fixtureReaderFileLayer,
@@ -11,30 +14,39 @@ import {
   GithubIssueTarget,
   GithubRepositoryName,
   GithubRepositoryOwner,
+  GitCommonDirectoryLocator,
+  GitCommonDirectoryTarget,
   JournalPosition,
   ProductionRunSelection,
+  ProductionRunSelectionConflict,
   RunTerminationDisposition,
+  StartupRecoveryBlocked,
   TraceAtCursor,
   TraceCursor,
+  TraceProjectionInvalid,
   TraceOutput,
   TrackerGraphReader,
   WorkflowTrace,
   traceControlDispositionFacetVersion,
   traceReaderSchemaVersion
 } from "@dalph/orchestrator"
-import { ConfigProvider, Console, Effect, FileSystem, Layer, Redacted, Ref, Schema } from "effect"
+import { ConfigProvider, Console, Effect, FileSystem, Layer, Option, Redacted, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import {
   decodeRunInvocation,
+  decodeProductionConfigurationLocator,
   encodeProductionCliRecord,
+  knownProductionCliFailure,
   loadProductionConfiguration,
   presentSelectedProductionRun,
+  ProductionConfigurationLocator,
   ProductionCliConfigurationError,
   ProductionCliRecord,
   ProductionCliUsageError
 } from "./production-cli.js"
 import { runProductionCli } from "./live-cli.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
+import { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 
 const runId = AllocatedWorkflowRunId.make(RunId.make("production-cli-run"))
 const target = GithubIssueTarget.make({
@@ -42,6 +54,7 @@ const target = GithubIssueTarget.make({
   owner: GithubRepositoryOwner.make("octo"),
   repository: GithubRepositoryName.make("dalph")
 })
+const configurationLocator = ProductionConfigurationLocator.make("/tmp/dalph-production.json")
 const cursor = TraceCursor.make({ runId, position: JournalPosition.make(1) })
 const snapshot = TraceAtCursor.make({
   cursor,
@@ -61,6 +74,11 @@ const snapshot = TraceAtCursor.make({
   },
   version: traceReaderSchemaVersion
 })
+
+const completedRunTermination = (terminatedAt = cursor) => {
+  const termination = { disposition: RunTerminationDisposition.make("Completed"), terminatedAt }
+  return { await: Effect.succeed(termination), poll: Effect.succeed(Option.some(termination)) }
+}
 
 const validProductionDocument = {
   activationInterval: "1 minute",
@@ -116,6 +134,19 @@ it.effect("keeps dry-run explicit and selects production only from --production"
   })
 )
 
+it.effect("brands only normalized absolute production configuration locators at the command boundary", () =>
+  Effect.gen(function* () {
+    const locator = yield* decodeProductionConfigurationLocator("/tmp/dalph-production.json")
+    expect(locator).toBe("/tmp/dalph-production.json")
+    expect(Schema.is(ProductionConfigurationLocator)(locator)).toBe(true)
+
+    for (const invalid of ["relative.json", "/tmp/../tmp/dalph-production.json"]) {
+      const failure = yield* decodeProductionConfigurationLocator(invalid).pipe(Effect.flip)
+      expect(failure).toBeInstanceOf(ProductionCliUsageError)
+    }
+  })
+)
+
 it.effect("the explicit dry mode keeps the controlled dry-run interpreter and never invokes the production host", () =>
   Effect.gen(function* () {
     const emitted = yield* Ref.make(0)
@@ -143,7 +174,7 @@ it.effect("the explicit dry mode keeps the controlled dry-run interpreter and ne
 it.effect("maps invalid production input to a stable redacted configuration code", () =>
   Effect.gen(function* () {
     const credential = "production-cli-secret-needle"
-    const failure = yield* loadProductionConfiguration("/tmp/dalph-production.json", target, () =>
+    const failure = yield* loadProductionConfiguration(configurationLocator, target, () =>
       Effect.succeed(`{"unsafe":"${credential}"`)
     ).pipe(
       Effect.provide(
@@ -204,10 +235,117 @@ it.effect("rejects a schema-invalid configuration before invoking the production
   })
 )
 
+it.effect("maps a startup ownership conflict to one stable redacted public code", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const failure = new CoordinatorLockHeld({
+      gitCommonDirectory: GitCommonDirectoryLocator.make("/srv/dalph/repository.git")
+    })
+    const application = runProductionCli(() => Effect.fail(failure))
+
+    const observed = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.flip
+    )
+
+    expect(observed).toBe(failure)
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
+      {
+        _tag: "Failure",
+        code: "startup.ownership_conflict",
+        detail: "another coordinator already owns the production repository",
+        subject: "production repository",
+        version: 1
+      }
+    ])
+  })
+)
+
+it("maps every typed startup boundary failure without retaining private diagnostic fields", () => {
+  const privateLocator = "/private/alice/repository.git"
+  const privateDetail = "EACCES for alice@example.test"
+  const failures = [
+    new CoordinatorLockUnavailable({
+      detail: privateDetail,
+      operation: "CoordinatorLock.acquire",
+      target: GitCommonDirectoryTarget.make(privateLocator)
+    }),
+    new StartupRecoveryBlocked({ issues: [] }),
+    new ProductionRunSelectionConflict({ conflicts: [{ runId, target }], requestedTarget: target })
+  ]
+
+  const records = failures.map(knownProductionCliFailure)
+  expect(records.map((failure) => failure?.code)).toEqual([
+    "startup.ownership_unavailable",
+    "startup.recovery_blocked",
+    "startup.run_selection_conflict"
+  ])
+  expect(JSON.stringify(records)).not.toContain(privateLocator)
+  expect(JSON.stringify(records)).not.toContain(privateDetail)
+})
+
+it.effect("maps a TraceAtCursor projection failure to one stable redacted public code", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const failure = new TraceProjectionInvalid({ detail: "private projection detail", runId })
+    const application = runProductionCli((_input, use) =>
+      use({
+        acceptedHistory: currentSignalOf(cursor),
+        runTermination: completedRunTermination(),
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.fail(failure) }
+      })
+    )
+
+    const observed = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.flip
+    )
+
+    expect(observed).toBe(failure)
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
+      { _tag: "RunSelected", runId, selection: "Allocated", version: 1 },
+      {
+        _tag: "Failure",
+        code: "status.projection_invalid",
+        detail: "the selected Run's historical projection is invalid",
+        subject: runId,
+        version: 1
+      }
+    ])
+  })
+)
+
 it.effect("combines only documented credential inputs with the non-secret production document", () =>
   Effect.gen(function* () {
-    const loaded = yield* loadProductionConfiguration("/tmp/dalph-production.json", target, () =>
-      Effect.succeed('{"repository":"/srv/dalph"}')
+    const loaded = yield* loadProductionConfiguration(configurationLocator, target, () =>
+      Effect.succeed(JSON.stringify(validProductionDocument))
     ).pipe(
       Effect.provide(
         ConfigProvider.layer(
@@ -216,7 +354,7 @@ it.effect("combines only documented credential inputs with the non-secret produc
       )
     )
 
-    expect(loaded).toMatchObject({ repository: "/srv/dalph", target: { _tag: "GithubIssue" } })
+    expect(loaded).toMatchObject({ repository: "/srv/dalph/repository.git", target: { _tag: "GithubIssue" } })
     expect(Redacted.value(loaded.githubToken)).toBe("github-secret")
     expect(Redacted.value(loaded.codexProviderCredential)).toBe("codex-secret")
   })
@@ -269,6 +407,7 @@ it.effect("cold public production command reports one allocated Run after its be
     yield* presentSelectedProductionRun(
       {
         acceptedHistory: currentSignalOf(cursor),
+        runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
         traceReader: { readAt: () => Effect.succeed(snapshot) }
       },
@@ -278,8 +417,29 @@ it.effect("cold public production command reports one allocated Run after its be
 
     expect(yield* Ref.get(hostEntries)).toBe(1)
     const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
-    expect(records.map(({ _tag }) => _tag)).toEqual(["RunSelected", "HistoricalSnapshot"])
+    expect(records.map(({ _tag }) => _tag)).toEqual(["RunSelected", "HistoricalSnapshot", "RunDisposition"])
     expect(records[0]).toEqual({ _tag: "RunSelected", runId, selection: "Allocated", version: 1 })
+  })
+)
+
+it.effect("normal Run termination closes an open history attachment after its final snapshot and returns", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalFromCurrentFirstStream(Stream.concat(Stream.make(cursor), Stream.never)),
+        runTermination: completedRunTermination(),
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) => Ref.update(lines, (current) => [...current, line])
+    )
+
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)._tag)).toEqual([
+      "RunSelected",
+      "HistoricalSnapshot",
+      "RunDisposition"
+    ])
   })
 )
 
@@ -289,6 +449,7 @@ it.effect("production presentation reports the host's exact recovered Run withou
     yield* presentSelectedProductionRun(
       {
         acceptedHistory: currentSignalOf(cursor),
+        runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Recovered.make({ runId }),
         traceReader: { readAt: () => Effect.succeed(snapshot) }
       },
@@ -368,6 +529,7 @@ it.effect("invokes one production host only after configuration and reports its 
         Effect.andThen(
           use({
             acceptedHistory: currentSignalOf(cursor),
+            runTermination: completedRunTermination(),
             selection: ProductionRunSelection.cases.Allocated.make({ runId }),
             traceReader: { readAt: () => Effect.succeed(snapshot) }
           })
@@ -390,10 +552,16 @@ it.effect("invokes one production host only after configuration and reports its 
       "host-acquired",
       "beginning-acknowledged",
       "output:RunSelected",
-      "output:HistoricalSnapshot"
+      "output:HistoricalSnapshot",
+      "output:RunDisposition"
     ])
     expect(yield* Ref.get(hostInputs)).toHaveLength(1)
-    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)._tag)).toEqual(["RunSelected", "HistoricalSnapshot"])
+    expect(Schema.is(ProductionRepositoryHostConfiguration)((yield* Ref.get(hostInputs))[0])).toBe(true)
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)._tag)).toEqual([
+      "RunSelected",
+      "HistoricalSnapshot",
+      "RunDisposition"
+    ])
   })
 )
 

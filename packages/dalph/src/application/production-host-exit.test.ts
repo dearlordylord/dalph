@@ -22,11 +22,13 @@ import {
   memoryJournalStoreLayer,
   makeProductionHostApplicationExitShell
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Ref, type Scope } from "effect"
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, type Scope } from "effect"
 import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { type ProductionRepositoryHostGraph, withProductionRepositoryHost } from "./production-host.js"
+
+const unterminatedRun = { await: Effect.never, poll: Effect.succeed(Option.none()) }
 
 const validRawConfiguration = () => ({
   target: { _tag: "GithubIssue", issueNumber: 297, owner: "dearlordylord", repository: "dalph" },
@@ -93,7 +95,8 @@ const makeHostGraph = (
                   TraceCursor.make({ position: JournalPosition.make(1), runId: selection.runId })
                 ),
                 awaitEstablished,
-                current: currentSignalOf({ _tag: "NotReady" as const })
+                current: currentSignalOf({ _tag: "NotReady" as const }),
+                runTermination: unterminatedRun
               })
             ),
             Context.add(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))

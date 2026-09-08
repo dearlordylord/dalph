@@ -4,19 +4,35 @@ import nodePath from "node:path"
 import { RunId } from "@dalph/contracts"
 import {
   ApplicationExitResult,
+  CoordinatorLockHeld,
+  CoordinatorLockUnavailable,
   type CurrentSignal,
   type GithubIssueTarget,
+  type JournaledRunTerminationSource,
   type ProductionRunSelection,
+  ProductionRunSelectionConflict,
   RunTerminationDisposition,
+  StartupRecoveryBlocked,
   TraceAtCursor,
+  TraceCausalPredecessorContradiction,
+  TraceCausalPredecessorMissing,
+  TraceCausalPredecessorNotProjected,
   type TraceCursor,
+  TraceCursorNotCommitted,
+  TraceJournalPrefixInvalid,
+  TraceProjectionInvalid,
+  TraceRunNotFound,
   type TraceReaderError,
   type TraceReaderService,
   type JournalStoreError,
   type TrackerTarget
 } from "@dalph/orchestrator"
-import { Config, Effect, type Redacted, Schema, Stream } from "effect"
+import { Config, Effect, Option, Redacted, Schema, Stream } from "effect"
 import { decodeCliTarget } from "./cli.js"
+import {
+  decodeProductionRepositoryHostConfiguration,
+  type ProductionRepositoryHostConfiguration
+} from "./production-configuration.js"
 
 export const productionCliWireVersion = 1 as const // eslint-disable-line no-magic-numbers
 
@@ -30,10 +46,43 @@ export class ProductionCliConfigurationError extends Schema.TaggedError<Producti
   { code: Schema.Literal("configuration.invalid"), detail: Schema.NonEmptyString, subject: Schema.NonEmptyString }
 ) {}
 
+export class ProductionCliStartupError extends Schema.TaggedError<ProductionCliStartupError>()(
+  "ProductionCliStartupError",
+  {
+    code: Schema.Literals([
+      "startup.ownership_conflict",
+      "startup.ownership_unavailable",
+      "startup.recovery_blocked",
+      "startup.run_selection_conflict"
+    ]),
+    detail: Schema.NonEmptyString,
+    subject: Schema.NonEmptyString
+  }
+) {}
+
+export class ProductionCliStatusError extends Schema.TaggedError<ProductionCliStatusError>()(
+  "ProductionCliStatusError",
+  { code: Schema.Literal("status.projection_invalid"), detail: Schema.NonEmptyString, subject: RunId }
+) {}
+
+/** Normalized absolute locator for Alice's non-secret production JSON document. */
+export const ProductionConfigurationLocator = Schema.NonEmptyString.check(
+  Schema.makeFilter((value) =>
+    nodePath.isAbsolute(value) && nodePath.normalize(value) === value
+      ? undefined
+      : "production configuration locator must be normalized and absolute"
+  )
+).pipe(Schema.brand("ProductionConfigurationLocator"))
+export type ProductionConfigurationLocator = typeof ProductionConfigurationLocator.Type
+
 /** Process-local command selection; this value is never persisted as Run state. */
 export type RunInvocation =
   | { readonly _tag: "DryRun"; readonly target: TrackerTarget }
-  | { readonly _tag: "Production"; readonly configuration: string; readonly target: GithubIssueTarget }
+  | {
+      readonly _tag: "Production"
+      readonly configuration: ProductionConfigurationLocator
+      readonly target: GithubIssueTarget
+    }
 
 export interface RawRunInvocation {
   readonly config: string | undefined
@@ -43,6 +92,13 @@ export interface RawRunInvocation {
 }
 
 const usageFailure = (detail: string) => new ProductionCliUsageError({ code: "usage.invalid", detail })
+
+export const decodeProductionConfigurationLocator = Effect.fn("ProductionCli.decodeConfigurationLocator")(
+  (input: string) =>
+    Schema.decodeUnknownEffect(ProductionConfigurationLocator)(input).pipe(
+      Effect.mapError(() => usageFailure("--config must name a normalized absolute JSON path"))
+    )
+)
 
 /**
  * Alice selects exactly one command interpreter before any production host can
@@ -64,20 +120,12 @@ export const decodeRunInvocation = Effect.fn("ProductionCli.decodeRunInvocation"
     return yield* usageFailure("--production requires github:OWNER/REPOSITORY#ISSUE")
   }
   if (input.config === undefined) return yield* usageFailure("--production requires --config <absolute-json-path>")
-  if (!nodePath.isAbsolute(input.config) || nodePath.normalize(input.config) !== input.config) {
-    return yield* usageFailure("--config must name a normalized absolute JSON path")
-  }
-  return { _tag: "Production", configuration: input.config, target } as const
+  const configuration = yield* decodeProductionConfigurationLocator(input.config)
+  return { _tag: "Production", configuration, target } as const
 })
 
 const UnknownConfigurationDocument = Schema.Record(Schema.String, Schema.Unknown)
 const parseUnknownJson = (source: string): unknown => JSON.parse(source)
-
-export interface LoadedProductionConfiguration extends Record<string, unknown> {
-  readonly codexProviderCredential: Redacted.Redacted<string>
-  readonly githubToken: Redacted.Redacted<string>
-  readonly target: GithubIssueTarget
-}
 
 const configurationFailure = (subject: string, detail: string) =>
   new ProductionCliConfigurationError({ code: "configuration.invalid", detail, subject })
@@ -87,10 +135,10 @@ const configurationFailure = (subject: string, detail: string) =>
  * credential environment values. Failures never retain rejected bytes.
  */
 export const loadProductionConfiguration = <ERead>(
-  locator: string,
+  locator: ProductionConfigurationLocator,
   target: GithubIssueTarget,
   readFile: (locator: string) => Effect.Effect<string, ERead>
-): Effect.Effect<LoadedProductionConfiguration, ProductionCliConfigurationError, never> =>
+): Effect.Effect<ProductionRepositoryHostConfiguration, ProductionCliConfigurationError, never> =>
   Effect.gen(function* () {
     const source = yield* readFile(locator).pipe(
       Effect.mapError(() => configurationFailure("production configuration file", "could not be read"))
@@ -113,7 +161,21 @@ export const loadProductionConfiguration = <ERead>(
         configurationFailure("DALPH_CODEX_PROVIDER_CREDENTIAL", "required credential is unavailable")
       )
     )
-    return { ...document, codexProviderCredential, githubToken, target }
+    return yield* decodeProductionRepositoryHostConfiguration({
+      ...document,
+      codexProviderCredential: Redacted.value(codexProviderCredential),
+      githubToken: Redacted.value(githubToken),
+      target
+    }).pipe(
+      Effect.mapError(
+        (failure) =>
+          new ProductionCliConfigurationError({
+            code: "configuration.invalid",
+            detail: failure.detail,
+            subject: failure.subject
+          })
+      )
+    )
   })
 
 /** Version-one public records keep selection, history, and dispositions distinct. */
@@ -130,7 +192,15 @@ export const ProductionCliRecord = Schema.TaggedUnion({
   },
   HistoricalSnapshot: { snapshot: PublicTraceAtCursor, version: Schema.Literal(productionCliWireVersion) },
   Failure: {
-    code: Schema.Literals(["configuration.invalid", "usage.invalid"]),
+    code: Schema.Literals([
+      "configuration.invalid",
+      "startup.ownership_conflict",
+      "startup.ownership_unavailable",
+      "startup.recovery_blocked",
+      "startup.run_selection_conflict",
+      "status.projection_invalid",
+      "usage.invalid"
+    ]),
     detail: Schema.NonEmptyString,
     subject: Schema.NonEmptyString,
     version: Schema.Literal(productionCliWireVersion)
@@ -154,6 +224,7 @@ export const encodeProductionCliRecord = (record: ProductionCliRecord): string =
 /** The exact read-only subset #298 consumes from one established production host. */
 export interface ProductionCliHostObservation {
   readonly acceptedHistory: CurrentSignal<TraceCursor>
+  readonly runTermination: JournaledRunTerminationSource
   readonly selection: ProductionRunSelection
   readonly traceReader: Pick<TraceReaderService, "readAt">
 }
@@ -182,12 +253,25 @@ export const presentSelectedProductionRun = <EOutput>(
     Effect.andThen(writeLine(encodeProductionCliRecord(selectedRecord(observation.selection)))),
     Effect.andThen(
       observation.acceptedHistory.changes.pipe(
+        Stream.takeUntilEffect((cursor) =>
+          observation.runTermination.poll.pipe(
+            Effect.map(
+              Option.exists(
+                ({ terminatedAt }) => terminatedAt.runId === cursor.runId && terminatedAt.position <= cursor.position
+              )
+            )
+          )
+        ),
         Stream.runForEach((cursor) =>
           observation.traceReader
             .readAt(cursor)
             .pipe(Effect.flatMap((snapshot) => writeLine(encodeProductionCliRecord(historicalRecord(snapshot)))))
         )
       )
+    ),
+    Effect.andThen(observation.runTermination.await),
+    Effect.flatMap(({ disposition }) =>
+      writeLine(encodeProductionCliRecord(runDispositionRecord(observation.selection.runId, disposition)))
     )
   )
 
@@ -203,12 +287,71 @@ export const applicationExitDispositionRecord = (
   ProductionCliRecord.cases.ApplicationExitDisposition.make({ disposition, runId, version: productionCliWireVersion })
 
 /** Safe public form of a known command/configuration failure. */
-export const productionCliFailureRecord = (
-  failure: ProductionCliConfigurationError | ProductionCliUsageError
-): ProductionCliRecord =>
+export const productionCliFailureRecord = (failure: ProductionCliKnownFailure): ProductionCliRecord =>
   ProductionCliRecord.cases.Failure.make({
     code: failure.code,
     detail: failure.detail,
-    subject: failure._tag === "ProductionCliConfigurationError" ? failure.subject : "dalph run",
+    subject: failure._tag === "ProductionCliUsageError" ? "dalph run" : failure.subject,
     version: productionCliWireVersion
   })
+
+export type ProductionCliKnownFailure =
+  | ProductionCliConfigurationError
+  | ProductionCliStartupError
+  | ProductionCliStatusError
+  | ProductionCliUsageError
+
+/** Maps only accepted typed failures; unexpected defects remain on the runtime failure channel. */
+export const knownProductionCliFailure = (failure: unknown): ProductionCliKnownFailure | undefined => {
+  if (failure instanceof ProductionCliConfigurationError || failure instanceof ProductionCliUsageError) return failure
+  if (failure instanceof CoordinatorLockHeld) {
+    return new ProductionCliStartupError({
+      code: "startup.ownership_conflict",
+      detail: "another coordinator already owns the production repository",
+      subject: "production repository"
+    })
+  }
+  if (failure instanceof CoordinatorLockUnavailable) {
+    return new ProductionCliStartupError({
+      code: "startup.ownership_unavailable",
+      detail: "coordinator ownership could not be acquired",
+      subject: "production repository"
+    })
+  }
+  if (failure instanceof StartupRecoveryBlocked) {
+    return new ProductionCliStartupError({
+      code: "startup.recovery_blocked",
+      detail: "the production Journal cannot be recovered safely",
+      subject: "production repository"
+    })
+  }
+  if (failure instanceof ProductionRunSelectionConflict) {
+    return new ProductionCliStartupError({
+      code: "startup.run_selection_conflict",
+      detail: "the production Journal does not identify one safe Run",
+      subject: "production repository"
+    })
+  }
+  if (
+    failure instanceof TraceCausalPredecessorContradiction ||
+    failure instanceof TraceCausalPredecessorMissing ||
+    failure instanceof TraceCausalPredecessorNotProjected ||
+    failure instanceof TraceJournalPrefixInvalid ||
+    failure instanceof TraceProjectionInvalid ||
+    failure instanceof TraceRunNotFound
+  ) {
+    return new ProductionCliStatusError({
+      code: "status.projection_invalid",
+      detail: "the selected Run's historical projection is invalid",
+      subject: failure.runId
+    })
+  }
+  if (failure instanceof TraceCursorNotCommitted) {
+    return new ProductionCliStatusError({
+      code: "status.projection_invalid",
+      detail: "the selected Run's historical projection is invalid",
+      subject: failure.cursor.runId
+    })
+  }
+  return undefined
+}

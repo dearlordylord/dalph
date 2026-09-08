@@ -20,6 +20,7 @@ import {
   InitialControlPolicy,
   Integrator,
   IntegratorCandidateProviderAuthority,
+  type JournaledRunTerminationSource,
   JournaledRunObservationSource,
   JournalStore,
   RunLifecycleJournal,
@@ -70,6 +71,8 @@ import {
 export interface ProductionHostObservation {
   readonly acceptedHistory: CurrentSignal<TraceCursor>
   readonly current: CurrentSignal<DeliveryRuntimeObservationState>
+  /** Exact terminal Journal result, independent from history and current status. */
+  readonly runTermination: JournaledRunTerminationSource
   readonly selection: ProductionRunSelection
   /** Read-only projection of an acknowledged cursor; it cannot append or poll an outside authority. */
   readonly traceReader: Pick<TraceReaderService, "readAt">
@@ -513,14 +516,13 @@ export const productionRepositoryHostGraph = <ECodex = never, EGithub = never, E
  * before live acquisition; the callback receives a scoped observation only
  * after the selected Run's durable beginning has been acknowledged.
  */
-export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFoundation, ERun, RRun, EActivation>(
-  input: unknown,
+export const withDecodedProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFoundation, ERun, RRun, EActivation>(
+  configuration: ProductionRepositoryHostConfiguration,
   graph: ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, RRun, EActivation>,
   use: (observation: ProductionHostObservation) => Effect.Effect<A, EUse, RUse>
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
-      const configuration = yield* decodeProductionRepositoryHostConfiguration(input)
       const foundation = yield* Layer.build(graph.foundation(configuration))
       const selection = yield* selectProductionRun(configuration.target).pipe(Effect.provide(foundation))
       const traceReaderContext = yield* Layer.build(TraceReaderLayer).pipe(Effect.provide(foundation))
@@ -540,6 +542,7 @@ export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFounda
       const observation = {
         acceptedHistory: source.acceptedHistory,
         current: source.current,
+        runTermination: source.runTermination,
         selection,
         traceReader,
         applicationExitRequestBoundary: applicationExit.requestBoundary
@@ -552,4 +555,14 @@ export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFounda
       // Exit, or a host retry.
       return yield* Effect.raceFirst(use(observation), Deferred.await(activationFailure))
     })
+  )
+
+/** Raw callers cross the #259 schema authority exactly once before live acquisition. */
+export const withProductionRepositoryHost = <A, EUse, RUse, EFoundation, RFoundation, ERun, RRun, EActivation>(
+  input: unknown,
+  graph: ProductionRepositoryHostGraph<EFoundation, RFoundation, ERun, RRun, EActivation>,
+  use: (observation: ProductionHostObservation) => Effect.Effect<A, EUse, RUse>
+) =>
+  decodeProductionRepositoryHostConfiguration(input).pipe(
+    Effect.flatMap((configuration) => withDecodedProductionRepositoryHost(configuration, graph, use))
   )

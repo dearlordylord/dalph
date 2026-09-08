@@ -6,44 +6,36 @@ import {
   type TraceReaderError,
   TraceOutput
 } from "@dalph/orchestrator"
-import { Effect, FileSystem, Layer, Option, Redacted } from "effect"
+import { Effect, FileSystem, Layer, Option } from "effect"
 import { Argument, Command, Flag } from "effect/unstable/cli"
 import { executeDryRun } from "./cli.js"
 import {
   decodeRunInvocation,
   loadProductionConfiguration,
+  knownProductionCliFailure,
   presentSelectedProductionRun,
   encodeProductionCliRecord,
   productionCliFailureRecord,
-  type LoadedProductionConfiguration,
-  ProductionCliConfigurationError,
-  type ProductionCliHostObservation,
-  ProductionCliUsageError
+  type ProductionCliHostObservation
 } from "./production-cli.js"
 import { dryRunOperationIdAllocatorLayer } from "./composition.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
 import {
   productionRepositoryHostGraph,
-  withProductionRepositoryHost,
+  withDecodedProductionRepositoryHost,
   type ProductionHostObservation
 } from "./production-host.js"
-import { decodeProductionRepositoryHostConfiguration } from "./production-configuration.js"
+import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { traceOutputStdioLayer } from "../presentation/stdio-trace-output.js"
 import { workflowTraceOutputLayer } from "../presentation/workflow-trace.js"
 
 /** Host callback consumed by the public command after all CLI/configuration validation. */
 export type ProductionCliHostRunner<E, R> = (
-  input: unknown,
+  input: ProductionRepositoryHostConfiguration,
   use: (
     observation: ProductionCliHostObservation
   ) => Effect.Effect<void, TraceOutputError | TraceReaderError | JournalStoreError>
 ) => Effect.Effect<void, E | TraceOutputError | TraceReaderError | JournalStoreError, R>
-
-const productionConfigurationInput = (loaded: LoadedProductionConfiguration) => ({
-  ...loaded,
-  codexProviderCredential: Redacted.value(loaded.codexProviderCredential),
-  githubToken: Redacted.value(loaded.githubToken)
-})
 
 const runConfiguration = { version: "0.0.0" }
 
@@ -85,26 +77,14 @@ export const makeProductionCli = <EHost, RHost>(runProductionHost: ProductionCli
           const loaded = yield* loadProductionConfiguration(invocation.configuration, invocation.target, (locator) =>
             fileSystem.readFileString(locator)
           )
-          const hostInput = productionConfigurationInput(loaded)
-          yield* decodeProductionRepositoryHostConfiguration(hostInput).pipe(
-            Effect.mapError(
-              (failure) =>
-                new ProductionCliConfigurationError({
-                  code: "configuration.invalid",
-                  detail: failure.detail,
-                  subject: failure.subject
-                })
-            )
-          )
-          yield* runProductionHost(hostInput, (observation) =>
-            presentSelectedProductionRun(observation, output.writeLine)
-          )
+          yield* runProductionHost(loaded, (observation) => presentSelectedProductionRun(observation, output.writeLine))
         }).pipe(
-          Effect.tapError((failure) =>
-            failure instanceof ProductionCliUsageError || failure instanceof ProductionCliConfigurationError
-              ? output.writeLine(encodeProductionCliRecord(productionCliFailureRecord(failure))).pipe(Effect.ignore)
-              : Effect.void
-          )
+          Effect.tapError((failure) => {
+            const known = knownProductionCliFailure(failure)
+            return known === undefined
+              ? Effect.void
+              : output.writeLine(encodeProductionCliRecord(productionCliFailureRecord(known))).pipe(Effect.ignore)
+          })
         )
       })
   ).pipe(
@@ -125,13 +105,15 @@ export const productionCliFromStdio = <EHost, RHost>(runProductionHost: Producti
 export const makeConfiguredProductionCliApplication = productionCliFromStdio
 
 const productionHostRunner = (
-  input: unknown,
+  input: ProductionRepositoryHostConfiguration,
   use: (
     observation: ProductionCliHostObservation
   ) => Effect.Effect<void, TraceOutputError | TraceReaderError | JournalStoreError>
 ) =>
-  withProductionRepositoryHost(input, productionRepositoryHostGraph(), (observation: ProductionHostObservation) =>
-    use(observation)
+  withDecodedProductionRepositoryHost(
+    input,
+    productionRepositoryHostGraph(),
+    (observation: ProductionHostObservation) => use(observation)
   )
 
 /** Shipped binary composition: both modes share one command and differ only by installed interpreter boundaries. */
@@ -146,5 +128,3 @@ export const productionCliApplication = productionCliFromStdio(productionHostRun
     ).pipe(Layer.provideMerge(NodeServices.layer))
   )
 )
-
-export type ProductionCliKnownFailure = ProductionCliConfigurationError | ProductionCliUsageError

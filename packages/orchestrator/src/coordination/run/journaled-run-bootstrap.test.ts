@@ -137,7 +137,7 @@ import { makeRunFinalityEvidence, runTerminationDispositionOf } from "../frontie
 import { AllocatedWorkflowRunId, freshWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import { JournaledRunBootstrap, type AcceptedRunReactivationObservers } from "./run.js"
-import { journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
+import { JournaledRunObservationSource, journaledRunBootstrapLayer } from "./journaled-run-bootstrap.js"
 import {
   PassivePlannedAttemptObserver,
   PassivePlannedAttemptProjectionPublication,
@@ -463,8 +463,14 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
     sharedApplicationExit,
     maintenanceObservation
   ).pipe(Layer.provide(dependencies))
-  const bootstrap = Context.get(yield* Layer.build(application), JournaledRunBootstrap)
-  return { ...bootstrap, applicationExitRequestBoundary: sharedApplicationExit.requestBoundary }
+  const context = yield* Layer.build(application)
+  const bootstrap = Context.get(context, JournaledRunBootstrap)
+  const observation = Context.get(context, JournaledRunObservationSource)
+  return {
+    ...bootstrap,
+    applicationExitRequestBoundary: sharedApplicationExit.requestBoundary,
+    runTermination: observation.runTermination
+  }
 })
 
 const captureTestSpecification = (taskId: TaskId) =>
@@ -1030,6 +1036,11 @@ it.effect("returns the existing terminal result when cancellation loses the Run-
       const storage = Context.get(journalContext, JournalStore)
       const bootstrap = yield* buildBootstrap(runId, storage)
       yield* bootstrap.activate(target, Effect.succeed(initialPolicy), runId, completedFinalityProof(runId, target))
+
+      expect(yield* bootstrap.runTermination.await).toEqual({
+        disposition: "Completed",
+        terminatedAt: { position: 4, runId }
+      })
 
       expect(yield* bootstrap.operatorControl.applyRunCancellation({ runId })).toMatchObject({
         _tag: "RunCancellationRunTerminated",

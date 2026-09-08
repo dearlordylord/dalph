@@ -664,8 +664,10 @@ export {
 export { runControlledWorkflow } from "./coordination/run/controlled-workflow.js"
 export {
   JournaledRunEstablished,
+  JournaledRunTermination,
   JournaledRunObservationSource,
   type JournaledRunObservationSourceService,
+  type JournaledRunTerminationSource,
   journaledRunBootstrapLayer,
   type JournaledRuntimeLayerInput
 } from "./coordination/run/journaled-run-bootstrap.js"
