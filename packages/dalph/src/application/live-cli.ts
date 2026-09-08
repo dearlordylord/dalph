@@ -20,11 +20,7 @@ import {
 } from "./production-cli.js"
 import { dryRunOperationIdAllocatorLayer } from "./composition.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
-import {
-  productionRepositoryHostGraph,
-  withDecodedProductionRepositoryHost,
-  type ProductionHostObservation
-} from "./production-host.js"
+import { productionRepositoryHostGraph, withDecodedProductionRepositoryHost } from "./production-host.js"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { traceOutputStdioLayer } from "../presentation/stdio-trace-output.js"
 import { workflowTraceOutputLayer } from "../presentation/workflow-trace.js"
@@ -106,12 +102,7 @@ const productionHostRunner = (
   use: (
     observation: ProductionCliHostObservation
   ) => Effect.Effect<void, TraceOutputError | TraceReaderError | JournalStoreError>
-) =>
-  withDecodedProductionRepositoryHost(
-    input,
-    productionRepositoryHostGraph(),
-    (observation: ProductionHostObservation) => use(observation)
-  )
+) => withDecodedProductionRepositoryHost(input, productionRepositoryHostGraph(), use)
 
 /** Shipped binary composition: both modes share one command and differ only by installed interpreter boundaries. */
 export const productionCliApplication = productionCliFromStdio(productionHostRunner).pipe(
