@@ -1,6 +1,8 @@
 import { performance } from "node:perf_hooks"
 
 export const quintCommandKinds = Object.freeze(["typecheck", "test", "sampled-run", "verify"])
+const terminalResults = new Set(["failed", "cancelled", "timed-out", "interrupted", "launch-failed", "invalid"])
+const isExactCommandResult = (result) => terminalResults.has(result) || /^exit:\d+$/.test(result)
 
 const isQuintCommandKind = (kind) => quintCommandKinds.includes(kind)
 
@@ -14,8 +16,11 @@ export const quintCommandKindForArgs = (args) => {
 export const formatQuintGateTimingReport = (timing) => {
   const lines = []
   for (const record of timing.records()) {
+    if (!isExactCommandResult(record.result)) {
+      throw new Error(`Unknown Quint command result for ${record.name}: ${String(record.result)}`)
+    }
     lines.push(
-      `Quint command timing: ${record.kind} ${record.name} ${(record.durationMilliseconds / 1000).toFixed(2)}s`
+      `Quint command timing: ${record.kind} ${record.name} ${(record.durationMilliseconds / 1000).toFixed(2)}s result=${record.result}`
     )
   }
   for (const kind of quintCommandKinds) {
@@ -40,17 +45,35 @@ export const createQuintGateTiming = ({ now = () => performance.now() } = {}) =>
   const measure = async ({ kind, name, order, run }) => {
     if (!isQuintCommandKind(kind)) throw new Error(`Unknown Quint command kind: ${kind}`)
     const startedAt = now()
+    let result = "failed"
     try {
-      return await run()
+      const value = await run()
+      if (!Number.isInteger(value?.exitCode) || value.exitCode < 0) {
+        result = "invalid"
+        throw new Error(`${name} returned no exact exit code`)
+      }
+      result = `exit:${value.exitCode}`
+      return value
+    } catch (error) {
+      if (error?.quintCommandResult !== undefined) {
+        if (!isExactCommandResult(error.quintCommandResult) || error.quintCommandResult === "invalid") {
+          result = "invalid"
+          throw new Error(`${name} produced unknown command result: ${String(error.quintCommandResult)}`, {
+            cause: error
+          })
+        }
+        result = error.quintCommandResult
+      }
+      throw error
     } finally {
-      records.push({ kind, name, durationMilliseconds: now() - startedAt, order: order ?? records.length })
+      records.push({ kind, name, durationMilliseconds: now() - startedAt, order: order ?? records.length, result })
     }
   }
 
   const copyRecords = () =>
     [...records]
       .sort((left, right) => left.order - right.order)
-      .map(({ durationMilliseconds, kind, name }) => ({ kind, name, durationMilliseconds }))
+      .map(({ durationMilliseconds, kind, name, result }) => ({ kind, name, durationMilliseconds, result }))
 
   const aggregates = () =>
     Object.fromEntries(

@@ -6,6 +6,8 @@ const defaultTerminationGraceMilliseconds = 5000
 const defaultProcessGroupAbsenceTimeoutMilliseconds = 2000
 const processGroupObservationIntervalMilliseconds = 25
 
+const commandError = (message, quintCommandResult) => Object.assign(new Error(message), { quintCommandResult })
+
 const terminate = (child, signal) => {
   if (child.pid === undefined) return
 
@@ -50,7 +52,7 @@ export const runBoundedCommand = ({
 }) =>
   new Promise((resolve, reject) => {
     if (signal?.aborted) {
-      reject(new Error(`${name} cancelled`))
+      reject(commandError(`${name} cancelled`, "cancelled"))
       return
     }
 
@@ -127,9 +129,10 @@ export const runBoundedCommand = ({
       if (finishTerminatedGroupIfAbsent() || settled) return
       if (performance.now() >= termination.absenceDeadline) {
         settleTermination(
-          new Error(
+          commandError(
             `${name} sent SIGKILL but could not prove process group ${String(child.pid)} absent within ` +
-              `${processGroupAbsenceTimeoutMilliseconds}ms`
+              `${processGroupAbsenceTimeoutMilliseconds}ms`,
+            "failed"
           )
         )
         return
@@ -167,7 +170,7 @@ export const runBoundedCommand = ({
       escalationTimer = setTimeout(forceTermination, grace)
     }
 
-    const cancel = () => beginTermination({ error: new Error(`${name} cancelled`) })
+    const cancel = () => beginTermination({ error: commandError(`${name} cancelled`, "cancelled") })
 
     const observeOutput = (output, destination, lineCounter) => {
       if (captureOutput) outputChunks.push(output)
@@ -187,7 +190,10 @@ export const runBoundedCommand = ({
     })
 
     const timer = setTimeout(
-      () => beginTermination({ error: new Error(`${name} exceeded ${timeoutMilliseconds / 1000} seconds`) }),
+      () =>
+        beginTermination({
+          error: commandError(`${name} exceeded ${timeoutMilliseconds / 1000} seconds`, "timed-out")
+        }),
       timeoutMilliseconds
     )
 
@@ -197,14 +203,20 @@ export const runBoundedCommand = ({
     if (relayParentSignals) {
       for (const parentSignal of parentSignals) {
         const listener = () =>
-          beginTermination({ error: new Error(`${name} interrupted by ${parentSignal}`), relayedSignal: parentSignal })
+          beginTermination({
+            error: commandError(`${name} interrupted by ${parentSignal}`, "interrupted"),
+            relayedSignal: parentSignal
+          })
         signalListeners.set(parentSignal, listener)
         process.on(parentSignal, listener)
       }
     }
 
     child.once("error", (error) => {
-      if (termination === undefined) settle(reject, attachCapturedOutput(error))
+      if (termination === undefined) {
+        const launchFailure = commandError(`${name} could not start: ${error.message}`, "launch-failed")
+        settle(reject, attachCapturedOutput(launchFailure))
+      }
     })
     child.once("close", (code, childSignal) => {
       closed = true
@@ -213,7 +225,15 @@ export const runBoundedCommand = ({
         return
       }
       if (!acceptedExitCodes.includes(code)) {
-        settle(reject, attachCapturedOutput(new Error(`${name} failed with ${childSignal ?? `exit ${code}`}`)))
+        settle(
+          reject,
+          attachCapturedOutput(
+            commandError(
+              `${name} failed with ${childSignal ?? `exit ${code}`}`,
+              Number.isInteger(code) && code >= 0 ? `exit:${code}` : "failed"
+            )
+          )
+        )
       } else {
         settle(
           resolve,
@@ -223,7 +243,7 @@ export const runBoundedCommand = ({
                 output: Buffer.concat(outputChunks).toString("utf8"),
                 outputLineCount: outputLineCount()
               }
-            : { outputLineCount: outputLineCount() }
+            : { exitCode: code, outputLineCount: outputLineCount() }
         )
       }
     })

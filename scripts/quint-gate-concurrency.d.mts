@@ -7,6 +7,7 @@ export type QuintGateBatchEntry<A> = QuintGateBatchOutcome<A> | undefined
 export interface QuintGateFamilyRunArguments<Command, Result> {
   readonly commands: ReadonlyArray<Command>
   readonly concurrency?: number
+  readonly serializedPrefix?: number
   readonly run: (command: Command, signal: AbortSignal) => Promise<Result> | Result
 }
 

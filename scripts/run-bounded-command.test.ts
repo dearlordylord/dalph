@@ -31,7 +31,7 @@ test("counts complete and unterminated stdout and stderr lines", async () => {
     timeoutMilliseconds: 2000
   })
 
-  expect(result).toEqual({ outputLineCount: 3 })
+  expect(result).toEqual({ exitCode: 0, outputLineCount: 3 })
 })
 
 test("captures output and an accepted nonzero exit for verdict inspection", async () => {
@@ -61,7 +61,8 @@ test("attaches captured output when a command exits outside the accepted set", a
   ).rejects.toMatchObject({
     message: "captured failed verdict fixture failed with exit 7",
     output: "failed verdict",
-    outputLineCount: 1
+    outputLineCount: 1,
+    quintCommandResult: "exit:7"
   })
 })
 
@@ -82,7 +83,8 @@ test("attaches captured output and line counts when a command times out", async 
   ).rejects.toMatchObject({
     message: "captured timeout fixture exceeded 0.5 seconds",
     output: "timed output\ntimed detail",
-    outputLineCount: 2
+    outputLineCount: 2,
+    quintCommandResult: "timed-out"
   })
 })
 
@@ -113,7 +115,10 @@ test("cancels a running child through its process group", async () => {
   })
 
   setTimeout(() => controller.abort(), 50)
-  await expect(command).rejects.toThrow("cancelled command fixture cancelled")
+  await expect(command).rejects.toMatchObject({
+    message: "cancelled command fixture cancelled",
+    quintCommandResult: "cancelled"
+  })
 })
 
 test.skipIf(process.platform === "win32")(
@@ -184,7 +189,7 @@ test("rejects an already-aborted signal without starting a child", async () => {
       signal: controller.signal,
       timeoutMilliseconds: 2000
     })
-  ).rejects.toThrow("pre-cancelled command fixture cancelled")
+  ).rejects.toMatchObject({ message: "pre-cancelled command fixture cancelled", quintCommandResult: "cancelled" })
 })
 
 test("runs a bounded child in the requested working directory", async () => {
@@ -260,7 +265,7 @@ test.skipIf(process.platform === "win32")(
       timeoutMilliseconds: 2000
     })
 
-    expect(result).toEqual({ outputLineCount: 1 })
+    expect(result).toEqual({ exitCode: 0, outputLineCount: 1 })
     expect(process.listenerCount("SIGTERM")).toBe(signalCounts.get("SIGTERM"))
     expect(process.listenerCount("SIGINT")).toBe(signalCounts.get("SIGINT"))
   }

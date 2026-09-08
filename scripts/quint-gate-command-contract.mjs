@@ -1,4 +1,14 @@
+import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
+
 export const quintGateExpectedCommandCounts = Object.freeze({
+  total: 105,
+  typecheck: 15,
+  test: 46,
+  "sampled-run": 23,
+  verify: 21
+})
+
+export const legacyQuintGateExpectedCommandCounts = Object.freeze({
   total: 92,
   typecheck: 13,
   test: 40,
@@ -6,7 +16,25 @@ export const quintGateExpectedCommandCounts = Object.freeze({
   verify: 19
 })
 
+// Both supported hosted runner architectures expose four logical processors.
+// Quint partitions a seeded simulation across this value, so leaving it to
+// os.cpus() changes the sampled traces while retaining the same seed.
+export const quintGateSampleThreadCount = 4
+
 const commandKinds = Object.freeze(["typecheck", "test", "sampled-run", "verify"])
+const commandKey = ({ kind, name }) => `${kind}\u0000${name}`
+
+/** Compare the retained pre-#315 commands with the independently accepted order. */
+export const assertAcceptedLegacyQuintGateCommands = (manifest) => {
+  const retained = manifest.filter(({ name }) => !name.startsWith("fresh-task admission")).map(commandKey)
+  const mismatch = retained.findIndex((key, index) => key !== acceptedLegacyQuintGateCommandKeys[index])
+  if (retained.length === acceptedLegacyQuintGateCommandKeys.length && mismatch < 0) return
+
+  const index = mismatch < 0 ? Math.min(retained.length, acceptedLegacyQuintGateCommandKeys.length) : mismatch
+  throw new Error(
+    `accepted legacy Quint command mismatch at ${index}: expected ${String(acceptedLegacyQuintGateCommandKeys[index])}, received ${String(retained[index])}`
+  )
+}
 
 const countManifestCommands = (manifest) => {
   const counts = Object.fromEntries(commandKinds.map((kind) => [kind, 0]))
@@ -18,10 +46,11 @@ const countManifestCommands = (manifest) => {
 
 /**
  * Keep the selected command count independent from the manifest and the
- * execution path. Both representations must retain the accepted 92-command
- * phase contract even when an omission changes them together.
+ * execution path. Both representations must retain the freshness-corrected
+ * 105-command phase contract even when an omission changes them together.
  */
 export const assertQuintGateCommandContract = ({ executed, manifest }) => {
+  assertAcceptedLegacyQuintGateCommands(manifest)
   const manifestCounts = countManifestCommands(manifest)
   const mismatches = []
   for (const key of ["total", ...commandKinds]) {
@@ -34,4 +63,21 @@ export const assertQuintGateCommandContract = ({ executed, manifest }) => {
     }
   }
   if (mismatches.length > 0) throw new Error(`Quint gate command contract mismatch: ${mismatches.join(", ")}`)
+}
+
+/** Require one explicit hosted-supported thread count on every sampled run. */
+export const assertQuintGateSampleThreadContract = (args) => {
+  const threadPositions = args.flatMap((arg, position) => (arg === "--n-threads" ? [position] : []))
+  if (threadPositions.length === 1 && args[threadPositions[0] + 1] === String(quintGateSampleThreadCount)) return
+
+  throw new Error(
+    `Quint sampled-run thread contract mismatch: expected exactly --n-threads ${quintGateSampleThreadCount}`
+  )
+}
+
+/** Materialize the sampled-run execution contract without changing command identity. */
+export const withQuintGateSampleThreadContract = (args) => {
+  const executionArgs = [...args, "--n-threads", String(quintGateSampleThreadCount)]
+  assertQuintGateSampleThreadContract(executionArgs)
+  return executionArgs
 }

@@ -9,10 +9,75 @@ retained stressed 36.26s prefix before mutation detection by 23.74s. Its 90s
 Vitest budget leaves a further 30s for child termination, temporary-copy
 cleanup, and runner overhead.
 
-## What was measured
+## Current qualification target
 
-The profile repeated the formal job's repository-local sequence on the same
-Linux arm64 machine:
+The supported runtime is the exact package-engine range `^24.20.0`. The hosted
+formal job derives its matrix from that range, so current qualification is on
+Node 24.20 and does not reintroduce Node 22. The Node 22.22.2 and Node 24.15.0
+profiles below are retained historical evidence from before the runtime and
+formal-command inventory advanced; they are not the current support matrix.
+
+The freshness-correct gate selects 105 commands: 15 typechecks, 46 tests, 23
+sampled runs, and 21 verifies. It retains all 92 legacy identities as an exact
+ordered subset and adds all 13 fresh-task admission identities. A local
+Node 24.20.0 run of that current inventory completed in 501.72 seconds against
+the unchanged 750-second regression budget; its phase totals were 26.28,
+209.08, 240.31, and 198.01 seconds respectively. This is local runner evidence,
+not hosted timing evidence. That run used a locally cached evaluator artifact;
+the artifact distinction is recorded below and it is not hosted-equivalent.
+
+## Exact-SHA hosted qualification and repair
+
+The first exact-SHA qualification of candidate
+`e5a80d6df98657d3ac0b201197ec721410244f7a` ran the supported Node 24.20.0
+runtime twice:
+
+- the dedicated [formal run 34268627362](https://github.com/dearlordylord/dalph/actions/runs/34268627362),
+  [job 102204286386](https://github.com/dearlordylord/dalph/actions/runs/34268627362/job/102204286386),
+  used Ubuntu 24.04 arm64 with four Neoverse-N2 processors. It stopped after
+  95 of 105 commands with phase accounting 13/42/21/19 and phase timings
+  26.00/162.45/259.98/195.30 seconds; setup through the formal command took
+  18.78 seconds and the formal command took 509.61 seconds;
+- the stressed [CI run 34268629739](https://github.com/dearlordylord/dalph/actions/runs/34268629739),
+  [formal job 102204339477](https://github.com/dearlordylord/dalph/actions/runs/34268629739/job/102204339477),
+  used Ubuntu x64. It stopped at the same command and accounting with phase
+  timings 29.51/195.38/297.98/218.89 seconds; setup took 18.87 seconds and the
+  formal command took 568.96 seconds. The concurrent
+  [quality job 102204339625](https://github.com/dearlordylord/dalph/actions/runs/34268629739/job/102204339625)
+  passed, including its controlled broken-obligation negative control.
+
+Both formal jobs failed closed on the accepted-result sampled model because
+`promotionExhaustedReached`, `successorSessionFixedReached`,
+`successorInFlightReached`, and `successorResponseLostReached` each reported
+zero of 10,000 traces. The temporal-mutant negative control also behaved as
+expected. No retry was dispatched. The exact-SHA candidate therefore remains
+unqualified even though both formal jobs stayed inside the 16-minute bound.
+
+Quint 0.32.0 otherwise defaults `--n-threads` to `os.cpus().length`, which
+changes how one seed is partitioned. Both supported hosted architectures in
+these runs exposed four processors. The repaired gate therefore passes
+`--n-threads 4` to every one of its 23 sampled commands and rejects an omitted,
+changed, or duplicate thread option. It does not change the 35-step or
+10,000-sample accepted-result bounds. Sampling-only guided action groups retain
+the existing atomic protocol actions while giving the three-attempt exhaustion
+and full-rerun successor chronologies reproducible coverage. Two local runs at
+seed 270 and four threads produced the same counts: 3 exhaustion traces and
+1692/1690/1686 successor-session/in-flight/response-lost traces.
+
+The gate now emits the installed Quint package version, evaluator release tag,
+platform, architecture, byte length, SHA-256, and path after the evaluator's
+installation-critical first family completes. The package version and evaluator
+tag are derived from the installed Quint package rather than copied into this
+repository. A local profile can be called hosted-equivalent only when its
+platform, architecture, and exact evaluator SHA-256 match the hosted record;
+the release tag alone is insufficient because its downloadable artifact has
+changed in place. The older local arm64 cache used above is 2,568,376 bytes with
+SHA-256 `8f3eb7e2b0fc4b9ceaf62c27b507a022e4f8e9e83f44449cd05385a9cb79cf26`.
+
+## Historical measurements
+
+The historical profile repeated the formal job's repository-local sequence on
+the same Linux arm64 machine:
 
 ```text
 mise exec node@<supported-version> -- pnpm install --frozen-lockfile
@@ -27,10 +92,14 @@ ordinary selected commands exited 0; the one expected temporal-mutant verify
 exited 1 and was accepted and checked by the gate, whose outer command exited
 0.
 
-The emitted command rows and reported phase totals are retained in
+The emitted command rows and reported phase totals are retained immutably in
 [`quint-hosted-equivalent-profile.raw.json`](./quint-hosted-equivalent-profile.raw.json).
-That artifact was generated from the five retained run logs with this command
-(the profile arguments are `id|node|repeat|install-seconds|log-path`):
+That artifact was generated from the five retained run logs by the then-current
+92-command generator. The current generator intentionally validates the
+freshness-correct 105-command inventory and therefore rejects those old logs;
+the command below records the historical inputs rather than promising current
+regeneration (the profile arguments are
+`id|node|repeat|install-seconds|log-path`):
 
 ```text
 node scripts/generate-quint-profile-evidence.mjs --output research/quint-hosted-equivalent-profile.raw.json \
@@ -48,12 +117,9 @@ portable files; the checked-in JSON is the retained measurement artifact.
 The machine is Linux arm64 rather than GitHub's hosted Ubuntu runner. Cold
 hosted action setup, cache-hit/miss behavior, and checkout/network timing were
 not measured and cannot be observed until the workflow is pushed, so this
-record does not present local timings as hosted timings. The workflow reserves
-300 seconds for checkout, action setup, cache and network variance, and other
-hosted startup work; that allowance is reserved, not measured, and is added to
-the measured install and the gate's 600-second internal deadline.
+record does not present local timings as hosted timings.
 
-## Repeated profiles
+## Historical repeated profiles
 
 All durations are wall-clock seconds. Phase values come from the gate's own
 per-command timing report; the total includes pnpm and process startup around
@@ -143,24 +209,34 @@ violation before continuing. A deliberately broken selected model in the
 negative-control test instead makes the outer `check:ci:formal` command exit
 nonzero.
 
-## Bound selected from the evidence
+## Current bound
 
-`check:quint` retains a 600-second decreasing internal deadline. The hosted
-formal job uses a 16-minute (`960` second) GitHub job timeout:
+The previous 960-second inner deadline started after checkout and installation,
+so it could not protect reporting before the hosted job's own 960-second cutoff.
+The repaired policy retains the 750-second regression threshold and 16-minute
+outer job limit, but stops command execution after one decreasing 720-second
+deadline. This stricter execution stop also leaves room for child termination:
 
 ```text
-600.000s internal gate budget
-  + 1.535s slowest measured frozen install
-  + 300.000s explicit hosted checkout/setup/network allowance
-  + 58.465s final reporting margin
-= 960.000s job timeout
+720.000s absolute command-execution deadline
+  +   5.000s child SIGTERM-to-SIGKILL grace
+  +   2.000s process-group absence confirmation
+  + 210.000s hosted checkout/setup/network/final-reporting allowance
+= 937.000s < 960.000s job timeout (23.000s additional slack)
 ```
 
-This bound cannot expire before the complete inner budget plus the measured
-install and the stated hosted-startup allowance. The 600-second bound remains
-well above the repeated local maximum; a later hosted run that exceeds it
-must fail with the gate's accumulated command and phase timings rather than
-silently omit formal checking.
+The allowance is reserved, not measured. It bounds the setup/reporting time
+assumed by this relationship; it does not claim that GitHub setup or network
+delays cannot exceed it. The policy derives the execution deadline by rounding
+down to a 30-second interval after subtracting the reserve and termination
+limits. Before any model command, it reads the formal workflow's literal cutoff
+and rejects missing, malformed, duplicated, or changed linkage. Each child gets
+only the remaining execution time and the policy's explicit termination limits;
+an expired deadline rejects admission rather than starting a new timeout.
+A late wedged command therefore fails with its exact identity and `timed-out`
+result while the reporting wrapper retains previously completed rows and phase
+accounting. The unchanged regression threshold is an additional check, not
+permission to extend the stricter execution deadline.
 
 ## Scenario-to-test mapping
 
@@ -173,6 +249,19 @@ exemption applies. The concrete tooling outcomes are covered by:
   that must make the formal gate fail;
 - `scripts/quint-gate-timing.test.ts`: command/phase accumulation, including
   timing output from `finally` while preserving the original failure; and
-- the five passing gate runs recorded above: the same `check:quint` command
-  exercised on both supported Node versions with all four phase families (four
-  with a separately measured frozen install and one final post-change run).
+- `scripts/quint-gate-policy.test.ts`: the strict execution/termination/reserve
+  inequality against the literal hosted cutoff, rejected missing or malformed
+  workflow linkage, and a real late wedged child retaining a completed row and
+  exact timeout accounting without receiving a fresh full deadline;
+- `scripts/quint-gate-command-contract.test.ts`: exact current 105-command and
+  15/46/23/21 phase accounting, the ordered legacy 92-command subset, and a
+  negative control that rejects omitted or changed four-thread sampling;
+- `scripts/quint-gate-concurrency.test.ts`: the installation-critical first
+  evaluator command completes before bounded parallel family work is admitted;
+- `scripts/quint-witness-coverage.test.ts`: the captured four-zero hosted
+  accepted-result output must fail closed;
+- `scripts/quint-evaluator-provenance.test.ts`: two artifacts claiming the same
+  package and evaluator versions retain different SHA-256 identities; and
+- the five historical passing runs, the exact-SHA hosted failures, and the
+  repaired local Node 24.20.0 four-thread samples recorded above. A new hosted
+  Node 24.20 exact-SHA run remains the authoritative qualification result.

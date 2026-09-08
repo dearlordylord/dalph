@@ -23,20 +23,33 @@ const attachBatchResults = (failure, results) => {
 export const quintGateBatchResults = (failure) => (failure instanceof Error ? failure[batchResults] : undefined)
 
 /**
- * Execute a fixed family with bounded concurrency. Results retain input order,
- * while completion order cannot change which command identity the caller
- * reports. The first failure aborts the shared signal and prevents new work.
+ * Execute a fixed family with bounded concurrency. An installation-critical
+ * prefix may finish serially before the workers are admitted, so concurrent
+ * children cannot race while preparing a shared tool artifact. Results retain
+ * input order, while completion order cannot change which command identity the
+ * caller reports. The first failure aborts the shared signal and prevents new
+ * work.
  */
-export const runQuintGateFamily = async ({ commands, concurrency = quintGateFamilyConcurrency, run }) => {
+export const runQuintGateFamily = async ({
+  commands,
+  concurrency = quintGateFamilyConcurrency,
+  run,
+  serializedPrefix = 0
+}) => {
   if (!Number.isInteger(concurrency) || concurrency < 1) {
     throw new Error(`Quint gate family concurrency must be a positive integer; received ${concurrency}`)
+  }
+  if (!Number.isInteger(serializedPrefix) || serializedPrefix < 0 || serializedPrefix > commands.length) {
+    throw new Error(
+      `Quint gate serialized prefix must be an integer between zero and the family size; received ${serializedPrefix}`
+    )
   }
   if (commands.length === 0) return []
 
   const effectiveConcurrency = Math.min(concurrency, quintGateFamilyConcurrency)
   const controller = new AbortController()
   const outcomes = new Array(commands.length)
-  let nextIndex = 0
+  let nextIndex = serializedPrefix
   const failureState = { error: undefined, occurred: false }
 
   const recordFailure = (error) => {
@@ -46,20 +59,28 @@ export const runQuintGateFamily = async ({ commands, concurrency = quintGateFami
     controller.abort(error)
   }
 
+  const executeAt = async (index) => {
+    const command = commands[index]
+    try {
+      outcomes[index] = { status: "fulfilled", value: await run(command, controller.signal) }
+      return true
+    } catch (error) {
+      outcomes[index] = { status: "rejected", reason: error }
+      recordFailure(error)
+      return false
+    }
+  }
+
+  for (let index = 0; index < serializedPrefix; index += 1) {
+    if (!(await executeAt(index))) throw attachBatchResults(failureState.error, outcomes)
+  }
+
   const worker = async () => {
     while (!failureState.occurred) {
       const index = nextIndex
       nextIndex += 1
       if (index >= commands.length) return
-      const command = commands[index]
-
-      try {
-        outcomes[index] = { status: "fulfilled", value: await run(command, controller.signal) }
-      } catch (error) {
-        outcomes[index] = { status: "rejected", reason: error }
-        recordFailure(error)
-        return
-      }
+      if (!(await executeAt(index))) return
     }
   }
 
