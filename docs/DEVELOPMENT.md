@@ -201,9 +201,10 @@ DALPH_COVERAGE_BASE_SHA="$(git merge-base origin/master HEAD)" pnpm test:coverag
 
 CI installs with `--frozen-lockfile`; pnpm enforces strict peers, allowlisted
 lifecycle scripts (`onlyBuiltDependencies`), and a 24-hour release delay unless
-explicitly excepted. Install gitleaks before committing. Pre-commit formats and
-lints staged code and scans staged secrets. The compatibility graph, workspace
-typecheck, and cycle check belong to `pnpm check:fast` and the candidate gate.
+explicitly excepted. Install gitleaks before committing. The pre-commit hook
+formats and lints staged code and scans staged secrets. `pnpm check:fast`
+includes the workspace typecheck; repository verification runs the compatibility
+graph and cycle check for the frozen candidate.
 
 Only exact diffs containing allowlisted documentation paths use the single
 Ubuntu docs gate: whitespace, classifier controls, changed-commit secrets.
