@@ -1,4 +1,4 @@
-import { GitCommitSha } from "@dalph/contracts"
+import { GitCommitSha, RunId } from "@dalph/contracts"
 import { it } from "@effect/vitest"
 import { Effect, Layer, Ref, Schema } from "effect"
 import { expect } from "vitest"
@@ -10,6 +10,7 @@ import {
   memoryJournalTestLayerFromPartitionRecords
 } from "../../../workflow-journal/adapters/memory-store.js"
 import {
+  integrationQuarantinedRecordKey,
   targetPromotionAttemptIntentRecordKey,
   targetPromotionIntentRecordKey,
   targetPromotionStaleRecordKey
@@ -153,6 +154,81 @@ it.effect("rejects wrongly keyed stale-promotion evidence before it can authoriz
     expect(promotionStaleQuarantineEvidenceIssue(records, wronglyKeyed)).toBe(
       "promotion-stale evidence has a foreign Journal key"
     )
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("rejects every foreign or chronologically impossible promotion-stale quarantine relation", () =>
+  Effect.gen(function* () {
+    const quarantine = yield* appendQuarantineFor("DirectRejectionAfterAttempt")
+    const records = yield* (yield* JournalStore).read(runId)
+    const stale = records.find(({ event }) => event._tag === "TargetPromotionStale")
+    const attempt = records.find(({ event }) => event._tag === "TargetPromotionAttemptIntended")
+    if (stale?.event._tag !== "TargetPromotionStale" || attempt === undefined) {
+      return yield* Effect.die("promotion-stale relation fixture lacks its stale result or attempt intent")
+    }
+    if (quarantine.event.basis._tag !== "PromotionStale") {
+      return yield* Effect.die("promotion-stale relation fixture lacks its quarantine basis")
+    }
+
+    expect(
+      promotionStaleQuarantineEvidenceIssue(records, { ...stale, runId: RunId.make("foreign-promotion-stale-run") })
+    ).toBe("promotion-stale evidence has a foreign Journal Run")
+
+    const foreignRunQuarantine = { ...quarantine, runId: RunId.make("foreign-promotion-quarantine-run") }
+    const foreignKeyQuarantine = { ...quarantine, key: JournalRecordKey.make("foreign-promotion-quarantine-key") }
+    const duplicateStaleRecords = [...records, { ...stale }]
+    const foreignStaleKeyRecords = records.map((record) =>
+      record.position === stale.position ? { ...record, key: JournalRecordKey.make("foreign-stale-key") } : record
+    )
+    const nonQuarantine = attempt
+    const lateQuarantine = { ...quarantine, position: stale.position }
+
+    const foreignCandidateBasis = { ...quarantine.event.basis, candidateCommit: GitCommitSha.make("7".repeat(40)) }
+    const foreignCandidateQuarantine = {
+      ...quarantine,
+      event: { ...quarantine.event, basis: foreignCandidateBasis },
+      key: integrationQuarantinedRecordKey(quarantine.event.correlation.sessionId, foreignCandidateBasis)
+    }
+    const foreignObservedHeadBasis = {
+      ...quarantine.event.basis,
+      observedTargetHead: GitCommitSha.make("8".repeat(40))
+    }
+    const foreignObservedHeadQuarantine = {
+      ...quarantine,
+      event: { ...quarantine.event, basis: foreignObservedHeadBasis },
+      key: integrationQuarantinedRecordKey(quarantine.event.correlation.sessionId, foreignObservedHeadBasis)
+    }
+
+    for (const [label, candidateRecords, candidateQuarantine, detail] of [
+      ["non-quarantine", records, nonQuarantine, "evidence is not a promotion-stale quarantine"],
+      ["foreign Run", records, foreignRunQuarantine, "promotion-stale quarantine has a foreign Journal Run"],
+      ["foreign key", records, foreignKeyQuarantine, "promotion-stale quarantine has a foreign Journal key"],
+      [
+        "duplicate stale position",
+        duplicateStaleRecords,
+        quarantine,
+        "promotion-stale quarantine lacks one exact stale record"
+      ],
+      ["foreign stale key", foreignStaleKeyRecords, quarantine, "promotion-stale evidence has a foreign Journal key"],
+      ["late stale evidence", records, lateQuarantine, "promotion-stale evidence must precede its quarantine"],
+      [
+        "foreign candidate commit",
+        records,
+        foreignCandidateQuarantine,
+        "promotion-stale quarantine names a foreign candidate commit"
+      ],
+      [
+        "foreign observed head",
+        records,
+        foreignObservedHeadQuarantine,
+        "promotion-stale quarantine names a foreign observed target head"
+      ]
+    ] as const) {
+      expect(validatePromotionStaleQuarantineEvidence(candidateRecords, candidateQuarantine), label).toEqual({
+        _tag: "Invalid",
+        detail
+      })
+    }
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
