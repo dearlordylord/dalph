@@ -14,7 +14,7 @@ import {
   targetPromotionIntentRecordKey,
   targetPromotionStaleRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { JournalPosition } from "../../../workflow-journal/identity.js"
+import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import {
   InRunJournal,
   type InRunJournalService,
@@ -138,6 +138,18 @@ it.effect("rejects non-stale and unchanged-head promotion evidence with exact di
     ] as const) {
       expect(promotionStaleQuarantineEvidenceIssue(records, evidence), label).toBe(expected)
     }
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("rejects wrongly keyed stale-promotion evidence before it can authorize FullRerun", () =>
+  Effect.gen(function* () {
+    const stale = yield* appendStaleScenario("DirectRejectionAfterAttempt")
+    const records = yield* (yield* JournalStore).read(runId)
+    const wronglyKeyed = { ...stale, key: JournalRecordKey.make("foreign-stale-promotion-key") }
+
+    expect(promotionStaleQuarantineEvidenceIssue(records, wronglyKeyed)).toBe(
+      "promotion-stale evidence has a foreign Journal key"
+    )
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 

@@ -18,17 +18,84 @@ import { OperationIdAllocator, PlannedTaskAttemptPlanner } from "../../workflow/
 import { freshWorkflowRunId } from "./fresh-run-identity.js"
 import {
   JournaledRunBootstrap,
+  runDeliveryAfterDispositionCleanup,
   runWorkflow,
   runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh
 } from "./run.js"
 import { RunActivationOpportunity } from "./run-activation-opportunity.js"
 import { runControlledWorkflow } from "./controlled-workflow.js"
+import type { DispositionCleanupActivationService } from "../../workflow/protocols/disposition-cleanup/loop.js"
+import { WorktreeCleanupOutcome } from "../../workflow/protocols/disposition-cleanup/worktree.js"
+import { authorization as cleanupAuthorization } from "../../workflow/protocols/disposition-cleanup/fixtures.js"
 
 const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
 const programDependencies = Layer.mergeAll(
   Layer.mock(OperationIdAllocator, {}),
   Layer.mock(PlannedTaskAttemptPlanner, {}),
   Layer.mock(TaskClaimAcquisitionPlanner, {})
+)
+
+it.effect("keeps the Run active and skips delivery until pending cleanup settles on a later activation", () =>
+  Effect.gen(function* () {
+    const deliveryCalls = yield* Ref.make(0)
+    const pending = WorktreeCleanupOutcome.cases.Pending.make({
+      attempts: 1,
+      authorization: cleanupAuthorization,
+      reason: "the removal response was unreadable"
+    })
+    const pendingCleanup = {
+      responsibilities: { branch: [], candidate: [], worktree: [cleanupAuthorization] },
+      run: Effect.succeed({
+        branch: undefined,
+        branchOutcomes: [],
+        candidate: undefined,
+        candidateOutcomes: [],
+        remaining: { branch: [], candidate: [], worktree: [cleanupAuthorization] },
+        selected: { branch: undefined, candidate: undefined, worktree: cleanupAuthorization },
+        worktree: pending,
+        worktreeOutcomes: [pending]
+      })
+    } satisfies DispositionCleanupActivationService
+    const deliveryProof = {
+      acceptedAt: null,
+      decision: RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" })
+    } as const
+    const deliveryProgram = Ref.update(deliveryCalls, (calls) => calls + 1).pipe(Effect.as(deliveryProof))
+
+    const blocked = yield* runDeliveryAfterDispositionCleanup(pendingCleanup, deliveryProgram)
+
+    expect(blocked).toEqual({
+      acceptedAt: null,
+      decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+    })
+    expect(yield* Ref.get(deliveryCalls)).toBe(0)
+
+    const settled = WorktreeCleanupOutcome.cases.Settled.make({
+      authorization: cleanupAuthorization,
+      result: {
+        _tag: "Removed",
+        branch: cleanupAuthorization.owner.branch,
+        locator: cleanupAuthorization.locator,
+        revision: cleanupAuthorization.evidenceRevision
+      }
+    })
+    const settledCleanup = {
+      responsibilities: { branch: [], candidate: [], worktree: [cleanupAuthorization] },
+      run: Effect.succeed({
+        branch: undefined,
+        branchOutcomes: [],
+        candidate: undefined,
+        candidateOutcomes: [],
+        remaining: { branch: [], candidate: [], worktree: [] },
+        selected: { branch: undefined, candidate: undefined, worktree: cleanupAuthorization },
+        worktree: settled,
+        worktreeOutcomes: [settled]
+      })
+    } satisfies DispositionCleanupActivationService
+
+    expect(yield* runDeliveryAfterDispositionCleanup(settledCleanup, deliveryProgram)).toBe(deliveryProof)
+    expect(yield* Ref.get(deliveryCalls)).toBe(1)
+  })
 )
 
 it.effect("hands every Run activation to one journal establishment boundary", () =>

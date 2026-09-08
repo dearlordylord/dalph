@@ -6,6 +6,7 @@ import {
   IntegratorCandidateCleanupObservation,
   IntegratorCandidateResourceLocator,
   IntegratorSessionId,
+  JournalRecordKey,
   type JournalRecord
 } from "@dalph/orchestrator"
 import { Effect } from "effect"
@@ -127,6 +128,8 @@ it.effect(
 
       expect(result.boundaryCalls.map(({ _tag }) => _tag)).toEqual(["Observe", "Remove", "Observe"])
       expect(result.outcomes.map((outcome) => outcome.candidate?._tag)).toEqual(["Pending", "Settled"])
+      expect(result.outcomes[0]?.remaining.candidate).toHaveLength(1)
+      expect(result.outcomes[1]?.remaining.candidate).toEqual([])
       expect(
         result.records.filter(({ event }) => event._tag === "IntegratorCandidateCleanupMutationIntended")
       ).toHaveLength(1)
@@ -148,6 +151,39 @@ it.effect(
         activations: 1,
         evidenceRevision,
         history: delivery.records.filter(({ event }) => event._tag !== "TargetPromotionAttemptIntended"),
+        observations: [
+          IntegratorCandidateCleanupObservation.cases.Present.make({
+            locator: predecessor.candidateResource,
+            revision: evidenceRevision,
+            sessionId: predecessor.sessionId,
+            writerQuiescent: true
+          })
+        ]
+      })
+
+      expect(result.boundaryCalls).toEqual([])
+      expect(result.outcomes[0]?.candidate).toBeUndefined()
+      expect(result.records.some(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")).toBe(false)
+      expect(result.upstreamAfter).toEqual(result.upstreamBefore)
+    }),
+  timeout
+)
+
+it.effect(
+  "does not authorize A's predecessor cleanup from wrongly keyed stale-promotion evidence",
+  () =>
+    Effect.gen(function* () {
+      const delivery = yield* cachedDeliveryRun
+      const predecessor = exactlyOne(delivery.records, "IntegratorSessionFixed").event.correlation
+      const wronglyKeyedHistory = delivery.records.map((record) =>
+        record.event._tag === "TargetPromotionStale"
+          ? { ...record, key: JournalRecordKey.make("foreign-stale-promotion-key") }
+          : record
+      )
+      const result = yield* runFullRerunPredecessorCleanupFromHistory({
+        activations: 1,
+        evidenceRevision,
+        history: wronglyKeyedHistory,
         observations: [
           IntegratorCandidateCleanupObservation.cases.Present.make({
             locator: predecessor.candidateResource,
@@ -248,6 +284,9 @@ it.effect(
           scenario.name
         ).toEqual(["Observe"])
         expect(result.outcomes[0]?.candidate?._tag, scenario.name).toBe(scenario.outcome)
+        expect(result.outcomes[0]?.remaining.candidate.length, scenario.name).toBe(
+          scenario.outcome === "Pending" ? 1 : 0
+        )
         expect(
           result.records.some(({ event }) => event._tag === "IntegratorCandidateCleanupMutationIntended"),
           scenario.name

@@ -239,6 +239,7 @@ it.effect("refuses cleanup selection from a no-begin journal", () =>
       branchOutcomes: [],
       candidate: undefined,
       candidateOutcomes: [],
+      remaining: { branch: [], candidate: [], worktree: [] },
       selected: { branch: undefined, candidate: undefined, worktree: undefined },
       worktree: undefined,
       worktreeOutcomes: []

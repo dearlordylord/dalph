@@ -31,7 +31,7 @@ import {
 } from "./events.js"
 import { integratorCorrelationsEqual, integratorResponsibilityFactsFromCorrelation } from "./state.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
-import { promotionStaleQuarantineEvidenceIssue } from "../integration-quarantine/promotion-stale-evidence.js"
+import { validatePromotionStaleQuarantineEvidence } from "../integration-quarantine/promotion-stale-evidence.js"
 import { evaluateIntegratorFullRerunSuccessor } from "./successor-history.js"
 
 type SessionRecord = JournalRecord & {
@@ -131,8 +131,6 @@ const isRunResultRecord = (record: JournalRecord): record is RunResultRecord =>
   record.event._tag === "IntegratorRunResultRecorded"
 const isCandidateObservationRecord = (record: JournalRecord): record is CandidateObservationRecord =>
   record.event._tag === "IntegratorRunCandidateGitObserved"
-const isPromotionStaleRecord = (record: JournalRecord): record is PromotionStaleRecord =>
-  record.event._tag === "TargetPromotionStale"
 const isProviderAbsenceRecord = (record: JournalRecord): record is ProviderAbsenceRecord =>
   record.event._tag === "IntegrationProviderRunActivityAbsent"
 const isQuarantineRecord = (record: JournalRecord): record is QuarantineRecord =>
@@ -358,16 +356,10 @@ const promotionStaleEvidence = (
   quarantine: QuarantineRecord
 ): IntegratorRetryOrdinalOneEvidence | undefined => {
   if (quarantine.event.basis._tag !== "PromotionStale") return undefined
+  const validation = validatePromotionStaleQuarantineEvidence(records, quarantine)
+  if (validation._tag === "Invalid") return undefined
   const basis = quarantine.event.basis
-  const stale = oneRecordAt(records, basis.targetPromotionStaleAt)
-  if (
-    stale === undefined ||
-    !isPromotionStaleRecord(stale) ||
-    stale.position >= quarantine.position ||
-    promotionStaleQuarantineEvidenceIssue(records, stale) !== undefined
-  ) {
-    return undefined
-  }
+  const stale = validation.stale
   const qualified = stale.event.correlation.qualifiedCandidate
   if (
     !integratorRunCorrelationsEqual(qualified.run, run) ||

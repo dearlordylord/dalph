@@ -821,6 +821,7 @@ const runtimeLayer = (
           branchOutcomes: [],
           candidate: undefined,
           candidateOutcomes: [],
+          remaining: { branch: [], candidate: [], worktree: [] },
           selected: { branch: undefined, candidate: undefined, worktree: undefined },
           worktree: undefined,
           worktreeOutcomes: []

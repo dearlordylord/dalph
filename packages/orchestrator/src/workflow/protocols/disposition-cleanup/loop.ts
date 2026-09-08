@@ -92,6 +92,8 @@ export type DispositionCleanupLoopResult = {
   readonly worktree: WorktreeCleanupOutcome | undefined
   readonly branchOutcomes: ReadonlyArray<BranchCleanupOutcome>
   readonly candidateOutcomes: ReadonlyArray<IntegratorCandidateCleanupOutcome>
+  /** Exact responsibilities still lacking settlement or durable relinquishment after this pass. */
+  readonly remaining: DispositionCleanupResponsibilitySet
   readonly worktreeOutcomes: ReadonlyArray<WorktreeCleanupOutcome>
 }
 
@@ -107,6 +109,7 @@ const emptyCleanupLoopResult = (): DispositionCleanupLoopResult => ({
   branchOutcomes: [],
   candidate: undefined,
   candidateOutcomes: [],
+  remaining: { branch: [], candidate: [], worktree: [] },
   selected: { branch: undefined, candidate: undefined, worktree: undefined },
   worktree: undefined,
   worktreeOutcomes: []
@@ -268,8 +271,9 @@ export const selectCleanupResponsibilities = (
  * foreign history for one operation does not hide an unrelated operation in
  * the same family; each result is validated against its own operation prefix.
  */
-export const selectCleanupResponsibilitySet = (
-  records: ReadonlyArray<unknown>
+const selectCleanupResponsibilitySetInternal = (
+  records: ReadonlyArray<unknown>,
+  requireMutationBudget: boolean
 ): DispositionCleanupResponsibilitySet => {
   const journalRecords = records.filter((record): record is JournalRecord => Schema.is(JournalRecord)(record))
   if (!hasImmutableRunBeginning(journalRecords)) return { branch: [], candidate: [], worktree: [] }
@@ -281,7 +285,8 @@ export const selectCleanupResponsibilitySet = (
         (authorization) => validBranch(journalRecords, authorization)
       ).filter(
         (authorization) =>
-          !hasTerminalCleanupEvent(journalRecords, authorization) && hasMutationBudget(journalRecords, authorization)
+          !hasTerminalCleanupEvent(journalRecords, authorization) &&
+          (!requireMutationBudget || hasMutationBudget(journalRecords, authorization))
       )
     ),
     candidate: bounded(
@@ -291,7 +296,8 @@ export const selectCleanupResponsibilitySet = (
         (authorization) => validCandidate(journalRecords, authorization)
       ).filter(
         (authorization) =>
-          !hasTerminalCleanupEvent(journalRecords, authorization) && hasMutationBudget(journalRecords, authorization)
+          !hasTerminalCleanupEvent(journalRecords, authorization) &&
+          (!requireMutationBudget || hasMutationBudget(journalRecords, authorization))
       )
     ),
     worktree: bounded(
@@ -301,11 +307,15 @@ export const selectCleanupResponsibilitySet = (
         (authorization) => validWorktree(journalRecords, authorization)
       ).filter(
         (authorization) =>
-          !hasTerminalCleanupEvent(journalRecords, authorization) && hasMutationBudget(journalRecords, authorization)
+          !hasTerminalCleanupEvent(journalRecords, authorization) &&
+          (!requireMutationBudget || hasMutationBudget(journalRecords, authorization))
       )
     )
   }
 }
+
+export const selectCleanupResponsibilitySet = (records: ReadonlyArray<unknown>): DispositionCleanupResponsibilitySet =>
+  selectCleanupResponsibilitySetInternal(records, true)
 
 /**
  * Runs the same family protocols used by production activation. Worktree
@@ -378,10 +388,12 @@ export const runDispositionCleanupLoop = Effect.fn("DispositionCleanup.loop")(fu
     candidate: selectedSet.candidate[0],
     worktree: selectedSet.worktree[0]
   }
+  const remaining = selectCleanupResponsibilitySetInternal(yield* journal.read(runId), false)
   return {
     branch: branchOutcomes[0],
     candidate: candidateOutcomes[0],
     selected,
+    remaining,
     worktree: worktreeOutcomes[0],
     branchOutcomes,
     candidateOutcomes,

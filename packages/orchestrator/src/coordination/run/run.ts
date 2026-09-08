@@ -42,14 +42,17 @@ import type {
   PauseProgressProjectionConflict,
   PauseProgressView
 } from "./pause-progress-observation.js"
-import type { RunFinalityDecision, RunFinalityProof } from "../frontier/frontier.js"
+import { RunFinalityDecision, type RunFinalityProof } from "../frontier/frontier.js"
 import { runStabilizedDelivery } from "./run-stabilization.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import type { AllocatedWorkflowRunId } from "./fresh-run-identity.js"
 import { RunRecoveryProjection } from "./recovery-activation.js"
 import type { StartupRecoveryBlocked } from "./startup-recovery.js"
 import type { ApplicationExiting } from "../application-exit/lifecycle-decision.js"
-import { DispositionCleanupActivation } from "../../workflow/protocols/disposition-cleanup/loop.js"
+import {
+  DispositionCleanupActivation,
+  type DispositionCleanupActivationService
+} from "../../workflow/protocols/disposition-cleanup/loop.js"
 import type { IntegratorCandidateCleanupEvidenceReadFailure } from "../../workflow/protocols/disposition-cleanup/integrator-candidate.js"
 import type { AppliedRunCancellation } from "../../workflow/protocols/run-cancellation/events.js"
 import type { ActiveWorkAuthorityRefreshSource } from "./run-activation-opportunity.js"
@@ -338,6 +341,25 @@ export type InitialControlPolicySource<E = never, R = never> = Effect.Effect<Ini
 const liveDeliveryActionExecutorFactory = (runId: RunId, target: TrackerTarget) =>
   makeLiveDeliveryActionExecutor(runId, target)
 
+/** Runs ordinary delivery only after the activation's exact cleanup pass. */
+export const runDeliveryAfterDispositionCleanup = Effect.fn("Run.runDeliveryAfterDispositionCleanup")(function* <E, R>(
+  cleanup: DispositionCleanupActivationService,
+  deliveryProgram: Effect.Effect<RunFinalityProof, E, R>
+) {
+  const cleanupResult = yield* cleanup.run
+  if (
+    cleanupResult.remaining.branch.length > 0 ||
+    cleanupResult.remaining.candidate.length > 0 ||
+    cleanupResult.remaining.worktree.length > 0
+  ) {
+    return {
+      acceptedAt: null,
+      decision: RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
+    } satisfies RunFinalityProof
+  }
+  return yield* deliveryProgram
+})
+
 const runJournaledDelivery = <E, R>(
   runId: RunId,
   target: TrackerTarget,
@@ -352,13 +374,15 @@ const runJournaledDelivery = <E, R>(
       // boundaries at activation, so production and controlled runs share the
       // same loop.
       const cleanup = yield* DispositionCleanupActivation
-      yield* cleanup.run
-      return yield* runDeliveryComposition(
-        target,
-        runId,
-        makeJournaledDeliveryRelations(runId, target, opportunity),
-        () => executorFactory(runId, target),
-        opportunity
+      return yield* runDeliveryAfterDispositionCleanup(
+        cleanup,
+        runDeliveryComposition(
+          target,
+          runId,
+          makeJournaledDeliveryRelations(runId, target, opportunity),
+          () => executorFactory(runId, target),
+          opportunity
+        )
       )
     })
   }

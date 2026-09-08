@@ -6,8 +6,7 @@ import {
   integrationQuarantinedRecordKey,
   integratorRunCandidateGitObservedRecordKey,
   integratorRunResultRecordedRecordKey,
-  integratorRunStartedRecordKey,
-  targetPromotionStaleRecordKey
+  integratorRunStartedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -29,7 +28,7 @@ import {
 import { integratorCorrelationsEqual } from "../integrator/state.js"
 import { evaluateIntegratorRetryAuthorization } from "../integrator/retry-authorization.js"
 import { providerRunStartFor, validateProviderRunActivityAbsent } from "./provider-failure.js"
-import { promotionStaleQuarantineEvidenceIssue } from "./promotion-stale-evidence.js"
+import { validatePromotionStaleQuarantineEvidence } from "./promotion-stale-evidence.js"
 
 /** Reconstructed disposition for one exact Integrator session; no process-local choice cache is retained. */
 export const IntegrationQuarantineState = Schema.TaggedUnion({
@@ -333,26 +332,7 @@ function retryTargetHeadEvidenceMatchesRecords(
 const promotionStaleEvidenceMatchesRecords = (
   records: ReadonlyArray<JournalRecord>,
   quarantine: QuarantineRecord
-): boolean => {
-  if (quarantine.event.basis._tag !== "PromotionStale") return false
-  const { basis, correlation } = quarantine.event
-  const stale = recordAt(records, basis.targetPromotionStaleAt)
-  if (
-    stale === undefined ||
-    stale.event._tag !== "TargetPromotionStale" ||
-    stale.position >= quarantine.position ||
-    stale.runId !== quarantine.runId ||
-    stale.key !== targetPromotionStaleRecordKey(stale.event.correlation.requestId)
-  ) {
-    return false
-  }
-  return (
-    integratorCorrelationsEqual(stale.event.correlation.qualifiedCandidate.run.session, correlation) &&
-    stale.event.correlation.qualifiedCandidate.candidateCommit === basis.candidateCommit &&
-    stale.event.observation.observedHeadSha === basis.observedTargetHead &&
-    promotionStaleQuarantineEvidenceIssue(records, stale) === undefined
-  )
-}
+): boolean => validatePromotionStaleQuarantineEvidence(records, quarantine)._tag === "Valid"
 
 function quarantineEvidenceMatchesRecords(
   records: ReadonlyArray<JournalRecord>,
