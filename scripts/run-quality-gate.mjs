@@ -1,11 +1,20 @@
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
-import { boundedQualityGateCommand, recordedCatalogQualityGate } from "./quality-gate-stage-policy.mjs"
+import {
+  boundedQualityGateCommand,
+  capabilityRegistrationQualityGate,
+  recordedCatalogQualityGate
+} from "./quality-gate-stage-policy.mjs"
 
 const SECOND = 1_000
 const maximumSuccessfulOutputLines = 550
 const pnpmEntryPoint = process.env.npm_execpath
 const withoutQuint = process.argv.includes("--without-quint")
+const candidateArgument = process.argv.find((argument) => argument.startsWith("--candidate="))
+// The full gate rebuilds the whole program several times and runs every suite, so it belongs to a frozen candidate and
+// to hosted verification. Development uses the focused tiers instead, which is why local runs state their intent.
+const acknowledgedFullGate =
+  candidateArgument !== undefined || process.env["DALPH_FULL_GATE"] === "1" || process.env["CI"] !== undefined
 const testEnvironment = {
   ...process.env,
   NODE_OPTIONS: [process.env.NODE_OPTIONS, "--disable-warning=ExperimentalWarning"].filter(Boolean).join(" ")
@@ -15,8 +24,21 @@ if (pnpmEntryPoint === undefined) {
   throw new Error("Run the quality gate through pnpm so its executable can be resolved safely")
 }
 
+if (!acknowledgedFullGate) {
+  console.error(
+    [
+      "The full quality gate runs once per frozen candidate.",
+      "Development loop: pnpm check:fast",
+      "Before freezing: pnpm typecheck && pnpm lint:code && pnpm test",
+      "Frozen candidate: pnpm check:all --candidate=<base sha>"
+    ].join("\n")
+  )
+  process.exit(2)
+}
+
 const gates = [
   { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
+  capabilityRegistrationQualityGate,
   { args: ["test:ci-change-classification"], name: "CI change classification", timeout: 60 * SECOND },
   { args: ["typecheck"], name: "typecheck", timeout: 2 * 60 * SECOND },
   { args: ["typecheck:effect"], name: "Effect diagnostics", timeout: 3 * 60 * SECOND },

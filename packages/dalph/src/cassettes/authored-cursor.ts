@@ -228,6 +228,10 @@ type ClaimedStoryItem<A extends StoryItem> =
 export interface StoryCursor {
   /** Release the exact pre-admission control latch after its production application has completed. */
   readonly completeControlDirectionBeforeDeliveryActionAdmission: Effect.Effect<void>
+  /** Release the in-flight FullRerun choice after its exact application is durable. */
+  readonly completeIntegrationQuarantineDirection: Effect.Effect<void>
+  /** Kill the process from the FullRerun append itself without awaiting that same in-flight driver. */
+  readonly pauseAfterIntegrationQuarantineDirectionAppend: Effect.Effect<void>
   /** Current zero-based position after all successfully consumed authored items. */
   readonly storyPosition: Effect.Effect<number>
   /** Current unconsumed authored item for the one sequential harness driver. */
@@ -442,6 +446,10 @@ export interface StoryCursor {
       | typeof AuthoredCassetteStoryItem.cases.OperatorAppliesControlDirectionBeforeDeliveryActionAdmission.Type
     >
   >
+  /** Consume Alice's exact FullRerun choice for one durable Integrator quarantine. */
+  readonly consumeIntegrationQuarantineDirection: Effect.Effect<
+    Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorAppliesIntegrationQuarantineDirection.Type>
+  >
   /** Consume Alice's exact whole-Run cancellation boundary. */
   readonly consumeRunCancellation: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellation.Type>
@@ -522,6 +530,8 @@ export interface StoryCursor {
     target: TrackerTarget,
     context?: AuthoredOperationCausalContext
   ) => Effect.Effect<AuthoredTrackerGraphReadResult, ExactCausalCursorFailure>
+  /** Consume a targeted death only after its required journal event has become durable. */
+  readonly pauseAtCoordinatorProcessDeathAfterJournalEvent: Effect.Effect<void>
   readonly pauseAtCoordinatorProcessDeath: Effect.Effect<void>
   /** Test-driver view of the next authored boundary; observing it never advances the story. */
   readonly storyItems: Stream.Stream<StoryItem | undefined>
@@ -616,6 +626,9 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     causal: { byOperationId: new Map(), byRole: new Map() }
   })
   const controlDirectionBeforeAdmission = yield* SubscriptionRef.make<Option.Option<Deferred.Deferred<void>>>(
+    Option.none()
+  )
+  const integrationQuarantineDirectionInFlight = yield* SubscriptionRef.make<Option.Option<Deferred.Deferred<void>>>(
     Option.none()
   )
   const terminalAssertionsReached = yield* Deferred.make<void>()
@@ -1910,6 +1923,21 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       if (Option.isSome(gate)) yield* SubscriptionRef.set(controlDirectionBeforeAdmission, gate)
       return Option.some(claimed.item)
     })
+  const consumeIntegrationQuarantineDirection = Effect.gen(function* () {
+    const completion = yield* Deferred.make<void>()
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorAppliesIntegrationQuarantineDirection.Type =>
+        item?._tag === "OperatorAppliesIntegrationQuarantineDirection"
+    )
+    /* v8 ignore next -- @preserve The direct-item dispatcher invokes this consumer only for this exact tag. */
+    if (claimed._tag === "Mismatch") return Option.none()
+    yield* SubscriptionRef.set(integrationQuarantineDirectionInFlight, Option.some(completion))
+    return Option.some(
+      yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.OperatorAppliesIntegrationQuarantineDirection)(
+        claimed.item
+      ).pipe(Effect.orDie)
+    )
+  })
   const consumeRunCancellation = Effect.gen(function* () {
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.OperatorAppliesRunCancellation.Type =>
@@ -2052,7 +2080,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     )
     return yield* awaitInFlightOperatorItems
   })
-  const pauseAtCoordinatorProcessDeath = Effect.gen(function* () {
+  const dieAtCoordinatorProcessDeath = Effect.gen(function* () {
     const bypassControlBoundary = Option.isSome(yield* SubscriptionRef.get(controlDirectionBeforeAdmission))
     const claimed = yield* claimNext(
       (item): item is typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDies.Type =>
@@ -2067,6 +2095,31 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     // production action fiber. The parent activation observes the defect and
     // disposes the whole scoped activation before the next report can occur.
     return yield* Effect.die(new AuthoredCoordinatorProcessDies({ storyPosition: claimed.index }))
+  })
+  const dieAtCoordinatorProcessDeathAfterJournalEvent = Effect.gen(function* () {
+    const claimed = yield* claimNext(
+      (item): item is typeof AuthoredCassetteStoryItem.cases.CoordinatorProcessDiesAfterJournalEvent.Type =>
+        item?._tag === "CoordinatorProcessDiesAfterJournalEvent"
+    )
+    if (claimed._tag === "Mismatch") return
+    yield* Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CoordinatorProcessDiesAfterJournalEvent)(
+      claimed.item
+    ).pipe(Effect.orDie)
+    return yield* Effect.die(new AuthoredCoordinatorProcessDies({ storyPosition: claimed.index }))
+  })
+  const pauseAtCoordinatorProcessDeath = Effect.gen(function* () {
+    const activeIntegrationDirection = yield* SubscriptionRef.get(integrationQuarantineDirectionInFlight)
+    if (Option.isSome(activeIntegrationDirection)) yield* Deferred.await(activeIntegrationDirection.value)
+    return yield* dieAtCoordinatorProcessDeath
+  })
+  const pauseAtCoordinatorProcessDeathAfterJournalEvent = Effect.gen(function* () {
+    const activeIntegrationDirection = yield* SubscriptionRef.get(integrationQuarantineDirectionInFlight)
+    if (Option.isSome(activeIntegrationDirection)) yield* Deferred.await(activeIntegrationDirection.value)
+    return yield* dieAtCoordinatorProcessDeathAfterJournalEvent
+  })
+  const pauseAfterIntegrationQuarantineDirectionAppend = Effect.gen(function* () {
+    yield* SubscriptionRef.set(integrationQuarantineDirectionInFlight, Option.none())
+    return yield* dieAtCoordinatorProcessDeathAfterJournalEvent
   })
   const consumeRunCoordinator = consume("RunCoordinator").pipe(
     Effect.flatMap((item) =>
@@ -2245,6 +2298,14 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
       yield* SubscriptionRef.set(controlDirectionBeforeAdmission, Option.none())
       yield* Deferred.succeed(gate.value, undefined)
     }),
+    completeIntegrationQuarantineDirection: Effect.gen(function* () {
+      const gate = yield* SubscriptionRef.get(integrationQuarantineDirectionInFlight)
+      if (Option.isNone(gate)) return
+      yield* SubscriptionRef.set(integrationQuarantineDirectionInFlight, Option.none())
+      yield* Deferred.succeed(gate.value, undefined)
+    }),
+    pauseAfterIntegrationQuarantineDirectionAppend,
+    pauseAtCoordinatorProcessDeathAfterJournalEvent,
     storyPosition: SubscriptionRef.get(position),
     currentStoryItem: SubscriptionRef.get(position).pipe(Effect.map((index) => story[index])),
     awaitCurrentStoryAdvance: SubscriptionRef.get(position).pipe(
@@ -2286,6 +2347,7 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeRunReactivationHints,
     consumeCurrentTrackerNotification,
     consumeControlDirection,
+    consumeIntegrationQuarantineDirection,
     consumeControlDirectionFailure,
     consumeRunCancellation,
     consumePauseObservationStart,
