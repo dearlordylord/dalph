@@ -11,7 +11,7 @@ import {
   type CapabilitySourceFile
 } from "./capability-registration-gate.js"
 // @ts-expect-error The quality-gate policy is an executable JavaScript module.
-import { boundedQualityGateCommand } from "./quality-gate-stage-policy.mjs"
+import { boundedQualityGateCommand, capabilityRegistrationQualityGate } from "./quality-gate-stage-policy.mjs"
 
 const sourceFiles = repositoryCapabilitySourceFiles()
 const githubTrackerMutationContractCall = `trackerMutationContract({
@@ -26,7 +26,7 @@ describe("capability registration gate", () => {
   it("fails closed for a first-audit virtual source under a repository source root", () => {
     const path = "packages/contracts/src/issue-262-invalid-added-root.ts"
     const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
-      { path, source: "export const = 1" }
+      { path, source: "export {}\nexport const = 1" }
     ])
 
     expect(issues.some((issue) => issue.includes(`in ${path}:`) && issue.includes("TS1134"))).toBe(true)
@@ -36,7 +36,18 @@ describe("capability registration gate", () => {
     "runs every registered controlled and production implementation through its named contract family",
     { timeout: 30_000 },
     () => {
-      expect(issuesFor(capabilityRegistrationInventory)).toEqual([])
+      inspectCapabilitySourceProgram([
+        {
+          path: "scripts/fixtures/issue-262-unrelated-global.ts",
+          source: "declare const issue262UnrelatedGlobal: string"
+        }
+      ])
+      const issues = issuesFor(capabilityRegistrationInventory)
+      const repositoryDiagnostics = inspectCapabilitySourceProgram(sourceFiles)
+
+      expect(issues).toEqual([])
+      expect(repositoryDiagnostics.reusedSourcePaths).toEqual([])
+      expect(repositoryDiagnostics.rebuiltSourcePaths).toHaveLength(sourceFiles.length)
 
       for (const capability of capabilityRegistrationInventory.capabilities) {
         for (const role of ["controlled", "production"] as const) {
@@ -706,9 +717,11 @@ describe("capability registration gate", () => {
       source: [
         'import defaultProvider, { hidden } from "./issue-79-layer-export-forms-reexport.js"',
         'import { namespace } from "./issue-79-layer-export-forms-reexport.js"',
+        "const localProvider = Layer.succeed(UnknownService, {})",
         "export const assembledLocal = hidden",
         "export const assembledDefault = defaultProvider",
-        "export const assembledNamespace = namespace.hidden"
+        "export const assembledNamespace = namespace.hidden",
+        "export const assembledLocalProvider = localProvider"
       ].join("\n")
     }
     const inventory = {
@@ -719,15 +732,15 @@ describe("capability registration gate", () => {
       ]
     }
 
-    expect(
-      runCapabilityRegistrationGate(inventory, [...sourceFiles, layerSource, reexportSource, composition])
-    ).toEqual(
+    const issues = runCapabilityRegistrationGate(inventory, [...sourceFiles, layerSource, reexportSource, composition])
+    expect(issues).toEqual(
       expect.arrayContaining([
         "production uses unregistered exported Layer hidden",
         "production uses unregistered exported Layer defaultProvider",
         "production uses unregistered exported Layer namespace.hidden"
       ])
     )
+    expect(issues).not.toContain("production uses unregistered exported Layer localProvider")
   })
 
   it("runtime value consumption excludes type-only references", () => {
@@ -815,6 +828,155 @@ describe("capability registration gate", () => {
     ).toBe(true)
   })
 
+  it("preserves or recomputes diagnostics across unrelated and ambient source changes", () => {
+    const path = "scripts/fixtures/issue-262-equivalent-invalid.ts"
+    const invalidSource = { path, source: "export const value: string = 1" }
+    const validSource = {
+      path: "scripts/fixtures/issue-262-equivalent-valid.ts",
+      source: "export const validValue = 1"
+    }
+    const unrelatedSource = {
+      path: "scripts/fixtures/issue-262-equivalent-unrelated.ts",
+      source: "export const unrelatedValue = 2"
+    }
+
+    const firstIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
+      { ...invalidSource },
+      { ...validSource }
+    ])
+    const reorderedIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
+      { ...validSource },
+      { ...invalidSource }
+    ])
+    const expandedIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
+      { ...validSource },
+      { ...invalidSource },
+      unrelatedSource
+    ])
+    const changedUnrelatedIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
+      { ...validSource },
+      { ...invalidSource },
+      { ...unrelatedSource, source: "export const unrelatedValue = 3" }
+    ])
+    const hasExpectedDiagnostic = (issues: ReadonlyArray<string>) =>
+      issues.some((issue) => issue.includes(`in ${path}:`) && issue.includes("TS2322"))
+
+    expect(hasExpectedDiagnostic(firstIssues)).toBe(true)
+    expect(hasExpectedDiagnostic(reorderedIssues)).toBe(true)
+    expect(hasExpectedDiagnostic(expandedIssues)).toBe(true)
+    expect(hasExpectedDiagnostic(changedUnrelatedIssues)).toBe(true)
+
+    const conflictPath = "scripts/fixtures/issue-262-global-conflict.ts"
+    const retainedGlobal: CapabilitySourceFile = {
+      path: "scripts/fixtures/issue-262-global-retained.ts",
+      source: "export {}; declare global { const issue262Conflict: string }"
+    }
+    const conflictingGlobal: CapabilitySourceFile = {
+      path: conflictPath,
+      source: "export {}; declare global { const issue262Conflict: number }"
+    }
+    const conflictingIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
+      retainedGlobal,
+      conflictingGlobal
+    ])
+    const afterRemovalIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [retainedGlobal])
+
+    expect(conflictingIssues.some((issue) => issue.includes("TS2451"))).toBe(true)
+    expect(afterRemovalIssues.some((issue) => issue.includes("TS2451"))).toBe(false)
+
+    const ambientPath = "scripts/fixtures/issue-262-ambient-value.ts"
+    const consumerPath = "scripts/fixtures/issue-262-ambient-consumer.ts"
+    const ambientNumber: CapabilitySourceFile = {
+      path: ambientPath,
+      source: "export {}; declare global { const issue262AmbientValue: number }"
+    }
+    const ambientString: CapabilitySourceFile = {
+      path: ambientPath,
+      source: "export {}; declare global { const issue262AmbientValue: string }"
+    }
+    const ambientConsumer: CapabilitySourceFile = {
+      path: consumerPath,
+      source: "export const issue262ConsumerValue: number = issue262AmbientValue"
+    }
+    const freshAmbientIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
+      { ...ambientString, path: "scripts/fixtures/issue-262-fresh-ambient-value.ts" },
+      {
+        path: "scripts/fixtures/issue-262-fresh-ambient-consumer.ts",
+        source: "export const issue262FreshConsumerValue: number = issue262AmbientValue"
+      }
+    ])
+
+    const baselineAmbientIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
+      ambientNumber,
+      ambientConsumer
+    ])
+    expect(baselineAmbientIssues.some((issue) => issue.startsWith("source audit TypeScript diagnostic"))).toBe(false)
+    const changedAmbientIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
+      ambientString,
+      ambientConsumer
+    ])
+    const diagnosticCodes = (issues: ReadonlyArray<string>) =>
+      issues.flatMap((issue) => issue.match(/source audit TypeScript diagnostic \([^)]*\) (TS\d+)/u)?.[1] ?? [])
+    expect(freshAmbientIssues.some((issue) => issue.includes("TS2322"))).toBe(true)
+    expect(
+      changedAmbientIssues.some((issue) => issue.includes(`in ${consumerPath}:`) && issue.includes("TS2322"))
+    ).toBe(true)
+    expect(diagnosticCodes(changedAmbientIssues)).toEqual(diagnosticCodes(freshAmbientIssues))
+
+    const indirectRoot = "scripts/fixtures/issue-262-indirect-ambient"
+    const indirectTypePath = `${indirectRoot}/type.ts`
+    const indirectAugmenterPath = `${indirectRoot}/augmenter.ts`
+    const indirectConsumerPath = `${indirectRoot}/consumer.ts`
+    const indirectAugmenter: CapabilitySourceFile = {
+      path: indirectAugmenterPath,
+      source:
+        'import type { Issue262AmbientType } from "./type.js"\nexport {}; declare global { const issue262IndirectAmbientValue: Issue262AmbientType }'
+    }
+    const indirectConsumer: CapabilitySourceFile = {
+      path: indirectConsumerPath,
+      source: "export const issue262IndirectConsumerValue: number = issue262IndirectAmbientValue"
+    }
+    inspectCapabilitySourceProgram([
+      { path: indirectTypePath, source: "export type Issue262AmbientType = number" },
+      indirectAugmenter,
+      indirectConsumer
+    ])
+    const changedSources = [
+      { path: indirectTypePath, source: "export type Issue262AmbientType = string" },
+      indirectAugmenter,
+      indirectConsumer
+    ]
+    const changedIndirectIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, changedSources)
+    const changedDiagnostics = inspectCapabilitySourceProgram(changedSources)
+
+    const freshIndirectRoot = "scripts/fixtures/issue-262-fresh-indirect-ambient"
+    const freshIndirectIssues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
+      { path: `${freshIndirectRoot}/type.ts`, source: "export type Issue262AmbientType = string" },
+      {
+        path: `${freshIndirectRoot}/augmenter.ts`,
+        source:
+          'import type { Issue262AmbientType } from "./type.js"\nexport {}; declare global { const issue262IndirectAmbientValue: Issue262AmbientType }'
+      },
+      {
+        path: `${freshIndirectRoot}/consumer.ts`,
+        source: "export const issue262IndirectConsumerValue: number = issue262IndirectAmbientValue"
+      }
+    ])
+    const compilerIssues = (issues: ReadonlyArray<string>) =>
+      issues.filter((issue) => issue.startsWith("source audit TypeScript diagnostic"))
+
+    expect(
+      changedIndirectIssues.some((issue) => issue.includes(`in ${indirectConsumerPath}:`) && issue.includes("TS2322"))
+    ).toBe(true)
+    expect(changedDiagnostics.rebuiltSourcePaths).toContain(indirectTypePath)
+    expect(changedDiagnostics.reusedSourcePaths).toEqual(
+      expect.arrayContaining([indirectAugmenterPath, indirectConsumerPath])
+    )
+    expect(compilerIssues(changedIndirectIssues)).toEqual(
+      compilerIssues(freshIndirectIssues).map((issue) => issue.replaceAll(freshIndirectRoot, indirectRoot))
+    )
+  })
+
   it("fails closed when a changed dependency removes an imported export", () => {
     const dependencyPath = "scripts/fixtures/issue-262-dependency.ts"
     const consumerPath = "scripts/fixtures/issue-262-dependency-consumer.ts"
@@ -827,9 +989,13 @@ describe("capability registration gate", () => {
     const removedExport: CapabilitySourceFile = { path: dependencyPath, source: "export const replacementValue = 1" }
 
     inspectCapabilitySourceProgram([validDependency, consumer])
-    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [removedExport, consumer])
+    const changedSources = [removedExport, consumer]
+    const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, changedSources)
+    const diagnostics = inspectCapabilitySourceProgram(changedSources)
 
     expect(issues.some((issue) => issue.includes(`in ${consumerPath}:`) && issue.includes("TS2305"))).toBe(true)
+    expect(diagnostics.rebuiltDependencyPaths).toContain(dependencyPath)
+    expect(diagnostics.reusedDependencyPaths).toContain(consumerPath)
   })
 
   it("fails closed when a removed dependency remains imported", () => {
@@ -966,17 +1132,31 @@ describe("capability registration gate", () => {
     expect(issues.some((issue) => issue.includes(`in ${consumerPath}:`) && issue.includes("TS2322"))).toBe(true)
   })
 
-  it("keeps exact source-array identity caching for repeated audits", () => {
-    const source = [{ path: "scripts/fixtures/issue-262-cache-identity.ts", source: "export const cached = 1" }]
+  it("keeps exact source-array identity caching and refreshes Program recency", () => {
+    const baselinePath = "scripts/fixtures/issue-262-cache-identity.ts"
+    const baseline = [{ path: baselinePath, source: "export const cached = 1" }]
+    const baselineDiagnostics = inspectCapabilitySourceProgram(baseline)
+    inspectCapabilitySourceProgram([
+      { path: "scripts/fixtures/issue-262-cache-displacement-a.ts", source: "export const displacementA = 1" },
+      { path: "scripts/fixtures/issue-262-cache-displacement-b.ts", source: "export const displacementB = 2" }
+    ])
 
-    expect(inspectCapabilitySourceProgram(source)).toBe(inspectCapabilitySourceProgram(source))
+    expect(inspectCapabilitySourceProgram(baseline)).toBe(baselineDiagnostics)
+    const expanded = inspectCapabilitySourceProgram([
+      ...baseline,
+      { path: "scripts/fixtures/issue-262-cache-expanded.ts", source: "export const expanded = 2" }
+    ])
+    expect(expanded.reusedSourcePaths).toContain(baselinePath)
+    expect(expanded.rebuiltSourcePaths).toContain("scripts/fixtures/issue-262-cache-expanded.ts")
   })
 
   it("audits source text without loading or invoking a live provider", () => {
-    const providerCalled = false
     const providerLayer: CapabilitySourceFile = {
       path: "scripts/fixtures/issue-79-provider-layer.ts",
-      source: 'export const unregisteredProviderLayer = Layer.effect(Provider, () => fetch("https://provider.invalid"))'
+      source: [
+        'throw new Error("capability source audit evaluated the provider fixture")',
+        'export const unregisteredProviderLayer = Layer.effect(Provider, () => fetch("https://provider.invalid"))'
+      ].join("\n")
     }
     const providerComposition: CapabilitySourceFile = {
       path: "scripts/fixtures/issue-79-provider-composition.ts",
@@ -991,18 +1171,49 @@ describe("capability registration gate", () => {
       ]
     }
 
-    const issues = runCapabilityRegistrationGate(inventory, [...sourceFiles, providerLayer, providerComposition])
+    const providerSources = [...sourceFiles, providerLayer, providerComposition]
+    const repositorySourcePath = sourceFiles[0]?.path
+    if (repositorySourcePath === undefined) throw new Error("repository capability sources are missing")
+    inspectCapabilitySourceProgram(sourceFiles)
+    const issues = runCapabilityRegistrationGate(inventory, providerSources)
+    const providerDiagnostics = inspectCapabilitySourceProgram(providerSources)
     expect(issues).toContain("production uses unregistered exported Layer unregisteredProviderLayer")
-    expect(providerCalled).toBe(false)
+    expect(providerDiagnostics.reusedSourcePaths).toContain(repositorySourcePath)
+    expect(new Set(providerDiagnostics.reusedSourcePaths)).toEqual(new Set(sourceFiles.map(({ path }) => path)))
   })
 
-  it("relays parent signals for every bounded quality-gate stage", () => {
+  it("passes the capability deadline and parent-signal policy to the bounded runner", () => {
     expect(
       boundedQualityGateCommand({
-        gate: { args: ["fixture"], name: "fixture", terminationGrace: 15_000, timeout: 60_000 },
+        gate: capabilityRegistrationQualityGate,
         nodeExecutable: "/fixture/node",
         pnpmEntryPoint: "/fixture/pnpm.cjs"
       })
-    ).toMatchObject({ relayParentSignals: true, terminationGraceMilliseconds: 15_000 })
+    ).toEqual({
+      args: ["/fixture/pnpm.cjs", "--silent", "test:capability-registration"],
+      environment: undefined,
+      executable: "/fixture/node",
+      name: "Quality gate 'capability registration'",
+      relayParentSignals: true,
+      terminationGraceMilliseconds: undefined,
+      timeoutMilliseconds: 60_000
+    })
+
+    expect(
+      boundedQualityGateCommand({
+        gate: {
+          args: ["test:issue-268-c4"],
+          name: "issue 268 fresh-process repeatability",
+          terminationGrace: 15_000,
+          timeout: 19 * 60_000
+        },
+        nodeExecutable: "/fixture/node",
+        pnpmEntryPoint: "/fixture/pnpm.cjs"
+      })
+    ).toMatchObject({
+      args: ["/fixture/pnpm.cjs", "--silent", "test:issue-268-c4"],
+      relayParentSignals: true,
+      terminationGraceMilliseconds: 15_000
+    })
   })
 })

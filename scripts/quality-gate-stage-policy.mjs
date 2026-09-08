@@ -9,6 +9,12 @@ export const recordedCatalogQualityGate = Object.freeze({
   timeout: 7 * 60 * SECOND
 })
 
+export const capabilityRegistrationQualityGate = Object.freeze({
+  args: Object.freeze(["test:capability-registration"]),
+  name: "capability registration",
+  timeout: 60 * SECOND
+})
+
 /** Build the process-group-bounded invocation shared by every quality stage. */
 export const boundedQualityGateCommand = ({ gate, nodeExecutable, pnpmEntryPoint }) => ({
   // Omit pnpm lifecycle banners; retain the child tool's output and exit status.

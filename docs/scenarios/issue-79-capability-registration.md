@@ -61,7 +61,12 @@ The gate first checks the fixed accepted family set, then checks duplicate
 families and duplicate identities within a family, controlled/production
 contract execution evidence, typed N/A details, source markers, composition
 uses, and unregistered exported Layers. It reads no provider and performs no
-runtime composition. The GitHub active-claim contract now exercises the real
+runtime composition. Across controlled fixture audits, it retains only the
+latest and largest semantic Programs and chooses the one with the greatest
+exact path-and-source overlap. A cached Program with no exact overlap is not a
+predecessor compilation context. It reuses a dependency index only when every
+root path is unchanged and that source's complete text is equal; adding or
+removing a root rebuilds every dependency index. The GitHub active-claim contract now exercises the real
 `githubTrackerMutationLayer` and counts as its production implementation edge.
 Node target-promotion qualification remains test-only and does not count as a
 repository-owned production consumer, so that side retains its
@@ -93,8 +98,11 @@ that is not consumed by its declared composition`, `rejects implementation
 evidence pointed at a consumer instead of its declaration`, `rejects a
 same-name local composition value that shadows the registered Layer`, `requires
 source-backed support binding evidence and a concrete reason`, `keeps the
-required family denominator outside a mutated inventory`. These assertions also
-run through `test:coverage` within `check:all`.
+required family denominator outside a mutated inventory`. `check:all` runs
+these source-audit assertions once through the focused
+`test:capability-registration` command under a 60-second process deadline. The
+coverage stage excludes that suite and every test named with the
+`.performance.test.ts` suffix, so neither is repeated under instrumentation.
 
 ## Scenario-to-test handoff
 
@@ -116,4 +124,5 @@ run through `test:coverage` within `check:all`.
 | Existing registration changed | Removing the journal suite's direct SQLite shared-contract call fails only the journal production execution. | `rejects journal production when its shared contract edge is removed` |
 | Existing registration changed | A destructured local helper shadow cannot satisfy an imported shared-contract execution. | `rejects a destructuring shadow of an imported shared contract` |
 | Existing registration changed | Every non-capability support layer has declaration-backed evidence and a concrete reason. | `requires source-backed support binding evidence and a concrete reason` |
-| Existing registration changed | Capability assertions remain required by repository acceptance. | `scripts/capability-registration.test.ts` in coverage mode; `test:coverage` within `pnpm check:all` |
+| Existing registration changed | A compiler error remains visible when a later audit reorders the unchanged invalid source, adds an unrelated root, or changes another unrelated source; changed or removed ambient declarations recompute every current root so conflicts disappear and new consumer errors appear. | `preserves or recomputes diagnostics across unrelated and ambient source changes` |
+| Existing registration changed | Capability assertions run exactly once under their accepted finite repository deadline; nonzero exits and timeouts fail the gate, a wedged descendant is terminated, and performance measurements remain explicit. | `runs the capability audit exactly once and continues to the next quality stage`; `fails fast when the capability audit exits nonzero`; `passes the capability deadline and parent-signal policy to the bounded runner`; `excludes capability correctness and every performance test only from coverage`; `attaches captured output and line counts when a command times out`; `kills a resistant descendant after the process-group leader exits`; `pnpm check:all` |

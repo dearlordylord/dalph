@@ -1,6 +1,10 @@
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
-import { boundedQualityGateCommand, recordedCatalogQualityGate } from "./quality-gate-stage-policy.mjs"
+import {
+  boundedQualityGateCommand,
+  capabilityRegistrationQualityGate,
+  recordedCatalogQualityGate
+} from "./quality-gate-stage-policy.mjs"
 
 const SECOND = 1_000
 const maximumSuccessfulOutputLines = 550
@@ -17,6 +21,7 @@ if (pnpmEntryPoint === undefined) {
 
 const gates = [
   { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
+  capabilityRegistrationQualityGate,
   { args: ["test:ci-change-classification"], name: "CI change classification", timeout: 60 * SECOND },
   { args: ["typecheck"], name: "typecheck", timeout: 2 * 60 * SECOND },
   { args: ["typecheck:effect"], name: "Effect diagnostics", timeout: 3 * 60 * SECOND },
