@@ -1,3 +1,4 @@
+import { acceptedFreshTaskAdmissionQuintGateCommandKeys } from "./quint-gate-fresh-task-command-oracle.mjs"
 import { acceptedLegacyQuintGateCommandKeys } from "./quint-gate-legacy-command-oracle.mjs"
 
 export const quintGateExpectedCommandCounts = Object.freeze({
@@ -23,6 +24,16 @@ export const quintGateSampleThreadCount = 4
 
 const commandKinds = Object.freeze(["typecheck", "test", "sampled-run", "verify"])
 const commandKey = ({ kind, name }) => `${kind}\u0000${name}`
+const firstPostFreshTaskCommandKey = "typecheck\u0000Run cancellation model typecheck"
+const freshTaskInsertionIndex = acceptedLegacyQuintGateCommandKeys.indexOf(firstPostFreshTaskCommandKey)
+
+if (freshTaskInsertionIndex < 0) throw new Error("accepted legacy Quint oracle lacks the post-#315 boundary")
+
+const acceptedQuintGateCommandKeys = Object.freeze([
+  ...acceptedLegacyQuintGateCommandKeys.slice(0, freshTaskInsertionIndex),
+  ...acceptedFreshTaskAdmissionQuintGateCommandKeys,
+  ...acceptedLegacyQuintGateCommandKeys.slice(freshTaskInsertionIndex)
+])
 
 /** Compare the retained pre-#315 commands with the independently accepted order. */
 export const assertAcceptedLegacyQuintGateCommands = (manifest) => {
@@ -33,6 +44,18 @@ export const assertAcceptedLegacyQuintGateCommands = (manifest) => {
   const index = mismatch < 0 ? Math.min(retained.length, acceptedLegacyQuintGateCommandKeys.length) : mismatch
   throw new Error(
     `accepted legacy Quint command mismatch at ${index}: expected ${String(acceptedLegacyQuintGateCommandKeys[index])}, received ${String(retained[index])}`
+  )
+}
+
+/** Compare every command with independent pre-#315 and #315 literal oracles. */
+export const assertAcceptedQuintGateCommands = (manifest) => {
+  const received = manifest.map(commandKey)
+  const mismatch = received.findIndex((key, index) => key !== acceptedQuintGateCommandKeys[index])
+  if (received.length === acceptedQuintGateCommandKeys.length && mismatch < 0) return
+
+  const index = mismatch < 0 ? Math.min(received.length, acceptedQuintGateCommandKeys.length) : mismatch
+  throw new Error(
+    `accepted Quint command mismatch at ${index}: expected ${String(acceptedQuintGateCommandKeys[index])}, received ${String(received[index])}`
   )
 }
 
@@ -50,7 +73,7 @@ const countManifestCommands = (manifest) => {
  * 105-command phase contract even when an omission changes them together.
  */
 export const assertQuintGateCommandContract = ({ executed, manifest }) => {
-  assertAcceptedLegacyQuintGateCommands(manifest)
+  assertAcceptedQuintGateCommands(manifest)
   const manifestCounts = countManifestCommands(manifest)
   const mismatches = []
   for (const key of ["total", ...commandKinds]) {
