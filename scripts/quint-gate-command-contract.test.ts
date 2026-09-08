@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest"
 import { legacyQuintGateCommandManifest, quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
 import {
   assertQuintGateCommandContract,
+  assertQuintGateSampleThreadContract,
   legacyQuintGateExpectedCommandCounts,
-  quintGateExpectedCommandCounts
+  quintGateSampleThreadCount,
+  quintGateExpectedCommandCounts,
+  withQuintGateSampleThreadContract
 } from "./quint-gate-command-contract.mjs"
 
 describe("Quint gate command contract", () => {
@@ -45,6 +48,27 @@ describe("Quint gate command contract", () => {
 
     expect(() => assertQuintGateCommandContract({ manifest: omittedManifest, executed: omittedExecution })).toThrow(
       "expected 105"
+    )
+  })
+
+  it("accepts the hosted-supported sampled-run thread count", () => {
+    expect(quintGateSampleThreadCount).toBe(4)
+    expect(() => assertQuintGateSampleThreadContract(["run", "spec.qnt", "--n-threads", "4"])).not.toThrow()
+    expect(withQuintGateSampleThreadContract(["run", "spec.qnt"])).toEqual(["run", "spec.qnt", "--n-threads", "4"])
+  })
+
+  it.each([
+    ["omitted", ["run", "spec.qnt"]],
+    ["changed", ["run", "spec.qnt", "--n-threads", "12"]]
+  ])("rejects a sampled-run thread count that is %s", (_case, args) => {
+    expect(() => assertQuintGateSampleThreadContract(args)).toThrow(
+      "Quint sampled-run thread contract mismatch: expected exactly --n-threads 4"
+    )
+  })
+
+  it("rejects an existing sampled-run thread option instead of masking it with the required value", () => {
+    expect(() => withQuintGateSampleThreadContract(["run", "spec.qnt", "--n-threads", "12"])).toThrow(
+      "Quint sampled-run thread contract mismatch: expected exactly --n-threads 4"
     )
   })
 })

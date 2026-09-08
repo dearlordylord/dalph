@@ -2847,10 +2847,20 @@ module acceptedResultIntegration {
     observeIncompatibleTargetLineageOne,
   }
 
-  // The canonical sampler gives this long promotion chronology one additional
-  // exploration opportunity per step. Every branch remains an existing atomic
-  // protocol action; exhaustive verification and runtime semantics use `step`.
-  action promotionWitnessCoverageStep: bool = any {
+  // The sampled gate gives the bounded three-attempt chronology a guided path.
+  // These remain the protocol's existing atomic actions; the ordinary `step`
+  // relation and exhaustive verification are unchanged.
+  action promotionRetryResponseLostOne: bool = all {
+    state.results.get(1).promotionAttemptCount < PROMOTION_ATTEMPT_LIMIT,
+    losePromotionAttemptResponseOne,
+  }
+
+  action promotionFinalAttemptExhaustedOne: bool = all {
+    state.results.get(1).promotionAttemptCount == PROMOTION_ATTEMPT_LIMIT,
+    observePromotionGitUnreadableOne,
+  }
+
+  action promotionExhaustionWitnessCoverageStep: bool = any {
     acceptResultOne,
     queueAcceptedResultOne,
     startIntegrationOne,
@@ -2865,17 +2875,41 @@ module acceptedResultIntegration {
     observePromotionExactExpectedHeadOne,
     recordPromotionAttemptIntentOne,
     sendPromotionAttemptOne,
-    losePromotionAttemptResponseOne,
-    recoverCoordinatorStep,
+    promotionRetryResponseLostOne,
+    promotionFinalAttemptExhaustedOne,
     observeTrackerFactsStep,
     observeTargetFactsOne,
     reconcilePromotionOne,
-    reconcilePromotionReadOnlyOne,
-    resumePromotionRetryWithAuthorityOne,
+  }
+
+  // A separate guided path covers the conclusive-result quarantine and full
+  // rerun successor without changing the ordinary scheduler relation.
+  action recoverSelectedFullRerunOne: bool = all {
+    state.results.get(1).phase == FullRerunSelected,
+    state.targetFactsCurrent,
+    recoverCoordinatorStep,
+  }
+
+  action successorWitnessCoverageStep: bool = any {
+    acceptResultOne,
+    queueAcceptedResultOne,
+    startIntegrationOne,
+    fixIntegratorSessionOne,
+    invokeIntegratorOne,
+    reportIntegratorNotPreparedOne,
+    recordQuarantineOne,
+    chooseFullRerunOne,
+    recoverSelectedFullRerunOne,
+    observeTrackerFactsStep,
+    observeSuccessorTargetHeadOne,
+    startFullRerunOne,
+    startSuccessorIntegratorOne,
+    loseSuccessorResponseOne,
   }
 
   action acceptedResultIntegrationSampleStep: bool = any {
-    promotionWitnessCoverageStep,
+    promotionExhaustionWitnessCoverageStep,
+    successorWitnessCoverageStep,
     step,
   }
 }

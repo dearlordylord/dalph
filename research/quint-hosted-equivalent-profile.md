@@ -23,8 +23,56 @@ ordered subset and adds all 13 fresh-task admission identities. A local
 Node 24.20.0 run of that current inventory completed in 501.72 seconds against
 the unchanged 750-second regression budget; its phase totals were 26.28,
 209.08, 240.31, and 198.01 seconds respectively. This is local runner evidence,
-not hosted timing evidence. A dedicated hosted run and a separately stressed
-Node 24.20 run remain exact-SHA qualification work after this branch is pushed.
+not hosted timing evidence. That run used a locally cached evaluator artifact;
+the artifact distinction is recorded below and it is not hosted-equivalent.
+
+## Exact-SHA hosted qualification and repair
+
+The first exact-SHA qualification of candidate
+`e5a80d6df98657d3ac0b201197ec721410244f7a` ran the supported Node 24.20.0
+runtime twice:
+
+- the dedicated [formal run 34268627362](https://github.com/dearlordylord/dalph/actions/runs/34268627362),
+  [job 102204286386](https://github.com/dearlordylord/dalph/actions/runs/34268627362/job/102204286386),
+  used Ubuntu 24.04 arm64 with four Neoverse-N2 processors. It stopped after
+  95 of 105 commands with phase accounting 13/42/21/19 and phase timings
+  26.00/162.45/259.98/195.30 seconds; setup through the formal command took
+  18.78 seconds and the formal command took 509.61 seconds;
+- the stressed [CI run 34268629739](https://github.com/dearlordylord/dalph/actions/runs/34268629739),
+  [formal job 102204339477](https://github.com/dearlordylord/dalph/actions/runs/34268629739/job/102204339477),
+  used Ubuntu x64. It stopped at the same command and accounting with phase
+  timings 29.51/195.38/297.98/218.89 seconds; setup took 18.87 seconds and the
+  formal command took 568.96 seconds. The concurrent
+  [quality job 102204339625](https://github.com/dearlordylord/dalph/actions/runs/34268629739/job/102204339625)
+  passed, including its controlled broken-obligation negative control.
+
+Both formal jobs failed closed on the accepted-result sampled model because
+`promotionExhaustedReached`, `successorSessionFixedReached`,
+`successorInFlightReached`, and `successorResponseLostReached` each reported
+zero of 10,000 traces. The temporal-mutant negative control also behaved as
+expected. No retry was dispatched. The exact-SHA candidate therefore remains
+unqualified even though both formal jobs stayed inside the 16-minute bound.
+
+Quint 0.32.0 otherwise defaults `--n-threads` to `os.cpus().length`, which
+changes how one seed is partitioned. Both supported hosted architectures in
+these runs exposed four processors. The repaired gate therefore passes
+`--n-threads 4` to every one of its 23 sampled commands and rejects an omitted,
+changed, or duplicate thread option. It does not change the 35-step or
+10,000-sample accepted-result bounds. Sampling-only guided action groups retain
+the existing atomic protocol actions while giving the three-attempt exhaustion
+and full-rerun successor chronologies reproducible coverage. Two local runs at
+seed 270 and four threads produced the same counts: 3 exhaustion traces and
+1692/1690/1686 successor-session/in-flight/response-lost traces.
+
+The gate now emits the installed Quint package version, evaluator release tag,
+platform, architecture, byte length, SHA-256, and path after the evaluator's
+installation-critical first family completes. The package version and evaluator
+tag are derived from the installed Quint package rather than copied into this
+repository. A local profile can be called hosted-equivalent only when its
+platform, architecture, and exact evaluator SHA-256 match the hosted record;
+the release tag alone is insufficient because its downloadable artifact has
+changed in place. The older local arm64 cache used above is 2,568,376 bytes with
+SHA-256 `8f3eb7e2b0fc4b9ceaf62c27b507a022e4f8e9e83f44449cd05385a9cb79cf26`.
 
 ## Historical measurements
 
@@ -191,10 +239,14 @@ exemption applies. The concrete tooling outcomes are covered by:
 - `scripts/quint-gate-timing.test.ts`: command/phase accumulation, including
   timing output from `finally` while preserving the original failure; and
 - `scripts/quint-gate-command-contract.test.ts`: exact current 105-command and
-  15/46/23/21 phase accounting, plus the ordered legacy 92-command subset;
+  15/46/23/21 phase accounting, the ordered legacy 92-command subset, and a
+  negative control that rejects omitted or changed four-thread sampling;
 - `scripts/quint-gate-concurrency.test.ts`: the installation-critical first
   evaluator command completes before bounded parallel family work is admitted;
-  and
-- the five historical passing runs recorded above, plus the current local
-  Node 24.20.0 run. Hosted Node 24.20 qualification remains the workflow's
-  authoritative environment-specific result.
+- `scripts/quint-witness-coverage.test.ts`: the captured four-zero hosted
+  accepted-result output must fail closed;
+- `scripts/quint-evaluator-provenance.test.ts`: two artifacts claiming the same
+  package and evaluator versions retain different SHA-256 identities; and
+- the five historical passing runs, the exact-SHA hosted failures, and the
+  repaired local Node 24.20.0 four-thread samples recorded above. A new hosted
+  Node 24.20 exact-SHA run remains the authoritative qualification result.

@@ -15,7 +15,8 @@ import {
 } from "./quint-model-obligations.mjs"
 import { quintGateRegressionBudgetMilliseconds, quintGateSafetyTimeoutMilliseconds } from "./quint-gate-policy.mjs"
 import { quintGateCommandManifest } from "./quint-gate-command-manifest.mjs"
-import { assertQuintGateCommandContract } from "./quint-gate-command-contract.mjs"
+import { assertQuintGateCommandContract, withQuintGateSampleThreadContract } from "./quint-gate-command-contract.mjs"
+import { readQuintEvaluatorProvenance, renderQuintEvaluatorProvenance } from "./quint-evaluator-provenance.mjs"
 import {
   apalacheVersion,
   assertCleanTemporalVerdict,
@@ -57,7 +58,12 @@ const reserveCommand = (name, args, options = {}) => {
   // Collected tests are exact examples or mutation witnesses. Execute every
   // declaration once with a stable identity-derived seed; unconstrained
   // exploration remains in the separately named sampled-run commands.
-  const executionArgs = kind === "test" ? [...args, "--max-samples", "1", "--seed", String(153_000 + position)] : args
+  const executionArgs =
+    kind === "test"
+      ? [...args, "--max-samples", "1", "--seed", String(153_000 + position)]
+      : kind === "sampled-run"
+        ? withQuintGateSampleThreadContract(args)
+        : args
   return { args: executionArgs, kind, name, options, position }
 }
 
@@ -164,6 +170,7 @@ await runWithQuintGateTiming({
       ],
       { serializedPrefix: 1 }
     )
+    process.stdout.write(`${renderQuintEvaluatorProvenance(await readQuintEvaluatorProvenance())}\n`)
     await runPreparedTemporalCheck({
       assertArtifactPrepared: () => assertTlcArtifactPrepared(),
       // Quint's TLC backend loads TLC from the Apalache distribution. On a cold
