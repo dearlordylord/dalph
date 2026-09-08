@@ -30,6 +30,11 @@ interface DeliveryStoryAcceptanceTest {
   readonly declaration: "it" | "it.effect" | "scenario"
   readonly name: string
   readonly sourceFile:
+    | "packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts"
+    | "packages/orchestrator/src/workflow/protocols/integration-quarantine/promotion-stale.test.ts"
+    | "packages/orchestrator/src/workflow/protocols/integration-quarantine/protocol.test.ts"
+    | "packages/orchestrator/src/workflow/protocols/integration-finality/protocol.test.ts"
+    | "packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts"
     | "packages/dalph/test/cassettes/scenario.test.ts"
     | "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
     | "prototypes/reducer-lab/src/cassette-lab.smoke.ts"
@@ -72,10 +77,71 @@ const capstoneTest = (name: string): DeliveryStoryAcceptanceTest => ({
   sourceFile: "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
 })
 
+const orchestratorTest = (
+  sourceFile: Extract<DeliveryStoryAcceptanceTest["sourceFile"], `packages/orchestrator/${string}`>,
+  declaration: "it" | "it.effect",
+  name: string
+): DeliveryStoryAcceptanceTest => ({ declaration, name, sourceFile })
+
 const topologyTest = capstoneTest("consumes a staggered graph while restart-added X waits for recovered capacity")
 const restartTest = capstoneTest("preserves the double-diamond middle positions across coordinator restart")
 const issue268CheckpointTable = capstoneTest("emits the exact DS01 through DS13 delivery checkpoint table")
 const issue268OccurrenceCassette = capstoneTest("consumes exactly the accepted issue 268 occurrence inventory")
+const ds14ThroughDs17Test = capstoneTest(
+  "executes DS-14 through DS-17 from rejected exact-head offer through Operator-authorized successor finality"
+)
+const ds15NegativeTest = capstoneTest("rejects DS-15 evidence when M or M2 lacks exact ordered head-then-C parents")
+const ds16NegativeTest = capstoneTest(
+  "rejects DS16 evidence without the rejected CAS attempt or with a pre-request stale read"
+)
+const ds14ThroughDs17PrefixHistoryTest = capstoneTest(
+  "accepts every DS-14 through DS-17 checkpoint prefix as valid history with at most one recorded successor, promotion, and completion attempt"
+)
+const ds14ThroughDs17ComposedRestartTest = capstoneTest(
+  "resumes the composed DS-14 through DS-17 path after every CAS-to-successor durable checkpoint"
+)
+const ds17FinalityRestartTests = [
+  capstoneTest("resumes exact DS-17 finality after TargetPromotionObservedSuccess durable checkpoint"),
+  capstoneTest("resumes exact DS-17 finality after CompletionClaimReplaced durable checkpoint"),
+  capstoneTest("resumes exact DS-17 finality after CompletionTaskAcknowledged durable checkpoint"),
+  capstoneTest("resumes exact DS-17 finality after CompletionClaimDeleted durable checkpoint"),
+  capstoneTest("resumes exact DS-17 finality after IntegrationFinalitySettled durable checkpoint")
+] as const
+const promotionStaleRestartTest = orchestratorTest(
+  "packages/orchestrator/src/workflow/protocols/integration-quarantine/promotion-stale.test.ts",
+  "it.effect",
+  "checks Git after losing the compare-and-set response and records at most one quarantine"
+)
+const fullRerunDirectionRedeliveryTest = orchestratorTest(
+  "packages/orchestrator/src/workflow/protocols/integration-quarantine/protocol.test.ts",
+  "it.effect",
+  "reconciles every ambiguous direction append outcome against the Journal winner"
+)
+const fullRerunPredecessorFactNegativeTest = orchestratorTest(
+  "packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts",
+  "it.effect",
+  "rejects every missing or contradictory FullRerun predecessor fact before appending S2"
+)
+const reusedSuccessorIdentityNegativeTest = orchestratorTest(
+  "packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts",
+  "it",
+  "rejects a FullRerun successor that reuses predecessor identities"
+)
+const foreignCompletionClaimNegativeTest = orchestratorTest(
+  "packages/orchestrator/src/workflow/protocols/integration-finality/protocol.test.ts",
+  "it.effect",
+  "does not delete when the completion marker disappears or changes before the first delete"
+)
+const successorSessionRestartTest = orchestratorTest(
+  "packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts",
+  "it.effect",
+  "recovers a recorded full rerun without creating a second successor"
+)
+const successorDeliveryRestartTest = orchestratorTest(
+  "packages/orchestrator/src/coordination/frontier/integration-frontier-transitions.test.ts",
+  "it",
+  "delivers the already-recorded FullRerun successor after restart"
+)
 const issue268CassetteKeys = ["controlled:issue268Ds01ThroughDs13"] as const
 const issue268BeatIds = deliveryStoryBeatIds.slice(0, deliveryStoryBeatIds.indexOf("DS-13") + 1)
 
@@ -108,20 +174,57 @@ export const deliveryStoryManifest = {
     ),
     slice(
       "DS-14",
-      ["authored:acceptedResultRestartsIntoIntegration"],
+      ["authored:deliveryStoryDs14ThroughDs17", "authored:acceptedResultRestartsIntoIntegration"],
+      ds14ThroughDs17Test,
+      ds14ThroughDs17ComposedRestartTest,
+      ds14ThroughDs17PrefixHistoryTest,
       scenarioTest("continues an accepted result after process death and crosses its integration cutoff once")
     ),
-    missing(
+    slice(
       "DS-15",
-      "No named acceptance test proves the candidate's exact ordered expected-head and accepted-result parents for this beat."
+      ["authored:deliveryStoryDs14ThroughDs17"],
+      ds14ThroughDs17Test,
+      ds15NegativeTest,
+      ds14ThroughDs17ComposedRestartTest,
+      ds14ThroughDs17PrefixHistoryTest
     ),
-    missing(
+    slice(
       "DS-16",
-      "The maintained stale-head cassette detects H2 before compare-and-set; it does not send the beat's rejected exact-head offer."
+      ["authored:deliveryStoryDs14ThroughDs17"],
+      ds14ThroughDs17Test,
+      ds16NegativeTest,
+      ds14ThroughDs17ComposedRestartTest,
+      ds14ThroughDs17PrefixHistoryTest,
+      promotionStaleRestartTest
     ),
-    missing(
+    slice(
       "DS-17",
-      "The separate A-finality spine settles A, but does not first reconcile a stale head and rebuild its successor candidate."
+      [
+        "authored:deliveryStoryDs14ThroughDs17",
+        "authored:ambiguousCompletionResponse",
+        "integration-finality:restartAfterPromotionResumesCompletionSettlementWithoutAnotherIntegrationAgent",
+        "integration-finality:reconcilesALostCompletionClaimReplacementWithoutAllocatingAnotherClaim",
+        "integration-finality:doesNotMutateAForeignClaimWhileSettlingAPromotedTask",
+        "integration-finality:deletesOnlyTheExactCompletionClaimAfterFocusedTaskSuccess",
+        "integration-finality:reconcilesALostCompletionClaimDeletionWithoutReopeningSuccess"
+      ],
+      ds14ThroughDs17Test,
+      ds14ThroughDs17ComposedRestartTest,
+      ...ds17FinalityRestartTests,
+      ds14ThroughDs17PrefixHistoryTest,
+      fullRerunDirectionRedeliveryTest,
+      fullRerunPredecessorFactNegativeTest,
+      reusedSuccessorIdentityNegativeTest,
+      foreignCompletionClaimNegativeTest,
+      successorSessionRestartTest,
+      successorDeliveryRestartTest,
+      scenarioTest("restart after promotion resumes completion settlement without another integration agent"),
+      scenarioTest("reconciles a lost completion-claim replacement without allocating another claim"),
+      scenarioTest("Dalph checks A after losing the tracker completion response"),
+      scenarioTest("does not mutate a foreign claim while settling a promoted task"),
+      scenarioTest("deletes only the exact completion claim after focused task success"),
+      scenarioTest("reconciles a lost completion-claim deletion without reopening success"),
+      scenarioTest("reconstructs and round-trips interrupted and settled completion-cleanup Run prefixes")
     ),
     missing(
       "DS-18",
