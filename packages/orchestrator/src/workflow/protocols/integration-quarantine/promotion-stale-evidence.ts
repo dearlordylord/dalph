@@ -65,7 +65,7 @@ export const promotionStaleQuarantineEvidenceIssue = (
     : "promotion-stale quarantine requires one exact earlier correlated compare-and-set attempt intent"
 }
 
-export type PromotionStaleQuarantineEvidenceValidation =
+type PromotionStaleQuarantineEvidenceValidation =
   | { readonly _tag: "Invalid"; readonly detail: string }
   | { readonly _tag: "Valid"; readonly stale: PromotionStaleRecord }
 
