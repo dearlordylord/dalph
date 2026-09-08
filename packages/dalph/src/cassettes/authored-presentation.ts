@@ -35,6 +35,8 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       CoordinatorActivationReturned: noLandmark,
       CoordinatorProcessDies: () =>
         "The coordinator process died; the next activation reconstructs accepted journal history",
+      CoordinatorProcessDiesAfterJournalEvent: (item) =>
+        `The coordinator process died after durable ${item.afterJournalEvent}; the next activation reconstructs accepted journal history`,
       DalphHoldsAdmittedContinuationBeforeExecutorIntent: noLandmark,
       CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: noLandmark,
       CassetteReleasesHeldPlannedAttemptContinuation: noLandmark,
@@ -59,6 +61,7 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       GitWorktreeObservationChanged: noLandmark,
       GitPlannedWorktreeCreateResponseLost: noLandmark,
       IntegratorRequestReceived: noLandmark,
+      OperatorAppliesIntegrationQuarantineDirection: noLandmark,
       IntegratorResultReturned: noLandmark,
       IntegratorGitObservationReturned: noLandmark,
       IntegratorGitObservationFailed: noLandmark,
@@ -251,7 +254,12 @@ const trackerGraphLyric = (item: AuthoredTrackerGraphStoryItem): string =>
 
 type CoordinatorStoryItem = Exclude<
   AuthoredCassetteStoryItem,
-  { readonly _tag: "CoordinatorActivationReturned" | "CoordinatorProcessDies" }
+  {
+    readonly _tag:
+      | "CoordinatorActivationReturned"
+      | "CoordinatorProcessDies"
+      | "CoordinatorProcessDiesAfterJournalEvent"
+  }
 >
 
 type AuthoredTrackerClaimStoryItem = Extract<
@@ -489,6 +497,8 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         `A read-only executor projection returns ${item.report._tag} for attempt ${item.report.attemptId}.`,
       PlannedAttemptExecutorResponseLost: (item) =>
         `The executor reaches ${item.report._tag} for attempt ${item.report.attemptId}, but Dalph loses the ${item.request} response: ${item.detail}`,
+      OperatorAppliesIntegrationQuarantineDirection: (item) =>
+        `Alice applies ${item.request.fingerprint.direction} to Integrator session ${item.request.fingerprint.sessionId} quarantined at ${item.request.fingerprint.quarantineAt}.`,
       OperatorStartsPauseObservation: (item) =>
         `Alice asks to observe Pause progress for ${
           item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
@@ -528,6 +538,9 @@ export const renderAuthoredStoryItemLyric = (item: AuthoredCassetteStoryItem): s
   }
   if (item._tag === "CoordinatorProcessDies") {
     return "The coordinator process and its same-process executor session die; durable and authority facts remain."
+  }
+  if (item._tag === "CoordinatorProcessDiesAfterJournalEvent") {
+    return `After ${item.afterJournalEvent} is durable, the coordinator process and its same-process executor session die; durable and authority facts remain.`
   }
   return coordinatorStoryLyric(item)
 }

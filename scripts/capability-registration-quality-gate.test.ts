@@ -1,62 +1,8 @@
-import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { fileURLToPath } from "node:url"
 import { expect, it } from "vitest"
-import vitestConfig from "../vitest.config.js"
-
-// @ts-expect-error The production quality-gate helper is an executable JavaScript module.
-import { runBoundedCommand } from "./run-bounded-command.mjs"
-
-const repositoryRoot = fileURLToPath(new URL("../", import.meta.url))
-
-const resolveVitestConfig = (mode: string) => {
-  if (typeof vitestConfig !== "function") throw new Error("Vitest configuration must be mode-aware")
-  return vitestConfig({ command: "serve", isPreview: false, isSsrBuild: false, mode })
-}
-
-const readInvocations = async (path: string) => (await readFile(path, "utf8")).trim().split("\n").filter(Boolean)
-
-const runQualityGateFixture = async (failureCommand?: string) => {
-  const directory = await mkdtemp(join(tmpdir(), "dalph-capability-registration-gate-"))
-  const entryPoint = join(directory, "pnpm-entry-point.mjs")
-  const invocationLog = join(directory, "invocations.log")
-
-  await writeFile(
-    entryPoint,
-    `import { appendFileSync } from "node:fs"
-const command = process.argv[3]
-appendFileSync(process.env.DALPH_QUALITY_GATE_INVOCATIONS, command + "\\n")
-if (command === process.env.DALPH_QUALITY_GATE_FAILURE_COMMAND) process.exit(23)
-`
-  )
-  await appendFile(invocationLog, "")
-
-  try {
-    const result = await runBoundedCommand({
-      acceptedExitCodes: failureCommand === undefined ? [0] : [1],
-      args: ["scripts/run-quality-gate.mjs"],
-      captureOutput: true,
-      cwd: repositoryRoot,
-      environment: {
-        ...process.env,
-        DALPH_QUALITY_GATE_FAILURE_COMMAND: failureCommand,
-        DALPH_QUALITY_GATE_INVOCATIONS: invocationLog,
-        npm_execpath: entryPoint
-      },
-      executable: process.execPath,
-      forwardOutput: false,
-      name: "capability-registration quality-gate fixture",
-      timeoutMilliseconds: 10_000
-    })
-    return { invocations: await readInvocations(invocationLog), result }
-  } finally {
-    await rm(directory, { force: true, recursive: true })
-  }
-}
+import { resolveVitestConfig, runQualityGateFixture } from "./quality-gate-test-fixture.js"
 
 it("runs the capability audit exactly once and continues to the next quality stage", async () => {
-  const { invocations, result } = await runQualityGateFixture()
+  const { invocations, result } = await runQualityGateFixture({ fixtureName: "capability-registration" })
   const capabilityIndex = invocations.indexOf("test:capability-registration")
 
   expect(result.exitCode).toBe(0)
@@ -66,7 +12,10 @@ it("runs the capability audit exactly once and continues to the next quality sta
 })
 
 it("fails fast when the capability audit exits nonzero", async () => {
-  const { invocations, result } = await runQualityGateFixture("test:capability-registration")
+  const { invocations, result } = await runQualityGateFixture({
+    failureCommand: "test:capability-registration",
+    fixtureName: "capability-registration"
+  })
 
   expect(result.exitCode).toBe(1)
   expect(result.output).toContain("Quality gate 'capability registration' failed with exit 23")
@@ -75,15 +24,19 @@ it("fails fast when the capability audit exits nonzero", async () => {
   expect(invocations).not.toContain("test:ci-change-classification")
 })
 
-it("excludes capability correctness and every performance test only from coverage", () => {
+it("keeps the exact combined exclusions out of ordinary tests and in coverage", () => {
   const ordinary = resolveVitestConfig("test")
   const coverage = resolveVitestConfig("coverage")
-  const capabilityTest = "scripts/capability-registration.test.ts"
-  const performanceTests = "**/*.performance.test.ts"
 
-  expect(ordinary.test?.exclude).not.toContain(capabilityTest)
-  expect(ordinary.test?.exclude).not.toContain(performanceTests)
-  expect(coverage.test?.exclude).toEqual(expect.arrayContaining([capabilityTest, performanceTests]))
+  expect(ordinary.test?.exclude).toEqual(["**/node_modules/**", "**/dist/**"])
+  expect(coverage.test?.exclude).toEqual([
+    "**/node_modules/**",
+    "**/dist/**",
+    "packages/**/!(run-activation|run-cancellation|task-fact-reconciliation).mbt.test.ts",
+    "scripts/capability-registration.test.ts",
+    "**/*.performance.test.ts",
+    "packages/dalph/test/cassettes/recorded-catalog-coverage.test.ts"
+  ])
   expect(coverage.test?.include).toEqual(ordinary.test?.include)
   expect(coverage.test?.coverage?.thresholds).toEqual({ branches: 75, functions: 75, lines: 75, statements: 75 })
 })

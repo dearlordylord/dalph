@@ -10,7 +10,6 @@ import {
   runCapabilityRegistrationGate,
   type CapabilitySourceFile
 } from "./capability-registration-gate.js"
-
 // @ts-expect-error The quality-gate policy is an executable JavaScript module.
 import { boundedQualityGateCommand, capabilityRegistrationQualityGate } from "./quality-gate-stage-policy.mjs"
 
@@ -1198,6 +1197,23 @@ describe("capability registration gate", () => {
       relayParentSignals: true,
       terminationGraceMilliseconds: undefined,
       timeoutMilliseconds: 60_000
+    })
+
+    expect(
+      boundedQualityGateCommand({
+        gate: {
+          args: ["test:issue-268-c4"],
+          name: "issue 268 fresh-process repeatability",
+          terminationGrace: 15_000,
+          timeout: 19 * 60_000
+        },
+        nodeExecutable: "/fixture/node",
+        pnpmEntryPoint: "/fixture/pnpm.cjs"
+      })
+    ).toMatchObject({
+      args: ["/fixture/pnpm.cjs", "--silent", "test:issue-268-c4"],
+      relayParentSignals: true,
+      terminationGraceMilliseconds: 15_000
     })
   })
 })

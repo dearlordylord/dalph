@@ -1,5 +1,14 @@
 const SECOND = 1_000
 
+// The unchanged all-catalog proof measured 348.688s wall time without V8
+// instrumentation. Seven minutes leaves 71.312s (20.5%) for runner variance
+// while keeping this duplicate semantic pass separate and finite.
+export const recordedCatalogQualityGate = Object.freeze({
+  args: Object.freeze(["test:recorded-catalog"]),
+  name: "maintained recorded-catalog semantics",
+  timeout: 7 * 60 * SECOND
+})
+
 export const capabilityRegistrationQualityGate = Object.freeze({
   args: Object.freeze(["test:capability-registration"]),
   name: "capability registration",
