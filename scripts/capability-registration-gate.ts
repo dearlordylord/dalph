@@ -43,6 +43,7 @@ interface CapabilitySourceProgram {
   readonly checker: ts.TypeChecker
   readonly dependenciesByPath: ReadonlyMap<string, ReadonlyArray<string>>
   readonly program: ts.Program
+  readonly sourceDiagnosticsByPath: ReadonlyMap<string, ReadonlyArray<CapabilityCompilerDiagnostic>>
   readonly sourceByPath: ReadonlyMap<string, CapabilitySourceFile>
   readonly diagnostics: CapabilitySourceProgramDiagnostics
 }
@@ -61,8 +62,21 @@ interface CapabilityCompilerDiagnostic {
  */
 interface CapabilitySourceProgramDiagnostics {
   readonly compilerDiagnostics: ReadonlyArray<CapabilityCompilerDiagnostic>
+  readonly rebuiltDependencyPaths: ReadonlyArray<string>
   readonly rebuiltSourcePaths: ReadonlyArray<string>
+  readonly reusedDependencyPaths: ReadonlyArray<string>
   readonly reusedSourcePaths: ReadonlyArray<string>
+}
+
+interface CapabilitySourceDependencies {
+  readonly dependenciesByPath: ReadonlyMap<string, ReadonlyArray<string>>
+  readonly rebuiltDependencyPaths: ReadonlyArray<string>
+  readonly reusedDependencyPaths: ReadonlyArray<string>
+}
+
+interface CapabilityCompilerDiagnostics {
+  readonly diagnostics: ReadonlyArray<CapabilityCompilerDiagnostic>
+  readonly sourceDiagnosticsByPath: ReadonlyMap<string, ReadonlyArray<CapabilityCompilerDiagnostic>>
 }
 
 const virtualRoot = "/__dalph_capability_registration__"
@@ -72,6 +86,18 @@ const sourcePathFromVirtualPath = (path: string): string => relative(virtualRoot
 
 const sourceProgramCache = new WeakMap<object, CapabilitySourceProgram>()
 let latestSourceProgram: CapabilitySourceProgram | undefined
+// Retain one bounded fallback so a tiny diagnostic fixture cannot evict the
+// repository Program whose unchanged trees are useful to the next full audit.
+let largestSourceProgram: CapabilitySourceProgram | undefined
+
+const rememberSourceProgram = (indexed: CapabilitySourceProgram): void => {
+  /* eslint-disable functional/immutable-data -- these are the two bounded module-local Program cache pointers. */
+  latestSourceProgram = indexed
+  if (largestSourceProgram === undefined || indexed.sourceByPath.size > largestSourceProgram.sourceByPath.size) {
+    largestSourceProgram = indexed
+  }
+  /* eslint-enable functional/immutable-data */
+}
 
 const diagnosticMessage = (diagnostic: ts.Diagnostic): string =>
   ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")
@@ -88,33 +114,42 @@ const sourceDependencyPaths = (
   program: ts.Program,
   sourceFiles: ReadonlyArray<CapabilitySourceFile>,
   options: ts.CompilerOptions,
-  host: ts.CompilerHost
-): ReadonlyMap<string, ReadonlyArray<string>> => {
+  host: ts.CompilerHost,
+  previous: CapabilitySourceProgram | undefined
+): CapabilitySourceDependencies => {
   const sourcePaths = new Set(sourceFiles.map(({ path }) => path))
-  return new Map(
-    sourceFiles.map((file) => {
-      const source = program.getSourceFile(virtualPath(file.path))
-      const preprocessed = ts.preProcessFile(file.source, true, true)
-      const sourcePath = (resolvedFileName: string): string | undefined => {
-        const normalized = normalizedVirtualPath(resolvedFileName)
-        return normalized.startsWith(`${virtualRoot}/`) ? sourcePathFromVirtualPath(normalized) : undefined
+  const rootsAreIdentical =
+    previous !== undefined &&
+    previous.sourceByPath.size === sourceFiles.length &&
+    sourceFiles.every(({ path }) => previous.sourceByPath.has(path))
+  const entries = sourceFiles.map((file) => {
+    const previousDependencies =
+      rootsAreIdentical && previous.sourceByPath.get(file.path)?.source === file.source
+        ? previous.dependenciesByPath.get(file.path)
+        : undefined
+    if (previousDependencies !== undefined) {
+      return { dependencies: previousDependencies, path: file.path, reused: true }
+    }
+    const source = program.getSourceFile(virtualPath(file.path))
+    const preprocessed = ts.preProcessFile(file.source, true, true)
+    const sourcePath = (resolvedFileName: string): string | undefined => {
+      const normalized = normalizedVirtualPath(resolvedFileName)
+      return normalized.startsWith(`${virtualRoot}/`) ? sourcePathFromVirtualPath(normalized) : undefined
+    }
+    const moduleDependencies = [...preprocessed.importedFiles, ...preprocessed.referencedFiles].flatMap(
+      ({ fileName }) => {
+        const resolved = ts.resolveModuleName(
+          fileName,
+          source?.fileName ?? virtualPath(file.path),
+          options,
+          host
+        ).resolvedModule
+        const dependencyPath = resolved === undefined ? undefined : sourcePath(resolved.resolvedFileName)
+        return dependencyPath === undefined ? [] : [dependencyPath]
       }
-      const moduleDependencies = [...preprocessed.importedFiles, ...preprocessed.referencedFiles].flatMap(
-        ({ fileName }) => {
-          const resolved = ts.resolveModuleName(
-            fileName,
-            source?.fileName ?? virtualPath(file.path),
-            options,
-            host
-          ).resolvedModule
-          const dependencyPath = resolved === undefined ? undefined : sourcePath(resolved.resolvedFileName)
-          return dependencyPath === undefined ? [] : [dependencyPath]
-        }
-      )
-      const typeDependencies = [
-        ...preprocessed.typeReferenceDirectives,
-        ...preprocessed.libReferenceDirectives
-      ].flatMap(({ fileName }) => {
+    )
+    const typeDependencies = [...preprocessed.typeReferenceDirectives, ...preprocessed.libReferenceDirectives].flatMap(
+      ({ fileName }) => {
         const resolved = ts.resolveTypeReferenceDirective(
           fileName,
           source?.fileName ?? virtualPath(file.path),
@@ -126,13 +161,18 @@ const sourceDependencyPaths = (
             ? undefined
             : sourcePath(resolved.resolvedFileName)
         return dependencyPath === undefined ? [] : [dependencyPath]
-      })
-      const dependencies = [...moduleDependencies, ...typeDependencies].filter(
-        (path) => path !== file.path && sourcePaths.has(path)
-      )
-      return [file.path, dependencies] as const
-    })
-  )
+      }
+    )
+    const dependencies = [...moduleDependencies, ...typeDependencies].filter(
+      (path) => path !== file.path && sourcePaths.has(path)
+    )
+    return { dependencies, path: file.path, reused: false }
+  })
+  return {
+    dependenciesByPath: new Map(entries.map(({ dependencies, path }) => [path, dependencies] as const)),
+    rebuiltDependencyPaths: entries.filter(({ reused }) => !reused).map(({ path }) => path),
+    reusedDependencyPaths: entries.filter(({ reused }) => reused).map(({ path }) => path)
+  }
 }
 
 const affectedSourcePaths = (
@@ -174,13 +214,29 @@ const affectedSourcePaths = (
   return new Set([...affected].filter((path) => currentPaths.has(path)))
 }
 
+const sourceCanChangeGlobalDiagnostics = (source: ts.SourceFile): boolean =>
+  !ts.isExternalModule(source) ||
+  sourceNodes(source).some(
+    (node) =>
+      ts.isNamespaceExportDeclaration(node) ||
+      (ts.isModuleDeclaration(node) &&
+        ((node.flags & ts.NodeFlags.GlobalAugmentation) !== 0 || ts.isStringLiteral(node.name)))
+  )
+
+const programSourceCanChangeGlobalDiagnostics = (program: ts.Program | undefined, path: string): boolean => {
+  const source = program?.getSourceFile(virtualPath(path))
+  return source !== undefined && sourceCanChangeGlobalDiagnostics(source)
+}
+
 const compilerDiagnostics = (
   program: ts.Program,
   sourceFiles: ReadonlyArray<CapabilitySourceFile>,
   previous: CapabilitySourceProgram | undefined,
   dependenciesByPath: ReadonlyMap<string, ReadonlyArray<string>>
-): ReadonlyArray<CapabilityCompilerDiagnostic> => {
-  const optionsIssues = program
+): CapabilityCompilerDiagnostics => {
+  // Compiler-option diagnostics have no source path that can participate in
+  // the affected closure, so every new Program recomputes them fail-closed.
+  const optionDiagnostics = program
     .getOptionsDiagnostics()
     .map((diagnostic) => ({
       category: diagnostic.category,
@@ -201,26 +257,77 @@ const compilerDiagnostics = (
   })
   const removedPaths =
     previous === undefined ? [] : [...previous.sourceByPath.keys()].filter((path) => !sourceByPath.has(path))
-  const affectedPaths = affectedSourcePaths(sourceFiles, previous, dependenciesByPath, changedPaths, removedPaths)
-  const sourceIssues = sourceFiles.flatMap((file) => {
+  const dependencyAffectedPaths = affectedSourcePaths(
+    sourceFiles,
+    previous,
+    dependenciesByPath,
+    changedPaths,
+    removedPaths
+  )
+  const globalScopeChanged =
+    [...dependencyAffectedPaths].some(
+      (path) =>
+        programSourceCanChangeGlobalDiagnostics(program, path) ||
+        programSourceCanChangeGlobalDiagnostics(previous?.program, path)
+    ) || removedPaths.some((path) => programSourceCanChangeGlobalDiagnostics(previous?.program, path))
+  const affectedPaths = globalScopeChanged ? new Set(sourceFiles.map(({ path }) => path)) : dependencyAffectedPaths
+  const sourceDiagnosticEntries = sourceFiles.map((file) => {
     const { path } = file
-    if (!affectedPaths.has(path)) return []
+    if (!affectedPaths.has(path) && previous?.sourceByPath.get(path)?.source === file.source) {
+      return [path, previous.sourceDiagnosticsByPath.get(path) ?? []] as const
+    }
+    if (!affectedPaths.has(path)) return [path, []] as const
     const source = program.getSourceFile(virtualPath(path))
-    if (source === undefined) return []
-    const diagnostics = [...program.getSyntacticDiagnostics(source), ...program.getSemanticDiagnostics(source)]
-    return diagnostics.map((diagnostic) => ({
-      category: diagnostic.category,
-      code: diagnostic.code,
-      message: diagnosticMessage(diagnostic),
-      path
-    }))
+    if (source === undefined) return [path, []] as const
+    const diagnostics = [...program.getSyntacticDiagnostics(source), ...program.getSemanticDiagnostics(source)].map(
+      (diagnostic) => ({
+        category: diagnostic.category,
+        code: diagnostic.code,
+        message: diagnosticMessage(diagnostic),
+        path
+      })
+    )
+    return [path, diagnostics] as const
   })
-  return [...optionsIssues, ...sourceIssues]
+  const sourceDiagnosticsByPath = new Map(sourceDiagnosticEntries)
+  return {
+    diagnostics: [...optionDiagnostics, ...sourceDiagnosticEntries.flatMap(([, diagnostics]) => diagnostics)],
+    sourceDiagnosticsByPath
+  }
+}
+
+const matchingSourceCount = (
+  candidate: CapabilitySourceProgram,
+  sourceFiles: ReadonlyArray<CapabilitySourceFile>
+): number =>
+  sourceFiles.reduce(
+    (count, file) => count + (candidate.sourceByPath.get(file.path)?.source === file.source ? 1 : 0),
+    0
+  )
+
+const previousSourceProgram = (
+  sourceFiles: ReadonlyArray<CapabilitySourceFile>
+): CapabilitySourceProgram | undefined => {
+  if (latestSourceProgram === undefined) {
+    return largestSourceProgram !== undefined && matchingSourceCount(largestSourceProgram, sourceFiles) > 0
+      ? largestSourceProgram
+      : undefined
+  }
+  const latestMatches = matchingSourceCount(latestSourceProgram, sourceFiles)
+  if (largestSourceProgram === undefined || largestSourceProgram === latestSourceProgram) {
+    return latestMatches > 0 ? latestSourceProgram : undefined
+  }
+  const largestMatches = matchingSourceCount(largestSourceProgram, sourceFiles)
+  if (latestMatches === 0 && largestMatches === 0) return undefined
+  return largestMatches > latestMatches ? largestSourceProgram : latestSourceProgram
 }
 
 const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): CapabilitySourceProgram => {
   const cached = sourceProgramCache.get(sourceFiles)
-  if (cached !== undefined) return cached
+  if (cached !== undefined) {
+    rememberSourceProgram(cached)
+    return cached
+  }
 
   const sourceByPath = new Map(sourceFiles.map((file) => [file.path, file] as const))
   const virtualSources = new Map(
@@ -240,7 +347,7 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
   // TypeScript can incrementally construct a Program with a different root
   // set. The host below is the compatibility boundary: it returns an old
   // tree only when the exact path and complete source text still match.
-  const previous = latestSourceProgram
+  const previous = previousSourceProgram(sourceFiles)
   const options: ts.CompilerOptions = {
     baseUrl: virtualRoot,
     lib: ["lib.es2023.d.ts"],
@@ -299,20 +406,25 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
     previous?.program
   )
   const checker = program.getTypeChecker()
-  const dependenciesByPath = sourceDependencyPaths(program, sourceFiles, options, host)
+  const dependencies = sourceDependencyPaths(program, sourceFiles, options, host, previous)
+  const { dependenciesByPath } = dependencies
+  const compiler = compilerDiagnostics(program, sourceFiles, previous, dependenciesByPath)
   const indexed = {
     checker,
     dependenciesByPath,
     diagnostics: {
-      compilerDiagnostics: compilerDiagnostics(program, sourceFiles, previous, dependenciesByPath),
+      compilerDiagnostics: compiler.diagnostics,
+      rebuiltDependencyPaths: dependencies.rebuiltDependencyPaths,
       rebuiltSourcePaths,
+      reusedDependencyPaths: dependencies.reusedDependencyPaths,
       reusedSourcePaths
     },
     program,
+    sourceDiagnosticsByPath: compiler.sourceDiagnosticsByPath,
     sourceByPath
   }
   sourceProgramCache.set(sourceFiles, indexed)
-  latestSourceProgram = indexed
+  rememberSourceProgram(indexed)
   /* eslint-enable functional/immutable-data */
   return indexed
 }
@@ -677,32 +789,22 @@ const isLayerSymbol = (symbol: ts.Symbol | undefined, indexed: CapabilitySourceP
   )
 }
 
-const exportedLayerSymbols = (indexed: CapabilitySourceProgram): ReadonlySet<ts.Symbol> => {
-  /* eslint-disable functional/immutable-data -- local symbol sets close over one source audit. */
-  const layers = new Set<ts.Symbol>()
-  const visited = new Set<ts.Symbol>()
-  const visitModule = (module: ts.Symbol): void => {
-    const resolvedModule = resolveSymbol(module, indexed.checker)
-    if (resolvedModule === undefined || visited.has(resolvedModule)) return
-    visited.add(resolvedModule)
-    let exports: ReadonlyArray<ts.Symbol>
-    try {
-      exports = indexed.checker.getExportsOfModule(resolvedModule)
-    } catch {
-      return
-    }
-    for (const exported of exports) {
-      const resolved = resolveSymbol(exported, indexed.checker)
-      if (resolved !== undefined && isLayerSymbol(resolved, indexed)) layers.add(resolved)
-      if (resolved !== undefined && resolved.exports !== undefined) visitModule(resolved)
-    }
-  }
-  for (const file of indexed.sourceByPath.values()) {
-    const module = indexed.checker.getSymbolAtLocation(parsedSource(file, indexed))
-    if (module !== undefined) visitModule(module)
-  }
-  /* eslint-enable functional/immutable-data */
-  return layers
+const isExportedSymbol = (symbol: ts.Symbol, indexed: CapabilitySourceProgram): boolean => {
+  const resolved = resolveSymbol(symbol, indexed.checker)
+  if (resolved === undefined) return false
+  return (
+    resolved.declarations?.some((declaration) => {
+      const module = indexed.checker.getSymbolAtLocation(declaration.getSourceFile())
+      if (module === undefined) return false
+      try {
+        return indexed.checker
+          .getExportsOfModule(module)
+          .some((exported) => resolveSymbol(exported, indexed.checker) === resolved)
+      } catch {
+        return false
+      }
+    }) ?? false
+  )
 }
 
 const implementationEntries = (inventory: CapabilityRegistrationInventory): ReadonlyArray<RegisteredImplementation> =>
@@ -712,9 +814,6 @@ const implementationEntries = (inventory: CapabilityRegistrationInventory): Read
       return implementation._tag === "Implementation" ? [implementation] : []
     })
   )
-
-const sourceAt = (sourceFiles: ReadonlyArray<CapabilitySourceFile>, path: string): CapabilitySourceFile | undefined =>
-  sourceFiles.find((file) => file.path === path)
 
 const runtimeValueReferences = (
   file: CapabilitySourceFile,
@@ -748,7 +847,6 @@ type ContractExecutionEvidence =
 const contractImplementationIssues = (
   capability: CapabilityRegistrationInventory["capabilities"][number],
   execution: ContractExecutionEvidence,
-  sourceFiles: ReadonlyArray<CapabilitySourceFile>,
   indexed: CapabilitySourceProgram
 ): ReadonlyArray<string> => {
   const binding = execution.implementation
@@ -769,11 +867,11 @@ const contractImplementationIssues = (
   ) {
     return [issue]
   }
-  const bindingSource = sourceAt(sourceFiles, binding.source)
+  const bindingSource = indexed.sourceByPath.get(binding.source)
   const expectedSymbol =
     bindingSource === undefined ? undefined : declarationSymbolFor(bindingSource, binding.marker, indexed)
   if (expectedSymbol === undefined || execution.invocation === undefined) return [issue]
-  const invocationSource = sourceAt(sourceFiles, execution.invocation.source)
+  const invocationSource = indexed.sourceByPath.get(execution.invocation.source)
   if (invocationSource === undefined) return [issue]
   const calls = callExpressions(
     invocationSource,
@@ -806,15 +904,15 @@ const implementationSourceIssues = (
     for (const role of ["controlled", "production"] as const) {
       const implementation = capability[role]
       if (implementation._tag === "NotApplicable") continue
-      const source = sourceAt(sourceFiles, implementation.source)
-      if (source === undefined) {
-        issues.push(`${capability.family} ${role} implementation source is missing: ${implementation.source}`)
-      } else if (declarationSymbolFor(source, implementation.marker, indexed) === undefined) {
-        issues.push(`${capability.family} ${role} implementation marker is stale: ${implementation.marker}`)
-      }
+      const source = indexed.sourceByPath.get(implementation.source)
       const implementationSymbol =
         source === undefined ? undefined : declarationSymbolFor(source, implementation.marker, indexed)
-      const composition = sourceAt(sourceFiles, implementation.composition.source)
+      if (source === undefined) {
+        issues.push(`${capability.family} ${role} implementation source is missing: ${implementation.source}`)
+      } else if (implementationSymbol === undefined) {
+        issues.push(`${capability.family} ${role} implementation marker is stale: ${implementation.marker}`)
+      }
+      const composition = indexed.sourceByPath.get(implementation.composition.source)
       if (composition === undefined) {
         issues.push(`${capability.family} ${role} composition source is missing: ${implementation.composition.source}`)
       } else if (!hasValueReference(composition, implementation.composition.marker, indexed)) {
@@ -834,14 +932,14 @@ const implementationSourceIssues = (
       }
     }
     for (const execution of capability.contract.executions) {
-      const source = sourceAt(sourceFiles, execution.source)
+      const source = indexed.sourceByPath.get(execution.source)
       if (source === undefined) {
         issues.push(`${capability.family} contract source is missing: ${execution.source}`)
       } else if (declarationSymbolFor(source, execution.marker, indexed) === undefined) {
         issues.push(`${capability.family} contract marker is stale: ${execution.marker}`)
       }
       if (execution.invocation !== undefined) {
-        const invocation = sourceAt(sourceFiles, execution.invocation.source)
+        const invocation = indexed.sourceByPath.get(execution.invocation.source)
         if (invocation === undefined) {
           issues.push(`${capability.family} contract invocation source is missing: ${execution.invocation.source}`)
         } else if (
@@ -859,7 +957,7 @@ const implementationSourceIssues = (
           issues.push(`${executionLabel} contract invocation marker is stale: ${execution.invocation.marker}`)
         }
       }
-      issues.push(...contractImplementationIssues(capability, execution, sourceFiles, indexed))
+      issues.push(...contractImplementationIssues(capability, execution, indexed))
     }
   }
   /* eslint-enable functional/immutable-data */
@@ -881,16 +979,15 @@ const compositionReferenceIssues = (
   /* eslint-disable functional/immutable-data */
   const issues: Array<string> = []
   const indexed = sourceProgram(sourceFiles)
-  const exportedLayers = exportedLayerSymbols(indexed)
   const registered = new Map<string, ts.Symbol>()
   for (const implementation of implementationEntries(inventory)) {
-    const source = sourceAt(sourceFiles, implementation.source)
+    const source = indexed.sourceByPath.get(implementation.source)
     const symbol = source === undefined ? undefined : declarationSymbolFor(source, implementation.marker, indexed)
     if (symbol !== undefined) registered.set(implementation.identity, symbol)
   }
   const support = new Map<string, ts.Symbol>()
   for (const binding of inventory.compositionSupportBindings) {
-    const source = sourceAt(sourceFiles, binding.source)
+    const source = indexed.sourceByPath.get(binding.source)
     const symbol = source === undefined ? undefined : declarationSymbolFor(source, binding.marker, indexed)
     if (symbol !== undefined) support.set(binding.identity, symbol)
   }
@@ -898,7 +995,7 @@ const compositionReferenceIssues = (
   const allowedSymbols = new Set([...allowed.values()].map((symbol) => resolveSymbol(symbol, indexed.checker)))
   const reported = new Set<string>()
   for (const composition of inventory.compositionSources) {
-    const source = sourceAt(sourceFiles, composition.source)
+    const source = indexed.sourceByPath.get(composition.source)
     if (source === undefined) {
       issues.push(`${composition.role} composition source is missing: ${composition.source}`)
       continue
@@ -914,7 +1011,7 @@ const compositionReferenceIssues = (
       if (isAllowedByIdentity && !isAllowedByBinding) continue
       if (
         symbol !== undefined &&
-        exportedLayers.has(symbol) &&
+        isExportedSymbol(symbol, indexed) &&
         !allowedSymbols.has(symbol) &&
         isLayerSymbol(symbol, indexed)
       ) {
@@ -938,7 +1035,7 @@ const supportBindingSourceIssues = (
   const issues: Array<string> = []
   /* eslint-disable functional/immutable-data -- local diagnostics are accumulated for one audit. */
   for (const binding of inventory.compositionSupportBindings) {
-    const source = sourceAt(sourceFiles, binding.source)
+    const source = indexed.sourceByPath.get(binding.source)
     if (source === undefined) {
       issues.push(`support binding ${binding.identity} declaration source is missing: ${binding.source}`)
     } else if (declarationSymbolFor(source, binding.marker, indexed) === undefined) {

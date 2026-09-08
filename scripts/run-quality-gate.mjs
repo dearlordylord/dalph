@@ -1,5 +1,6 @@
 import { runBoundedCommand } from "./run-bounded-command.mjs"
 import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
+import { boundedQualityGateCommand, capabilityRegistrationQualityGate } from "./quality-gate-stage-policy.mjs"
 
 const SECOND = 1_000
 const maximumSuccessfulOutputLines = 550
@@ -16,6 +17,7 @@ if (pnpmEntryPoint === undefined) {
 
 const gates = [
   { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
+  capabilityRegistrationQualityGate,
   { args: ["test:ci-change-classification"], name: "CI change classification", timeout: 60 * SECOND },
   { args: ["typecheck"], name: "typecheck", timeout: 2 * 60 * SECOND },
   { args: ["typecheck:effect"], name: "Effect diagnostics", timeout: 3 * 60 * SECOND },
@@ -44,16 +46,9 @@ const gates = [
 let successfulOutputLines = 0
 
 for (const gate of gates) {
-  const result = await runBoundedCommand({
-    // Omit pnpm lifecycle banners; retain the child tool's output and exit status.
-    args: [pnpmEntryPoint, "--silent", ...gate.args],
-    environment: gate.environment,
-    executable: process.execPath,
-    name: `Quality gate '${gate.name}'`,
-    relayParentSignals: true,
-    terminationGraceMilliseconds: gate.terminationGrace,
-    timeoutMilliseconds: gate.timeout
-  })
+  const result = await runBoundedCommand(
+    boundedQualityGateCommand({ gate, nodeExecutable: process.execPath, pnpmEntryPoint })
+  )
   successfulOutputLines = addSuccessfulOutputLines({
     currentOutputLines: successfulOutputLines,
     maximumOutputLines: maximumSuccessfulOutputLines,
