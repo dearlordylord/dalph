@@ -48,15 +48,21 @@ questions. Reuse guidance already read unless it changed or scope changed.
 
 - Use minimal live-provider fixtures, controlled tests for bulk behavior, and
   never retry throttled mutations.
-- Develop with focused checks. Target repositories' application-specific
-  typecheck, model-checking, and MBT gates are not Dalph implementation gates.
+- Develop with `pnpm check:fast` and focused tests. The full gate belongs to a
+  frozen candidate and to hosted verification, and states its candidate:
+  `pnpm check:all --candidate=<base sha>`. The compatibility lint and the
+  project-wide Effect pass build the entire program, so run them through the
+  repository commands rather than per edited file. Target repositories'
+  application-specific typecheck, model-checking, and MBT gates are not Dalph
+  implementation gates.
 - Before the final `pnpm check:all`, close domain/spec, architecture/connascence,
   and code-correctness reviews under the scoped closure rules in
   [CODE_REVIEW.md](docs/CODE_REVIEW.md). Passing the final gate remains required
   before handoff.
 - Run `pnpm check:quint` after final relevant changes and before integration.
-  During development, run it for model, conformance-adapter, or model-governed
-  behavior changes. It is separate from `check:all`. Uncollected tests,
+  During development, run `pnpm check:quint:changed`, which runs the gate for
+  specification, gate-script, and conformance-adapter changes and reports when
+  there are none. It is separate from `check:all`. Uncollected tests,
   undefined behavior, and unreachable actions can appear green: require a
   negative control.
 - Before declaring Playwright environment-blocked, try the documented
