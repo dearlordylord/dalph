@@ -77,7 +77,9 @@ describe("hosted formal-model contract", () => {
   })
 
   it("keeps exhaustive formal checking out of check:all", () => {
-    expect(packageJson.scripts["check:all"]).toBe("node scripts/run-quality-gate.mjs")
+    expect(packageJson.scripts["check:all"]).toBe(
+      "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs"
+    )
     expect(qualityGate).not.toContain('args: ["check:quint"]')
     expect(qualityGate).toContain('args: ["test:mbt"]')
   })

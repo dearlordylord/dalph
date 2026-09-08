@@ -84,7 +84,8 @@ All commands below use `pnpm`. Script definitions live in
 | `check:circular` | Reject runtime dependency cycles. |
 | `check:complexity` | Reject increased per-file counts of production functions above complexity eight. |
 | `check:duplicates` | Enforce the configured duplication budget. |
-| `test:coverage` | Enforce separate production/evaluation coverage and changed-line floors below. |
+| `coverage:body` | Coverage suites and their verifiers, without taking an admission slot. |
+| `test:coverage` | Enforce separate production/evaluation coverage and changed-line floors below; takes an admission slot. |
 | `test:mbt` | Quint-connected executable conformance suites. |
 | `test:issue-268-c4` | Run the accepted DS01–DS13 table and strict occurrence order in twenty consecutive fresh processes; stop at the first incomplete or divergent run. |
 | `test:ci-change-classification` | Prove the docs-only CI allowlist and fail-closed classification. |
@@ -96,6 +97,17 @@ All commands below use `pnpm`. Script definitions live in
 | `check:secrets` | Scan Git history with gitleaks. |
 | `check:all` | Bounded handoff gate for a frozen candidate, including MBT and non-browser Lab; excludes exhaustive model checks. Local runs state the candidate with `--candidate=<base sha>` or `DALPH_FULL_GATE=1`; hosted runs need neither. |
 | `check:ci` | Hosted gate; currently omits only Quint-connected MBT. |
+
+### Heavy-gate admission
+
+`check:all`, `test:coverage`, and `check:quint` acquire one of two slots in the
+Git common directory before they run, so every worktree of one clone shares the
+same admission and concurrent agents do not multiply whole-program work across
+the machine's cores. A run that finds both slots taken reports each holder and
+its own queue time, then is admitted when a slot frees. A stage the full gate
+spawns inherits its parent's slot rather than acquiring a second one. Set
+`DALPH_GATE_SLOTS` to match a different core count. The focused tiers —
+`check:fast`, `lint:changed`, `typecheck`, focused `vitest` — run unadmitted.
 
 ### Current source and built artifacts
 
