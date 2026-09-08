@@ -11,8 +11,18 @@ import {
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey
 } from "@dalph/contracts"
+import type {
+  // @ts-expect-error -- the package root exposes only the exhaustive delivery status unions.
+  DeliveryStatusEvidenceConflictEntry as PublicDeliveryStatusEvidenceConflictEntry,
+  // @ts-expect-error -- the package root exposes only the exhaustive delivery status unions.
+  DeliveryStatusEvidenceUnavailableEntry as PublicDeliveryStatusEvidenceUnavailableEntry,
+  // @ts-expect-error -- the package root exposes only the exhaustive delivery status unions.
+  DeliveryStatusSnapshot as PublicDeliveryStatusSnapshot,
+  // @ts-expect-error -- the package root exposes only the exhaustive delivery status unions.
+  DeliveryStatusTrackerFactWait as PublicDeliveryStatusTrackerFactWait
+} from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
-import { Context, Effect, Ref, Schema, Stream } from "effect"
+import { Context, Effect, Ref, Schema, Stream, SubscriptionRef } from "effect"
 import { expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import {
@@ -30,7 +40,7 @@ import {
   type PlannedAttemptExecutorDisposition,
   type ResponsibilityFreshFacts
 } from "../frontier/fresh-facts.js"
-import { JournalPosition } from "../../workflow-journal/identity.js"
+import { JournalDatabaseLocator, JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import {
@@ -82,6 +92,7 @@ import {
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/responsibility.js"
 import { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import { memoryJournalStoreLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { sqliteJournalTestLayer } from "../../workflow-journal/adapters/sqlite-store.js"
 import { JournalStore, RunLifecycleJournal } from "../../workflow-journal/store.js"
 import { TrackerGraphReader } from "../../authorities/task-tracker/graph-reader.js"
 import { GitCommand } from "../../authorities/git/command.js"
@@ -130,9 +141,21 @@ type SettlementCompatibilityIdentityFieldsAreAbsent =
   Extract<keyof Extract<DeliveryStatusEntry, { readonly _tag: "Settlement" }>, "taskId" | "attemptId"> extends never
     ? true
     : false
+type PackageRootMustNotExposePartialDeliveryStatusContracts = readonly [
+  PublicDeliveryStatusEvidenceConflictEntry,
+  PublicDeliveryStatusEvidenceUnavailableEntry,
+  PublicDeliveryStatusSnapshot,
+  PublicDeliveryStatusTrackerFactWait
+]
 const statusProjectionHasOnlyObservationInputs: StatusProjectionHasOnlyObservationInputs = true
 const statusVocabularyHasNoExecutorPrivateTags: StatusVocabularyHasNoExecutorPrivateTags = true
 const settlementCompatibilityIdentityFieldsAreAbsent: SettlementCompatibilityIdentityFieldsAreAbsent = true
+const packageRootMustNotExposePartialDeliveryStatusContracts: PackageRootMustNotExposePartialDeliveryStatusContracts | null =
+  null
+
+it("keeps partial delivery status contracts private to their defining module", () => {
+  expect(packageRootMustNotExposePartialDeliveryStatusContracts).toBeNull()
+})
 
 const runId = RunId.make("delivery-status-run")
 const policy = RunControlPolicy.make({
@@ -590,6 +613,17 @@ it.effect("distinguishes proposed, live, and accepted publication-pending action
     expect(pending).toMatchObject({ entries: [{ _tag: "AcceptedFactPublicationWait" }] })
     if (pending._tag === "DeliveryStatusAvailable") {
       expect(pending.entries.some(({ _tag }) => _tag === "ProposedDeliveryAction")).toBe(false)
+    }
+
+    const afterAcceptedPublication = statusFor(evaluationOf(), { _tag: "Run", runId })
+    expect(afterAcceptedPublication).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+    if (afterAcceptedPublication._tag === "DeliveryStatusAvailable") {
+      expect(
+        afterAcceptedPublication.entries.some(
+          ({ _tag }) =>
+            _tag === "ProposedDeliveryAction" || _tag === "LiveDeliveryAction" || _tag === "AcceptedFactPublicationWait"
+        )
+      ).toBe(false)
     }
   })
 )
@@ -1869,6 +1903,43 @@ it.effect("reconnects current-first and distinguishes not-ready, absent, wrong-R
   })
 )
 
+it.effect("does not carry a live owner from a closed process into a new current source", () =>
+  Effect.gen(function* () {
+    const proposal = taskProposalOf("status-old-process-owner", TaskId.make("A"))
+    const oldReady = evaluationOf({
+      tasks: [{ id: "A" }],
+      proposals: [proposal],
+      liveOwners: [ownerOf(proposal, false)]
+    })
+    if (oldReady._tag !== "Ready") return expect.fail("old process fixture must be ready")
+    const oldState = yield* SubscriptionRef.make<DeliveryRuntimeObservationState>(oldReady)
+    const oldSignal = yield* deliveryStatusSignalOf(
+      currentSignalFromCurrentFirstStream(SubscriptionRef.changes(oldState)),
+      { _tag: "Run", runId }
+    )
+    expect(yield* oldSignal.get).toMatchObject({ entries: [{ _tag: "LiveDeliveryAction" }] })
+
+    yield* SubscriptionRef.set(oldState, DeliveryRuntimeObservationState.Closed({ final: oldReady }))
+    expect(yield* oldSignal.get).toMatchObject({
+      _tag: "DeliveryStatusClosed",
+      final: { entries: [{ _tag: "LiveDeliveryAction" }] }
+    })
+
+    const newState = yield* SubscriptionRef.make<DeliveryRuntimeObservationState>(
+      evaluationOf({ tasks: [{ id: "A" }], proposals: [proposal] })
+    )
+    const newSignal = yield* deliveryStatusSignalOf(
+      currentSignalFromCurrentFirstStream(SubscriptionRef.changes(newState)),
+      { _tag: "Run", runId }
+    )
+    const newCurrent = yield* newSignal.get
+    expect(newCurrent).toMatchObject({ entries: [{ _tag: "ProposedDeliveryAction" }] })
+    if (newCurrent._tag === "DeliveryStatusAvailable") {
+      expect(newCurrent.entries.some(({ _tag }) => _tag === "LiveDeliveryAction")).toBe(false)
+    }
+  })
+)
+
 it("keeps an unestablished tracker graph as an explicit passive fact", () => {
   const status = statusFor(evaluationOf({ established: false }), { _tag: "Run", runId })
   expect(status).toMatchObject({
@@ -1971,14 +2042,19 @@ it.effect("reconnects to current status without a durable UI cursor", () =>
       proposals: [proposal],
       liveOwners: [ownerOf(proposal, false)]
     })
-    const source = currentSignalFromCurrentFirstStream(Stream.fromIterable([before, after]))
+    const state = yield* SubscriptionRef.make(before)
+    const source = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(state))
     const statusSignal = yield* deliveryStatusSignalOf(source, { _tag: "Run", runId })
     const first = yield* statusSignal.get
     expect(first).toMatchObject({ _tag: "DeliveryStatusAvailable" })
-    const observed = yield* statusSignal.changes.pipe(Stream.take(2), Stream.runCollect)
-    expect(observed).toHaveLength(2)
-    expect(observed[0]).toMatchObject({ entries: [{ _tag: "TaskWorkCapacityWait" }] })
-    expect(observed[1]).toMatchObject({ entries: [{ _tag: "LiveDeliveryAction" }] })
+    expect(first).toMatchObject({ entries: [{ _tag: "TaskWorkCapacityWait" }] })
+
+    yield* SubscriptionRef.set(state, after)
+    const reconnected = yield* statusSignal.get
+    expect(reconnected).toMatchObject({ entries: [{ _tag: "LiveDeliveryAction" }] })
+    if (reconnected._tag === "DeliveryStatusAvailable") {
+      expect(reconnected.entries.some(({ _tag }) => _tag === "TaskWorkCapacityWait")).toBe(false)
+    }
   })
 )
 
@@ -2081,10 +2157,16 @@ it.effect("calls no instrumented authority or mutation boundary while status cha
       tasks: [{ id: "A" }],
       proposals: [taskProposalOf("instrumented-after", TaskId.make("A"))]
     })
-    const source = currentSignalFromCurrentFirstStream(Stream.fromIterable([before, after]))
+    const state = yield* SubscriptionRef.make(before)
+    const source = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(state))
     const signal = yield* deliveryStatusSignalOf(source, { _tag: "Run", runId }).pipe(Effect.provide(forbiddenContext))
-    yield* signal.get
-    yield* signal.changes.pipe(Stream.take(2), Stream.runCollect)
+    const first = yield* signal.get
+    expect(first).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+    if (first._tag === "DeliveryStatusAvailable") {
+      expect(first.entries.some(({ _tag }) => _tag === "ProposedDeliveryAction")).toBe(false)
+    }
+    yield* SubscriptionRef.set(state, after)
+    expect(yield* signal.get).toMatchObject({ entries: [{ _tag: "ProposedDeliveryAction" }] })
     expect(yield* Ref.get(calls)).toEqual([])
   })
 )
@@ -2101,6 +2183,20 @@ it.effect("does not append a status value or cursor to the workflow Journal", ()
     const after = yield* journal.read(runId)
     expect(after).toEqual(before)
   }).pipe(Effect.provide(memoryJournalStoreLayer))
+)
+
+it.effect("does not append a status value or cursor to the SQLite workflow Journal", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const before = yield* journal.read(runId)
+    const signal = yield* deliveryStatusSignalOf(currentSignalOf(evaluationOf({ tasks: [{ id: "A" }] })), {
+      _tag: "Run",
+      runId
+    })
+    yield* signal.get
+    const after = yield* journal.read(runId)
+    expect(after).toEqual(before)
+  }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") })))
 )
 
 it("keeps every exact obligation identity distinct when evidence conflicts", () => {
