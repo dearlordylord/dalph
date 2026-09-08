@@ -1,5 +1,13 @@
 /* eslint-disable max-lines -- The maintained authored story catalog keeps complete chronological cassettes reviewable together. */
-import { makeTaskWorkSpecification, TaskId } from "@dalph/contracts"
+import { GitCommitSha, makeTaskWorkSpecification, TaskId } from "@dalph/contracts"
+import {
+  IntegratorRunOrdinal,
+  IntegratorSessionCorrelation,
+  JournalPosition,
+  TargetLineageObservation,
+  integratorRunCorrelationForSession,
+  integratorSuccessorCorrelationFor
+} from "@dalph/orchestrator"
 import { Option, Schema } from "effect"
 import { AuthoredScenarioCassette, type AuthoredScenarioCassette as ScenarioCassette } from "./authored.js"
 import { AuthoredCassetteStoryItem, type AuthoredOrchestrationEvidence } from "./authored-domain.js"
@@ -5196,6 +5204,134 @@ export const targetPromotionLostResponseDiscoversCurrentCandidateAuthoredCassett
     }
   )
 
+const deliveryStoryChangedHead = GitCommitSha.make("2222222222222222222222222222222222222222")
+const deliveryStorySuccessorCandidateCommit = GitCommitSha.make("dddddddddddddddddddddddddddddddddddddddd")
+const deliveryStorySuccessorCandidateText = "refs/heads/dalph/integrator-candidate-A-successor"
+const deliveryStoryQuarantineAt = JournalPosition.make(39) // eslint-disable-line no-magic-numbers -- Exact authored Q position.
+const deliveryStoryDirectionAppliedAt = JournalPosition.make(40) // eslint-disable-line no-magic-numbers -- Exact authored D position.
+const deliveryStorySuccessorLineageObservedAt = JournalPosition.make(42) // eslint-disable-line no-magic-numbers -- Exact authored fresh-L position.
+const deliveryStoryPredecessor = Schema.decodeUnknownSync(IntegratorSessionCorrelation)(
+  outerIntegratorSessionCorrelationA
+)
+const deliveryStorySuccessorLineage = TargetLineageObservation.make({
+  plannedBaseIsAncestorOfTargetHead: true,
+  plannedBaseSha: GitCommitSha.make(outerIntegratorExpectedHead),
+  targetHeadSha: deliveryStoryChangedHead
+})
+const deliveryStorySuccessor = integratorSuccessorCorrelationFor({
+  directionAppliedAt: deliveryStoryDirectionAppliedAt,
+  predecessor: deliveryStoryPredecessor,
+  quarantineAt: deliveryStoryQuarantineAt,
+  targetLineage: deliveryStorySuccessorLineage,
+  targetLineageObservedAt: deliveryStorySuccessorLineageObservedAt
+})
+const deliveryStorySuccessorPromotionRequest = targetPromotionGitRequest(
+  "/dalph/cassettes/integration.git",
+  deliveryStorySuccessorCandidateCommit,
+  deliveryStoryChangedHead
+)
+
+/**
+ * A's accepted result crosses the real stale-promotion, Operator FullRerun,
+ * successor-candidate, exact promotion, and completion-finality boundaries.
+ */
+export const deliveryStoryDs14ThroughDs17AuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
+  AuthoredScenarioCassette
+)({
+  ...targetPromotionSuccessAuthoredCassette,
+  name: "DS-14 through DS-17 rejected exact-head offer, FullRerun successor, and finality",
+  startingFacts: {
+    ...targetPromotionSuccessAuthoredCassette.startingFacts,
+    targetLineageObservations: [
+      {
+        plannedBaseIsAncestorOfTargetHead: true,
+        plannedBaseSha: outerIntegratorExpectedHead,
+        targetHeadSha: outerIntegratorExpectedHead
+      },
+      deliveryStorySuccessorLineage,
+      deliveryStorySuccessorLineage
+    ]
+  },
+  story: targetPromotionSuccessAuthoredCassette.story.flatMap((item): ReadonlyArray<unknown> => {
+    if (item._tag === "TargetPromotionCompareAndSetReturned") {
+      return [
+        { ...item, result: { _tag: "RejectedExpectedHead", observedHeadSha: deliveryStoryChangedHead } },
+        {
+          _tag: "OperatorAppliesIntegrationQuarantineDirection",
+          expected: "Applied",
+          request: {
+            fingerprint: {
+              direction: "FullRerun",
+              quarantineAt: deliveryStoryQuarantineAt,
+              sessionId: deliveryStoryPredecessor.sessionId
+            },
+            requestId: { nonce: "delivery-story-full-rerun-A", runId: "$authored-run" }
+          }
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
+        {
+          _tag: "IntegratorRequestReceived",
+          correlation: integratorRunCorrelationForSession(deliveryStorySuccessor, IntegratorRunOrdinal.make(1))
+        },
+        {
+          _tag: "IntegratorResultReturned",
+          result: { _tag: "PreparedCandidate", candidateText: deliveryStorySuccessorCandidateText }
+        },
+        {
+          _tag: "IntegratorGitObservationReturned",
+          candidateText: deliveryStorySuccessorCandidateText,
+          observation: {
+            _tag: "Commit",
+            candidateText: deliveryStorySuccessorCandidateText,
+            commit: deliveryStorySuccessorCandidateCommit,
+            directParents: [deliveryStoryChangedHead, outerIntegratorAcceptedCommit]
+          }
+        },
+        { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" } },
+        targetPromotionGitReadReturned("/dalph/cassettes/integration.git", deliveryStorySuccessorCandidateCommit, {
+          _tag: "CandidateNotInAncestry",
+          currentHeadSha: deliveryStoryChangedHead
+        }),
+        {
+          _tag: "TargetPromotionCompareAndSetReturned",
+          request: deliveryStorySuccessorPromotionRequest,
+          result: { _tag: "Applied" }
+        },
+        { _tag: "CompletionClaimReadReturned", claim: "Active", taskId: "A" },
+        { _tag: "CompletionClaimReplacementApplied", taskId: "A" },
+        {
+          _tag: "CompletionTaskFocusedReadReturned",
+          lifecycle: "Open",
+          taskId: "A",
+          unfinishedPrerequisiteTaskIds: []
+        },
+        targetPromotionGitReadReturned("/dalph/cassettes/integration.git", deliveryStorySuccessorCandidateCommit, {
+          _tag: "CandidateCurrent",
+          currentHeadSha: deliveryStorySuccessorCandidateCommit
+        }),
+        { _tag: "CompletionTaskRequestReturned", outcome: "Acknowledged", taskId: "A" },
+        {
+          _tag: "CompletionTaskFocusedReadReturned",
+          lifecycle: "CompletedSuccessfully",
+          taskId: "A",
+          unfinishedPrerequisiteTaskIds: []
+        },
+        { _tag: "CompletionClaimReadReturned", claim: "CompletionMarker", taskId: "A" },
+        { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+        { _tag: "DalphSelects", operation: { _tag: "ReleaseTaskClaim", taskId: "A" } },
+        { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+        { _tag: "CompletionClaimReadReturned", claim: "CompletionMarker", taskId: "A" },
+        { _tag: "TaskClaimCurrentReadReturned", taskId: "A" },
+        { _tag: "CompletionClaimDeletionApplied", taskId: "A" },
+        { _tag: "CompletionClaimReadReturned", claim: "CompletionMarkerAbsent", taskId: "A" },
+        { _tag: "TaskClaimCurrentReadReturned", taskId: "A" }
+      ]
+    }
+    if (item._tag === "ExpectedBehavior") return [{ ...item, orchestration: null }]
+    return [item]
+  })
+})
+
 /** Public catalog consumed by acceptance tests, documentation, and Reducer Lab. */
 const defineAuthoredCassetteCatalog = <const Name extends string>(
   catalog: Readonly<Record<Name, AuthoredScenarioCassette>>
@@ -5243,6 +5379,7 @@ type MaintainedAuthoredCassetteName =
   | "completionTaskConflict"
   | "currentCompletionGraphAuthority"
   | "deliveryFinalitySpine"
+  | "deliveryStoryDs14ThroughDs17"
   | "deliveryInvariantStory"
   | "productionShapedFiveTaskDiamond"
   | "dependentTasksCompleteInOneRun"
@@ -5311,6 +5448,7 @@ export const maintainedAuthoredCassetteCatalog: Readonly<Record<MaintainedAuthor
     completionTaskConflict: completionTaskConflictAuthoredCassette,
     currentCompletionGraphAuthority: currentCompletionGraphAuthorityAuthoredCassette,
     deliveryFinalitySpine: deliveryFinalitySpineAuthoredCassette,
+    deliveryStoryDs14ThroughDs17: deliveryStoryDs14ThroughDs17AuthoredCassette,
     deliveryInvariantStory: deliveryInvariantStoryAuthoredCassette,
     productionShapedFiveTaskDiamond: productionShapedFiveTaskDiamondAuthoredCassette,
     dependentTasksCompleteInOneRun: dependentTasksCompleteInOneRunAuthoredCassette,
