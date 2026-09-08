@@ -43,6 +43,12 @@ export const IntegratorSessionCorrelation = Schema.Struct({
 })
 export type IntegratorSessionCorrelation = typeof IntegratorSessionCorrelation.Type
 
+/**
+ * Schema-equivalent correlation objects name one Integrator session even when
+ * their property insertion order differs.
+ */
+export const integratorSessionCorrelationsEqual = Schema.toEquivalence(IntegratorSessionCorrelation)
+
 /** One-based ordinal identifying one opaque outer-Integrator run within a session. */
 export const IntegratorRunOrdinal = Schema.Int.check(Schema.isGreaterThan(0)).pipe(Schema.brand("IntegratorRunOrdinal"))
 export type IntegratorRunOrdinal = typeof IntegratorRunOrdinal.Type
