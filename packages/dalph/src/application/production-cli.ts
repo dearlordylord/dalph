@@ -463,6 +463,7 @@ const mapProductionCliBoundaryFailure = (failure: ProductionCliBoundaryFailure):
       return historicalProjectionFailure(failure.runId)
     case "TraceCursorNotCommitted":
       return historicalProjectionFailure(failure.cursor.runId)
+    /* v8 ignore next -- @preserve schema decoding admits only the exhaustive boundary-failure union above. */
     default: {
       const exhaustive: never = failure
       return exhaustive
