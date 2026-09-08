@@ -5,10 +5,20 @@ import { RunId } from "@dalph/contracts"
 import {
   ApplicationExitResult,
   CoordinatorLockHeld,
+  CoordinatorLockObservationContradiction,
   CoordinatorLockUnavailable,
+  CoordinatorOwnershipLost,
   type CurrentSignal,
   type GithubIssueTarget,
   type JournaledRunTerminationSource,
+  JournalDataCorruption,
+  JournalHistoryCorruption,
+  JournalPartitionContradiction,
+  JournalSchemaIncompatible,
+  JournalStorageAccessDenied,
+  JournalStorageCapacityExhausted,
+  JournalStorageLocked,
+  JournalStorageUnavailable,
   type ProductionRunSelection,
   ProductionRunSelectionConflict,
   RunTerminationDisposition,
@@ -51,12 +61,34 @@ export class ProductionCliStartupError extends Schema.TaggedError<ProductionCliS
   {
     code: Schema.Literals([
       "startup.ownership_conflict",
+      "startup.ownership_contradiction",
+      "startup.ownership_lost",
       "startup.ownership_unavailable",
       "startup.recovery_blocked",
       "startup.run_selection_conflict"
     ]),
     detail: Schema.NonEmptyString,
     subject: Schema.NonEmptyString
+  }
+) {}
+
+const productionCliJournalFailureCodes = [
+  "journal.data_corruption",
+  "journal.history_corruption",
+  "journal.partition_contradiction",
+  "journal.schema_incompatible",
+  "journal.storage_access_denied",
+  "journal.storage_capacity_exhausted",
+  "journal.storage_locked",
+  "journal.storage_unavailable"
+] as const
+
+export class ProductionCliJournalError extends Schema.TaggedError<ProductionCliJournalError>()(
+  "ProductionCliJournalError",
+  {
+    code: Schema.Literals(productionCliJournalFailureCodes),
+    detail: Schema.NonEmptyString,
+    subject: Schema.Literal("production Journal")
   }
 ) {}
 
@@ -194,7 +226,10 @@ export const ProductionCliRecord = Schema.TaggedUnion({
   Failure: {
     code: Schema.Literals([
       "configuration.invalid",
+      ...productionCliJournalFailureCodes,
       "startup.ownership_conflict",
+      "startup.ownership_contradiction",
+      "startup.ownership_lost",
       "startup.ownership_unavailable",
       "startup.recovery_blocked",
       "startup.run_selection_conflict",
@@ -297,61 +332,146 @@ export const productionCliFailureRecord = (failure: ProductionCliKnownFailure): 
 
 export type ProductionCliKnownFailure =
   | ProductionCliConfigurationError
+  | ProductionCliJournalError
   | ProductionCliStartupError
   | ProductionCliStatusError
   | ProductionCliUsageError
 
-/** Maps only accepted typed failures; unexpected defects remain on the runtime failure channel. */
-export const knownProductionCliFailure = (failure: unknown): ProductionCliKnownFailure | undefined => {
-  if (failure instanceof ProductionCliConfigurationError || failure instanceof ProductionCliUsageError) return failure
-  if (failure instanceof CoordinatorLockHeld) {
-    return new ProductionCliStartupError({
-      code: "startup.ownership_conflict",
-      detail: "another coordinator already owns the production repository",
-      subject: "production repository"
-    })
+type ProductionCliBoundaryFailure =
+  | CoordinatorLockHeld
+  | CoordinatorLockObservationContradiction
+  | CoordinatorLockUnavailable
+  | CoordinatorOwnershipLost
+  | JournalStoreError
+  | ProductionCliConfigurationError
+  | ProductionCliUsageError
+  | ProductionRunSelectionConflict
+  | StartupRecoveryBlocked
+  | TraceReaderError
+
+/** Exact schema for every accepted CLI boundary failure and its exhaustive mapper. */
+const exactProductionCliBoundaryFailure = <S extends Schema.Top>(
+  schema: S &
+    ([ProductionCliBoundaryFailure] extends [S["Type"]]
+      ? [S["Type"]] extends [ProductionCliBoundaryFailure]
+        ? unknown
+        : never
+      : never)
+): S => schema
+
+const ProductionCliBoundaryFailure = exactProductionCliBoundaryFailure(
+  Schema.Union([
+    CoordinatorLockHeld,
+    CoordinatorLockObservationContradiction,
+    CoordinatorLockUnavailable,
+    CoordinatorOwnershipLost,
+    JournalDataCorruption,
+    JournalHistoryCorruption,
+    JournalPartitionContradiction,
+    JournalSchemaIncompatible,
+    JournalStorageAccessDenied,
+    JournalStorageCapacityExhausted,
+    JournalStorageLocked,
+    JournalStorageUnavailable,
+    ProductionCliConfigurationError,
+    ProductionCliUsageError,
+    ProductionRunSelectionConflict,
+    StartupRecoveryBlocked,
+    TraceCausalPredecessorContradiction,
+    TraceCausalPredecessorMissing,
+    TraceCausalPredecessorNotProjected,
+    TraceCursorNotCommitted,
+    TraceJournalPrefixInvalid,
+    TraceProjectionInvalid,
+    TraceRunNotFound
+  ])
+)
+
+const journalFailure = (code: ProductionCliJournalError["code"], detail: string): ProductionCliJournalError =>
+  new ProductionCliJournalError({ code, detail, subject: "production Journal" })
+
+const historicalProjectionFailure = (runId: RunId): ProductionCliStatusError =>
+  new ProductionCliStatusError({
+    code: "status.projection_invalid",
+    detail: "the selected Run's historical projection is invalid",
+    subject: runId
+  })
+
+const mapProductionCliBoundaryFailure = (failure: ProductionCliBoundaryFailure): ProductionCliKnownFailure => {
+  switch (failure._tag) {
+    case "ProductionCliConfigurationError":
+    case "ProductionCliUsageError":
+      return failure
+    case "CoordinatorLockHeld":
+      return new ProductionCliStartupError({
+        code: "startup.ownership_conflict",
+        detail: "another coordinator already owns the production repository",
+        subject: "production repository"
+      })
+    case "CoordinatorLockObservationContradiction":
+      return new ProductionCliStartupError({
+        code: "startup.ownership_contradiction",
+        detail: "coordinator ownership no longer matches the production repository",
+        subject: "production repository"
+      })
+    case "CoordinatorOwnershipLost":
+      return new ProductionCliStartupError({
+        code: "startup.ownership_lost",
+        detail: "coordinator ownership ended before the production operation completed",
+        subject: "production repository"
+      })
+    case "CoordinatorLockUnavailable":
+      return new ProductionCliStartupError({
+        code: "startup.ownership_unavailable",
+        detail: "coordinator ownership could not be acquired",
+        subject: "production repository"
+      })
+    case "StartupRecoveryBlocked":
+      return new ProductionCliStartupError({
+        code: "startup.recovery_blocked",
+        detail: "the production Journal cannot be recovered safely",
+        subject: "production repository"
+      })
+    case "ProductionRunSelectionConflict":
+      return new ProductionCliStartupError({
+        code: "startup.run_selection_conflict",
+        detail: "the production Journal does not identify one safe Run",
+        subject: "production repository"
+      })
+    case "JournalDataCorruption":
+      return journalFailure("journal.data_corruption", "the production Journal contains invalid data")
+    case "JournalHistoryCorruption":
+      return journalFailure("journal.history_corruption", "the production Journal contains an invalid Run history")
+    case "JournalPartitionContradiction":
+      return journalFailure("journal.partition_contradiction", "the production Journal contains conflicting Run copies")
+    case "JournalSchemaIncompatible":
+      return journalFailure("journal.schema_incompatible", "the production Journal schema is incompatible")
+    case "JournalStorageAccessDenied":
+      return journalFailure("journal.storage_access_denied", "access to the production Journal was denied")
+    case "JournalStorageCapacityExhausted":
+      return journalFailure("journal.storage_capacity_exhausted", "the production Journal has exhausted its capacity")
+    case "JournalStorageLocked":
+      return journalFailure("journal.storage_locked", "the production Journal is locked")
+    case "JournalStorageUnavailable":
+      return journalFailure("journal.storage_unavailable", "the production Journal is unavailable")
+    case "TraceCausalPredecessorContradiction":
+    case "TraceCausalPredecessorMissing":
+    case "TraceCausalPredecessorNotProjected":
+    case "TraceJournalPrefixInvalid":
+    case "TraceProjectionInvalid":
+    case "TraceRunNotFound":
+      return historicalProjectionFailure(failure.runId)
+    case "TraceCursorNotCommitted":
+      return historicalProjectionFailure(failure.cursor.runId)
+    default: {
+      const exhaustive: never = failure
+      return exhaustive
+    }
   }
-  if (failure instanceof CoordinatorLockUnavailable) {
-    return new ProductionCliStartupError({
-      code: "startup.ownership_unavailable",
-      detail: "coordinator ownership could not be acquired",
-      subject: "production repository"
-    })
-  }
-  if (failure instanceof StartupRecoveryBlocked) {
-    return new ProductionCliStartupError({
-      code: "startup.recovery_blocked",
-      detail: "the production Journal cannot be recovered safely",
-      subject: "production repository"
-    })
-  }
-  if (failure instanceof ProductionRunSelectionConflict) {
-    return new ProductionCliStartupError({
-      code: "startup.run_selection_conflict",
-      detail: "the production Journal does not identify one safe Run",
-      subject: "production repository"
-    })
-  }
-  if (
-    failure instanceof TraceCausalPredecessorContradiction ||
-    failure instanceof TraceCausalPredecessorMissing ||
-    failure instanceof TraceCausalPredecessorNotProjected ||
-    failure instanceof TraceJournalPrefixInvalid ||
-    failure instanceof TraceProjectionInvalid ||
-    failure instanceof TraceRunNotFound
-  ) {
-    return new ProductionCliStatusError({
-      code: "status.projection_invalid",
-      detail: "the selected Run's historical projection is invalid",
-      subject: failure.runId
-    })
-  }
-  if (failure instanceof TraceCursorNotCommitted) {
-    return new ProductionCliStatusError({
-      code: "status.projection_invalid",
-      detail: "the selected Run's historical projection is invalid",
-      subject: failure.cursor.runId
-    })
-  }
-  return undefined
 }
+
+/** Maps only accepted typed failures; unexpected defects remain on the runtime failure channel. */
+export const knownProductionCliFailure = (failure: unknown): ProductionCliKnownFailure | undefined =>
+  Option.map(Schema.decodeUnknownOption(ProductionCliBoundaryFailure)(failure), mapProductionCliBoundaryFailure).pipe(
+    Option.getOrUndefined
+  )

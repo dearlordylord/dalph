@@ -14,9 +14,11 @@ The reactivation owner persists none of its wake, timer, frontier, or UI
 state; its queue, fibers, cooldown, and one-owner registration disappear on
 application exit or process loss. The supported production entry is the
 scoped `productionRunReactivationLayer` composition. The configured CLI host
-entry is `makeConfiguredProductionCliApplication`, which invokes a host-owned
-production callback. Before #298, `bin/dalph.ts` installed only the documented
-dry-run host. #298 explicitly supersedes that dry-only clause: Alice now chooses
+entry is `productionCliFromStdio`, which invokes a host-owned production
+callback. The unreleased historical
+`makeConfiguredProductionCliApplication` alias has no consumer and is not a
+supported seam. Before #298, `bin/dalph.ts` installed only the documented dry-run
+host. #298 explicitly supersedes that dry-only clause: Alice now chooses
 `dalph run <target> --dry` or `dalph run github:OWNER/REPOSITORY#ISSUE
 --production --config <absolute-json-path>` before a live boundary opens. The
 production callback still enters this same host-owned reactivation composition;
@@ -75,14 +77,16 @@ observation, or infer work from the missing notification.
   proves the supported production Layer wires one exact Run owner and that an
   injected current-first tracker notification, timer tick, and accepted-fact
   publication each cause an ordinary fresh check.
-- `routes the configured production CLI command into its host-owned application
-  boundary` is the historical #218 evidence that the configured callback
-  composes the production Layer and reaches its startup activation. #298's
-  `invokes one production host only after configuration and reports its
-  acknowledged selection` now proves the shipped explicit `--production`
-  command reaches that same callback once; `normal Run termination closes an
-  open history attachment after its final snapshot and returns` proves the
-  callback returns after the independently acknowledged terminal disposition.
+- `invokes one production host only after configuration and reports its
+  acknowledged selection` proves the canonical `productionCliFromStdio` seam
+  sends the shipped explicit `--production` command through the host-owned
+  callback once and only after configuration decoding.
+- `normal Run termination closes an open history attachment after its final
+  snapshot and returns` proves that callback returns after the independently
+  acknowledged terminal disposition.
+- `exports only the canonical production CLI seam and omits the unreleased
+  historical alias` proves the package barrel exposes
+  `productionCliFromStdio` without preserving the superseded #218 wrapper.
 
 ## Several hints produce one activation and one optional trailing check
 

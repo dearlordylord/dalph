@@ -5,7 +5,9 @@ import {
   ApplicationExitResult,
   AllocatedWorkflowRunId,
   CoordinatorLockHeld,
+  CoordinatorLockObservationContradiction,
   CoordinatorLockUnavailable,
+  CoordinatorOwnershipLost,
   currentSignalFromCurrentFirstStream,
   currentSignalOf,
   deterministicOperationIdAllocatorLayer,
@@ -17,6 +19,15 @@ import {
   GitCommonDirectoryLocator,
   GitCommonDirectoryTarget,
   JournalPosition,
+  JournalDataCorruption,
+  JournalHistoryCorruption,
+  JournalPartitionContradiction,
+  JournalSchemaIncompatible,
+  JournalSchemaVersion,
+  JournalStorageAccessDenied,
+  JournalStorageCapacityExhausted,
+  JournalStorageLocked,
+  JournalStorageUnavailable,
   ProductionRunSelection,
   ProductionRunSelectionConflict,
   RunTerminationDisposition,
@@ -296,6 +307,140 @@ it("maps every typed startup boundary failure without retaining private diagnost
   expect(JSON.stringify(records)).not.toContain(privateLocator)
   expect(JSON.stringify(records)).not.toContain(privateDetail)
 })
+
+it("maps every Journal storage failure through one exhaustive redacted public algebra", () => {
+  const privateDetail = "sqlite /private/alice/journal.sqlite token=secret"
+  const failures = [
+    new JournalDataCorruption({ detail: privateDetail, operation: "JournalStore.read" }),
+    new JournalHistoryCorruption({ detail: privateDetail, operation: "JournalStore.read", partition: "Hot", runId }),
+    new JournalSchemaIncompatible({ found: JournalSchemaVersion.make(2), supported: JournalSchemaVersion.make(1) }),
+    new JournalStorageAccessDenied({ detail: privateDetail, operation: "JournalStore.open" }),
+    new JournalStorageCapacityExhausted({ detail: privateDetail, operation: "JournalStore.append" }),
+    new JournalStorageLocked({ detail: privateDetail, operation: "JournalStore.open" }),
+    new JournalStorageUnavailable({ detail: privateDetail, operation: "JournalStore.read" }),
+    new JournalPartitionContradiction({ runId })
+  ]
+
+  const records = failures.map(knownProductionCliFailure)
+  expect(records.map((failure) => failure?.code)).toEqual([
+    "journal.data_corruption",
+    "journal.history_corruption",
+    "journal.schema_incompatible",
+    "journal.storage_access_denied",
+    "journal.storage_capacity_exhausted",
+    "journal.storage_locked",
+    "journal.storage_unavailable",
+    "journal.partition_contradiction"
+  ])
+  expect(
+    records.map((failure) => (failure !== undefined && "subject" in failure ? failure.subject : undefined))
+  ).toEqual(Array.from({ length: failures.length }, () => "production Journal"))
+  expect(JSON.stringify(records)).not.toContain(privateDetail)
+  expect(JSON.stringify(records)).not.toContain("/private/alice/journal.sqlite")
+})
+
+it("leaves an unknown defect outside the public Failure algebra", () => {
+  const defect = new Error("private Cause.pretty detail /private/alice/journal.sqlite token=secret")
+
+  expect(knownProductionCliFailure(defect)).toBeUndefined()
+})
+
+it.effect("startup Journal and ownership failures each emit one stable redacted Failure record", () =>
+  Effect.gen(function* () {
+    const privateLocator = "/private/alice/repository.git"
+    const privateDetail = "sqlite /private/alice/journal.sqlite token=secret"
+    const cases = [
+      {
+        code: "journal.storage_unavailable",
+        detail: "the production Journal is unavailable",
+        failure: new JournalStorageUnavailable({ detail: privateDetail, operation: "JournalStore.open" }),
+        subject: "production Journal"
+      },
+      {
+        code: "startup.ownership_lost",
+        detail: "coordinator ownership ended before the production operation completed",
+        failure: new CoordinatorOwnershipLost({ gitCommonDirectory: GitCommonDirectoryLocator.make(privateLocator) }),
+        subject: "production repository"
+      },
+      {
+        code: "startup.ownership_contradiction",
+        detail: "coordinator ownership no longer matches the production repository",
+        failure: new CoordinatorLockObservationContradiction({
+          gitCommonDirectory: GitCommonDirectoryLocator.make(privateLocator)
+        }),
+        subject: "production repository"
+      }
+    ] as const
+
+    for (const testCase of cases) {
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+      const application = runProductionCli(() => Effect.fail(testCase.failure))
+
+      yield* application(["run", "github:octo/dalph#42", "--production", "--config", "/tmp/production.json"]).pipe(
+        Effect.provide(liveCliLayer(lines, chronology)),
+        Effect.provide(NodeServices.layer),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromUnknown({
+              DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret",
+              GITHUB_TOKEN: "github-secret"
+            })
+          )
+        ),
+        Effect.flip
+      )
+
+      const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+      expect(records).toEqual([
+        { _tag: "Failure", code: testCase.code, detail: testCase.detail, subject: testCase.subject, version: 1 }
+      ])
+      expect(JSON.stringify(records)).not.toContain(privateLocator)
+      expect(JSON.stringify(records)).not.toContain(privateDetail)
+    }
+  })
+)
+
+it.effect("a TraceReader Journal failure emits one stable redacted Failure after selection", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const privateDetail = "sqlite /private/alice/journal.sqlite token=secret"
+    const failure = new JournalStorageUnavailable({ detail: privateDetail, operation: "JournalStore.read" })
+    const application = runProductionCli((_input, use) =>
+      use({
+        acceptedHistory: currentSignalOf(cursor),
+        runTermination: completedRunTermination(),
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.fail(failure) }
+      })
+    )
+
+    yield* application(["run", "github:octo/dalph#42", "--production", "--config", "/tmp/production.json"]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.flip
+    )
+
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(records.filter(({ _tag }) => _tag === "Failure")).toEqual([
+      {
+        _tag: "Failure",
+        code: "journal.storage_unavailable",
+        detail: "the production Journal is unavailable",
+        subject: "production Journal",
+        version: 1
+      }
+    ])
+    expect(JSON.stringify(records)).not.toContain(privateDetail)
+    expect(JSON.stringify(records)).not.toContain("/private/alice/journal.sqlite")
+  })
+)
 
 it.effect("maps a TraceAtCursor projection failure to one stable redacted public code", () =>
   Effect.gen(function* () {
@@ -592,3 +737,10 @@ it.effect("production help names required configuration credentials recovery and
     expect(help).not.toContain("codex-secret")
   })
 )
+
+it("exports only the canonical production CLI seam and omits the unreleased historical alias", async () => {
+  const publicApi = await import("../index.js")
+
+  expect(publicApi).toHaveProperty("productionCliFromStdio")
+  expect(publicApi).not.toHaveProperty("makeConfiguredProductionCliApplication")
+})

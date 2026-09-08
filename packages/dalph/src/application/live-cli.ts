@@ -101,9 +101,6 @@ export const runProductionCli = <EHost, RHost>(runProductionHost: ProductionCliH
 export const productionCliFromStdio = <EHost, RHost>(runProductionHost: ProductionCliHostRunner<EHost, RHost>) =>
   Command.run(makeProductionCli(runProductionHost), runConfiguration)
 
-/** Configured host seam retained under its accepted #218 name, now with explicit mode selection. */
-export const makeConfiguredProductionCliApplication = productionCliFromStdio
-
 const productionHostRunner = (
   input: ProductionRepositoryHostConfiguration,
   use: (
