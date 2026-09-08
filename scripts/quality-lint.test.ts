@@ -178,3 +178,48 @@ describe.sequential("quality lint integration", () => {
     30_000
   )
 })
+
+describe("compatibility lint policy", () => {
+  const allFiles = ["packages/dalph/src/index.ts", "packages/dalph/src/run.ts", "scripts/run.mjs"]
+
+  it("keeps the whole compatibility graph for a repository run", () => {
+    const { compatibilityFiles } = selectCompatibilityFiles({ allFiles, selectedFiles: allFiles, staged: false })
+
+    expect(compatibilityFiles).toEqual(["packages/dalph/src/index.ts", "packages/dalph/src/run.ts"])
+  })
+
+  it("skips the compatibility pass for an explicit-file run", () => {
+    const { compatibilityFiles, selectedCompatibilityFiles } = selectCompatibilityFiles({
+      allFiles,
+      explicit: true,
+      selectedFiles: ["packages/dalph/src/run.ts"],
+      staged: false
+    })
+
+    expect(compatibilityFiles).toEqual([])
+    expect(selectedCompatibilityFiles).toEqual(["packages/dalph/src/run.ts"])
+  })
+
+  it("runs the compatibility pass for an explicit-file run that asks for it", () => {
+    const { compatibilityFiles } = selectCompatibilityFiles({
+      allFiles,
+      compatibility: true,
+      explicit: true,
+      selectedFiles: ["packages/dalph/src/run.ts"],
+      staged: false
+    })
+
+    expect(compatibilityFiles).toEqual(["packages/dalph/src/run.ts"])
+  })
+
+  it("skips the compatibility pass when a repository run declines it", () => {
+    const { compatibilityFiles } = selectCompatibilityFiles({
+      allFiles,
+      selectedFiles: allFiles,
+      staged: false,
+      withoutCompatibility: true
+    })
+
+    expect(compatibilityFiles).toEqual([])
+  })
+})

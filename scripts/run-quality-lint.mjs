@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process"
 import { extname, join } from "node:path"
+import { changedRepositoryFiles } from "./changed-files.mjs"
 import { discoverQualityFiles } from "./quality-file-discovery.mjs"
 import { selectCompatibilityFiles } from "./quality-lint-policy.mjs"
 
@@ -7,8 +8,15 @@ const options = new Set(process.argv.slice(2).filter((argument) => argument.star
 const explicitFiles = process.argv.slice(2).filter((argument) => !argument.startsWith("--"))
 const staged = options.has("--staged")
 const fix = options.has("--fix")
+const changedOnly = options.has("--changed")
+const baseReference = process.env["DALPH_DIAGNOSTICS_BASE"] ?? "origin/master"
+const compatibility = options.has("--compatibility")
+const withoutCompatibility = options.has("--without-compatibility")
 const allFiles = await discoverQualityFiles()
-const selectedFiles = explicitFiles.length === 0 ? allFiles : await discoverQualityFiles({ explicitFiles })
+const requestedFiles =
+  changedOnly && explicitFiles.length === 0 ? changedRepositoryFiles({ baseReference }) : explicitFiles
+const selectedFiles =
+  requestedFiles.length === 0 && !changedOnly ? allFiles : await discoverQualityFiles({ explicitFiles: requestedFiles })
 const lintableExtensions = new Set([".js", ".mjs", ".ts", ".tsx"])
 // Compatibility lint loads the complete TypeScript import graph even when a
 // single explicit file is selected. Give that child process enough heap for
@@ -31,7 +39,14 @@ if (nativeFiles.length > 0) {
   run(executable("oxlint"), ["-c", ".oxlintrc.json", "--deny-warnings", ...(fix ? ["--fix"] : []), ...nativeFiles])
 }
 
-const { compatibilityFiles } = selectCompatibilityFiles({ allFiles, selectedFiles, staged })
+const { compatibilityFiles } = selectCompatibilityFiles({
+  allFiles,
+  compatibility,
+  explicit: changedOnly || explicitFiles.length > 0,
+  selectedFiles,
+  staged,
+  withoutCompatibility
+})
 const runCompatibility = (files, shouldFix) => {
   if (files.length === 0) return
   run(
