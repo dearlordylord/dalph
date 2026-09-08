@@ -10,6 +10,7 @@ import {
   targetPromotionStaleRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { integratorSessionCorrelationsEqual } from "../integrator/events.js"
 import type { IntegrationQuarantinedEvent } from "./events.js"
 
 type PromotionAttemptRecord = JournalRecord & { readonly event: TargetPromotionAttemptIntendedEvent }
@@ -20,8 +21,6 @@ type PromotionStaleQuarantineRecord = JournalRecord & {
   readonly event: IntegrationQuarantinedEvent & { readonly basis: { readonly _tag: "PromotionStale" } }
 }
 
-const exactSchemaValueEquals = (left: unknown, right: unknown): boolean =>
-  JSON.stringify(left) === JSON.stringify(right)
 const isPromotionStaleRecord = (record: JournalRecord): record is PromotionStaleRecord =>
   record.event._tag === "TargetPromotionStale"
 const isPromotionStaleQuarantineRecord = (record: JournalRecord): record is PromotionStaleQuarantineRecord =>
@@ -98,7 +97,7 @@ export const validatePromotionStaleQuarantineEvidence = (
   if (stale.position >= quarantine.position) {
     return { _tag: "Invalid", detail: "promotion-stale evidence must precede its quarantine" }
   }
-  if (!exactSchemaValueEquals(stale.event.correlation.qualifiedCandidate.run.session, correlation)) {
+  if (!integratorSessionCorrelationsEqual(stale.event.correlation.qualifiedCandidate.run.session, correlation)) {
     return { _tag: "Invalid", detail: "promotion-stale quarantine names a foreign Integrator session" }
   }
   if (stale.event.correlation.qualifiedCandidate.candidateCommit !== basis.candidateCommit) {

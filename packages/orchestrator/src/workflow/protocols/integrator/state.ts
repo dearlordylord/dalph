@@ -6,6 +6,7 @@ import type { WorkflowJournalEvent } from "../../registry/event.js"
 import { exactTargetLineageRecord } from "../integration-quarantine/canonical-lineage.js"
 import {
   IntegratorResponsibilityFacts,
+  integratorSessionCorrelationsEqual,
   IntegratorRunCorrelation,
   IntegratorRunOrdinal,
   IntegratorRunQualifiedCandidate,
@@ -39,18 +40,7 @@ export const integratorResponsibilityFactsFromCorrelation = (
 
 export const integratorResponsibilityFactsEqual = responsibilityFactsEquivalence
 
-export const integratorCorrelationsEqual = (
-  left: IntegratorSessionCorrelation,
-  right: IntegratorSessionCorrelation
-): boolean =>
-  left.candidateResource === right.candidateResource &&
-  left.expectedTargetHead === right.expectedTargetHead &&
-  left.sessionId === right.sessionId &&
-  left.targetLineageObservedAt === right.targetLineageObservedAt &&
-  integratorResponsibilityFactsEqual(
-    integratorResponsibilityFactsFromCorrelation(left),
-    integratorResponsibilityFactsFromCorrelation(right)
-  )
+export const integratorCorrelationsEqual = integratorSessionCorrelationsEqual
 
 export const integratorFindEventAtKey = (
   records: ReadonlyArray<JournalRecord>,

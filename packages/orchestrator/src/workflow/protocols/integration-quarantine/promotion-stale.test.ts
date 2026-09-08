@@ -1,6 +1,6 @@
 import { GitCommitSha } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { Effect, Layer, Ref } from "effect"
+import { Effect, Layer, Ref, Schema } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -24,7 +24,7 @@ import {
 } from "../../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
-import { IntegratorSessionId } from "../integrator/events.js"
+import { IntegratorSessionCorrelation, IntegratorSessionId } from "../integrator/events.js"
 import {
   TargetPromotionAttemptIntendedEvent,
   TargetPromotionAttemptOrdinal,
@@ -45,7 +45,10 @@ import {
   IntegrationPromotionStaleQuarantineRejected,
   pendingPromotionStaleIntegrationQuarantineFor
 } from "./promotion-stale.js"
-import { promotionStaleQuarantineEvidenceIssue } from "./promotion-stale-evidence.js"
+import {
+  promotionStaleQuarantineEvidenceIssue,
+  validatePromotionStaleQuarantineEvidence
+} from "./promotion-stale-evidence.js"
 import { deriveIntegrationQuarantineState } from "./state.js"
 
 const candidate = integrationFinalityFixture.qualifiedCandidate
@@ -164,6 +167,44 @@ it.effect("records one quarantine after Git directly rejects the exact compare-a
     expect(first.event._tag).toBe("IntegrationQuarantined")
     expect(first.event.basis._tag).toBe("PromotionStale")
     expect(second).toEqual(first)
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("compares promotion-stale session correlations by schema value rather than property insertion order", () =>
+  Effect.gen(function* () {
+    const quarantine = yield* appendQuarantineFor("DirectRejectionAfterAttempt")
+    const records = yield* (yield* JournalStore).read(runId)
+    const original = quarantine.event.correlation
+    const reordered = {
+      targetLineageObservedAt: original.targetLineageObservedAt,
+      startedAt: original.startedAt,
+      sessionId: original.sessionId,
+      queuedAt: original.queuedAt,
+      plannedAttempt: original.plannedAttempt,
+      integrationTarget: original.integrationTarget,
+      expectedTargetHead: original.expectedTargetHead,
+      candidateResource: original.candidateResource,
+      acceptedResult: original.acceptedResult
+    } satisfies IntegratorSessionCorrelation
+    expect(Schema.is(IntegratorSessionCorrelation)(reordered)).toBe(true)
+
+    expect(
+      validatePromotionStaleQuarantineEvidence(records, {
+        ...quarantine,
+        event: { ...quarantine.event, correlation: reordered }
+      })._tag
+    ).toBe("Valid")
+
+    const foreign = {
+      ...reordered,
+      expectedTargetHead: GitCommitSha.make("6".repeat(40))
+    } satisfies IntegratorSessionCorrelation
+    expect(
+      validatePromotionStaleQuarantineEvidence(records, {
+        ...quarantine,
+        event: { ...quarantine.event, correlation: foreign }
+      })
+    ).toEqual({ _tag: "Invalid", detail: "promotion-stale quarantine names a foreign Integrator session" })
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
