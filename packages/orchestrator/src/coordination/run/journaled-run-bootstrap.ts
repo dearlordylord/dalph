@@ -50,7 +50,7 @@ import {
 } from "../delivery/delivery-runtime-resources.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { RunFinalityDecision, type RunFinalityProof } from "../frontier/frontier.js"
-import { runFinalityEvidenceMatches } from "../frontier/run-finality.js"
+import { RunTerminationDisposition, runFinalityEvidenceMatches } from "../frontier/run-finality.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { InvalidWorkflowJournalHistory, ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import {
@@ -124,12 +124,27 @@ export const JournaledRunEstablished = Schema.Struct({
 })
 export type JournaledRunEstablished = typeof JournaledRunEstablished.Type
 
+/** The exact acknowledged terminal occurrence that closes one selected Run. */
+export const JournaledRunTermination = Schema.Struct({
+  disposition: RunTerminationDisposition,
+  terminatedAt: TraceCursor
+})
+export type JournaledRunTermination = typeof JournaledRunTermination.Type
+
+/** Read-only process-local completion source; callers cannot complete it. */
+export interface JournaledRunTerminationSource {
+  readonly await: Effect.Effect<JournaledRunTermination>
+  readonly poll: Effect.Effect<Option.Option<JournaledRunTermination>>
+}
+
 /** Read-only process source published by one scoped Journal-backed Run graph. */
 export interface JournaledRunObservationSourceService {
   /** Latest exact Journal cursor published only after its append is acknowledged. */
   readonly acceptedHistory: CurrentSignal<TraceCursor>
   readonly awaitEstablished: Effect.Effect<JournaledRunEstablished>
   readonly current: CurrentSignal<DeliveryRuntimeObservationState>
+  /** Completes only after this Run's terminal Journal append is acknowledged. */
+  readonly runTermination: JournaledRunTerminationSource
 }
 
 export class JournaledRunObservationSource extends Context.Service<
@@ -308,6 +323,7 @@ export const journaledRunBootstrapLayer = (
           )
         )
       const acceptedHistoryState = yield* SubscriptionRef.make<Option.Option<TraceCursor>>(Option.none())
+      const runTermination = yield* Deferred.make<JournaledRunTermination>()
       yield* Effect.addFinalizer(() => PubSub.shutdown(acceptedHistoryState.pubsub))
       const acceptedHistoryPublication = yield* Semaphore.make(1)
       const publishAcceptedHistory = (runId: RunId, position: JournalPosition) =>
@@ -631,6 +647,17 @@ export const journaledRunBootstrapLayer = (
           "terminate",
           lifecycle.terminateRun(runId, terminalProof.disposition, terminalProof.evidence)
         ).pipe(Effect.ensuring(owner.value.release))
+        /* v8 ignore next -- @preserve RunLifecycleJournal.terminateRun returns the acknowledged terminal record. */
+        if (termination.event._tag !== "WorkflowRunTerminated") {
+          return yield* Effect.die(new Error("Run termination did not return its terminal Journal record"))
+        }
+        yield* Deferred.succeed(
+          runTermination,
+          JournaledRunTermination.make({
+            disposition: termination.event.disposition,
+            terminatedAt: TraceCursor.make({ position: termination.position, runId: termination.runId })
+          })
+        )
         yield* publishAcceptedHistory(termination.runId, termination.position)
         const shouldAttemptRetirement = yield* Ref.modify(startupRetirementAttempts, (attempted) => {
           /* v8 ignore next -- @preserve lifecycle.terminateRun accepts one terminal append per Run; a second finish for the same Run is rejected before this guard. */
@@ -938,7 +965,18 @@ export const journaledRunBootstrapLayer = (
       const observation = JournaledRunObservationSource.of({
         acceptedHistory,
         awaitEstablished: Deferred.await(established),
-        current: processRuntimeCapabilities.resources.runtimeObservation
+        current: processRuntimeCapabilities.resources.runtimeObservation,
+        runTermination: {
+          await: Deferred.await(runTermination),
+          poll: Deferred.poll(runTermination).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.succeed(Option.none<JournaledRunTermination>()),
+                onSome: Effect.map(Option.some)
+              })
+            )
+          )
+        }
       })
       return Context.empty().pipe(
         Context.add(JournaledRunBootstrap, bootstrap),

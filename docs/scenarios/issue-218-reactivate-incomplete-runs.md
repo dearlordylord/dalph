@@ -14,13 +14,19 @@ The reactivation owner persists none of its wake, timer, frontier, or UI
 state; its queue, fibers, cooldown, and one-owner registration disappear on
 application exit or process loss. The supported production entry is the
 scoped `productionRunReactivationLayer` composition. The configured CLI host
-entry is `makeConfiguredProductionCliApplication`, which invokes a host-owned
-production callback for `dalph run <target>`; `bin/dalph.ts` still installs
-only the documented dry-run host. The accepted-fact publication boundary is
-wired through the reactive delivery publication observer. `TrackerGraphReader`
-currently exposes reads but no provider notification stream, so the bounded
-timer remains the honest tracker-notification recovery adapter rather than an
-invented live source.
+entry is `productionCliFromStdio`, which invokes a host-owned production
+callback. The unreleased historical
+`makeConfiguredProductionCliApplication` alias has no consumer and is not a
+supported seam. Before #298, `bin/dalph.ts` installed only the documented dry-run
+host. #298 explicitly supersedes that dry-only clause: Alice now chooses
+`dalph run <target> --dry` or `dalph run github:OWNER/REPOSITORY#ISSUE
+--production --config <absolute-json-path>` before a live boundary opens. The
+production callback still enters this same host-owned reactivation composition;
+the CLI neither discovers a Run nor creates a second activation path. The
+accepted-fact publication boundary is wired through the reactive delivery
+publication observer. `TrackerGraphReader` currently exposes reads but no
+provider notification stream, so the bounded timer remains the honest
+tracker-notification recovery adapter rather than an invented live source.
 
 ## A lost tracker notification is recovered by the bounded timer
 
@@ -71,10 +77,16 @@ observation, or infer work from the missing notification.
   proves the supported production Layer wires one exact Run owner and that an
   injected current-first tracker notification, timer tick, and accepted-fact
   publication each cause an ordinary fresh check.
-- `routes the configured production CLI command into its host-owned application
-  boundary` proves the exact configured CLI command composes the production
-  Layer and reaches its startup activation; the repository binary remains
-  dry-run-only by configuration.
+- `invokes one production host only after configuration and reports its
+  acknowledged selection` proves the canonical `productionCliFromStdio` seam
+  sends the shipped explicit `--production` command through the host-owned
+  callback once and only after configuration decoding.
+- `normal Run termination closes an open history attachment after its final
+  snapshot and returns` proves that callback returns after the independently
+  acknowledged terminal disposition.
+- `exports only the canonical production CLI seam and omits the unreleased
+  historical alias` proves the package barrel exposes
+  `productionCliFromStdio` without preserving the superseded #218 wrapper.
 
 ## Several hints produce one activation and one optional trailing check
 

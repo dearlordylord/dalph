@@ -76,6 +76,7 @@ import {
   productionRepositoryHostGraph,
   withProductionRepositoryHost
 } from "./production-host.js"
+
 import {
   isNonRetryableProductionActivationFailure,
   type ProductionWorkflowApplicationExitBoundary
@@ -94,6 +95,8 @@ import {
   RestartFixtureEvent as RestartFixtureEventSchema,
   type RestartFixtureInput as RestartFixtureInputType
 } from "../../bin/production-restart-host-fixture-contract.js"
+
+const unterminatedRun = { await: Effect.never, poll: Effect.succeed(Option.none()) }
 
 const validRawConfiguration = () => ({
   target: { _tag: "GithubIssue", issueNumber: 293, owner: "dearlordylord", repository: "dalph" },
@@ -246,7 +249,8 @@ it.effect(
                       TraceCursor.make({ position: JournalPosition.make(1), runId: selection.runId })
                     ),
                     awaitEstablished,
-                    current: currentSignalOf({ _tag: "NotReady" as const })
+                    current: currentSignalOf({ _tag: "NotReady" as const }),
+                    runTermination: unterminatedRun
                   })
                 ),
                 Context.add(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))
@@ -314,7 +318,8 @@ it.effect("production host exposes TaskTrackerMutationThrottled unchanged and te
                       target: configuration.target
                     })
                   ),
-                  current: currentSignalOf({ _tag: "NotReady" as const })
+                  current: currentSignalOf({ _tag: "NotReady" as const }),
+                  runTermination: unterminatedRun
                 })
               ),
               Context.add(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))
@@ -596,7 +601,8 @@ it.effect("invalid production host configuration opens no scoped production grap
                 TraceCursor.make({ position: JournalPosition.make(1), runId: RunId.make("unreachable-invalid-run") })
               ),
               awaitEstablished: Effect.die("invalid configuration must not build a Run"),
-              current: currentSignalOf({ _tag: "NotReady" as const })
+              current: currentSignalOf({ _tag: "NotReady" as const }),
+              runTermination: unterminatedRun
             })
           ),
           Layer.succeed(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))
@@ -659,7 +665,8 @@ it.effect("allocated and recovered selections identify the exact Run and never a
                     TraceCursor.make({ position: JournalPosition.make(1), runId: selection.runId })
                   ),
                   awaitEstablished,
-                  current: currentSignalOf({ _tag: "NotReady" as const })
+                  current: currentSignalOf({ _tag: "NotReady" as const }),
+                  runTermination: unterminatedRun
                 })
               ),
               Context.add(RunReactivationOwner, RunReactivationOwner.of({ hint: () => Effect.void }))

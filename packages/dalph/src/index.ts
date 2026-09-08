@@ -1,6 +1,8 @@
 export * from "./application/cli.js"
 export * from "./application/composition.js"
 export * from "./application/dry-run.js"
+export * from "./application/live-cli.js"
+export * from "./application/production-cli.js"
 export * from "./application/production.js"
 export * from "./application/production-configuration.js"
 export * from "./application/supervisor-exit.js"
@@ -21,6 +23,7 @@ export {
   type ProductionRepositoryHostAdapters,
   type ProductionRepositoryHostGraph,
   productionRepositoryHostGraph,
+  withDecodedProductionRepositoryHost,
   withProductionRepositoryHost
 } from "./application/production-host.js"
 export {

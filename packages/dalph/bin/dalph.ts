@@ -1,6 +1,5 @@
 #!/usr/bin/env node
-import { NodeRuntime, NodeStdio } from "@effect/platform-node"
-import { Effect } from "effect"
-import { dryRunCliApplication } from "../src/application/dry-run.js"
+import { NodeRuntime } from "@effect/platform-node"
+import { productionCliApplication } from "../src/application/live-cli.js"
 
-dryRunCliApplication.pipe(Effect.provide(NodeStdio.layer), NodeRuntime.runMain)
+NodeRuntime.runMain(productionCliApplication)
