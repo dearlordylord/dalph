@@ -33,6 +33,8 @@ import {
   makePassivePlannedAttemptObserver,
   memoryEvidenceStoreLayer,
   OperationId,
+  JournalDatabaseLocator,
+  sqliteJournalTestLayer,
   type GitCommandService
 } from "@dalph/orchestrator"
 import { NodeServices } from "@effect/platform-node"
@@ -213,6 +215,7 @@ const makeHarness = (
     readonly loseTurnResponseAt?: number
     readonly resumeUnavailableAfterLostTurn?: boolean
     readonly missingEmptyThread?: boolean
+    readonly freshThreadIds?: boolean
     readonly failAssociatedWriteOnce?: boolean
     readonly manualBeforeFirstTurn?: boolean
     readonly manualAfterFirstTurn?: boolean
@@ -238,7 +241,7 @@ const makeHarness = (
     readonly afterActivityCensus?: () => Effect.Effect<void>
   } = {}
 ): Harness => {
-  const threadId = CodexThreadId.make("codex-thread-issue-58")
+  let threadId = CodexThreadId.make("codex-thread-issue-58")
   const turns: Array<CodexTurnSnapshot> = []
   const records = new Map<string, CodexAttemptRecord>()
   const turnCwds: Array<string> = []
@@ -302,7 +305,14 @@ const makeHarness = (
     startThread: (cwd) =>
       Effect.sync(() => {
         threadStartCount += 1
-        currentThread = { ...currentThread, cwd: CodexThreadWorkingDirectory.make(cwd), status: "idle", turns: [] }
+        if (options.freshThreadIds) threadId = CodexThreadId.make(`codex-thread-${threadStartCount}`)
+        currentThread = {
+          ...currentThread,
+          id: threadId,
+          cwd: CodexThreadWorkingDirectory.make(cwd),
+          status: "idle",
+          turns: []
+        }
         return currentThread
       }),
     readThread: () => Effect.succeed(currentThread),
@@ -2483,6 +2493,310 @@ it.effect("restarts the production workflow after durable association and finish
   }).pipe(Effect.provide(memoryJournalTestLayer))
 })
 
+for (const change of [
+  "MissingAssociation",
+  "ChangedAssociation",
+  "ProcessRestart",
+  "InterveningCommand",
+  "NewerProof",
+  "ConsumedProof"
+] as const) {
+  it.effect(`rejects fresh-allocation Begin capability after ${change} without another allocation or turn`, () => {
+    const harness = makeHarness({ freshThreadIds: true, missingEmptyThread: true })
+    let associationMissing = false
+    const store: CodexAttemptStoreService = {
+      ...harness.store,
+      readAttempt: (runId, attemptId) =>
+        Effect.suspend(() =>
+          associationMissing ? Effect.succeed(Option.none()) : harness.store.readAttempt(runId, attemptId)
+        )
+    }
+    const executorLayer = layerFor(
+      harness,
+      defaultGitCommand,
+      memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)),
+      undefined,
+      store
+    )
+    return Effect.gen(function* () {
+      const original = yield* harness.app.startThread(worktree)
+      yield* harness.store.writeAttempt(
+        CodexAttemptRecord.cases.AssociatedPreTurn.make({
+          attemptId: attempt.attemptId,
+          correlationAttemptId: attempt.attemptId,
+          correlationRunId: attempt.runId,
+          threadId: original.id,
+          worktree
+        })
+      )
+      const executor = yield* PlannedAttemptExecutor
+      const proof = yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" })
+      if (proof._tag !== "BeginNotCrossed")
+        return expect.fail("fresh allocation must issue its process-local capability")
+      if (change === "MissingAssociation") associationMissing = true
+      if (change === "ChangedAssociation")
+        harness.setRecord(
+          CodexAttemptRecord.cases.AssociatedPreTurn.make({
+            attemptId: attempt.attemptId,
+            correlationAttemptId: attempt.attemptId,
+            correlationRunId: attempt.runId,
+            threadId: CodexThreadId.make("different-association"),
+            worktree
+          })
+        )
+      if (change === "InterveningCommand") yield* executor.requestSuspension(attempt).pipe(Effect.exit)
+      if (change === "NewerProof") yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" })
+      if (change === "ConsumedProof")
+        yield* executor.begin(request, { _tag: "ReconciledDelivery", proofId: proof.proofId })
+      const starts = harness.threadStarts()
+      const turns = harness.turnCount()
+      const redeliver = Effect.flatMap(PlannedAttemptExecutor, (current) =>
+        current.begin(request, { _tag: "ReconciledDelivery", proofId: proof.proofId })
+      )
+      const result = yield* (
+        change === "ProcessRestart" ? redeliver.pipe(Effect.provide(executorLayer, { local: true })) : redeliver
+      ).pipe(Effect.exit)
+      expect(result._tag).toBe("Failure")
+      expect(harness.threadStarts()).toBe(starts)
+      expect(harness.turnCount()).toBe(turns)
+    }).pipe(Effect.provide(executorLayer))
+  })
+}
+
+for (const returned of ["active", "notLoaded", "systemError", "turn-bearing", "foreign-worktree"] as const) {
+  it.effect(`preserves empty allocation intent when replacement thread/start returns ${returned} evidence`, () => {
+    const harness = makeHarness({ freshThreadIds: true })
+    const app: CodexAppServerService = {
+      ...harness.app,
+      resumeThread: () =>
+        Effect.fail(
+          new CodexAppServerFailure({
+            kind: "NotFound",
+            operation: "thread/resume",
+            detail: "original empty thread absent"
+          })
+        ),
+      startThread: (cwd) =>
+        harness.app
+          .startThread(cwd)
+          .pipe(
+            Effect.map((thread) => ({
+              ...thread,
+              ...(returned === "turn-bearing"
+                ? { turns: [{ id: CodexTurnId.make("foreign-turn"), status: "completed" as const, items: [] }] }
+                : returned === "foreign-worktree"
+                  ? { cwd: CodexThreadWorkingDirectory.make("/foreign/worktree") }
+                  : { status: returned })
+            }))
+          )
+    }
+    return Effect.gen(function* () {
+      const original = yield* harness.app.startThread(worktree)
+      yield* harness.store.writeAttempt(
+        CodexAttemptRecord.cases.AssociatedPreTurn.make({
+          attemptId: attempt.attemptId,
+          correlationAttemptId: attempt.attemptId,
+          correlationRunId: attempt.runId,
+          worktree,
+          threadId: original.id
+        })
+      )
+      const executor = yield* PlannedAttemptExecutor
+      expect((yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" }))._tag).toBe(
+        "Unreadable"
+      )
+      expect(harness.currentRecord()?._tag).toBe("EmptyPreTurn")
+      expect(harness.threadStarts()).toBe(2)
+      expect(harness.turnCount()).toBe(0)
+    }).pipe(Effect.provide(layerFor({ ...harness, app })))
+  })
+}
+
+for (const storage of ["memory", "sqlite-and-private-files"] as const) {
+  for (const cut of [
+    "before-absence-read",
+    "after-absence-read",
+    "before-allocation-intent",
+    "after-allocation-intent",
+    "after-thread-start",
+    "before-association",
+    "after-association",
+    "before-proof-observation",
+    "after-proof-observation",
+    "before-turn-intent",
+    "after-turn-intent",
+    "after-turn-start"
+  ] as const) {
+    it.effect(`reconstructs the original Begin after absent-thread replacement loss at ${cut} with ${storage}`, () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const directory = yield* fs.makeTempDirectoryScoped()
+        const harness = makeHarness({ freshThreadIds: true })
+        const memoryJournal = yield* JournalStore
+        const durableLayer = nodeCodexAttemptStoreLayer({ stateDirectory: `${directory}/private` })
+        let originalAssociation = true
+        let cutPending = true
+        let recovery = false
+        const calls: Array<string> = []
+        const crash = (boundary: typeof cut) =>
+          Effect.suspend(() => {
+            calls.push(boundary)
+            if (!recovery || boundary !== cut || !cutPending) return Effect.void
+            cutPending = false
+            return Effect.die(`coordinator lost at ${boundary}`)
+          })
+        const wrapStore = (durable: CodexAttemptStoreService): CodexAttemptStoreService => ({
+          ...durable,
+          readAttempt: (runId, attemptId) =>
+            Effect.suspend(() => {
+              calls.push("private-read")
+              return durable.readAttempt(runId, attemptId)
+            }),
+          writeAttempt: (record) =>
+            Effect.gen(function* () {
+              if (record._tag === "EmptyPreTurn") yield* crash("before-allocation-intent")
+              if (record._tag === "AssociatedPreTurn") yield* crash("before-association")
+              if (record._tag === "TurnIntentRecorded") yield* crash("before-turn-intent")
+              yield* durable.writeAttempt(record)
+              calls.push(`saved:${record._tag}`)
+              if (record._tag === "AssociatedPreTurn" && originalAssociation) {
+                originalAssociation = false
+                return yield* Effect.die("original process lost after association")
+              }
+              if (record._tag === "EmptyPreTurn") yield* crash("after-allocation-intent")
+              if (record._tag === "AssociatedPreTurn") yield* crash("after-association")
+              if (record._tag === "TurnIntentRecorded") yield* crash("after-turn-intent")
+            })
+        })
+        const app: CodexAppServerService = {
+          ...harness.app,
+          resumeThread: (threadId, cwd) =>
+            Effect.gen(function* () {
+              yield* crash("before-absence-read")
+              calls.push(`read:${threadId}`)
+              if (threadId === CodexThreadId.make("codex-thread-1")) {
+                yield* crash("after-absence-read")
+                return yield* new CodexAppServerFailure({
+                  kind: "NotFound",
+                  operation: "thread/resume",
+                  detail: "exact original empty rollout absent"
+                })
+              }
+              return yield* harness.app.resumeThread(threadId, cwd)
+            }),
+          startThread: (cwd) =>
+            Effect.gen(function* () {
+              calls.push("thread/start")
+              const thread = yield* harness.app.startThread(cwd)
+              yield* crash("after-thread-start")
+              return thread
+            }),
+          startTurn: (threadId, cwd, text, token) =>
+            Effect.gen(function* () {
+              calls.push("turn/start")
+              const turn = yield* harness.app.startTurn(threadId, cwd, text, token)
+              yield* crash("after-turn-start")
+              return turn
+            })
+        }
+        const journalLayer =
+          storage === "memory"
+            ? Layer.succeed(JournalStore, memoryJournal)
+            : sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(`${directory}/journal.sqlite`) })
+        const privateLayer = storage === "memory" ? Layer.succeed(CodexAttemptStore, harness.store) : durableLayer
+        const activation = (seed = false) =>
+          Effect.gen(function* () {
+            const journal = yield* JournalStore
+            const store = wrapStore(yield* CodexAttemptStore)
+            if (seed) {
+              const read = makeTaskWorkSpecificationObservationOperation(
+                OperationId.make("issue-342-specification"),
+                FixtureTarget.make("issue-342"),
+                attempt.taskId,
+                []
+              )
+              yield* journal.append(attempt.runId, intentRecordKey(read.operationId), taskTrackerReadIntent(read))
+              yield* journal.append(
+                attempt.runId,
+                outcomeRecordKey(read.operationId),
+                taskTrackerFactsObservedEvent(
+                  read.operationId,
+                  makeFocusedTaskWorkSpecificationFactsObserved(read, specification)
+                )
+              )
+            }
+            const runJournal = InRunJournal.of({
+              read: journal.read,
+              append: (runId, key, event) =>
+                Effect.gen(function* () {
+                  const proof =
+                    event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+                    event.observation._tag === "ExecutorBeginNotCrossed"
+                  if (proof) yield* crash("before-proof-observation")
+                  const record = yield* journal.append(runId, key, event)
+                  if (proof) yield* crash("after-proof-observation")
+                  return record
+                })
+            })
+            return yield* beginPlannedAttemptExecutorWork(attempt).pipe(
+              Effect.provideService(InRunJournal, runJournal),
+              Effect.provide(plannedAttemptProtocolControllerLayer),
+              Effect.provide(
+                layerFor(
+                  { ...harness, app },
+                  defaultGitCommand,
+                  memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)),
+                  undefined,
+                  store
+                ),
+                { local: true }
+              )
+            )
+          }).pipe(Effect.provide(journalLayer, { local: true }), Effect.provide(privateLayer, { local: true }))
+        expect((yield* activation(true).pipe(Effect.exit))._tag).toBe("Failure")
+        recovery = true
+        expect((yield* activation().pipe(Effect.exit))._tag).toBe("Failure")
+        expect(cutPending).toBe(false)
+        const beforeRestart = calls.length
+        const recovered = yield* activation().pipe(Effect.exit)
+        expect(calls.slice(beforeRestart)).toContain("private-read")
+        if (cut === "after-turn-intent") {
+          expect(recovered._tag).toBe("Failure")
+          expect(harness.turnCount()).toBe(0)
+        } else {
+          expect(recovered).toMatchObject({ _tag: "Success", value: { _tag: "ExecutorWorkExecuting", correlation } })
+          expect(harness.turnCount()).toBe(1)
+          expect(harness.currentThread().id).not.toBe("codex-thread-1")
+          expect(calls.indexOf("turn/start")).toBeGreaterThan(calls.indexOf("saved:TurnIntentRecorded"))
+          expect(harness.turnCwds).toEqual([attempt.worktree])
+        }
+        const records = yield* Effect.flatMap(JournalStore, (journal) => journal.read(attempt.runId)).pipe(
+          Effect.provide(journalLayer, { local: true })
+        )
+        expect(
+          records
+            .filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+            .map(({ event }) => event)
+        ).toMatchObject([{ command: "Begin", ordinal: 1, plannedAttempt: attempt }])
+        expect(
+          records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved")
+        ).toHaveLength(cut === "after-turn-intent" || cut === "after-turn-start" ? 0 : 1)
+        if (cut === "after-turn-start")
+          expect(records.map(({ event }) => event)).toContainEqual(
+            expect.objectContaining({
+              _tag: "PlannedAttemptExecutorCommandProjectionObserved",
+              observation: expect.objectContaining({
+                _tag: "ExactExecutorReport",
+                report: { _tag: "ExecutorWorkExecuting", correlation }
+              })
+            })
+          )
+        expect(harness.threadStarts()).toBe(cut === "after-thread-start" || cut === "before-association" ? 3 : 2)
+      }).pipe(Effect.provide(memoryJournalTestLayer), Effect.provide(NodeServices.layer))
+    )
+  }
+}
+
 it.effect("projects Begin-not-crossed only for exact idle association and Begin reconciliation", () => {
   const harness = makeHarness()
   return Effect.gen(function* () {
@@ -2606,7 +2920,6 @@ for (const change of [
 
 for (const evidence of [
   "MissingPrivate",
-  "NotFound",
   "Unavailable",
   "Foreign",
   "Active",
@@ -2614,7 +2927,7 @@ for (const evidence of [
   "WrongWorktree"
 ] as const) {
   it.effect(`refuses Begin-not-crossed for ${evidence} executor evidence`, () => {
-    const harness = makeHarness({ missingEmptyThread: evidence === "NotFound" })
+    const harness = makeHarness()
     return Effect.gen(function* () {
       const thread = yield* harness.app.startThread(worktree)
       if (evidence !== "MissingPrivate")

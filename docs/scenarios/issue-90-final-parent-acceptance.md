@@ -85,8 +85,8 @@ non-browser Lab checks pass.
 
 ## Acceptance-test mapping
 
-- `runs every registered controlled and production implementation through its
-  named contract family` plus the capability-registration negative cases prove
+- `runs every registered controlled, production, and qualification implementation
+  through its named contract family` plus the capability-registration negative cases prove
   the closed 16-family composition denominator.
 - `keeps the recovery-prefix manifest closed and tied to current evidence`
   proves the 17-family recovery denominator, exact P0–P6 applicability reasons,

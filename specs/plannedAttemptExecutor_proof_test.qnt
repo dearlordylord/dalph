@@ -1,6 +1,25 @@
 module plannedAttemptExecutorEvidenceProofTest {
   import plannedAttemptExecutorEvidenceProof.* from "./plannedAttemptExecutor_proof"
 
+  run absentReplacementAndRepeatedCrashCutsTest = {
+    init.then(recordBeginIntent).then(callBeginPreTurn)
+      .then(readEmptyAbsence).then(loseReplacementProcess)
+      .expect(state.stage == BeginPreTurn)
+      .then(readEmptyAbsence).then(recordEmptyReplacementIntent).then(loseReplacementProcess)
+      .then(allocateReplacementThread).then(loseReplacementProcess)
+      .expect(state.stage == EmptyReplacement)
+      .then(allocateReplacementThread).then(associateReplacementThread)
+      .expect(state.stage == BeginFreshReplacement).then(loseReplacementProcess)
+      .then(observeBeginNotCrossed).then(loseBeginProof)
+      .then(observeBeginNotCrossed).then(redeliverBegin).then(crossBeginTurn)
+      .expect(and { state.beginCount == 1, state.beginTurnCrossingCount == 1, replacementRequiresFreshAbsence, allocationRequiresDurableEmptyIntent, redeliveryNeverAllocates })
+  }
+
+  run unsafeThreadNeverAllocatesTest = {
+    init.then(recordBeginIntent).then(callBeginPreTurn).then(readUnsafePreTurn)
+      .then(recordEmptyReplacementIntent).fail()
+  }
+
   run fourPassiveExecutingReadsKeepOneReportOrdinalTest = {
     init.then(recordBeginIntent).then(callBegin).then(observeBeginResponse(ExecutingReport)).then(settleBeginResponse)
       .then(observeUnchangedExecuting).then(observeUnchangedExecuting).then(observeUnchangedExecuting).then(observeUnchangedExecuting)

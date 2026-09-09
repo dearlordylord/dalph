@@ -1,4 +1,5 @@
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
+import type { RunId } from "@dalph/contracts"
 import {
   type ApplicationExitRequestBoundaryService,
   fixtureReaderFileLayer,
@@ -18,6 +19,7 @@ import {
   presentSelectedProductionRun,
   encodeProductionCliRecord,
   productionCliFailureRecord,
+  productionCliFailureForSelectedRun,
   type ProductionCliHostObservation,
   type ProductionCliLifecycleError,
   type ProductionCliStatusError
@@ -84,6 +86,7 @@ export const makeProductionCli = <EHost, RHost>(
     ({ config, dry, production, target }) =>
       Effect.gen(function* () {
         const output = yield* TraceOutput
+        const selectedRunId = yield* Deferred.make<RunId>()
         return yield* Effect.gen(function* () {
           const invocation = yield* decodeRunInvocation({
             config: Option.getOrUndefined(config),
@@ -98,52 +101,66 @@ export const makeProductionCli = <EHost, RHost>(
             fileSystem.readFileString(locator)
           )
           yield* runProductionHost(loaded, (observation, applicationExitRequestBoundary) =>
-            Effect.scoped(
-              Effect.gen(function* () {
-                const selected = yield* Deferred.make<void>()
-                const signalAdapter = yield* installApplicationExitSignalAdapter(
-                  applicationExitRequestBoundary,
-                  signals,
-                  ["SIGINT", "SIGTERM"]
-                )
-                const presentRun = yield* presentSelectedProductionRun(
-                  observation,
-                  output.writeLine,
-                  Deferred.succeed(selected, undefined)
-                ).pipe(Effect.forkScoped)
-                const firstCompletion = yield* Effect.raceFirst(
-                  Fiber.await(presentRun).pipe(
-                    Effect.map((exit) => ({ _tag: "RunPresentationCompleted" as const, exit }))
-                  ),
-                  signalAdapter.awaitRequest.pipe(Effect.as({ _tag: "ExitRequested" as const }))
-                )
-                if (firstCompletion._tag === "RunPresentationCompleted") {
-                  return yield* firstCompletion.exit
-                }
-                if (!(yield* Deferred.isDone(selected))) {
-                  const selection = yield* Effect.raceFirst(
-                    Deferred.await(selected).pipe(Effect.as({ _tag: "Selected" as const })),
-                    Fiber.await(presentRun).pipe(
-                      Effect.map((exit) => ({ _tag: "RunPresentationCompleted" as const, exit }))
+            Deferred.succeed(selectedRunId, observation.selection.runId).pipe(
+              Effect.andThen(
+                Effect.scoped(
+                  Effect.gen(function* () {
+                    const selected = yield* Deferred.make<void>()
+                    const signalAdapter = yield* installApplicationExitSignalAdapter(
+                      applicationExitRequestBoundary,
+                      signals,
+                      ["SIGINT", "SIGTERM"]
                     )
-                  )
-                  if (selection._tag === "RunPresentationCompleted" && selection.exit._tag === "Failure") {
-                    return yield* Effect.failCause(selection.exit.cause)
-                  }
-                }
-                const result = yield* signalAdapter.awaitResult
-                yield* Fiber.interrupt(presentRun)
-                yield* presentApplicationExitResult(observation.selection.runId, result, output.writeLine)
-              })
+                    const presentRun = yield* presentSelectedProductionRun(
+                      observation,
+                      output.writeLine,
+                      Deferred.succeed(selected, undefined)
+                    ).pipe(Effect.forkScoped)
+                    const firstCompletion = yield* Effect.raceFirst(
+                      Fiber.await(presentRun).pipe(
+                        Effect.map((exit) => ({ _tag: "RunPresentationCompleted" as const, exit }))
+                      ),
+                      signalAdapter.awaitRequest.pipe(Effect.as({ _tag: "ExitRequested" as const }))
+                    )
+                    if (firstCompletion._tag === "RunPresentationCompleted") {
+                      return yield* firstCompletion.exit
+                    }
+                    if (!(yield* Deferred.isDone(selected))) {
+                      const selection = yield* Effect.raceFirst(
+                        Deferred.await(selected).pipe(Effect.as({ _tag: "Selected" as const })),
+                        Fiber.await(presentRun).pipe(
+                          Effect.map((exit) => ({ _tag: "RunPresentationCompleted" as const, exit }))
+                        )
+                      )
+                      if (selection._tag === "RunPresentationCompleted" && selection.exit._tag === "Failure") {
+                        return yield* Effect.failCause(selection.exit.cause)
+                      }
+                    }
+                    const result = yield* signalAdapter.awaitResult
+                    yield* Fiber.interrupt(presentRun)
+                    yield* presentApplicationExitResult(observation.selection.runId, result, output.writeLine)
+                  })
+                )
+              )
             )
           )
         }).pipe(
-          Effect.tapError((failure) => {
-            const known = knownProductionCliFailure(failure)
-            return known === undefined
-              ? Effect.void
-              : output.writeLine(encodeProductionCliRecord(productionCliFailureRecord(known))).pipe(Effect.ignore)
-          })
+          Effect.tapError((failure) =>
+            Deferred.isDone(selectedRunId).pipe(
+              Effect.flatMap((hasSelection) =>
+                hasSelection
+                  ? Deferred.await(selectedRunId).pipe(
+                      Effect.map((runId) => productionCliFailureForSelectedRun(failure, runId))
+                    )
+                  : Effect.succeed(knownProductionCliFailure(failure))
+              ),
+              Effect.flatMap((known) => {
+                return known === undefined
+                  ? Effect.void
+                  : output.writeLine(encodeProductionCliRecord(productionCliFailureRecord(known))).pipe(Effect.ignore)
+              })
+            )
+          )
         )
       })
   ).pipe(

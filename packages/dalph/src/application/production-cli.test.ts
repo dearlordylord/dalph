@@ -87,6 +87,9 @@ import {
   TaskWorkCapacity,
   TaskDagSnapshot,
   TaskLifecycle,
+  TaskTrackerMutationThrottled,
+  TaskTrackerThrottleRetryAfterSeconds,
+  TaskTrackerThrottleTimingEvidence,
   TrackerSnapshot,
   RunControlPolicy,
   initialRunPolicyRevision,
@@ -121,6 +124,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Queue,
   Redacted,
   Ref,
   Schema,
@@ -138,6 +142,8 @@ import {
   loadProductionConfiguration,
   presentApplicationExitResult,
   presentSelectedProductionRun,
+  productionCliFailureRecord,
+  productionCliFailureForSelectedRun,
   ProductionConfigurationLocator,
   ProductionCliConfigurationError,
   ProductionCliLifecycleError,
@@ -514,6 +520,317 @@ it("maps every typed startup boundary failure without retaining private diagnost
   expect(JSON.stringify(records)).not.toContain(privateLocator)
   expect(JSON.stringify(records)).not.toContain(privateDetail)
 })
+
+it("maps a typed task-tracker throttle to a selected-Run delivery failure", () => {
+  const throttle = new TaskTrackerMutationThrottled({
+    detail: "private GitHub response header token=secret",
+    operation: "AcquireTaskClaim",
+    operationId: OperationId.make("production-cli-throttled-claim"),
+    retry: TaskTrackerThrottleTimingEvidence.cases.RetryAfter.make({
+      seconds: TaskTrackerThrottleRetryAfterSeconds.make(29)
+    })
+  })
+
+  const mapped = productionCliFailureForSelectedRun(throttle, runId)
+
+  expect(knownProductionCliFailure(throttle)).toBeUndefined()
+  expect(mapped).toMatchObject({
+    _tag: "ProductionCliDeliveryError",
+    code: "delivery.provider_throttled",
+    detail: "the task tracker throttled a production delivery mutation",
+    subject: {
+      _tag: "TaskTrackerMutation",
+      operation: "AcquireTaskClaim",
+      operationId: "production-cli-throttled-claim",
+      retry: { _tag: "RetryAfter", seconds: 29 },
+      runId
+    }
+  })
+  expect(JSON.stringify(mapped)).not.toContain(throttle.detail)
+})
+
+it.effect("delivery throttle closes presentation and host scope without requesting graceful Exit", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const selectedOutput = yield* Deferred.make<void>()
+    const exitRequests = yield* Ref.make(0)
+    const throttle = new TaskTrackerMutationThrottled({
+      detail: "private provider response",
+      operation: "AcquireTaskClaim",
+      operationId: OperationId.make("production-cli-host-throttle"),
+      retry: null
+    })
+    const application = runProductionCli((_input, use) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* Effect.addFinalizer(() => Ref.update(chronology, (current) => [...current, "host-scope-closed"]))
+          yield* use(
+            {
+              acceptedHistory: currentSignalOf(cursor),
+              current: currentSignalOf({ _tag: "NotReady" as const }),
+              runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
+              selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+              traceReader: { readAt: () => Effect.succeed(snapshot) }
+            },
+            {
+              requestExit: Ref.update(exitRequests, (count) => count + 1).pipe(
+                Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+              )
+            }
+          ).pipe(Effect.forkScoped)
+          yield* Deferred.await(selectedOutput)
+          return yield* throttle
+        })
+      )
+    )
+
+    const observed = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(
+        liveCliLayer(lines, chronology, JSON.stringify(validProductionDocument), (line) =>
+          JSON.parse(line)._tag === "RunSelected" ? Deferred.succeed(selectedOutput, undefined) : Effect.void
+        )
+      ),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.flip
+    )
+
+    expect(observed).toBe(throttle)
+    expect(yield* Ref.get(exitRequests)).toBe(0)
+    expect(yield* Ref.get(chronology)).toContain("host-scope-closed")
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-1)).toMatchObject({
+      _tag: "Failure",
+      code: "delivery.provider_throttled",
+      subject: { runId }
+    })
+  })
+)
+
+it("delivery throttle output is redacted and preserves only safe R operation and retry evidence", () => {
+  const privateDetail = "GitHub x-ratelimit-reset=private token=secret"
+  const throttle = new TaskTrackerMutationThrottled({
+    detail: privateDetail,
+    operation: "CompleteTask",
+    operationId: OperationId.make("production-cli-complete-throttle"),
+    retry: TaskTrackerThrottleTimingEvidence.cases.RetryAfter.make({
+      seconds: TaskTrackerThrottleRetryAfterSeconds.make(17)
+    })
+  })
+  const mapped = productionCliFailureForSelectedRun(throttle, runId)
+  if (mapped === undefined) return expect.fail("typed throttle was not mapped")
+
+  const encoded = encodeProductionCliRecord(productionCliFailureRecord(mapped))
+
+  expect(JSON.parse(encoded)).toEqual({
+    _tag: "Failure",
+    code: "delivery.provider_throttled",
+    detail: "the task tracker throttled a production delivery mutation",
+    subject: {
+      _tag: "TaskTrackerMutation",
+      operation: "CompleteTask",
+      operationId: "production-cli-complete-throttle",
+      retry: { _tag: "RetryAfter", seconds: 17 },
+      runId
+    },
+    version: 1
+  })
+  expect(encoded).not.toContain(privateDetail)
+  expect(encoded).not.toContain("secret")
+  expect(encoded).not.toContain("x-ratelimit-reset")
+})
+
+it("rejects mismatched public failure codes details and subjects", () => {
+  const deliverySubject = {
+    _tag: "TaskTrackerMutation",
+    operation: "CompleteTask",
+    operationId: "production-cli-invalid-failure",
+    retry: null,
+    runId
+  }
+  const invalid = [
+    {
+      _tag: "Failure",
+      code: "configuration.invalid",
+      detail: "invalid configuration",
+      subject: deliverySubject,
+      version: 1
+    },
+    {
+      _tag: "Failure",
+      code: "delivery.provider_throttled",
+      detail: "provider-private detail",
+      subject: deliverySubject,
+      version: 1
+    },
+    {
+      _tag: "Failure",
+      code: "delivery.provider_throttled",
+      detail: "the task tracker throttled a production delivery mutation",
+      subject: "production repository",
+      version: 1
+    }
+  ]
+
+  expect(invalid.map((record) => Option.isNone(Schema.decodeUnknownOption(ProductionCliRecord)(record)))).toEqual([
+    true,
+    true,
+    true
+  ])
+})
+
+it.effect("preserves original task-tracker throttle after lost Failure output without requesting graceful Exit", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const selectedOutput = yield* Deferred.make<void>()
+    const failureOutputAttempted = yield* Deferred.make<void>()
+    const exitRequests = yield* Ref.make(0)
+    const outputFailure = new TraceOutputError({ detail: "controlled stdout loss" })
+    const throttle = new TaskTrackerMutationThrottled({
+      detail: "private provider response",
+      operation: "ReleaseTaskClaim",
+      operationId: OperationId.make("production-cli-lost-output-throttle"),
+      retry: null
+    })
+    const application = runProductionCli((_input, use) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* use(
+            {
+              acceptedHistory: currentSignalOf(cursor),
+              current: currentSignalOf({ _tag: "NotReady" as const }),
+              runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
+              selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+              traceReader: { readAt: () => Effect.succeed(snapshot) }
+            },
+            {
+              requestExit: Ref.update(exitRequests, (count) => count + 1).pipe(
+                Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+              )
+            }
+          ).pipe(Effect.forkScoped)
+          yield* Deferred.await(selectedOutput)
+          return yield* throttle
+        })
+      )
+    )
+    const failingOutputLayer = Layer.succeed(
+      TraceOutput,
+      TraceOutput.of({
+        writeLine: (line) => {
+          const record = JSON.parse(line)
+          if (record._tag === "Failure") {
+            return Deferred.succeed(failureOutputAttempted, undefined).pipe(Effect.andThen(Effect.fail(outputFailure)))
+          }
+          return Ref.update(lines, (current) => [...current, line]).pipe(
+            Effect.andThen(record._tag === "RunSelected" ? Deferred.succeed(selectedOutput, undefined) : Effect.void)
+          )
+        }
+      })
+    )
+
+    const observed = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(Layer.merge(liveCliLayer(lines, chronology), failingOutputLayer)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.flip
+    )
+
+    yield* Deferred.await(failureOutputAttempted)
+    expect(observed).toBe(throttle)
+    expect(observed).not.toBe(outputFailure)
+    expect(yield* Ref.get(exitRequests)).toBe(0)
+    expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "Failure")).toBe(false)
+    expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "ApplicationExitDisposition")).toBe(false)
+  })
+)
+
+it.effect("two CLI invocations report allocated then the same recovered Run without presentation retry", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const hostInvocations = yield* Ref.make(0)
+    const selectedOutputs = yield* Queue.unbounded<void>()
+    const throttle = new TaskTrackerMutationThrottled({
+      detail: "private provider response",
+      operation: "AcquireTaskClaim",
+      operationId: OperationId.make("production-cli-recovery-throttle"),
+      retry: null
+    })
+    const application = runProductionCli((_input, use) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const invocation = yield* Ref.getAndUpdate(hostInvocations, (count) => count + 1)
+          const selection =
+            invocation === 0
+              ? ProductionRunSelection.cases.Allocated.make({ runId })
+              : ProductionRunSelection.cases.Recovered.make({ runId })
+          yield* use(
+            {
+              acceptedHistory: currentSignalOf(cursor),
+              current: currentSignalOf({ _tag: "NotReady" as const }),
+              runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
+              selection,
+              traceReader: { readAt: () => Effect.succeed(snapshot) }
+            },
+            inactiveApplicationExitRequestBoundary
+          ).pipe(Effect.forkScoped)
+          yield* Queue.take(selectedOutputs)
+          return yield* throttle
+        })
+      )
+    )
+    const layer = liveCliLayer(lines, chronology, JSON.stringify(validProductionDocument), (line) =>
+      JSON.parse(line)._tag === "RunSelected" ? Queue.offer(selectedOutputs, undefined) : Effect.void
+    )
+    const args = ["run", "github:octo/dalph#42", "--production", "--config", "/tmp/production.json"]
+    const credentials = ConfigProvider.layer(
+      ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+    )
+
+    for (const _invocation of [0, 1]) {
+      const observed = yield* application(args).pipe(
+        Effect.provide(layer),
+        Effect.provide(NodeServices.layer),
+        Effect.provide(credentials),
+        Effect.flip
+      )
+      expect(observed).toBe(throttle)
+    }
+
+    expect(yield* Ref.get(hostInvocations)).toBe(2)
+    expect(
+      (yield* Ref.get(lines))
+        .map((line) => JSON.parse(line))
+        .filter(({ _tag }) => _tag === "RunSelected")
+        .map(({ runId: selectedRunId, selection }) => ({ runId: selectedRunId, selection }))
+    ).toEqual([
+      { runId, selection: "Allocated" },
+      { runId, selection: "Recovered" }
+    ])
+  })
+)
 
 it("maps every Journal storage failure through one exhaustive redacted public algebra", () => {
   const privateDetail = "sqlite /private/alice/journal.sqlite token=secret"
@@ -1242,18 +1559,15 @@ it.effect("closed status without a final value cannot report Run completion", ()
 )
 
 it("each HistoricalSnapshot contains exactly one whole canonical TraceAtCursor and current status/disposition remain separate", () => {
-  const records = [
-    ProductionCliRecord.cases.HistoricalSnapshot.make({ snapshot, version: 1 }),
-    ProductionCliRecord.cases.RunDisposition.make({
-      disposition: RunTerminationDisposition.make("Completed"),
-      runId,
-      version: 1
-    }),
-    ProductionCliRecord.cases.ApplicationExitDisposition.make({
+  const records: ReadonlyArray<ProductionCliRecord> = [
+    { _tag: "HistoricalSnapshot", snapshot, version: 1 },
+    { _tag: "RunDisposition", disposition: RunTerminationDisposition.make("Completed"), runId, version: 1 },
+    {
+      _tag: "ApplicationExitDisposition",
       disposition: ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }),
       runId,
       version: 1
-    }),
+    },
     applicationExitDispositionRecord(runId, ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
   ]
   const encoded = records.map(encodeProductionCliRecord).map((line) => JSON.parse(line))

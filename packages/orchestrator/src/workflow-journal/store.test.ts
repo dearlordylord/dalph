@@ -952,6 +952,9 @@ journalAppendContract("sqlite", () =>
     Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: ":memory:" })))
   )
 )
+journalAppendContract("sqlite-qualification", () =>
+  sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") })
+)
 durableJournalStoreContract(
   "sqlite",
   () => sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }),
