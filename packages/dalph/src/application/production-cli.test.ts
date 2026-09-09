@@ -689,6 +689,20 @@ it.effect("lost throttle output remains status one and never becomes graceful Ex
         })
       )
     )
+    const failingOutputLayer = Layer.succeed(
+      TraceOutput,
+      TraceOutput.of({
+        writeLine: (line) => {
+          const record = JSON.parse(line)
+          if (record._tag === "Failure") {
+            return Deferred.succeed(failureOutputAttempted, undefined).pipe(Effect.andThen(Effect.fail(outputFailure)))
+          }
+          return Ref.update(lines, (current) => [...current, line]).pipe(
+            Effect.andThen(record._tag === "RunSelected" ? Deferred.succeed(selectedOutput, undefined) : Effect.void)
+          )
+        }
+      })
+    )
 
     const observed = yield* application([
       "run",
@@ -697,16 +711,7 @@ it.effect("lost throttle output remains status one and never becomes graceful Ex
       "--config",
       "/tmp/production.json"
     ]).pipe(
-      Effect.provide(
-        liveCliLayer(lines, chronology, JSON.stringify(validProductionDocument), (line) => {
-          const record = JSON.parse(line)
-          if (record._tag === "RunSelected") return Deferred.succeed(selectedOutput, undefined)
-          if (record._tag === "Failure") {
-            return Deferred.succeed(failureOutputAttempted, undefined).pipe(Effect.andThen(Effect.fail(outputFailure)))
-          }
-          return Effect.void
-        })
-      ),
+      Effect.provide(Layer.merge(liveCliLayer(lines, chronology), failingOutputLayer)),
       Effect.provide(NodeServices.layer),
       Effect.provide(
         ConfigProvider.layer(
@@ -720,6 +725,7 @@ it.effect("lost throttle output remains status one and never becomes graceful Ex
     expect(observed).toBe(throttle)
     expect(observed).not.toBe(outputFailure)
     expect(yield* Ref.get(exitRequests)).toBe(0)
+    expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "Failure")).toBe(false)
     expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "ApplicationExitDisposition")).toBe(false)
   })
 )
