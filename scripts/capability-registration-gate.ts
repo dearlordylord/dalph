@@ -917,14 +917,14 @@ const implementationSourceIssues = (
         issues.push(`${capability.family} ${role} implementation marker is stale: ${implementation.marker}`)
       }
       const composition = indexed.sourceByPath.get(implementation.composition.source)
-      const compositionRole = inventory.compositionSources.find(
-        ({ source }) => source === implementation.composition.source
-      )?.role
+      const compositionRoles = inventory.compositionSources
+        .filter(({ source }) => source === implementation.composition.source)
+        .map(({ role }) => role)
       if (composition === undefined) {
         issues.push(`${capability.family} ${role} composition source is missing: ${implementation.composition.source}`)
-      } else if (compositionRole !== role) {
+      } else if (!compositionRoles.includes(role)) {
         issues.push(
-          `${capability.family} ${role} composition role is stale: ${implementation.composition.source} is ${compositionRole ?? "unregistered"}`
+          `${capability.family} ${role} composition role is stale: ${implementation.composition.source} is ${compositionRoles.length === 0 ? "unregistered" : compositionRoles.join("/")}`
         )
       } else if (!hasValueReference(composition, implementation.composition.marker, indexed)) {
         issues.push(`${capability.family} ${role} composition marker is stale: ${implementation.composition.marker}`)
@@ -1003,11 +1003,14 @@ const compositionReferenceIssues = (
     if (symbol !== undefined) support.set(binding.identity, symbol)
   }
   const reported = new Set<string>()
-  for (const composition of inventory.compositionSources) {
-    if (composition.evidenceOnly === true) continue
+  const compositionSources = [...new Set(inventory.compositionSources.map(({ source }) => source))].map((source) => ({
+    roles: inventory.compositionSources.filter((composition) => composition.source === source).map(({ role }) => role),
+    source
+  }))
+  for (const composition of compositionSources) {
     const compatibleRegistered = new Map(
       [...registered].flatMap(([identity, registration]) =>
-        composition.role === "qualification" || registration.role === composition.role
+        composition.roles.includes("qualification") || composition.roles.includes(registration.role)
           ? [[identity, registration.symbol] as const]
           : []
       )
@@ -1016,7 +1019,7 @@ const compositionReferenceIssues = (
     const allowedSymbols = new Set([...allowed.values()].map((symbol) => resolveSymbol(symbol, indexed.checker)))
     const source = indexed.sourceByPath.get(composition.source)
     if (source === undefined) {
-      issues.push(`${composition.role} composition source is missing: ${composition.source}`)
+      issues.push(`${composition.roles.join("/")} composition source is missing: ${composition.source}`)
       continue
     }
     for (const node of runtimeValueReferences(source, indexed)) {
@@ -1034,7 +1037,7 @@ const compositionReferenceIssues = (
         !allowedSymbols.has(symbol) &&
         isLayerSymbol(symbol, indexed)
       ) {
-        const issue = `${composition.role} uses unregistered exported Layer ${identity}`
+        const issue = `${composition.roles.join("/")} uses unregistered exported Layer ${identity}`
         if (!reported.has(issue)) {
           reported.add(issue)
           issues.push(issue)

@@ -245,6 +245,33 @@ describe("capability registration gate", () => {
     )
   })
 
+  it("cannot reclassify the production host to hide a qualification-only Layer", () => {
+    const forbiddenProductionHost = sourceFiles.map((file) =>
+      file.path === "packages/dalph/src/application/production-host.ts"
+        ? {
+            ...file,
+            source: [
+              'import { sqliteJournalTestLayer } from "../../../orchestrator/src/workflow-journal/adapters/sqlite-store.js"',
+              file.source,
+              "export const forbiddenQualificationJournal = sqliteJournalTestLayer"
+            ].join("\n")
+          }
+        : file
+    )
+    const attemptedReclassification = {
+      ...capabilityRegistrationInventory,
+      compositionSources: capabilityRegistrationInventory.compositionSources.map((composition) =>
+        composition.source === "packages/dalph/src/application/production-host.ts"
+          ? { ...composition, evidenceOnly: true as const }
+          : composition
+      )
+    }
+
+    expect(runCapabilityRegistrationGate(attemptedReclassification, forbiddenProductionHost)).toContain(
+      "production uses unregistered exported Layer sqliteJournalTestLayer"
+    )
+  })
+
   it("rejects one-sided contract evidence", () => {
     const oneSided = {
       ...capabilityRegistrationInventory,

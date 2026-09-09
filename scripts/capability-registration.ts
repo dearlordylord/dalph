@@ -109,8 +109,6 @@ interface CapabilityRegistration {
 interface CompositionSource {
   readonly role: CapabilityRole
   readonly source: string
-  /** Contract fixtures prove one exact implementation identity; runtime roots additionally audit every exported Layer. */
-  readonly evidenceOnly?: true
 }
 
 /**
@@ -1048,64 +1046,34 @@ export const capabilityRegistrationInventory = {
     }
   ],
   compositionSources: [
-    { evidenceOnly: true, role: "controlled", source: "packages/orchestrator/src/workflow-journal/store.test.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/workflow-journal/store.test.ts" },
+    { role: "production", source: "packages/orchestrator/src/workflow-journal/store.test.ts" },
+    { role: "qualification", source: "packages/orchestrator/src/workflow-journal/store.test.ts" },
+    { role: "production", source: "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/workflow/interpretation/layers.ts" },
     {
-      evidenceOnly: true,
-      role: "production",
-      source: "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts"
-    },
-    { evidenceOnly: true, role: "controlled", source: "packages/orchestrator/src/workflow/interpretation/layers.ts" },
-    {
-      evidenceOnly: true,
       role: "controlled",
       source: "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.test.ts"
     },
-    { evidenceOnly: true, role: "controlled", source: "packages/orchestrator/src/authorities/git/worktree.test.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/authorities/git/worktree.test.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts" },
+    { role: "production", source: "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts" },
     {
-      evidenceOnly: true,
-      role: "controlled",
-      source: "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts"
-    },
-    {
-      evidenceOnly: true,
       role: "controlled",
       source: "packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts"
     },
+    { role: "production", source: "packages/dalph/src/application/codex-planned-attempt-executor.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts" },
+    { role: "production", source: "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.test.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/branch.test.ts" },
     {
-      evidenceOnly: true,
-      role: "production",
-      source: "packages/dalph/src/application/codex-planned-attempt-executor.ts"
-    },
-    {
-      evidenceOnly: true,
-      role: "controlled",
-      source: "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts"
-    },
-    {
-      evidenceOnly: true,
-      role: "controlled",
-      source: "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts"
-    },
-    {
-      evidenceOnly: true,
-      role: "controlled",
-      source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.test.ts"
-    },
-    {
-      evidenceOnly: true,
-      role: "controlled",
-      source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/branch.test.ts"
-    },
-    {
-      evidenceOnly: true,
       role: "controlled",
       source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/integrator-candidate.test.ts"
     },
-    {
-      evidenceOnly: true,
-      role: "controlled",
-      source: "packages/orchestrator/src/authorities/coordinator-ownership/ownership.test.ts"
-    },
+    { role: "controlled", source: "packages/orchestrator/src/authorities/coordinator-ownership/ownership.test.ts" },
+    { role: "production", source: "packages/orchestrator/src/authorities/coordinator-ownership/ownership.test.ts" },
     { role: "production", source: "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts" },
     { role: "production", source: "packages/dalph/src/application/production.ts" },
     { role: "production", source: "packages/dalph/src/application/production-host.ts" },
@@ -1246,6 +1214,11 @@ export const capabilityRegistrationInventory = {
       "nodeCodexOwnedActivityCensusLayer",
       "execution-substrate observation support shared by the registered Codex executor and Integrator",
       "packages/dalph/src/application/codex-app-server.ts"
+    ),
+    support(
+      "nodeCoordinatorLockAdapterLayer",
+      "node lock mechanism beneath the registered coordinator-ownership capability",
+      "packages/orchestrator/src/authorities/coordinator-ownership/node-lock.ts"
     ),
     support(
       "nodeGitCommandLayer",
