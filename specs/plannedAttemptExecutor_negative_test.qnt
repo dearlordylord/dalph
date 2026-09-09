@@ -2,6 +2,52 @@
 module plannedAttemptExecutorNegativeTest {
   import plannedAttemptExecutor.* from "./plannedAttemptExecutor"
 
+  action replaceWithoutFreshAbsence: bool = all {
+    state' = { ...state, beginTurnBoundary: BeginEmptyReplacement, replacementIntentWasFreshExactAbsence: state.preTurnThreadRead == ExactAbsent and state.beginTurnBoundary == BeginAssociatedPreTurn },
+  }
+  action retainFreshAllocationAfterRestart: bool = all { state' = { ...state, lastAction: RecoveryActivatedAction } }
+  run persistedFreshAllocationAuthorityMutationIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recordPreTurnThreadRead(ExactAbsent)).then(recordEmptyReplacementIntent)
+      .then(allocateReplacementThread).then(associateReplacementThread)
+      .then(retainFreshAllocationAfterRestart).expect(not(restartDiscardsFreshAllocationAuthority))
+  }
+  action allocateDuringRedelivery: bool = all {
+    state' = { ...state, replacementAllocationCount: state.replacementAllocationCount + 1 },
+  }
+  action allocateWithoutEmptyIntent: bool = all {
+    state' = { ...state, beginTurnBoundary: BeginReplacementAllocated, lastAllocationHadDurableEmptyIntent: state.beginTurnBoundary == BeginEmptyReplacement },
+  }
+  run allocationWithoutEmptyIntentMutationIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recordPreTurnThreadRead(ExactAbsent)).then(allocateWithoutEmptyIntent)
+      .expect(not(replacementAllocationRequiresDurableEmptyIntent))
+  }
+  action issueProofBeforeAssociation: bool = all {
+    state' = { ...state, evidence: CommandProjectionEvidence({ correlation: PLANNED_CORRELATION, commandOrdinal: 1, outcome: CommandProjectionBeginNotCrossed }) },
+  }
+  run staleAbsenceReplacementMutationIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recordPreTurnThreadRead(ExactAbsent)).then(recoverActivation)
+      .then(replaceWithoutFreshAbsence).expect(not(replacementRequiresFreshExactAbsence))
+  }
+  run ambiguousReplacementMutationIsDetectedTest = {
+    nondet read = Set(TemporarilyUnavailable, Unreadable, Foreign, TurnBearing).oneOf()
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recordPreTurnThreadRead(read)).then(replaceWithoutFreshAbsence)
+      .expect(not(replacementRequiresFreshExactAbsence))
+  }
+  run proofBeforeReplacementAssociationMutationIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recordPreTurnThreadRead(ExactAbsent)).then(recordEmptyReplacementIntent)
+      .then(issueProofBeforeAssociation).expect(not(beginNotCrossedProofHasExactPreTurnAuthority))
+  }
+  run redeliveryAllocationMutationIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionBeginNotCrossed)).then(redeliverBegin)
+      .then(allocateDuringRedelivery).expect(not(redeliveryNeverAllocates))
+  }
+
   action callWithoutIntent: bool = all {
     state.status == ResponsibilityBegan,
     state' = { ...state, commandCallCount: state.commandCallCount + 1, lastAction: BeginCalledAction },

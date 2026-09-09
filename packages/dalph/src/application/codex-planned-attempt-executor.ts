@@ -37,6 +37,7 @@ import {
 } from "@dalph/orchestrator"
 import {
   Context,
+  Data,
   Crypto,
   Deferred,
   Duration,
@@ -168,6 +169,12 @@ const sameAcceptedManifest = Schema.toEquivalence(AcceptedResultEvidenceManifest
 
 type CodexEmptyRecord = Extract<CodexAttemptRecord, { readonly _tag: "EmptyPreTurn" }>
 type CodexAssociatedRecord = Extract<CodexAttemptRecord, { readonly _tag: "AssociatedPreTurn" }>
+/** A successful allocation has no readable rollout yet; only its current process owns this response authority. */
+type CodexBeginAssociation = Data.TaggedEnum<{
+  FreshAllocation: { readonly record: CodexAssociatedRecord }
+  ReconciledExisting: { readonly record: CodexAssociatedRecord }
+}>
+const CodexBeginAssociation = Data.taggedEnum<CodexBeginAssociation>()
 type CodexIntentRecord = Extract<CodexAttemptRecord, { readonly _tag: "TurnIntentRecorded" }>
 type CodexObservedRecord = Extract<CodexAttemptRecord, { readonly _tag: "TurnObserved" }>
 type CodexRunningRecord = Extract<CodexAttemptRecord, { readonly _tag: "Running" }>
@@ -855,7 +862,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     const beginProofs = yield* Ref.make<
       ReadonlyMap<
         string,
-        { readonly proofId: PlannedAttemptExecutorBeginProofId; readonly record: CodexAssociatedRecord }
+        { readonly proofId: PlannedAttemptExecutorBeginProofId; readonly association: CodexBeginAssociation }
       >
     >(new Map())
     const invalidateBeginProof = (correlation: PlannedAttemptExecutorCorrelation) =>
@@ -936,7 +943,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     // An AssociatedPreTurn record says Dalph has not authorized turn/start.
     // Any provider turn therefore contradicts the private pre-turn state.
     const reconcileAssociatedThread = (thread: CodexThreadSnapshot) => {
-      if (thread.turns.length > 0 || thread.status === "active") {
+      if (thread.turns.length > 0 || thread.status !== "idle") {
         return Effect.fail(new CodexTurnBoundaryUnknown({}))
       }
       return Effect.succeed<ThreadReconciliation>({ _tag: "Idle", thread, turn: undefined })
@@ -1298,7 +1305,7 @@ const makeCodexPlannedAttemptExecutorContext = (
     })
 
     const allocateThread = Effect.fn("CodexPlannedAttemptExecutor.allocateThread")(function* (
-      attempt: PlannedTaskAttempt,
+      attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation
     ) {
       // This record is the durable empty allocation intent. No task turn may
@@ -1306,6 +1313,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       yield* save(emptyRecordFor(attempt))
       const thread = yield* app.startThread(attempt.worktree)
       yield* enforceThreadIdentity(attempt, correlation, thread.id, thread)
+      yield* reconcileAssociatedThread(thread)
       const associated = associatedRecordFor(attempt, thread.id)
       yield* save(associated)
       return associated
@@ -1413,11 +1421,14 @@ const makeCodexPlannedAttemptExecutorContext = (
       return { _tag: "Recovered" as const, record } satisfies LoadedBeginRecord
     })
 
-    const reconcileAssociatedBegin = Effect.fn("CodexPlannedAttemptExecutor.reconcileAssociatedBegin")(function* (
-      attempt: PlannedTaskAttempt,
+    const reconcilePreTurnBegin = Effect.fn("CodexPlannedAttemptExecutor.reconcilePreTurnBegin")(function* (
+      attempt: CodexAttemptContext,
       correlation: PlannedAttemptExecutorCorrelation,
-      record: Extract<CodexAttemptRecord, { readonly _tag: "AssociatedPreTurn" }>
+      record: CodexEmptyRecord | CodexAssociatedRecord
     ) {
+      if (record._tag === "EmptyPreTurn") {
+        return CodexBeginAssociation.FreshAllocation({ record: yield* allocateThread(attempt, correlation) })
+      }
       const reconciliation = yield* reconcile(attempt, correlation, record).pipe(
         Effect.catch((error: unknown) =>
           error instanceof CodexAppServerFailure && error.kind === "NotFound"
@@ -1428,7 +1439,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       if (reconciliation === undefined) {
         // The durable association proves turn/start was not yet authorized, so
         // a conclusively absent empty thread can be replaced within this Begin.
-        return yield* allocateThread(attempt, correlation)
+        return CodexBeginAssociation.FreshAllocation({ record: yield* allocateThread(attempt, correlation) })
       }
       /* v8 ignore next -- @preserve Associated pre-turn state carries no owned turn that can be Running or Terminal. */
       if (reconciliation._tag === "Running" || reconciliation._tag === "Terminal") {
@@ -1436,7 +1447,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       }
       /* v8 ignore next -- @preserve Associated pre-turn reconciliation is idle, unresolved, or conclusively absent. */
       if (reconciliation._tag === "Unresolved") return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
-      return record
+      return CodexBeginAssociation.ReconciledExisting({ record })
     })
 
     const saveExecutingResumeRecord = Effect.fn("CodexPlannedAttemptExecutor.saveExecutingResumeRecord")(function* (
@@ -1496,15 +1507,15 @@ const makeCodexPlannedAttemptExecutorContext = (
       const current = found.value
       if (
         current._tag !== "AssociatedPreTurn" ||
-        current.threadId !== proof.record.threadId ||
-        current.worktree !== proof.record.worktree
+        current.threadId !== proof.association.record.threadId ||
+        current.worktree !== proof.association.record.worktree
       ) {
         return yield* new CodexTurnBoundaryUnknown({})
       }
-      // No allocation/replacement path is reachable from reconciled delivery.
-      // AssociatedPreTurn reconciliation returns Idle or fails; it cannot
-      // return an owned-turn lifecycle projection.
-      yield* reconcile(attempt, correlation, current)
+      // A newly allocated empty thread has no readable rollout until its first
+      // task turn. Its validated start response is authority only in this process.
+      // Existing threads require a fresh read; neither route can allocate here.
+      if (proof.association._tag === "ReconciledExisting") yield* reconcile(attempt, correlation, current)
       return current
     })
 
@@ -1523,7 +1534,7 @@ const makeCodexPlannedAttemptExecutorContext = (
       const loaded = yield* loadBeginRecord(attempt, correlation)
       let record = loaded.record
       if (loaded._tag === "Recovered" && record._tag === "AssociatedPreTurn") {
-        record = yield* reconcileAssociatedBegin(attempt, correlation, record)
+        record = (yield* reconcilePreTurnBegin(attempt, correlation, record)).record
       } else if (loaded._tag === "Recovered") {
         return yield* new CodexTurnBoundaryUnknown({})
       }
@@ -1674,20 +1685,30 @@ const makeCodexPlannedAttemptExecutorContext = (
     const isBeginReconciliation = (purpose: PlannedAttemptExecutorObservationPurpose): boolean =>
       purpose._tag === "ReconcileCommand" && purpose.command === "Begin"
 
+    const isPreTurnBeginRecord = (
+      record: CodexAttemptRecord,
+      purpose: PlannedAttemptExecutorObservationPurpose
+    ): record is CodexEmptyRecord | CodexAssociatedRecord =>
+      isBeginReconciliation(purpose) && (record._tag === "EmptyPreTurn" || record._tag === "AssociatedPreTurn")
+
+    const issueBeginProof = Effect.fn("CodexPlannedAttemptExecutor.issueBeginProof")(function* (
+      correlation: PlannedAttemptExecutorCorrelation,
+      association: CodexBeginAssociation
+    ) {
+      const proofId = PlannedAttemptExecutorBeginProofId.make(yield* crypto.randomUUIDv4)
+      yield* Ref.update(
+        beginProofs,
+        (current) =>
+          new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), { proofId, association }]])
+      )
+      return PlannedAttemptExecutorProjection.cases.BeginNotCrossed.make({ correlation, proofId })
+    })
+
     const projectIdleRecord = Effect.fn("CodexPlannedAttemptExecutor.projectIdleRecord")(function* (
       correlation: PlannedAttemptExecutorCorrelation,
-      record: CodexThreadBackedRecord,
-      purpose: PlannedAttemptExecutorObservationPurpose
+      record: CodexThreadBackedRecord
     ) {
-      if (record._tag === "AssociatedPreTurn") {
-        if (!isBeginReconciliation(purpose)) return noReport(correlation)
-        const proofId = PlannedAttemptExecutorBeginProofId.make(yield* crypto.randomUUIDv4)
-        yield* Ref.update(
-          beginProofs,
-          (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), { proofId, record }]])
-        )
-        return PlannedAttemptExecutorProjection.cases.BeginNotCrossed.make({ correlation, proofId })
-      }
+      if (record._tag === "AssociatedPreTurn") return noReport(correlation)
       const census = yield* observeOwnedActivityByThreadId(record.threadId)
       if (census._tag === "ExactLive") return exact(running(correlation))
       if (isUnusableActivityCensus(census)) return unreadable(correlation)
@@ -1723,7 +1744,7 @@ const makeCodexPlannedAttemptExecutorContext = (
         )
       }
       if (reconciliation._tag === "Unresolved") return projectionOutcome(unreadable(correlation))
-      return projectionOutcome(yield* projectIdleRecord(correlation, record, purpose))
+      return projectionOutcome(yield* projectIdleRecord(correlation, record))
     })
 
     const projectStoredRecord = Effect.fn("CodexPlannedAttemptExecutor.projectStoredRecord")(function* (
@@ -1739,7 +1760,6 @@ const makeCodexPlannedAttemptExecutorContext = (
         attemptId: record.correlationAttemptId
       })
       if (!sameCorrelation(observed, correlation)) return projectionOutcome(foreign(correlation, observed))
-      if (!isThreadBackedRecord(record)) return projectionOutcome(noReport(correlation))
       if (isBeginReconciliation(purpose) && record._tag === "Terminal") {
         return projectionOutcome(exact(running(correlation)))
       }
@@ -1748,6 +1768,15 @@ const makeCodexPlannedAttemptExecutorContext = (
         runId: correlation.runId,
         worktree: record.worktree
       }
+      if (isPreTurnBeginRecord(record, purpose)) {
+        // An empty allocation intent proves no task turn was authorized, even
+        // if its thread/start response or association write was lost. A retained
+        // association must first be freshly reconciled; only exact absence may
+        // replace it. Each allocation persists its own private intent.
+        const association = yield* reconcilePreTurnBegin(attempt, correlation, record)
+        return projectionOutcome(yield* issueBeginProof(correlation, association))
+      }
+      if (!isThreadBackedRecord(record)) return projectionOutcome(noReport(correlation))
       const reconciliation = yield* reconcile(attempt, correlation, record)
       return yield* projectReconciliation(correlation, record, attempt, reconciliation, purpose)
     })

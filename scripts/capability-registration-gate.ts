@@ -4,6 +4,7 @@ import ts from "typescript"
 import {
   capabilityRegistrationInventory,
   capabilityRegistrationIssues,
+  implementationCompositionEvidenceIsEligible,
   type ContractImplementationBinding,
   type CapabilityRegistrationInventory,
   type RegisteredImplementation
@@ -807,11 +808,15 @@ const isExportedSymbol = (symbol: ts.Symbol, indexed: CapabilitySourceProgram): 
   )
 }
 
-const implementationEntries = (inventory: CapabilityRegistrationInventory): ReadonlyArray<RegisteredImplementation> =>
+type CapabilityRole = CapabilityRegistrationInventory["compositionSources"][number]["role"]
+
+const roleImplementationEntries = (
+  inventory: CapabilityRegistrationInventory
+): ReadonlyArray<{ readonly implementation: RegisteredImplementation; readonly role: CapabilityRole }> =>
   inventory.capabilities.flatMap((capability) =>
-    (["controlled", "production"] as const).flatMap((role) => {
+    (["controlled", "production", "qualification"] as const).flatMap((role) => {
       const implementation = capability[role]
-      return implementation._tag === "Implementation" ? [implementation] : []
+      return implementation?._tag === "Implementation" ? [{ implementation, role }] : []
     })
   )
 
@@ -852,13 +857,13 @@ const contractImplementationIssues = (
   const binding = execution.implementation
   const implementation = capability[execution.role]
   if (binding === undefined) {
-    return implementation._tag === "Implementation"
+    return implementation?._tag === "Implementation"
       ? [
           `${capability.family} ${execution.role} contract implementation binding is missing: ${implementation.identity}`
         ]
       : []
   }
-  if (implementation._tag === "NotApplicable") return []
+  if (implementation === undefined || implementation._tag === "NotApplicable") return []
   const issue = `${capability.family} ${execution.role} contract implementation binding is stale: ${binding.identity}`
   if (
     binding.identity !== implementation.identity ||
@@ -901,9 +906,9 @@ const implementationSourceIssues = (
   const issues: Array<string> = []
   const indexed = sourceProgram(sourceFiles)
   for (const capability of inventory.capabilities) {
-    for (const role of ["controlled", "production"] as const) {
+    for (const role of ["controlled", "production", "qualification"] as const) {
       const implementation = capability[role]
-      if (implementation._tag === "NotApplicable") continue
+      if (implementation === undefined || implementation._tag === "NotApplicable") continue
       const source = indexed.sourceByPath.get(implementation.source)
       const implementationSymbol =
         source === undefined ? undefined : declarationSymbolFor(source, implementation.marker, indexed)
@@ -913,8 +918,19 @@ const implementationSourceIssues = (
         issues.push(`${capability.family} ${role} implementation marker is stale: ${implementation.marker}`)
       }
       const composition = indexed.sourceByPath.get(implementation.composition.source)
+      const compositionRoles = inventory.compositionSources
+        .filter(({ source }) => source === implementation.composition.source)
+        .map(({ role }) => role)
       if (composition === undefined) {
         issues.push(`${capability.family} ${role} composition source is missing: ${implementation.composition.source}`)
+      } else if (!compositionRoles.includes(role)) {
+        issues.push(
+          `${capability.family} ${role} composition role is stale: ${implementation.composition.source} is ${compositionRoles.length === 0 ? "unregistered" : compositionRoles.join("/")}`
+        )
+      } else if (!implementationCompositionEvidenceIsEligible(role, implementation.composition.source)) {
+        issues.push(
+          `${capability.family} ${role} composition source is ineligible evidence: ${implementation.composition.source}`
+        )
       } else if (!hasValueReference(composition, implementation.composition.marker, indexed)) {
         issues.push(`${capability.family} ${role} composition marker is stale: ${implementation.composition.marker}`)
       } else if (implementation.composition.marker !== implementation.identity) {
@@ -979,11 +995,11 @@ const compositionReferenceIssues = (
   /* eslint-disable functional/immutable-data */
   const issues: Array<string> = []
   const indexed = sourceProgram(sourceFiles)
-  const registered = new Map<string, ts.Symbol>()
-  for (const implementation of implementationEntries(inventory)) {
+  const registered = new Map<string, { readonly role: CapabilityRole; readonly symbol: ts.Symbol }>()
+  for (const { implementation, role } of roleImplementationEntries(inventory)) {
     const source = indexed.sourceByPath.get(implementation.source)
     const symbol = source === undefined ? undefined : declarationSymbolFor(source, implementation.marker, indexed)
-    if (symbol !== undefined) registered.set(implementation.identity, symbol)
+    if (symbol !== undefined) registered.set(implementation.identity, { role, symbol })
   }
   const support = new Map<string, ts.Symbol>()
   for (const binding of inventory.compositionSupportBindings) {
@@ -991,13 +1007,24 @@ const compositionReferenceIssues = (
     const symbol = source === undefined ? undefined : declarationSymbolFor(source, binding.marker, indexed)
     if (symbol !== undefined) support.set(binding.identity, symbol)
   }
-  const allowed = new Map([...registered, ...support])
-  const allowedSymbols = new Set([...allowed.values()].map((symbol) => resolveSymbol(symbol, indexed.checker)))
   const reported = new Set<string>()
-  for (const composition of inventory.compositionSources) {
+  const compositionSources = [...new Set(inventory.compositionSources.map(({ source }) => source))].map((source) => ({
+    roles: inventory.compositionSources.filter((composition) => composition.source === source).map(({ role }) => role),
+    source
+  }))
+  for (const composition of compositionSources) {
+    const compatibleRegistered = new Map(
+      [...registered].flatMap(([identity, registration]) =>
+        composition.roles.includes("qualification") || composition.roles.includes(registration.role)
+          ? [[identity, registration.symbol] as const]
+          : []
+      )
+    )
+    const allowed = new Map([...compatibleRegistered, ...support])
+    const allowedSymbols = new Set([...allowed.values()].map((symbol) => resolveSymbol(symbol, indexed.checker)))
     const source = indexed.sourceByPath.get(composition.source)
     if (source === undefined) {
-      issues.push(`${composition.role} composition source is missing: ${composition.source}`)
+      issues.push(`${composition.roles.join("/")} composition source is missing: ${composition.source}`)
       continue
     }
     for (const node of runtimeValueReferences(source, indexed)) {
@@ -1015,7 +1042,7 @@ const compositionReferenceIssues = (
         !allowedSymbols.has(symbol) &&
         isLayerSymbol(symbol, indexed)
       ) {
-        const issue = `${composition.role} uses unregistered exported Layer ${identity}`
+        const issue = `${composition.roles.join("/")} uses unregistered exported Layer ${identity}`
         if (!reported.has(issue)) {
           reported.add(issue)
           issues.push(issue)

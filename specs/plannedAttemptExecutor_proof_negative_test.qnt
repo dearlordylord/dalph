@@ -1,6 +1,37 @@
 module plannedAttemptExecutorEvidenceProofNegativeTest {
   import plannedAttemptExecutorEvidenceProof.* from "./plannedAttemptExecutor_proof"
 
+  action replaceWithoutFreshAbsence: bool = all { state' = { ...state, stage: EmptyReplacement, lastReplacementHadFreshAbsence: state.stage == EmptyAbsenceObserved } }
+  action allocateWithoutIntent: bool = all { state' = { ...state, stage: ReplacementAllocated, lastAllocationHadDurableIntent: state.stage == EmptyReplacement } }
+  action allocateWithRedelivery: bool = all { state' = { ...state, allocationParity: not(state.allocationParity) } }
+  action issueProofWithoutAssociation: bool = all { state' = { ...state, stage: BeginNotCrossedObserved, lastProofHadAssociatedAuthority: state.stage == BeginPreTurn or state.stage == BeginFreshReplacement } }
+  run proofBeforeAssociationMutationIsDetectedTest = {
+    init.then(recordBeginIntent).then(callBeginPreTurn).then(readEmptyAbsence).then(recordEmptyReplacementIntent)
+      .then(issueProofWithoutAssociation).expect(not(beginProofRequiresAssociation))
+  }
+  action retainFreshAllocationAfterRestart: bool = all { state' = { ...state, lastEvent: ReplacementProcessLost } }
+  run persistedFreshAllocationAuthorityMutationIsDetectedTest = {
+    init.then(recordBeginIntent).then(callBeginPreTurn).then(readEmptyAbsence).then(recordEmptyReplacementIntent)
+      .then(allocateReplacementThread).then(associateReplacementThread)
+      .then(retainFreshAllocationAfterRestart).expect(not(restartDiscardsFreshAllocationAuthority))
+  }
+  run staleAbsenceReplacementMutationIsDetectedTest = {
+    init.then(recordBeginIntent).then(callBeginPreTurn).then(readEmptyAbsence).then(loseReplacementProcess)
+      .then(replaceWithoutFreshAbsence).expect(not(replacementRequiresFreshAbsence))
+  }
+  run unsafeReplacementMutationIsDetectedTest = {
+    init.then(recordBeginIntent).then(callBeginPreTurn).then(readUnsafePreTurn)
+      .then(replaceWithoutFreshAbsence).expect(not(replacementRequiresFreshAbsence))
+  }
+  run missingAllocationIntentMutationIsDetectedTest = {
+    init.then(recordBeginIntent).then(callBeginPreTurn).then(readEmptyAbsence)
+      .then(allocateWithoutIntent).expect(not(allocationRequiresDurableEmptyIntent))
+  }
+  run redeliveryAllocationMutationIsDetectedTest = {
+    init.then(recordBeginIntent).then(callBeginPreTurn).then(observeBeginNotCrossed).then(redeliverBegin)
+      .then(allocateWithRedelivery).expect(not(redeliveryNeverAllocates))
+  }
+
   action callWithoutIntent: bool = all { state.stage == ResponsibilityHeld, state' = { ...state, callCount: 1, lastEvent: BeginBoundaryCalled } }
   action appendOrdinalForUnchangedRead: bool = all { state.stage == Executing, state' = { ...state, observationCount: 1, acceptedReportOrdinal: 2, durableObservationCount: state.durableObservationCount + 1, proposalIdentityCount: state.proposalIdentityCount + 1, intentCount: state.intentCount + 1, callCount: state.callCount + 1, lastEvent: PassiveExecutingObserved } }
   action secondBegin: bool = all { state.stage == Executing, state' = { ...state, beginCount: 2, intentCount: state.intentCount + 1, lastEvent: BeginIntentRecorded } }

@@ -1,6 +1,40 @@
 module plannedAttemptExecutorTest {
   import plannedAttemptExecutor.* from "./plannedAttemptExecutor"
 
+  run absentEmptyAssociationFinishesSameBeginTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recoverActivation).then(recordPreTurnThreadRead(ExactAbsent))
+      .then(recordEmptyReplacementIntent).expect(replacementKeepsOriginalBegin)
+      .then(allocateReplacementThread).then(associateReplacementThread)
+      .then(recordCommandProjection(CommandProjectionBeginNotCrossed)).expect(freshAllocationProofReached).then(redeliverBegin)
+      .expect(and { redeliveryNeverAllocates, state.replacementAllocationCount == 1 })
+      .then(crossRedeliveredBeginTurn).then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .expect(and { state.commandIntentCount == 1, state.acceptedReportOrdinal == 1, state.beginTurnCrossingCount == 1 })
+  }
+
+  run repeatedReplacementCrashCutsKeepOneBeginTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recordPreTurnThreadRead(ExactAbsent)).then(recoverActivation)
+      .expect(state.preTurnThreadRead == PreTurnNotRead)
+      .then(recordPreTurnThreadRead(ExactAbsent)).then(recordEmptyReplacementIntent).then(recoverActivation)
+      .expect(state.beginTurnBoundary == BeginEmptyReplacement)
+      .then(allocateReplacementThread).then(recoverActivation)
+      .expect(state.beginTurnBoundary == BeginEmptyReplacement)
+      .then(allocateReplacementThread).then(associateReplacementThread).then(recoverActivation)
+      .then(recordCommandProjection(CommandProjectionBeginNotCrossed)).then(recoverActivation)
+      .expect(state.evidence == NoEvidence)
+      .then(recordCommandProjection(CommandProjectionBeginNotCrossed)).then(redeliverBegin)
+      .then(crossRedeliveredBeginTurn)
+      .expect(and { state.replacementAllocationCount == 2, state.beginTurnCrossingCount == 1, state.commandIntentCount == 1, redeliveryNeverAllocates })
+  }
+
+  run ambiguousPreTurnReadForbidsReplacementTest = {
+    nondet read = Set(TemporarilyUnavailable, Unreadable, Foreign, TurnBearing).oneOf()
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recordPreTurnThreadRead(read))
+      .then(recordEmptyReplacementIntent).fail()
+  }
+
   run exactBoundaryCorrelationAndOrdinalArePreservedTest = {
     init.then(beginResponsibility).then(recordBeginIntent)
       .expect(and {

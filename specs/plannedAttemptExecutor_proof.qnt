@@ -1,8 +1,8 @@
 // Focused finite proof projections for named autonomous executor obligations.
 module plannedAttemptExecutorEvidenceProof {
-  type Stage = ResumeRecoveryRequired | ResumeProjectionSafe | ResumeWitnessReady | ResumeRedeliveryIntent | ResumeRedeliveryCalled | BeginPreTurn | BeginNotCrossedObserved | BeginTurnIntent | ResponsibilityHeld | BeginIntent | BeginCalled | BeginResponseObserved | Executing | SuspendIntent | SuspendCalled | SuspendResponseObserved | Safe | ResumeIntent | ResumeCalled | ResumeResponseObserved | Terminal
+  type Stage = BeginFreshReplacement | EmptyAbsenceObserved | EmptyReplacement | ReplacementAllocated | UnsafePreTurnRead | ResumeRecoveryRequired | ResumeProjectionSafe | ResumeWitnessReady | ResumeRedeliveryIntent | ResumeRedeliveryCalled | BeginPreTurn | BeginNotCrossedObserved | BeginTurnIntent | ResponsibilityHeld | BeginIntent | BeginCalled | BeginResponseObserved | Executing | SuspendIntent | SuspendCalled | SuspendResponseObserved | Safe | ResumeIntent | ResumeCalled | ResumeResponseObserved | Terminal
   type Report = ExecutingReport | SafeReport | TerminalReport
-  type Event = ResumeDeliveryCrashed | ResumeSafeProjected | ResumeWitnessRead | ResumeRedeliveryRecorded | ResumeRedeliveryBoundaryCalled | ResumeRecoveredExecuting | BeginPreTurnDelivered | BeginNotCrossedRead | BeginRedelivered | BeginTurnBoundaryCrossed | BeginProofLost | Initialized | BeginIntentRecorded | BeginBoundaryCalled | CommandResponseRecorded | DistinctReportAccepted | PassiveExecutingObserved | PassiveTerminalObserved | SuspendIntentRecorded | SuspendBoundaryCalled | ResumeIntentRecorded | ResumeBoundaryCalled
+  type Event = EmptyAbsenceRead | EmptyReplacementIntended | ReplacementThreadAllocated | ReplacementThreadAssociated | ReplacementProcessLost | UnsafeThreadRead | ResumeDeliveryCrashed | ResumeSafeProjected | ResumeWitnessRead | ResumeRedeliveryRecorded | ResumeRedeliveryBoundaryCalled | ResumeRecoveredExecuting | BeginPreTurnDelivered | BeginNotCrossedRead | BeginRedelivered | BeginTurnBoundaryCrossed | BeginProofLost | Initialized | BeginIntentRecorded | BeginBoundaryCalled | CommandResponseRecorded | DistinctReportAccepted | PassiveExecutingObserved | PassiveTerminalObserved | SuspendIntentRecorded | SuspendBoundaryCalled | ResumeIntentRecorded | ResumeBoundaryCalled
   type State = {
     stage: Stage,
     resumeProjectionOrdinal: int,
@@ -12,6 +12,14 @@ module plannedAttemptExecutorEvidenceProof {
     resumeCrashCount: int,
     lastResumeRedeliveryHadFreshWitness: bool,
     resumeDeliveryMayCall: bool,
+    replacementOccurred: bool,
+    lastReplacementHadFreshAbsence: bool,
+    lastAllocationHadDurableIntent: bool,
+    // Modulo-two allocation count preserves whether delivery allocates while
+    // keeping arbitrarily repeated empty-allocation crash cycles finite.
+    allocationParity: bool,
+    allocationParityBeforeRedelivery: bool,
+    lastProofHadAssociatedAuthority: bool,
     pendingReport: Report,
     intentCount: int,
     callCount: int,
@@ -52,6 +60,18 @@ module plannedAttemptExecutorEvidenceProof {
   val resumeDeliveryCrashReached = state.lastEvent == ResumeDeliveryCrashed
 
   val everyCallHasDurableIntent = state.callCount <= state.intentCount + state.beginRedeliveryCount + state.resumeRedeliveryCount
+  val replacementRequiresFreshAbsence = state.lastReplacementHadFreshAbsence
+  val beginProofRequiresAssociation = state.lastProofHadAssociatedAuthority
+  val restartDiscardsFreshAllocationAuthority = state.lastEvent != ReplacementProcessLost or state.stage != BeginFreshReplacement
+  val allocationRequiresDurableEmptyIntent = state.lastAllocationHadDurableIntent
+  val redeliveryNeverAllocates = state.lastEvent != BeginRedelivered or state.allocationParity == state.allocationParityBeforeRedelivery
+  val replacementKeepsUncrossedBegin = (state.stage != EmptyReplacement and state.stage != ReplacementAllocated) or and { state.beginCount == 1, state.intentCount == 1, state.beginTurnCrossingCount == 0, state.positionHeld }
+  val emptyAbsenceReached = state.stage == EmptyAbsenceObserved
+  val emptyReplacementReached = state.stage == EmptyReplacement
+  val replacementAllocatedReached = state.stage == ReplacementAllocated
+  val replacementAssociatedReached = (state.stage == BeginPreTurn or state.stage == BeginFreshReplacement) and state.replacementOccurred
+  val replacementProcessLostReached = state.lastEvent == ReplacementProcessLost
+  val unsafePreTurnReadReached = state.stage == UnsafePreTurnRead
   val beginTurnCrossesAtMostOnce = state.beginTurnCrossingCount <= 1
   val redeliveryRequiresFreshProof = state.lastEvent != BeginRedelivered or state.lastRedeliveryHadFreshProof
   val beginPreTurnReached = state.stage == BeginPreTurn
@@ -99,14 +119,26 @@ module plannedAttemptExecutorEvidenceProof {
   val resumeCalledReached = state.lastEvent == ResumeBoundaryCalled
 
   action init: bool = all {
-    state' = { resumeProjectionOrdinal: 0, consumedResumeProjectionOrdinal: 0, resumeRedeliveryCount: 0, resumeRedeliveryCallCount: 0, resumeCrashCount: 0, lastResumeRedeliveryHadFreshWitness: false, resumeDeliveryMayCall: false, stage: ResponsibilityHeld, pendingReport: ExecutingReport, intentCount: 0, callCount: 0, responseCount: 0, settlementCount: 0, acceptedReportOrdinal: 0, acceptedReportOrdinalBeforePassiveRead: 0, observationCount: 0, durableObservationCount: 0, durableObservationCountBeforePassiveRead: 0, proposalIdentityCount: 0, proposalIdentityCountBeforePassiveRead: 0, intentCountBeforePassiveRead: 0, callCountBeforePassiveRead: 0, beginCount: 0, beginRedeliveryCount: 0, beginTurnCrossingCount: 0, lastRedeliveryHadFreshProof: false, firstAcceptedReportWasExecuting: false, suspendCount: 0, resumeCountSinceSafe: 0, positionHeld: true, lastEvent: Initialized }
+    state' = { resumeProjectionOrdinal: 0, consumedResumeProjectionOrdinal: 0, resumeRedeliveryCount: 0, resumeRedeliveryCallCount: 0, resumeCrashCount: 0, lastResumeRedeliveryHadFreshWitness: false, resumeDeliveryMayCall: false, stage: ResponsibilityHeld, replacementOccurred: false, lastReplacementHadFreshAbsence: true, lastAllocationHadDurableIntent: true, allocationParity: false, allocationParityBeforeRedelivery: false, lastProofHadAssociatedAuthority: true, pendingReport: ExecutingReport, intentCount: 0, callCount: 0, responseCount: 0, settlementCount: 0, acceptedReportOrdinal: 0, acceptedReportOrdinalBeforePassiveRead: 0, observationCount: 0, durableObservationCount: 0, durableObservationCountBeforePassiveRead: 0, proposalIdentityCount: 0, proposalIdentityCountBeforePassiveRead: 0, intentCountBeforePassiveRead: 0, callCountBeforePassiveRead: 0, beginCount: 0, beginRedeliveryCount: 0, beginTurnCrossingCount: 0, lastRedeliveryHadFreshProof: false, firstAcceptedReportWasExecuting: false, suspendCount: 0, resumeCountSinceSafe: 0, positionHeld: true, lastEvent: Initialized }
   }
   action recordBeginIntent: bool = all { state.stage == ResponsibilityHeld, state' = { ...state, stage: BeginIntent, intentCount: 1, beginCount: 1, lastEvent: BeginIntentRecorded } }
+  // This finite projection retains durable/private crash cuts. Repeated
+  // empty allocations collapse to the same state; canonical counters and
+  // provider tests measure their number. No production retry budget is added.
+  action readEmptyAbsence: bool = all { state.stage == BeginPreTurn, state' = { ...state, stage: EmptyAbsenceObserved, lastEvent: EmptyAbsenceRead } }
+  action readUnsafePreTurn: bool = all { state.stage == BeginPreTurn, state' = { ...state, stage: UnsafePreTurnRead, lastEvent: UnsafeThreadRead } }
+  action recordEmptyReplacementIntent: bool = all { state.stage == EmptyAbsenceObserved, state' = { ...state, stage: EmptyReplacement, lastReplacementHadFreshAbsence: state.stage == EmptyAbsenceObserved, lastEvent: EmptyReplacementIntended } }
+  action allocateReplacementThread: bool = all { state.stage == EmptyReplacement, state' = { ...state, stage: ReplacementAllocated, lastAllocationHadDurableIntent: state.stage == EmptyReplacement, replacementOccurred: true, allocationParity: not(state.allocationParity), lastEvent: ReplacementThreadAllocated } }
+  action associateReplacementThread: bool = all { state.stage == ReplacementAllocated, state' = { ...state, stage: BeginFreshReplacement, lastEvent: ReplacementThreadAssociated } }
+  action loseReplacementProcess: bool = all {
+    Set(BeginFreshReplacement, BeginPreTurn, EmptyAbsenceObserved, EmptyReplacement, ReplacementAllocated, UnsafePreTurnRead).contains(state.stage),
+    state' = { ...state, stage: if (state.stage == EmptyReplacement or state.stage == ReplacementAllocated) EmptyReplacement else BeginPreTurn, lastEvent: ReplacementProcessLost },
+  }
   action callBegin: bool = all { state.stage == BeginIntent, state' = { ...state, stage: BeginCalled, callCount: 1, beginTurnCrossingCount: 1, lastEvent: BeginBoundaryCalled } }
   action callBeginPreTurn: bool = all { state.stage == BeginIntent, state' = { ...state, stage: BeginPreTurn, callCount: 1, lastEvent: BeginPreTurnDelivered } }
-  action observeBeginNotCrossed: bool = all { state.stage == BeginPreTurn, state' = { ...state, stage: BeginNotCrossedObserved, lastEvent: BeginNotCrossedRead } }
+  action observeBeginNotCrossed: bool = all { (state.stage == BeginPreTurn or state.stage == BeginFreshReplacement), state' = { ...state, stage: BeginNotCrossedObserved, lastProofHadAssociatedAuthority: state.stage == BeginPreTurn or state.stage == BeginFreshReplacement, lastEvent: BeginNotCrossedRead } }
   action loseBeginProof: bool = all { state.stage == BeginNotCrossedObserved, state' = { ...state, stage: BeginPreTurn, lastEvent: BeginProofLost } }
-  action redeliverBegin: bool = all { state.stage == BeginNotCrossedObserved, state' = { ...state, stage: BeginTurnIntent, callCount: state.callCount + 1, beginRedeliveryCount: state.beginRedeliveryCount + 1, lastRedeliveryHadFreshProof: state.stage == BeginNotCrossedObserved, lastEvent: BeginRedelivered } }
+  action redeliverBegin: bool = all { state.stage == BeginNotCrossedObserved, state' = { ...state, stage: BeginTurnIntent, allocationParityBeforeRedelivery: state.allocationParity, callCount: state.callCount + 1, beginRedeliveryCount: state.beginRedeliveryCount + 1, lastRedeliveryHadFreshProof: state.stage == BeginNotCrossedObserved, lastEvent: BeginRedelivered } }
   action crossBeginTurn: bool = all { state.stage == BeginTurnIntent, state' = { ...state, stage: BeginCalled, beginTurnCrossingCount: state.beginTurnCrossingCount + 1, lastEvent: BeginTurnBoundaryCrossed } }
   action observeBeginResponse(report: Report): bool = all { state.stage == BeginCalled, state' = { ...state, stage: BeginResponseObserved, pendingReport: report, responseCount: state.responseCount + 1, lastEvent: CommandResponseRecorded } }
   action settleBeginResponse: bool = all {
@@ -175,7 +207,7 @@ module plannedAttemptExecutorEvidenceProof {
 
   action step: bool = {
     nondet report = Set(ExecutingReport, SafeReport, TerminalReport).oneOf()
-    any { recordBeginIntent, callBegin, callBeginPreTurn, observeBeginNotCrossed, loseBeginProof, redeliverBegin, crossBeginTurn, observeBeginResponse(report), settleBeginResponse, observeUnchangedExecuting, observeTerminal, recordSuspendIntent, callSuspend, observeSuspendResponse(report), settleSuspendResponse, recordResumeIntent, callResume, observeResumeResponse(report), settleResumeResponse, crashResumeDelivery, observeResumeSafeProjection, readResumeContinuationWitness, recordResumeRedeliveryIntent, callResumeRedelivery, reconcileResumeExecuting }
+    any { readEmptyAbsence, readUnsafePreTurn, recordEmptyReplacementIntent, allocateReplacementThread, associateReplacementThread, loseReplacementProcess, recordBeginIntent, callBegin, callBeginPreTurn, observeBeginNotCrossed, loseBeginProof, redeliverBegin, crossBeginTurn, observeBeginResponse(report), settleBeginResponse, observeUnchangedExecuting, observeTerminal, recordSuspendIntent, callSuspend, observeSuspendResponse(report), settleSuspendResponse, recordResumeIntent, callResume, observeResumeResponse(report), settleResumeResponse, crashResumeDelivery, observeResumeSafeProjection, readResumeContinuationWitness, recordResumeRedeliveryIntent, callResumeRedelivery, reconcileResumeExecuting }
   }
 }
 

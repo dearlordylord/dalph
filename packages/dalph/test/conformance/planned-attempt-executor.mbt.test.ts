@@ -191,6 +191,10 @@ const executorConformanceDriver = defineDriver(
     beginResponsibility: {},
     callBegin: {},
     callBeginPreTurn: {},
+    recordPreTurnThreadRead: { read: Schema.Unknown },
+    recordEmptyReplacementIntent: {},
+    allocateReplacementThread: {},
+    associateReplacementThread: {},
     redeliverBegin: {},
     crossRedeliveredBeginTurn: {},
     callResume: {},
@@ -690,6 +694,13 @@ const executorConformanceDriver = defineDriver(
           yield* Deferred.await(beginTurnSignal)
         }).pipe(Effect.orDie),
       callBeginPreTurn: () => call().pipe(Effect.orDie),
+      // The controller cannot observe executor-private reads, EmptyPreTurn
+      // writes, or empty-thread allocations. They stutter at this normalized
+      // boundary; production executor crash-prefix tests check those effects.
+      recordPreTurnThreadRead: () => Effect.void,
+      recordEmptyReplacementIntent: () => Effect.void,
+      allocateReplacementThread: () => Effect.void,
+      associateReplacementThread: () => Effect.void,
       redeliverBegin: () =>
         Effect.gen(function* () {
           commandCallSignal = Deferred.makeUnsafe<void>()

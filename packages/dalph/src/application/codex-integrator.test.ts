@@ -60,6 +60,7 @@ import {
   GitCommandInvocationFailure,
   GitCommonDirectoryLocator,
   Integrator,
+  IntegratorCandidateText,
   IntegratorCandidateCleanupAuthorization,
   IntegratorCandidateCleanupDisposition,
   IntegratorCandidateCleanupEvidenceRevision,
@@ -77,6 +78,7 @@ import {
   OperationId,
   type GitCommandService
 } from "@dalph/orchestrator"
+import { integratorContract } from "../../../orchestrator/test/contracts/integrator-contract.js"
 
 const sha = (letter: string): GitCommitSha => GitCommitSha.make(letter.repeat(40))
 const repository = GitRepositoryLocator.make("/repositories/integrator-test.git")
@@ -595,6 +597,43 @@ const providerLayer = (config: CodexIntegratorConfiguration, options: FixtureOpt
       )
     )
   )
+
+const nodeContractRequest = requestFor(1)
+const nodeContractLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem
+    const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-integrator-contract-" })
+    const configuration = CodexIntegratorConfiguration.make({
+      candidateWorktreeRoot: IntegratorCandidateWorktreeRoot.make(directory),
+      commonDirectory,
+      privateStoreLocator: IntegratorPrivateStoreLocator.make(`${directory}/store.json`),
+      repository
+    })
+    return nodeCodexIntegratorLayer(configuration).pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          NodeFileSystem.layer,
+          fixtureLayer({ worktreePath: candidateWorktreePathFor(configuration, resource) }).pipe(
+            Layer.provide(NodeFileSystem.layer)
+          ),
+          controlledCodexOwnedActivityCensusLayer({
+            observe: () => Effect.succeed({ _tag: "Absent" }),
+            terminateDescendants: () => Effect.void
+          })
+        )
+      )
+    )
+  })
+).pipe(Layer.provide(NodeFileSystem.layer))
+integratorContract({
+  expected: IntegratorResult.cases.PreparedCandidate.make({
+    candidateText: IntegratorCandidateText.make("M"),
+    correlation: nodeContractRequest.correlation
+  }),
+  layer: nodeContractLayer,
+  name: "node",
+  request: nodeContractRequest
+})
 
 describe("Codex Integrator", () => {
   it("composes the node-backed private store behind the integrator boundary", () => {
