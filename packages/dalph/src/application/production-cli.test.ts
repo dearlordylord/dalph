@@ -158,22 +158,46 @@ it.effect("keeps dry-run explicit and selects production only from --production"
 
 it.effect("rejects every incomplete or malformed command selection before acquiring a production host", () =>
   Effect.gen(function* () {
-    const cases = [
+    const cases: ReadonlyArray<{ readonly args: ReadonlyArray<string>; readonly detail: string }> = [
+      { args: ["run", "github:octo/dalph#42"], detail: "exactly one of --dry or --production is required" },
       {
-        config: "/tmp/dalph-production.json",
-        dry: true,
-        production: false,
-        target: "packages/orchestrator/fixtures/empty.json"
+        args: ["run", "github:octo/dalph#42", "--dry", "--production", "--config", "/tmp/dalph-production.json"],
+        detail: "exactly one of --dry or --production is required"
       },
-      { config: undefined, dry: false, production: true, target: "github:octo/dalph#42" },
-      { config: "/tmp/dalph-production.json", dry: false, production: true, target: "" }
-    ] as const
+      {
+        args: ["run", "packages/orchestrator/fixtures/empty.json", "--dry", "--config", "/tmp/dalph-production.json"],
+        detail: "--config is available only with --production"
+      },
+      {
+        args: ["run", "github:octo/dalph#42", "--production"],
+        detail: "--production requires --config <absolute-json-path>"
+      },
+      {
+        args: ["run", "github:octo/dalph/not-an-issue", "--production", "--config", "/tmp/dalph-production.json"],
+        detail: "the target is invalid for the selected command mode"
+      }
+    ]
 
-    for (const input of cases) {
-      const failure = yield* decodeRunInvocation(input).pipe(Effect.flip)
+    for (const testCase of cases) {
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+      const hostAcquisitions = yield* Ref.make(0)
+      const application = runProductionCli(() => Ref.update(hostAcquisitions, (count) => count + 1))
+      const failure = yield* application(testCase.args).pipe(
+        Effect.provide(liveCliLayer(lines, chronology)),
+        Effect.provide(NodeServices.layer),
+        Effect.flip
+      )
       expect(failure).toBeInstanceOf(ProductionCliUsageError)
+      expect(yield* Ref.get(hostAcquisitions)).toBe(0)
+      expect(yield* Ref.get(chronology)).toEqual(["output:Failure"])
+      expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
+        { _tag: "Failure", code: "usage.invalid", detail: testCase.detail, subject: "dalph run", version: 1 }
+      ])
     }
 
+    // This malformed unmarked target exercises the fixture-locator decoder;
+    // Effect CLI cannot represent an empty positional argument.
     const fixtureFailure = yield* decodeCliTarget("").pipe(Effect.flip)
     expect(fixtureFailure._tag).toBe("Cli.CliUsageError")
   })
