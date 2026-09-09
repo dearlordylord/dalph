@@ -789,9 +789,18 @@ export { delivery } from "./coordination/delivery/delivery.js"
 export { deliveryActionPlanning } from "./coordination/delivery/delivery-action-planning.js"
 export {
   DeliveryProposalId,
+  DeliveryProposalOrdinal,
   deliveryProposalOrderTaskId,
-  FreshDecisionPartitionInvalid
+  FreshDecisionPartitionInvalid,
+  trackerGraphReadProposalOf
 } from "./coordination/delivery/delivery-action-proposal.js"
+export { FreshWorkflowStepTag } from "./coordination/delivery/fresh-workflow-step.js"
+export { RunnableFrontierTransitionTag } from "./coordination/frontier/frontier.js"
+export { makeDeliverySettlement } from "./coordination/delivery/relations.js"
+export {
+  deliveryStatusObligationReference,
+  statusEntryIdentity
+} from "./coordination/delivery/delivery-status-order.js"
 export {
   FreshTaskAdmissionBasisInvalid,
   FreshTaskAdmissionBasisRunMismatch,
@@ -827,6 +836,8 @@ export {
   type DeliveryRuntimeObservationState
 } from "./coordination/delivery/delivery-runtime-observation.js"
 export {
+  DeliveryStatusEvidenceIdentity,
+  DeliveryStatusEntryIdentity,
   DeliveryStatusSubject,
   DeliveryStatusRunMismatch,
   DeliveryStatusRunIdentityUnavailable,
@@ -861,14 +872,25 @@ export {
   TrackerGraphRelationError,
   type JournaledTrackerGraphObservation,
   type DeliveryConsequences,
-  type BoundedTicketRank,
+  BoundedTicketRank,
   type DeliveryGraphPublication,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
+  type DeliveryRuntimeSnapshot,
+  type DeliveryActionProposal,
+  type TicketDeliveryEvidence,
+  makeDeliveryReflection,
+  TrackerGraphState,
   type CurrentSignal,
   type CurrentSignalAttachment,
   zipCurrentSignals
 } from "./coordination/delivery/relations.js"
+export {
+  boundedParallelTicketsOf,
+  deliverySettlementsOf,
+  frontierOf,
+  ticketDeliveriesOf
+} from "./coordination/delivery/ticket-delivery-projection.js"
 export {
   DeliveryActionCompletionPublicationMismatch,
   DeliveryRuntimeAdmissionProgressContradiction,

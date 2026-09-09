@@ -18,6 +18,7 @@ import {
   JournalStore,
   OperationId,
   TaskWorkCapacity,
+  TrackerRevision,
   TaskTrackerReadInitiated,
   TraceAtCursor,
   TraceCursor,
@@ -37,6 +38,7 @@ import {
   traceControlDispositionFacetVersion,
   traceReaderSchemaVersion,
   currentSignalFromCurrentFirstStream,
+  type CurrentDeliveryStatus,
   type CurrentSignal
 } from "@dalph/orchestrator"
 import { Effect, Layer, Ref, SubscriptionRef } from "effect"
@@ -48,10 +50,10 @@ import {
   encodeTraceControlDispositionFacet,
   encodeTraceHistoryItem,
   HistoricalTraceConsole,
-  type TraceConsoleStatus,
   historicalTraceConsoleLayer,
   renderTraceAtCursor,
   renderTraceAtCursorWithStatus,
+  renderTraceStatus,
   semanticTraceAtCursor,
   traceCursorAt,
   writeTraceAtCursor
@@ -66,7 +68,10 @@ type HistoricalConsoleUsesProductionCursor = Assert<
   IsExactly<Parameters<HistoricalTraceConsole["Service"]["presentAt"]>[0], TraceCursor>
 >
 type HistoricalConsoleUsesPassiveStatus = Assert<
-  IsExactly<Parameters<HistoricalTraceConsole["Service"]["presentAtWithStatus"]>[1], CurrentSignal<TraceConsoleStatus>>
+  IsExactly<
+    Parameters<HistoricalTraceConsole["Service"]["presentAtWithStatus"]>[1],
+    CurrentSignal<CurrentDeliveryStatus>
+  >
 >
 
 const consoleViewUsesProductionView: ConsoleViewUsesProductionView = true
@@ -194,8 +199,7 @@ it("canonicalizes the production cursor view without changing its committed iden
     "Historical snapshot · Run console-production-trace-run · through journal position 4",
     "Journal position 2 · Dalph coordinator initiated tracker read",
     "Journal position 3 · Dalph coordinator initiated tracker read",
-    "Journal position 4 · Dalph coordinator initiated coordinator responsibility record",
-    "Passive current status · Unavailable · no passive status source was supplied."
+    "Journal position 4 · Dalph coordinator initiated coordinator responsibility record"
   ])
 })
 
@@ -215,9 +219,28 @@ it("renders an exact historical cursor without a transcript or internal executor
   expect(lines[0]).toContain("Historical snapshot")
   expect(lines[0]).toContain("Run console-production-trace-run")
   expect(lines[0]).toContain("journal position 4")
-  expect(lines.at(-1)).toBe("Passive current status · Unavailable · no passive status source was supplied.")
+  expect(lines.at(-1)).toBe("Journal position 4 · Dalph coordinator initiated coordinator responsibility record")
   expect(lines.join("\n")).not.toMatch(/(?:transcript|session|turn|expectedTargetHead|acceptedResult)/iu)
   expect(lines.filter((line) => line.includes("Journal position 4"))).toHaveLength(1)
+})
+
+it("renders task-local available and absent status without inferring historical state", () => {
+  const subject = { _tag: "Task" as const, runId, taskId: executorAttempt.taskId }
+  const graphSource = {
+    _tag: "EstablishedGraph" as const,
+    contentIdentity: TrackerRevision.make("console-status-content"),
+    freshnessOperationId: OperationId.make("console-status-freshness"),
+    operationId: OperationId.make("console-status-graph"),
+    recordedAt: JournalPosition.make(5),
+    revision: TrackerRevision.make("console-status-revision")
+  }
+
+  expect(
+    renderTraceStatus({ _tag: "DeliveryStatusAvailable", acceptedAt: JournalPosition.make(5), entries: [], subject })
+  ).toBe(`Available · Task ${executorAttempt.taskId} in Run ${runId} · 0 exact entries`)
+  expect(renderTraceStatus({ _tag: "TaskAbsentFromCurrentGraph", graphSource, subject })).toBe(
+    `Absent from current graph · Task ${executorAttempt.taskId} in Run ${runId}`
+  )
 })
 
 it.effect("reads one exact production cursor through TraceReader and writes its schema-versioned view", () =>
@@ -272,9 +295,9 @@ it.effect("retries the same cursor while passive status changes without rewritin
     Effect.gen(function* () {
       const lines = yield* Ref.make<ReadonlyArray<string>>([])
       const output = TraceOutput.of({ writeLine: (line) => Ref.update(lines, (current) => [...current, line]) })
-      const statusState = yield* SubscriptionRef.make<TraceConsoleStatus>({
-        _tag: "Waiting",
-        reason: "connected owner"
+      const statusState = yield* SubscriptionRef.make<CurrentDeliveryStatus>({
+        _tag: "DeliveryStatusNotReady",
+        subject: { _tag: "Run", runId }
       })
       const status = currentSignalFromCurrentFirstStream(SubscriptionRef.changes(statusState))
       const presentationLayer = historicalTraceConsoleLayer.pipe(
@@ -294,13 +317,17 @@ it.effect("retries the same cursor while passive status changes without rewritin
         const cursor = TraceCursor.make({ position: JournalPosition.make(2), runId })
         const first = yield* console.presentAtWithStatus(cursor, status)
         const firstStatus = yield* first.currentStatus.get
-        expect(firstStatus).toEqual({ _tag: "Waiting", reason: "connected owner" })
+        expect(firstStatus).toEqual({ _tag: "DeliveryStatusNotReady", subject: { _tag: "Run", runId } })
 
-        yield* SubscriptionRef.set<TraceConsoleStatus>(statusState, { _tag: "Running", reason: "reconnected owner" })
+        yield* SubscriptionRef.set<CurrentDeliveryStatus>(statusState, {
+          _tag: "DeliveryStatusClosed",
+          final: null,
+          subject: { _tag: "Run", runId }
+        })
         yield* console.refreshStatus(first)
         const second = yield* console.presentAtWithStatus(cursor, status)
         const secondStatus = yield* second.currentStatus.get
-        expect(secondStatus).toEqual({ _tag: "Running", reason: "reconnected owner" })
+        expect(secondStatus).toEqual({ _tag: "DeliveryStatusClosed", final: null, subject: { _tag: "Run", runId } })
         expect(first.history.cursor).toEqual(second.history.cursor)
         expect(first.history.items.map(({ identity }) => identity)).toEqual(
           second.history.items.map(({ identity }) => identity)
@@ -309,10 +336,10 @@ it.effect("retries the same cursor while passive status changes without rewritin
           renderTraceAtCursorWithStatus(second.history, secondStatus).slice(0, -1)
         )
         const rendered = yield* Ref.get(lines)
-        expect(rendered.some((line) => line.includes("Passive current status · Waiting · connected owner"))).toBe(true)
-        expect(rendered.some((line) => line.includes("Passive current status · Running · reconnected owner"))).toBe(
-          true
-        )
+        expect(rendered.some((line) => line.includes("Passive current status · Not ready · Run"))).toBe(true)
+        expect(
+          rendered.some((line) => line.includes("Passive current status · Closed without a final value · Run"))
+        ).toBe(true)
         expect((yield* journal.read(runId)).map(({ position }) => position)).toEqual([
           JournalPosition.make(1),
           JournalPosition.make(2)
