@@ -266,4 +266,22 @@ module plannedAttemptExecutorNegativeTest {
         not(canSettleCommandProjection(state)),
       })
   }
+  action redeliverWithoutProof: bool = all {
+    isCalled(state.commandState),
+    state' = { ...state, commandCallCount: state.commandCallCount + 1, beginRedeliveryCount: state.beginRedeliveryCount + 1, lastRedeliveryHadFreshExactProof: false, lastAction: BeginRedeliveredAction },
+  }
+  action crossBeginAgain: bool = all {
+    state.beginTurnBoundary == BeginTurnCrossed,
+    state' = { ...state, beginTurnCrossingCount: state.beginTurnCrossingCount + 1 },
+  }
+  run staleBeginProofMutationIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionBeginNotCrossed)).then(recoverActivation)
+      .then(redeliverWithoutProof).expect(not(redeliveryRequiresFreshExactPreTurnProof))
+  }
+  run duplicateBeginTurnMutationIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(crossBeginAgain).expect(not(beginTurnCrossesAtMostOnce))
+  }
+
 }

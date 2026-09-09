@@ -35,6 +35,16 @@ module plannedAttemptExecutorEvidenceProofNegativeTest {
     init.then(recordBeginIntent).then(callBegin).then(observeBeginResponse(ExecutingReport)).then(settleBeginResponse)
       .then(observeTerminal).then(retainTerminalPosition).expect(not(safeAndTerminalReleasePosition))
   }
+  action redeliverStaleProof: bool = all { state.stage == BeginPreTurn, state' = { ...state, stage: BeginTurnIntent, lastRedeliveryHadFreshProof: false, lastEvent: BeginRedelivered } }
+  action crossDuplicateTurn: bool = all { state.stage == BeginCalled, state' = { ...state, beginTurnCrossingCount: state.beginTurnCrossingCount + 1 } }
+  run stalePreTurnProofIsDetectedTest = {
+    init.then(recordBeginIntent).then(callBeginPreTurn).then(observeBeginNotCrossed).then(loseBeginProof)
+      .then(redeliverStaleProof).expect(not(redeliveryRequiresFreshProof))
+  }
+  run duplicateTaskTurnIsDetectedTest = {
+    init.then(recordBeginIntent).then(callBegin).then(crossDuplicateTurn).expect(not(beginTurnCrossesAtMostOnce))
+  }
+
 }
 
 module plannedAttemptExecutorSuspendBoundProofNegativeTest {
