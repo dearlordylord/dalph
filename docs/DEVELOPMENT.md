@@ -176,6 +176,336 @@ The browser runner owns its host; no manual Vite or `REDUCER_LAB_URL` is needed.
 Git repositories/worktrees. It is outside `check:all`; the same contract runs
 on Ubuntu/macOS in the [qualification workflow](../.github/workflows/codex-app-server-qualification.yml).
 
+## Disposable production repository walkthrough
+
+This walkthrough lets Alice run the shipped production command against one
+dedicated disposable GitHub repository and one unblocked issue. Production can
+create and delete repository labels, close the issue, start Codex sessions,
+write local Git refs and worktrees, and retain durable local state. Do not point
+it at an existing project, a shared clone, or an issue with sub-issues or
+blocking relationships.
+
+This is an operator walkthrough of already implemented behavior. It is not the
+repeatable live-provider qualification owned by GitHub issue #261 and supplies
+no #261 closure evidence.
+
+### 1. Create the isolated GitHub and credential boundary
+
+In GitHub, create a private repository named
+`dalph-production-walkthrough`, initialize its `main` branch with a README, and
+do not add collaborators, rules, Actions, sub-issues, or dependencies. Create a
+fine-grained personal access token restricted to that repository with:
+
+- repository metadata: read (GitHub always includes this permission);
+- repository contents: read, for the local clone; and
+- issues: read and write, for graph reads, Dalph claim/completion labels, and
+  issue completion.
+
+The token does not need Actions, Administration, Pull requests, or organization
+permissions. Use a separately authorized browser session if you later delete
+the repository. The Codex credential below is an OpenAI API project key allowed
+to run the installed Codex CLI. Read both values without echoing them and keep
+them in environment variables only:
+
+```sh
+read -r -s -p "Disposable-repository GitHub token: " GITHUB_TOKEN
+printf '\n'
+export GITHUB_TOKEN
+read -r -s -p "Disposable Codex provider credential: " DALPH_CODEX_PROVIDER_CREDENTIAL
+printf '\n'
+export DALPH_CODEX_PROVIDER_CREDENTIAL
+```
+
+Do not put either value in shell history, a Git remote URL, the JSON document,
+the repository, SQLite, or an evidence directory. Dalph reads exactly
+`GITHUB_TOKEN` and `DALPH_CODEX_PROVIDER_CREDENTIAL` and redacts known
+configuration failures.
+
+Set the repository identity, create an exact disposable local root, clone the
+initialized repository, and create its only issue. Replace `YOUR_LOGIN`; keep
+the repository name dedicated to this exercise.
+
+```sh
+export DALPH_DEMO_OWNER=YOUR_LOGIN
+export DALPH_DEMO_REPOSITORY=dalph-production-walkthrough
+export DALPH_DEMO_TEMP_PARENT
+DALPH_DEMO_TEMP_PARENT="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+export DALPH_DEMO_ROOT
+DALPH_DEMO_ROOT="$(mktemp -d "${DALPH_DEMO_TEMP_PARENT}/dalph-production-walkthrough.XXXXXX")"
+printf '%s\n' "${DALPH_DEMO_OWNER}/${DALPH_DEMO_REPOSITORY}" \
+  > "${DALPH_DEMO_ROOT}/.dalph-walkthrough-repository"
+
+export DALPH_DEMO_LOCAL_REPOSITORY="${DALPH_DEMO_ROOT}/repository"
+GH_TOKEN="${GITHUB_TOKEN}" gh repo clone \
+  "${DALPH_DEMO_OWNER}/${DALPH_DEMO_REPOSITORY}" \
+  "${DALPH_DEMO_LOCAL_REPOSITORY}"
+git -C "${DALPH_DEMO_LOCAL_REPOSITORY}" switch main
+git -C "${DALPH_DEMO_LOCAL_REPOSITORY}" config user.name "Dalph Walkthrough"
+git -C "${DALPH_DEMO_LOCAL_REPOSITORY}" config user.email "dalph-walkthrough@example.invalid"
+
+export DALPH_DEMO_ISSUE_URL
+DALPH_DEMO_ISSUE_URL="$(GH_TOKEN="${GITHUB_TOKEN}" gh issue create \
+  --repo "${DALPH_DEMO_OWNER}/${DALPH_DEMO_REPOSITORY}" \
+  --title "Create the disposable walkthrough note" \
+  --body "Create WALKTHROUGH.md containing one sentence that identifies this disposable Dalph production walkthrough. Commit the change. This issue has no dependencies.")"
+export DALPH_DEMO_ISSUE_NUMBER="${DALPH_DEMO_ISSUE_URL##*/}"
+```
+
+Confirm that the URL ends in the numeric issue number and that the GitHub issue
+shows no blocked-by or sub-issue relationship. That makes the sole task
+immediately eligible; an ordinary label is not a dependency.
+
+### 2. Build Dalph and pin the local Git facts
+
+Run these commands from the Dalph source checkout. The disposable target clone
+is separate from this source checkout.
+
+```sh
+export DALPH_SOURCE="$(pwd -P)"
+pnpm install --frozen-lockfile
+pnpm build
+
+export DALPH_EXECUTABLE="${DALPH_SOURCE}/packages/dalph/dist/bin/dalph.js"
+export DALPH_CODEX_EXECUTABLE="${DALPH_SOURCE}/node_modules/.bin/codex"
+test -f "${DALPH_EXECUTABLE}"
+test -x "${DALPH_CODEX_EXECUTABLE}"
+
+export DALPH_DEMO_INTEGRATION_REF
+DALPH_DEMO_INTEGRATION_REF="$(git -C "${DALPH_DEMO_LOCAL_REPOSITORY}" symbolic-ref HEAD)"
+test "${DALPH_DEMO_INTEGRATION_REF}" = refs/heads/main
+export DALPH_DEMO_BASE_SHA
+DALPH_DEMO_BASE_SHA="$(git -C "${DALPH_DEMO_LOCAL_REPOSITORY}" rev-parse "${DALPH_DEMO_INTEGRATION_REF}^{commit}")"
+git -C "${DALPH_DEMO_LOCAL_REPOSITORY}" cat-file -e "${DALPH_DEMO_BASE_SHA}^{commit}"
+export DALPH_DEMO_COMMON_DIRECTORY
+DALPH_DEMO_COMMON_DIRECTORY="$(git -C "${DALPH_DEMO_LOCAL_REPOSITORY}" \
+  rev-parse --path-format=absolute --git-common-dir)"
+test "${DALPH_DEMO_COMMON_DIRECTORY}" = "${DALPH_DEMO_LOCAL_REPOSITORY}/.git"
+```
+
+`DALPH_DEMO_BASE_SHA` is the exact planned Base SHA, not a branch name. The
+configured `integrationRef` is the local `refs/heads/main`; Dalph updates that
+local ref and does not promise to push it to GitHub. The common directory is
+also the exact OS-backed coordinator-lock target. The Codex executable is the
+built workspace dependency, not an inferred executable from a target
+repository.
+
+### 3. Write the complete non-secret configuration
+
+Create disjoint sibling locations under the disposable root. The two worktree
+roots must not contain each other or the repository/private state. The Journal
+database, evidence root, Codex state directory, and Integrator private-store
+file must also be pairwise disjoint. Every path below is normalized and
+absolute because it is derived from the absolute `mktemp` root.
+
+```sh
+export DALPH_DEMO_JOURNAL="${DALPH_DEMO_ROOT}/journal.sqlite"
+export DALPH_DEMO_EVIDENCE="${DALPH_DEMO_ROOT}/evidence"
+export DALPH_DEMO_CODEX_STATE="${DALPH_DEMO_ROOT}/codex-state"
+export DALPH_DEMO_INTEGRATOR_STORE="${DALPH_DEMO_ROOT}/integrator-private.json"
+export DALPH_DEMO_TASK_WORKTREES="${DALPH_DEMO_ROOT}/task-worktrees"
+export DALPH_DEMO_INTEGRATOR_WORKTREES="${DALPH_DEMO_ROOT}/integrator-worktrees"
+export DALPH_DEMO_CONFIG="${DALPH_DEMO_ROOT}/production.json"
+mkdir -p \
+  "${DALPH_DEMO_EVIDENCE}" \
+  "${DALPH_DEMO_CODEX_STATE}" \
+  "${DALPH_DEMO_TASK_WORKTREES}" \
+  "${DALPH_DEMO_INTEGRATOR_WORKTREES}"
+chmod 700 \
+  "${DALPH_DEMO_ROOT}" \
+  "${DALPH_DEMO_EVIDENCE}" \
+  "${DALPH_DEMO_CODEX_STATE}" \
+  "${DALPH_DEMO_TASK_WORKTREES}" \
+  "${DALPH_DEMO_INTEGRATOR_WORKTREES}"
+
+node --input-type=module <<'NODE'
+import { writeFileSync } from "node:fs"
+
+const requiredEnvironment = [
+  "DALPH_CODEX_EXECUTABLE",
+  "DALPH_DEMO_BASE_SHA",
+  "DALPH_DEMO_CODEX_STATE",
+  "DALPH_DEMO_COMMON_DIRECTORY",
+  "DALPH_DEMO_CONFIG",
+  "DALPH_DEMO_EVIDENCE",
+  "DALPH_DEMO_INTEGRATION_REF",
+  "DALPH_DEMO_INTEGRATOR_STORE",
+  "DALPH_DEMO_INTEGRATOR_WORKTREES",
+  "DALPH_DEMO_JOURNAL",
+  "DALPH_DEMO_LOCAL_REPOSITORY",
+  "DALPH_DEMO_TASK_WORKTREES"
+]
+
+for (const name of requiredEnvironment) {
+  if (!process.env[name]) throw new Error(`missing walkthrough environment: ${name}`)
+}
+
+const configuration = {
+  repository: process.env.DALPH_DEMO_LOCAL_REPOSITORY,
+  commonDirectory: process.env.DALPH_DEMO_COMMON_DIRECTORY,
+  integrationRef: process.env.DALPH_DEMO_INTEGRATION_REF,
+  plannedAttemptBaseSha: process.env.DALPH_DEMO_BASE_SHA,
+  plannedAttemptExecutor: "codex:production",
+  claimOwner: "dalph:production-walkthrough",
+  taskWorkCapacity: 1,
+  journalDatabase: process.env.DALPH_DEMO_JOURNAL,
+  evidenceStoreRoot: process.env.DALPH_DEMO_EVIDENCE,
+  plannedAttemptWorktreeRoot: process.env.DALPH_DEMO_TASK_WORKTREES,
+  codexStateDirectory: process.env.DALPH_DEMO_CODEX_STATE,
+  integratorCandidateWorktreeRoot: process.env.DALPH_DEMO_INTEGRATOR_WORKTREES,
+  integratorPrivateStore: process.env.DALPH_DEMO_INTEGRATOR_STORE,
+  activationInterval: "1 minute",
+  failureCooldown: "5 seconds",
+  codexExecutable: process.env.DALPH_CODEX_EXECUTABLE,
+  codexClientName: "dalph-production-walkthrough",
+  codexClientVersion: "1.0.0",
+  codexProvider: "openai"
+}
+
+writeFileSync(process.env.DALPH_DEMO_CONFIG, `${JSON.stringify(configuration, null, 2)}\n`, {
+  mode: 0o600
+})
+NODE
+```
+
+Those are all 19 non-secret
+`ProductionRepositoryHostConfiguration` document fields. The CLI injects the
+GitHub target parsed from the command and the two redacted credentials parsed
+from the environment; adding `target`, `githubToken`, or
+`codexProviderCredential` to the JSON is rejected as an excess property.
+
+### 4. Run and read the public output
+
+Run exactly this public command from any directory:
+
+```sh
+node "${DALPH_EXECUTABLE}" \
+  run "github:${DALPH_DEMO_OWNER}/${DALPH_DEMO_REPOSITORY}#${DALPH_DEMO_ISSUE_NUMBER}" \
+  --production \
+  --config "${DALPH_DEMO_CONFIG}"
+```
+
+Each stdout line is one version-1 JSON record. The first successful selection
+has `_tag: "RunSelected"`, `selection: "Allocated"`, an exact `runId`, and
+`version: 1`. Later records can be:
+
+- `CurrentStatus`, whose `status._tag` is `DeliveryStatusNotReady`,
+  `DeliveryStatusAvailable`, or `DeliveryStatusClosed` for the selected Run;
+  available entries are separately classified as `Waiting`, `Progressing`,
+  `Blocked`, `Settled`, or `Relinquished`;
+- `HistoricalSnapshot`, containing one whole immutable `snapshot` and its exact
+  Journal cursor;
+- `RunDisposition`, with `Completed`, `Blocked`, or `Cancelled`, after the host
+  independently proves Run termination;
+- `ApplicationExitDisposition`, with `Succeeded` and status 0 or `Failed` /
+  `TimedOut` and status 1, after a signal-requested application Exit; or
+- `Failure`, with a stable redacted `code`, `detail`, and safe `subject`, after a
+  known usage, configuration, startup/ownership, Journal, delivery-throttle,
+  status/projection, or lifecycle failure.
+
+An unexpected defect is reported through stderr and a nonzero process result;
+it does not invent an `internal.unexpected` NDJSON record. Historical snapshots,
+current status, Run disposition, and application Exit are distinct facts. An
+empty or closed status stream alone is never terminal success.
+
+The run can change each owning system:
+
+- GitHub is read for the issue closure, may gain exact `dalph-claim-*` and
+  `dalph-completion-*` repository labels, and may have the issue closed. Dalph
+  re-reads GitHub before retrying an ambiguous label or completion effect.
+- Local Git can gain deterministic task branches/worktrees, executor commits,
+  an Integrator candidate worktree/commit, and an atomic update of the configured
+  local `refs/heads/main`. It does not treat GitHub as Git lineage authority and
+  does not promise a remote push.
+- SQLite at `journalDatabase` records the Run beginning and workflow history.
+  The coordinator holds an OS lock on the exact Git common directory while the
+  host scope is live; it does not persist a second ownership database.
+- The evidence directory receives accepted evidence artifacts. The task and
+  Integrator roots receive only their derived worktrees. Cleanup removes only
+  exact resources whose disposition is proven; unreadable, foreign, or
+  ambiguous resources are preserved and block unsafe successor work.
+- The Codex executable starts app-server processes and provider threads using
+  the environment credential. Executor state stays under `codexStateDirectory`;
+  Integrator thread/candidate facts stay in `integratorPrivateStore` and the
+  candidate-worktree root. Public output omits provider-private transcripts and
+  session data.
+
+### 5. Optionally prove graceful same-Run recovery
+
+For a recovery demonstration, press Ctrl-C promptly after the first
+`RunSelected` record and before `RunDisposition`. `SIGINT` and `SIGTERM` both
+submit the same graceful application Exit request. Repeated signals join the
+first request and do not restart the fixed five-second drain.
+
+If the final record is `ApplicationExitDisposition` with
+`disposition._tag: "Succeeded"`, the process returns 0 but the unfinished Run
+is not terminated. Repeat the identical command from step 4. Its first
+selection record must have the same `runId` and `selection: "Recovered"`:
+
+```text
+{"_tag":"RunSelected","runId":"...","selection":"Allocated","version":1}
+...
+{"_tag":"ApplicationExitDisposition","disposition":{"_tag":"Succeeded","requestedStatus":0},"runId":"...","version":1}
+
+{"_tag":"RunSelected","runId":"...","selection":"Recovered","version":1}
+```
+
+Recovery rebuilds a new process-local current-status source, validates the
+SQLite prefix, and checks the authority that owns any acknowledged ambiguous
+effect before another mutation. It neither appends another Run beginning nor
+recovers stdout, an old status subscription, or an Exit timer.
+
+Graceful Exit is different from abrupt death. After `Succeeded`, admitted work
+has reached the accepted bounded shutdown result and the host releases its
+scoped resources and coordinator lock; the Run may still be unfinished. A
+crash, `SIGKILL`, machine loss, or process disappearance emits no
+`ApplicationExitDisposition` and proves no graceful result. Preserve every
+local and GitHub fact after abrupt death, then use the identical step-4 command
+to reconcile and recover the same unfinished Run. Never interpret a missing
+stdout line as permission to retry a provider mutation.
+
+### 6. Dispose exactly, or preserve everything
+
+Let the command return before cleanup. If it is still running, its final output
+is missing, a GitHub/Git fact is unreadable, or any resource identity is
+uncertain, stop here: preserve the complete GitHub repository and
+`DALPH_DEMO_ROOT` together. Do not manually delete individual Dalph labels,
+branches, worktrees, SQLite rows, evidence files, Codex state, or Integrator
+records; partial deletion destroys the facts needed for fail-closed recovery.
+
+When the command has returned and you intentionally abandon the entire
+disposable exercise, first verify both exact identities:
+
+```sh
+test "$(<"${DALPH_DEMO_ROOT}/.dalph-walkthrough-repository")" = \
+  "${DALPH_DEMO_OWNER}/${DALPH_DEMO_REPOSITORY}"
+test "$(GH_TOKEN="${GITHUB_TOKEN}" gh repo view \
+  "${DALPH_DEMO_OWNER}/${DALPH_DEMO_REPOSITORY}" \
+  --json nameWithOwner --jq .nameWithOwner)" = \
+  "${DALPH_DEMO_OWNER}/${DALPH_DEMO_REPOSITORY}"
+git -C "${DALPH_DEMO_COMMON_DIRECTORY}" worktree list --porcelain
+```
+
+Delete exactly `YOUR_LOGIN/dalph-production-walkthrough` in GitHub's Danger
+Zone using the repository name confirmation. The deliberately restricted token
+above cannot delete it. Only after GitHub confirms that exact deletion, remove
+the local root with this guarded command:
+
+```sh
+case "${DALPH_DEMO_ROOT}" in
+  "${DALPH_DEMO_TEMP_PARENT}"/dalph-production-walkthrough.*) ;;
+  *) printf '%s\n' "refusing unexpected cleanup root: ${DALPH_DEMO_ROOT}" >&2; exit 1 ;;
+esac
+test -f "${DALPH_DEMO_ROOT}/.dalph-walkthrough-repository"
+test "$(<"${DALPH_DEMO_ROOT}/.dalph-walkthrough-repository")" = \
+  "${DALPH_DEMO_OWNER}/${DALPH_DEMO_REPOSITORY}"
+rm -rf -- "${DALPH_DEMO_ROOT}"
+unset GITHUB_TOKEN DALPH_CODEX_PROVIDER_CREDENTIAL
+```
+
+The path-shape and marker checks are fail-closed guards around one exact
+disposable root. A failed guard, failed GitHub deletion, live process, or
+unsettled ambiguity means preserve rather than broaden or repeat cleanup.
+
 For shared-host gate failures, dispatch [Candidate qualification](../.github/workflows/quint-qualification.yml)
 once with the frozen `candidate_sha`. Choose `quint` (default, ARM) or `all`
 (x64, full history, submodules, gitleaks); `all` also requires the reviewed

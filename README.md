@@ -22,8 +22,8 @@ CLI requires Alice to choose `--dry` or `--production` explicitly. Dry-run
 retains the controlled/read-only interpreter. Production accepts one GitHub
 issue target and a decoded repository-host configuration, then reports the
 exact allocated or recovered Run and immutable historical snapshots. Passive
-current-status attachment and bounded SIGINT/SIGTERM Exit are also available;
-public recovery races remain a follow-on CLI slice.
+current-status attachment, bounded SIGINT/SIGTERM Exit, and same-Run recovery
+after process loss are also available.
 
 ## Repository map
 
@@ -56,20 +56,30 @@ currently eligible tasks, and simulated task outcomes. The larger retained
 fixture is available at
 `packages/orchestrator/fixtures/wayfinder-105.json`.
 
-Production is selected only with an explicit GitHub target and normalized
-absolute configuration path:
+Production changes live state. Use only a dedicated disposable GitHub
+repository with one unblocked issue for a first run. Give `GITHUB_TOKEN` access
+only to that repository (metadata read, issues read/write, and contents
+read for the local clone), keep both credentials in the environment,
+and never put either value in the JSON file. The complete, copyable
+[disposable production walkthrough](docs/DEVELOPMENT.md#disposable-production-repository-walkthrough)
+creates disjoint local state and worktree paths, explains every configuration
+field and consequence, shows the version-1 NDJSON records, exercises recovery,
+and disposes or deliberately preserves the exact resources.
+
+Production is selected only with an explicit GitHub target and a normalized
+absolute configuration path. Its exact public command is:
 
 ```sh
-GITHUB_TOKEN=... DALPH_CODEX_PROVIDER_CREDENTIAL=... \
-  node packages/dalph/dist/bin/dalph.js \
+node packages/dalph/dist/bin/dalph.js \
   run github:OWNER/REPOSITORY#ISSUE --production \
   --config /absolute/dalph-production.json
 ```
 
-The JSON document contains the non-secret repository/ref, capacity/cadence,
-Journal/evidence, worktree, and Codex settings accepted by the production-host
-schema. Credential values stay in the two named environment inputs and are
-redacted from public validation records and help.
+The non-secret JSON document contains the repository/ref, exact Base SHA,
+capacity/cadence, Journal/evidence, disjoint worktree/private-state, and Codex
+settings accepted by the production-host schema. Credential values come only
+from `GITHUB_TOKEN` and `DALPH_CODEX_PROVIDER_CREDENTIAL`; public validation
+records and help never print them.
 
 While the production command is attached, Ctrl-C (`SIGINT`) and supervisor
 `SIGTERM` deliveries enter the same host-owned graceful application Exit. A
