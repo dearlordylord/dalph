@@ -19,6 +19,7 @@ import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/t
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import type {
@@ -69,6 +70,7 @@ export type SafeContinuationRevalidationEligibility = {
     | {
         readonly _tag: "ReconciledResumeStillSafe"
         readonly observedAt: JournalPosition
+        readonly projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal
         readonly resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal
       }
 }

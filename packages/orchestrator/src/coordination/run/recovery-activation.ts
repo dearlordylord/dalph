@@ -1474,7 +1474,12 @@ const reconciledResumeStillSafeBasis = (records: ReadonlyArray<JournalRecord>, p
   return superseded
     ? undefined
     : {
-        basis: { _tag: "ReconciledResumeStillSafe" as const, observedAt: reconciled.position, resumeCommandOrdinal },
+        basis: {
+          _tag: "ReconciledResumeStillSafe" as const,
+          observedAt: reconciled.position,
+          projectionOrdinal: reconciled.event.projectionOrdinal,
+          resumeCommandOrdinal
+        },
         lifecycleSafe
       }
 }

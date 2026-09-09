@@ -1840,7 +1840,7 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
   )
   expect(retry).toMatchObject({
     safeContinuationRevalidationEligibility: {
-      basis: { _tag: "ReconciledResumeStillSafe", observedAt: 11, resumeCommandOrdinal: 3 }
+      basis: { _tag: "ReconciledResumeStillSafe", observedAt: 11, projectionOrdinal: 1, resumeCommandOrdinal: 3 }
     }
   })
   const acceptedRetryRecords = [...retryRecords, executorReport(12, safe)]
@@ -1854,7 +1854,7 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
     disposition: { _tag: "Ready", acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: 12 } },
     safeContinuationRevalidationEligibility: {
       acceptedSafe: { reportOrdinal: 12 },
-      basis: { _tag: "ReconciledResumeStillSafe", observedAt: 11, resumeCommandOrdinal: 3 }
+      basis: { _tag: "ReconciledResumeStillSafe", observedAt: 11, projectionOrdinal: 1, resumeCommandOrdinal: 3 }
     }
   })
 
