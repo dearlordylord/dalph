@@ -1464,6 +1464,16 @@ const reconciledResumeStillSafeBasis = (records: ReadonlyArray<JournalRecord>, p
       event.observation.report.correlation.attemptId === plannedAttempt.attemptId
   )
   if (reconciled?.event._tag !== "PlannedAttemptExecutorCommandProjectionObserved") return undefined
+  const reconciledProjectionOrdinal = reconciled.event.projectionOrdinal
+  const consumed = records.some(
+    ({ event, position }) =>
+      position > reconciled.position &&
+      event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" &&
+      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt) &&
+      event.commandOrdinal === resumeCommandOrdinal &&
+      event.projectionOrdinal === reconciledProjectionOrdinal &&
+      event.authorization.safeProjectionObservedAt === reconciled.position
+  )
   const superseded = records.some(
     ({ event, position }) =>
       position > reconciled.position &&
@@ -1471,13 +1481,13 @@ const reconciledResumeStillSafeBasis = (records: ReadonlyArray<JournalRecord>, p
       (event.command === "Begin" || event.command === "Resume") &&
       plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
   )
-  return superseded
+  return consumed || superseded
     ? undefined
     : {
         basis: {
           _tag: "ReconciledResumeStillSafe" as const,
           observedAt: reconciled.position,
-          projectionOrdinal: reconciled.event.projectionOrdinal,
+          projectionOrdinal: reconciledProjectionOrdinal,
           resumeCommandOrdinal
         },
         lifecycleSafe

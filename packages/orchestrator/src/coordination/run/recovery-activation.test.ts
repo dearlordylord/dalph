@@ -69,6 +69,8 @@ import {
   PlannedAttemptExecutorCommandProjectionObservation,
   PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorResumeRedeliveryIntendedEvent,
+  PlannedAttemptExecutorResumeRedeliveryOrdinal,
   PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorStateObservationOrdinal,
   PlannedAttemptExecutorStateObservedEvent,
@@ -1809,7 +1811,8 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
     position: number,
     report: PlannedAttemptExecutorReport,
     plannedAttempt = coverageAttempt,
-    ordinal = PlannedAttemptExecutorCommandOrdinal.make(3)
+    ordinal = PlannedAttemptExecutorCommandOrdinal.make(3),
+    projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(1)
   ) =>
     coverageRecord(
       position,
@@ -1818,7 +1821,39 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
         observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({ report }),
         occurrenceClassification: "NonActionOccurrence",
         plannedAttempt,
-        projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
+        projectionOrdinal,
+        version: workflowJournalEventVersion
+      })
+    )
+  const redelivery = (
+    position: number,
+    safeProjectionObservedAt: JournalPosition,
+    redeliveryOrdinal = PlannedAttemptExecutorResumeRedeliveryOrdinal.make(1),
+    plannedAttempt = coverageAttempt,
+    commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(3),
+    projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(1)
+  ) =>
+    coverageRecord(
+      position,
+      PlannedAttemptExecutorResumeRedeliveryIntendedEvent.make({
+        authorization: {
+          safeProjectionObservedAt,
+          witness: {
+            activeTaskContinuationRead: {
+              graphObservationOperationId: OperationId.make("safe-reopen-redelivery-graph"),
+              taskClaimObservationOperationId: OperationId.make("safe-reopen-redelivery-claim"),
+              taskWorkSpecificationObservationOperationId: OperationId.make("safe-reopen-redelivery-specification")
+            },
+            targetLineageObservationOperationId: OperationId.make("safe-reopen-redelivery-lineage"),
+            worktreeObservationOperationId: OperationId.make("safe-reopen-redelivery-worktree")
+          }
+        },
+        commandOrdinal,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        plannedAttempt,
+        projectionOrdinal,
+        redeliveryOrdinal,
         version: workflowJournalEventVersion
       })
     )
@@ -1905,6 +1940,45 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
     noEligibility([
       ...retryRecords,
       command(12, "Resume", coverageAttempt, PlannedAttemptExecutorCommandOrdinal.make(4))
+    ])
+  ).toBeUndefined()
+  const firstProjectionAt = JournalPosition.make(11)
+  const consumedRetryRecords = [...retryRecords, redelivery(12, firstProjectionAt)]
+  expect(noEligibility(consumedRetryRecords)).toBeUndefined()
+
+  expect(
+    noEligibility([
+      ...retryRecords,
+      redelivery(
+        12,
+        firstProjectionAt,
+        PlannedAttemptExecutorResumeRedeliveryOrdinal.make(1),
+        coverageAttempt,
+        PlannedAttemptExecutorCommandOrdinal.make(3),
+        PlannedAttemptExecutorCommandProjectionOrdinal.make(2)
+      )
+    ])
+  ).toMatchObject({ basis: { observedAt: 11, projectionOrdinal: 1 } })
+
+  const secondProjectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(2)
+  const freshlyReconciledRecords = [
+    ...consumedRetryRecords,
+    projection(13, safe, coverageAttempt, PlannedAttemptExecutorCommandOrdinal.make(3), secondProjectionOrdinal)
+  ]
+  expect(noEligibility(freshlyReconciledRecords)).toMatchObject({
+    basis: { observedAt: 13, projectionOrdinal: 2, resumeCommandOrdinal: 3 }
+  })
+  expect(
+    noEligibility([
+      ...freshlyReconciledRecords,
+      redelivery(
+        14,
+        JournalPosition.make(13),
+        PlannedAttemptExecutorResumeRedeliveryOrdinal.make(2),
+        coverageAttempt,
+        PlannedAttemptExecutorCommandOrdinal.make(3),
+        secondProjectionOrdinal
+      )
     ])
   ).toBeUndefined()
 })
