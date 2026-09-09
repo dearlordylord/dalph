@@ -43,6 +43,7 @@ import {
   type CurrentDeliveryStatus,
   type DeliveryStatusEntry
 } from "./delivery-status.js"
+import { ticketOwnerSnapshotForTest } from "../../../test/support/delivery-runtime-live-owner.js"
 
 const runId = RunId.make("delivery-status-property-run")
 const target = FixtureTarget.make("delivery-status-property-target")
@@ -133,9 +134,7 @@ const stateOf = (
   const proposalB = proposalOf("property-B", TaskId.make("B"), 1)
   const proposals = proposalOrder.map((label) => (label === "A" ? proposalA : label === "A2" ? proposalA2 : proposalB))
   const ownerForTask = (taskId: "A" | "B"): DeliveryRuntimeLiveOwnerSnapshot =>
-    taskId === "A"
-      ? { _tag: "AdmittedDeliveryAction", admissionAuthority: { _tag: "TicketProposalAdmission" }, proposal: proposalA }
-      : { _tag: "AdmittedDeliveryAction", admissionAuthority: { _tag: "TicketProposalAdmission" }, proposal: proposalB }
+    taskId === "A" ? ticketOwnerSnapshotForTest(proposalA) : ticketOwnerSnapshotForTest(proposalB)
   const liveOwners = ownerOrder.map(ownerForTask)
   const issues: ReadonlyArray<DeliveryProposalDerivationIssue> = [
     {
@@ -295,11 +294,7 @@ const allPhenomenaStateOf = (permutation: PhenomenonPermutation): DeliveryRuntim
     ResponsibilityDisposition.StoppedAttemptSettled({ claimDisposition: "Released" })
   )
   const proposal = proposalOf("property-publication", capacityTask, 3)
-  const settledOwner: DeliveryRuntimeLiveOwnerSnapshot = {
-    _tag: "SettledBeforeMaterialization",
-    admissionAuthority: { _tag: "TicketProposalAdmission" },
-    proposal
-  }
+  const settledOwner = ticketOwnerSnapshotForTest(proposal, { _tag: "SettledBeforeMaterialization" })
   const extraDeliveries: ReadonlyArray<TicketDelivery> = [
     {
       _tag: "TicketDelivery",

@@ -179,19 +179,16 @@ const validateLiveOwnerAdmissionForStatus = (
 ): DeliveryStatusProjectionConflict | null => {
   const proposalId = owner.proposal.id
   const admitted = admittedProposalFor(owner.admissionAuthority)
-  if (owner.admissionAuthority._tag === "FreshTaskCandidateAdmission") {
-    return admitted === undefined || !proposalEquals(admitted, owner.proposal)
-      ? liveOwnerConflict(subject, proposalId, "a fresh live owner lacks its exact admission authority")
-      : null
+  if (admitted === undefined || !proposalEquals(admitted, owner.proposal)) {
+    const detail =
+      owner.admissionAuthority._tag === "FreshTaskCandidateAdmission"
+        ? "a fresh live owner lacks its exact admission authority"
+        : "a ticket live owner lacks its exact admission authority"
+    return liveOwnerConflict(subject, proposalId, detail)
   }
   const current = currentProposals.find(({ id }) => id === proposalId)
-  if (current !== undefined) {
-    return proposalEquals(owner.proposal, current)
-      ? null
-      : liveOwnerConflict(subject, proposalId, "a live owner proposal differs from the current frontier proposal")
-  }
-  return admitted === undefined || !proposalEquals(admitted, owner.proposal)
-    ? liveOwnerConflict(subject, proposalId, "an absent live owner lacks its exact historical admission authority")
+  return current !== undefined && !proposalEquals(owner.proposal, current)
+    ? liveOwnerConflict(subject, proposalId, "a live owner proposal differs from the current frontier proposal")
     : null
 }
 

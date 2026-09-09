@@ -1259,6 +1259,25 @@ it.effect("admits independent D while recovered A and C perform read-only restar
     const statusSubject = DeliveryStatusSubject.cases.Run.make({ runId })
     expect(validateLiveOwnersForStatus(statusSubject, held.evaluation, held.liveOwners)).toBeNull()
 
+    if (freshOwner === undefined || held.evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") {
+      return yield* Effect.die("the fresh owner and proposal frontier must be observable")
+    }
+    const changedFreshProposal = {
+      ...freshOwner.proposal,
+      waitsForLiveOperationId: OperationId.make("changed-fresh-owner-proposal")
+    }
+    const changedFreshEvaluation: DeliveryRuntimeEvaluation = {
+      ...held.evaluation,
+      proposedActions: {
+        ...held.evaluation.proposedActions,
+        proposals: [...held.evaluation.proposedActions.proposals, changedFreshProposal]
+      }
+    }
+    const changedFreshConflict = validateLiveOwnersForStatus(statusSubject, changedFreshEvaluation, held.liveOwners)
+    expect(changedFreshConflict).toBeInstanceOf(DeliveryStatusProjectionConflict)
+    if (!(changedFreshConflict instanceof DeliveryStatusProjectionConflict)) return
+    expect(changedFreshConflict.detail).toBe("a live owner proposal differs from the current frontier proposal")
+
     if (initial.proposedActions._tag !== "DeliveryProposalsAvailable") {
       return yield* Effect.die("the fresh-candidate fixture must carry an available proposal frontier")
     }

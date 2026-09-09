@@ -115,6 +115,7 @@ import {
 } from "@dalph/orchestrator"
 import { makeTestJournaledTrackerGraphObservation } from "../../../orchestrator/test/journaled-graph-observation.js"
 import { makeFreshTaskAdmissionTestBasis } from "../../../orchestrator/test/support/fresh-task-admission.js"
+import { ticketOwnerSnapshotForTest } from "../../../orchestrator/test/support/delivery-runtime-live-owner.js"
 import {
   ConfigProvider,
   Console,
@@ -2005,12 +2006,8 @@ const projectedStatusFixture = (): DeliveryRuntimeObservationState => {
     })
   }
   const liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot> = [
-    { _tag: "AdmittedDeliveryAction", admissionAuthority: { _tag: "TicketProposalAdmission" }, proposal: live },
-    {
-      _tag: "SettledBeforeMaterialization",
-      admissionAuthority: { _tag: "TicketProposalAdmission" },
-      proposal: publicationWait
-    }
+    ticketOwnerSnapshotForTest(live),
+    ticketOwnerSnapshotForTest(publicationWait, { _tag: "SettledBeforeMaterialization" })
   ]
   return { _tag: "Ready", evaluation, liveOwners }
 }
