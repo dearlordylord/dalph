@@ -16,7 +16,7 @@ import {
   makeTaskWorkSpecification,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Effect, Exit, Layer, Option, Result } from "effect"
+import { Cause, Effect, Exit, Layer, Option, Result } from "effect"
 import { expect } from "vitest"
 import { validSnapshot } from "../../../test/task-dag.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
@@ -590,7 +590,13 @@ it.effect("reconciles a reserved Safe continuation only with the same accepted a
       const mismatchingReservation = yield* mismatching.tryReserve(proposal("mismatching"))
       if (mismatchingReservation._tag !== "Admitted") return yield* Effect.die("Safe continuation was not admitted")
       yield* mismatching.complete(mismatchingReservation.reservation)
-      expect(Exit.isFailure(yield* Effect.exit(mismatching.synchronize(yield* basis([foreignAttempt]))))).toBe(true)
+      const mismatch = yield* Effect.exit(mismatching.synchronize(yield* basis([foreignAttempt])))
+      if (Exit.isSuccess(mismatch)) return yield* Effect.die("foreign accepted attempt was not rejected")
+      expect(mismatch._tag).toBe("Failure")
+      expect(Cause.squash(mismatch.cause)).toBe(
+        `accepted task-work position contradicts locally accepted attempt ${taskId}`
+      )
+      expect((yield* mismatching.snapshot).positions.get(taskId)?._tag).toBe("SafeContinuationReserved")
     })
   )
 )
@@ -898,13 +904,15 @@ it.effect("rejects stale, foreign, and wrong-kind accepted Resume handoffs witho
         )
         const admitted = yield* controller.tryReserve(safeContinuationProposal(eligibility, id))
         if (admitted._tag !== "Admitted") return yield* Effect.die("Safe continuation was not admitted")
-        expect(
-          Exit.isFailure(
-            yield* Effect.exit(
-              controller.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, undefined, receipt)
-            )
-          )
-        ).toBe(true)
+        const rejection = yield* Effect.exit(
+          controller.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, undefined, receipt)
+        )
+        if (Exit.isSuccess(rejection)) return yield* Effect.die("invalid accepted Resume handoff was not rejected")
+        expect(rejection._tag).toBe("Failure")
+        expect(Cause.squash(rejection.cause)).toBe(
+          `planned-attempt position rejected reservation ${admitted.reservation.proposal.id}`
+        )
+        expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("SafeContinuationReserved")
         yield* controller.rollback(admitted.reservation, "AfterDurableClaimIntentOrAmbiguity")
       })
       const initialIntent = (attempt: PlannedTaskAttempt) =>
@@ -1000,9 +1008,13 @@ it.effect("binds an exact planned attempt once and rejects its local position as
         id: DeliveryProposalId.make("pending-runtime-repeat")
       })
       if (repeated._tag !== "Admitted") return yield* Effect.die("exact local position was not reused")
-      expect(
-        Exit.isFailure(yield* Effect.exit(controller.bindPlannedAttemptPosition(repeated.reservation, plannedAttempt)))
-      ).toBe(true)
+      const rejection = yield* Effect.exit(controller.bindPlannedAttemptPosition(repeated.reservation, plannedAttempt))
+      if (Exit.isSuccess(rejection)) return yield* Effect.die("local accepted position was reused as binding authority")
+      expect(rejection._tag).toBe("Failure")
+      expect(Cause.squash(rejection.cause)).toBe(
+        `planned-attempt position rejected reservation ${repeated.reservation.proposal.id}`
+      )
+      expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("LocallyAcceptedAttemptPosition")
     })
   )
 )
@@ -1268,6 +1280,39 @@ it.effect("a proposal without accepted fresh-task capability cannot retain a tem
   )
 )
 
+it.effect("recognizes only the proposal issued for the exact accepted fresh candidate", () =>
+  withProtocolController(
+    Effect.gen(function* () {
+      const admission = yield* makeDeliveryRuntimeAdmissionController(
+        admissionBasis(1),
+        yield* makeIntegrationTargetResourceController()
+      )
+      const frontier = makeFreshTaskCandidateFrontierForTest({
+        decisions: [freshEntryDecision("A", "proposal-authority-A-r1")],
+        runId
+      })
+      const foreignFrontier = makeFreshTaskCandidateFrontierForTest({
+        decisions: [freshEntryDecision("B", "proposal-authority-B-r1")],
+        runId
+      })
+      const candidate = frontier.candidates[0]
+      const foreignCandidate = foreignFrontier.candidates[0]
+      if (candidate === undefined || foreignCandidate === undefined)
+        return yield* Effect.die("missing fresh candidates")
+
+      const admitted = yield* admission.tryReserveFresh(frontier, (accepted) => {
+        const proposal = deliveryProposalOfAcceptedFreshTask(accepted)
+        expect(isAcceptedFreshTaskDeliveryProposalFor(null, candidate)).toBe(false)
+        expect(isAcceptedFreshTaskDeliveryProposalFor({ ...proposal }, candidate)).toBe(false)
+        expect(isAcceptedFreshTaskDeliveryProposalFor(proposal, foreignCandidate)).toBe(false)
+        expect(isAcceptedFreshTaskDeliveryProposalFor(proposal, candidate)).toBe(true)
+        return proposal
+      })
+      expect(admitted._tag).toBe("Admitted")
+    })
+  )
+)
+
 it.effect("materializes proposals for A through C only after their atomic fresh admission", () =>
   withProtocolController(
     Effect.gen(function* () {
@@ -1486,8 +1531,6 @@ it.effect("retains all holders across contraction and admits only after occupanc
       })
       const candidate = frontier.candidates[0]
       if (candidate === undefined) return yield* Effect.die("missing contraction candidate")
-      expect(isAcceptedFreshTaskDeliveryProposalFor(null, candidate)).toBe(false)
-
       expect((yield* admission.tryReserveFresh(frontier, deliveryProposalOfAcceptedFreshTask))._tag).toBe("Deferred")
       yield* admission.releasePlannedAttemptPosition(plannedAttemptExecutorCorrelation(firstAttempt))
       expect((yield* admission.tryReserveFresh(frontier, deliveryProposalOfAcceptedFreshTask))._tag).toBe("Deferred")
