@@ -1,10 +1,17 @@
 // Focused finite proof projections for named autonomous executor obligations.
 module plannedAttemptExecutorEvidenceProof {
-  type Stage = BeginPreTurn | BeginNotCrossedObserved | BeginTurnIntent | ResponsibilityHeld | BeginIntent | BeginCalled | BeginResponseObserved | Executing | SuspendIntent | SuspendCalled | SuspendResponseObserved | Safe | ResumeIntent | ResumeCalled | ResumeResponseObserved | Terminal
+  type Stage = ResumeRecoveryRequired | ResumeProjectionSafe | ResumeWitnessReady | ResumeRedeliveryIntent | ResumeRedeliveryCalled | BeginPreTurn | BeginNotCrossedObserved | BeginTurnIntent | ResponsibilityHeld | BeginIntent | BeginCalled | BeginResponseObserved | Executing | SuspendIntent | SuspendCalled | SuspendResponseObserved | Safe | ResumeIntent | ResumeCalled | ResumeResponseObserved | Terminal
   type Report = ExecutingReport | SafeReport | TerminalReport
-  type Event = BeginPreTurnDelivered | BeginNotCrossedRead | BeginRedelivered | BeginTurnBoundaryCrossed | BeginProofLost | Initialized | BeginIntentRecorded | BeginBoundaryCalled | CommandResponseRecorded | DistinctReportAccepted | PassiveExecutingObserved | PassiveTerminalObserved | SuspendIntentRecorded | SuspendBoundaryCalled | ResumeIntentRecorded | ResumeBoundaryCalled
+  type Event = ResumeDeliveryCrashed | ResumeSafeProjected | ResumeWitnessRead | ResumeRedeliveryRecorded | ResumeRedeliveryBoundaryCalled | ResumeRecoveredExecuting | BeginPreTurnDelivered | BeginNotCrossedRead | BeginRedelivered | BeginTurnBoundaryCrossed | BeginProofLost | Initialized | BeginIntentRecorded | BeginBoundaryCalled | CommandResponseRecorded | DistinctReportAccepted | PassiveExecutingObserved | PassiveTerminalObserved | SuspendIntentRecorded | SuspendBoundaryCalled | ResumeIntentRecorded | ResumeBoundaryCalled
   type State = {
     stage: Stage,
+    resumeProjectionOrdinal: int,
+    consumedResumeProjectionOrdinal: int,
+    resumeRedeliveryCount: int,
+    resumeRedeliveryCallCount: int,
+    resumeCrashCount: int,
+    lastResumeRedeliveryHadFreshWitness: bool,
+    resumeDeliveryMayCall: bool,
     pendingReport: Report,
     intentCount: int,
     callCount: int,
@@ -31,7 +38,20 @@ module plannedAttemptExecutorEvidenceProof {
   }
   var state: State
 
-  val everyCallHasDurableIntent = state.callCount <= state.intentCount + state.beginRedeliveryCount
+
+  val resumeProjectionConsumedOnce = state.resumeRedeliveryCount <= state.consumedResumeProjectionOrdinal and state.consumedResumeProjectionOrdinal <= state.resumeProjectionOrdinal
+  val resumeRedeliveryCallHasIntent = state.resumeRedeliveryCallCount <= state.resumeRedeliveryCount
+  val resumeRedeliveryUsesFreshWitness = state.lastEvent != ResumeRedeliveryRecorded or state.lastResumeRedeliveryHadFreshWitness
+  val resumeRedeliveryPreservesSemanticResume = state.resumeRedeliveryCount == 0 or and { state.resumeCountSinceSafe == 1, state.intentCount == 3 }
+  val resumeRedeliveryRetainsPosition = (state.stage != ResumeRedeliveryIntent and state.stage != ResumeRedeliveryCalled and state.stage != ResumeRecoveryRequired) or state.positionHeld
+  val resumeCrashDiscardsCallPermission = state.lastEvent != ResumeDeliveryCrashed or not(state.resumeDeliveryMayCall)
+  val resumeSafeProjectionReached = state.stage == ResumeProjectionSafe
+  val resumeWitnessReadyReached = state.stage == ResumeWitnessReady
+  val resumeRedeliveryIntentReached = state.stage == ResumeRedeliveryIntent
+  val resumeRedeliveryCalledReached = state.stage == ResumeRedeliveryCalled
+  val resumeDeliveryCrashReached = state.lastEvent == ResumeDeliveryCrashed
+
+  val everyCallHasDurableIntent = state.callCount <= state.intentCount + state.beginRedeliveryCount + state.resumeRedeliveryCount
   val beginTurnCrossesAtMostOnce = state.beginTurnCrossingCount <= 1
   val redeliveryRequiresFreshProof = state.lastEvent != BeginRedelivered or state.lastRedeliveryHadFreshProof
   val beginPreTurnReached = state.stage == BeginPreTurn
@@ -56,9 +76,13 @@ module plannedAttemptExecutorEvidenceProof {
   }
   val safeAndTerminalReleasePosition = (state.stage != Safe and state.stage != Terminal) or not(state.positionHeld)
   val evidenceProofTypeOk = and {
+    state.resumeProjectionOrdinal >= 0, state.resumeProjectionOrdinal <= 2,
+    state.resumeRedeliveryCount >= 0, state.resumeRedeliveryCount <= 2,
+    state.resumeCrashCount >= 0, state.resumeCrashCount <= 2,
     state.intentCount >= 0, state.callCount >= 0, state.responseCount >= 0,
     state.settlementCount >= 0, state.acceptedReportOrdinal >= 0,
-    state.observationCount >= 0, state.observationCount <= 5,
+    // Four unchanged reads, one recovered Resume projection, then terminal.
+    state.observationCount >= 0, state.observationCount <= 6,
     state.suspendCount >= 0, state.suspendCount <= 1,
     state.resumeCountSinceSafe >= 0, state.resumeCountSinceSafe <= 1,
     state.durableObservationCount >= 0, state.proposalIdentityCount >= 0,
@@ -75,7 +99,7 @@ module plannedAttemptExecutorEvidenceProof {
   val resumeCalledReached = state.lastEvent == ResumeBoundaryCalled
 
   action init: bool = all {
-    state' = { stage: ResponsibilityHeld, pendingReport: ExecutingReport, intentCount: 0, callCount: 0, responseCount: 0, settlementCount: 0, acceptedReportOrdinal: 0, acceptedReportOrdinalBeforePassiveRead: 0, observationCount: 0, durableObservationCount: 0, durableObservationCountBeforePassiveRead: 0, proposalIdentityCount: 0, proposalIdentityCountBeforePassiveRead: 0, intentCountBeforePassiveRead: 0, callCountBeforePassiveRead: 0, beginCount: 0, beginRedeliveryCount: 0, beginTurnCrossingCount: 0, lastRedeliveryHadFreshProof: false, firstAcceptedReportWasExecuting: false, suspendCount: 0, resumeCountSinceSafe: 0, positionHeld: true, lastEvent: Initialized }
+    state' = { resumeProjectionOrdinal: 0, consumedResumeProjectionOrdinal: 0, resumeRedeliveryCount: 0, resumeRedeliveryCallCount: 0, resumeCrashCount: 0, lastResumeRedeliveryHadFreshWitness: false, resumeDeliveryMayCall: false, stage: ResponsibilityHeld, pendingReport: ExecutingReport, intentCount: 0, callCount: 0, responseCount: 0, settlementCount: 0, acceptedReportOrdinal: 0, acceptedReportOrdinalBeforePassiveRead: 0, observationCount: 0, durableObservationCount: 0, durableObservationCountBeforePassiveRead: 0, proposalIdentityCount: 0, proposalIdentityCountBeforePassiveRead: 0, intentCountBeforePassiveRead: 0, callCountBeforePassiveRead: 0, beginCount: 0, beginRedeliveryCount: 0, beginTurnCrossingCount: 0, lastRedeliveryHadFreshProof: false, firstAcceptedReportWasExecuting: false, suspendCount: 0, resumeCountSinceSafe: 0, positionHeld: true, lastEvent: Initialized }
   }
   action recordBeginIntent: bool = all { state.stage == ResponsibilityHeld, state' = { ...state, stage: BeginIntent, intentCount: 1, beginCount: 1, lastEvent: BeginIntentRecorded } }
   action callBegin: bool = all { state.stage == BeginIntent, state' = { ...state, stage: BeginCalled, callCount: 1, beginTurnCrossingCount: 1, lastEvent: BeginBoundaryCalled } }
@@ -106,7 +130,7 @@ module plannedAttemptExecutorEvidenceProof {
   }
   action recordResumeIntent: bool = all { state.stage == Safe, state.resumeCountSinceSafe == 0, state' = { ...state, stage: ResumeIntent, intentCount: state.intentCount + 1, resumeCountSinceSafe: state.resumeCountSinceSafe + 1, positionHeld: true, lastEvent: ResumeIntentRecorded } }
   action callResume: bool = all { state.stage == ResumeIntent, state' = { ...state, stage: ResumeCalled, callCount: state.callCount + 1, lastEvent: ResumeBoundaryCalled } }
-  action observeResumeResponse(report: Report): bool = all { state.stage == ResumeCalled, state' = { ...state, stage: ResumeResponseObserved, pendingReport: report, responseCount: state.responseCount + 1, lastEvent: CommandResponseRecorded } }
+  action observeResumeResponse(report: Report): bool = all { (state.stage == ResumeCalled or state.stage == ResumeRedeliveryCalled), state' = { ...state, stage: ResumeResponseObserved, pendingReport: report, responseCount: state.responseCount + 1, lastEvent: CommandResponseRecorded } }
   action settleResumeResponse: bool = all {
     state.stage == ResumeResponseObserved,
     state' = if (state.pendingReport == SafeReport)
@@ -116,9 +140,42 @@ module plannedAttemptExecutorEvidenceProof {
     else
       { ...state, stage: Executing, settlementCount: state.settlementCount + 1, acceptedReportOrdinal: state.acceptedReportOrdinal + 1, proposalIdentityCount: state.proposalIdentityCount + 1, positionHeld: true, lastEvent: DistinctReportAccepted },
   }
+
+  // Identity-rich canonical actions collapse to stages/counters here.
+  // An exact Safe projection settles a delivery, not the semantic Resume budget.
+  action crashResumeDelivery: bool = all {
+    state.stage == ResumeIntent or state.stage == ResumeCalled or state.stage == ResumeRedeliveryIntent or state.stage == ResumeRedeliveryCalled,
+    state.resumeCrashCount < 2,
+    state' = { ...state, stage: ResumeRecoveryRequired, resumeCrashCount: state.resumeCrashCount + 1, resumeDeliveryMayCall: false, positionHeld: true, lastEvent: ResumeDeliveryCrashed },
+  }
+  action observeResumeSafeProjection: bool = all {
+    state.stage == ResumeRecoveryRequired,
+    state' = { ...state, stage: ResumeProjectionSafe, resumeProjectionOrdinal: state.resumeProjectionOrdinal + 1, positionHeld: false, lastEvent: ResumeSafeProjected },
+  }
+  action readResumeContinuationWitness: bool = all {
+    state.stage == ResumeProjectionSafe,
+    state' = { ...state, stage: ResumeWitnessReady, positionHeld: true, lastEvent: ResumeWitnessRead },
+  }
+  action recordResumeRedeliveryIntent: bool = all {
+    state.stage == ResumeWitnessReady, state.resumeProjectionOrdinal > state.consumedResumeProjectionOrdinal,
+    state.resumeRedeliveryCount < 2,
+    state' = { ...state, stage: ResumeRedeliveryIntent, resumeRedeliveryCount: state.resumeRedeliveryCount + 1,
+      consumedResumeProjectionOrdinal: state.resumeProjectionOrdinal, resumeDeliveryMayCall: true, positionHeld: true,
+      lastResumeRedeliveryHadFreshWitness: state.stage == ResumeWitnessReady and state.resumeProjectionOrdinal > state.consumedResumeProjectionOrdinal,
+      lastEvent: ResumeRedeliveryRecorded },
+  }
+  action callResumeRedelivery: bool = all {
+    state.stage == ResumeRedeliveryIntent, state.resumeDeliveryMayCall,
+    state' = { ...state, stage: ResumeRedeliveryCalled, callCount: state.callCount + 1, resumeRedeliveryCallCount: state.resumeRedeliveryCallCount + 1, resumeDeliveryMayCall: false, lastEvent: ResumeRedeliveryBoundaryCalled },
+  }
+  action reconcileResumeExecuting: bool = all {
+    state.stage == ResumeRecoveryRequired,
+    state' = { ...state, stage: Executing, acceptedReportOrdinal: state.acceptedReportOrdinal + 1, observationCount: state.observationCount + 1, positionHeld: true, lastEvent: ResumeRecoveredExecuting },
+  }
+
   action step: bool = {
     nondet report = Set(ExecutingReport, SafeReport, TerminalReport).oneOf()
-    any { recordBeginIntent, callBegin, callBeginPreTurn, observeBeginNotCrossed, loseBeginProof, redeliverBegin, crossBeginTurn, observeBeginResponse(report), settleBeginResponse, observeUnchangedExecuting, observeTerminal, recordSuspendIntent, callSuspend, observeSuspendResponse(report), settleSuspendResponse, recordResumeIntent, callResume, observeResumeResponse(report), settleResumeResponse }
+    any { recordBeginIntent, callBegin, callBeginPreTurn, observeBeginNotCrossed, loseBeginProof, redeliverBegin, crossBeginTurn, observeBeginResponse(report), settleBeginResponse, observeUnchangedExecuting, observeTerminal, recordSuspendIntent, callSuspend, observeSuspendResponse(report), settleSuspendResponse, recordResumeIntent, callResume, observeResumeResponse(report), settleResumeResponse, crashResumeDelivery, observeResumeSafeProjection, readResumeContinuationWitness, recordResumeRedeliveryIntent, callResumeRedelivery, reconcileResumeExecuting }
   }
 }
 
