@@ -16,11 +16,16 @@ import {
   presentSelectedProductionRun,
   encodeProductionCliRecord,
   productionCliFailureRecord,
-  type ProductionCliHostObservation
+  type ProductionCliHostObservation,
+  type ProductionCliStatusError
 } from "./production-cli.js"
 import { dryRunOperationIdAllocatorLayer } from "./composition.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
-import { productionRepositoryHostGraph, withDecodedProductionRepositoryHost } from "./production-host.js"
+import {
+  productionRepositoryHostGraph,
+  type ProductionHostObservation,
+  withDecodedProductionRepositoryHost
+} from "./production-host.js"
 import type { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 import { traceOutputStdioLayer } from "../presentation/stdio-trace-output.js"
 import { workflowTraceOutputLayer } from "../presentation/workflow-trace.js"
@@ -30,8 +35,8 @@ export type ProductionCliHostRunner<E, R> = (
   input: ProductionRepositoryHostConfiguration,
   use: (
     observation: ProductionCliHostObservation
-  ) => Effect.Effect<void, TraceOutputError | TraceReaderError | JournalStoreError>
-) => Effect.Effect<void, E | TraceOutputError | TraceReaderError | JournalStoreError, R>
+  ) => Effect.Effect<void, ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError>
+) => Effect.Effect<void, E | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError, R>
 
 const runConfiguration = { version: "0.0.0" }
 
@@ -101,8 +106,22 @@ const productionHostRunner = (
   input: ProductionRepositoryHostConfiguration,
   use: (
     observation: ProductionCliHostObservation
-  ) => Effect.Effect<void, TraceOutputError | TraceReaderError | JournalStoreError>
-) => withDecodedProductionRepositoryHost(input, productionRepositoryHostGraph(), use)
+  ) => Effect.Effect<void, ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError>
+) =>
+  withDecodedProductionRepositoryHost(input, productionRepositoryHostGraph(), (observation) =>
+    use(productionCliHostObservationOf(observation))
+  )
+
+/** Removes host lifecycle authority before the shipped presentation callback receives its observation. */
+export const productionCliHostObservationOf = (
+  observation: ProductionHostObservation
+): ProductionCliHostObservation => ({
+  acceptedHistory: observation.acceptedHistory,
+  current: observation.current,
+  runTermination: observation.runTermination,
+  selection: observation.selection,
+  traceReader: observation.traceReader
+})
 
 /** Shipped binary composition: both modes share one command and differ only by installed interpreter boundaries. */
 export const productionCliApplication = productionCliFromStdio(productionHostRunner).pipe(

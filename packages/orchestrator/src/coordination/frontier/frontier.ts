@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- The closed transition/explanation algebra and its exhaustive mapping share one owner. */
-import { Data, Match, Option } from "effect"
+import { Data, Match, Option, Schema } from "effect"
 import {
   type IntegrationTarget,
   type PlannedTaskAttempt,
@@ -266,6 +266,60 @@ export type RunnableFrontierTransition = Data.TaggedEnum<{
 }>
 
 export const RunnableFrontierTransition = Data.taggedEnum<RunnableFrontierTransition>()
+
+/** Closed canonical transition tags carried by recovered delivery-order evidence. */
+const runnableFrontierTransitionTags = [
+  "AdvanceAttemptRestart",
+  "AdvanceAttemptStoppage",
+  "CheckTaskClaim",
+  "CommitFreshTaskClaimIntent",
+  "CommitTaskClaimReacquisitionIntent",
+  "ContinueFreshWorkflowOperation",
+  "BeginPlannedAttemptExecutorWork",
+  "ObservePlannedAttemptExecutorWork",
+  "ResumePlannedAttemptExecutorWorkAfterCurrentFacts",
+  "ObservePlannedAttemptContinuationGraph",
+  "ObservePlannedAttemptContinuationSpecification",
+  "ObservePlannedAttemptContinuationClaim",
+  "ObservePlannedAttemptContinuationWorktree",
+  "ObservePlannedAttemptContinuationTargetLineage",
+  "ReconcilePlannedAttemptExecutorWork",
+  "ObserveAttemptStoppageExecutor",
+  "ObserveResponsibleTaskClaim",
+  "ObserveStoppedAttemptClaim",
+  "RelinquishCancelledAttemptImplementation",
+  "ObserveCancelledAttemptClaim",
+  "RecordCancelledAttemptClaimNoRelease",
+  "ReleaseCancelledAttemptClaim",
+  "RetryCancelledAttemptClaimRelease",
+  "RecordStoppedAttemptClaimNoRelease",
+  "ReleaseStoppedAttemptClaim",
+  "RetryStoppedAttemptClaimRelease",
+  "SuspendPlannedAttemptExecutorWork",
+  "ReconcileTaskClaim",
+  "ReconcileTaskClaimRelease",
+  "ReleaseExternallyCompletedTaskClaim",
+  "ReconcileTaskWorktree",
+  "QueueAcceptedResultIntegrationResponsibility",
+  "StartQueuedIntegration",
+  "AcquireStartedIntegrationTarget",
+  "RunIntegrator",
+  "RecordChangedHeadRetryQuarantine",
+  "RecordPromotionStaleIntegrationQuarantine",
+  "RecordInitialConclusiveIntegrationQuarantine",
+  "RecordProviderRunFailureIntegrationQuarantine",
+  "RecordRetryConclusiveIntegrationQuarantine",
+  "FixIntegratorSuccessorSession",
+  "RunTargetPromotion",
+  "ReconcileTargetPromotionAttempt",
+  "ReplacePromotedTaskClaim",
+  "ObservePromotedCandidateAncestryAfterBlockerClear",
+  "CompletePromotedTask",
+  "ObserveFocusedTaskCompletion",
+  "DeleteCompletedTaskCompletionClaim",
+  "ReleaseStartedIntegrationTarget"
+] as const satisfies ReadonlyArray<RunnableFrontierTransition["_tag"]>
+export const RunnableFrontierTransitionTag = Schema.Literals(runnableFrontierTransitionTags)
 
 type AttemptStopTransition = Extract<
   RunnableFrontierTransition,

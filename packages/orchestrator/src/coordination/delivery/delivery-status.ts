@@ -116,10 +116,10 @@ const statusOrFail = (
 export const deliveryStatusOf = snapshotFor
 
 /** Decodes a public subject before opening the process-local current-first status source. */
-export const deliveryStatusSignalOf = (
-  source: CurrentSignal<DeliveryRuntimeObservationState>,
+export const deliveryStatusSignalOf = <E>(
+  source: CurrentSignal<DeliveryRuntimeObservationState, E>,
   input: unknown
-): Effect.Effect<CurrentSignal<CurrentDeliveryStatus, DeliveryStatusProjectionError>, Schema.SchemaError> =>
+): Effect.Effect<CurrentSignal<CurrentDeliveryStatus, E | DeliveryStatusProjectionError>, Schema.SchemaError> =>
   Schema.decodeUnknownEffect(DeliveryStatusSubject)(input).pipe(
     Effect.map((subject) =>
       makeCurrentSignal(

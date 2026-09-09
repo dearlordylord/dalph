@@ -11,6 +11,7 @@ import {
   describeWorkflowOccurrence
 } from "@dalph/orchestrator"
 import type {
+  CurrentDeliveryStatus,
   CurrentSignal,
   JournalStoreError,
   TraceCursor,
@@ -48,59 +49,60 @@ export const encodeTraceControlDispositionFacet = (history: TraceAtCursor): stri
     Schema.encodeUnknownSync(TraceControlDispositionFacet)(semanticTraceAtCursor(history).facets.controlDisposition)
   )
 
-/** The passive status visible beside a fixed historical cursor; it is not journal evidence. */
-export type TraceConsoleStatus =
-  | { readonly _tag: "Waiting"; readonly reason: string }
-  | { readonly _tag: "Running"; readonly reason: string }
-  | { readonly _tag: "Unavailable"; readonly reason: string }
-
-const unavailableTraceStatus: TraceConsoleStatus = {
-  _tag: "Unavailable",
-  reason: "no passive status source was supplied"
-}
+const renderDeliveryStatusSubject = (status: CurrentDeliveryStatus): string =>
+  status.subject._tag === "Run"
+    ? `Run ${status.subject.runId}`
+    : `Task ${status.subject.taskId} in Run ${status.subject.runId}`
 
 /** Renders only the current-status signal, keeping it separate from historical trace lines. */
-export const renderTraceStatus = (status: TraceConsoleStatus): string => {
+export const renderTraceStatus = (status: CurrentDeliveryStatus): string => {
+  const subject = renderDeliveryStatusSubject(status)
   switch (status._tag) {
-    case "Waiting":
-      return `Waiting · ${status.reason}`
-    case "Running":
-      return `Running · ${status.reason}`
-    case "Unavailable":
-      return `Unavailable · ${status.reason}`
+    case "DeliveryStatusNotReady":
+      return `Not ready · ${subject}`
+    case "DeliveryStatusAvailable":
+      return `Available · ${subject} · ${status.entries.length} exact entries`
+    case "TaskAbsentFromCurrentGraph":
+      return `Absent from current graph · ${subject}`
+    case "DeliveryStatusClosed":
+      return status.final === null
+        ? `Closed without a final value · ${subject}`
+        : `Closed with final ${status.final._tag} · ${subject}`
   }
 }
 
-/** Renders one fixed historical cursor together with a separately read passive status value. */
-export const renderTraceAtCursorWithStatus = (
-  history: TraceAtCursor,
-  status: TraceConsoleStatus
-): ReadonlyArray<string> => {
+const renderHistoricalTraceAtCursor = (history: TraceAtCursor): ReadonlyArray<string> => {
   const canonical = semanticTraceAtCursor(history)
   return [
     `Historical snapshot · Run ${canonical.cursor.runId} · through journal position ${canonical.cursor.position}`,
     ...canonical.items.map(
       ({ identity, occurrence }) =>
         `Journal position ${identity.position} · ${describeWorkflowOccurrence(occurrence).text}`
-    ),
-    `Passive current status · ${renderTraceStatus(status)}.`
+    )
   ]
 }
 
+/** Renders one fixed historical cursor together with a separately read passive status value. */
+export const renderTraceAtCursorWithStatus = (
+  history: TraceAtCursor,
+  status: CurrentDeliveryStatus
+): ReadonlyArray<string> => {
+  return [...renderHistoricalTraceAtCursor(history), `Passive current status · ${renderTraceStatus(status)}.`]
+}
+
 /** Renders one immutable committed cursor with truthful actors and no internal transcript. */
-export const renderTraceAtCursor = (history: TraceAtCursor): ReadonlyArray<string> =>
-  renderTraceAtCursorWithStatus(history, unavailableTraceStatus)
+export const renderTraceAtCursor = renderHistoricalTraceAtCursor
 
 /** Writes only the passive current-status region; it never rereads or rewrites history. */
 export const writeTraceStatus = (
   output: Pick<TraceOutput["Service"], "writeLine">,
-  status: TraceConsoleStatus
+  status: CurrentDeliveryStatus
 ): Effect.Effect<void, TraceOutputError> => output.writeLine(`Passive current status · ${renderTraceStatus(status)}.`)
 
 /** Writes one fixed historical view and its separately sourced passive status. */
 export const writeTraceAtCursorWithStatus = (
   output: Pick<TraceOutput["Service"], "writeLine">,
-  presentation: TracePresentation<TraceConsoleStatus>
+  presentation: TracePresentation<CurrentDeliveryStatus>
 ): Effect.Effect<void, TraceOutputError> =>
   Effect.forEach(renderTraceAtCursorWithStatus(presentation.history, presentation.currentStatus), output.writeLine, {
     discard: true
@@ -111,7 +113,7 @@ export const writeTraceAtCursor = (
   output: Pick<TraceOutput["Service"], "writeLine">,
   history: TraceAtCursor
 ): Effect.Effect<void, TraceOutputError> =>
-  writeTraceAtCursorWithStatus(output, makeTracePresentation(history, unavailableTraceStatus))
+  Effect.forEach(renderTraceAtCursor(history), output.writeLine, { discard: true })
 
 /** Read-only production console service: one exact cursor is read and its view is written once. */
 export interface HistoricalTraceConsoleService {
@@ -121,14 +123,14 @@ export interface HistoricalTraceConsoleService {
   /** Reads one fixed cursor and a separate current-first passive status source. */
   readonly presentAtWithStatus: (
     cursor: TraceCursor,
-    currentStatus: CurrentSignal<TraceConsoleStatus>
+    currentStatus: CurrentSignal<CurrentDeliveryStatus>
   ) => Effect.Effect<
-    TracePresentation<CurrentSignal<TraceConsoleStatus>>,
+    TracePresentation<CurrentSignal<CurrentDeliveryStatus>>,
     JournalStoreError | TraceOutputError | TraceReaderError
   >
   /** Writes a changed passive status without rereading or rewriting the selected history. */
   readonly refreshStatus: (
-    presentation: TracePresentation<CurrentSignal<TraceConsoleStatus>>
+    presentation: TracePresentation<CurrentSignal<CurrentDeliveryStatus>>
   ) => Effect.Effect<void, TraceOutputError>
 }
 
