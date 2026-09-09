@@ -12,6 +12,7 @@ import {
 } from "../../test-support/issue-274-retained-c-cassette.js"
 import { issue268ControlledDeliveryCharacterization as scenario } from "../../test-support/issue-268-controlled-characterization-catalog.js"
 import { runIssue274CrashCheckpoint } from "../../test-support/issue-268-controlled-characterization.js"
+import { requiredPlannedAttemptPositionsOf } from "../../../orchestrator/src/coordination/run/required-planned-attempt-positions.js"
 
 it.effect(
   "reopens C and resumes its original attempt only after accepted capacity three",
@@ -259,6 +260,62 @@ it.effect(
     }),
   120_000
 )
+
+for (const checkpoint of ["RedeliveryIntent", "RedeliveryHeld", "RedeliveryResponseLost"] as const) {
+  it.effect(
+    `recovers ${checkpoint} with a new projection and no new semantic Resume`,
+    () =>
+      Effect.gen(function* () {
+        const result = yield* runIssue274CrashCheckpoint(checkpoint)
+        const redelivery = result.redelivery
+        if (redelivery === undefined) return expect.fail("missing accepted redelivery crash prefix")
+        const prefixIntent = redelivery.records.findLast(
+          ({ event }) => event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended"
+        )
+        if (prefixIntent?.event._tag !== "PlannedAttemptExecutorResumeRedeliveryIntended")
+          return expect.fail("missing first redelivery intent")
+        const history = reduceWorkflowJournalHistory(scenario.runId, redelivery.records)
+        if (history._tag !== "ValidWorkflowJournalHistory") return expect.fail("redelivery cut has invalid history")
+        expect(
+          requiredPlannedAttemptPositionsOf(history.runState)
+            .map(({ attemptId }) => attemptId)
+            .toSorted()
+        ).toEqual([scenario.attempts.B1, scenario.attempts.C1, scenario.attempts.D1].toSorted())
+        expect(redelivery.commands).toEqual(
+          checkpoint === "RedeliveryResponseLost" ? [{ attemptId: scenario.attempts.C1, command: "Resume" }] : []
+        )
+        const suffix = result.after.records.slice(redelivery.records.length)
+        const projection = suffix.find(
+          ({ event }) =>
+            event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+            event.plannedAttempt.attemptId === scenario.attempts.C1
+        )
+        if (projection?.event._tag !== "PlannedAttemptExecutorCommandProjectionObserved")
+          return expect.fail("missing new command projection")
+        expect(projection.event.commandOrdinal).toBe(prefixIntent.event.commandOrdinal)
+        expect(projection.event.projectionOrdinal).toBeGreaterThan(prefixIntent.event.projectionOrdinal)
+        expect(suffix.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toEqual([])
+        const retry = suffix.filter(({ event }) => event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended")
+        expect(retry).toHaveLength(checkpoint === "RedeliveryResponseLost" ? 0 : 1)
+        const nextIntent = retry[0]
+        if (nextIntent?.event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended") {
+          expect(nextIntent.event.redeliveryOrdinal).toBe(prefixIntent.event.redeliveryOrdinal + 1)
+          expect(nextIntent.event.commandOrdinal).toBe(prefixIntent.event.commandOrdinal)
+          expect(nextIntent.event.plannedAttempt).toEqual(prefixIntent.event.plannedAttempt)
+          expect(nextIntent.event.projectionOrdinal).toBe(projection.event.projectionOrdinal)
+          expect(nextIntent.position).toBeGreaterThan(projection.position)
+        }
+        expect(result.after.commands).toEqual(
+          checkpoint === "RedeliveryResponseLost" ? [] : [{ attemptId: scenario.attempts.C1, command: "Resume" }]
+        )
+        expect(result.after.plans).toEqual([])
+        expect(result.after.claimRequests).toEqual([])
+        expect(result.after.worktreeCreateRequests).toEqual(result.before.worktreeCreateRequests)
+        expect(result.resourcesAfter).toEqual(result.resourcesBefore)
+      }),
+    120_000
+  )
+}
 
 it.effect(
   "reconciles C's lost Resume response after restart without another Begin or Resume",

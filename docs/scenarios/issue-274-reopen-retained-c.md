@@ -94,6 +94,14 @@ append hands the same reserved position to command-delivery responsibility
 before the executor call; a restarted process reconstructs that responsibility
 from the Journal. Another crash after this intent requires a newer executor
 projection before any further redelivery, never reuse of the consumed proof.
+The controlled coordinator also stops immediately after this redelivery-intent
+append and, separately, after the exact position handoff but before the executor
+call. Both restarts recover B/C/D occupancy and obtain a newer Safe projection
+before a second redelivery intent with the next redelivery ordinal. A third cut
+lets the retry take effect but loses its response: recovery sees Executing and
+settles the original command without another executor call. Each activation
+allocates new observation identities; the attempt, planned worktree, Base SHA,
+and semantic Resume ordinal remain unchanged across all three processes.
 A separate qualified execution lets C's executor
 apply Resume and retain its Executing projection, then cuts the coordinator
 before the response returns. Recovery reads that same executor correlation and
@@ -127,6 +135,7 @@ Resume boundary. B/D remain the only owners of task-work positions.
 | G4 cannot clear an independent Pause, even after capacity increases | `preserves Alice's independently applied Pause when G4 reopens C even at capacity three` |
 | Executor applies Resume but its response is lost | `issue-274-lifecycle-resume.test.ts`: `reconciles C's lost Resume response after restart without another Begin or Resume` |
 | Crash before the initial Resume call; Safe reconciliation permits only same-ordinal redelivery | `issue-274-lifecycle-resume.test.ts`: `recovers the real ResumeIntent crash before resuming exactly retained C1`; pure `resume-redelivery-authorization.test.ts` rejects consumed/swapped/foreign or superseded proofs; controller exact receipt test retains one position across append publication and rejects a settled lease |
+| Crash after redelivery intent, after Held handoff, or after retry effect before response | `issue-274-lifecycle-resume.test.ts`: `recovers RedeliveryIntent with a new projection and no new semantic Resume`, `recovers RedeliveryHeld with a new projection and no new semantic Resume`, and `recovers RedeliveryResponseLost with a new projection and no new semantic Resume`; each validates B/C/D reconstructed positions and unchanged resources |
 | Invalid/superseded authority cannot contact Resume | `delivery-proposal-routes.test.ts`: `never contacts Resume for invalid or superseded continuation authority` |
 | Pending/unreadable tracker facts must be reread | `recovery-activation.test.ts`: `recovers each later pending or unreadable tracker read before proposing Resume` |
 | Uninterrupted DS-01–22 composition and passive presentation | Deferred to #279; these controlled recovery slices make no such claim |

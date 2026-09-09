@@ -76,7 +76,7 @@ import {
   type RunReactivationOwnerOptions,
   type TraceItem
 } from "@dalph/orchestrator"
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Ref, Scope, Stream } from "effect"
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Ref, Scope, Stream } from "effect"
 import { issue268ControlledDeliveryCharacterization as scenario } from "./issue-268-controlled-characterization-catalog.js"
 import type {
   Issue268Ds03BoundarySnapshot,
@@ -266,6 +266,7 @@ interface Issue268StartupCharacterizationOptions {
   readonly retainedResume?: {
     readonly activation: string
     readonly beforeAction?: (action: MaterializedDeliveryAction) => Effect.Effect<void>
+    readonly afterCommandDeliveryHandoff?: Deferred.Deferred<void>
     readonly loseResponse?: Deferred.Deferred<void>
     readonly projectedReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>
     readonly publications: Queue.Queue<DeliveryRelationInputBundle>
@@ -1287,7 +1288,27 @@ const runIssue268StartupCharacterizationFor = (
                 if (options.retainedResume?.beforeAction !== undefined) {
                   yield* options.retainedResume.beforeAction(action)
                 }
-                const result = yield* live.execute(action, lease)
+                const handoffCut = options.retainedResume?.afterCommandDeliveryHandoff
+                const result = yield* live.execute(
+                  action,
+                  handoffCut === undefined
+                    ? lease
+                    : {
+                        ...lease,
+                        bindPlannedAttemptPosition: (plannedAttempt, responsibility, delivery) =>
+                          lease
+                            .bindPlannedAttemptPosition(plannedAttempt, responsibility, delivery)
+                            .pipe(
+                              Effect.andThen(
+                                delivery?.delivery._tag === "ResumeRedelivery"
+                                  ? Deferred.succeed(handoffCut, undefined).pipe(
+                                      Effect.andThen(Effect.never.pipe(Effect.interruptible))
+                                    )
+                                  : Effect.void
+                              )
+                            )
+                      }
+                )
                 yield* recordOccurrence({ detail: actionDetail, kind: "DeliveryActionReturned", source: "Action" })
                 return result
               })
@@ -2630,7 +2651,8 @@ const startRetainedC = Effect.fn("Issue274.startRetainedC")(function* (
   outerScope: Scope.Scope,
   activation: string,
   loseResponse?: Deferred.Deferred<void>,
-  beforeAction?: (action: MaterializedDeliveryAction) => Effect.Effect<void>
+  beforeAction?: (action: MaterializedDeliveryAction) => Effect.Effect<void>,
+  afterCommandDeliveryHandoff?: Deferred.Deferred<void>
 ) {
   const publications = yield* Queue.unbounded<DeliveryRelationInputBundle>()
   const ready = yield* Deferred.make<{
@@ -2646,22 +2668,32 @@ const startRetainedC = Effect.fn("Issue274.startRetainedC")(function* (
       publications,
       ready,
       ...(beforeAction === undefined ? {} : { beforeAction }),
+      ...(afterCommandDeliveryHandoff === undefined ? {} : { afterCommandDeliveryHandoff }),
       ...(loseResponse === undefined ? {} : { loseResponse })
     },
     sharedAuthorities,
     sharedScope: outerScope
   }).pipe(Effect.provideService(Scope.Scope, scope), Effect.forkIn(scope))
-  const controls = yield* Deferred.await(ready)
+  const processStopped = Fiber.await(process).pipe(
+    Effect.flatMap((exit) =>
+      Effect.die(
+        `retained C activation ${activation} stopped before its checkpoint: ${Exit.isFailure(exit) ? Cause.pretty(exit.cause) : "Succeeded"}`
+      )
+    )
+  )
+  const controls = yield* Deferred.await(ready).pipe(Effect.raceFirst(processStopped))
   const awaitPublication = (
     predicate: (bundle: DeliveryRelationInputBundle) => boolean
   ): Effect.Effect<DeliveryRelationInputBundle> =>
     Queue.take(publications).pipe(
+      Effect.raceFirst(processStopped),
       Effect.flatMap((bundle) => (predicate(bundle) ? Effect.succeed(bundle) : awaitPublication(predicate)))
     )
   const awaitSnapshot = (
     predicate: (snapshot: Issue268Ds03BoundarySnapshot) => boolean
   ): Effect.Effect<Issue268Ds03BoundarySnapshot> =>
     Queue.take(publications).pipe(
+      Effect.raceFirst(processStopped),
       Effect.andThen(controls.snapshot().pipe(Effect.orDie)),
       Effect.flatMap((snapshot) => {
         return predicate(snapshot) ? Effect.succeed(snapshot) : awaitSnapshot(predicate)
@@ -2782,6 +2814,9 @@ type Issue274CrashCheckpoint =
   | "Lineage"
   | "Authorization"
   | "ResumeIntent"
+  | "RedeliveryIntent"
+  | "RedeliveryHeld"
+  | "RedeliveryResponseLost"
   | "Pause"
 
 const matchesRetainedCJournalCut = (
@@ -2819,7 +2854,10 @@ const matchesRetainedCJournalCut = (
       return checkpoint === "Authorization" && event.plannedAttempt.attemptId === scenario.attempts.C1
     case "PlannedAttemptExecutorCommandIntended":
       return (
-        checkpoint === "ResumeIntent" &&
+        (checkpoint === "ResumeIntent" ||
+          checkpoint === "RedeliveryIntent" ||
+          checkpoint === "RedeliveryHeld" ||
+          checkpoint === "RedeliveryResponseLost") &&
         event.plannedAttempt.attemptId === scenario.attempts.C1 &&
         event.command === "Resume"
       )
@@ -2900,6 +2938,49 @@ const continueRetainedCThroughCrash = Effect.fn("Issue274.continueRetainedCThrou
   }
   const before = yield* first.snapshot().pipe(Effect.orDie)
   yield* first.stop
+  if (checkpoint === "RedeliveryIntent" || checkpoint === "RedeliveryHeld" || checkpoint === "RedeliveryResponseLost") {
+    const retryCut = yield* Deferred.make<void>()
+    const retryJournal = JournalStore.of({
+      ...sharedAuthorities.journal,
+      append: (runId, key, event) =>
+        sharedAuthorities.journal
+          .append(runId, key, event)
+          .pipe(
+            Effect.tap(() =>
+              checkpoint === "RedeliveryIntent" && event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended"
+                ? Deferred.succeed(retryCut, undefined).pipe(Effect.andThen(Effect.never.pipe(Effect.interruptible)))
+                : Effect.void
+            )
+          )
+    })
+    const retry = yield* startRetainedC(
+      { ...sharedAuthorities, journal: retryJournal },
+      projectedReports,
+      outerScope,
+      `RedeliverCut:${checkpoint}`,
+      checkpoint === "RedeliveryResponseLost" ? retryCut : undefined,
+      undefined,
+      checkpoint === "RedeliveryHeld" ? retryCut : undefined
+    )
+    yield* Deferred.await(retryCut)
+    const redelivery = yield* retry.snapshot().pipe(Effect.orDie)
+    yield* retry.stop
+    const recovered = yield* startRetainedC(sharedAuthorities, projectedReports, outerScope, `Recover:${checkpoint}`)
+    const after = yield* recovered.awaitSnapshot(cExecutingSince(redelivery.records.length))
+    yield* recovered.stop
+    const resourcesAfter = yield* readRetainedCResources(sharedAuthorities)
+    return {
+      after,
+      before,
+      cut,
+      redelivery,
+      reopened: undefined,
+      retained,
+      waiting: undefined,
+      resourcesBefore,
+      resourcesAfter
+    }
+  }
   const second = yield* startRetainedC(sharedAuthorities, projectedReports, outerScope, `Recover:${checkpoint}`)
   const reopened = checkpoint === "G4" ? yield* second.awaitPublication(cRevalidationProposed) : undefined
   const waiting = checkpoint === "G4" ? yield* second.snapshot().pipe(Effect.orDie) : undefined
@@ -2923,7 +3004,7 @@ const continueRetainedCThroughCrash = Effect.fn("Issue274.continueRetainedCThrou
       : yield* second.awaitSnapshot(cExecutingSince(before.records.length))
   yield* second.stop
   const resourcesAfter = yield* readRetainedCResources(sharedAuthorities)
-  return { after, before, cut, reopened, retained, waiting, resourcesBefore, resourcesAfter }
+  return { after, before, cut, redelivery: undefined, reopened, retained, waiting, resourcesBefore, resourcesAfter }
 })
 
 export const runIssue274CrashCheckpoint = (checkpoint: Issue274CrashCheckpoint) =>
