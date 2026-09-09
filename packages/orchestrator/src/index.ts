@@ -891,8 +891,6 @@ export {
   frontierOf,
   ticketDeliveriesOf
 } from "./coordination/delivery/ticket-delivery-projection.js"
-export { makeTestJournaledTrackerGraphObservation } from "../test/journaled-graph-observation.js"
-export { makeFreshTaskAdmissionTestBasis } from "../test/support/fresh-task-admission.js"
 export {
   DeliveryActionCompletionPublicationMismatch,
   DeliveryRuntimeAdmissionProgressContradiction,

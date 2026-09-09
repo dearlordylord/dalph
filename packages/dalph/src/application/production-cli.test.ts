@@ -89,8 +89,6 @@ import {
   WorkflowResponsibilityEntry,
   makeDeliverySettlement,
   makeDeliveryReflection,
-  makeTestJournaledTrackerGraphObservation,
-  makeFreshTaskAdmissionTestBasis,
   boundedParallelTicketsOf,
   deliverySettlementsOf,
   frontierOf,
@@ -106,6 +104,8 @@ import {
   traceControlDispositionFacetVersion,
   traceReaderSchemaVersion
 } from "@dalph/orchestrator"
+import { makeTestJournaledTrackerGraphObservation } from "../../../orchestrator/test/journaled-graph-observation.js"
+import { makeFreshTaskAdmissionTestBasis } from "../../../orchestrator/test/support/fresh-task-admission.js"
 import {
   ConfigProvider,
   Console,
