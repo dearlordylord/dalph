@@ -91,7 +91,7 @@ const onMessage = (message) => {
       id: "fixture-turn",
       status: "completed",
       items: [
-        { type: "userMessage", content: [{ type: "input_text", text: inputText }] },
+        { type: "userMessage", content: [{ type: "text", text: inputText }] },
         { type: "agentMessage", text: "fixture <!-- dalph-owned-turn-token:v1:agent-prose -->" }
       ]
     }

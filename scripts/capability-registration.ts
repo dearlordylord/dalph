@@ -22,7 +22,7 @@ type CapabilityFamily =
   | "integrator-predecessor-candidate-cleanup"
   | "coordinator-ownership"
 
-type CapabilityRole = "controlled" | "production"
+type CapabilityRole = "controlled" | "production" | "qualification"
 
 interface ContractExecution {
   readonly role: CapabilityRole
@@ -102,12 +102,55 @@ interface CapabilityRegistration {
   readonly contract: ContractEvidence
   readonly controlled: RegisteredImplementation | NotApplicableImplementation
   readonly production: RegisteredImplementation | NotApplicableImplementation
+  /** Additional repository-owned implementation assembled only by a qualification host. */
+  readonly qualification?: RegisteredImplementation
 }
 
 interface CompositionSource {
   readonly role: CapabilityRole
   readonly source: string
 }
+
+/**
+ * Closed set of source/role pairs allowed to prove that an implementation is
+ * assembled. Composition sources outside this set are still exhaustively
+ * audited for the roles they consume, but cannot stand in for runtime wiring.
+ */
+const implementationCompositionEvidenceSources = [
+  { role: "controlled", source: "packages/orchestrator/src/workflow-journal/store.test.ts" },
+  { role: "production", source: "packages/dalph/src/application/production.ts" },
+  { role: "qualification", source: "packages/dalph/bin/codex-qualification-host.ts" },
+  { role: "controlled", source: "packages/dalph/src/application/dry-run.ts" },
+  { role: "production", source: "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts" },
+  { role: "controlled", source: "packages/orchestrator/src/workflow/interpretation/layers.ts" },
+  { role: "production", source: "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts" },
+  {
+    role: "controlled",
+    source: "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.test.ts"
+  },
+  { role: "controlled", source: "packages/orchestrator/src/authorities/git/worktree.test.ts" },
+  { role: "controlled", source: "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts" },
+  {
+    role: "controlled",
+    source: "packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts"
+  },
+  { role: "controlled", source: "packages/dalph/src/application/composition.ts" },
+  { role: "production", source: "packages/dalph/src/application/codex-planned-attempt-executor.ts" },
+  { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts" },
+  { role: "production", source: "packages/dalph/src/application/production-host.ts" },
+  { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts" },
+  { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.test.ts" },
+  { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/branch.test.ts" },
+  {
+    role: "controlled",
+    source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/integrator-candidate.test.ts"
+  },
+  { role: "controlled", source: "packages/orchestrator/src/authorities/coordinator-ownership/ownership.test.ts" },
+  { role: "production", source: "packages/orchestrator/src/authorities/coordinator-ownership/live-task-work-start.ts" }
+] as const satisfies ReadonlyArray<CompositionSource>
+
+export const implementationCompositionEvidenceIsEligible = (role: CapabilityRole, source: string): boolean =>
+  implementationCompositionEvidenceSources.some((candidate) => candidate.role === role && candidate.source === source)
 
 /**
  * A production composition may contain layers that are not one of #79's
@@ -169,6 +212,14 @@ const support = (identity: string, reason: string, source: string): CompositionS
 
 const controlledComposition = composed
 
+const implementationRoles = (capability: CapabilityRegistration) => [
+  { entry: capability.controlled, role: "controlled" as const },
+  { entry: capability.production, role: "production" as const },
+  ...(capability.qualification === undefined
+    ? []
+    : [{ entry: capability.qualification, role: "qualification" as const }])
+]
+
 /**
  * The acceptance issue is the authority for this family set. Keeping the
  * required set separate from the records makes deleting one record a real
@@ -222,6 +273,22 @@ const journalContract = contract("JournalStore", [
       "productionJournalStoreLayer",
       "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts",
       "productionJournalStoreLayer",
+      { _tag: "Argument", index: 1 }
+    )
+  },
+  {
+    invocation: {
+      marker: "journalAppendContract(",
+      selector: { _tag: "StringArgument", index: 0, value: "sqlite-qualification" },
+      source: "packages/orchestrator/src/workflow-journal/store.test.ts"
+    },
+    marker: "journalAppendContract",
+    role: "qualification",
+    source: "packages/orchestrator/src/workflow-journal/store.test.ts",
+    implementation: implementationBinding(
+      "sqliteJournalTestLayer",
+      "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts",
+      "sqliteJournalTestLayer",
       { _tag: "Argument", index: 1 }
     )
   }
@@ -537,6 +604,22 @@ const integratorContract = contract("Integrator", [
       "controlledIntegratorContractService",
       { _tag: "ObjectProperty", property: "layer" }
     )
+  },
+  {
+    invocation: {
+      marker: "integratorContract(",
+      selector: { _tag: "ObjectProperty", property: "name", value: "node" },
+      source: "packages/dalph/src/application/codex-integrator.test.ts"
+    },
+    marker: "integratorContract",
+    role: "production",
+    source: "packages/orchestrator/test/contracts/integrator-contract.ts",
+    implementation: implementationBinding(
+      "nodeCodexIntegratorLayer",
+      "packages/dalph/src/application/codex-integrator.ts",
+      "nodeCodexIntegratorLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   }
 ])
 
@@ -672,6 +755,12 @@ export const capabilityRegistrationInventory = {
         "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts",
         "productionJournalStoreLayer",
         composed("packages/dalph/src/application/production.ts", "productionJournalStoreLayer")
+      ),
+      qualification: implementation(
+        "sqliteJournalTestLayer",
+        "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts",
+        "sqliteJournalTestLayer",
+        composed("packages/dalph/bin/codex-qualification-host.ts", "sqliteJournalTestLayer")
       )
     },
     {
@@ -868,9 +957,11 @@ export const capabilityRegistrationInventory = {
       ),
       contract: integratorContract,
       family: "outer-integrator",
-      production: notApplicable(
-        "no-repository-provider",
-        "production activation accepts an outer Integrator service from its host; no repository-owned production Integrator provider is assembled"
+      production: implementation(
+        "nodeCodexIntegratorLayer",
+        "packages/dalph/src/application/codex-integrator.ts",
+        "nodeCodexIntegratorLayer",
+        composed("packages/dalph/src/application/production-host.ts", "nodeCodexIntegratorLayer")
       )
     },
     {
@@ -890,7 +981,7 @@ export const capabilityRegistrationInventory = {
         "nodeEvidenceStoreLayer",
         "packages/orchestrator/src/workflow/protocols/evidence-store.ts",
         "nodeEvidenceStoreLayer",
-        composed("packages/dalph/bin/codex-qualification-host.ts", "nodeEvidenceStoreLayer")
+        composed("packages/dalph/src/application/production-host.ts", "nodeEvidenceStoreLayer")
       )
     },
     {
@@ -996,9 +1087,38 @@ export const capabilityRegistrationInventory = {
     }
   ],
   compositionSources: [
+    { role: "controlled", source: "packages/orchestrator/src/workflow-journal/store.test.ts" },
+    { role: "production", source: "packages/orchestrator/src/workflow-journal/store.test.ts" },
+    { role: "qualification", source: "packages/orchestrator/src/workflow-journal/store.test.ts" },
+    { role: "production", source: "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/workflow/interpretation/layers.ts" },
+    {
+      role: "controlled",
+      source: "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.test.ts"
+    },
+    { role: "controlled", source: "packages/orchestrator/src/authorities/git/worktree.test.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts" },
+    { role: "production", source: "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts" },
+    {
+      role: "controlled",
+      source: "packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts"
+    },
+    { role: "production", source: "packages/dalph/src/application/codex-planned-attempt-executor.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts" },
+    { role: "production", source: "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.test.ts" },
+    { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/branch.test.ts" },
+    {
+      role: "controlled",
+      source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/integrator-candidate.test.ts"
+    },
+    { role: "controlled", source: "packages/orchestrator/src/authorities/coordinator-ownership/ownership.test.ts" },
+    { role: "production", source: "packages/orchestrator/src/authorities/coordinator-ownership/ownership.test.ts" },
     { role: "production", source: "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts" },
     { role: "production", source: "packages/dalph/src/application/production.ts" },
-    { role: "production", source: "packages/dalph/bin/codex-qualification-host.ts" },
+    { role: "production", source: "packages/dalph/src/application/production-host.ts" },
+    { role: "qualification", source: "packages/dalph/bin/codex-qualification-host.ts" },
     {
       role: "production",
       source: "packages/orchestrator/src/authorities/coordinator-ownership/live-task-work-start.ts"
@@ -1032,6 +1152,11 @@ export const capabilityRegistrationInventory = {
       "attemptChoiceControlWithProvidedProtocolLayer",
       "operator-control protocol support sharing the process-scoped exact-attempt controller",
       "packages/orchestrator/src/workflow/protocols/attempt-choice/control.ts"
+    ),
+    support(
+      "plannedAttemptProtocolControllerLayer",
+      "process-scoped exact-attempt protocol coordination shared by operator control and executor commands",
+      "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.ts"
     ),
     support(
       "coordinatorOwnershipLayer",
@@ -1100,6 +1225,11 @@ export const capabilityRegistrationInventory = {
       "GitHub transport support behind the registered tracker provider",
       "packages/orchestrator/src/authorities/task-tracker/github/graphql-client.ts"
     ),
+    support(
+      "githubGraphqlClientLayer",
+      "configured GitHub transport beneath the registered tracker authority assembly",
+      "packages/orchestrator/src/authorities/task-tracker/github/graphql-client.ts"
+    ),
     support("journalLayer", "journaled application runtime support", "packages/dalph/src/application/production.ts"),
     support(
       "journaledRunBootstrapLayer",
@@ -1122,6 +1252,16 @@ export const capabilityRegistrationInventory = {
       "packages/dalph/src/application/codex-process-native.ts"
     ),
     support(
+      "nodeCodexOwnedActivityCensusLayer",
+      "execution-substrate observation support shared by the registered Codex executor and Integrator",
+      "packages/dalph/src/application/codex-app-server.ts"
+    ),
+    support(
+      "nodeCoordinatorLockAdapterLayer",
+      "node lock mechanism beneath the registered coordinator-ownership capability",
+      "packages/orchestrator/src/authorities/coordinator-ownership/node-lock.ts"
+    ),
+    support(
       "nodeGitCommandLayer",
       "shared Git command dependency of registered Git boundaries",
       "packages/orchestrator/src/authorities/git/command.ts"
@@ -1140,6 +1280,11 @@ export const capabilityRegistrationInventory = {
       "productionRunReactivationLayer",
       "application lifecycle composition",
       "packages/dalph/src/application/production.ts"
+    ),
+    support(
+      "productionPlannedTaskAttemptLayer",
+      "production task-attempt planning support",
+      "packages/dalph/src/application/production-configuration.ts"
     ),
     support(
       "productionCoordinatorOwnershipLayer",
@@ -1162,6 +1307,11 @@ export const capabilityRegistrationInventory = {
       "packages/orchestrator/src/workflow/protocols/task-claim-reacquisition/control.ts"
     ),
     support(
+      "taskClaimAcquisitionPlannerLayer",
+      "task-claim acquisition planning support",
+      "packages/orchestrator/src/workflow/protocols/task-claim-acquisition/plan.ts"
+    ),
+    support(
       "taskWorkCapacityControlLayer",
       "task-work capacity protocol support",
       "packages/orchestrator/src/control/task-work-capacity.ts"
@@ -1170,6 +1320,11 @@ export const capabilityRegistrationInventory = {
       "traceOutputStdioLayer",
       "dry-run trace output support",
       "packages/dalph/src/presentation/stdio-trace-output.ts"
+    ),
+    support(
+      "TraceReaderLayer",
+      "workflow-journal presentation support",
+      "packages/orchestrator/src/presentation/trace-reader.ts"
     ),
     support(
       "unpublishedInRunJournalTestLayer",
@@ -1234,10 +1389,9 @@ export const capabilityRegistrationIssues = (
       issues.push(`duplicate capability family ${family}`)
   }
   for (const capability of inventory.capabilities) {
-    for (const side of ["controlled", "production"] as const) {
-      const entry = capability[side]
+    for (const { entry, role } of implementationRoles(capability)) {
       if (entry._tag === "NotApplicable") {
-        if (entry.detail.trim() === "") issues.push(`${capability.family} ${side} has an empty not-applicable reason`)
+        if (entry.detail.trim() === "") issues.push(`${capability.family} ${role} has an empty not-applicable reason`)
         continue
       }
       const identityKey = `${capability.family}:${entry.identity}`
@@ -1260,10 +1414,12 @@ export const capabilityRegistrationIssues = (
     }
     const executions = capability.contract.executions
     const presentRoles = new Set(
-      executions.filter(({ role }) => capability[role]._tag === "Implementation").map(({ role }) => role)
+      executions
+        .filter(({ role }) => implementationRoles(capability).some((candidate) => candidate.role === role))
+        .map(({ role }) => role)
     )
-    for (const role of ["controlled", "production"] as const) {
-      if (capability[role]._tag === "Implementation" && !presentRoles.has(role)) {
+    for (const { entry, role } of implementationRoles(capability)) {
+      if (entry._tag === "Implementation" && !presentRoles.has(role)) {
         issues.push(`${capability.family} ${role} has no shared contract execution`)
       }
     }

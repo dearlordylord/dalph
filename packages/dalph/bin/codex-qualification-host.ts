@@ -30,7 +30,20 @@ import {
   EvidenceStoreLocator,
   makeApplicationExitShell,
   nodeEvidenceStoreLayer,
-  nodeGitCommandLayer
+  nodeGitCommandLayer,
+  beginPlannedAttemptExecutorWork,
+  plannedAttemptProtocolControllerLayer,
+  sqliteJournalTestLayer,
+  JournalDatabaseLocator,
+  JournalStore,
+  OperationId,
+  FixtureTarget,
+  makeTaskWorkSpecificationObservationOperation,
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerReadIntent,
+  taskTrackerFactsObservedEvent,
+  intentRecordKey,
+  outcomeRecordKey
 } from "@dalph/orchestrator"
 import { Cause, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import {
@@ -71,7 +84,7 @@ class QualificationConfigurationFailure extends Schema.TaggedError<Qualification
 ) {}
 
 const usage =
-  "dalph-codex-qualification-host <allocate|associate|association-cut|pre-thread-cut|create|resume|project|read|suspend|interrupt|settle|exercise-suspension|exercise-terminal-suspension|exit|exit-stuck|close|wait>; requires qualification paths, base SHA, and CODEX_HOME"
+  "dalph-codex-qualification-host <allocate|associate|association-cut|workflow-association-cut|workflow-begin|pre-thread-cut|create|resume|project|read|suspend|interrupt|settle|exercise-suspension|exercise-terminal-suspension|exit|exit-stuck|close|wait>; requires qualification paths, base SHA, and CODEX_HOME"
 
 const envValue = (name: string): string | undefined => nodeProcess.env[name]
 
@@ -211,14 +224,23 @@ const configurationProgram = Effect.gen(function* () {
       const exitLayer = Layer.succeed(ApplicationExitShell, applicationExit)
       const durableStoreLayer = nodeCodexAttemptStoreLayer({ stateDirectory: configuration.stateDirectory })
       const storeLayer =
-        configuration.action === "association-cut"
+        configuration.action === "association-cut" || configuration.action === "workflow-association-cut"
           ? Layer.effect(
               CodexAttemptStore,
               Effect.map(CodexAttemptStore, (durable) => ({
                 ...durable,
                 writeAttempt: (record: CodexAttemptRecord) =>
                   record._tag === "AssociatedPreTurn"
-                    ? writeEvent({ event: "association-write-started" }).pipe(Effect.andThen(Effect.never))
+                    ? (configuration.action === "workflow-association-cut"
+                        ? durable
+                            .writeAttempt(record)
+                            .pipe(
+                              Effect.andThen(
+                                writeEvent({ event: "associated", threadMaterialized: true, worktree: record.worktree })
+                              )
+                            )
+                        : writeEvent({ event: "association-write-started" })
+                      ).pipe(Effect.andThen(Effect.never))
                     : durable.writeAttempt(record)
               }))
             ).pipe(Layer.provide(durableStoreLayer))
@@ -244,7 +266,54 @@ const configurationProgram = Effect.gen(function* () {
 
         if (configuration.action === "wait" || configuration.action === "pre-thread-cut") return yield* Effect.never
 
-        if (configuration.action === "allocate") {
+        if (configuration.action === "workflow-association-cut" || configuration.action === "workflow-begin") {
+          yield* Effect.gen(function* () {
+            const journal = yield* JournalStore
+            const records = yield* journal.read(attempt.runId)
+            if (records.length === 0) {
+              const read = makeTaskWorkSpecificationObservationOperation(
+                OperationId.make("qualification-original-specification"),
+                FixtureTarget.make("qualification"),
+                attempt.taskId,
+                []
+              )
+              yield* journal.append(attempt.runId, intentRecordKey(read.operationId), taskTrackerReadIntent(read))
+              yield* journal.append(
+                attempt.runId,
+                outcomeRecordKey(read.operationId),
+                taskTrackerFactsObservedEvent(
+                  read.operationId,
+                  makeFocusedTaskWorkSpecificationFactsObserved(read, specification)
+                )
+              )
+            }
+            yield* writeEvent(reportEvent("Begin", yield* beginPlannedAttemptExecutorWork(attempt)))
+            const after = yield* journal.read(attempt.runId)
+            const intents = after.flatMap(({ event }) =>
+              event._tag === "PlannedAttemptExecutorCommandIntended" ? [event] : []
+            )
+            const firstIntent = yield* Effect.fromNullishOr(intents[0]).pipe(Effect.orDie)
+            yield* writeEvent({
+              event: "begin-journal",
+              beginIntents: intents.length,
+              beginOrdinal: firstIntent.ordinal,
+              beginResponses: after.filter(
+                ({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved"
+              ).length
+            })
+          }).pipe(
+            Effect.provide(
+              Layer.merge(
+                plannedAttemptProtocolControllerLayer,
+                sqliteJournalTestLayer({
+                  filename: JournalDatabaseLocator.make(
+                    nodePath.join(configuration.stateDirectory, "qualification-journal.sqlite")
+                  )
+                })
+              )
+            )
+          )
+        } else if (configuration.action === "allocate") {
           const thread = yield* app.startThread(configuration.worktree)
           yield* writeEvent({ event: "allocated", threadMaterialized: true, worktree: thread.cwd })
         } else if (configuration.action === "associate") {
