@@ -5,6 +5,7 @@ import { type Effect, Runtime } from "effect"
 const runMainWithoutSignalInterruption = Runtime.makeRunMain(({ fiber, teardown }) => {
   fiber.addObserver((exit) => {
     teardown(exit, (status) => {
+      // eslint-disable-next-line functional/immutable-data -- Node's process exitCode is the host-visible result channel.
       nodeProcess.exitCode = status
     })
   })
