@@ -382,6 +382,38 @@ newly allocated identity as a continuation of R.
   `terminatedRunIsFinal` must reject a mutant that appends or activates after
   termination.
 
+## Alice observes only acknowledged journal history
+
+This qualification preserves the [accepted #259 host-observation clarification](https://github.com/dearlordylord/dalph/issues/259).
+Alice's host has established exact Run R from a valid beginning at position 1.
+There are no task claims, Git worktrees, or executor sessions in this fixture:
+it isolates the journal acknowledgement boundary before any provider call.
+Alice attaches to the host's current-first accepted-history source and sees R
+at position 1.
+
+An ordinary in-Run journal append stores a tracker-read intent at position 2,
+but storage holds its acknowledgement. Alice must still see position 1.
+Releasing that acknowledgement publishes position 2 exactly once. Storage then
+holds the acknowledgement for position 3; Alice still sees position 2 until
+that acknowledgement is released. A later append is acknowledged at position 4.
+Alice sees position 4. Repeating the exact position-4 append,
+receiving the older position-3 acknowledgement again, and repeating the position-2
+append must neither regress nor republish Alice's cursor. A final acknowledged
+position 5 lets the test consume all preceding publications deterministically;
+the changes are exactly 2, 3, 4, 5 and storage contains exactly five rows.
+
+No process crash is injected in this qualification: it proves the live held
+acknowledgement and exact-append redelivery boundaries. Process loss and restart
+retain the accepted #259 clarification's ordinary prefix-validation protocol.
+No tracker request is issued merely to observe history, and the cursor does
+not prove a tracker result or Run/application disposition.
+
+Acceptance mapping: `Alice receives accepted history only after append acknowledgement and never receives duplicate or older cursors`
+in `journaled-run-bootstrap.test.ts` runs the real bootstrap and its
+`InRunJournal` wrapper over controlled journal storage, with Deferred gates
+after storage accepts each held append. This adds test evidence only and
+changes no Dalph runtime behavior.
+
 ## Scenario-to-test handoff contract
 
 The implementation handoff must report every scenario above against its named
