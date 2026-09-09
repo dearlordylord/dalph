@@ -29,7 +29,12 @@ import {
   taskOrderOrConflictFor,
   type OrderedStatusEntry
 } from "./delivery-status-support.js"
-import { deliveryTaskPositionAt, taskOrderAt, type StatusTaskOrder } from "./delivery-status-order.js"
+import {
+  deliveryTaskPositionAt,
+  historicalProposalTaskOrder,
+  taskOrderAt,
+  type StatusTaskOrder
+} from "./delivery-status-order.js"
 import { dependencyEntriesFor, trackerAndEvidenceEntriesFor } from "./delivery-status-entry-builders.js"
 
 const addProposedDeliveryEntriesFor = (
@@ -66,11 +71,14 @@ const addLiveOwnerEntryFor = (
   owner: DeliveryRuntimeLiveOwnerSnapshot,
   entries: Array<OrderedStatusEntry>,
   taskOrders: ReadonlyMap<TaskId, StatusTaskOrder>
-): DeliveryStatusProjectionConflict | null => {
+): void => {
   const taskId = deliveryProposalOrderTaskId(owner.proposal.order)
-  if (!includeForSubject(subject, taskId)) return null
-  const ownerTaskOrder = taskId === null ? runWideTaskOrder : taskOrderOrConflictFor(subject, taskOrders, taskId)
-  if (ownerTaskOrder instanceof DeliveryStatusProjectionConflict) return ownerTaskOrder
+  if (!includeForSubject(subject, taskId)) return
+  const currentTaskOrder = taskId === null ? runWideTaskOrder : taskOrderOrConflictFor(subject, taskOrders, taskId)
+  const ownerTaskOrder =
+    currentTaskOrder instanceof DeliveryStatusProjectionConflict
+      ? historicalProposalTaskOrder(owner.proposal.order)
+      : currentTaskOrder
   const entrySubject = taskId === null ? subject : taskStatusSubject(subject, taskId)
   const entry: DeliveryStatusEntry = ownerIsSettled(owner)
     ? {
@@ -82,7 +90,6 @@ const addLiveOwnerEntryFor = (
       }
     : { _tag: "LiveDeliveryAction", classification: "Progressing", subject: entrySubject, owner }
   addEntry(entries, entry, ownerTaskOrder)
-  return null
 }
 
 const actionEntriesFor = (
@@ -101,8 +108,7 @@ const actionEntriesFor = (
   )
   if (proposedConflict !== null) return proposedConflict
   for (const owner of liveOwners) {
-    const ownerConflict = addLiveOwnerEntryFor(subject, evaluation, owner, entries, taskOrders)
-    if (ownerConflict !== null) return ownerConflict
+    addLiveOwnerEntryFor(subject, evaluation, owner, entries, taskOrders)
   }
   return null
 }

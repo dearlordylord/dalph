@@ -1014,7 +1014,7 @@ const restartHostProcesses = Effect.scoped(
   }).pipe(Effect.provide(Layer.mergeAll(NodeFileSystem.layer, NodePath.layer, NodeServices.layer, NodeCrypto.layer)))
 )
 
-it.effect("unfinished SQLite restart selects the same Run and skips replacement initial policy", () =>
+it.effect("unfinished SQLite public restart reports the same recovered Run and no second beginning", () =>
   restartHostProcesses.pipe(
     Effect.map(({ first, records, second, seededRunId }) => {
       const firstCompleted = eventsWithTag(first, "HostCompleted")[0]
@@ -1045,7 +1045,46 @@ it.effect("unfinished SQLite restart selects the same Run and skips replacement 
   )
 )
 
-it.effect("restarted production host reconstructs the active claim before its first GitHub task-claim read", () =>
+it.effect(
+  "recovered CLI status uses the new process-local source and never reconstructs a live owner from history",
+  () =>
+    restartHostProcesses.pipe(
+      Effect.map(({ first, input, second }) => {
+        const processIds = [first, second].map((events) => {
+          const publicRecords = eventsWithTag(events, "PublicRecoveryStatusObserved")
+          const selected = publicRecords.find(({ record }) => record._tag === "RunSelected")
+          const status = publicRecords.find(({ record }) => record._tag === "CurrentStatus")
+          const history = publicRecords.find(({ record }) => record._tag === "HistoricalSnapshot")
+          expect(selected?.record).toEqual({
+            _tag: "RunSelected",
+            runId: input.runId,
+            selection: "Recovered",
+            version: 1
+          })
+          expect(status?.record).toMatchObject({
+            _tag: "CurrentStatus",
+            status: { subject: { _tag: "Run", runId: input.runId } },
+            version: 1
+          })
+          expect(history?.record).toMatchObject({
+            _tag: "HistoricalSnapshot",
+            snapshot: { cursor: { position: 5, runId: input.runId } },
+            version: 1
+          })
+          if (status?.record._tag !== "CurrentStatus") return undefined
+          expect(status.record.status).toEqual({
+            _tag: "DeliveryStatusNotReady",
+            subject: { _tag: "Run", runId: input.runId }
+          })
+          return status.pid
+        })
+        expect(processIds).toHaveLength(2)
+        expect(processIds[0]).not.toBe(processIds[1])
+      })
+    )
+)
+
+it.effect("public restart reconciles an acknowledged boundary intent before any duplicate request", () =>
   restartHostProcesses.pipe(
     Effect.map(({ first, input, second }) => {
       for (const events of [first, second]) {
@@ -1055,7 +1094,7 @@ it.effect("restarted production host reconstructs the active claim before its fi
         const reconstructionIndex = events.findIndex(({ _tag }) => _tag === "RecoveryReconstructed")
         const selectedIndex = events.findIndex(({ _tag }) => _tag === "TaskClaimCheckSelected")
         const githubReadIndex = events.findIndex(({ _tag }) => _tag === "GithubReadStarted")
-        expect(events.map(({ _tag }) => _tag)).toEqual([
+        expect(events.filter(({ _tag }) => _tag !== "PublicRecoveryStatusObserved").map(({ _tag }) => _tag)).toEqual([
           "RestartChildStarted",
           "RecoveryReconstructed",
           "TaskClaimCheckSelected",

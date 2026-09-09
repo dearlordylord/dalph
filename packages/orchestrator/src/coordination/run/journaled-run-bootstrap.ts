@@ -651,6 +651,10 @@ export const journaledRunBootstrapLayer = (
         if (termination.event._tag !== "WorkflowRunTerminated") {
           return yield* Effect.die(new Error("Run termination did not return its terminal Journal record"))
         }
+        // Run finality closes the process-local status source at the same terminal boundary.
+        // Host-scope cleanup remains idempotent, but public observers need the exact final
+        // Ready value wrapped as Closed before they can report the terminal disposition.
+        yield* processRuntimeCapabilities.observation.close
         yield* Deferred.succeed(
           runTermination,
           JournaledRunTermination.make({

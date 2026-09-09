@@ -1,5 +1,5 @@
 import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey, type TaskId } from "@dalph/contracts"
-import type { DeliveryRuntimeLiveOwnerSnapshot } from "./delivery-runtime-observation.js"
+import { admittedProposalFor, type DeliveryRuntimeLiveOwnerSnapshot } from "./delivery-runtime-observation.js"
 import type { DeliveryActionProposal } from "./delivery-action-proposal.js"
 import type {
   DeliveryRuntimeEvaluation,
@@ -172,14 +172,35 @@ const liveOwnerConflict = (
     detail
   })
 
-/** Live owners are valid only as one exact lifecycle snapshot of one current proposal. */
+const validateLiveOwnerAdmissionForStatus = (
+  subject: DeliveryStatusSubject,
+  currentProposals: ReadonlyArray<DeliveryActionProposal>,
+  owner: DeliveryRuntimeLiveOwnerSnapshot
+): DeliveryStatusProjectionConflict | null => {
+  const proposalId = owner.proposal.id
+  const admitted = admittedProposalFor(owner.admissionAuthority)
+  if (admitted === undefined || !proposalEquals(admitted, owner.proposal)) {
+    const detail =
+      owner.admissionAuthority._tag === "FreshTaskCandidateAdmission"
+        ? "a fresh live owner lacks its exact admission authority"
+        : "a ticket live owner lacks its exact admission authority"
+    return liveOwnerConflict(subject, proposalId, detail)
+  }
+  const current = currentProposals.find(({ id }) => id === proposalId)
+  return current !== undefined && !proposalEquals(owner.proposal, current)
+    ? liveOwnerConflict(subject, proposalId, "a live owner proposal differs from the current frontier proposal")
+    : null
+}
+
+/** Live owners are valid only as one exact admitted lifecycle snapshot from this process. */
 export const validateLiveOwnersForStatus = (
   subject: DeliveryStatusSubject,
   evaluation: DeliveryRuntimeEvaluation,
   liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
 ): DeliveryStatusProjectionConflict | null => {
-  if (evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") return null
-  const duplicateProposal = evaluation.proposedActions.proposals.find(
+  const proposals =
+    evaluation.proposedActions._tag === "DeliveryProposalsAvailable" ? evaluation.proposedActions.proposals : []
+  const duplicateProposal = proposals.find(
     (proposal, index, proposals) => proposals.findIndex(({ id }) => id === proposal.id) !== index
   )
   if (duplicateProposal !== undefined) {
@@ -196,14 +217,8 @@ export const validateLiveOwnersForStatus = (
     )
   }
   for (const owner of liveOwners) {
-    const proposalId = owner.proposal.id
-    const current = evaluation.proposedActions.proposals.find(({ id }) => id === proposalId)
-    if (current === undefined) {
-      return liveOwnerConflict(subject, proposalId, "a live owner proposal is absent from the current frontier")
-    }
-    if (!proposalEquals(owner.proposal, current)) {
-      return liveOwnerConflict(subject, proposalId, "a live owner proposal differs from the current frontier proposal")
-    }
+    const conflict = validateLiveOwnerAdmissionForStatus(subject, proposals, owner)
+    if (conflict !== null) return conflict
   }
   return null
 }

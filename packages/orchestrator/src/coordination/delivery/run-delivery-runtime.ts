@@ -223,10 +223,9 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const publishRuntimeObservationInsideGate = Effect.fn("DeliveryRuntime.publishObservationInsideGate")(
         function* () {
           const evaluation = Option.getOrThrow(yield* Ref.get(latest))
-          yield* runtimeObservation.publish(
-            evaluation,
-            yield* RuntimeObservation.deliveryRuntimeLiveOwnerSnapshots(yield* Ref.get(owners))
-          )
+          const liveOwnerSources = yield* Ref.get(owners)
+          const liveOwners = yield* RuntimeObservation.deliveryRuntimeLiveOwnerSnapshots(liveOwnerSources)
+          yield* runtimeObservation.publish(evaluation, liveOwners)
         }
       )
       const publishRuntimeObservation = Effect.fn("DeliveryRuntime.publishObservation")(() =>
