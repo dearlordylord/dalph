@@ -26,7 +26,7 @@ const PlannedAttemptResumeRedeliveryAuthorizationTypeId: unique symbol = Symbol(
 const issuedResumeRedeliveryAuthorizations = new WeakSet<object>()
 
 /** Exact process-local authority to redeliver one already-intended Resume command. */
-export type PlannedAttemptResumeRedeliveryAuthorization = {
+type PlannedAttemptResumeRedeliveryAuthorization = {
   readonly [PlannedAttemptResumeRedeliveryAuthorizationTypeId]: typeof PlannedAttemptResumeRedeliveryAuthorizationTypeId
   readonly plannedAttempt: PlannedTaskAttempt
   readonly resumeCommandOrdinal: Extract<
@@ -46,14 +46,14 @@ export const isPlannedAttemptResumeRedeliveryAuthorization = (
 ): value is PlannedAttemptResumeRedeliveryAuthorization =>
   typeof value === "object" && value !== null && issuedResumeRedeliveryAuthorizations.has(value)
 
-export type ResumeRedeliveryAuthorizationReason =
+type ResumeRedeliveryAuthorizationReason =
   | ContinuationAuthorizationReason
   | "ConsumedProjection"
   | "InvalidEligibility"
   | "MissingResumeIntent"
   | "StaleExecutorEvidence"
 
-export type PlannedAttemptResumeRedeliveryAuthorizationEvaluation =
+type PlannedAttemptResumeRedeliveryAuthorizationEvaluation =
   | { readonly _tag: "Authorized"; readonly authorization: PlannedAttemptResumeRedeliveryAuthorization }
   | {
       readonly _tag: "Rejected"
@@ -67,12 +67,12 @@ type RejectedResumeRedeliveryAuthorization = Extract<
   { readonly _tag: "Rejected" }
 >
 
-export type ReconciledResumeStillSafeBasis = Extract<
+type ReconciledResumeStillSafeBasis = Extract<
   SafeContinuationRevalidationEligibility["basis"],
   { readonly _tag: "ReconciledResumeStillSafe" }
 >
 
-export type PlannedAttemptResumeRedeliveryProofEvaluation =
+type PlannedAttemptResumeRedeliveryProofEvaluation =
   | { readonly _tag: "ValidResumeRedeliveryProof" }
   | RejectedResumeRedeliveryAuthorization
 

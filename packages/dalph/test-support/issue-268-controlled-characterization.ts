@@ -2824,11 +2824,26 @@ const matchesRetainedCJournalCut = (
   event: JournalRecord["event"],
   plannedAttempt: PlannedTaskAttempt
 ): boolean => {
-  // eslint-disable-next-line @typescript-eslint/switch-exhaustiveness-check -- This controlled cut ignores journal events outside its explicitly named boundary.
+  if (
+    event._tag !== "TaskTrackerFactsObserved" &&
+    event._tag !== "TaskWorkCapacityChanged" &&
+    event._tag !== "PlannedAttemptWorktreeObserved" &&
+    event._tag !== "TargetLineageObserved" &&
+    event._tag !== "PlannedAttemptContinuationAuthorized" &&
+    event._tag !== "PlannedAttemptExecutorCommandIntended"
+  ) {
+    return false
+  }
   switch (event._tag) {
     case "TaskTrackerFactsObserved": {
       const observation = event.observation
-      // eslint-disable-next-line @typescript-eslint/switch-exhaustiveness-check -- Only these successful tracker observations are requested crash checkpoints.
+      if (
+        observation._tag !== "CompleteTaskTrackerFacts" &&
+        observation._tag !== "FocusedTaskWorkSpecificationFacts" &&
+        observation._tag !== "FocusedTaskClaimFacts"
+      ) {
+        return false
+      }
       switch (observation._tag) {
         case "CompleteTaskTrackerFacts":
           return checkpoint === "G4" && observation.factFamilies[0].contentIdentity === scenario.graphs.G4.revision
@@ -2836,8 +2851,6 @@ const matchesRetainedCJournalCut = (
           return checkpoint === "Specification" && observation.factFamily.taskId === scenario.taskIds.C
         case "FocusedTaskClaimFacts":
           return checkpoint === "Claim" && observation.coverage.taskId === scenario.taskIds.C
-        default:
-          return false
       }
     }
     case "TaskWorkCapacityChanged":
@@ -2861,8 +2874,6 @@ const matchesRetainedCJournalCut = (
         event.plannedAttempt.attemptId === scenario.attempts.C1 &&
         event.command === "Resume"
       )
-    default:
-      return false
   }
 }
 

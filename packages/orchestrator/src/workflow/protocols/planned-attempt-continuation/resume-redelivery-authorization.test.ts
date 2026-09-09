@@ -345,7 +345,7 @@ const fixture = () => {
     (candidate) => candidate._tag === "PlannedAttemptExecutorFreshFacts"
   )
   const eligibility = facts?.safeContinuationRevalidationEligibility
-  if (eligibility === undefined) throw new Error("fixture must mint exact reconciled-Safe eligibility")
+  if (eligibility === undefined) expect.fail("fixture must mint exact reconciled-Safe eligibility")
   return { eligibility, projection, records, witness }
 }
 
@@ -404,7 +404,7 @@ describe("Resume redelivery authorization", () => {
       evaluatePlannedAttemptResumeRedeliveryAuthorization(withoutProjection, plannedAttempt, eligibility, witness)
     ).toMatchObject({ _tag: "Rejected", reason: "StaleExecutorEvidence" })
 
-    if (eligibility.basis._tag !== "ReconciledResumeStillSafe") throw new Error("fixture retry basis missing")
+    if (eligibility.basis._tag !== "ReconciledResumeStillSafe") expect.fail("fixture retry basis missing")
     expect(
       evaluatePlannedAttemptResumeRedeliveryProof(
         records,
@@ -417,7 +417,7 @@ describe("Resume redelivery authorization", () => {
 
   it("rejects a later semantic command inserted before the reconciled projection", () => {
     const { eligibility, projection, records, witness } = fixture()
-    if (eligibility.basis._tag !== "ReconciledResumeStillSafe") throw new Error("fixture retry basis missing")
+    if (eligibility.basis._tag !== "ReconciledResumeStillSafe") expect.fail("fixture retry basis missing")
     const shifted = records.map((record) =>
       record.position >= projection.position
         ? { ...record, position: JournalPosition.make(Number(record.position) + 1) }
@@ -449,7 +449,7 @@ describe("Resume redelivery authorization", () => {
 
   it("rejects eligibility whose exact projection was already consumed", () => {
     const { eligibility, records, witness } = fixture()
-    if (eligibility.basis._tag !== "ReconciledResumeStillSafe") throw new Error("fixture retry basis missing")
+    if (eligibility.basis._tag !== "ReconciledResumeStillSafe") expect.fail("fixture retry basis missing")
     append(
       records,
       PlannedAttemptExecutorResumeRedeliveryIntendedEvent.make({
@@ -483,7 +483,7 @@ describe("Resume redelivery authorization", () => {
         event._tag === "TaskTrackerFactsObserved" &&
         event.operationId === witness.activeTaskContinuationRead.graphObservationOperationId
     )
-    if (graphOutcome === undefined) throw new Error("fixture graph outcome missing")
+    if (graphOutcome === undefined) expect.fail("fixture graph outcome missing")
     const staleGraph = records.map((record) =>
       record === graphOutcome ? { ...record, position: projection.position } : record
     )

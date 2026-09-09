@@ -15,7 +15,7 @@ import { plannedAttemptExecutorRequestFor } from "./evidence.js"
 import type { PlannedAttemptProtocolPermit } from "./protocol-controller.js"
 
 /** Rejects retry-delivery authorization before any new ambiguity-crossing intent exists. */
-export class PlannedAttemptResumeRedeliveryRejected extends Schema.TaggedError<PlannedAttemptResumeRedeliveryRejected>()(
+class PlannedAttemptResumeRedeliveryRejected extends Schema.TaggedError<PlannedAttemptResumeRedeliveryRejected>()(
   "PlannedAttemptResumeRedeliveryRejected",
   { detail: Schema.String }
 ) {}
