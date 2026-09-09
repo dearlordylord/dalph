@@ -311,4 +311,99 @@ module plannedAttemptExecutorTest {
       .expect(and { state.beginTurnBoundary == BeginTurnAuthorized, state.responseAmbiguous, state.evidence == NoEvidence })
   }
 
+  // #274: C's same Resume is reconciled Safe, then newer exact focused reads
+  // authorize one durable delivery intent before the executor is contacted.
+  run exactSafeResumeRedeliveryKeepsOriginalOrdinalTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordResumeIntent).then(crashResumeDelivery)
+      .then(recordCommandProjection(CommandProjectionExactSafelySuspended)).then(settleCommandProjection)
+      .expect(and { isNoCommand(state.commandState), not(state.positionHeld), state.commandSettlementCount == 3 })
+      .then(readResumeContinuationWitness).then(recordResumeRedeliveryIntent)
+      .expect(and { state.commandIntentCount == 3, state.nextCommandOrdinal == 4, state.commandSettlementCount == 2, state.positionHeld, resumeRedeliveryKeepsOriginalCommand })
+      .then(callResumeRedelivery).then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .expect(and { state.status == StatusExecuting, state.commandCallCount == 3, state.resumeRecovery.totalRedeliveryIntents == 1, state.acceptedReportOrdinal == 3, everyCallHasOneDurableIntent })
+  }
+  run crashAfterResumeRedeliveryIntentRequiresNewProjectionAndIntentTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordResumeIntent).then(crashResumeDelivery)
+      .then(recordCommandProjection(CommandProjectionExactSafelySuspended)).then(settleCommandProjection).then(readResumeContinuationWitness).then(recordResumeRedeliveryIntent)
+      .then(crashResumeDelivery)
+      .expect(and { state.positionHeld, crashedResumeCannotReuseDeliveryAuthorization, not(canAuthorizeResumeRedelivery(state)) })
+      .then(recordCommandProjection(CommandProjectionExactSafelySuspended)).then(settleCommandProjection)
+      .then(readResumeContinuationWitness).then(recordResumeRedeliveryIntent)
+      .expect(and { secondResumeRedeliveryReached, state.resumeRecovery.projectionOrdinal == 2, resumeProjectionConsumedAtMostOnce, resumeRedeliveryOrdinalsAreExact })
+      .then(callResumeRedelivery).then(loseCommandResponse).then(recoverActivation)
+      .then(recordCommandProjection(CommandProjectionExactExecuting)).then(settleCommandProjection)
+      .expect(and { state.status == StatusExecuting, state.commandIntentCount == 3, state.resumeRecovery.totalRedeliveryIntents == 2, state.commandCallCount == 3 })
+  }
+  run activationRecoveryCannotBypassUncalledResumeCrashTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordResumeIntent).then(recoverActivation).fail()
+  }
+  run activationRecoveryCannotBypassResumeRedeliveryCrashTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordResumeIntent).then(crashResumeDelivery)
+      .then(recordCommandProjection(CommandProjectionExactSafelySuspended)).then(settleCommandProjection)
+      .then(readResumeContinuationWitness).then(recordResumeRedeliveryIntent)
+      .then(recoverActivation).fail()
+  }
+  run completedResumeDeliveryReconcilesWithoutAnotherResumeTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordResumeIntent).then(callResume).then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionExactExecuting)).then(settleCommandProjection)
+      .expect(and { state.status == StatusExecuting, state.resumeRecovery.proof == NoResumeProjection, state.commandCallCount == 3, state.resumeRecovery.totalRedeliveryIntents == 0 })
+  }
+  run ordinarySafeResumeResponseCannotMintRedeliveryProofTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordResumeIntent).then(callResume).then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .expect(and { state.resumeRecovery.proof == NoResumeProjection, not(canAuthorizeResumeRedelivery(state)) })
+  }
+  run unavailableResumeProjectionCannotAuthorizeRetryTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordResumeIntent).then(crashResumeDelivery).then(recordCommandProjection(CommandProjectionTemporarilyUnavailable))
+      .expect(and { state.positionHeld, state.resumeRecovery.proof == NoResumeProjection, not(canAuthorizeResumeRedelivery(state)) })
+  }
+  run crashBeforeResumeRedeliveryIntentDiscardsFocusedWitnessTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordResumeIntent).then(crashResumeDelivery)
+      .then(recordCommandProjection(CommandProjectionExactSafelySuspended)).then(settleCommandProjection).then(readResumeContinuationWitness).then(recoverActivation)
+      .expect(and { state.resumeRecovery.witness == NoResumeWitness, not(canAuthorizeResumeRedelivery(state)) })
+      .then(readResumeContinuationWitness).then(recordResumeRedeliveryIntent)
+      .expect(resumeRedeliveryUsesLaterExactWitnesses)
+  }
+  run laterDurableExecutorEvidenceInvalidatesResumeProjectionTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordResumeIntent).then(crashResumeDelivery)
+      .then(recordCommandProjection(CommandProjectionExactSafelySuspended)).then(settleCommandProjection).then(recoverActivation)
+      .then(recordFreshStateProjection(ExecutorStateTerminal))
+      .expect(and { state.resumeRecovery.proof == NoResumeProjection, not(canAuthorizeResumeRedelivery(state)) })
+      .then(acceptFreshStateProjectionProof)
+      .expect(and { state.status == StatusTerminal, not(state.positionHeld) })
+  }
 }

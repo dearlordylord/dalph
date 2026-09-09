@@ -25,6 +25,10 @@ import { immutableSnapshot } from "../immutable-snapshot.js"
 import { acceptedFreshAttemptLineage } from "./fresh-attempt-lineage.js"
 import type { TaskWorkCapacity } from "./capacity.js"
 import { requiredPlannedAttemptPositionsOf } from "../run/required-planned-attempt-positions.js"
+import {
+  isSafeContinuationRevalidationEligibility,
+  type SafeContinuationRevalidationEligibility
+} from "../frontier/fresh-facts.js"
 
 const FreshTaskCommitmentTypeId: unique symbol = Symbol("@dalph/FreshTaskCommitment")
 const issuedFreshTaskCommitments = new WeakSet<object>()
@@ -385,7 +389,15 @@ export interface FreshTaskAdmissionBasis {
   /** Accepted exact releases indexed by the task and claim operation they settle. */
   readonly releaseEvidence: ReadonlyMap<string, FreshTaskAdmissionReleaseEvidence>
   readonly runId: RunId
+  /** Exact Safe attempts eligible to reserve for fresh reads; these entries do not themselves occupy capacity. */
+  readonly safeContinuationRevalidations: ReadonlyArray<SafeContinuationRevalidationEligibility>
 }
+
+/** A caller supplied unissued or foreign eligibility for reserving an exact safe continuation. */
+export class SafeContinuationRevalidationBasisInvalid extends Schema.TaggedError<SafeContinuationRevalidationBasisInvalid>()(
+  "SafeContinuationRevalidationBasisInvalid",
+  { runId: RunId }
+) {}
 
 /** More than one occupancy form was supplied for the same tracker task. */
 export class FreshTaskAdmissionBasisInvalid extends Schema.TaggedError<FreshTaskAdmissionBasisInvalid>()(
@@ -419,6 +431,7 @@ interface FreshTaskAdmissionBasisInput {
   readonly entries: ReadonlyArray<NonCommitmentOccupancy>
   readonly projection?: FreshTaskAdmissionProjection
   readonly runId: RunId
+  readonly safeContinuationRevalidations?: ReadonlyArray<SafeContinuationRevalidationEligibility>
 }
 
 const issuedFreshTaskAdmissionBases = new WeakMap<object, FreshTaskAdmissionProjection | null>()
@@ -429,6 +442,7 @@ interface FreshTaskAdmissionBasisInternalInput {
   readonly entries: ReadonlyArray<TaskAdmissionOccupancy>
   readonly projection?: FreshTaskAdmissionProjection
   readonly runId: RunId
+  readonly safeContinuationRevalidations?: ReadonlyArray<SafeContinuationRevalidationEligibility>
 }
 
 const nonNullObjectField = (value: unknown, key: PropertyKey): object | undefined => {
@@ -461,7 +475,8 @@ const makeFreshTaskAdmissionBasisFromOccupied = (
   capacity: TaskWorkCapacity,
   occupied: ReadonlyMap<TaskId, TaskAdmissionOccupancy>,
   releaseEvidence: ReadonlyArray<FreshTaskAdmissionReleaseEvidence>,
-  runId: RunId
+  runId: RunId,
+  safeContinuationRevalidations: ReadonlyArray<SafeContinuationRevalidationEligibility>
 ): FreshTaskAdmissionBasis => {
   const immutableOccupied = immutableReadonlyMap(occupied)
   const immutableReleaseEvidence = immutableReadonlyMap(
@@ -481,7 +496,8 @@ const makeFreshTaskAdmissionBasisFromOccupied = (
     held,
     occupied: immutableOccupied,
     releaseEvidence: immutableReleaseEvidence,
-    runId
+    runId,
+    safeContinuationRevalidations: Object.freeze([...safeContinuationRevalidations])
   }
   return Object.freeze(basis)
 }
@@ -536,6 +552,15 @@ const buildFreshTaskAdmissionBasis = Effect.fn("FreshTaskAdmission.buildBasis")(
   projectionSource: FreshTaskAdmissionProjection | null
 ) {
   const acceptedAt = input.acceptedAt ?? null
+  const safeContinuationRevalidations = input.safeContinuationRevalidations ?? []
+  if (
+    safeContinuationRevalidations.some(
+      (eligibility) =>
+        !isSafeContinuationRevalidationEligibility(eligibility) || eligibility.plannedAttempt.runId !== input.runId
+    )
+  ) {
+    return yield* new SafeContinuationRevalidationBasisInvalid({ runId: input.runId })
+  }
   const entries: ReadonlyArray<TaskAdmissionOccupancy> = [
     ...projectedCommitments,
     ...projectedHeldAttempts.map((plannedAttempt) => TaskAdmissionOccupancy.ExactAttemptHeld({ plannedAttempt })),
@@ -579,7 +604,8 @@ const buildFreshTaskAdmissionBasis = Effect.fn("FreshTaskAdmission.buildBasis")(
     input.capacity,
     occupied,
     releaseEvidence,
-    input.runId
+    input.runId,
+    safeContinuationRevalidations
   )
   issuedFreshTaskAdmissionBases.set(basis, projectionSource)
   return basis

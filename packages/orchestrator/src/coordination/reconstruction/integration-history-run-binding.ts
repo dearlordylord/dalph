@@ -256,6 +256,8 @@ const invalidRunBinding = (event: WorkflowJournalEvent, runId: RunId): string | 
         invalidNestedRunBinding("planned-attempt continuation", [candidate.plannedAttempt.runId], runId),
       PlannedAttemptExecutorCommandIntended: (candidate) =>
         invalidNestedRunBinding("executor command intent", [candidate.plannedAttempt.runId], runId),
+      PlannedAttemptExecutorResumeRedeliveryIntended: (candidate) =>
+        invalidNestedRunBinding("executor Resume redelivery intent", [candidate.plannedAttempt.runId], runId),
       PlannedAttemptExecutorCommandProjectionObserved: (candidate) =>
         invalidNestedRunBinding(
           "executor command projection",

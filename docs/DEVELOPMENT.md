@@ -241,7 +241,21 @@ exclusions must not hide authored logic.
   `--prune-suppressions` with the explicit discovered file list and inspect the
   diff; changed files do not automatically deserve new exceptions.
 - `oxlint-complexity-suppressions.json` counts violations per file, not per
-  function/value. Run `pnpm check:complexity:prune` after reductions.
+  function/value. A new or increased entry records a concrete `justification`
+  for keeping the function cohesive after independent decisions have been
+  extracted. Every full gate resolves the same base used by changed-line
+  coverage—from its explicit candidate, `DALPH_COVERAGE_BASE_SHA`, the merge
+  base with `origin/master`, or `HEAD^`—and passes that exact SHA to this check;
+  the base must be an ancestor strictly earlier than candidate `HEAD`. A
+  self-resolving fallback tries the verified parent instead; the gate fails if
+  no such commit is available. A direct check without
+  `--candidate=<base sha>` treats existing entries as legacy while still
+  rejecting count mismatches and malformed entries. Run
+  `pnpm check:complexity:prune` after reductions; pruning preserves reviewed
+  justifications for every retained entry.
+  The resolved canonical SHA is also exported to changed-line coverage as
+  `DALPH_COVERAGE_BASE_SHA`; an explicit all-zero candidate is invalid rather
+  than a request to use fallback discovery.
 - Production `floatingEffect` is an error. Test `multipleEffectProvide` and
   `unnecessaryEffectGen` stay off for deliberate Layer/generator composition;
   `lazyEffect` stays off for intentional lazy interfaces. New severity overrides

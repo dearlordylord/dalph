@@ -21,7 +21,8 @@ import {
   reconstructedTaskIsPaused,
   workflowResponsibilityOperationId
 } from "../reconstruction/state.js"
-import type { PlannedAttemptExecutorDisposition, ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
+import { type PlannedAttemptExecutorDisposition, type ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
+import { safeContinuationRevalidationEligibilityFromRecoveryHistory } from "../frontier/safe-continuation-revalidation-eligibility.js"
 import type { DeliveryProjectionEvidence } from "../frontier/delivery-projection-evidence.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
@@ -1942,7 +1943,18 @@ export const deriveJournalResponsibilityFacts = (
         : { _tag: "Ready", acceptedProgress: readyProgress() }
     }
     const disposition = taskStateDisposition() ?? constraintDisposition() ?? pauseOrReadyDisposition()
-    return { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
+    const facts = { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
+    if (disposition._tag !== "Ready" || disposition.acceptedProgress._tag !== "ExecutorReportAccepted") return facts
+    const safeContinuationRevalidationEligibility = safeContinuationRevalidationEligibilityFromRecoveryHistory(
+      records,
+      responsibility.plannedAttempt,
+      responsibility.beganAt,
+      disposition.acceptedProgress,
+      attemptRefreshOpportunity
+    )
+    return safeContinuationRevalidationEligibility === undefined
+      ? facts
+      : { ...facts, safeContinuationRevalidationEligibility }
   })
 }
 

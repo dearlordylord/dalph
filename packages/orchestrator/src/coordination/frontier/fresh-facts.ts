@@ -28,6 +28,12 @@ import type {
 } from "../../workflow/protocols/attempt-choice/restart-reasons.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { PlannedAttemptExecutorProjectionWaitReason } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import type { SafeContinuationRevalidationEligibility } from "./safe-continuation-revalidation-eligibility.js"
+
+export {
+  isSafeContinuationRevalidationEligibility,
+  type SafeContinuationRevalidationEligibility
+} from "./safe-continuation-revalidation-eligibility.js"
 
 /** The exact unfinished prerequisites blocking one executing task; an empty set is not a dependency constraint. */
 export const UnfinishedPrerequisiteTaskIds = Schema.NonEmptyArray(TaskId)
@@ -265,6 +271,7 @@ export type ResponsibilityFreshFacts =
         WorkflowResponsibilityEntry,
         { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }
       >
+      readonly safeContinuationRevalidationEligibility?: SafeContinuationRevalidationEligibility
     }
   | {
       readonly _tag: "WorkflowOperationFreshFacts"

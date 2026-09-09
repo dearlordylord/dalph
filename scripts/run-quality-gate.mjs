@@ -3,8 +3,11 @@ import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
 import {
   boundedQualityGateCommand,
   capabilityRegistrationQualityGate,
+  complexityQualityGate,
+  qualityGateTestEnvironment,
   recordedCatalogQualityGate
 } from "./quality-gate-stage-policy.mjs"
+import { resolveQualityGateBase } from "./resolve-quality-gate-base.mjs"
 
 const SECOND = 1_000
 const maximumSuccessfulOutputLines = 550
@@ -15,10 +18,6 @@ const candidateArgument = process.argv.find((argument) => argument.startsWith("-
 // to hosted verification. Development uses the focused tiers instead, which is why local runs state their intent.
 const acknowledgedFullGate =
   candidateArgument !== undefined || process.env["DALPH_FULL_GATE"] === "1" || process.env["CI"] !== undefined
-const testEnvironment = {
-  ...process.env,
-  NODE_OPTIONS: [process.env.NODE_OPTIONS, "--disable-warning=ExperimentalWarning"].filter(Boolean).join(" ")
-}
 
 if (pnpmEntryPoint === undefined) {
   throw new Error("Run the quality gate through pnpm so its executable can be resolved safely")
@@ -36,6 +35,13 @@ if (!acknowledgedFullGate) {
   process.exit(2)
 }
 
+const explicitCandidateBase = candidateArgument?.slice("--candidate=".length)
+const qualityBaseSha = resolveQualityGateBase({
+  candidateBase: explicitCandidateBase,
+  hostedBase: process.env.DALPH_COVERAGE_BASE_SHA
+})
+const testEnvironment = qualityGateTestEnvironment(qualityBaseSha)
+
 const gates = [
   { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
   capabilityRegistrationQualityGate,
@@ -44,7 +50,7 @@ const gates = [
   { args: ["typecheck:effect"], name: "Effect diagnostics", timeout: 3 * 60 * SECOND },
   { args: ["check:format"], name: "format and lint", timeout: 5 * 60 * SECOND },
   { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
-  { args: ["check:complexity"], name: "cyclomatic complexity", timeout: 60 * SECOND },
+  complexityQualityGate(qualityBaseSha),
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
   { args: ["test:memory"], name: "project memory scenarios", timeout: 60 * SECOND },
   {

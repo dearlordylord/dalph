@@ -5,6 +5,9 @@ import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AttemptId,
   GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -53,6 +56,7 @@ import { RunnableFrontierTransition } from "../../../orchestrator/src/coordinati
 import { InitialControlPolicy, RunPolicyRevision } from "../../../orchestrator/src/control/policy.js"
 import type { CurrentDeliveryFrame } from "../../../orchestrator/src/coordination/run/current-delivery-frame.js"
 import { RunActivationOpportunity } from "../../../orchestrator/src/coordination/run/run-activation-opportunity.js"
+import { deriveJournalResponsibilityFacts } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
 import { reconstructedTaskGraphFor } from "../../../orchestrator/src/coordination/reconstruction/graph-knowledge.js"
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import { requiredPlannedAttemptPositionsOf } from "../../../orchestrator/src/coordination/run/required-planned-attempt-positions.js"
@@ -63,6 +67,7 @@ import {
   intentRecordKey,
   outcomeRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorCommandProjectionObservedRecordKey,
   plannedAttemptExecutorCommandResponseObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey,
   taskWorkCapacityPolicyRecordKey
@@ -74,6 +79,8 @@ import {
   makeTaskClaimObservationOperation,
   makeTaskAttemptPlanOperation,
   makeTaskWorkSpecificationObservationOperation,
+  makeTaskWorktreeObservationOperation,
+  makeTargetLineageObservationOperation,
   makeTaskWorktreeReconciliationOperation,
   makeTrackerGraphObservationOperation
 } from "../../../orchestrator/src/workflow/registry/operation.js"
@@ -102,6 +109,9 @@ import { beginPlannedAttemptExecutorResponsibility } from "../../../orchestrator
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandProjectionObservation,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkReportedEvent
@@ -109,6 +119,8 @@ import {
 
 const taskTags = ["TaskA", "TaskB", "TaskC", "TaskD", "TaskE"] as const
 type TaskTag = (typeof taskTags)[number]
+const continuationWitnessTags = ["AuthoredSpecification", "ExactClaim", "PlannedWorktree", "TargetLineage"] as const
+type ContinuationWitnessTag = (typeof continuationWitnessTags)[number]
 
 const runId = RunId.make("fresh-task-admission-mbt-run")
 const target = FixtureTarget.make("fresh-task-admission-mbt-target")
@@ -140,6 +152,24 @@ const graph = (() => {
   })
   return Option.getOrThrow(Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined))
 })()
+
+const graphWithLifecycle = (tag: TaskTag, lifecycle: "Open" | "TerminalWithoutSuccess") => {
+  const projected = projectTrackerSnapshot({
+    revision: `fresh-task-admission-mbt-${tag}-${lifecycle}`,
+    tasks: taskTags.map((candidate) => ({
+      id: taskIdFor(candidate),
+      lifecycle: { _tag: candidate === tag ? lifecycle : ("Open" as const) },
+      parentTaskId: null,
+      prerequisiteIds: []
+    }))
+  })
+  return Option.getOrThrow(Option.fromUndefinedOr(projected._tag === "Valid" ? projected.snapshot : undefined))
+}
+
+const integrationTarget = IntegrationTarget.make({
+  ref: IntegrationTargetRef.make("refs/heads/main"),
+  repository: GitRepositoryLocator.make("/repositories/fresh-task-admission-mbt.git")
+})
 
 const specificationFor = (tag: TaskTag) => makeTaskWorkSpecification({ body: tag, taskId: taskIdFor(tag), title: tag })
 
@@ -208,6 +238,8 @@ const projectionOfSpec = (raw: unknown): Effect.Effect<AdmissionProjection> =>
   )
 
 const actionNames = {
+  acceptSafeReportFor: { task: Schema.Unknown },
+  authorizeSafeContinuationFor: { task: Schema.Unknown },
   contractCapacity: {},
   crash: {},
   expandCapacity: {},
@@ -221,15 +253,23 @@ const actionNames = {
   observeExecutorResponsibilityAppendAbsentFor: { task: Schema.Unknown },
   observeExecutorResponsibilityAppendPresentFor: { task: Schema.Unknown },
   observeForeignClaimClearedFor: { task: Schema.Unknown },
+  observeLifecycleClosureFor: { task: Schema.Unknown },
+  observeLifecycleReopenFor: { task: Schema.Unknown },
+  readContinuationWitnessFor: { task: Schema.Unknown, witness: Schema.Unknown },
+  reconcileResumeAsStillSafeFor: { task: Schema.Unknown },
   recordClaimIntentFor: { task: Schema.Unknown },
   projectAcceptedWorktreeReadyFor: { task: Schema.Unknown },
   projectForeignClaimRejectionFor: { task: Schema.Unknown },
+  projectOrdinarySafeContinuationReadyFor: { task: Schema.Unknown },
   probeFreshEntryDeferredFor: { task: Schema.Unknown },
   recover: {},
   releaseHeldPositionNotReadyFor: { task: Schema.Unknown },
   releaseHeldPositionReadyFor: { task: Schema.Unknown },
   reserveFreshEntryFor: { task: Schema.Unknown },
-  reserveReadyResponsibilityFor: { task: Schema.Unknown }
+  reserveReadyResponsibilityFor: { task: Schema.Unknown },
+  rejectFreshBypassFor: { task: Schema.Unknown },
+  rejectSafeContinuationAtCapacityFor: { task: Schema.Unknown },
+  selectSafeContinuationFor: { task: Schema.Unknown }
 } as const
 
 /**
@@ -239,6 +279,8 @@ const actionNames = {
  * - Handoff has no gap and B release admits D: handoff/release actions + atomic controller synchronization.
  * - Contraction/expansion and ready-existing priority: policy actions and ready-responsibility controller reservation.
  * - Process loss reconstructs durable occupancy only: crash/recover + a new controller projected from Journal facts.
+ * - Closed-at-Safe then reopened C reserves before focused reads; cap two rejects it and cap three blocks fresh E.
+ * - Its one reservation survives four exact read routes and hands off only after Resume intent; retry Safe is rederived.
  */
 const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
   let process: "ProcessDown" | "ProcessUp" = "ProcessUp"
@@ -249,6 +291,7 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
   let graphSequence = 0
   let acceptedFrontier: FreshTaskCandidateFrontier | undefined
   const reservations = new Map<TaskTag, DeliveryAdmissionReservation>()
+  const continuationReservations = new Map<TaskTag, DeliveryAdmissionReservation>()
   const claimCycles = new Map<TaskTag, number>()
   const ambiguousResponsibilityTags = new Set<TaskTag>()
   const visibleRecords = () => records.slice(0, visiblePrefixLength)
@@ -295,7 +338,7 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
       },
       read: (eventRunId) => Effect.succeed(records.filter(({ runId: recordedRunId }) => recordedRunId === eventRunId))
     })
-  const appendGraph = (suffix: string, explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = []) => {
+  const appendGraph = (suffix: string, explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = [], snapshot = graph) => {
     const operation = makeTrackerGraphObservationOperation(
       { _tag: "WorkflowEstablishment" },
       OperationId.make(`fresh-task-admission-graph-${suffix}-${++graphSequence}`),
@@ -305,12 +348,30 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
     )
     append(taskTrackerReadIntent(operation), intentRecordKey(operation.operationId))
     append(
-      taskTrackerFactsObservedEvent(operation.operationId, makeCompleteTaskTrackerFactsObserved(operation, graph)),
+      taskTrackerFactsObservedEvent(operation.operationId, makeCompleteTaskTrackerFactsObserved(operation, snapshot)),
       outcomeRecordKey(operation.operationId)
     )
     return operation
   }
   let currentGraphOperation = appendGraph("initial", [...taskIds.values()])
+  const appendLifecycleGraph = (tag: TaskTag, lifecycle: "Open" | "TerminalWithoutSuccess") => {
+    const operation = makeTrackerGraphObservationOperation(
+      { _tag: "AttemptContinuation" },
+      OperationId.make(`fresh-task-admission-${tag}-lifecycle-${lifecycle}-${++graphSequence}`),
+      target,
+      [OperationId.make(`fresh-task-admission-${tag}-plan`)],
+      [taskIdFor(tag)]
+    )
+    append(taskTrackerReadIntent(operation), intentRecordKey(operation.operationId))
+    append(
+      taskTrackerFactsObservedEvent(
+        operation.operationId,
+        makeCompleteTaskTrackerFactsObserved(operation, graphWithLifecycle(tag, lifecycle))
+      ),
+      outcomeRecordKey(operation.operationId)
+    )
+    return operation
+  }
 
   const frame = (): CurrentDeliveryFrame => {
     const { runState } = currentReduction()
@@ -353,6 +414,18 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
         target
       }).pipe(Effect.map(({ frontier }) => frontier))
     })
+  const safeContinuationRevalidations = () =>
+    deriveJournalResponsibilityFacts(
+      currentReduction().runState,
+      Option.none(),
+      Option.none(),
+      target,
+      RunActivationOpportunity.OrdinaryRunEntry()
+    ).flatMap((facts) =>
+      facts._tag === "PlannedAttemptExecutorFreshFacts" && facts.safeContinuationRevalidationEligibility !== undefined
+        ? [facts.safeContinuationRevalidationEligibility]
+        : []
+    )
   const basis = () => {
     const { runState } = currentReduction()
     const policy = Option.getOrUndefined(runState.controlPolicy)
@@ -364,7 +437,8 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
       capacity: policy.taskExecutionCapacity,
       entries: [],
       projection: freshAdmission,
-      runId
+      runId,
+      safeContinuationRevalidations: safeContinuationRevalidations()
     })
   }
   const makeController = Effect.fn("FreshTaskAdmissionMBT.makeController")(function* () {
@@ -640,6 +714,31 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
       plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal)
     )
   }
+  const appendSafeResumeReconciliation = (tag: TaskTag) => {
+    const plannedAttempt = attemptFor(tag)
+    const resume = commandIntentsFor(tag).findLast(({ command }) => command === "Resume")
+    if (resume === undefined) return Effect.runSync(Effect.die(`missing Resume intent for ${tag}`))
+    const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(1)
+    append(
+      PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+        commandOrdinal: resume.ordinal,
+        observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+            correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+          })
+        }),
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt,
+        projectionOrdinal,
+        version: workflowJournalEventVersion
+      }),
+      plannedAttemptExecutorCommandProjectionObservedRecordKey(
+        plannedAttempt.attemptId,
+        resume.ordinal,
+        projectionOrdinal
+      )
+    )
+  }
   const appendSafeReleaseEvidence = (tag: TaskTag) => {
     const plannedAttempt = attemptFor(tag)
     const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
@@ -670,7 +769,105 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
     yield* admission.releasePlannedAttemptPosition(plannedAttemptExecutorCorrelation(attemptFor(tag)))
     yield* synchronize()
   })
+  const safeContinuationEligibilityFor = (tag: TaskTag) =>
+    safeContinuationRevalidations().find(({ plannedAttempt }) => plannedAttempt.attemptId === attemptFor(tag).attemptId)
+  const continuationOperationIdsFor = (tag: TaskTag) => ({
+    claim: OperationId.make(`fresh-task-admission-${tag}-continuation-claim`),
+    graph: OperationId.make(`fresh-task-admission-${tag}-continuation-graph`),
+    specification: OperationId.make(`fresh-task-admission-${tag}-continuation-specification`),
+    targetLineage: OperationId.make(`fresh-task-admission-${tag}-continuation-target-lineage`),
+    worktree: OperationId.make(`fresh-task-admission-${tag}-continuation-worktree`)
+  })
+  const continuationTransitionFor = (tag: TaskTag, witness: ContinuationWitnessTag | "Reservation" | "Resume") => {
+    const plannedAttempt = attemptFor(tag)
+    const operationIds = continuationOperationIdsFor(tag)
+    const predecessors = [OperationId.make(`fresh-task-admission-${tag}-plan`)]
+    if (witness === "Reservation") {
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "AttemptContinuation" },
+        operationIds.graph,
+        target,
+        predecessors,
+        [plannedAttempt.taskId]
+      )
+      return RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({ operation, plannedAttempt })
+    }
+    if (witness === "AuthoredSpecification") {
+      const operation = makeTaskWorkSpecificationObservationOperation(
+        operationIds.specification,
+        target,
+        plannedAttempt.taskId,
+        predecessors
+      )
+      return RunnableFrontierTransition.ObservePlannedAttemptContinuationSpecification({ operation, plannedAttempt })
+    }
+    if (witness === "ExactClaim") {
+      const operation = makeTaskClaimObservationOperation(
+        operationIds.claim,
+        target,
+        plannedAttempt.taskId,
+        predecessors
+      )
+      return RunnableFrontierTransition.ObservePlannedAttemptContinuationClaim({ operation, plannedAttempt })
+    }
+    if (witness === "PlannedWorktree") {
+      const operation = makeTaskWorktreeObservationOperation({
+        operationId: operationIds.worktree,
+        plannedAttempt,
+        predecessorOperationIds: predecessors
+      })
+      return RunnableFrontierTransition.ObservePlannedAttemptContinuationWorktree({ operation, plannedAttempt })
+    }
+    if (witness === "TargetLineage") {
+      const operation = makeTargetLineageObservationOperation({
+        integrationTarget,
+        operationId: operationIds.targetLineage,
+        plannedAttempt,
+        predecessorOperationIds: predecessors
+      })
+      return RunnableFrontierTransition.ObservePlannedAttemptContinuationTargetLineage({ operation, plannedAttempt })
+    }
+    const eligibility = safeContinuationEligibilityFor(tag)
+    if (eligibility === undefined) return Effect.runSync(Effect.die(`missing safe continuation eligibility for ${tag}`))
+    return RunnableFrontierTransition.ResumePlannedAttemptExecutorWorkAfterCurrentFacts({
+      acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: eligibility.acceptedSafe.reportOrdinal },
+      plannedAttempt,
+      witness: {
+        activeTaskContinuationRead: {
+          graphObservationOperationId: operationIds.graph,
+          taskClaimObservationOperationId: operationIds.claim,
+          taskWorkSpecificationObservationOperationId: operationIds.specification
+        },
+        targetLineageObservationOperationId: operationIds.targetLineage,
+        worktreeObservationOperationId: operationIds.worktree
+      }
+    })
+  }
+  const continuationProposalFor = (tag: TaskTag, witness: ContinuationWitnessTag | "Reservation" | "Resume") => {
+    const eligibility = safeContinuationEligibilityFor(tag)
+    if (eligibility === undefined) return Effect.runSync(Effect.die(`missing safe continuation eligibility for ${tag}`))
+    const proposal = deliveryProposalsOf({
+      acceptedAt: currentReduction().runState.appliedThrough,
+      acceptedOperationIds: new Set(),
+      fresh: [],
+      responsibilities: currentReduction().runState.responsibility.entries,
+      runId,
+      safeContinuationRevalidations: [eligibility],
+      transitions: [continuationTransitionFor(tag, witness)]
+    }).ticketDelivery[0]
+    if (proposal?.admission.safeContinuationRevalidation !== eligibility) {
+      return Effect.runSync(Effect.die(`continuation ${witness} proposal for ${tag} lost exact eligibility`))
+    }
+    return proposal
+  }
   const tagged = ({ task }: { readonly task: unknown }) => taskTagOf(task)
+  const continuationWitnessTagOf = ({ witness }: { readonly witness: unknown }): ContinuationWitnessTag => {
+    const tag = variantTag(witness)
+    if (!continuationWitnessTags.includes(tag as ContinuationWitnessTag)) {
+      return Effect.runSync(Effect.die(`unknown continuation witness ${tag}`))
+    }
+    return tag as ContinuationWitnessTag
+  }
   const appendCapacityChange = (delta: -1 | 1) => {
     const policy = Option.getOrUndefined(currentReduction().runState.controlPolicy)
     if (policy === undefined) return Effect.runSync(Effect.die("cannot change an unreconstructed capacity"))
@@ -697,11 +894,49 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
         visiblePrefixLength = 1
         graphSequence = 0
         reservations.clear()
+        continuationReservations.clear()
         claimCycles.clear()
         ambiguousResponsibilityTags.clear()
         currentGraphOperation = appendGraph("initial", [...taskIds.values()])
         controller = yield* makeController()
         yield* synchronize()
+      }),
+    observeLifecycleClosureFor: (input) =>
+      Effect.gen(function* () {
+        const tag = tagged(input)
+        currentGraphOperation = appendLifecycleGraph(tag, "TerminalWithoutSuccess")
+        yield* synchronize()
+      }),
+    acceptSafeReportFor: (input) =>
+      Effect.gen(function* () {
+        const tag = tagged(input)
+        appendSafeReleaseEvidence(tag)
+        yield* (yield* requireController()).releasePlannedAttemptPosition(
+          plannedAttemptExecutorCorrelation(attemptFor(tag))
+        )
+        yield* synchronize()
+      }),
+    observeLifecycleReopenFor: (input) =>
+      Effect.gen(function* () {
+        const tag = tagged(input)
+        currentGraphOperation = appendLifecycleGraph(tag, "Open")
+        yield* synchronize()
+      }),
+    selectSafeContinuationFor: (input) =>
+      Effect.gen(function* () {
+        const tag = tagged(input)
+        yield* synchronize()
+        if (safeContinuationEligibilityFor(tag) === undefined) {
+          return yield* Effect.die(`production did not select reopened Safe continuation ${tag}`)
+        }
+      }),
+    projectOrdinarySafeContinuationReadyFor: (input) =>
+      Effect.gen(function* () {
+        const tag = tagged(input)
+        yield* synchronize()
+        if (safeContinuationEligibilityFor(tag) !== undefined) {
+          return yield* Effect.die(`ordinary Safe continuation ${tag} gained lifecycle-reopen eligibility`)
+        }
       }),
     reserveFreshEntryFor: (input) =>
       Effect.gen(function* () {
@@ -870,6 +1105,18 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
       Effect.gen(function* () {
         const tag = tagged(input)
         const plannedAttempt = attemptFor(tag)
+        if (safeContinuationEligibilityFor(tag) !== undefined) {
+          const result = yield* (yield* requireController()).tryReserve(continuationProposalFor(tag, "Reservation"))
+          if (result._tag !== "Admitted") {
+            return yield* Effect.die(`safe continuation responsibility ${tag} was deferred`)
+          }
+          yield* (yield* requireController()).complete(result.reservation)
+          const position = (yield* (yield* requireController()).snapshot).positions.get(taskIdFor(tag))
+          if (position?._tag !== "SafeContinuationReserved") {
+            return yield* Effect.die(`safe continuation ${tag} did not retain its pre-read reservation`)
+          }
+          return
+        }
         const proposal = {
           ...trackerGraphReadProposalOf({
             acceptedAt: JournalPosition.make(Math.max(sequence, 1)),
@@ -895,9 +1142,73 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
         if (result._tag !== "Admitted") return yield* Effect.die(`ready responsibility ${tag} was deferred`)
         reservations.set(tag, result.reservation)
       }),
+    rejectSafeContinuationAtCapacityFor: (input) =>
+      Effect.gen(function* () {
+        const tag = tagged(input)
+        const before = yield* (yield* requireController()).snapshot
+        const result = yield* (yield* requireController()).tryReserve(continuationProposalFor(tag, "Reservation"))
+        if (result._tag !== "Deferred") {
+          return yield* Effect.die(`safe continuation ${tag} crossed its boundary at capacity`)
+        }
+        const after = yield* (yield* requireController()).snapshot
+        if (after.positions.size !== before.positions.size || after.positions.has(taskIdFor(tag))) {
+          return yield* Effect.die(`rejected safe continuation ${tag} changed occupancy`)
+        }
+      }),
+    rejectFreshBypassFor: (input) =>
+      Effect.gen(function* () {
+        const tag = tagged(input)
+        if (acceptedFrontier === undefined) return yield* Effect.die("fresh candidate frontier is not synchronized")
+        const result = yield* (yield* requireController()).tryReserveFresh(
+          acceptedFrontier,
+          deliveryProposalOfAcceptedFreshTask
+        )
+        if (result._tag !== "Deferred") {
+          return yield* Effect.die(`fresh ${tag} bypassed a waiting Safe continuation`)
+        }
+        if ((yield* (yield* requireController()).snapshot).positions.has(taskIdFor(tag))) {
+          return yield* Effect.die(`rejected fresh bypass ${tag} changed occupancy`)
+        }
+      }),
+    readContinuationWitnessFor: (input) =>
+      Effect.gen(function* () {
+        const tag = tagged(input)
+        const witness = continuationWitnessTagOf(input)
+        const before = yield* (yield* requireController()).snapshot
+        const result = yield* (yield* requireController()).tryReserve(continuationProposalFor(tag, witness))
+        if (result._tag !== "Admitted") return yield* Effect.die(`continuation ${witness} read for ${tag} was deferred`)
+        yield* (yield* requireController()).complete(result.reservation)
+        const after = yield* (yield* requireController()).snapshot
+        if (after.positions.get(taskIdFor(tag))?._tag !== "SafeContinuationReserved") {
+          return yield* Effect.die(`continuation ${witness} read released ${tag}`)
+        }
+        if (after.positions.size !== before.positions.size) {
+          return yield* Effect.die(`continuation ${witness} read double-occupied ${tag}`)
+        }
+      }),
+    authorizeSafeContinuationFor: (input) =>
+      Effect.gen(function* () {
+        const tag = tagged(input)
+        const result = yield* (yield* requireController()).tryReserve(continuationProposalFor(tag, "Resume"))
+        if (result._tag !== "Admitted") return yield* Effect.die(`continuation authorization for ${tag} was deferred`)
+        yield* (yield* requireController()).bindPlannedAttemptPosition(result.reservation, attemptFor(tag))
+        continuationReservations.set(tag, result.reservation)
+        const snapshot = yield* (yield* requireController()).snapshot
+        if (snapshot.positions.get(taskIdFor(tag))?._tag !== "SafeContinuationReserved") {
+          return yield* Effect.die(`authorization prematurely handed off ${tag}`)
+        }
+      }),
     handoffReadyResponsibilityFor: (input) =>
       Effect.gen(function* () {
         const tag = tagged(input)
+        const continuationReservation = continuationReservations.get(tag)
+        if (continuationReservation !== undefined) {
+          appendCommandIntent(tag, "Resume")
+          yield* (yield* requireController()).complete(continuationReservation)
+          continuationReservations.delete(tag)
+          yield* synchronize()
+          return
+        }
         const reservation = reservations.get(tag)
         if (reservation === undefined) return yield* Effect.die(`missing ready responsibility reservation for ${tag}`)
         const admission = yield* requireController()
@@ -906,6 +1217,19 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
         yield* admission.complete(reservation)
         reservations.delete(tag)
         yield* synchronize()
+      }),
+    reconcileResumeAsStillSafeFor: (input) =>
+      Effect.gen(function* () {
+        const tag = tagged(input)
+        appendSafeResumeReconciliation(tag)
+        yield* (yield* requireController()).releasePlannedAttemptPosition(
+          plannedAttemptExecutorCorrelation(attemptFor(tag))
+        )
+        yield* synchronize()
+        const eligibility = safeContinuationEligibilityFor(tag)
+        if (eligibility?.basis._tag !== "ReconciledResumeStillSafe") {
+          return yield* Effect.die(`reconciled Resume for ${tag} did not regain exact Safe retry admission`)
+        }
       }),
     contractCapacity: () => {
       appendCapacityChange(-1)
@@ -921,6 +1245,7 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
         revealAcceptedSuffix()
         controller = yield* makeController()
         reservations.clear()
+        continuationReservations.clear()
         ambiguousResponsibilityTags.clear()
         process = "ProcessUp"
         yield* synchronize()
@@ -936,11 +1261,13 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
               const state =
                 position._tag === "FreshEntryRuntimePosition"
                   ? "FreshEntryReserved"
-                  : position._tag === "LocallyAcceptedAttemptPosition"
-                    ? "ExactAttemptHeld"
-                    : position._tag === "BoundRuntimePosition"
-                      ? "ExistingResponsibilityReserved"
-                      : position._tag
+                  : position._tag === "SafeContinuationReserved"
+                    ? "ExistingResponsibilityReserved"
+                    : position._tag === "LocallyAcceptedAttemptPosition"
+                      ? "ExactAttemptHeld"
+                      : position._tag === "BoundRuntimePosition"
+                        ? "ExistingResponsibilityReserved"
+                        : position._tag
               if (position._tag === "BoundRuntimePosition") {
                 return { attemptId: position.correlation.attemptId, runId: position.correlation.runId, state, task }
               }
@@ -1035,6 +1362,104 @@ quintIt(
   it.effect,
   "rebinds a ready retained responsibility without an admission gap",
   focusedConformance("readyResponsibilityHandoffMbtStep", 8)
+)
+
+quintIt(
+  it.effect,
+  "reserves a lifecycle-reopened Safe continuation through exact focused reads and Resume intent",
+  focusedConformance("lifecycleRevalidationMbtStep", 18)
+)
+
+it.effect("keeps C ahead of fresh E across the canonical cap-two lifecycle chronology", () =>
+  Effect.gen(function* () {
+    const driver = yield* freshTaskAdmissionDriver.create()
+    const action = <Name extends keyof typeof actionNames>(name: Name) =>
+      Option.getOrThrowWith(Option.fromUndefinedOr(driver.actions[name]), () => new Error(`missing action ${name}`))
+        .handler
+    const task = (tag: TaskTag) => ({ task: tag })
+
+    yield* action("init")({})
+    for (const tag of taskTags.slice(0, 3)) {
+      yield* action("reserveFreshEntryFor")(task(tag))
+      yield* action("recordClaimIntentFor")(task(tag))
+      yield* action("projectAcceptedWorktreeReadyFor")(task(tag))
+      yield* action("handoffToExecutorResponsibilityFor")(task(tag))
+    }
+    yield* action("acceptSafeReportFor")(task("TaskB"))
+    yield* action("reserveFreshEntryFor")(task("TaskD"))
+    yield* action("recordClaimIntentFor")(task("TaskD"))
+    yield* action("projectAcceptedWorktreeReadyFor")(task("TaskD"))
+    yield* action("handoffToExecutorResponsibilityFor")(task("TaskD"))
+    yield* action("contractCapacity")({})
+    yield* action("observeLifecycleClosureFor")(task("TaskC"))
+    yield* action("acceptSafeReportFor")(task("TaskC"))
+    yield* action("projectOrdinarySafeContinuationReadyFor")(task("TaskB"))
+    yield* action("releaseHeldPositionNotReadyFor")(task("TaskA"))
+    yield* action("reserveReadyResponsibilityFor")(task("TaskB"))
+    yield* action("handoffReadyResponsibilityFor")(task("TaskB"))
+    yield* action("observeLifecycleReopenFor")(task("TaskC"))
+    yield* action("selectSafeContinuationFor")(task("TaskC"))
+    yield* action("rejectSafeContinuationAtCapacityFor")(task("TaskC"))
+    yield* action("expandCapacity")({})
+    yield* action("rejectFreshBypassFor")(task("TaskE"))
+    yield* action("reserveReadyResponsibilityFor")(task("TaskC"))
+    for (const witness of continuationWitnessTags) {
+      yield* action("readContinuationWitnessFor")({ task: "TaskC", witness })
+    }
+    yield* action("authorizeSafeContinuationFor")(task("TaskC"))
+    yield* action("handoffReadyResponsibilityFor")(task("TaskC"))
+
+    const getState = driver.getState
+    if (getState === undefined) return yield* Effect.die("fresh admission driver must expose state")
+    expect((yield* getState()).occupied).toMatchObject([
+      { state: "ExactAttemptHeld", task: "TaskB" },
+      { state: "ExactAttemptHeld", task: "TaskC" },
+      { state: "ExactAttemptHeld", task: "TaskD" }
+    ])
+  })
+)
+
+it.effect("reconstructs a post-Resume-intent attempt before retrying its exact Safe continuation", () =>
+  Effect.gen(function* () {
+    const driver = yield* freshTaskAdmissionDriver.create()
+    const action = <Name extends keyof typeof actionNames>(name: Name) =>
+      Option.getOrThrowWith(Option.fromUndefinedOr(driver.actions[name]), () => new Error(`missing action ${name}`))
+        .handler
+    const task = { task: "TaskA" }
+
+    yield* action("init")({})
+    yield* action("reserveFreshEntryFor")(task)
+    yield* action("recordClaimIntentFor")(task)
+    yield* action("projectAcceptedWorktreeReadyFor")(task)
+    yield* action("handoffToExecutorResponsibilityFor")(task)
+    yield* action("observeLifecycleClosureFor")(task)
+    yield* action("acceptSafeReportFor")(task)
+    yield* action("observeLifecycleReopenFor")(task)
+    yield* action("selectSafeContinuationFor")(task)
+    yield* action("reserveReadyResponsibilityFor")(task)
+    for (const witness of continuationWitnessTags) {
+      yield* action("readContinuationWitnessFor")({ ...task, witness })
+    }
+    yield* action("authorizeSafeContinuationFor")(task)
+    yield* action("handoffReadyResponsibilityFor")(task)
+    yield* action("crash")({})
+    yield* action("recover")({})
+
+    const getState = driver.getState
+    if (getState === undefined) return yield* Effect.die("fresh admission driver must expose state")
+    expect((yield* getState()).occupied).toMatchObject([{ state: "ExactAttemptHeld", task: "TaskA" }])
+
+    yield* action("reconcileResumeAsStillSafeFor")(task)
+    expect((yield* getState()).occupied).toEqual([])
+    yield* action("reserveReadyResponsibilityFor")(task)
+    expect((yield* getState()).occupied).toMatchObject([{ state: "ExistingResponsibilityReserved", task: "TaskA" }])
+  })
+)
+
+quintIt(
+  it.effect,
+  "keeps lifecycle continuation capacity decisions aligned across A-E",
+  focusedConformance("lifecycleCapacityMbtStep", 45)
 )
 
 quintIt(

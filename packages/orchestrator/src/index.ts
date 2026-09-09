@@ -806,7 +806,8 @@ export {
   FreshTaskAdmissionBasisRunMismatch,
   FreshTaskAdmissionCommitmentAuthorityInvalid,
   FreshTaskAdmissionProjectionInvalid,
-  FreshTaskAdmissionReleaseAuthorityInvalid
+  FreshTaskAdmissionReleaseAuthorityInvalid,
+  SafeContinuationRevalidationBasisInvalid
 } from "./coordination/admission/fresh-task-admission.js"
 export {
   FreshTaskCandidateFrontierInvalid,

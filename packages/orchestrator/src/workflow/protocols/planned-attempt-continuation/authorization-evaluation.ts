@@ -36,7 +36,8 @@ const isRejected = (
 
 type ValidExecutorAuthority = { readonly _tag: "ValidExecutorAuthority"; readonly observedAt: JournalPosition }
 
-const continuationTaskAuthorityFor = (
+/** Shared task-revision authority for first Resume and exact Resume redelivery. */
+export const continuationTaskAuthorityFor = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
   witness: PlannedAttemptContinuationWitness,

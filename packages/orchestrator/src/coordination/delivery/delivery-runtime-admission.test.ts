@@ -5,6 +5,7 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -15,7 +16,7 @@ import {
   makeTaskWorkSpecification,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Effect, Exit, Layer, Option, Result } from "effect"
+import { Cause, Effect, Exit, Layer, Option, Result } from "effect"
 import { expect } from "vitest"
 import { validSnapshot } from "../../../test/task-dag.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
@@ -47,6 +48,11 @@ import { ActiveTaskClaim, TaskClaimAcquisition } from "../../authorities/task-tr
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
+  appendExecutorCommandDeliveryIntent,
+  type AcceptedExecutorCommandDelivery
+} from "../../workflow/protocols/planned-attempt-executor-work/command-delivery.js"
+import { memoryJournalTestLayerFromPartitionRecords } from "../../workflow-journal/adapters/memory-store.js"
+import {
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
@@ -55,6 +61,7 @@ import {
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { OperationId } from "../../workflow/identity.js"
+import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
@@ -72,7 +79,16 @@ import {
   taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
-import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionObservation,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent,
+  PlannedAttemptExecutorWorkReportedEvent
+} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved,
@@ -83,6 +99,7 @@ import { AttemptChoiceRequestId } from "../../workflow/protocols/attempt-choice/
 import {
   deliveryProposalsOf,
   deliveryProposalOfAcceptedFreshTask,
+  isAcceptedFreshTaskDeliveryProposalFor,
   type AcceptedFreshTaskDeliveryProposal
 } from "./delivery-proposal-derivation.js"
 import { FreshWorkflowStep } from "./fresh-workflow-step.js"
@@ -95,6 +112,12 @@ import {
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { beginPlannedAttemptExecutorResponsibility } from "../../workflow/protocols/planned-attempt-executor-work/responsibility.js"
+import {
+  isSafeContinuationRevalidationEligibility,
+  type SafeContinuationRevalidationEligibility
+} from "../frontier/fresh-facts.js"
+import { deriveJournalResponsibilityFacts } from "../run/recovery-activation.js"
+import type { ReconstructedRunState } from "../reconstruction/state.js"
 
 const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntimeAdmissionTest.make")(function* (
   initial: Parameters<typeof makeAdmissionControllerWithLifecycle>[0],
@@ -158,6 +181,534 @@ const admissionBasis = (
       runId: basisRunId
     })
   )
+
+const safeContinuationEligibility = (
+  basis:
+    | { readonly _tag: "LifecycleReopenAfterAcceptedSafe" }
+    | {
+        readonly _tag: "ReconciledResumeStillSafe"
+        readonly observedAt: JournalPosition
+        readonly projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal
+        readonly resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal
+      } = { _tag: "LifecycleReopenAfterAcceptedSafe" },
+  eligibleAttempt: PlannedTaskAttempt = plannedAttempt,
+  responsibilityBeganAt: JournalPosition = JournalPosition.make(2)
+) => {
+  const target = FixtureTarget.make(
+    `admission-safe:${eligibleAttempt.taskId}:${basis._tag}:${
+      basis._tag === "ReconciledResumeStillSafe" ? basis.observedAt : 0
+    }`
+  )
+  const planOperation = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make(`admission-safe-plan:${target}`),
+    plannedAttempt: eligibleAttempt,
+    predecessorOperationIds: []
+  })
+  const graphOperation = (state: "closed" | "open") =>
+    makeTrackerGraphObservationOperation(
+      { _tag: "AttemptContinuation" },
+      OperationId.make(`admission-safe-${state}:${target}`),
+      target,
+      [planOperation.operationId],
+      [eligibleAttempt.taskId]
+    )
+  const closedOperation = graphOperation("closed")
+  const openOperation = graphOperation("open")
+  const graph = (state: "closed" | "open") =>
+    validSnapshot({
+      revision: `admission-safe-${state}:${target}`,
+      tasks: [
+        {
+          id: eligibleAttempt.taskId,
+          lifecycle: state === "closed" ? ({ _tag: "TerminalWithoutSuccess" } as const) : ({ _tag: "Open" } as const),
+          parentTaskId: null,
+          prerequisiteIds: []
+        }
+      ]
+    })
+  const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+    correlation: plannedAttemptExecutorCorrelation(eligibleAttempt)
+  })
+  const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(position),
+    runId
+  })
+  const records: Array<JournalRecord> = [
+    makeWorkflowRunBeganRecord(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    ),
+    record(2, TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })),
+    record(3, taskTrackerReadIntent(closedOperation)),
+    record(
+      4,
+      taskTrackerFactsObservedEvent(
+        closedOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(closedOperation, graph("closed"))
+      )
+    ),
+    record(
+      5,
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+        report: safe,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(6, taskTrackerReadIntent(openOperation)),
+    record(
+      7,
+      taskTrackerFactsObservedEvent(
+        openOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(openOperation, graph("open"))
+      )
+    )
+  ]
+  if (basis._tag === "ReconciledResumeStillSafe") {
+    const commandPosition = Number(basis.observedAt) - 1
+    records.push(
+      record(
+        commandPosition,
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Resume",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: basis.resumeCommandOrdinal,
+          plannedAttempt: eligibleAttempt,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        Number(basis.observedAt),
+        PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+          commandOrdinal: basis.resumeCommandOrdinal,
+          observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({
+            report: safe
+          }),
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt: eligibleAttempt,
+          projectionOrdinal: basis.projectionOrdinal,
+          version: workflowJournalEventVersion
+        })
+      )
+    )
+  }
+  const responsibility = {
+    _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+    beganAt: responsibilityBeganAt,
+    plannedAttempt: eligibleAttempt
+  }
+  const runState: ReconstructedRunState = {
+    appliedThrough: records.at(-1)?.position ?? null,
+    cancellation: { _tag: "RunCancellationNotApplied" },
+    controlPolicy: Option.none(),
+    graphKnowledge: {
+      taskTrackerFacts: [
+        makeCompleteTaskTrackerFactsObserved(closedOperation, graph("closed")),
+        makeCompleteTaskTrackerFactsObserved(openOperation, graph("open"))
+      ]
+    },
+    pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+    responsibility: { entries: [responsibility] },
+    runId,
+    workflowHistory: { records }
+  }
+  const facts = deriveJournalResponsibilityFacts(runState).find(
+    (candidate) => candidate._tag === "PlannedAttemptExecutorFreshFacts"
+  )
+  const eligibility = facts?.safeContinuationRevalidationEligibility
+  if (!isSafeContinuationRevalidationEligibility(eligibility)) {
+    return Effect.die("validated Safe recovery history did not establish revalidation eligibility")
+  }
+  return Effect.succeed(eligibility)
+}
+
+const safeContinuationProposal = (eligibility: SafeContinuationRevalidationEligibility, id: string) => ({
+  ...trackerGraphReadProposalOf({
+    acceptedAt: null,
+    purpose: "EstablishCurrentGraph",
+    runId,
+    target: FixtureTarget.make(`safe-binding-${id}`)
+  }),
+  id: DeliveryProposalId.make(id),
+  admission: {
+    integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+    plannedAttemptProtocol: {
+      _tag: "PlannedAttemptProtocolRequired" as const,
+      correlation: plannedAttemptExecutorCorrelation(eligibility.plannedAttempt)
+    },
+    taskWorkPosition: {
+      _tag: "TaskWorkPositionRequired" as const,
+      mode: "ReserveOrReuse" as const,
+      taskId: eligibility.plannedAttempt.taskId
+    },
+    safeContinuationRevalidation: eligibility
+  }
+})
+
+it.effect("rejects structural Safe eligibility before it can reserve capacity", () =>
+  Effect.gen(function* () {
+    const issued = yield* safeContinuationEligibility()
+    const structuralCopy = { ...issued }
+
+    expect(isSafeContinuationRevalidationEligibility(structuralCopy)).toBe(false)
+    const basis = yield* Effect.exit(
+      makeFreshTaskAdmissionBasis({
+        capacity: TaskWorkCapacity.make(1),
+        entries: [],
+        runId,
+        safeContinuationRevalidations: [structuralCopy]
+      })
+    )
+    expect(Exit.isFailure(basis)).toBe(true)
+  })
+)
+
+it.effect(
+  "reserves only the third position for Safe revalidation before fresh E and releases a rejected pre-intent lease",
+  () =>
+    withProtocolController(
+      Effect.gen(function* () {
+        const eligibility = yield* safeContinuationEligibility()
+        const held = ["B", "D"].map((id) =>
+          PlannedTaskAttempt.make({
+            ...plannedAttempt,
+            taskId: TaskId.make(id),
+            attemptId: AttemptId.make(`attempt:${id}:0`),
+            branch: TaskBranchRef.make(`refs/heads/dalph/attempt-${id}-0`),
+            worktree: WorktreeLocator.make(`/worktrees/attempt-${id}-0`)
+          })
+        )
+        const basis = (capacity: number) =>
+          makeFreshTaskAdmissionBasis({
+            capacity: TaskWorkCapacity.make(capacity),
+            entries: held.map((attempt) => TaskAdmissionOccupancy.ExactAttemptHeld({ plannedAttempt: attempt })),
+            runId,
+            safeContinuationRevalidations: [eligibility]
+          })
+        const controller = yield* makeDeliveryRuntimeAdmissionController(
+          yield* basis(2),
+          yield* makeIntegrationTargetResourceController()
+        )
+        const proposal = {
+          ...trackerGraphReadProposalOf({
+            acceptedAt: null,
+            purpose: "EstablishCurrentGraph",
+            runId,
+            target: FixtureTarget.make("safe-capacity")
+          }),
+          admission: {
+            integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+            plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+            taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId },
+            safeContinuationRevalidation: eligibility
+          }
+        }
+        expect((yield* controller.tryReserve(proposal))._tag).toBe("Deferred")
+        expect((yield* controller.snapshot).positions.size).toBe(2)
+        yield* controller.synchronize(yield* basis(3))
+        const frontier = makeFreshTaskCandidateFrontierForTest({ decisions: [freshEntryDecision("E", "E-r1")], runId })
+        expect((yield* controller.tryReserveFresh(frontier, deliveryProposalOfAcceptedFreshTask))._tag).toBe("Deferred")
+        const admitted = yield* controller.tryReserve(proposal)
+        if (admitted._tag !== "Admitted") return yield* Effect.die("third continuation position was unavailable")
+        expect((yield* controller.snapshot).positions.size).toBe(3)
+        expect((yield* controller.tryReserveFresh(frontier, deliveryProposalOfAcceptedFreshTask))._tag).toBe("Deferred")
+        yield* controller.rollback(admitted.reservation, "BeforeDurableClaimIntent")
+        expect((yield* controller.snapshot).positions.size).toBe(2)
+        yield* controller.synchronize(admissionBasis(3, held), frontier)
+        expect((yield* controller.tryReserveFresh(frontier, deliveryProposalOfAcceptedFreshTask))._tag).toBe("Admitted")
+      })
+    )
+)
+
+it.effect("admits Safe continuation rereads in responsibility chronology", () =>
+  withProtocolController(
+    Effect.gen(function* () {
+      const earlierAttempt = PlannedTaskAttempt.make({
+        ...plannedAttempt,
+        attemptId: AttemptId.make("safe-chronology-earlier-attempt"),
+        taskId: TaskId.make("safe-chronology-earlier-task")
+      })
+      const earlier = yield* safeContinuationEligibility(
+        { _tag: "LifecycleReopenAfterAcceptedSafe" },
+        earlierAttempt,
+        JournalPosition.make(1)
+      )
+      const later = yield* safeContinuationEligibility()
+      const controller = yield* makeDeliveryRuntimeAdmissionController(
+        yield* makeFreshTaskAdmissionBasis({
+          capacity: TaskWorkCapacity.make(1),
+          entries: [],
+          runId,
+          safeContinuationRevalidations: [earlier, later]
+        }),
+        yield* makeIntegrationTargetResourceController()
+      )
+
+      expect((yield* controller.tryReserve(safeContinuationProposal(later, "later")))._tag).toBe("Deferred")
+      const admitted = yield* controller.tryReserve(safeContinuationProposal(earlier, "earlier"))
+      if (admitted._tag !== "Admitted") return yield* Effect.die("earlier Safe continuation was not admitted")
+      expect(yield* controller.releasePlannedAttemptPosition(plannedAttemptExecutorCorrelation(earlierAttempt))).toBe(
+        "Released"
+      )
+      yield* controller.rollback(admitted.reservation, "BeforeDurableClaimIntent")
+    })
+  )
+)
+
+it.effect("rejects stale or swapped reconciled Resume identity before reserving", () =>
+  withProtocolController(
+    Effect.gen(function* () {
+      const original = yield* safeContinuationEligibility()
+      const exact = yield* safeContinuationEligibility({
+        _tag: "ReconciledResumeStillSafe",
+        observedAt: JournalPosition.make(10),
+        projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
+        resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(3)
+      })
+      const stale = yield* safeContinuationEligibility({
+        _tag: "ReconciledResumeStillSafe",
+        observedAt: JournalPosition.make(9),
+        projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
+        resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(3)
+      })
+      const swapped = yield* safeContinuationEligibility({
+        _tag: "ReconciledResumeStillSafe",
+        observedAt: JournalPosition.make(10),
+        projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
+        resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(4)
+      })
+      const swappedProjection = yield* safeContinuationEligibility({
+        _tag: "ReconciledResumeStillSafe",
+        observedAt: JournalPosition.make(10),
+        projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(2),
+        resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(3)
+      })
+      const controller = yield* makeDeliveryRuntimeAdmissionController(
+        yield* makeFreshTaskAdmissionBasis({
+          capacity: TaskWorkCapacity.make(1),
+          entries: [],
+          runId,
+          safeContinuationRevalidations: [exact]
+        }),
+        yield* makeIntegrationTargetResourceController()
+      )
+      const proposal = (eligibility: typeof exact) => ({
+        ...trackerGraphReadProposalOf({
+          acceptedAt: JournalPosition.make(5),
+          purpose: "EstablishCurrentGraph",
+          runId,
+          target: FixtureTarget.make("safe-retry-identity")
+        }),
+        admission: {
+          integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+          plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+          taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId },
+          safeContinuationRevalidation: eligibility
+        }
+      })
+      for (const invalid of [original, stale, swapped, swappedProjection])
+        expect((yield* controller.tryReserve(proposal(invalid)))._tag).toBe("Deferred")
+      const exactProposal = proposal(exact)
+      expect(
+        (yield* controller.tryReserve({
+          ...exactProposal,
+          admission: {
+            ...exactProposal.admission,
+            plannedAttemptProtocol: {
+              _tag: "PlannedAttemptProtocolRequired",
+              correlation: { ...correlation, attemptId: AttemptId.make("another-executor-attempt") }
+            }
+          }
+        }))._tag
+      ).toBe("Deferred")
+      expect((yield* controller.snapshot).positions.size).toBe(0)
+      const admitted = yield* controller.tryReserve(proposal(exact))
+      if (admitted._tag !== "Admitted") return yield* Effect.die("exact reconciled Resume was not admitted")
+      yield* controller.complete(admitted.reservation)
+      expect((yield* controller.snapshot).positions.size).toBe(1)
+      yield* controller.synchronize(
+        yield* makeFreshTaskAdmissionBasis({
+          capacity: TaskWorkCapacity.make(1),
+          entries: [],
+          runId,
+          safeContinuationRevalidations: [swapped]
+        })
+      )
+      expect((yield* controller.snapshot).positions.size).toBe(0)
+    })
+  )
+)
+
+it.effect("reconciles a reserved Safe continuation only with the same accepted attempt", () =>
+  withProtocolController(
+    Effect.gen(function* () {
+      const eligibility = yield* safeContinuationEligibility()
+      const basis = (heldAttempts: ReadonlyArray<PlannedTaskAttempt>) =>
+        makeFreshTaskAdmissionBasis({
+          capacity: TaskWorkCapacity.make(1),
+          entries: heldAttempts.map((attempt) => TaskAdmissionOccupancy.ExactAttemptHeld({ plannedAttempt: attempt })),
+          runId,
+          safeContinuationRevalidations: [eligibility]
+        })
+      const proposal = (id: string) => ({
+        ...trackerGraphReadProposalOf({
+          acceptedAt: null,
+          purpose: "EstablishCurrentGraph",
+          runId,
+          target: FixtureTarget.make(`safe-accepted-reconciliation-${id}`)
+        }),
+        id: DeliveryProposalId.make(id),
+        admission: {
+          integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+          plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+          taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId },
+          safeContinuationRevalidation: eligibility
+        }
+      })
+      const matching = yield* makeDeliveryRuntimeAdmissionController(
+        yield* basis([]),
+        yield* makeIntegrationTargetResourceController()
+      )
+      const matchingReservation = yield* matching.tryReserve(proposal("matching"))
+      if (matchingReservation._tag !== "Admitted") return yield* Effect.die("Safe continuation was not admitted")
+      yield* matching.complete(matchingReservation.reservation)
+      yield* matching.synchronize(yield* basis([plannedAttempt]))
+      expect((yield* matching.snapshot).positions.get(taskId)?._tag).toBe("ExactAttemptHeld")
+
+      const foreignAttempt = PlannedTaskAttempt.make({
+        ...plannedAttempt,
+        attemptId: AttemptId.make("safe-accepted-foreign-attempt")
+      })
+      const mismatching = yield* makeDeliveryRuntimeAdmissionController(
+        yield* basis([]),
+        yield* makeIntegrationTargetResourceController()
+      )
+      const mismatchingReservation = yield* mismatching.tryReserve(proposal("mismatching"))
+      if (mismatchingReservation._tag !== "Admitted") return yield* Effect.die("Safe continuation was not admitted")
+      yield* mismatching.complete(mismatchingReservation.reservation)
+      const positionBeforeMismatch = (yield* mismatching.snapshot).positions.get(taskId)
+      expect(positionBeforeMismatch?._tag).toBe("SafeContinuationReserved")
+      const mismatch = yield* Effect.exit(mismatching.synchronize(yield* basis([foreignAttempt])))
+      if (Exit.isSuccess(mismatch)) return yield* Effect.die("foreign accepted attempt was not rejected")
+      expect(mismatch._tag).toBe("Failure")
+      expect(Cause.squash(mismatch.cause)).toBe(
+        `accepted task-work position contradicts locally accepted attempt ${taskId}`
+      )
+      expect((yield* mismatching.snapshot).positions.get(taskId)).toEqual(positionBeforeMismatch)
+    })
+  )
+)
+
+it.effect("keeps one exact safe continuation reservation through reads and Resume intent handoff", () =>
+  withProtocolController(
+    Effect.gen(function* () {
+      const eligibility = yield* safeContinuationEligibility()
+      const basis = (capacity: number, eligible = true, held = false) =>
+        makeFreshTaskAdmissionBasis({
+          acceptedAt: JournalPosition.make(3),
+          capacity: TaskWorkCapacity.make(capacity),
+          entries: held ? [TaskAdmissionOccupancy.ExactAttemptHeld({ plannedAttempt })] : [],
+          runId,
+          safeContinuationRevalidations: eligible ? [eligibility] : []
+        })
+      const controller = yield* makeDeliveryRuntimeAdmissionController(
+        yield* basis(1),
+        yield* makeIntegrationTargetResourceController()
+      )
+      const proposal = (id: string) => ({
+        ...trackerGraphReadProposalOf({
+          acceptedAt: JournalPosition.make(3),
+          purpose: "EstablishCurrentGraph",
+          runId,
+          target: FixtureTarget.make("safe-continuation")
+        }),
+        id: DeliveryProposalId.make(id),
+        admission: {
+          integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+          plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired" as const, correlation },
+          taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId },
+          safeContinuationRevalidation: eligibility
+        }
+      })
+      const first = yield* controller.tryReserve(proposal("safe-read-one"))
+      if (first._tag !== "Admitted") return yield* Effect.die("safe read was not admitted")
+      expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("SafeContinuationReserved")
+      yield* controller.complete(first.reservation)
+      yield* controller.synchronize(yield* basis(1))
+      const second = yield* controller.tryReserve(proposal("safe-read-two"))
+      if (second._tag !== "Admitted") return yield* Effect.die("second safe read lost its position")
+      expect((yield* controller.snapshot).positions.size).toBe(1)
+      yield* controller.bindPlannedAttemptPosition(second.reservation, plannedAttempt)
+      yield* controller.synchronize(yield* basis(1))
+      expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("SafeContinuationReserved")
+      const receipt = yield* appendExecutorCommandDeliveryIntent({
+        _tag: "PlannedAttemptExecutorCommandIntended",
+        command: "Resume",
+        ordinal: PlannedAttemptExecutorCommandOrdinal.make(3),
+        plannedAttempt,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ hot: exactHandoffFixture.records })))
+      yield* controller.bindPlannedAttemptPosition(second.reservation, plannedAttempt, undefined, receipt)
+      expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("LocallyAcceptedAttemptPosition")
+      yield* controller.synchronize(yield* basis(1))
+      expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("LocallyAcceptedAttemptPosition")
+      yield* controller.synchronize(yield* basis(1, false, true))
+      expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("ExactAttemptHeld")
+      yield* controller.rollback(second.reservation, "AfterDurableClaimIntentOrAmbiguity")
+      expect((yield* controller.snapshot).positions.size).toBe(1)
+      const staleLease = yield* controller
+        .bindPlannedAttemptPosition(second.reservation, plannedAttempt, undefined, receipt)
+        .pipe(Effect.exit)
+      expect(staleLease._tag).toBe("Failure")
+      expect((yield* controller.snapshot).positions.size).toBe(1)
+    })
+  )
+)
+
+it.effect("releases safe revalidation capacity when accepted evidence becomes constrained", () =>
+  withProtocolController(
+    Effect.gen(function* () {
+      const eligibility = yield* safeContinuationEligibility()
+      const basis = yield* makeFreshTaskAdmissionBasis({
+        capacity: TaskWorkCapacity.make(1),
+        entries: [],
+        runId,
+        safeContinuationRevalidations: [eligibility]
+      })
+      const controller = yield* makeDeliveryRuntimeAdmissionController(
+        basis,
+        yield* makeIntegrationTargetResourceController()
+      )
+      const proposal = {
+        ...trackerGraphReadProposalOf({
+          acceptedAt: null,
+          purpose: "EstablishCurrentGraph",
+          runId,
+          target: FixtureTarget.make("safe-revalidation-release")
+        }),
+        admission: {
+          integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+          plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" as const },
+          taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId },
+          safeContinuationRevalidation: eligibility
+        }
+      }
+      const admitted = yield* controller.tryReserve(proposal)
+      if (admitted._tag !== "Admitted") return yield* Effect.die("safe read was not admitted")
+      yield* controller.complete(admitted.reservation)
+      expect((yield* controller.snapshot).positions.size).toBe(1)
+      yield* controller.synchronize(admissionBasis(1))
+      expect((yield* controller.snapshot).positions.size).toBe(0)
+      expect((yield* controller.tryReserve(proposal))._tag).toBe("Deferred")
+    })
+  )
+)
 
 it.effect("does not expose mutable controller authority through its descriptive snapshot", () =>
   withProtocolController(
@@ -336,6 +887,86 @@ const exactHandoffFixture = (() => {
   return { attempt, claimOperationId: taskACommitment.operation.acquisition.operationId, projection, records }
 })()
 
+it.effect("rejects stale, foreign, and wrong-kind accepted Resume handoffs without minting position authority", () =>
+  withProtocolController(
+    Effect.gen(function* () {
+      const bindRejected = Effect.fn(function* (
+        eligibility: SafeContinuationRevalidationEligibility,
+        receipt: AcceptedExecutorCommandDelivery,
+        id: string
+      ) {
+        const controller = yield* makeDeliveryRuntimeAdmissionController(
+          yield* makeFreshTaskAdmissionBasis({
+            capacity: TaskWorkCapacity.make(1),
+            entries: [],
+            runId,
+            safeContinuationRevalidations: [eligibility]
+          }),
+          yield* makeIntegrationTargetResourceController()
+        )
+        const admitted = yield* controller.tryReserve(safeContinuationProposal(eligibility, id))
+        if (admitted._tag !== "Admitted") return yield* Effect.die("Safe continuation was not admitted")
+        const positionBeforeRejection = (yield* controller.snapshot).positions.get(taskId)
+        expect(positionBeforeRejection?._tag).toBe("SafeContinuationReserved")
+        const rejection = yield* Effect.exit(
+          controller.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, undefined, receipt)
+        )
+        if (Exit.isSuccess(rejection)) return yield* Effect.die("invalid accepted Resume handoff was not rejected")
+        expect(rejection._tag).toBe("Failure")
+        expect(Cause.squash(rejection.cause)).toBe(
+          `planned-attempt position rejected reservation ${admitted.reservation.proposal.id}`
+        )
+        expect((yield* controller.snapshot).positions.get(taskId)).toEqual(positionBeforeRejection)
+        yield* controller.rollback(admitted.reservation, "AfterDurableClaimIntentOrAmbiguity")
+      })
+      const initialIntent = (attempt: PlannedTaskAttempt) =>
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Resume",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: PlannedAttemptExecutorCommandOrdinal.make(3),
+          plannedAttempt: attempt,
+          version: workflowJournalEventVersion
+        })
+      const lifecycleEligibility = yield* safeContinuationEligibility()
+      const earlyReceipt = yield* appendExecutorCommandDeliveryIntent(initialIntent(plannedAttempt)).pipe(
+        Effect.provide(
+          memoryJournalTestLayerFromPartitionRecords({
+            hot: [
+              makeWorkflowRunBeganRecord(
+                runId,
+                FixtureTarget.make("safe-binding-early"),
+                InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+              )
+            ]
+          })
+        )
+      )
+      yield* bindRejected(lifecycleEligibility, earlyReceipt, "early")
+
+      const foreignAttempt = PlannedTaskAttempt.make({
+        ...plannedAttempt,
+        attemptId: AttemptId.make("safe-binding-foreign-attempt")
+      })
+      const foreignReceipt = yield* appendExecutorCommandDeliveryIntent(initialIntent(foreignAttempt)).pipe(
+        Effect.provide(memoryJournalTestLayerFromPartitionRecords({ hot: exactHandoffFixture.records }))
+      )
+      yield* bindRejected(lifecycleEligibility, foreignReceipt, "foreign")
+
+      const reconciledEligibility = yield* safeContinuationEligibility({
+        _tag: "ReconciledResumeStillSafe",
+        observedAt: JournalPosition.make(10),
+        projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
+        resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(3)
+      })
+      const initialRetryReceipt = yield* appendExecutorCommandDeliveryIntent(initialIntent(plannedAttempt)).pipe(
+        Effect.provide(memoryJournalTestLayerFromPartitionRecords({ hot: exactHandoffFixture.records }))
+      )
+      yield* bindRejected(reconciledEligibility, initialRetryReceipt, "wrong-kind")
+    })
+  )
+)
+
 const responsibilityAcceptedAt = JournalPosition.make(Number(taskAProjection.acceptedAt) + 2)
 const acceptedResponsibility = Effect.runSync(
   beginPlannedAttemptExecutorResponsibility(plannedAttempt).pipe(
@@ -347,6 +978,50 @@ const acceptedResponsibility = Effect.runSync(
         read: () => Effect.succeed([])
       })
     )
+  )
+)
+
+it.effect("binds an exact planned attempt once and rejects its local position as fresh binding authority", () =>
+  withProtocolController(
+    Effect.gen(function* () {
+      const controller = yield* makeDeliveryRuntimeAdmissionController(
+        admissionBasis(1, [], undefined, JournalPosition.make(3)),
+        yield* makeIntegrationTargetResourceController()
+      )
+      const proposal = {
+        ...trackerGraphReadProposalOf({
+          acceptedAt: JournalPosition.make(3),
+          purpose: "EstablishCurrentGraph",
+          runId,
+          target: FixtureTarget.make("pending-runtime-position")
+        }),
+        id: DeliveryProposalId.make("pending-runtime-position"),
+        admission: {
+          integrationTarget: { _tag: "NoIntegrationTargetResource" as const },
+          plannedAttemptProtocol: { _tag: "PlannedAttemptProtocolRequired" as const, correlation },
+          taskWorkPosition: { _tag: "TaskWorkPositionRequired" as const, mode: "ReserveOrReuse" as const, taskId }
+        }
+      }
+      const admitted = yield* controller.tryReserve(proposal)
+      if (admitted._tag !== "Admitted") return yield* Effect.die("pending position was not admitted")
+      yield* controller.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt)
+      expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("LocallyAcceptedAttemptPosition")
+      yield* controller.complete(admitted.reservation)
+      const repeated = yield* controller.tryReserve({
+        ...proposal,
+        id: DeliveryProposalId.make("pending-runtime-repeat")
+      })
+      if (repeated._tag !== "Admitted") return yield* Effect.die("exact local position was not reused")
+      const positionBeforeRejection = (yield* controller.snapshot).positions.get(taskId)
+      expect(positionBeforeRejection?._tag).toBe("LocallyAcceptedAttemptPosition")
+      const rejection = yield* Effect.exit(controller.bindPlannedAttemptPosition(repeated.reservation, plannedAttempt))
+      if (Exit.isSuccess(rejection)) return yield* Effect.die("local accepted position was reused as binding authority")
+      expect(rejection._tag).toBe("Failure")
+      expect(Cause.squash(rejection.cause)).toBe(
+        `planned-attempt position rejected reservation ${repeated.reservation.proposal.id}`
+      )
+      expect((yield* controller.snapshot).positions.get(taskId)).toEqual(positionBeforeRejection)
+    })
   )
 )
 
@@ -611,6 +1286,39 @@ it.effect("a proposal without accepted fresh-task capability cannot retain a tem
   )
 )
 
+it.effect("recognizes only the proposal issued for the exact accepted fresh candidate", () =>
+  withProtocolController(
+    Effect.gen(function* () {
+      const admission = yield* makeDeliveryRuntimeAdmissionController(
+        admissionBasis(1),
+        yield* makeIntegrationTargetResourceController()
+      )
+      const frontier = makeFreshTaskCandidateFrontierForTest({
+        decisions: [freshEntryDecision("A", "proposal-authority-A-r1")],
+        runId
+      })
+      const foreignFrontier = makeFreshTaskCandidateFrontierForTest({
+        decisions: [freshEntryDecision("B", "proposal-authority-B-r1")],
+        runId
+      })
+      const candidate = frontier.candidates[0]
+      const foreignCandidate = foreignFrontier.candidates[0]
+      if (candidate === undefined || foreignCandidate === undefined)
+        return yield* Effect.die("missing fresh candidates")
+
+      const admitted = yield* admission.tryReserveFresh(frontier, (accepted) => {
+        const proposal = deliveryProposalOfAcceptedFreshTask(accepted)
+        expect(isAcceptedFreshTaskDeliveryProposalFor(null, candidate)).toBe(false)
+        expect(isAcceptedFreshTaskDeliveryProposalFor({ ...proposal }, candidate)).toBe(false)
+        expect(isAcceptedFreshTaskDeliveryProposalFor(proposal, foreignCandidate)).toBe(false)
+        expect(isAcceptedFreshTaskDeliveryProposalFor(proposal, candidate)).toBe(true)
+        return proposal
+      })
+      expect(admitted._tag).toBe("Admitted")
+    })
+  )
+)
+
 it.effect("materializes proposals for A through C only after their atomic fresh admission", () =>
   withProtocolController(
     Effect.gen(function* () {
@@ -829,7 +1537,6 @@ it.effect("retains all holders across contraction and admits only after occupanc
       })
       const candidate = frontier.candidates[0]
       if (candidate === undefined) return yield* Effect.die("missing contraction candidate")
-
       expect((yield* admission.tryReserveFresh(frontier, deliveryProposalOfAcceptedFreshTask))._tag).toBe("Deferred")
       yield* admission.releasePlannedAttemptPosition(plannedAttemptExecutorCorrelation(firstAttempt))
       expect((yield* admission.tryReserveFresh(frontier, deliveryProposalOfAcceptedFreshTask))._tag).toBe("Deferred")

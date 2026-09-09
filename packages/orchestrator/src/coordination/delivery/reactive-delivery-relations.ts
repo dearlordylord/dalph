@@ -13,6 +13,10 @@ import {
   transitionTrackerGraphRequirement,
   type RunnableFrontierTransition
 } from "../frontier/frontier.js"
+import {
+  isSafeContinuationRevalidationEligibility,
+  type SafeContinuationRevalidationEligibility
+} from "../frontier/fresh-facts.js"
 import { readDeliveryProjectionFrom, type RunRecoveryProjectionSource } from "../run/recovery-activation.js"
 import { journaledCurrentDeliveryFrameOf, type CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import {
@@ -103,6 +107,17 @@ const exactDeliveryEvidenceOf = (
     ...projection.evidence.integrationWaits.map((wait): TicketDeliveryEvidence => ({ _tag: "IntegrationWait", wait }))
   ]
 }
+
+const safeContinuationRevalidationsOf = (
+  projection: RecoveredDeliveryProjection
+): ReadonlyArray<SafeContinuationRevalidationEligibility> =>
+  projection.evidence._tag === "AvailableDeliveryProjectionEvidence"
+    ? projection.evidence.facts.flatMap((facts) => {
+        if (facts._tag !== "PlannedAttemptExecutorFreshFacts") return []
+        const eligibility = facts.safeContinuationRevalidationEligibility
+        return isSafeContinuationRevalidationEligibility(eligibility) ? [eligibility] : []
+      })
+    : []
 
 /**
  * A restarted active refresh must establish the current graph before it can
@@ -215,6 +230,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     })
     const transitions = [...recovered, ...admittedFresh.map(({ transition }) => transition)]
     const records = journal.records
+    const safeContinuationRevalidations = safeContinuationRevalidationsOf(projection)
     const integrationResponsibilities = deriveIntegrationAdmission(records).responsibilities
     const proposalContributions = deliveryProposalsOf({
       acceptedAt: journal.position,
@@ -224,6 +240,7 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       pendingReadOperationIds: pendingReadOperationIdsOf(records),
       responsibilities: journal.reconstructed.responsibility.entries,
       runId,
+      safeContinuationRevalidations,
       transitions
     })
     const exactEvidence = exactDeliveryEvidenceOf(frame, projection, records)
@@ -237,7 +254,8 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       capacity: policy.taskExecutionCapacity,
       entries: [],
       projection: freshAdmission,
-      runId
+      runId,
+      safeContinuationRevalidations
     })
     return {
       actionInputs: {

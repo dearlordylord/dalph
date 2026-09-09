@@ -44,6 +44,7 @@ import {
   type JournalRecord,
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
+  PlannedAttemptExecutorResumeRedeliveryIntendedEvent,
   PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorCommandResponseContradictedEvent,
   PlannedAttemptExecutorStateObservedEvent,
@@ -141,6 +142,7 @@ const recordExecutorEntry = (
       readonly _tag:
         | "PlannedAttemptExecutorCommandIntended"
         | "PlannedAttemptExecutorCommandProjectionObserved"
+        | "PlannedAttemptExecutorResumeRedeliveryIntended"
         | "PlannedAttemptExecutorCommandResponseObserved"
         | "PlannedAttemptExecutorCommandResponseContradicted"
         | "PlannedAttemptExecutorStateObserved"
@@ -178,6 +180,16 @@ const recordExecutorEntry = (
         occurrenceClassification: value.occurrenceClassification,
         plannedAttempt: value.plannedAttempt,
         projectionOrdinal: value.projectionOrdinal
+      }),
+      PlannedAttemptExecutorResumeRedeliveryIntended: (value): RecordedCassetteEntry => ({
+        _tag: "PlannedAttemptExecutorResumeRedeliveryIntended",
+        authorization: value.authorization,
+        commandOrdinal: value.commandOrdinal,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        plannedAttempt: value.plannedAttempt,
+        projectionOrdinal: value.projectionOrdinal,
+        redeliveryOrdinal: value.redeliveryOrdinal
       }),
       PlannedAttemptExecutorCommandResponseObserved: (value): RecordedCassetteEntry => ({
         _tag: "PlannedAttemptExecutorCommandResponseObserved",
@@ -555,6 +567,7 @@ type ExecutorEvent = Extract<
     readonly _tag:
       | "PlannedAttemptExecutorCommandIntended"
       | "PlannedAttemptExecutorCommandProjectionObserved"
+      | "PlannedAttemptExecutorResumeRedeliveryIntended"
       | "PlannedAttemptExecutorCommandResponseObserved"
       | "PlannedAttemptExecutorCommandResponseContradicted"
       | "PlannedAttemptExecutorStateObserved"
@@ -566,6 +579,7 @@ type ExecutorEvent = Extract<
 const executorEventTags = {
   PlannedAttemptExecutorCommandIntended: true,
   PlannedAttemptExecutorCommandProjectionObserved: true,
+  PlannedAttemptExecutorResumeRedeliveryIntended: true,
   PlannedAttemptExecutorCommandResponseObserved: true,
   PlannedAttemptExecutorCommandResponseContradicted: true,
   PlannedAttemptExecutorStateObserved: true,
@@ -1017,6 +1031,7 @@ type RecordedExecutorEntry = Extract<
     readonly _tag:
       | "PlannedAttemptExecutorCommandIntended"
       | "PlannedAttemptExecutorCommandProjectionObserved"
+      | "PlannedAttemptExecutorResumeRedeliveryIntended"
       | "PlannedAttemptExecutorCommandResponseObserved"
       | "PlannedAttemptExecutorCommandResponseContradicted"
       | "PlannedAttemptExecutorStateObserved"
@@ -1028,6 +1043,7 @@ const isRecordedExecutorEntry = (entry: RecordedCassetteEntry): entry is Recorde
   new Set([
     "PlannedAttemptExecutorCommandIntended",
     "PlannedAttemptExecutorCommandProjectionObserved",
+    "PlannedAttemptExecutorResumeRedeliveryIntended",
     "PlannedAttemptExecutorCommandResponseObserved",
     "PlannedAttemptExecutorCommandResponseContradicted",
     "PlannedAttemptExecutorStateObserved",
@@ -1064,6 +1080,17 @@ const eventForExecutorEntry = (entry: RecordedExecutorEntry): WorkflowJournalEve
         occurrenceClassification: value.occurrenceClassification,
         plannedAttempt: value.plannedAttempt,
         projectionOrdinal: value.projectionOrdinal,
+        version: workflowJournalEventVersion
+      }),
+    PlannedAttemptExecutorResumeRedeliveryIntended: (value) =>
+      PlannedAttemptExecutorResumeRedeliveryIntendedEvent.make({
+        authorization: value.authorization,
+        commandOrdinal: value.commandOrdinal,
+        initiatedBy: value.initiatedBy,
+        occurrenceClassification: value.occurrenceClassification,
+        plannedAttempt: value.plannedAttempt,
+        projectionOrdinal: value.projectionOrdinal,
+        redeliveryOrdinal: value.redeliveryOrdinal,
         version: workflowJournalEventVersion
       }),
     PlannedAttemptExecutorCommandResponseObserved: (value) =>
@@ -1577,6 +1604,8 @@ const lyricForExecutorEntry = (entry: RecordedExecutorEntry): string =>
       `Dalph coordinator intended executor command ${value.command} for attempt ${value.plannedAttempt.attemptId}.`,
     PlannedAttemptExecutorCommandProjectionObserved: (value) =>
       `Dalph observed ${value.observation._tag} while reconciling executor command ${value.commandOrdinal} for attempt ${value.plannedAttempt.attemptId}.`,
+    PlannedAttemptExecutorResumeRedeliveryIntended: (value) =>
+      `Dalph coordinator intended redelivery ${value.redeliveryOrdinal} of Resume command ${value.commandOrdinal} for attempt ${value.plannedAttempt.attemptId}.`,
     PlannedAttemptExecutorCommandResponseObserved: (value) =>
       `The executor returned ${value.report._tag} to command ${value.commandOrdinal} for attempt ${value.plannedAttempt.attemptId}.`,
     PlannedAttemptExecutorCommandResponseContradicted: (value) =>

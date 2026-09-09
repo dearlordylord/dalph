@@ -37,6 +37,7 @@ interface DeliveryStoryAcceptanceTest {
     | "packages/orchestrator/src/workflow/protocols/integrator/successor-session.test.ts"
     | "packages/dalph/test/cassettes/scenario.test.ts"
     | "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
+    | "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts"
     | "prototypes/reducer-lab/src/cassette-lab.smoke.ts"
 }
 
@@ -226,11 +227,25 @@ export const deliveryStoryManifest = {
       scenarioTest("reconciles a lost completion-claim deletion without reopening success"),
       scenarioTest("reconstructs and round-trips interrupted and settled completion-cleanup Run prefixes")
     ),
-    missing(
-      "DS-18",
-      "No maintained run reopens a tracker lifecycle wait for C; Operator task Unpause is a different phenomenon."
+    slice("DS-18", ["controlled:issue274LifecycleReopen"], {
+      declaration: "it.effect",
+      sourceFile: "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts",
+      name: "reopens C and resumes its original attempt only after accepted capacity three"
+    }),
+    slice(
+      "DS-19",
+      ["controlled:issue274LifecycleReopen", "controlled:issue274LostResumeResponse"],
+      {
+        declaration: "it.effect",
+        sourceFile: "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts",
+        name: "reopens C and resumes its original attempt only after accepted capacity three"
+      },
+      {
+        declaration: "it.effect",
+        sourceFile: "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts",
+        name: "reconciles C's lost Resume response after restart without another Begin or Resume"
+      }
     ),
-    missing("DS-19", "No maintained run combines the retained C attempt with a later capacity increase."),
     missing(
       "DS-20",
       "The maintained staggered graph adds X during process loss and delays it behind reconstructed B/C positions; it does not add F and G behind three running tasks."

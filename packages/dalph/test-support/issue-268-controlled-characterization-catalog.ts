@@ -85,7 +85,7 @@ export const issue268ControlledDeliveryCharacterization = {
     D1: AttemptId.make("attempt:D:1")
   },
   baseSha: GitCommitSha.make("1111111111111111111111111111111111111111"),
-  graphs: { G0: graph("G0"), G1: graph("G1"), G2: graph("G2", "C") },
+  graphs: { G0: graph("G0"), G1: graph("G1"), G2: graph("G2", "C"), G4: graph("G4") },
   integrationTarget: IntegrationTarget.make({
     repository: GitRepositoryLocator.make("/dalph/controlled-characterization/issue-268.git"),
     ref: IntegrationTargetRef.make("refs/heads/main")
