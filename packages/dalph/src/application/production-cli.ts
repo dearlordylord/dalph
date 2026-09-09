@@ -44,6 +44,10 @@ import {
   type TraceReaderError,
   type TraceReaderService,
   type JournalStoreError,
+  OperationId,
+  TaskTrackerMutationOperation,
+  TaskTrackerMutationThrottled,
+  TaskTrackerThrottleTimingEvidence,
   type TrackerTarget
 } from "@dalph/orchestrator"
 import { Config, Effect, Option, Redacted, Schema, Stream } from "effect"
@@ -99,6 +103,25 @@ export class ProductionCliJournalError extends Schema.TaggedError<ProductionCliJ
     code: Schema.Literals(productionCliJournalFailureCodes),
     detail: Schema.NonEmptyString,
     subject: Schema.Literal("production Journal")
+  }
+) {}
+
+/** Safe identity and timing evidence for the one tracker mutation rejected by its provider. */
+export const ProductionCliDeliveryFailureSubject = Schema.TaggedStruct("TaskTrackerMutation", {
+  operation: TaskTrackerMutationOperation,
+  operationId: OperationId,
+  retry: Schema.NullOr(TaskTrackerThrottleTimingEvidence),
+  runId: Schema.NullOr(RunId)
+})
+export type ProductionCliDeliveryFailureSubject = typeof ProductionCliDeliveryFailureSubject.Type
+
+/** One provider throttle remains a delivery failure and never becomes startup or graceful Exit. */
+export class ProductionCliDeliveryError extends Schema.TaggedError<ProductionCliDeliveryError>()(
+  "ProductionCliDeliveryError",
+  {
+    code: Schema.Literal("delivery.provider_throttled"),
+    detail: Schema.Literal("the task tracker throttled a production delivery mutation"),
+    subject: ProductionCliDeliveryFailureSubject
   }
 ) {}
 
@@ -259,6 +282,7 @@ export const ProductionCliRecord = Schema.TaggedUnion({
   Failure: {
     code: Schema.Literals([
       "configuration.invalid",
+      "delivery.provider_throttled",
       ...productionCliJournalFailureCodes,
       ...productionCliLifecycleFailureCodes,
       "startup.ownership_conflict",
@@ -271,7 +295,7 @@ export const ProductionCliRecord = Schema.TaggedUnion({
       "usage.invalid"
     ]),
     detail: Schema.NonEmptyString,
-    subject: Schema.NonEmptyString,
+    subject: Schema.Union([Schema.NonEmptyString, ProductionCliDeliveryFailureSubject]),
     version: Schema.Literal(productionCliWireVersion)
   },
   RunDisposition: {
@@ -435,6 +459,7 @@ export const productionCliFailureRecord = (failure: ProductionCliKnownFailure): 
 
 export type ProductionCliKnownFailure =
   | ProductionCliConfigurationError
+  | ProductionCliDeliveryError
   | ProductionCliJournalError
   | ProductionCliLifecycleError
   | ProductionCliStartupError
@@ -454,6 +479,7 @@ type ProductionCliBoundaryFailure =
   | ProductionCliUsageError
   | ProductionRunSelectionConflict
   | StartupRecoveryBlocked
+  | TaskTrackerMutationThrottled
   | TraceReaderError
 
 /** Exact schema for every accepted CLI boundary failure and its exhaustive mapper. */
@@ -489,6 +515,7 @@ const ProductionCliBoundaryFailure = exactProductionCliBoundaryFailure(
     ProductionCliUsageError,
     ProductionRunSelectionConflict,
     StartupRecoveryBlocked,
+    TaskTrackerMutationThrottled,
     TraceCausalPredecessorContradiction,
     TraceCausalPredecessorMissing,
     TraceCausalPredecessorNotProjected,
@@ -532,13 +559,27 @@ const currentStatusProjectionFailure = (failure: DeliveryStatusProjectionError):
   }
 }
 
-const mapProductionCliBoundaryFailure = (failure: ProductionCliBoundaryFailure): ProductionCliKnownFailure => {
+const mapProductionCliBoundaryFailure = (
+  failure: ProductionCliBoundaryFailure,
+  selectedRunId: RunId | null
+): ProductionCliKnownFailure => {
   switch (failure._tag) {
     case "ProductionCliConfigurationError":
     case "ProductionCliLifecycleError":
     case "ProductionCliStatusError":
     case "ProductionCliUsageError":
       return failure
+    case "TaskTrackerMutationThrottled":
+      return new ProductionCliDeliveryError({
+        code: "delivery.provider_throttled",
+        detail: "the task tracker throttled a production delivery mutation",
+        subject: ProductionCliDeliveryFailureSubject.make({
+          operation: failure.operation,
+          operationId: failure.operationId,
+          retry: failure.retry,
+          runId: selectedRunId
+        })
+      })
     case "DeliveryStatusProjectionConflict":
     case "DeliveryStatusRunIdentityUnavailable":
     case "DeliveryStatusRunMismatch":
@@ -613,7 +654,16 @@ const mapProductionCliBoundaryFailure = (failure: ProductionCliBoundaryFailure):
 }
 
 /** Maps only accepted typed failures; unexpected defects remain on the runtime failure channel. */
-export const knownProductionCliFailure = (failure: unknown): ProductionCliKnownFailure | undefined =>
-  Option.map(Schema.decodeUnknownOption(ProductionCliBoundaryFailure)(failure), mapProductionCliBoundaryFailure).pipe(
-    Option.getOrUndefined
-  )
+export function knownProductionCliFailure(failure: unknown): ProductionCliKnownFailure | undefined
+export function knownProductionCliFailure(
+  failure: unknown,
+  selectedRunId: RunId | null
+): ProductionCliKnownFailure | undefined
+export function knownProductionCliFailure(
+  failure: unknown,
+  selectedRunId: RunId | null = null
+): ProductionCliKnownFailure | undefined {
+  return Option.map(Schema.decodeUnknownOption(ProductionCliBoundaryFailure)(failure), (known) =>
+    mapProductionCliBoundaryFailure(known, selectedRunId)
+  ).pipe(Option.getOrUndefined)
+}
