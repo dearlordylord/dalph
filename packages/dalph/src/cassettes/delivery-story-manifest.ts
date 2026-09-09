@@ -250,7 +250,7 @@ export const deliveryStoryManifest = {
     slice("DS-20", ["controlled:issue275ActiveGraphRefresh"], {
       declaration: "it.effect",
       sourceFile: "packages/dalph/test/cassettes/issue-275-active-graph-refresh.test.ts",
-      name: "observes F and G while B C and D remain held and admits neither until an exact position is released"
+      name: "observes F and G without admitting either while B C and D retain every exact position"
     }),
     missing("DS-21", "No maintained authored run finalizes B, C, and D and admits E, F, and G in one chronology."),
     missing(

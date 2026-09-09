@@ -72,7 +72,7 @@ owns that composition.
 
 | Scenario | Acceptance evidence |
 | --- | --- |
-| C resumes, then Alice adds F/G behind exact B/C/D occupancy | `observes F and G while B C and D remain held and admits neither until an exact position is released` in `issue-275-active-graph-refresh.test.ts` |
+| C resumes, then Alice adds F/G behind exact B/C/D occupancy | `observes F and G without admitting either while B C and D retain every exact position` in `issue-275-active-graph-refresh.test.ts` |
 | Publication, notification, and timer retain one trailing graph read | The same maintained cassette counts provider calls, maximum concurrency, accepted graph observations, and executor commands |
 | Executor publications alone cause no graph reads | Production active-refresh report-variant tests in `production-reactivation.test.ts` |
 | Failed graph observation retains work and waits for an independent hint | `unreadable F G discovery preserves B C D and waits for another independent tracker hint` plus the production uncertainty matrix in `production-reactivation.test.ts` |

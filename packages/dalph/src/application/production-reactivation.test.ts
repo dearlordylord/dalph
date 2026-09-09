@@ -2241,6 +2241,8 @@ it.effect("production discovers F and G without admitting them while B C and D h
     expect(result.executorCalls).toEqual([])
     expect(result.executorEntries).toEqual([])
     expect(result.trackerCalls.filter((call) => call === "acquire")).toEqual([])
+    expect(result.taskWorkSnapshots.length).toBeGreaterThan(0)
+    expect([...new Set(result.taskWorkSnapshots.map((held) => held.toSorted().join(",")))]).toEqual(["B,C,D"])
     expect(result.taskWorkSnapshots.every((held) => held.toSorted().join(",") === "B,C,D")).toBe(true)
     expect(
       result.journalRecords.some(
@@ -2273,6 +2275,8 @@ it.effect("unreadable F G discovery preserves B C D and waits for another indepe
     expect(result.executorCalls).toEqual([])
     expect(result.executorEntries).toEqual([])
     expect(result.trackerCalls.filter((call) => call === "acquire")).toEqual([])
+    expect(result.taskWorkSnapshots.length).toBeGreaterThan(0)
+    expect([...new Set(result.taskWorkSnapshots.map((held) => held.toSorted().join(",")))]).toEqual(["B,C,D"])
     expect(result.taskWorkSnapshots.every((held) => held.toSorted().join(",") === "B,C,D")).toBe(true)
     expect(
       result.journalRecords.some(
