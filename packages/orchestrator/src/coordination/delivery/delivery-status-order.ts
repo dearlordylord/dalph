@@ -71,7 +71,8 @@ const subjectKey = (subject: DeliveryStatusSubject): string =>
 const workflowResponsibilityIdentity = (responsibility: WorkflowResponsibilityEntry): string =>
   canonicalIdentity(["workflow", workflowResponsibilityKey(responsibility)])
 
-const obligationIdentity = (obligation: ExactWorkflowObligation): string => {
+/** Stable descriptive reference for one exact obligation; it grants no execution authority. */
+export const deliveryStatusObligationReference = (obligation: ExactWorkflowObligation): string => {
   if (obligation._tag === "WorkflowResponsibility") return workflowResponsibilityIdentity(obligation.responsibility)
   if (obligation._tag === "AcceptedAwaitingIntegration") {
     return canonicalIdentity([
@@ -115,8 +116,8 @@ export const obligationForEvidenceConflict = (
   const matches = delivery.obligations.filter((obligation) => identities.has(evidenceIdentityForObligation(obligation)))
   const first = matches[0]
   if (first === undefined) return null
-  const identity = obligationIdentity(first)
-  return matches.every((candidate) => obligationIdentity(candidate) === identity) ? first : null
+  const identity = deliveryStatusObligationReference(first)
+  return matches.every((candidate) => deliveryStatusObligationReference(candidate) === identity) ? first : null
 }
 
 const proposalDerivationIssueIdentity = (issue: DeliveryProposalDerivationIssue): string =>
@@ -219,7 +220,7 @@ export const statusEntryIdentity = Match.typeTags<DeliveryStatusEntry, string>()
   TrackerFactWait: (entry) =>
     canonicalIdentity([
       statusEntryPrefix(entry),
-      entry.responsibility === null ? "subject" : obligationIdentity(entry.responsibility),
+      entry.responsibility === null ? "subject" : deliveryStatusObligationReference(entry.responsibility),
       entry.fact._tag
     ]),
   TaskWorkCapacityWait: (entry) => canonicalIdentity([statusEntryPrefix(entry), entry.taskId]),

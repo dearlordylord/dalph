@@ -52,7 +52,7 @@ import {
   decodeProductionRepositoryHostConfiguration,
   type ProductionRepositoryHostConfiguration
 } from "./production-configuration.js"
-import { ProductionCliCurrentDeliveryStatus } from "./production-cli-status-schema.js"
+import { ProductionCliCurrentDeliveryStatus, publicDeliveryStatusOf } from "./production-cli-status-schema.js"
 
 export const productionCliWireVersion = 1 as const // eslint-disable-line no-magic-numbers
 
@@ -293,34 +293,10 @@ const selectedRecord = (selection: ProductionRunSelection): ProductionCliRecord 
 const historicalRecord = (snapshot: TraceAtCursor): ProductionCliRecord =>
   ProductionCliRecord.cases.HistoricalSnapshot.make({ snapshot, version: productionCliWireVersion })
 
-type DeliveryStatusSnapshot = Exclude<CurrentDeliveryStatus, { readonly _tag: "DeliveryStatusClosed" }>
-
-const publicDeliveryStatusSnapshot = (status: DeliveryStatusSnapshot): DeliveryStatusSnapshot => {
-  switch (status._tag) {
-    case "DeliveryStatusNotReady":
-    case "TaskAbsentFromCurrentGraph":
-      return status
-    case "DeliveryStatusAvailable":
-      return { ...status, entries: [...status.entries] }
-  }
-}
-
-/** Exhaustively removes no semantic field and retains the projector's structural entry order. */
-const publicCurrentDeliveryStatus = (status: CurrentDeliveryStatus): CurrentDeliveryStatus => {
-  switch (status._tag) {
-    case "DeliveryStatusNotReady":
-    case "DeliveryStatusAvailable":
-    case "TaskAbsentFromCurrentGraph":
-      return publicDeliveryStatusSnapshot(status)
-    case "DeliveryStatusClosed":
-      return { ...status, final: status.final === null ? null : publicDeliveryStatusSnapshot(status.final) }
-  }
-}
-
 /** Encodes one complete #217 status value without deriving presentation-owned order or classifications. */
 export const currentDeliveryStatusRecord = (status: CurrentDeliveryStatus): ProductionCliRecord =>
   ProductionCliRecord.cases.CurrentStatus.make({
-    status: Schema.decodeUnknownSync(ProductionCliCurrentDeliveryStatus)(publicCurrentDeliveryStatus(status)),
+    status: Schema.decodeUnknownSync(ProductionCliCurrentDeliveryStatus)(publicDeliveryStatusOf(status)),
     version: productionCliWireVersion
   })
 

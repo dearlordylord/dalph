@@ -41,6 +41,7 @@ import {
   ProductionRunSelectionConflict,
   RunTerminationDisposition,
   StartupRecoveryBlocked,
+  statusEntryIdentity,
   TraceAtCursor,
   TraceCausalPredecessorContradiction,
   TraceCausalPredecessorMissing,
@@ -88,6 +89,7 @@ import {
   ProductionCliRecord,
   ProductionCliUsageError
 } from "./production-cli.js"
+import { publicDeliveryStatusOf } from "./production-cli-status-schema.js"
 import { decodeCliTarget, executeDryRun } from "./cli.js"
 import { productionCliHostObservationOf, runProductionCli } from "./live-cli.js"
 import type { ProductionHostObservation } from "./production-host.js"
@@ -133,6 +135,17 @@ const currentObservationFailure = (
   changes: Stream.fail(failure),
   get: Effect.fail(failure)
 })
+
+const currentObservationChangesFailure = (
+  failure: DeliveryStatusProjectionError
+): CurrentSignal<DeliveryRuntimeObservationState, DeliveryStatusProjectionError> => {
+  const current: DeliveryRuntimeObservationState = { _tag: "NotReady" }
+  return {
+    attach: Effect.succeed({ changes: Stream.fail(failure), current }),
+    changes: Stream.concat(Stream.make(current), Stream.fail(failure)),
+    get: Effect.succeed(current)
+  }
+}
 
 const validProductionDocument = {
   activationInterval: "1 minute",
@@ -715,73 +728,89 @@ it.effect(
           })
         }
       ] as const
+      const failureCuts = [
+        { current: currentObservationFailure, currentWasWritten: false },
+        { current: currentObservationChangesFailure, currentWasWritten: true }
+      ] as const
 
       yield* Effect.forEach(statusFailures, ({ code, failure }) =>
-        Effect.gen(function* () {
-          const statusLines = yield* Ref.make<ReadonlyArray<string>>([])
-          const statusChronology = yield* Ref.make<ReadonlyArray<string>>([])
-          const statusExitRequests = yield* Ref.make(0)
-          const workflowMutations = yield* Ref.make(0)
-          const application = runProductionCli((_input, use) => {
-            const observation = {
-              acceptedHistory: currentSignalOf(cursor),
-              applicationExitRequestBoundary: {
-                requestExit: Ref.update(statusExitRequests, (count) => count + 1).pipe(
-                  Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+        Effect.forEach(failureCuts, ({ current, currentWasWritten }) =>
+          Effect.gen(function* () {
+            const statusLines = yield* Ref.make<ReadonlyArray<string>>([])
+            const statusChronology = yield* Ref.make<ReadonlyArray<string>>([])
+            const statusExitRequests = yield* Ref.make(0)
+            const workflowMutations = yield* Ref.make(0)
+            const application = runProductionCli((_input, use) => {
+              const observation = {
+                acceptedHistory: currentSignalOf(cursor),
+                applicationExitRequestBoundary: {
+                  requestExit: Ref.update(statusExitRequests, (count) => count + 1).pipe(
+                    Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+                  )
+                },
+                current: current(failure),
+                mutateWorkflow: Ref.update(workflowMutations, (count) => count + 1),
+                runTermination: completedRunTermination(),
+                selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+                traceReader: { readAt: () => Effect.succeed(snapshot) }
+              }
+              return use(observation)
+            })
+
+            const observed = yield* application([
+              "run",
+              "github:octo/dalph#42",
+              "--production",
+              "--config",
+              "/tmp/production.json"
+            ]).pipe(
+              Effect.provide(liveCliLayer(statusLines, statusChronology)),
+              Effect.provide(NodeServices.layer),
+              Effect.provide(
+                ConfigProvider.layer(
+                  ConfigProvider.fromUnknown({
+                    DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret",
+                    GITHUB_TOKEN: "github-secret"
+                  })
                 )
-              },
-              current: currentObservationFailure(failure),
-              mutateWorkflow: Ref.update(workflowMutations, (count) => count + 1),
-              runTermination: completedRunTermination(),
-              selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-              traceReader: { readAt: () => Effect.succeed(snapshot) }
-            }
-            return use(observation)
+              ),
+              Effect.flip
+            )
+
+            expect(observed).toMatchObject({ _tag: "ProductionCliStatusError", code, subject: runId })
+            expect(yield* Ref.get(statusExitRequests)).toBe(0)
+            expect(yield* Ref.get(workflowMutations)).toBe(0)
+            const records = (yield* Ref.get(statusLines)).map((line) => JSON.parse(line))
+            expect(records).toEqual([
+              { _tag: "RunSelected", runId, selection: "Allocated", version: 1 },
+              ...(currentWasWritten
+                ? [
+                    {
+                      _tag: "CurrentStatus",
+                      status: { _tag: "DeliveryStatusNotReady", subject: { _tag: "Run", runId } },
+                      version: 1
+                    }
+                  ]
+                : []),
+              {
+                _tag: "Failure",
+                code,
+                detail:
+                  code === "status.run_mismatch"
+                    ? "the passive status source describes another Run"
+                    : code === "status.run_identity_unavailable"
+                      ? "the passive status source has no exact Run identity"
+                      : "the passive status source contains incompatible exact evidence",
+                subject: runId,
+                version: 1
+              }
+            ])
+            expect(records.filter(({ _tag }) => _tag === "CurrentStatus")).toHaveLength(currentWasWritten ? 1 : 0)
+            expect(records.some(({ _tag }) => _tag.endsWith("Disposition"))).toBe(false)
+            expect(JSON.stringify(records)).not.toContain(privateDetail)
+            expect(JSON.stringify(records)).not.toContain("private-entry")
           })
-
-          const observed = yield* application([
-            "run",
-            "github:octo/dalph#42",
-            "--production",
-            "--config",
-            "/tmp/production.json"
-          ]).pipe(
-            Effect.provide(liveCliLayer(statusLines, statusChronology)),
-            Effect.provide(NodeServices.layer),
-            Effect.provide(
-              ConfigProvider.layer(
-                ConfigProvider.fromUnknown({
-                  DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret",
-                  GITHUB_TOKEN: "github-secret"
-                })
-              )
-            ),
-            Effect.flip
-          )
-
-          expect(observed).toMatchObject({ _tag: "ProductionCliStatusError", code, subject: runId })
-          expect(yield* Ref.get(statusExitRequests)).toBe(0)
-          expect(yield* Ref.get(workflowMutations)).toBe(0)
-          const records = (yield* Ref.get(statusLines)).map((line) => JSON.parse(line))
-          expect(records).toEqual([
-            { _tag: "RunSelected", runId, selection: "Allocated", version: 1 },
-            {
-              _tag: "Failure",
-              code,
-              detail:
-                code === "status.run_mismatch"
-                  ? "the passive status source describes another Run"
-                  : code === "status.run_identity_unavailable"
-                    ? "the passive status source has no exact Run identity"
-                    : "the passive status source contains incompatible exact evidence",
-              subject: runId,
-              version: 1
-            }
-          ])
-          expect(records.some(({ _tag }) => _tag === "CurrentStatus" || _tag.endsWith("Disposition"))).toBe(false)
-          expect(JSON.stringify(records)).not.toContain(privateDetail)
-          expect(JSON.stringify(records)).not.toContain("private-entry")
-        })
+        )
       )
 
       const lines = yield* Ref.make<ReadonlyArray<string>>([])
@@ -1220,6 +1249,95 @@ it("rejects malformed current-status wire variants at the public codec boundary"
         subject: { _tag: "Run", runId }
       },
       version: 1
+    },
+    {
+      _tag: "CurrentStatus",
+      status: {
+        _tag: "DeliveryStatusClosed",
+        final: {
+          _tag: "DeliveryStatusAvailable",
+          acceptedAt: null,
+          entries: [
+            {
+              _tag: "TrackerFactWait",
+              classification: "Waiting",
+              fact: { _tag: "Unobserved", boundary: "TaskTracker" },
+              responsibility: null,
+              standing: { _tag: "GraphNotEstablished" },
+              subject: { _tag: "Run", runId: RunId.make("another-run") },
+              wakeCondition: "TaskTrackerFactsObserved"
+            }
+          ],
+          subject: { _tag: "Run", runId }
+        },
+        subject: { _tag: "Run", runId }
+      },
+      version: 1
+    },
+    ...[
+      {
+        _tag: "AcceptedFactPublicationWait",
+        acceptedAt: null,
+        classification: "Waiting",
+        owner: { _tag: "Invented" },
+        subject: taskSubject
+      },
+      {
+        _tag: "TrackerFactWait",
+        classification: "Waiting",
+        fact: { _tag: "Missing", boundary: "TaskTracker" },
+        responsibility: { _tag: "Invented" },
+        standing: { _tag: "ResponsibilitySituation" },
+        subject: taskSubject,
+        wakeCondition: "TaskClaimFactsObserved"
+      },
+      { _tag: "Settlement", classification: "Settled", settlement: { _tag: "Invented" }, subject: taskSubject },
+      {
+        _tag: "ProposedDeliveryAction",
+        classification: "Waiting",
+        proposal: { _tag: "Invented" },
+        subject: taskSubject
+      },
+      {
+        _tag: "DependencyWait",
+        classification: "Waiting",
+        prerequisiteTaskIds: [TaskId.make("B")],
+        standing: { _tag: "Invented" },
+        subject: taskSubject,
+        taskId: taskSubject.taskId
+      },
+      {
+        _tag: "EvidenceUnavailable",
+        classification: "Blocked",
+        evidence: { _tag: "ProposalDerivationIssue", issue: { _tag: "Invented" } },
+        responsibility: null,
+        subject: taskSubject
+      }
+    ].map((entry) => ({
+      _tag: "CurrentStatus",
+      status: { _tag: "DeliveryStatusAvailable", acceptedAt: null, entries: [entry], subject: taskSubject },
+      version: 1
+    })),
+    {
+      _tag: "CurrentStatus",
+      status: {
+        _tag: "DeliveryStatusAvailable",
+        acceptedAt: null,
+        entries: [
+          {
+            _tag: "TaskWorkCapacityWait",
+            classification: "Waiting",
+            entryIdentity: DeliveryStatusEntryIdentity.make("capacity-entry"),
+            holders: [],
+            rank: 0,
+            scope: { _tag: "RunTaskWorkCapacityScope", capacity: 1, runId: RunId.make("foreign-run") },
+            subject: taskSubject,
+            taskId: taskSubject.taskId
+          }
+        ],
+        subject: taskSubject
+      },
+      version: 1
     }
   ]
 
@@ -1267,12 +1385,18 @@ it("preserves current status subjects evidence classifications and structural or
 
   for (const status of [available, absent, closed] as const) {
     const encoded = JSON.parse(encodeProductionCliRecord(currentDeliveryStatusRecord(status)))
-    expect(encoded).toEqual({ _tag: "CurrentStatus", status, version: 1 })
+    expect(encoded).toEqual({ _tag: "CurrentStatus", status: publicDeliveryStatusOf(status), version: 1 })
   }
-  expect(JSON.parse(encodeProductionCliRecord(currentDeliveryStatusRecord(available))).status.entries).toEqual([
-    trackerWait(taskB),
-    trackerWait(taskA)
+  const entries = JSON.parse(encodeProductionCliRecord(currentDeliveryStatusRecord(available))).status.entries
+  expect(
+    entries.map(({ _tag, classification, subject }: Record<string, unknown>) => ({ _tag, classification, subject }))
+  ).toEqual([
+    { _tag: "TrackerFactWait", classification: "Waiting", subject: taskB },
+    { _tag: "TrackerFactWait", classification: "Waiting", subject: taskA }
   ])
+  expect(entries.map(({ entryIdentity }: { readonly entryIdentity: string }) => entryIdentity)).toEqual(
+    available.entries.map(statusEntryIdentity)
+  )
 })
 
 it("production status rendering has no tracker Git executor Integrator Journal mutation admission retry cleanup control or Exit capability", () => {

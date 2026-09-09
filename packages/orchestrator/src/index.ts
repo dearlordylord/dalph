@@ -793,6 +793,10 @@ export {
   FreshDecisionPartitionInvalid
 } from "./coordination/delivery/delivery-action-proposal.js"
 export {
+  deliveryStatusObligationReference,
+  statusEntryIdentity
+} from "./coordination/delivery/delivery-status-order.js"
+export {
   FreshTaskAdmissionBasisInvalid,
   FreshTaskAdmissionBasisRunMismatch,
   FreshTaskAdmissionCommitmentAuthorityInvalid,
