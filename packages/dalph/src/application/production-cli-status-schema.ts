@@ -1,4 +1,5 @@
 import {
+  AttemptId,
   IntegrationTarget,
   PlannedAttemptExecutorCorrelation,
   PlannedTaskAttempt,
@@ -7,6 +8,8 @@ import {
 } from "@dalph/contracts"
 import type { CurrentDeliveryStatus } from "@dalph/orchestrator"
 import {
+  BoundedTicketRank,
+  DeliveryProposalOrdinal,
   DeliveryProposalId,
   DeliveryStatusEntryIdentity,
   DeliveryStatusEvidenceIdentity,
@@ -14,29 +17,33 @@ import {
   JournalPosition,
   OperationId,
   TaskWorkCapacity,
+  TaskClaimReacquisitionRequestId,
   TrackerRevision
 } from "@dalph/orchestrator"
 import { Schema } from "effect"
 import { ObligationReference } from "./production-cli-status-identity-schema.js"
 import { publicDeliveryStatusEntryOf } from "./production-cli-status-projection.js"
 
-const ProposalOrdinal = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(Schema.brand("DeliveryProposalOrdinal"))
 const ProposalOrder = Schema.TaggedUnion({
-  FreshWorkflowOrder: { frontierOrdinal: ProposalOrdinal, step: Schema.NonEmptyString, taskId: TaskId },
+  FreshWorkflowOrder: { frontierOrdinal: DeliveryProposalOrdinal, step: Schema.NonEmptyString, taskId: TaskId },
   RecoveredWorkflowOrder: {
     acceptedAt: Schema.NullOr(JournalPosition),
-    frontierOrdinal: ProposalOrdinal,
+    frontierOrdinal: DeliveryProposalOrdinal,
     responsibilityBeganAt: Schema.NullOr(JournalPosition),
     taskId: TaskId,
     transition: Schema.NonEmptyString
   },
   IntegrationOrder: {
-    frontierOrdinal: ProposalOrdinal,
+    frontierOrdinal: DeliveryProposalOrdinal,
     queuedAt: JournalPosition,
     startedAt: Schema.NullOr(JournalPosition),
     taskId: TaskId
   },
-  UnqueuedAcceptedResultOrder: { frontierOrdinal: ProposalOrdinal, taskId: TaskId, terminalAt: JournalPosition },
+  UnqueuedAcceptedResultOrder: {
+    frontierOrdinal: DeliveryProposalOrdinal,
+    taskId: TaskId,
+    terminalAt: JournalPosition
+  },
   TrackerGraphOrder: { acceptedAt: Schema.NullOr(JournalPosition) }
 })
 const ActionIdentity = Schema.TaggedUnion({
@@ -48,7 +55,7 @@ const ActionIdentity = Schema.TaggedUnion({
       Allocate: {},
       Preserve: { operationId: OperationId },
       ExternalSuccessReleaseClaim: { claimOperationId: OperationId },
-      TaskClaimReacquisitionRequest: { requestId: Schema.NonEmptyString }
+      TaskClaimReacquisitionRequest: { requestId: TaskClaimReacquisitionRequestId }
     })
   }
 })
@@ -58,14 +65,13 @@ const ownerLifecycle = Schema.Literals([
   "SettledBeforeMaterialization",
   "SettledMaterializedDeliveryAction"
 ])
-const standingKind = Schema.Literals([
+const DependencyStandingKind = Schema.Literals([
   "GraphExcluded",
   "PromotedPrerequisiteReleasePending",
   "ResponsibilitySituation",
-  "IntegrationWait",
-  "ExactEvidenceConflict",
-  "GraphNotEstablished"
+  "IntegrationWait"
 ])
+const TrackerStandingKind = Schema.Literals(["ResponsibilitySituation", "IntegrationWait", "GraphNotEstablished"])
 const entryBase = {
   classification: Schema.Literals(["Waiting", "Progressing", "Blocked", "Settled", "Relinquished"]),
   entryIdentity: DeliveryStatusEntryIdentity,
@@ -78,7 +84,7 @@ const PublicDeliveryStatusEntryShape = Schema.TaggedUnion({
     classification: Schema.Literal("Waiting"),
     taskId: TaskId,
     prerequisiteTaskIds: Schema.NonEmptyArray(TaskId),
-    standingKind,
+    standingKind: DependencyStandingKind,
     obligationReference: Schema.NullOr(ObligationReference)
   },
   TrackerFactWait: {
@@ -86,7 +92,7 @@ const PublicDeliveryStatusEntryShape = Schema.TaggedUnion({
     classification: Schema.Literal("Waiting"),
     obligationReference: Schema.NullOr(ObligationReference),
     fact: Schema.TaggedUnion({ Foreign: {}, Missing: {}, Unobserved: {}, Unreadable: {} }),
-    standingKind,
+    standingKind: TrackerStandingKind,
     wakeCondition: Schema.NonEmptyString
   },
   TaskWorkCapacityWait: {
@@ -94,7 +100,7 @@ const PublicDeliveryStatusEntryShape = Schema.TaggedUnion({
     classification: Schema.Literal("Waiting"),
     taskId: TaskId,
     scope: Schema.TaggedStruct("RunTaskWorkCapacityScope", { runId: RunId, capacity: TaskWorkCapacity }),
-    rank: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+    rank: BoundedTicketRank,
     holders: Schema.Array(Schema.Struct({ taskId: TaskId, correlation: PlannedAttemptExecutorCorrelation }))
   },
   ProposedDeliveryAction: {
@@ -133,7 +139,14 @@ const PublicDeliveryStatusEntryShape = Schema.TaggedUnion({
     classification: Schema.Literal("Blocked"),
     obligationReference: Schema.NullOr(ObligationReference),
     evidence: Schema.TaggedUnion({
-      ProposalDerivationIssue: { issueKind: Schema.NonEmptyString, taskId: TaskId },
+      ProposalDerivationIssue: {
+        issueKind: Schema.Literals([
+          "AcceptedOperationEvidenceMissing",
+          "FreshRouteProvenanceMissing",
+          "TypedRoutePolicyContradiction"
+        ]),
+        taskId: TaskId
+      },
       ResponsibilityFacts: { responsibilityReference: ObligationReference },
       IntegrationConfigurationWait: { plannedAttempt: PlannedTaskAttempt },
       TargetPromotionConfigurationWait: { plannedAttempt: PlannedTaskAttempt }
@@ -150,7 +163,7 @@ const PublicDeliveryStatusEntryShape = Schema.TaggedUnion({
     classification: Schema.Literal("Settled"),
     taskId: TaskId,
     settlement: Schema.Union([
-      Schema.TaggedStruct("DeliverySettlement", { attemptId: Schema.NonEmptyString }),
+      Schema.TaggedStruct("DeliverySettlement", { attemptId: AttemptId }),
       Schema.TaggedStruct("CancelledAttemptSettled", {
         obligationReference: ObligationReference,
         claimDisposition: Schema.Literals(["NoRelease", "Released"])
@@ -192,6 +205,19 @@ export const PublicDeliveryStatusEntry = PublicDeliveryStatusEntryShape.pipe(
       if (entry._tag === "EvidenceConflict") {
         return new Set(entry.evidenceIdentities).size === entry.evidenceIdentities.length
       }
+      if (entry._tag === "DependencyWait") {
+        return (
+          taskMatchesSubject(entry.taskId, entry.subject) &&
+          (entry.standingKind === "ResponsibilitySituation") === (entry.obligationReference !== null)
+        )
+      }
+      if (entry._tag === "TrackerFactWait") {
+        return entry.obligationReference === null
+          ? entry.standingKind === "GraphNotEstablished" &&
+              entry.fact._tag === "Unobserved" &&
+              entry.wakeCondition === "TaskTrackerFactsObserved"
+          : entry.standingKind !== "GraphNotEstablished"
+      }
       if (entry._tag === "TaskWorkCapacityWait") {
         return entry.scope.runId === entry.subject.runId && taskMatchesSubject(entry.taskId, entry.subject)
       }
@@ -202,7 +228,6 @@ export const PublicDeliveryStatusEntry = PublicDeliveryStatusEntryShape.pipe(
         )
       }
       if (entry._tag === "Settlement") return taskMatchesSubject(entry.taskId, entry.subject)
-      if (entry._tag === "DependencyWait") return taskMatchesSubject(entry.taskId, entry.subject)
       if (entry._tag === "ProposedDeliveryAction" && "taskId" in entry.order) {
         return taskMatchesSubject(entry.order.taskId, entry.subject)
       }

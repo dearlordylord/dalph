@@ -1179,191 +1179,107 @@ it("encodes the exact passive not-ready value as a separate current-status recor
 
 it("rejects malformed current-status wire variants at the public codec boundary", () => {
   const taskSubject = { _tag: "Task", runId, taskId: TaskId.make("A") } as const
+  const availableOf = (
+    entry: DeliveryStatusEntry
+  ): Exclude<CurrentDeliveryStatus, { readonly _tag: "DeliveryStatusClosed" }> => ({
+    _tag: "DeliveryStatusAvailable",
+    acceptedAt: null,
+    entries: [entry],
+    subject: taskSubject
+  })
+  const tracker = availableOf({
+    _tag: "TrackerFactWait",
+    classification: "Waiting",
+    fact: { _tag: "Unobserved", boundary: "TaskTracker" },
+    responsibility: null,
+    standing: { _tag: "GraphNotEstablished" },
+    subject: taskSubject,
+    wakeCondition: "TaskTrackerFactsObserved"
+  })
+  const dependency = availableOf({
+    _tag: "DependencyWait",
+    classification: "Waiting",
+    prerequisiteTaskIds: [TaskId.make("B")],
+    standing: { _tag: "GraphExcluded", reasons: [{ _tag: "PrerequisitesIncomplete", prerequisiteTaskIds: [] }] },
+    subject: taskSubject,
+    taskId: taskSubject.taskId
+  })
+  const conflict = availableOf({
+    _tag: "EvidenceConflict",
+    classification: "Blocked",
+    evidenceIdentities: [
+      DeliveryStatusEvidenceIdentity.make("evidence-a"),
+      DeliveryStatusEvidenceIdentity.make("evidence-b")
+    ],
+    responsibility: null,
+    standing: { _tag: "ExactEvidenceConflict", evidenceIdentities: ["evidence-a", "evidence-b"] },
+    subject: taskSubject
+  })
+  const capacity = availableOf({
+    _tag: "TaskWorkCapacityWait",
+    classification: "Waiting",
+    holders: [],
+    placement: { _tag: "Selected", rank: BoundedTicketRank.make(0) },
+    scope: { _tag: "RunTaskWorkCapacityScope", capacity: TaskWorkCapacity.make(1), runId },
+    subject: taskSubject,
+    taskId: taskSubject.taskId
+  })
+  const wireOf = (status: CurrentDeliveryStatus) =>
+    JSON.parse(encodeProductionCliRecord(currentDeliveryStatusRecord(status)))
+  const trackerWire = wireOf(tracker)
+  const dependencyWire = wireOf(dependency)
+  const conflictWire = wireOf(conflict)
+  const capacityWire = wireOf(capacity)
+  const closedWire = wireOf({ _tag: "DeliveryStatusClosed", final: tracker, subject: taskSubject })
+  for (const valid of [trackerWire, dependencyWire, conflictWire, capacityWire, closedWire]) {
+    expect(Option.isSome(Schema.decodeUnknownOption(ProductionCliRecord)(valid))).toBe(true)
+  }
+  const entryOf = (wire: typeof trackerWire) => wire.status.entries[0]
   const malformed = [
     {
-      _tag: "CurrentStatus",
-      status: {
-        _tag: "DeliveryStatusAvailable",
-        acceptedAt: null,
-        entries: [{ _tag: "TrackerFactWait", classification: "Blocked", subject: taskSubject }],
-        subject: taskSubject
-      },
-      version: 1
+      ...trackerWire,
+      status: { ...trackerWire.status, entries: [{ ...entryOf(trackerWire), classification: "Blocked" }] }
     },
     {
-      _tag: "CurrentStatus",
+      ...trackerWire,
       status: {
-        _tag: "DeliveryStatusAvailable",
-        acceptedAt: null,
-        entries: [
-          {
-            _tag: "TrackerFactWait",
-            classification: "Waiting",
-            fact: { _tag: "Unobserved", boundary: "TaskTracker" },
-            responsibility: null,
-            standing: { _tag: "GraphNotEstablished" },
-            subject: { ...taskSubject, taskId: TaskId.make("B") },
-            wakeCondition: "TaskTrackerFactsObserved"
-          }
-        ],
-        subject: taskSubject
-      },
-      version: 1
-    },
-    {
-      _tag: "CurrentStatus",
-      status: {
-        _tag: "DeliveryStatusAvailable",
-        acceptedAt: null,
-        entries: [
-          {
-            _tag: "EvidenceUnavailable",
-            classification: "Blocked",
-            evidence: {
-              _tag: "IntegrationConfigurationWait",
-              standing: { _tag: "IntegrationWait" },
-              wait: { _tag: "IntegrationConfigurationWait" }
-            },
-            responsibility: null,
-            subject: taskSubject
-          }
-        ],
-        subject: taskSubject
-      },
-      version: 1
-    },
-    {
-      _tag: "CurrentStatus",
-      status: {
-        _tag: "DeliveryStatusAvailable",
-        acceptedAt: null,
-        entries: [
-          {
-            _tag: "EvidenceConflict",
-            classification: "Blocked",
-            evidenceIdentities: [],
-            responsibility: null,
-            standing: { _tag: "ExactEvidenceConflict" },
-            subject: taskSubject
-          }
-        ],
-        subject: taskSubject
-      },
-      version: 1
-    },
-    {
-      _tag: "CurrentStatus",
-      status: {
-        _tag: "TaskAbsentFromCurrentGraph",
-        graphSource: {
-          _tag: "EstablishedGraph",
-          contentIdentity: "revision-1",
-          freshnessOperationId: "freshness-1",
-          operationId: "operation-1",
-          recordedAt: 1,
-          revision: "revision-1"
-        },
-        subject: { _tag: "Run", runId }
-      },
-      version: 1
-    },
-    {
-      _tag: "CurrentStatus",
-      status: {
-        _tag: "DeliveryStatusClosed",
-        final: { _tag: "DeliveryStatusNotReady", subject: { _tag: "Run", runId: RunId.make("another-run") } },
-        subject: { _tag: "Run", runId }
-      },
-      version: 1
-    },
-    {
-      _tag: "CurrentStatus",
-      status: {
-        _tag: "DeliveryStatusClosed",
-        final: {
-          _tag: "DeliveryStatusAvailable",
-          acceptedAt: null,
-          entries: [
-            {
-              _tag: "TrackerFactWait",
-              classification: "Waiting",
-              fact: { _tag: "Unobserved", boundary: "TaskTracker" },
-              responsibility: null,
-              standing: { _tag: "GraphNotEstablished" },
-              subject: { _tag: "Run", runId: RunId.make("another-run") },
-              wakeCondition: "TaskTrackerFactsObserved"
-            }
-          ],
-          subject: { _tag: "Run", runId }
-        },
-        subject: { _tag: "Run", runId }
-      },
-      version: 1
-    },
-    ...[
-      {
-        _tag: "AcceptedFactPublicationWait",
-        acceptedAt: null,
-        classification: "Waiting",
-        owner: { _tag: "Invented" },
-        subject: taskSubject
-      },
-      {
-        _tag: "TrackerFactWait",
-        classification: "Waiting",
-        fact: { _tag: "Missing", boundary: "TaskTracker" },
-        responsibility: { _tag: "Invented" },
-        standing: { _tag: "ResponsibilitySituation" },
-        subject: taskSubject,
-        wakeCondition: "TaskClaimFactsObserved"
-      },
-      { _tag: "Settlement", classification: "Settled", settlement: { _tag: "Invented" }, subject: taskSubject },
-      {
-        _tag: "ProposedDeliveryAction",
-        classification: "Waiting",
-        proposal: { _tag: "Invented" },
-        subject: taskSubject
-      },
-      {
-        _tag: "DependencyWait",
-        classification: "Waiting",
-        prerequisiteTaskIds: [TaskId.make("B")],
-        standing: { _tag: "Invented" },
-        subject: taskSubject,
-        taskId: taskSubject.taskId
-      },
-      {
-        _tag: "EvidenceUnavailable",
-        classification: "Blocked",
-        evidence: { _tag: "ProposalDerivationIssue", issue: { _tag: "Invented" } },
-        responsibility: null,
-        subject: taskSubject
+        ...trackerWire.status,
+        entries: [{ ...entryOf(trackerWire), subject: { ...taskSubject, taskId: TaskId.make("foreign-task") } }]
       }
-    ].map((entry) => ({
-      _tag: "CurrentStatus",
-      status: { _tag: "DeliveryStatusAvailable", acceptedAt: null, entries: [entry], subject: taskSubject },
-      version: 1
-    })),
+    },
     {
-      _tag: "CurrentStatus",
+      ...trackerWire,
+      status: { ...trackerWire.status, entries: [{ ...entryOf(trackerWire), fact: { _tag: "Missing" } }] }
+    },
+    {
+      ...dependencyWire,
       status: {
-        _tag: "DeliveryStatusAvailable",
-        acceptedAt: null,
+        ...dependencyWire.status,
+        entries: [{ ...entryOf(dependencyWire), standingKind: "ExactEvidenceConflict" }]
+      }
+    },
+    {
+      ...conflictWire,
+      status: {
+        ...conflictWire.status,
+        entries: [{ ...entryOf(conflictWire), evidenceIdentities: ["evidence-a", "evidence-a"] }]
+      }
+    },
+    {
+      ...capacityWire,
+      status: {
+        ...capacityWire.status,
         entries: [
-          {
-            _tag: "TaskWorkCapacityWait",
-            classification: "Waiting",
-            entryIdentity: DeliveryStatusEntryIdentity.make("capacity-entry"),
-            holders: [],
-            rank: 0,
-            scope: { _tag: "RunTaskWorkCapacityScope", capacity: 1, runId: RunId.make("foreign-run") },
-            subject: taskSubject,
-            taskId: taskSubject.taskId
-          }
-        ],
-        subject: taskSubject
-      },
-      version: 1
+          { ...entryOf(capacityWire), scope: { ...entryOf(capacityWire).scope, runId: RunId.make("foreign-run") } }
+        ]
+      }
+    },
+    {
+      ...closedWire,
+      status: {
+        ...closedWire.status,
+        final: { ...closedWire.status.final, subject: { ...taskSubject, taskId: TaskId.make("foreign-task") } }
+      }
     }
   ]
 
