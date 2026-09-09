@@ -468,10 +468,101 @@ const buildBootstrap = Effect.fn("JournaledRunBootstrapTest.build")(function* (
   const observation = Context.get(context, JournaledRunObservationSource)
   return {
     ...bootstrap,
+    acceptedHistory: observation.acceptedHistory,
     applicationExitRequestBoundary: sharedApplicationExit.requestBoundary,
     runTermination: observation.runTermination
   }
 })
+
+it.effect(
+  "Alice receives accepted history only after append acknowledgement and never receives duplicate or older cursors",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const target = FixtureTarget.make("journaled-bootstrap-accepted-history")
+        const runId = yield* freshWorkflowRunId(target)
+        const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+        const delegate = Context.get(journalContext, JournalStore)
+        const firstStored = yield* Deferred.make<void>()
+        const acknowledgeFirst = yield* Deferred.make<void>()
+        const olderStored = yield* Deferred.make<void>()
+        const acknowledgeOlder = yield* Deferred.make<void>()
+        const operations = ["first", "older", "newer", "last"].map((name) =>
+          makeTrackerGraphObservationOperation(
+            { _tag: "ExecutingWorkAuthorityCheck" },
+            OperationId.make(`accepted-history:${name}`),
+            target
+          )
+        )
+        const [first, older, newer, last] = operations
+        if (first === undefined || older === undefined || newer === undefined || last === undefined)
+          return yield* Effect.die("accepted-history fixture requires four exact operations")
+        const storage = JournalStore.of({
+          ...delegate,
+          append: (requestedRunId, key, event) =>
+            delegate.append(requestedRunId, key, event).pipe(
+              Effect.tap(() => {
+                if (key === intentRecordKey(first.operationId))
+                  return Deferred.succeed(firstStored, undefined).pipe(Effect.andThen(Deferred.await(acknowledgeFirst)))
+                if (key === intentRecordKey(older.operationId))
+                  return Deferred.succeed(olderStored, undefined).pipe(Effect.andThen(Deferred.await(acknowledgeOlder)))
+                return Effect.void
+              })
+            )
+        })
+        const bootstrap = yield* buildBootstrap(runId, storage)
+        yield* bootstrap.activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.gen(function* () {
+            const journal = yield* InRunJournal
+            const subscription = yield* bootstrap.acceptedHistory.attach
+            expect(subscription.current).toEqual({ position: 1, runId })
+            const published = yield* subscription.changes.pipe(
+              Stream.takeUntil(({ position }) => position === 5),
+              Stream.runCollect,
+              Effect.forkChild
+            )
+            const append = (operation: (typeof operations)[number]) =>
+              journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+
+            const firstAppend = yield* append(first).pipe(Effect.forkChild)
+            yield* Deferred.await(firstStored)
+            expect((yield* delegate.read(runId)).map(({ position }) => position)).toEqual([1, 2])
+            expect(yield* bootstrap.acceptedHistory.get).toEqual({ position: 1, runId })
+            yield* Deferred.succeed(acknowledgeFirst, undefined)
+            expect((yield* Fiber.join(firstAppend)).position).toBe(2)
+            expect(yield* bootstrap.acceptedHistory.get).toEqual({ position: 2, runId })
+
+            const olderAppend = yield* append(older).pipe(Effect.forkChild)
+            yield* Deferred.await(olderStored)
+            expect(yield* bootstrap.acceptedHistory.get).toEqual({ position: 2, runId })
+            yield* Deferred.succeed(acknowledgeOlder, undefined)
+            expect((yield* Fiber.join(olderAppend)).position).toBe(3)
+            expect((yield* append(newer)).position).toBe(4)
+            expect(yield* bootstrap.acceptedHistory.get).toEqual({ position: 4, runId })
+            expect((yield* append(newer)).position).toBe(4)
+            expect((yield* append(older)).position).toBe(3)
+            expect((yield* append(first)).position).toBe(2)
+            expect(yield* bootstrap.acceptedHistory.get).toEqual({ position: 4, runId })
+
+            // A later acknowledged record drains all preceding publications without a timed absence check.
+            expect((yield* append(last)).position).toBe(5)
+            expect(yield* Fiber.join(published)).toEqual([
+              { position: 2, runId },
+              { position: 3, runId },
+              { position: 4, runId },
+              { position: 5, runId }
+            ])
+            expect(yield* bootstrap.acceptedHistory.get).toEqual({ position: 5, runId })
+            expect((yield* delegate.read(runId)).map(({ position }) => position)).toEqual([1, 2, 3, 4, 5])
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "TrackerTargetUnsettled" }))
+          })
+        )
+      })
+    ).pipe(Effect.provide(NodeCrypto.layer))
+)
 
 const captureTestSpecification = (taskId: TaskId) =>
   makeTaskWorkSpecification({ body: `Implement bootstrap task ${taskId}.`, taskId, title: `Bootstrap task ${taskId}` })
