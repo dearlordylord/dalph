@@ -1105,6 +1105,20 @@ module freshTaskAdmission {
     state.safeContinuationConstraint.get(task) == ContinuationPermitted or
       state.admission.get(task) == Unoccupied)
   val safeContinuationAuthorizationRequiresEveryWitness = not(state.trace.continuationAuthorizedWithoutWitnesses)
+  val continuationWitnessesRemainWithinExactContinuation = TASKS.forall(task =>
+    state.continuationWitnesses.get(task).size() == 0 or or {
+      and {
+        state.admission.get(task) == ExistingResponsibilityReserved(attemptFor(task)),
+        or {
+          state.existingResponsibility.get(task) == SafeContinuationAwaitingRevalidation(attemptFor(task)),
+          state.existingResponsibility.get(task) == ReadyExistingResponsibility(attemptFor(task)),
+        },
+      },
+      and {
+        state.admission.get(task) == ExactAttemptHeld(attemptFor(task)),
+        state.resumeIntentPending.get(task),
+      },
+    })
   val revalidationRequiresAcceptedSafeReport = TASKS.forall(task =>
     state.existingResponsibility.get(task) != SafeContinuationAwaitingRevalidation(attemptFor(task)) or
       state.safeReportAccepted.get(task))
@@ -1186,6 +1200,9 @@ module freshTaskAdmission {
     releaseHeldPositionNotReady,
     releaseHeldPositionReady, reserveReadyResponsibility, handoffReadyResponsibility,
     contractCapacity, expandCapacity, crash, recover,
+    // This already-existing TaskA conformance slice adds sampling weight for
+    // the long lifecycle chronology without adding any new transition.
+    lifecycleRevalidationMbtStep,
   }
 
   // Executable conformance uses the same transition relations as `step`, but

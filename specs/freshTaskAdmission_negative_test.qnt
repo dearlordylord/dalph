@@ -46,6 +46,15 @@ module freshTaskAdmissionNegativeTest {
     },
   }
 
+  action readContinuationWitnessWithoutReservation: bool = all {
+    state.admission.get(TaskA) == Unoccupied,
+    state.existingResponsibility.get(TaskA) == SafeContinuationAwaitingRevalidation(AttemptA),
+    state' = {
+      ...state,
+      continuationWitnesses: state.continuationWitnesses.put(TaskA, Set(AuthoredSpecification)),
+    },
+  }
+
   action reserveConstrainedContinuation: bool = all {
     state.safeContinuationConstraint.get(TaskA) != ContinuationPermitted,
     state' = { ...state, admission: state.admission.put(TaskA, ExistingResponsibilityReserved(AttemptA)) },
@@ -61,6 +70,10 @@ module freshTaskAdmissionNegativeTest {
 
   run resumeWithoutWitnessesTurnsInvariantRedTest = safeAwaitingA.then(reserveReadyResponsibilityFor(TaskA))
     .then(authorizeWithoutContinuationReads).expect(not(safeContinuationAuthorizationRequiresEveryWitness))
+
+  run unreservedContinuationReadTurnsInvariantRedTest = safeAwaitingA
+    .then(readContinuationWitnessWithoutReservation)
+    .expect(not(continuationWitnessesRemainWithinExactContinuation))
 
   run pauseClosedAndConflictsTurnReservationInvariantRedTest = {
     nondet constraint = Set(TrackerClosed, OperatorPaused, SpecificationBlocked, ClaimBlocked, GitBlocked, EvidenceUnavailable).oneOf()
