@@ -75,6 +75,7 @@ thread and owned turn. NoReport never grants allocation or redelivery.
 | Scenario | Concrete acceptance evidence |
 | --- | --- |
 | Original idle association remains reusable | `restarts the production workflow after durable association and finishes Begin ordinal one` |
+| Ordinary Run startup reconstructs the same responsibility across another association crash | `ordinary Run reconstruction replaces an absent empty Codex association and settles only Begin ordinal one`: three fresh production applications reopen SQLite and private files; process two rereads the prior association before allocation, saves turn intent before one task turn, and settles Begin ordinal 1; process three performs no allocation or turn; Git Base/worktree/branch and claim remain preserved |
 | Absent association changes only private thread id and retains A1, worktree, Base and ordinal 1 | `reconstructs the original Begin after absent-thread replacement loss at … with …`: exact original intent/request, changed thread id, original cwd, one turn |
 | Loss before/after absence read, private allocation intent, thread/start and association write | Same matrix for `before-absence-read`, `after-absence-read`, `before-allocation-intent`, `after-allocation-intent`, `after-thread-start`, `before-association`, `after-association`; each runs with memory and reopened SQLite plus file-backed private store |
 | Loss before/after proof observation and before turn intent | Same matrix for `before-proof-observation`, `after-proof-observation`, `before-turn-intent`; fresh executor Layer/private read on each activation |
@@ -85,10 +86,21 @@ thread and owned turn. NoReport never grants allocation or redelivery.
 | Fresh allocation cannot confer durable or reusable permission | `rejects fresh-allocation Begin capability after … without another allocation or turn` covers missing/changed association, process restart, intervening command, newer proof and consumed proof |
 | Replacement allocation response is not usable | `preserves empty allocation intent when replacement thread/start returns … evidence` covers active, notLoaded, systemError, turn-bearing and foreign worktree responses |
 
-The controlled matrix exercises the production command workflow; the built
-host exercises its real Codex/private-store connection. Bulk cuts use no live
+The controlled matrix exercises the production command workflow, and the
+ordinary Run test enters `runWorkflow` and fresh production bootstrap layers
+over the exact accepted Journal prefix. Its later provider unavailability
+ends the activation while preserving the executing report; a subsequent
+activation remains incomplete without allocating or commanding another turn.
+The built host exercises the real Codex/private-store connection. Bulk cuts use no live
 provider. The built host uses the supported-host fixture's isolated deterministic
 local model endpoint, not production credentials.
+
+The scoped Linux host case proves the first Begin settles as Executing. The
+unchanged normal-start terminal qualification was also tried as a comparator:
+its local model finished both responses, but terminal projection remained
+Unreadable. That later terminal limitation was observed on the normal and
+replacement paths; this child neither repairs that adapter behavior nor claims
+terminal qualification. The original #75 terminal test remains unchanged.
 
 #330 retains its acceptance audit and blockers of #261/#307 until both children
 are integrated and reviewed. This child changes no #303/#339 prerequisite.

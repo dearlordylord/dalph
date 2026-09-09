@@ -162,6 +162,22 @@ import {
 import { controlledFakePlannedAttemptExecutorLayer } from "../../../orchestrator/test/controlled-planned-attempt-executor.js"
 import { productionWorkflowInterpreterLayer } from "../../src/application/production.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
+import {
+  CodexAppServer,
+  CodexAppServerFailure,
+  CodexThreadWorkingDirectory,
+  controlledCodexOwnedActivityCensusLayer,
+  type CodexThreadSnapshot
+} from "../../src/application/codex-app-server.js"
+import {
+  CodexAttemptStore,
+  CodexAttemptRecord,
+  CodexServerIncarnation,
+  CodexThreadId,
+  CodexTurnId,
+  nodeCodexAttemptStoreLayer
+} from "../../src/application/codex-attempt-store.js"
+import { codexPlannedAttemptExecutorLayer } from "../../src/application/codex-planned-attempt-executor.js"
 
 const productionControlledFakePlannedAttemptExecutorLayer = controlledSynchronousPlannedAttemptExecutorLayer(
   controlledFakePlannedAttemptExecutorLayer
@@ -393,6 +409,10 @@ type PublicExecutorProjectionForApplication = (
 
 // eslint-disable-next-line functional/no-mixed-types -- The restart fixture combines static boundary options with the per-process lifecycle factory it exercises.
 interface PublicRunFixtureOptions {
+  readonly executorLayerForApplication?: (
+    attempt: PlannedTaskAttempt,
+    ordinal: number
+  ) => Layer.Layer<PlannedAttemptExecutor | PlannedAttemptExecutorLifecycleObservation>
   readonly acceptedResultEvidenceStore?: EvidenceStoreService
   readonly beginSucceeds?: boolean
   readonly integratorCandidateProviderAuthority?: IntegratorCandidateProviderAuthorityService
@@ -670,7 +690,8 @@ const makePublicRunFixture = (projectionPlan: PublicExecutorProjectionPlan, opti
       const executor = executorForApplication(applicationOrdinal)
       const executorLayer = Layer.succeed(PlannedAttemptExecutor, executor)
       const completeExecutorLayer =
-        lifecycleForApplication === undefined
+        options.executorLayerForApplication?.(attempt, applicationOrdinal) ??
+        (lifecycleForApplication === undefined
           ? controlledSynchronousPlannedAttemptExecutorLayer(executorLayer)
           : Layer.merge(
               executorLayer,
@@ -678,7 +699,7 @@ const makePublicRunFixture = (projectionPlan: PublicExecutorProjectionPlan, opti
                 PlannedAttemptExecutorLifecycleObservation,
                 lifecycleForApplication(applicationOrdinal, executor)
               )
-            )
+            ))
       return productionWorkflowInterpreterLayer(
         runId,
         GitCommonDirectoryTarget.make(`${directory}/.git`),
@@ -1353,6 +1374,174 @@ it.effect("ordinary production Run activation derives W1 then B1 cleanup and pre
       )
     }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
   )
+)
+
+it.effect(
+  "ordinary Run reconstruction replaces an absent empty Codex association and settles only Begin ordinal one",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem
+        const stateDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "dalph-342-private-" })
+        const calls: Array<string> = []
+        let allocations = 0
+        let turns = 0
+        const privateStore = nodeCodexAttemptStoreLayer({ stateDirectory })
+        const fixture = yield* makePublicRunFixture(() => [], {
+          executorLayerForApplication: (planned, ordinal) => {
+            let thread: CodexThreadSnapshot | undefined
+            const app = Layer.unwrap(
+              Effect.map(CodexAttemptStore, (durable) =>
+                Layer.mock(CodexAppServer, {
+                  incarnation: CodexServerIncarnation.make(`process-${ordinal}`),
+                  attachTurnCompletedHints: Effect.succeed(Stream.empty),
+                  attachOwnedActivityHints: Effect.succeed(Stream.empty),
+                  startThread: (cwd) =>
+                    Effect.sync(() => {
+                      calls.push(`process-${ordinal}:thread/start`)
+                      allocations += 1
+                      thread = {
+                        id: CodexThreadId.make(`replacement-${allocations}`),
+                        cwd: CodexThreadWorkingDirectory.make(cwd),
+                        status: "idle",
+                        turns: []
+                      }
+                      return thread
+                    }),
+                  resumeThread: (threadId, cwd) =>
+                    Effect.gen(function* () {
+                      calls.push(`process-${ordinal}:read:${threadId}`)
+                      expect(cwd).toBe(planned.worktree)
+                      if (thread === undefined || thread.id !== threadId)
+                        return yield* new CodexAppServerFailure({
+                          kind: "NotFound",
+                          operation: "thread/resume",
+                          detail: "empty rollout disappeared with the earlier process"
+                        })
+                      if (turns > 0)
+                        return yield* new CodexAppServerFailure({
+                          kind: "Unavailable",
+                          operation: "thread/resume",
+                          detail: "controlled provider loss after Begin settlement ends this activation"
+                        })
+                      return thread
+                    }),
+                  startTurn: (threadId, cwd, _text, token) =>
+                    Effect.gen(function* () {
+                      calls.push(`process-${ordinal}:turn/start`)
+                      expect(cwd).toBe(planned.worktree)
+                      const record = yield* durable.readAttempt(planned.runId, planned.attemptId).pipe(Effect.orDie)
+                      expect(Option.getOrUndefined(record)).toMatchObject({
+                        _tag: "TurnIntentRecorded",
+                        threadId,
+                        worktree: planned.worktree,
+                        currentToken: token
+                      })
+                      turns += 1
+                      return {
+                        id: CodexTurnId.make("sole-task-turn"),
+                        status: "inProgress" as const,
+                        items: [],
+                        ...(token === undefined ? {} : { ownedTurnToken: token })
+                      }
+                    })
+                })
+              )
+            )
+            const store = Layer.effect(
+              CodexAttemptStore,
+              Effect.gen(function* () {
+                const durable = yield* CodexAttemptStore
+                return CodexAttemptStore.of({
+                  ...durable,
+                  writeAttempt: (record) =>
+                    durable.writeAttempt(record).pipe(
+                      Effect.andThen(
+                        Effect.suspend(() => {
+                          calls.push(`process-${ordinal}:saved:${record._tag}`)
+                          return ordinal === 1 && record._tag === "AssociatedPreTurn"
+                            ? Effect.die("process lost after replacement association became durable")
+                            : Effect.void
+                        })
+                      )
+                    )
+                })
+              })
+            ).pipe(Layer.provide(privateStore))
+            return codexPlannedAttemptExecutorLayer.pipe(
+              Layer.provide(
+                Layer.mergeAll(
+                  app.pipe(Layer.provide(store)),
+                  store,
+                  nodeGitCommandLayer,
+                  controlledCodexOwnedActivityCensusLayer({
+                    observe: () => Effect.succeed({ _tag: "Absent" }),
+                    terminateDescendants: () => Effect.void
+                  })
+                )
+              ),
+              Layer.provide(NodeServices.layer),
+              Layer.orDie
+            )
+          }
+        })
+        yield* Effect.gen(function* () {
+          const store = yield* CodexAttemptStore
+          yield* store.writeAttempt(
+            CodexAttemptRecord.cases.AssociatedPreTurn.make({
+              attemptId: fixture.attempt.attemptId,
+              correlationAttemptId: fixture.attempt.attemptId,
+              correlationRunId: fixture.runId,
+              worktree: fixture.attempt.worktree,
+              threadId: CodexThreadId.make("original-empty-thread")
+            })
+          )
+        }).pipe(Effect.provide(privateStore))
+        expect((yield* fixture.activate().pipe(Effect.exit))._tag).toBe("Failure")
+        expect(allocations).toBe(1)
+        expect(turns).toBe(0)
+        const recovered = yield* fixture.activate().pipe(Effect.exit)
+        expect(recovered._tag).toBe("Failure")
+        expect(allocations).toBe(2)
+        expect(turns).toBe(1)
+        expect((yield* fixture.activate().pipe(Effect.exit))._tag).toBe("Success")
+        expect(fixture.applicationBuilds()).toBe(3)
+        expect(allocations).toBe(2)
+        expect(turns).toBe(1)
+        expect(calls).toContain("process-2:read:replacement-1")
+        expect(calls).toContain("process-2:saved:TurnIntentRecorded")
+        expect(calls).toContain("process-2:turn/start")
+        expect(calls.indexOf("process-2:read:replacement-1")).toBeLessThan(calls.indexOf("process-2:thread/start"))
+        expect(calls.indexOf("process-2:saved:TurnIntentRecorded")).toBeLessThan(calls.indexOf("process-2:turn/start"))
+        const records = yield* fixture.readRecords
+        expect(reduceWorkflowJournalHistory(fixture.runId, records)._tag).toBe("ValidWorkflowJournalHistory")
+        expect(
+          records
+            .filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
+            .map(({ event }) => event)
+        ).toMatchObject([{ ordinal: 1, command: "Begin", plannedAttempt: fixture.attempt }])
+        expect(
+          records
+            .filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved")
+            .map(({ event }) => event)
+        ).toMatchObject([
+          {
+            commandOrdinal: 1,
+            report: { _tag: "ExecutorWorkExecuting", correlation: plannedAttemptExecutorCorrelation(fixture.attempt) }
+          }
+        ])
+        expect(records.filter(({ event }) => event._tag === "TaskAttemptPlanned")).toHaveLength(1)
+        expect(records.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+        expect(
+          records.some(({ event }) => event._tag === "PlannedAttemptReplaced" || event._tag === "TaskClaimReleased")
+        ).toBe(false)
+        expect(yield* fs.exists(fixture.attempt.worktree)).toBe(true)
+        const git = yield* GitCommand
+        expect((yield* git.runInWorktree(fixture.attempt.worktree, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
+          fixture.attempt.baseSha
+        )
+      }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+    )
 )
 
 it.effect("reconciles a lost Begin to executing work without sending another command", () =>
