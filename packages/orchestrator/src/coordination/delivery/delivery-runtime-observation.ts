@@ -21,7 +21,7 @@ const issuedTicketProposalAdmissions = new WeakMap<object, DeliveryActionProposa
 /** Opaque proof that this process admitted one exact ticket-derived proposal. */
 export interface TicketProposalAdmissionAuthority {
   readonly _tag: "TicketProposalAdmission"
-  /** Present only on the runtime-issued witness; decoded and synthetic snapshots remain representable but untrusted. */
+  /** Present only on the runtime-issued witness; decoded and manually constructed snapshots remain representable but untrusted. */
   readonly [TicketProposalAdmissionAuthorityTypeId]?: typeof TicketProposalAdmissionAuthorityTypeId
 }
 
