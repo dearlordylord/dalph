@@ -33,6 +33,7 @@ import {
   DeliveryProposalId,
   DeliveryProposalOrdinal,
   BoundedTicketRank,
+  deliveryStatusObligationReference,
   deliveryStatusOf,
   type DeliveryStatusProjectionError,
   DeliveryStatusProjectionConflict,
@@ -137,6 +138,7 @@ import {
   ProductionCliUsageError
 } from "./production-cli.js"
 import { publicDeliveryStatusOf } from "./production-cli-status-schema.js"
+import { ObligationReference } from "./production-cli-status-identity-schema.js"
 import { decodeCliTarget, executeDryRun } from "./cli.js"
 import { productionCliHostObservationOf, runProductionCli } from "./live-cli.js"
 import type { ProductionHostObservation } from "./production-host.js"
@@ -1718,6 +1720,7 @@ it("round-trips the ordered identity evidence of every canonical current-status 
     plannedAttempt: attempt
   })
   const obligation = { _tag: "WorkflowResponsibility" as const, responsibility }
+  const dependencyObligationReference = ObligationReference.make(deliveryStatusObligationReference(obligation))
   const prerequisiteTaskIds = [TaskId.make("prerequisite-b"), TaskId.make("prerequisite-a")] as const
   const holders = [
     { correlation: { attemptId: AttemptId.make("holder-b"), runId }, taskId: TaskId.make("holder-b") },
@@ -1920,7 +1923,11 @@ it("round-trips the ordered identity evidence of every canonical current-status 
     expect(projected.entries[8]).toMatchObject({ evidenceIdentities })
     expect(projected.entries[10]).toMatchObject({ reason: "AuthorizedHandoff", supporting })
     expect(projected.entries.slice(11)).toMatchObject([
-      { _tag: "DependencyWait", obligationReference: expect.any(String), standingKind: "ResponsibilitySituation" },
+      {
+        _tag: "DependencyWait",
+        obligationReference: dependencyObligationReference,
+        standingKind: "ResponsibilitySituation"
+      },
       {
         _tag: "LiveDeliveryAction",
         lifecycle: "MaterializedDeliveryAction",
