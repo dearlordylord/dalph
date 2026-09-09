@@ -2085,6 +2085,59 @@ it.effect("projects and encodes all eleven status variants through the productio
   })
 )
 
+it.effect("presents Alice's nonterminal status change before the accepted Run termination", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const initialStatus = yield* Deferred.make<void>()
+    const statusChanged = yield* Deferred.make<void>()
+    const termination = yield* Deferred.make<{
+      readonly disposition: RunTerminationDisposition
+      readonly terminatedAt: TraceCursor
+    }>()
+    const observationState = projectedStatusFixture()
+    const changes = yield* Queue.unbounded<DeliveryRuntimeObservationState>()
+    const current = currentSignalFromCurrentFirstStream(
+      Stream.concat(Stream.make({ _tag: "NotReady" as const }), Stream.fromQueue(changes).pipe(Stream.take(1)))
+    )
+    const presentation = yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current,
+        runTermination: { await: Deferred.await(termination), poll: Effect.succeed(Option.none()) },
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) => {
+        const record = JSON.parse(line)
+        return Ref.update(lines, (current) => [...current, line]).pipe(
+          Effect.andThen(
+            record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusNotReady"
+              ? Deferred.succeed(initialStatus, undefined)
+              : record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusAvailable"
+                ? Deferred.succeed(statusChanged, undefined)
+                : Effect.void
+          )
+        )
+      }
+    ).pipe(Effect.forkChild)
+
+    yield* Deferred.await(initialStatus)
+    yield* Queue.offer(changes, observationState)
+    yield* Deferred.await(statusChanged)
+    yield* Deferred.succeed(termination, {
+      disposition: RunTerminationDisposition.make("Completed"),
+      terminatedAt: cursor
+    })
+    yield* Fiber.join(presentation)
+
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(records.map(({ _tag }) => _tag)).toContain("RunDisposition")
+    expect(
+      records.some((record) => record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusAvailable")
+    ).toBe(true)
+  })
+)
+
 it("round-trips the ordered identity evidence of every canonical current-status entry", () => {
   const taskId = TaskId.make("identity-fixture-task")
   const subject = { _tag: "Task" as const, runId, taskId }

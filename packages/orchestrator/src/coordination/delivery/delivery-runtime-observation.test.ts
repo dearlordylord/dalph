@@ -165,6 +165,9 @@ it.effect("rejects protocol work when the admitted action owns no planned-attemp
     const rejectedIntent = yield* Effect.exit(lease.recordIntent(OperationId.make("wrong-lease-owner-operation")))
     expect(rejectedIntent._tag).toBe("Failure")
 
+    const rejectedPosition = yield* Effect.exit(lease.bindPlannedAttemptPosition(ownerAttempt))
+    expect(rejectedPosition._tag).toBe("Failure")
+
     const failure = yield* lease.withPlannedAttemptProtocol(correlation, () => Effect.void).pipe(Effect.flip)
     expect(failure).toEqual(
       new DeliveryActionProtocolAdmissionMissing({ correlation, proposalId: owner.reservation.proposal.id })

@@ -61,10 +61,13 @@ import {
   type DeliveryProposalDerivationIssue
 } from "./delivery-action-proposal.js"
 import {
+  DeliveryRuntimeObservationObserver,
   DeliveryRuntimeObservationPublication,
   DeliveryRuntimeObservationState,
+  makeDeliveryRuntimeObservationController,
   type DeliveryRuntimeLiveOwnerSnapshot
 } from "./delivery-runtime-observation.js"
+import { historicalProposalTaskOrder } from "./delivery-status-order.js"
 import { ticketOwnerSnapshotForTest } from "../../../test/support/delivery-runtime-live-owner.js"
 import {
   currentSignalOf,
@@ -1112,6 +1115,16 @@ it("fails closed for duplicate or mismatched live-owner snapshots", () => {
     expect(untrusted).toBeInstanceOf(DeliveryStatusProjectionConflict)
   }
 
+  // The public snapshot union remains decodable, but a manually constructed fresh admission has no private witness.
+  const forgedFreshAuthority: DeliveryRuntimeLiveOwnerSnapshot["admissionAuthority"] = {
+    _tag: "FreshTaskCandidateAdmission"
+  } as never
+  const untrustedFreshOwner = deliveryStatusOf(
+    Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
+    evaluationOf({ proposals: [proposal], liveOwners: [{ ...genuine, admissionAuthority: forgedFreshAuthority }] })
+  )
+  expect(untrustedFreshOwner).toBeInstanceOf(DeliveryStatusProjectionConflict)
+
   const another = taskProposalOf("another-owner-proposal", TaskId.make("A"))
   const rebound = deliveryStatusOf(
     Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
@@ -1165,6 +1178,71 @@ it("orders multiple historical owners by their admitted proposal evidence for ev
     ).toEqual([earlier.id, later.id])
   }
 })
+
+it("keeps Alice's historical action order when each admitted proposal kind leaves the current task graph", () => {
+  const historicalTaskId = TaskId.make("historical-order-task")
+
+  expect(
+    historicalProposalTaskOrder({
+      _tag: "IntegrationOrder",
+      frontierOrdinal: DeliveryProposalOrdinal.make(1),
+      queuedAt: JournalPosition.make(2),
+      startedAt: JournalPosition.make(3),
+      taskId: historicalTaskId
+    })
+  ).toEqual({ _tag: "TaskOrder", position: 1 })
+  expect(
+    historicalProposalTaskOrder({
+      _tag: "RecoveredWorkflowOrder",
+      acceptedAt: JournalPosition.make(1),
+      frontierOrdinal: DeliveryProposalOrdinal.make(2),
+      responsibilityBeganAt: JournalPosition.make(2),
+      taskId: historicalTaskId,
+      transition: "CheckTaskClaim"
+    })
+  ).toEqual({ _tag: "TaskOrder", position: 2 })
+  expect(historicalProposalTaskOrder({ _tag: "TrackerGraphOrder", acceptedAt: JournalPosition.make(1) })).toEqual({
+    _tag: "RunWideTaskOrder"
+  })
+  expect(
+    historicalProposalTaskOrder({
+      _tag: "UnqueuedAcceptedResultOrder",
+      frontierOrdinal: DeliveryProposalOrdinal.make(3),
+      taskId: historicalTaskId,
+      terminalAt: JournalPosition.make(4)
+    })
+  ).toEqual({ _tag: "TaskOrder", position: 3 })
+})
+
+it.effect("publishes Alice's coherent runtime observation and freezes the last value after close", () =>
+  Effect.gen(function* () {
+    const initial = evaluationOf()
+    if (initial._tag !== "Ready") return yield* Effect.die("runtime observation fixture must be ready")
+    const observed = yield* Ref.make<ReadonlyArray<DeliveryRuntimeEvaluation>>([])
+    const observer = DeliveryRuntimeObservationObserver.of({
+      observe: ({ evaluation }) => Ref.update(observed, (evaluations) => [...evaluations, evaluation])
+    })
+    const controller = yield* makeDeliveryRuntimeObservationController().pipe(
+      Effect.provideService(DeliveryRuntimeObservationObserver, observer)
+    )
+
+    yield* controller.publishCurrent(initial.evaluation, [])
+    expect(yield* controller.signal.get).toMatchObject({ _tag: "Ready", evaluation: initial.evaluation })
+
+    yield* controller.observe(initial.evaluation, [])
+    yield* controller.publish(initial.evaluation, [])
+    expect(yield* Ref.get(observed)).toEqual([initial.evaluation, initial.evaluation])
+
+    yield* controller.close
+    const closed = yield* controller.signal.get
+    const later = { ...initial.evaluation, acceptedAt: JournalPosition.make(6) }
+    yield* controller.publishCurrent(later, [])
+    yield* controller.publish(later, [])
+
+    expect(yield* controller.signal.get).toEqual(closed)
+    expect(yield* Ref.get(observed)).toEqual([initial.evaluation, initial.evaluation])
+  })
+)
 
 it("compares live-owner proposals canonically through causal predecessor arrays", () => {
   const taskId = TaskId.make("canonical-owner-task")
