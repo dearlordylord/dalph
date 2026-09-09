@@ -628,7 +628,7 @@ it("delivery throttle output is redacted and preserves only safe R operation and
     })
   })
   const mapped = productionCliFailureForSelectedRun(throttle, runId)
-  if (mapped === undefined) throw new Error("typed throttle was not mapped")
+  if (mapped === undefined) return expect.fail("typed throttle was not mapped")
 
   const encoded = encodeProductionCliRecord(productionCliFailureRecord(mapped))
 
