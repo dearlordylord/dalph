@@ -2,11 +2,10 @@ import { Effect, Schema } from "effect"
 import type { PlannedTaskAttempt } from "@dalph/contracts"
 import type { SafeContinuationRevalidationEligibility } from "../../../coordination/frontier/fresh-facts.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
-import { plannedAttemptExecutorResumeRedeliveryIntendedRecordKey } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { evaluatePlannedAttemptResumeRedeliveryAuthorization } from "../planned-attempt-continuation/resume-redelivery-authorization.js"
 import type { PlannedAttemptContinuationWitness } from "../planned-attempt-continuation/events.js"
-import { acceptedExecutorCommandDelivery, type AcceptedExecutorCommandDelivery } from "./command-delivery.js"
+import { appendExecutorCommandDeliveryIntent, type AcceptedExecutorCommandDelivery } from "./command-delivery.js"
 import { issuePlannedAttemptExecutorCommand, recordPlannedAttemptExecutorCommandResponse } from "./command.js"
 import {
   PlannedAttemptExecutorResumeRedeliveryIntendedEvent,
@@ -56,14 +55,8 @@ export const runPlannedAttemptExecutorResumeRedelivery = Effect.fn("PlannedAttem
                 event.commandOrdinal === authorization.resumeCommandOrdinal
             ).length + 1
           )
-          const record = yield* restore(
-            journal.append(
-              plannedAttempt.runId,
-              plannedAttemptExecutorResumeRedeliveryIntendedRecordKey(
-                plannedAttempt.attemptId,
-                authorization.resumeCommandOrdinal,
-                redeliveryOrdinal
-              ),
+          const receipt = yield* restore(
+            appendExecutorCommandDeliveryIntent(
               PlannedAttemptExecutorResumeRedeliveryIntendedEvent.make({
                 authorization: {
                   safeProjectionObservedAt: authorization.safeProjectionObservedAt,
@@ -79,7 +72,6 @@ export const runPlannedAttemptExecutorResumeRedelivery = Effect.fn("PlannedAttem
               })
             )
           )
-          const receipt = yield* acceptedExecutorCommandDelivery(record)
           yield* onIntentAccepted(receipt)
           return receipt
         })

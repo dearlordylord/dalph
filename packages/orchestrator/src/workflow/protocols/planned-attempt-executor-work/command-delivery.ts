@@ -1,11 +1,18 @@
 import type { PlannedTaskAttempt } from "@dalph/contracts"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
+import { immutableSnapshot } from "../../../coordination/immutable-snapshot.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
-import type { JournalRecord } from "../../../workflow-journal/store.js"
-import type {
-  PlannedAttemptExecutorCommandOrdinal,
-  PlannedAttemptExecutorCommandProjectionOrdinal,
-  PlannedAttemptExecutorResumeRedeliveryOrdinal
+import { InRunJournal } from "../../../workflow-journal/store.js"
+import {
+  plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorResumeRedeliveryIntendedRecordKey
+} from "../../../workflow-journal/record-key.js"
+import {
+  PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorResumeRedeliveryIntendedEvent,
+  type PlannedAttemptExecutorCommandOrdinal,
+  type PlannedAttemptExecutorCommandProjectionOrdinal,
+  type PlannedAttemptExecutorResumeRedeliveryOrdinal
 } from "./events.js"
 
 const AcceptedExecutorCommandDeliveryTypeId: unique symbol = Symbol("@dalph/AcceptedExecutorCommandDelivery")
@@ -30,16 +37,29 @@ export interface AcceptedExecutorCommandDelivery {
 export const isAcceptedExecutorCommandDelivery = (value: unknown): value is AcceptedExecutorCommandDelivery =>
   typeof value === "object" && value !== null && acceptedDeliveries.has(value)
 
-/** Only the command protocol calls this after its exact Journal append succeeds. */
-export const acceptedExecutorCommandDelivery = Effect.fn("ExecutorCommandDelivery.acceptedReceipt")(function* (
-  record: JournalRecord
+/** Appends the exact delivery intent before issuing its process-local position-handoff receipt. */
+export const appendExecutorCommandDeliveryIntent = Effect.fn("ExecutorCommandDelivery.appendIntent")(function* (
+  intent: PlannedAttemptExecutorCommandIntendedEvent | PlannedAttemptExecutorResumeRedeliveryIntendedEvent
 ) {
-  const event = record.event
-  if (
-    event._tag !== "PlannedAttemptExecutorCommandIntended" &&
-    event._tag !== "PlannedAttemptExecutorResumeRedeliveryIntended"
-  ) {
-    return yield* Effect.die("executor command delivery requires an accepted command-delivery intent")
+  const event = immutableSnapshot(intent)
+  const journal = yield* InRunJournal
+  const key =
+    event._tag === "PlannedAttemptExecutorCommandIntended"
+      ? plannedAttemptExecutorCommandIntendedRecordKey(event.plannedAttempt.attemptId, event.ordinal)
+      : plannedAttemptExecutorResumeRedeliveryIntendedRecordKey(
+          event.plannedAttempt.attemptId,
+          event.commandOrdinal,
+          event.redeliveryOrdinal
+        )
+  const record = yield* journal.append(event.plannedAttempt.runId, key, event)
+  const exactEvent =
+    event._tag === "PlannedAttemptExecutorCommandIntended"
+      ? record.event._tag === event._tag &&
+        Schema.toEquivalence(PlannedAttemptExecutorCommandIntendedEvent)(record.event, event)
+      : record.event._tag === event._tag &&
+        Schema.toEquivalence(PlannedAttemptExecutorResumeRedeliveryIntendedEvent)(record.event, event)
+  if (record.runId !== event.plannedAttempt.runId || record.key !== key || !exactEvent) {
+    return yield* Effect.die("executor command delivery append returned a different Run, key, or intent")
   }
   const receipt = Object.freeze<AcceptedExecutorCommandDelivery>({
     [AcceptedExecutorCommandDeliveryTypeId]: AcceptedExecutorCommandDeliveryTypeId,

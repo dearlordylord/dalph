@@ -10,10 +10,9 @@ import {
   type TaskWorkSpecification
 } from "@dalph/contracts"
 import { Effect, Match } from "effect"
-import { acceptedExecutorCommandDelivery, type AcceptedExecutorCommandDelivery } from "./command-delivery.js"
+import { appendExecutorCommandDeliveryIntent, type AcceptedExecutorCommandDelivery } from "./command-delivery.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
-  plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorCommandProjectionObservedRecordKey,
   plannedAttemptExecutorCommandResponseContradictedRecordKey,
   plannedAttemptExecutorCommandResponseObservedRecordKey
@@ -313,9 +312,7 @@ const appendPlannedAttemptExecutorCommandIntent = Effect.fn("PlannedAttemptExecu
         return yield* new PlannedAttemptExecutorResumeNotAuthorized({ correlation })
       }
     }
-    return yield* journal.append(
-      plannedAttempt.runId,
-      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+    return yield* appendExecutorCommandDeliveryIntent(
       PlannedAttemptExecutorCommandIntendedEvent.make({
         command,
         initiatedBy: { _tag: "DalphCoordinator" },
@@ -415,10 +412,10 @@ export const runPlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecuto
         }
   yield* Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
-      const intentRecord = yield* restore(
+      const receipt = yield* restore(
         permit.commitIntent(appendPlannedAttemptExecutorCommandIntent(plannedAttempt, command, commandOrdinal))
       )
-      yield* onIntentAccepted(yield* acceptedExecutorCommandDelivery(intentRecord))
+      yield* onIntentAccepted(receipt)
     })
   )
   const report = yield* issuePlannedAttemptExecutorCommand(plannedAttempt, invocation)
