@@ -197,6 +197,9 @@ export const validateLiveOwnersForStatus = (
   }
   for (const owner of liveOwners) {
     const proposalId = owner.proposal.id
+    if (owner.admissionAuthority._tag === "FreshTaskCandidateAdmission") {
+      continue
+    }
     const current = evaluation.proposedActions.proposals.find(({ id }) => id === proposalId)
     if (current === undefined) {
       return liveOwnerConflict(subject, proposalId, "a live owner proposal is absent from the current frontier")

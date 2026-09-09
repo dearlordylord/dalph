@@ -227,14 +227,13 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           const evaluation = Option.getOrThrow(yield* Ref.get(latest))
           const liveOwnerSources = yield* Ref.get(owners)
           const liveOwners = yield* RuntimeObservation.deliveryRuntimeLiveOwnerSnapshots(liveOwnerSources)
-          const freshCandidateOwnerProposalIds = new Set(
-            [...liveOwnerSources.values()]
-              .filter(({ reservation }) => reservation.freshTaskCandidate !== null)
-              .map(({ proposal }) => proposal.id)
-          )
           const ownersMissingFromSuccessor =
             evaluation.proposedActions._tag === "DeliveryProposalsAvailable"
-              ? liveOwners.filter(({ proposal }) => !proposalIsPresent(evaluation.proposedActions, proposal.id))
+              ? liveOwners.filter(
+                  ({ admissionAuthority, proposal }) =>
+                    admissionAuthority._tag === "TicketProposalAdmission" &&
+                    !proposalIsPresent(evaluation.proposedActions, proposal.id)
+                )
               : []
           // An accepted successor frontier can arrive immediately before the matching
           // process-local completion event. Retain the previous coherent publication
@@ -249,18 +248,14 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           if (
             Option.isSome(previous) &&
             previous.value.proposedActions._tag === "DeliveryProposalsAvailable" &&
-            liveOwners.every(({ proposal }) => proposalIsPresent(previous.value.proposedActions, proposal.id))
+            liveOwners.every(
+              ({ admissionAuthority, proposal }) =>
+                admissionAuthority._tag === "FreshTaskCandidateAdmission" ||
+                proposalIsPresent(previous.value.proposedActions, proposal.id)
+            )
           ) {
             yield* runtimeObservation.observe(evaluation, liveOwners)
             yield* runtimeObservation.publishCurrent(previous.value, liveOwners)
-            return
-          }
-          if (ownersMissingFromSuccessor.every(({ proposal }) => freshCandidateOwnerProposalIds.has(proposal.id))) {
-            // Fresh-candidate admission owns an action derived from the distinct candidate
-            // frontier, not from the exact ticket proposal frontier projected by status.
-            // Keep the prior coherent current value until owner removal republishes evaluation;
-            // fabricating a ticket proposal or owner identity would cross that authority boundary.
-            yield* runtimeObservation.observe(evaluation, liveOwners)
             return
           }
           // No known coherent predecessor can explain this owner/frontier pair.

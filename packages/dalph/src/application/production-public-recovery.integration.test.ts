@@ -307,6 +307,19 @@ it.live(
         }
         const createdClaim = createdClaimOrExit.event
         if (createdClaim._tag !== "CreateClaimLabelStarted") return
+        const heldClaimOwner = yield* takeMatching(
+          first.records,
+          (record) =>
+            record._tag === "CurrentStatus" &&
+            record.status._tag === "DeliveryStatusAvailable" &&
+            record.status.entries.some(
+              (entry) => entry._tag === "LiveDeliveryAction" && entry.operationId === createdClaim.operationId
+            )
+        )
+        expect(heldClaimOwner).toMatchObject({
+          _tag: "CurrentStatus",
+          status: { _tag: "DeliveryStatusAvailable", subject: { _tag: "Run", runId: allocated.runId } }
+        })
         const firstExit = yield* stopAbruptly(first)
         expect(firstExit._tag).toBe("Failure")
         expect(yield* Ref.get(first.recordLog)).not.toContainEqual(expect.objectContaining({ _tag: "RunDisposition" }))

@@ -134,8 +134,8 @@ const stateOf = (
   const proposals = proposalOrder.map((label) => (label === "A" ? proposalA : label === "A2" ? proposalA2 : proposalB))
   const ownerForTask = (taskId: "A" | "B"): DeliveryRuntimeLiveOwnerSnapshot =>
     taskId === "A"
-      ? { _tag: "AdmittedDeliveryAction", proposal: proposalA }
-      : { _tag: "AdmittedDeliveryAction", proposal: proposalB }
+      ? { _tag: "AdmittedDeliveryAction", admissionAuthority: { _tag: "TicketProposalAdmission" }, proposal: proposalA }
+      : { _tag: "AdmittedDeliveryAction", admissionAuthority: { _tag: "TicketProposalAdmission" }, proposal: proposalB }
   const liveOwners = ownerOrder.map(ownerForTask)
   const issues: ReadonlyArray<DeliveryProposalDerivationIssue> = [
     {
@@ -295,7 +295,11 @@ const allPhenomenaStateOf = (permutation: PhenomenonPermutation): DeliveryRuntim
     ResponsibilityDisposition.StoppedAttemptSettled({ claimDisposition: "Released" })
   )
   const proposal = proposalOf("property-publication", capacityTask, 3)
-  const settledOwner: DeliveryRuntimeLiveOwnerSnapshot = { _tag: "SettledBeforeMaterialization", proposal }
+  const settledOwner: DeliveryRuntimeLiveOwnerSnapshot = {
+    _tag: "SettledBeforeMaterialization",
+    admissionAuthority: { _tag: "TicketProposalAdmission" },
+    proposal
+  }
   const extraDeliveries: ReadonlyArray<TicketDelivery> = [
     {
       _tag: "TicketDelivery",

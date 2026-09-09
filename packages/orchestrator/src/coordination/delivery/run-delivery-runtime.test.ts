@@ -135,6 +135,7 @@ import {
   type DeliveryRuntimeObservationState
 } from "./delivery-runtime-observation.js"
 import { deliveryStatusOf, DeliveryStatusProjectionConflict, DeliveryStatusSubject } from "./delivery-status.js"
+import { validateLiveOwnersForStatus } from "./delivery-status-support.js"
 import {
   makePlannedAttemptProtocolController,
   PlannedAttemptProtocolController,
@@ -211,10 +212,9 @@ const plannerLayer = deterministicPlannedTaskAttemptLayer({
   runId,
   worktreeRoot: WorktreeLocator.make("/runtime-test")
 })
-const identityLayers = Layer.mergeAll(
+const identitySupportLayers = Layer.mergeAll(
   deterministicOperationIdAllocatorLayer("runtime-operation"),
   plannerLayer,
-  testDeliveryRuntimeResourcesLayer,
   plannedAttemptProtocolControllerLayer,
   Layer.succeed(
     DeliveryAcceptedFactPublication,
@@ -227,6 +227,7 @@ const identityLayers = Layer.mergeAll(
     })
   )
 )
+const identityLayers = Layer.merge(identitySupportLayers, testDeliveryRuntimeResourcesLayer)
 
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("runtime-test-attempt"),
@@ -664,6 +665,7 @@ it.effect("publishes current-first exact live-owner observations until standalon
       expect(active.liveOwners).toEqual([
         {
           _tag: "MaterializedDeliveryAction",
+          admissionAuthority: { _tag: "TicketProposalAdmission" },
           intent: "IntentRecorded",
           operationId: OperationId.make("runtime-observation:0"),
           proposal: admitted
@@ -1233,8 +1235,11 @@ it.effect("admits independent D while recovered A and C perform read-only restar
           Effect.andThen(Effect.never)
         )
     })
+    const integrationTargets = yield* makeIntegrationTargetResourceController()
+    const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
     const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
-      Effect.provide(identityLayers),
+      Effect.provide(identitySupportLayers),
+      Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
       Effect.provideService(DeliveryActionExecutor, executor),
       Effect.forkChild
     )
@@ -1242,6 +1247,43 @@ it.effect("admits independent D while recovered A and C perform read-only restar
     yield* Deferred.await(allStarted)
     expect(yield* Ref.get(started)).toHaveLength(3)
     expect((yield* Ref.get(started)).slice(0, 2)).toEqual([proposalA.id, proposalC.id])
+    const held = yield* capabilities.resources.runtimeObservation.get
+    if (held._tag !== "Ready") return yield* Effect.die("held fresh-candidate ownership must be observable")
+    const freshOwner = held.liveOwners.find(
+      ({ admissionAuthority }) => admissionAuthority._tag === "FreshTaskCandidateAdmission"
+    )
+    expect(freshOwner?.admissionAuthority).toMatchObject({
+      _tag: "FreshTaskCandidateAdmission",
+      candidate: { id: freshCandidates.candidates[0]?.id }
+    })
+    const statusSubject = DeliveryStatusSubject.cases.Run.make({ runId })
+    expect(validateLiveOwnersForStatus(statusSubject, held.evaluation, held.liveOwners)).toBeNull()
+
+    if (initial.proposedActions._tag !== "DeliveryProposalsAvailable") {
+      return yield* Effect.die("the fresh-candidate fixture must carry an available proposal frontier")
+    }
+    const malformed = {
+      ...initial,
+      proposedActions: { ...initial.proposedActions, proposals: [proposalA, proposalA, proposalC] }
+    } satisfies DeliveryRuntimeEvaluation
+    const malformedPublished = yield* capabilities.resources.runtimeObservation.changes.pipe(
+      Stream.filter((state) => state._tag === "Ready" && state.evaluation === malformed),
+      Stream.runHead,
+      Effect.forkChild
+    )
+    yield* relation.publish(malformed)
+    const malformedObservation = yield* Fiber.join(malformedPublished)
+    if (Option.isNone(malformedObservation) || malformedObservation.value._tag !== "Ready") {
+      return yield* Effect.die("the unrelated malformed frontier must remain visible")
+    }
+    const projectionFailure = validateLiveOwnersForStatus(
+      statusSubject,
+      malformedObservation.value.evaluation,
+      malformedObservation.value.liveOwners
+    )
+    expect(projectionFailure).toBeInstanceOf(DeliveryStatusProjectionConflict)
+    if (!(projectionFailure instanceof DeliveryStatusProjectionConflict)) return
+    expect(projectionFailure.detail).toBe("the current proposal frontier repeats one action identity")
     yield* Fiber.interrupt(runtime)
   }).pipe(Effect.scoped)
 )

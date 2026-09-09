@@ -1690,8 +1690,12 @@ const projectedStatusFixture = (): DeliveryRuntimeObservationState => {
     })
   }
   const liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot> = [
-    { _tag: "AdmittedDeliveryAction", proposal: live },
-    { _tag: "SettledBeforeMaterialization", proposal: publicationWait }
+    { _tag: "AdmittedDeliveryAction", admissionAuthority: { _tag: "TicketProposalAdmission" }, proposal: live },
+    {
+      _tag: "SettledBeforeMaterialization",
+      admissionAuthority: { _tag: "TicketProposalAdmission" },
+      proposal: publicationWait
+    }
   ]
   return { _tag: "Ready", evaluation, liveOwners }
 }
@@ -1869,14 +1873,18 @@ it("round-trips the ordered identity evidence of every canonical current-status 
     {
       _tag: "LiveDeliveryAction",
       classification: "Progressing",
-      owner: { _tag: "AdmittedDeliveryAction", proposal },
+      owner: { _tag: "AdmittedDeliveryAction", admissionAuthority: { _tag: "TicketProposalAdmission" }, proposal },
       subject
     },
     {
       _tag: "AcceptedFactPublicationWait",
       acceptedAt: JournalPosition.make(9),
       classification: "Waiting",
-      owner: { _tag: "SettledBeforeMaterialization", proposal },
+      owner: {
+        _tag: "SettledBeforeMaterialization",
+        admissionAuthority: { _tag: "TicketProposalAdmission" },
+        proposal
+      },
       subject
     },
     {
@@ -1946,6 +1954,7 @@ it("round-trips the ordered identity evidence of every canonical current-status 
       classification: "Progressing",
       owner: {
         _tag: "MaterializedDeliveryAction",
+        admissionAuthority: { _tag: "TicketProposalAdmission" },
         intent: "IntentRecorded",
         operationId: OperationId.make("identity-fixture-live-operation"),
         proposal
@@ -1958,6 +1967,7 @@ it("round-trips the ordered identity evidence of every canonical current-status 
       classification: "Waiting",
       owner: {
         _tag: "SettledMaterializedDeliveryAction",
+        admissionAuthority: { _tag: "TicketProposalAdmission" },
         intent: "IntentRecorded",
         operationId: OperationId.make("identity-fixture-settled-operation"),
         proposal

@@ -219,7 +219,9 @@ const taskProposalOf = (id: string, taskId: TaskId): DeliveryActionProposal => (
 })
 
 const ownerOf = (proposal: DeliveryActionProposal, settled: boolean): DeliveryRuntimeLiveOwnerSnapshot =>
-  settled ? { _tag: "SettledBeforeMaterialization", proposal } : { _tag: "AdmittedDeliveryAction", proposal }
+  settled
+    ? { _tag: "SettledBeforeMaterialization", admissionAuthority: { _tag: "TicketProposalAdmission" }, proposal }
+    : { _tag: "AdmittedDeliveryAction", admissionAuthority: { _tag: "TicketProposalAdmission" }, proposal }
 
 const taskClaimEvidenceOf = (taskId: TaskId): TicketDeliveryEvidence => ({
   _tag: "ResponsibilityFacts",
@@ -1052,12 +1054,14 @@ it("retains materialized operation identity through live and settled owner chron
   const operationId = OperationId.make("materialized-status-operation")
   const materialized: DeliveryRuntimeLiveOwnerSnapshot = {
     _tag: "MaterializedDeliveryAction",
+    admissionAuthority: { _tag: "TicketProposalAdmission" },
     intent: "IntentRecorded",
     operationId,
     proposal
   }
   const settled: DeliveryRuntimeLiveOwnerSnapshot = {
     _tag: "SettledMaterializedDeliveryAction",
+    admissionAuthority: { _tag: "TicketProposalAdmission" },
     intent: "IntentRecorded",
     operationId,
     proposal

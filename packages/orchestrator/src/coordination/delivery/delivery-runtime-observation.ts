@@ -3,6 +3,7 @@ import type { OperationId } from "../../workflow/identity.js"
 import type { DeliveryAdmissionReservation, DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { currentSignalFromCurrentFirstStream, type CurrentSignal, type DeliveryRuntimeEvaluation } from "./relations.js"
 import type { DeliveryActionProposal, DeliveryProposalId } from "./delivery-action-proposal.js"
+import type { FreshTaskCandidate } from "./fresh-task-candidate.js"
 import {
   DeliveryActionProtocolAdmissionMissing,
   type DeliveryActionExecutionLease
@@ -11,6 +12,17 @@ import { withPlannedAttemptProtocolPermit } from "../../workflow/protocols/plann
 
 /** The process-local action's intent state after its exact OperationId exists. */
 export type DeliveryRuntimeActionIntent = "IntentNotRecorded" | "IntentRecorded"
+
+const FreshTaskCandidateAdmissionAuthorityTypeId: unique symbol = Symbol("@dalph/FreshTaskCandidateAdmissionAuthority")
+
+/** Exact authority under which runtime admitted a process-local action owner. */
+export type DeliveryRuntimeLiveOwnerAdmissionAuthority =
+  | {
+      readonly _tag: "FreshTaskCandidateAdmission"
+      readonly [FreshTaskCandidateAdmissionAuthorityTypeId]: typeof FreshTaskCandidateAdmissionAuthorityTypeId
+      readonly candidate: FreshTaskCandidate
+    }
+  | { readonly _tag: "TicketProposalAdmission" }
 
 type DeliveryRuntimeLiveOwnerLifecycle = Data.TaggedEnum<{
   AdmittedDeliveryAction: Record<never, never>
@@ -23,14 +35,22 @@ const DeliveryRuntimeLiveOwnerLifecycle = Data.taggedEnum<DeliveryRuntimeLiveOwn
 
 /** The exhaustive process-local state retained for one action owner without exposing mutable refs. */
 export type DeliveryRuntimeLiveOwnerSnapshot = Data.TaggedEnum<{
-  AdmittedDeliveryAction: { readonly proposal: DeliveryActionProposal }
+  AdmittedDeliveryAction: {
+    readonly admissionAuthority: DeliveryRuntimeLiveOwnerAdmissionAuthority
+    readonly proposal: DeliveryActionProposal
+  }
   MaterializedDeliveryAction: {
+    readonly admissionAuthority: DeliveryRuntimeLiveOwnerAdmissionAuthority
     readonly intent: DeliveryRuntimeActionIntent
     readonly operationId: OperationId
     readonly proposal: DeliveryActionProposal
   }
-  SettledBeforeMaterialization: { readonly proposal: DeliveryActionProposal }
+  SettledBeforeMaterialization: {
+    readonly admissionAuthority: DeliveryRuntimeLiveOwnerAdmissionAuthority
+    readonly proposal: DeliveryActionProposal
+  }
   SettledMaterializedDeliveryAction: {
+    readonly admissionAuthority: DeliveryRuntimeLiveOwnerAdmissionAuthority
     readonly intent: DeliveryRuntimeActionIntent
     readonly operationId: OperationId
     readonly proposal: DeliveryActionProposal
@@ -80,17 +100,39 @@ const lifecycleIsSettled = Match.type<DeliveryRuntimeLiveOwnerLifecycle>().pipe(
 )
 
 const ownerSnapshot = (
-  proposal: DeliveryActionProposal,
+  reservation: DeliveryAdmissionReservation,
   lifecycle: DeliveryRuntimeLiveOwnerLifecycle
-): DeliveryRuntimeLiveOwnerSnapshot =>
-  Match.valueTags(lifecycle, {
-    AdmittedDeliveryAction: () => DeliveryRuntimeLiveOwnerSnapshot.AdmittedDeliveryAction({ proposal }),
+): DeliveryRuntimeLiveOwnerSnapshot => {
+  const proposal = reservation.proposal
+  const admissionAuthority =
+    reservation.freshTaskCandidate === null
+      ? ({ _tag: "TicketProposalAdmission" } as const)
+      : ({
+          _tag: "FreshTaskCandidateAdmission",
+          [FreshTaskCandidateAdmissionAuthorityTypeId]: FreshTaskCandidateAdmissionAuthorityTypeId,
+          candidate: reservation.freshTaskCandidate
+        } as const)
+  return Match.valueTags(lifecycle, {
+    AdmittedDeliveryAction: () =>
+      DeliveryRuntimeLiveOwnerSnapshot.AdmittedDeliveryAction({ admissionAuthority, proposal }),
     MaterializedDeliveryAction: ({ intent, operationId }) =>
-      DeliveryRuntimeLiveOwnerSnapshot.MaterializedDeliveryAction({ intent, operationId, proposal }),
-    SettledBeforeMaterialization: () => DeliveryRuntimeLiveOwnerSnapshot.SettledBeforeMaterialization({ proposal }),
+      DeliveryRuntimeLiveOwnerSnapshot.MaterializedDeliveryAction({
+        admissionAuthority,
+        intent,
+        operationId,
+        proposal
+      }),
+    SettledBeforeMaterialization: () =>
+      DeliveryRuntimeLiveOwnerSnapshot.SettledBeforeMaterialization({ admissionAuthority, proposal }),
     SettledMaterializedDeliveryAction: ({ intent, operationId }) =>
-      DeliveryRuntimeLiveOwnerSnapshot.SettledMaterializedDeliveryAction({ intent, operationId, proposal })
+      DeliveryRuntimeLiveOwnerSnapshot.SettledMaterializedDeliveryAction({
+        admissionAuthority,
+        intent,
+        operationId,
+        proposal
+      })
   })
+}
 
 /** Creates the sole mutation authority for one admitted proposal's process-local owner lifecycle. */
 export const makeDeliveryRuntimeLiveOwner = Effect.fn("DeliveryRuntime.makeLiveOwner")(function* (
@@ -139,7 +181,7 @@ export const makeDeliveryRuntimeLiveOwner = Effect.fn("DeliveryRuntime.makeLiveO
     recordIntent,
     reservation,
     settle,
-    snapshot: Ref.get(lifecycle).pipe(Effect.map((current) => ownerSnapshot(proposal, current)))
+    snapshot: Ref.get(lifecycle).pipe(Effect.map((current) => ownerSnapshot(reservation, current)))
   } satisfies DeliveryRuntimeLiveOwnerSource
 })
 

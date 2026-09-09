@@ -253,6 +253,7 @@ it("confirms exactly when every generated covered executor state has reached its
           liveOwners: liveOwnerPresent
             ? [
                 DeliveryRuntimeLiveOwnerSnapshot.MaterializedDeliveryAction({
+                  admissionAuthority: { _tag: "TicketProposalAdmission" },
                   intent: "IntentRecorded",
                   operationId: OperationId.make("pause-progress-live-action"),
                   proposal: action
