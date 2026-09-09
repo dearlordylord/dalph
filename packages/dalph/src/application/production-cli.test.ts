@@ -681,7 +681,7 @@ it.effect("a TraceReader Journal failure emits one stable redacted Failure after
 )
 
 it.effect(
-  "typed status or TraceAtCursor projection failure fails fast without calling ApplicationExitRequestBoundary.requestExit",
+  "typed status or TraceAtCursor projection failure fails fast without calling ApplicationExitRequestBoundary.requestExit or mutating a workflow boundary",
   () =>
     Effect.gen(function* () {
       const lines = yield* Ref.make<ReadonlyArray<string>>([])
