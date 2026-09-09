@@ -1034,6 +1034,11 @@ export const capabilityRegistrationInventory = {
       "packages/orchestrator/src/workflow/protocols/attempt-choice/control.ts"
     ),
     support(
+      "plannedAttemptProtocolControllerLayer",
+      "process-scoped exact-attempt protocol coordination shared by operator control and executor commands",
+      "packages/orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.ts"
+    ),
+    support(
       "coordinatorOwnershipLayer",
       "coordinator wrapper implementation support",
       "packages/orchestrator/src/authorities/coordinator-ownership/live-task-work-start.ts"
@@ -1129,6 +1134,11 @@ export const capabilityRegistrationInventory = {
     support(
       "sqliteJournalStoreLayer",
       "implementation-private storage beneath the registered journal boundary",
+      "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts"
+    ),
+    support(
+      "sqliteJournalTestLayer",
+      "controlled SQLite journal composition used by the qualification host without replacing the registered production journal boundary",
       "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts"
     ),
     support(
