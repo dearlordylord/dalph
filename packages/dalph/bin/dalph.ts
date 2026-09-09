@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { NodeRuntime } from "@effect/platform-node"
 import { productionCliApplication } from "../src/application/live-cli.js"
+import { runDalphNodeMain } from "../src/application/node-main.js"
 
-NodeRuntime.runMain(productionCliApplication)
+runDalphNodeMain(productionCliApplication)

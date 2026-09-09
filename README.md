@@ -74,11 +74,12 @@ redacted from public validation records and help.
 While the production command is attached, Ctrl-C (`SIGINT`) and supervisor
 `SIGTERM` deliveries enter the same host-owned graceful application Exit. A
 later signal joins the first request and cannot extend its fixed five-second
-drain. The command reports the redacted application-Exit disposition and
-returns status zero only for `Succeeded`; `TimedOut`, a conclusive drain
-failure, lost output, or abrupt process death remains nonzero. Graceful
-application Exit does not terminate the selected Run: unfinished work remains
-available to the ordinary recovery path on the next invocation.
+drain. The shipped Node runner does not independently interrupt the application
+fiber for those signals. The command reports the redacted application-Exit
+disposition and returns status zero only for `Succeeded`; `TimedOut`, a
+conclusive drain failure, lost output, or abrupt process death remains nonzero.
+Graceful application Exit does not terminate the selected Run: unfinished work
+remains available to the ordinary recovery path on the next invocation.
 
 For a visual preview of the intended experience, run the disposable historical
 execution-trace prototype:

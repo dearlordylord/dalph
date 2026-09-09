@@ -57,6 +57,7 @@ it.effect("SIGINT and SIGTERM enter the same scoped application Exit request bou
     expect(signals.listener("SIGTERM")).toBeTypeOf("function")
 
     signals.listener("SIGINT")?.()
+    yield* joinedResult.awaitRequest
     signals.listener("SIGTERM")?.()
     yield* Effect.yieldNow
     expect(yield* Ref.get(requestCount)).toBe(2)

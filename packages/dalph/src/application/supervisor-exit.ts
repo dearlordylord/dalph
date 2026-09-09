@@ -23,16 +23,14 @@ export interface ApplicationExitSignalBoundary {
   readonly removeSignalListener: (signal: ApplicationExitSignal, listener: () => void) => Effect.Effect<void>
 }
 
-/** The historical #210 name retained for its Linux SIGTERM-only composition. */
-export type LinuxSupervisorSignalBoundary = ApplicationExitSignalBoundary
-
 /** One scoped listener installation and the first joined lifecycle result it observes. */
 export interface InstalledApplicationExitSignalAdapter {
+  readonly awaitRequest: Effect.Effect<void>
   readonly awaitResult: Effect.Effect<ApplicationExitResult>
 }
 
 /** The outer host boundary that reports lifecycle facts and ends this exact process incarnation. */
-export interface ApplicationHostProcessBoundary extends LinuxSupervisorSignalBoundary {
+export interface ApplicationHostProcessBoundary extends ApplicationExitSignalBoundary {
   readonly reportLifecycleEvent: (event: ApplicationExitTraceEvent) => Effect.Effect<void>
   readonly requestProcessEnd: (status: 0 | 1) => Effect.Effect<void>
 }
@@ -52,11 +50,13 @@ export const installApplicationExitSignalAdapter = Effect.fn("ApplicationExitSig
   acceptedSignals: readonly [ApplicationExitSignal, ...Array<ApplicationExitSignal>]
 ) {
   const runRequest = yield* FiberSet.makeRuntime<never, void, never>()
+  const firstRequest = yield* Deferred.make<void>()
   const firstResult = yield* Deferred.make<ApplicationExitResult>()
   const registrations = acceptedSignals.map((signal) => {
     const listener = () => {
       runRequest(
-        requestBoundary.requestExit.pipe(
+        Deferred.succeed(firstRequest, undefined).pipe(
+          Effect.andThen(requestBoundary.requestExit),
           Effect.flatMap((result) => Deferred.succeed(firstResult, result)),
           Effect.asVoid
         )
@@ -72,12 +72,15 @@ export const installApplicationExitSignalAdapter = Effect.fn("ApplicationExitSig
       ),
     { discard: true }
   )
-  return { awaitResult: Deferred.await(firstResult) } satisfies InstalledApplicationExitSignalAdapter
+  return {
+    awaitRequest: Deferred.await(firstRequest),
+    awaitResult: Deferred.await(firstResult)
+  } satisfies InstalledApplicationExitSignalAdapter
 })
 
 /** Preserves #210's Linux supervisor contract: only SIGTERM is installed. */
 export const installLinuxSupervisorExitSignalAdapter = Effect.fn("LinuxSupervisorExitSignalAdapter.install")(
-  (requestBoundary: ApplicationExitRequestBoundaryService, signals: LinuxSupervisorSignalBoundary) =>
+  (requestBoundary: ApplicationExitRequestBoundaryService, signals: ApplicationExitSignalBoundary) =>
     installApplicationExitSignalAdapter(requestBoundary, signals, [linuxSupervisorExitSignal]).pipe(Effect.asVoid)
 )
 

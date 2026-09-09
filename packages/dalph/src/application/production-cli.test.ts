@@ -2190,6 +2190,80 @@ it.effect("repeated public signals join one cutoff and one five-second drain", (
   })
 )
 
+it.effect("a Run termination during an accepted Exit request cannot replace its timed-out disposition", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const signals = yield* controlledApplicationExitSignals()
+    const cutoffClosed = yield* Deferred.make<void>()
+    const runTerminated = yield* Deferred.make<{
+      readonly disposition: RunTerminationDisposition
+      readonly terminatedAt: TraceCursor
+    }>()
+    const runTerminationState = yield* Ref.make(
+      Option.none<{ readonly disposition: RunTerminationDisposition; readonly terminatedAt: TraceCursor }>()
+    )
+    const observation = {
+      ...activeProductionCliObservation(),
+      runTermination: { await: Deferred.await(runTerminated), poll: Ref.get(runTerminationState) }
+    }
+    const application = runProductionCli(
+      (_input, use) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const shell = yield* makeProductionHostApplicationExitShell({
+              emit: (event) =>
+                event._tag === "AdmissionCutoffClosed" ? Deferred.succeed(cutoffClosed, undefined) : Effect.void
+            })
+            yield* shell.registerProcessLocalDrain({ closeProcessLocalResources: Effect.never })
+            yield* use(observation, shell.requestBoundary)
+          })
+        ),
+      signals.boundary
+    )
+
+    const running = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.forkChild
+    )
+
+    yield* signals.installed
+    yield* signals.send("SIGTERM")
+    yield* Deferred.await(cutoffClosed)
+    const termination = { disposition: RunTerminationDisposition.make("Completed"), terminatedAt: cursor }
+    yield* Ref.set(runTerminationState, Option.some(termination))
+    yield* Deferred.succeed(runTerminated, termination)
+    yield* Effect.yieldNow
+
+    expect(running.pollUnsafe()).toBeUndefined()
+    expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "RunDisposition")).toBe(false)
+
+    yield* TestClock.adjust("5 seconds")
+    expect(yield* Fiber.join(running).pipe(Effect.flip)).toMatchObject({
+      _tag: "ProductionCliLifecycleError",
+      code: "lifecycle.exit_timed_out"
+    })
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-2)).toEqual({
+      _tag: "ApplicationExitDisposition",
+      disposition: { _tag: "TimedOut", requestedStatus: 1 },
+      runId,
+      version: 1
+    })
+  })
+)
+
 it.effect("public conclusive Exit failure renders a stable lifecycle code and exits one", () =>
   Effect.gen(function* () {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
