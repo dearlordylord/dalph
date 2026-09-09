@@ -243,9 +243,14 @@ exclusions must not hide authored logic.
 - `oxlint-complexity-suppressions.json` counts violations per file, not per
   function/value. A new or increased entry records a concrete `justification`
   for keeping the function cohesive after independent decisions have been
-  extracted. The frozen-candidate gate compares entries with its candidate SHA;
-  a direct check without `--candidate=<base sha>` treats existing entries as
-  legacy while still rejecting count mismatches and malformed entries. Run
+  extracted. Every full gate resolves the same base used by changed-line
+  coverage—from its explicit candidate, `DALPH_COVERAGE_BASE_SHA`, the merge
+  base with `origin/master`, or `HEAD^`—and passes that exact SHA to this check;
+  the base must be an ancestor strictly earlier than candidate `HEAD`. A
+  self-resolving fallback tries the verified parent instead; the gate fails if
+  no such commit is available. A direct check without
+  `--candidate=<base sha>` treats existing entries as legacy while still
+  rejecting count mismatches and malformed entries. Run
   `pnpm check:complexity:prune` after reductions; pruning preserves reviewed
   justifications for every retained entry.
 - Production `floatingEffect` is an error. Test `multipleEffectProvide` and

@@ -15,6 +15,14 @@ export const capabilityRegistrationQualityGate = Object.freeze({
   timeout: 60 * SECOND
 })
 
+/** The complexity policy compares its registry with the exact full-gate base. */
+export const complexityQualityGate = (baseSha) =>
+  Object.freeze({
+    args: Object.freeze(["check:complexity", `--candidate=${baseSha}`]),
+    name: "cyclomatic complexity",
+    timeout: 60 * SECOND
+  })
+
 /** Build the process-group-bounded invocation shared by every quality stage. */
 export const boundedQualityGateCommand = ({ gate, nodeExecutable, pnpmEntryPoint }) => ({
   // Omit pnpm lifecycle banners; retain the child tool's output and exit status.

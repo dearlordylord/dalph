@@ -3,8 +3,10 @@ import { addSuccessfulOutputLines } from "./quality-output-budget.mjs"
 import {
   boundedQualityGateCommand,
   capabilityRegistrationQualityGate,
+  complexityQualityGate,
   recordedCatalogQualityGate
 } from "./quality-gate-stage-policy.mjs"
+import { resolveQualityGateBase } from "./resolve-quality-gate-base.mjs"
 
 const SECOND = 1_000
 const maximumSuccessfulOutputLines = 550
@@ -36,6 +38,15 @@ if (!acknowledgedFullGate) {
   process.exit(2)
 }
 
+const explicitCandidateBase = candidateArgument?.slice("--candidate=".length)
+if (candidateArgument !== undefined && explicitCandidateBase?.trim().length === 0) {
+  throw new Error("The frozen-candidate base SHA must not be blank")
+}
+const qualityBaseSha = resolveQualityGateBase({
+  candidateBase: explicitCandidateBase,
+  hostedBase: process.env.DALPH_COVERAGE_BASE_SHA
+})
+
 const gates = [
   { args: ["check:artifacts"], name: "build and production artifacts", timeout: 5 * 60 * SECOND },
   capabilityRegistrationQualityGate,
@@ -44,11 +55,7 @@ const gates = [
   { args: ["typecheck:effect"], name: "Effect diagnostics", timeout: 3 * 60 * SECOND },
   { args: ["check:format"], name: "format and lint", timeout: 5 * 60 * SECOND },
   { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
-  {
-    args: ["check:complexity", ...(candidateArgument === undefined ? [] : [candidateArgument])],
-    name: "cyclomatic complexity",
-    timeout: 60 * SECOND
-  },
+  complexityQualityGate(qualityBaseSha),
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
   { args: ["test:memory"], name: "project memory scenarios", timeout: 60 * SECOND },
   {

@@ -16,6 +16,12 @@ describe("complexity suppression policy", () => {
     ])
   })
 
+  it("does not let a hosted candidate treat its current missing reason as the baseline", () => {
+    expect(
+      suppressionPolicyViolations({ baseline: { "hosted.ts": entry(1) }, current: { "hosted.ts": entry(2) } })
+    ).toEqual(["hosted.ts: new or increased complexity count requires a non-blank justification"])
+  })
+
   it("allows unchanged legacy counts and justified increases", () => {
     expect(
       suppressionPolicyViolations({
