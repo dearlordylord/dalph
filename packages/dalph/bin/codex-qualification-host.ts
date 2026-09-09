@@ -292,10 +292,11 @@ const configurationProgram = Effect.gen(function* () {
             const intents = after.flatMap(({ event }) =>
               event._tag === "PlannedAttemptExecutorCommandIntended" ? [event] : []
             )
+            const firstIntent = yield* Effect.fromNullishOr(intents[0]).pipe(Effect.orDie)
             yield* writeEvent({
               event: "begin-journal",
               beginIntents: intents.length,
-              beginOrdinal: intents[0]?.ordinal,
+              beginOrdinal: firstIntent.ordinal,
               beginResponses: after.filter(
                 ({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved"
               ).length

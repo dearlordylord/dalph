@@ -257,11 +257,12 @@ type HostAction =
   | "exit-stuck"
   | "close"
 
-const requireEvent = <EventName extends HostEvent["event"]>(
+function requireEvent<EventName extends HostEvent["event"]>(
   event: HostEvent,
   expected: EventName
-): Extract<HostEvent, { readonly event: EventName }> | HostEvent => {
-  if (event.event === "failure") throw new Error(event.detail ?? "qualification host failed without detail")
+): Extract<HostEvent, { readonly event: EventName }>
+function requireEvent(event: HostEvent, expected: HostEvent["event"]): HostEvent {
+  if (event.event === "failure") throw new Error(event.detail)
   if (event.event !== expected) throw new Error(`expected ${expected} event, received ${event.event}`)
   return event
 }
@@ -530,7 +531,7 @@ const suspensionRaceCases: ReadonlyArray<readonly [string, "failed-race" | "acce
 
 const acceptedEvidenceFor = async (fixture: Fixture, event: HostEvent): Promise<void> => {
   const report = requireEvent(event, "report").report
-  if (report === undefined || report._tag !== "ExecutorWorkTerminal" || report.result._tag !== "Accepted") {
+  if (report._tag !== "ExecutorWorkTerminal" || report.result._tag !== "Accepted") {
     throw new Error("expected an Accepted terminal host report")
   }
   const accepted = report.result.acceptedResult
@@ -654,7 +655,7 @@ const dispose = async (fixture: Fixture, hosts: ReadonlyArray<BuiltHost>): Promi
 
 const exactProjectionReport = (event: HostEvent) => {
   const projection = requireEvent(event, "projection").projection
-  if (projection === undefined || projection._tag !== "Exact") {
+  if (projection._tag !== "Exact") {
     throw new Error(`expected Exact projection, got ${JSON.stringify(projection)}`)
   }
   return projection.report
@@ -662,7 +663,7 @@ const exactProjectionReport = (event: HostEvent) => {
 
 const terminalReport = (event: HostEvent) => {
   const report = event.event === "report" ? event.report : exactProjectionReport(event)
-  if (report === undefined || report._tag !== "ExecutorWorkTerminal") {
+  if (report._tag !== "ExecutorWorkTerminal") {
     throw new Error(`expected terminal executor report, got ${JSON.stringify(event)}`)
   }
   return report
@@ -677,7 +678,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       try {
         const first = await spawnHost(fixture, "settle")
         hosts.push(first)
-        expect(requireEvent(await first.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await first.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         expect(terminalReport(await first.waitForReport(2)).result._tag).toBe("Accepted")
         await first.waitForExit()
         const before = await attemptRecord(fixture)
@@ -708,10 +709,10 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         const started = await spawnHost(fixture, "settle")
         hosts.push(started)
         const running = requireEvent(await started.waitForReport(1), "report")
-        expect(running.report?._tag).toBe("ExecutorWorkExecuting")
+        expect(running.report._tag).toBe("ExecutorWorkExecuting")
         const terminal = requireEvent(await started.waitForReport(2), "report")
-        expect(terminal.report?._tag).toBe("ExecutorWorkTerminal")
-        if (terminal.report?._tag === "ExecutorWorkTerminal") {
+        expect(terminal.report._tag).toBe("ExecutorWorkTerminal")
+        if (terminal.report._tag === "ExecutorWorkTerminal") {
           expect(terminal.report.result._tag).toBe("Accepted")
           if (terminal.report.result._tag === "Accepted") {
             expect(terminal.report.result.acceptedResult.commit).toBe(await git(fixture.worktree, "rev-parse", "HEAD"))
@@ -736,10 +737,10 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       try {
         const started = await spawnHost(fixture, "settle")
         hosts.push(started)
-        expect(requireEvent(await started.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await started.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         const terminal = requireEvent(await started.waitForReport(2), "report")
-        expect(terminal.report?._tag).toBe("ExecutorWorkTerminal")
-        if (terminal.report?._tag === "ExecutorWorkTerminal") {
+        expect(terminal.report._tag).toBe("ExecutorWorkTerminal")
+        if (terminal.report._tag === "ExecutorWorkTerminal") {
           expect(terminal.report.result._tag).toBe("Failed")
         }
         expect(JSON.stringify(terminal)).not.toContain("Completed")
@@ -764,7 +765,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
 
         const replacement = await spawnHost(fixture, "settle")
         hosts.push(replacement)
-        expect(requireEvent(await replacement.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await replacement.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         const terminal = terminalReport(await replacement.waitForReport(2))
         expect(terminal.result._tag).toBe("Accepted")
         expect(fixture.model.calls).toHaveLength(2)
@@ -792,7 +793,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
 
         const resumed = await spawnHost(fixture, "workflow-begin", { hold: true })
         hosts.push(resumed)
-        expect(requireEvent(await resumed.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await resumed.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         await fixture.model.waitForCalls(1)
         const replacementThread = threadIdOf(await attemptRecord(fixture))
         expect(replacementThread).toBeDefined()
@@ -832,7 +833,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
 
         const resumed = await spawnHost(fixture, "settle")
         hosts.push(resumed)
-        expect(requireEvent(await resumed.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await resumed.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         expect(terminalReport(await resumed.waitForReport(2)).result._tag).toBe("Accepted")
         const replacementThread = threadIdOf(await attemptRecord(fixture))
         expect(replacementThread).toBeDefined()
@@ -862,7 +863,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
 
         const replacement = await spawnHost(fixture, "settle")
         hosts.push(replacement)
-        expect(requireEvent(await replacement.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await replacement.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         expect(terminalReport(await replacement.waitForReport(2)).result._tag).toBe("Accepted")
         expect(fixture.model.calls).toHaveLength(2)
         expect((await attemptRecord(fixture))._tag).toBe("Terminal")
@@ -881,7 +882,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       try {
         const first = await spawnHost(fixture, "create", { hold: true })
         hosts.push(first)
-        expect(requireEvent(await first.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await first.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         await fixture.model.waitForCalls(1)
         const ownedChildPid = await waitForOwnedChildPid(fixture)
         const originalThread = threadIdOf(await attemptRecord(fixture))
@@ -925,7 +926,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       try {
         const first = await spawnHost(fixture, "create", { hold: true })
         hosts.push(first)
-        expect(requireEvent(await first.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await first.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         await fixture.model.waitForCalls(1)
         const originalThread = threadIdOf(await attemptRecord(fixture))
         expect(originalThread).toBeDefined()
@@ -941,14 +942,14 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         if (priorAppServerPid !== null && priorAppServerPid !== undefined)
           await waitForProcessAbsence(priorAppServerPid)
         const projected = await projectedHost.waitFor("projection")
-        if (projected.event === "projection" && projected.projection?._tag === "Exact") {
+        if (projected.event === "projection" && projected.projection._tag === "Exact") {
           expect(["ExecutorWorkExecuting", "ExecutorWorkTerminal"]).toContain(projected.projection.report._tag)
           if (projected.projection.report._tag === "ExecutorWorkTerminal") {
             expect(projected.projection.report.result._tag).not.toBe("Completed")
           }
         } else {
           expect(projected.event).toBe("projection")
-          if (projected.event === "projection") expect(["Unreadable", "NoReport"]).toContain(projected.projection?._tag)
+          if (projected.event === "projection") expect(["Unreadable", "NoReport"]).toContain(projected.projection._tag)
         }
         expect(threadIdOf(await attemptRecord(fixture))).toBe(originalThread)
 
@@ -968,11 +969,11 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       try {
         const started = await spawnHost(fixture, "exercise-suspension", { waitForOwnedChild: true })
         hosts.push(started)
-        expect(requireEvent(await started.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await started.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         const ownedChildPid = await waitForOwnedChildPid(fixture)
         const report = requireEvent(await started.waitForReport(2), "report")
         expect(report.command).toBe("Suspend")
-        expect(report.report?._tag).toBe("ExecutorWorkSafelySuspended")
+        expect(report.report._tag).toBe("ExecutorWorkSafelySuspended")
         expect(processCanMutateWorktree(ownedChildPid)).toBe(false)
         await waitForProcessAbsence(ownedChildPid)
         expect(fixture.model.calls).toHaveLength(1)
@@ -991,19 +992,19 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       try {
         const suspended = await spawnHost(fixture, "exercise-suspension")
         hosts.push(suspended)
-        expect(requireEvent(await suspended.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await suspended.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         const originalThread = threadIdOf(await attemptRecord(fixture))
         expect(originalThread).toBeDefined()
         const report = requireEvent(await suspended.waitForReport(2), "report")
         expect(report.command).toBe("Suspend")
-        expect(report.report?._tag).toBe("ExecutorWorkSafelySuspended")
+        expect(report.report._tag).toBe("ExecutorWorkSafelySuspended")
         expect(fixture.model.calls).toHaveLength(1)
 
         const resumed = await spawnHost(fixture, "resume")
         hosts.push(resumed)
         const resumedReport = requireEvent(await resumed.waitForReport(1), "report")
         expect(resumedReport.command).toBe("Resume")
-        expect(resumedReport.report?._tag).toBe("ExecutorWorkExecuting")
+        expect(resumedReport.report._tag).toBe("ExecutorWorkExecuting")
         expect(threadIdOf(await attemptRecord(fixture))).toBe(originalThread)
         expect(fixture.model.calls).toHaveLength(1)
       } finally {
@@ -1021,15 +1022,15 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       try {
         const survivor = await spawnHost(fixture, "exit-stuck", { waitForOwnedChild: true })
         hosts.push(survivor)
-        expect(requireEvent(await survivor.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await survivor.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         await fixture.model.waitForCalls(1)
         const ownedChildPid = await waitForOwnedChildPid(fixture)
         const appServerPid = (await latestPrivateSnapshot(fixture)).serverLaunch?.pid
         expect(appServerPid).not.toBeNull()
         expect(appServerPid).toBeDefined()
         const result = requireEvent(await survivor.waitFor("exit-result"), "exit-result").exitResult
-        expect(result?._tag).toBe("TimedOut")
-        expect(result?.requestedStatus).toBe(1)
+        expect(result._tag).toBe("TimedOut")
+        expect(result.requestedStatus).toBe(1)
         expect(survivor.events.filter((event) => event.event === "report")).toHaveLength(1)
         expect(survivor.events.some((event) => event.event === "suspension-unresolved")).toBe(true)
         expect(
@@ -1060,13 +1061,13 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         hosts.push(exited)
         const started = requireEvent(await exited.waitForReport(1), "report")
         expect(started.command).toBe("Begin")
-        expect(started.report?._tag).toBe("ExecutorWorkExecuting")
+        expect(started.report._tag).toBe("ExecutorWorkExecuting")
         const appServerPid = (await latestPrivateSnapshot(fixture)).serverLaunch?.pid
         expect(appServerPid).not.toBeNull()
         expect(appServerPid).toBeDefined()
         const report = requireEvent(await exited.waitForReport(2), "report")
         expect(report.command).toBe("Suspend")
-        expect(report.report?._tag).toBe("ExecutorWorkSafelySuspended")
+        expect(report.report._tag).toBe("ExecutorWorkSafelySuspended")
         const originalThread = threadIdOf(await attemptRecord(fixture))
         expect(originalThread).toBeDefined()
         const result = requireEvent(await exited.waitFor("exit-result"), "exit-result").exitResult
@@ -1088,7 +1089,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         hosts.push(resumed)
         const resumedReport = requireEvent(await resumed.waitForReport(1), "report")
         expect(resumedReport.command).toBe("Resume")
-        expect(resumedReport.report?._tag).toBe("ExecutorWorkExecuting")
+        expect(resumedReport.report._tag).toBe("ExecutorWorkExecuting")
         expect(threadIdOf(await attemptRecord(fixture))).toBe(originalThread)
         expect(fixture.model.calls).toHaveLength(1)
       } finally {
@@ -1106,7 +1107,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       try {
         const started = await spawnHost(fixture, "settle")
         hosts.push(started)
-        expect(requireEvent(await started.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await started.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         const terminal = terminalReport(await started.waitForReport(2))
         expect(terminal.result._tag).toBe("Failed")
         expect(terminal.result._tag).not.toBe("Completed")
@@ -1134,7 +1135,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         })
         hosts.push(foreign)
         const projection = requireEvent(await foreign.waitFor("projection"), "projection").projection
-        expect(projection?._tag).toBe("NoReport")
+        expect(projection._tag).toBe("NoReport")
         expect(JSON.stringify(projection)).not.toContain("Terminal")
         expect(fixture.model.calls).toHaveLength(2)
       } finally {
@@ -1152,7 +1153,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       try {
         const running = await spawnHost(fixture, "create", { hold: true })
         hosts.push(running)
-        expect(requireEvent(await running.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await running.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         await fixture.model.waitForCalls(1)
         const rollout = await onlyRolloutFile(fixture)
         await running.stop("SIGKILL")
@@ -1160,7 +1161,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
 
         const projected = await spawnHost(fixture, "project")
         hosts.push(projected)
-        expect(requireEvent(await projected.waitFor("projection"), "projection").projection?._tag).toBe("Unreadable")
+        expect(requireEvent(await projected.waitFor("projection"), "projection").projection._tag).toBe("Unreadable")
         expect(fixture.model.calls).toHaveLength(1)
         expect((await attemptRecord(fixture))._tag).not.toBe("Terminal")
       } finally {
@@ -1182,7 +1183,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       try {
         const running = await spawnHost(fixture, "create", { hold: true })
         hosts.push(running)
-        expect(requireEvent(await running.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await running.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         await fixture.model.waitForCalls(1)
         rollout = await onlyRolloutFile(fixture)
         await running.stop("SIGKILL")
@@ -1190,7 +1191,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
 
         const projected = await spawnHost(fixture, "project")
         hosts.push(projected)
-        expect(requireEvent(await projected.waitFor("projection"), "projection").projection?._tag).toBe("Unreadable")
+        expect(requireEvent(await projected.waitFor("projection"), "projection").projection._tag).toBe("Unreadable")
         expect(fixture.model.calls).toHaveLength(1)
         expect((await attemptRecord(fixture))._tag).not.toBe("Terminal")
       } finally {
@@ -1255,7 +1256,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       try {
         const interrupted = await spawnHost(fixture, "exercise-suspension")
         hosts.push(interrupted)
-        expect(requireEvent(await interrupted.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await interrupted.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         await fixture.model.waitForCalls(1)
         const originalThread = threadIdOf(await attemptRecord(fixture))
         expect(originalThread).toBeDefined()
@@ -1264,7 +1265,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         await interrupted.stop("SIGKILL")
         expect(
           interrupted.events.some(
-            (event) => event.event === "report" && event.report?._tag === "ExecutorWorkSafelySuspended"
+            (event) => event.event === "report" && event.report._tag === "ExecutorWorkSafelySuspended"
           )
         ).toBe(false)
 
@@ -1273,8 +1274,8 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         if (priorAppServerPid !== null && priorAppServerPid !== undefined)
           await waitForProcessAbsence(priorAppServerPid)
         const projection = requireEvent(await projected.waitFor("projection"), "projection").projection
-        expect(["Exact", "Unreadable"]).toContain(projection?._tag)
-        if (projection?._tag === "Exact") expect(projection.report._tag).not.toBe("ExecutorWorkSafelySuspended")
+        expect(["Exact", "Unreadable"]).toContain(projection._tag)
+        if (projection._tag === "Exact") expect(projection.report._tag).not.toBe("ExecutorWorkSafelySuspended")
         expect(threadIdOf(await attemptRecord(fixture))).toBe(originalThread)
         expect(fixture.model.calls).toHaveLength(1)
       } finally {
@@ -1292,7 +1293,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
       try {
         const exercised = await spawnHost(fixture, "exercise-terminal-suspension")
         hosts.push(exercised)
-        expect(requireEvent(await exercised.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        expect(requireEvent(await exercised.waitForReport(1), "report").report._tag).toBe("ExecutorWorkExecuting")
         requireEvent(await exercised.waitFor("suspension-ready"), "suspension-ready")
         fixture.model.releaseTerminal()
         await fixture.model.waitForTerminalSent()
@@ -1303,7 +1304,7 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(terminal.result._tag).not.toBe("Completed")
         expect(
           exercised.events.some(
-            (event) => event.event === "report" && event.report?._tag === "ExecutorWorkSafelySuspended"
+            (event) => event.event === "report" && event.report._tag === "ExecutorWorkSafelySuspended"
           )
         ).toBe(false)
       } finally {
