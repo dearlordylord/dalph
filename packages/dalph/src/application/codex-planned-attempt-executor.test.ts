@@ -6,6 +6,7 @@ import {
   EvidenceReference,
   GitCommitSha,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorBeginProofId,
   PlannedAttemptExecutorLifecycleObservation,
   type PlannedAttemptExecutorService,
   PlannedAttemptExecutorProjection,
@@ -54,6 +55,18 @@ import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import { definePlannedAttemptExecutorConformanceSuite } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/conformance.test.js"
 import { plannedAttemptExecutorContract } from "../../../orchestrator/test/contracts/planned-attempt-executor-contract.js"
+import { beginPlannedAttemptExecutorWork } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/guarded-protocol.js"
+import { plannedAttemptProtocolControllerLayer } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
+import { memoryJournalTestLayer } from "../../../orchestrator/src/workflow-journal/adapters/memory-store.js"
+import { InRunJournal, JournalStore } from "../../../orchestrator/src/workflow-journal/store.js"
+import { intentRecordKey, outcomeRecordKey } from "../../../orchestrator/src/workflow-journal/record-key.js"
+import { makeTaskWorkSpecificationObservationOperation } from "../../../orchestrator/src/workflow/registry/operation.js"
+import { taskTrackerReadIntent } from "../../../orchestrator/src/workflow/registry/event.js"
+import {
+  makeFocusedTaskWorkSpecificationFactsObserved,
+  taskTrackerFactsObservedEvent
+} from "../../../orchestrator/src/workflow/task-tracker-facts/observation.js"
+import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import {
   CodexAppServerFailure,
   controlledCodexOwnedActivityCensusLayer,
@@ -2359,6 +2372,277 @@ it.effect("replaces only a conclusively absent recovered pre-turn thread before 
     expect(harness.turnCount()).toBe(1)
   }).pipe(Effect.provide(layerFor(harness)))
 })
+
+it.effect("restarts the production workflow after durable association and finishes Begin ordinal one", () => {
+  const harness = makeHarness()
+  let crashAfterAssociation = true
+  const store: CodexAttemptStoreService = {
+    ...harness.store,
+    writeAttempt: (record) =>
+      harness.store.writeAttempt(record).pipe(
+        Effect.andThen(
+          Effect.suspend(() => {
+            if (record._tag !== "AssociatedPreTurn" || !crashAfterAssociation) return Effect.void
+            crashAfterAssociation = false
+            return Effect.die("coordinator lost after durable association")
+          })
+        )
+      )
+  }
+  const executorLayer = layerFor(
+    harness,
+    defaultGitCommand,
+    memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)),
+    undefined,
+    store
+  )
+  return Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const specificationRead = makeTaskWorkSpecificationObservationOperation(
+      OperationId.make("issue-341-original-specification"),
+      FixtureTarget.make("issue-341"),
+      attempt.taskId,
+      []
+    )
+    yield* journal.append(
+      attempt.runId,
+      intentRecordKey(specificationRead.operationId),
+      taskTrackerReadIntent(specificationRead)
+    )
+    yield* journal.append(
+      attempt.runId,
+      outcomeRecordKey(specificationRead.operationId),
+      taskTrackerFactsObservedEvent(
+        specificationRead.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(specificationRead, specification)
+      )
+    )
+    const activate = () =>
+      beginPlannedAttemptExecutorWork(attempt).pipe(
+        Effect.provide(plannedAttemptProtocolControllerLayer),
+        Effect.provide(executorLayer, { local: true })
+      )
+    expect((yield* activate().pipe(Effect.exit))._tag).toBe("Failure")
+    expect(harness.currentRecord()?._tag).toBe("AssociatedPreTurn")
+    expect(harness.turnCount()).toBe(0)
+    const originalThread = harness.currentThread().id
+    const crashingJournal = InRunJournal.of({
+      read: journal.read,
+      append: (runId, key, event) =>
+        journal
+          .append(runId, key, event)
+          .pipe(
+            Effect.flatMap((record) =>
+              event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+              event.observation._tag === "ExecutorBeginNotCrossed"
+                ? Effect.die("coordinator lost after durable proof observation")
+                : Effect.succeed(record)
+            )
+          )
+    })
+    expect((yield* activate().pipe(Effect.provideService(InRunJournal, crashingJournal), Effect.exit))._tag).toBe(
+      "Failure"
+    )
+    expect(harness.turnCount()).toBe(0)
+    expect((yield* activate())._tag).toBe("ExecutorWorkExecuting")
+    expect(harness.currentThread().id).toBe(originalThread)
+    expect(harness.threadStarts()).toBe(1)
+    expect(harness.turnCount()).toBe(1)
+    const records = yield* journal.read(attempt.runId)
+    expect(
+      records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended").map(({ event }) => event)
+    ).toMatchObject([{ command: "Begin", ordinal: 1, plannedAttempt: attempt }])
+    const projections = records.flatMap(({ event }) =>
+      event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+      event.observation._tag === "ExecutorBeginNotCrossed"
+        ? [event]
+        : []
+    )
+    expect(projections).toMatchObject([
+      { commandOrdinal: 1, projectionOrdinal: 1, observation: { _tag: "ExecutorBeginNotCrossed" } },
+      { commandOrdinal: 1, projectionOrdinal: 2, observation: { _tag: "ExecutorBeginNotCrossed" } }
+    ])
+    expect(
+      new Set(
+        projections.flatMap(({ observation }) =>
+          observation._tag === "ExecutorBeginNotCrossed" ? [observation.proofId] : []
+        )
+      ).size
+    ).toBe(2)
+    expect(
+      records
+        .filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved")
+        .map(({ event }) => event)
+    ).toMatchObject([{ commandOrdinal: 1, report: { _tag: "ExecutorWorkExecuting", correlation } }])
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+})
+
+it.effect("projects Begin-not-crossed only for exact idle association and Begin reconciliation", () => {
+  const harness = makeHarness()
+  return Effect.gen(function* () {
+    const thread = yield* harness.app.startThread(worktree)
+    harness.setRecord(
+      CodexAttemptRecord.cases.AssociatedPreTurn.make({
+        attemptId: attempt.attemptId,
+        correlationAttemptId: attempt.attemptId,
+        correlationRunId: attempt.runId,
+        threadId: thread.id,
+        worktree
+      })
+    )
+    const executor = yield* PlannedAttemptExecutor
+    expect(yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" })).toMatchObject({
+      _tag: "BeginNotCrossed",
+      correlation
+    })
+    for (const purpose of [
+      passiveLifecycleObservationPurpose,
+      { _tag: "ReconcileCommand", command: "Resume" } as const,
+      { _tag: "ReconcileCommand", command: "Suspend" } as const
+    ]) {
+      expect((yield* executor.observe(correlation, purpose))._tag).toBe("NoReport")
+    }
+    expect(harness.turnCount()).toBe(0)
+    expect(harness.resumeCwds).toHaveLength(4)
+    harness.setRecord(
+      CodexAttemptRecord.cases.TurnIntentRecorded.make({
+        attemptId: attempt.attemptId,
+        correlationAttemptId: attempt.attemptId,
+        correlationRunId: attempt.runId,
+        threadId: thread.id,
+        worktree,
+        currentToken: CodexOwnedTurnToken.make("authorized-first-turn"),
+        priorObservedTurnId: null
+      })
+    )
+    expect((yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" }))._tag).toBe(
+      "Unreadable"
+    )
+    expect((yield* executor.begin(request).pipe(Effect.exit))._tag).toBe("Failure")
+    expect(harness.turnCount()).toBe(0)
+  }).pipe(Effect.provide(layerFor(harness)))
+})
+
+for (const change of [
+  "MissingAssociation",
+  "ChangedAssociation",
+  "NotFoundThread",
+  "InterveningCommand",
+  "NewerProof",
+  "ForgedProof",
+  "OtherAttempt",
+  "ProcessRestart"
+] as const) {
+  it.effect(`rejects stale Begin recovery delivery after ${change} without allocation or task turn`, () => {
+    const harness = makeHarness()
+    let associationMissing = false
+    const store: CodexAttemptStoreService = {
+      ...harness.store,
+      readAttempt: (runId, attemptId) =>
+        associationMissing ? Effect.succeed(Option.none()) : harness.store.readAttempt(runId, attemptId)
+    }
+    const executorLayer = layerFor(
+      harness,
+      defaultGitCommand,
+      memoryEvidenceStoreLayer.pipe(Layer.provide(NodeServices.layer)),
+      undefined,
+      store
+    )
+    return Effect.gen(function* () {
+      const thread = yield* harness.app.startThread(worktree)
+      const association = CodexAttemptRecord.cases.AssociatedPreTurn.make({
+        attemptId: attempt.attemptId,
+        correlationAttemptId: attempt.attemptId,
+        correlationRunId: attempt.runId,
+        threadId: thread.id,
+        worktree
+      })
+      harness.setRecord(association)
+      const executor = yield* PlannedAttemptExecutor
+      const proof = yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" })
+      if (proof._tag !== "BeginNotCrossed") return expect.fail("expected exact pre-turn proof")
+      if (change === "MissingAssociation") associationMissing = true
+      if (change === "ChangedAssociation")
+        harness.setRecord({ ...association, threadId: CodexThreadId.make("replacement-empty-thread") })
+      if (change === "NotFoundThread")
+        harness.setResumeFailure(
+          new CodexAppServerFailure({
+            kind: "NotFound",
+            operation: "thread/resume",
+            detail: "thread disappeared after proof"
+          })
+        )
+      if (change === "InterveningCommand") yield* executor.requestSuspension(attempt).pipe(Effect.exit)
+      if (change === "NewerProof") yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" })
+      const redeliver = Effect.gen(function* () {
+        const currentExecutor = yield* PlannedAttemptExecutor
+        return yield* currentExecutor.begin(
+          change === "OtherAttempt"
+            ? { ...request, plannedAttempt: { ...attempt, attemptId: AttemptId.make("other-attempt") } }
+            : request,
+          {
+            _tag: "ReconciledDelivery",
+            proofId: change === "ForgedProof" ? PlannedAttemptExecutorBeginProofId.make("forged") : proof.proofId
+          }
+        )
+      })
+      const result = yield* (
+        change === "ProcessRestart" ? redeliver.pipe(Effect.provide(executorLayer, { local: true })) : redeliver
+      ).pipe(Effect.exit)
+      expect(result._tag).toBe("Failure")
+      expect(harness.threadStarts()).toBe(1)
+      expect(harness.turnCount()).toBe(0)
+    }).pipe(Effect.provide(executorLayer))
+  })
+}
+
+for (const evidence of [
+  "MissingPrivate",
+  "NotFound",
+  "Unavailable",
+  "Foreign",
+  "Active",
+  "TurnBearing",
+  "WrongWorktree"
+] as const) {
+  it.effect(`refuses Begin-not-crossed for ${evidence} executor evidence`, () => {
+    const harness = makeHarness({ missingEmptyThread: evidence === "NotFound" })
+    return Effect.gen(function* () {
+      const thread = yield* harness.app.startThread(worktree)
+      if (evidence !== "MissingPrivate")
+        harness.setRecord(
+          CodexAttemptRecord.cases.AssociatedPreTurn.make({
+            attemptId: attempt.attemptId,
+            correlationAttemptId: attempt.attemptId,
+            correlationRunId: attempt.runId,
+            threadId: thread.id,
+            worktree
+          })
+        )
+      if (evidence === "Unavailable")
+        harness.setResumeFailure(
+          new CodexAppServerFailure({
+            detail: "controlled unavailable thread",
+            kind: "Unavailable",
+            operation: "thread/resume"
+          })
+        )
+      if (evidence === "Foreign") harness.makeForeignResume()
+      if (evidence === "Active") harness.setThread({ ...thread, status: "active" })
+      if (evidence === "TurnBearing") harness.addManualTurn("after")
+      if (evidence === "WrongWorktree") {
+        harness.setThread({ ...thread, cwd: CodexThreadWorkingDirectory.make("/foreign/worktree") })
+        harness.preserveResumeCwd()
+      }
+      const executor = yield* PlannedAttemptExecutor
+      expect((yield* executor.observe(correlation, { _tag: "ReconcileCommand", command: "Begin" }))._tag).not.toBe(
+        "BeginNotCrossed"
+      )
+      expect(harness.turnCount()).toBe(0)
+      expect(harness.threadStarts()).toBe(1)
+    }).pipe(Effect.provide(layerFor(harness)))
+  })
+}
 
 it.effect("reuses an exact idle recovered pre-turn thread before sending its first turn", () => {
   const harness = makeHarness()

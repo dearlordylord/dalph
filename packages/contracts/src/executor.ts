@@ -93,8 +93,23 @@ export const samePlannedAttemptExecutorCorrelation = (
   right: PlannedAttemptExecutorCorrelation
 ): boolean => left.attemptId === right.attemptId && left.runId === right.runId
 
+/** Identifies one process-local, single-use exact pre-turn read; it carries no provider identity. */
+export const PlannedAttemptExecutorBeginProofId = Schema.NonEmptyString.pipe(
+  Schema.brand("PlannedAttemptExecutorBeginProofId")
+)
+export type PlannedAttemptExecutorBeginProofId = typeof PlannedAttemptExecutorBeginProofId.Type
+
+/** Distinguishes first delivery from completion of the same semantic Begin after reconciliation. */
+export const PlannedAttemptExecutorBeginDelivery = Schema.TaggedUnion({
+  InitialDelivery: {},
+  ReconciledDelivery: { proofId: PlannedAttemptExecutorBeginProofId }
+})
+export type PlannedAttemptExecutorBeginDelivery = typeof PlannedAttemptExecutorBeginDelivery.Type
+
 const PlannedAttemptExecutorProjectionShape = Schema.TaggedUnion({
   Exact: { report: PlannedAttemptExecutorReport },
+  /** Fresh exact pre-turn authority, available only while reconciling Begin; never a lifecycle report. */
+  BeginNotCrossed: { correlation: PlannedAttemptExecutorCorrelation, proofId: PlannedAttemptExecutorBeginProofId },
   NoReport: { correlation: PlannedAttemptExecutorCorrelation },
   TemporarilyUnavailable: { correlation: PlannedAttemptExecutorCorrelation },
   Unreadable: { correlation: PlannedAttemptExecutorCorrelation },
@@ -168,7 +183,8 @@ export interface PlannedAttemptExecutorService {
   ) => Effect.Effect<PlannedAttemptExecutorProjection>
   /** Begins the complete work for an exact planned attempt once. */
   readonly begin: (
-    request: PlannedAttemptExecutorRequest
+    request: PlannedAttemptExecutorRequest,
+    delivery?: PlannedAttemptExecutorBeginDelivery
   ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
   readonly requestSuspension: (
     plannedAttempt: PlannedTaskAttempt

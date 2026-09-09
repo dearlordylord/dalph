@@ -7,6 +7,7 @@ import {
   GitCommitSha,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorBeginProofId,
   PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
@@ -128,6 +129,7 @@ const Variant = Schema.Struct({ tag: Schema.String, value: Schema.Unknown })
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
     commandCallCount: ITFBigInt,
+    beginTurnCrossingCount: ITFBigInt,
     commandIntentCount: ITFBigInt,
     commandResponseEvidenceCount: ITFBigInt,
     commandResponseSettlementCount: ITFBigInt,
@@ -173,6 +175,9 @@ const executorConformanceDriver = defineDriver(
     acceptFreshStateProjectionProof: {},
     beginResponsibility: {},
     callBegin: {},
+    callBeginPreTurn: {},
+    redeliverBegin: {},
+    crossRedeliveredBeginTurn: {},
     callResume: {},
     callSuspend: {},
     init: {},
@@ -198,6 +203,9 @@ const executorConformanceDriver = defineDriver(
     let commandIntentSignal = Deferred.makeUnsafe<void>()
     let commandCallSignal = Deferred.makeUnsafe<void>()
     let commandResponse = Deferred.makeUnsafe<PlannedAttemptExecutorReport>()
+    let beginTurnGate = Deferred.makeUnsafe<void>()
+    let beginTurnSignal = Deferred.makeUnsafe<void>()
+    let beginTurnCrossingCount = 0
     let responseGate = Deferred.makeUnsafe<void>()
     let responseSignal = Deferred.makeUnsafe<void>()
     let projectionGate = Deferred.makeUnsafe<void>()
@@ -212,6 +220,7 @@ const executorConformanceDriver = defineDriver(
     let pendingProjection: Fiber.Fiber<PlannedAttemptExecutorReport, unknown> | undefined
     let pendingState: Fiber.Fiber<PlannedAttemptExecutorReport, unknown> | undefined
     let commandCalls = 0
+    let currentCommandCalled = false
     let observationCalls = 0
     // Recovery count is an activation-local driver fact; command and evidence
     // state below still comes exclusively from the production journal.
@@ -385,12 +394,14 @@ const executorConformanceDriver = defineDriver(
         ),
       requestSuspension: () =>
         Effect.gen(function* () {
+          currentCommandCalled = true
           commandCalls += 1
           yield* Deferred.succeed(commandCallSignal, undefined)
           return yield* Deferred.await(commandResponse)
         }),
       begin: (request) =>
         Effect.gen(function* () {
+          currentCommandCalled = true
           if (
             request.specification.body !== specification.body ||
             request.specification.fingerprint !== specification.fingerprint ||
@@ -401,10 +412,14 @@ const executorConformanceDriver = defineDriver(
           }
           commandCalls += 1
           yield* Deferred.succeed(commandCallSignal, undefined)
+          yield* Deferred.await(beginTurnGate)
+          beginTurnCrossingCount += 1
+          yield* Deferred.succeed(beginTurnSignal, undefined)
           return yield* Deferred.await(commandResponse)
         }),
       resume: () =>
         Effect.gen(function* () {
+          currentCommandCalled = true
           commandCalls += 1
           yield* Deferred.succeed(commandCallSignal, undefined)
           return yield* Deferred.await(commandResponse)
@@ -443,6 +458,7 @@ const executorConformanceDriver = defineDriver(
       if (snapshot.positions.has(plannedAttempt.taskId)) yield* admission.releasePlannedAttemptPosition(correlation)
     })
     const resetCommand = (kind: typeof commandKind) => {
+      currentCommandCalled = false
       commandKind = kind
       commandIntentGate = Deferred.makeUnsafe<void>()
       commandIntentSignal = Deferred.makeUnsafe<void>()
@@ -572,6 +588,10 @@ const executorConformanceDriver = defineDriver(
           authorityReport = undefined
           currentProjection = undefined
           commandCalls = 0
+          currentCommandCalled = false
+          beginTurnCrossingCount = 0
+          beginTurnGate = Deferred.makeUnsafe<void>()
+          beginTurnSignal = Deferred.makeUnsafe<void>()
           observationCalls = 0
           recoveryCount = 0
           projectionBaseline = 0
@@ -596,7 +616,31 @@ const executorConformanceDriver = defineDriver(
       recordBeginIntent: () => reservePosition().pipe(Effect.andThen(recordIntent("Begin")), Effect.orDie),
       recordResumeIntent: () => reservePosition().pipe(Effect.andThen(recordIntent("Resume")), Effect.orDie),
       recordSuspendIntent: () => recordIntent("Suspend").pipe(Effect.orDie),
-      callBegin: () => call().pipe(Effect.orDie),
+      callBegin: () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(beginTurnGate, undefined)
+          yield* call()
+          yield* Deferred.await(beginTurnSignal)
+        }).pipe(Effect.orDie),
+      callBeginPreTurn: () => call().pipe(Effect.orDie),
+      redeliverBegin: () =>
+        Effect.gen(function* () {
+          commandCallSignal = Deferred.makeUnsafe<void>()
+          commandResponse = Deferred.makeUnsafe<PlannedAttemptExecutorReport>()
+          beginTurnGate = Deferred.makeUnsafe<void>()
+          beginTurnSignal = Deferred.makeUnsafe<void>()
+          responseGate = Deferred.makeUnsafe<void>()
+          responseSignal = Deferred.makeUnsafe<void>()
+          pendingCommand = pendingProjection
+          pendingProjection = undefined
+          yield* Deferred.succeed(projectionGate, undefined)
+          yield* Deferred.await(commandCallSignal)
+        }).pipe(Effect.orDie),
+      crossRedeliveredBeginTurn: () =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(beginTurnGate, undefined)
+          yield* Deferred.await(beginTurnSignal)
+        }),
       callResume: () => call().pipe(Effect.orDie),
       callSuspend: () => call().pipe(Effect.orDie),
       receiveCommandResponse: ({ report }) =>
@@ -630,31 +674,36 @@ const executorConformanceDriver = defineDriver(
             correlation: { attemptId: AttemptId.make("other"), runId: plannedAttempt.runId }
           })
           currentProjection =
-            tag === "CommandProjectionNoCurrentReport"
-              ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
-              : tag === "CommandProjectionTemporarilyUnavailable"
-                ? PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation })
-                : tag === "CommandProjectionUnreadable"
-                  ? PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })
-                  : tag === "CommandProjectionContradiction"
-                    ? PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
-                        expected: correlation,
-                        observed: foreignReport
-                      })
-                    : tag === "CommandProjectionExactSafelySuspended"
-                      ? PlannedAttemptExecutorProjection.cases.Exact.make({
-                          report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+            tag === "CommandProjectionBeginNotCrossed"
+              ? PlannedAttemptExecutorProjection.cases.BeginNotCrossed.make({
+                  correlation,
+                  proofId: PlannedAttemptExecutorBeginProofId.make("fresh-begin-proof")
+                })
+              : tag === "CommandProjectionNoCurrentReport"
+                ? PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
+                : tag === "CommandProjectionTemporarilyUnavailable"
+                  ? PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation })
+                  : tag === "CommandProjectionUnreadable"
+                    ? PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation })
+                    : tag === "CommandProjectionContradiction"
+                      ? PlannedAttemptExecutorProjection.cases.CorrelationContradiction.make({
+                          expected: correlation,
+                          observed: foreignReport
                         })
-                      : tag === "CommandProjectionExactTerminal"
+                      : tag === "CommandProjectionExactSafelySuspended"
                         ? PlannedAttemptExecutorProjection.cases.Exact.make({
-                            report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
-                              correlation,
-                              result: { _tag: "Completed" }
+                            report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+                          })
+                        : tag === "CommandProjectionExactTerminal"
+                          ? PlannedAttemptExecutorProjection.cases.Exact.make({
+                              report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+                                correlation,
+                                result: { _tag: "Completed" }
+                              })
                             })
-                          })
-                        : PlannedAttemptExecutorProjection.cases.Exact.make({
-                            report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
-                          })
+                          : PlannedAttemptExecutorProjection.cases.Exact.make({
+                              report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
+                            })
           authorityReport =
             currentProjection._tag === "Exact"
               ? currentProjection.report
@@ -741,8 +790,12 @@ const executorConformanceDriver = defineDriver(
       recoverActivation: () =>
         Effect.gen(function* () {
           if (pendingProjection !== undefined) {
-            yield* Deferred.succeed(projectionGate, undefined)
-            yield* Fiber.await(pendingProjection)
+            if (currentProjection?._tag === "BeginNotCrossed") {
+              yield* Fiber.interrupt(pendingProjection)
+            } else {
+              yield* Deferred.succeed(projectionGate, undefined)
+              yield* Fiber.await(pendingProjection)
+            }
             pendingProjection = undefined
           }
           if (pendingState !== undefined) {
@@ -774,10 +827,10 @@ const executorConformanceDriver = defineDriver(
           const responsibilityBegan = records.some(
             ({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
           )
-          const responseAmbiguous =
-            unmatched !== undefined && commandCalls === intents.length && pendingCommand === undefined
+          const responseAmbiguous = unmatched !== undefined && currentCommandCalled && pendingCommand === undefined
           return {
             commandCallCount: BigInt(commandCalls),
+            beginTurnCrossingCount: BigInt(beginTurnCrossingCount),
             commandIntentCount: BigInt(intents.length),
             commandResponseEvidenceCount: BigInt(
               records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandResponseObserved").length
@@ -785,11 +838,7 @@ const executorConformanceDriver = defineDriver(
             commandResponseSettlementCount: BigInt(settlements.filter(({ source }) => source === "Response").length),
             commandSettlementCount: BigInt(settlements.length),
             commandState:
-              unmatched === undefined
-                ? "NoCommand"
-                : commandCalls < intents.length
-                  ? "CommandIntended"
-                  : "CommandCalled",
+              unmatched === undefined ? "NoCommand" : !currentCommandCalled ? "CommandIntended" : "CommandCalled",
             evidence,
             nextCommandOrdinal: BigInt(intents.length + 1),
             positionHeld: snapshot.positions.has(plannedAttempt.taskId),

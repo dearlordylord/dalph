@@ -2622,8 +2622,21 @@ const validateExecutorEvent = (
           `executor command projection contradiction for attempt ${attemptId} contains the expected correlation`
         )
       }
+      const validateBeginNotCrossedObservation = () => {
+        if (event.observation._tag !== "ExecutorBeginNotCrossed") return
+        const prior = records.filter(({ position }) => position < record.position)
+        const intended = latestUnsettledPlannedAttemptExecutorCommand(prior, event.plannedAttempt)
+        if (intended?.command === "Begin" && intended.ordinal === event.commandOrdinal) return
+        semanticIssue(
+          issues,
+          runId,
+          record.position,
+          `executor Begin-not-crossed projection for attempt ${attemptId} requires its exact unsettled Begin intent`
+        )
+      }
       validateExactObservation()
       validateContradictoryObservation()
+      validateBeginNotCrossedObservation()
     }
   }
   const validateCommandResponseContradiction = () => {

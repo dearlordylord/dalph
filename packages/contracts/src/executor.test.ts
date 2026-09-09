@@ -4,6 +4,7 @@ import { expect } from "vitest"
 import {
   PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorBeginProofId,
   PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey
@@ -51,6 +52,10 @@ it.each([
     report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
   }),
   PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation }),
+  PlannedAttemptExecutorProjection.cases.BeginNotCrossed.make({
+    correlation,
+    proofId: PlannedAttemptExecutorBeginProofId.make("fresh-begin-proof")
+  }),
   PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation }),
   PlannedAttemptExecutorProjection.cases.Unreadable.make({ correlation }),
   PlannedAttemptExecutorProjection.cases.InitializationCorrelationContradiction.make({
@@ -79,6 +84,16 @@ it("rejects a contradiction that does not contain a foreign observed report", ()
       observed: { _tag: "ExecutorWorkExecuting", correlation }
     })
   ).toThrow()
+})
+
+it("rejects Begin-not-crossed encodings without exact correlation and a proof identity", () => {
+  for (const projection of [
+    { _tag: "BeginNotCrossed", correlation },
+    { _tag: "BeginNotCrossed", correlation, proofId: "" },
+    { _tag: "BeginNotCrossed", correlation: { runId: correlation.runId }, proofId: "proof" }
+  ]) {
+    expect(() => Schema.decodeUnknownSync(PlannedAttemptExecutorProjection)(projection)).toThrow()
+  }
 })
 
 it("roundtrips a provider-neutral exact command failure", () => {
