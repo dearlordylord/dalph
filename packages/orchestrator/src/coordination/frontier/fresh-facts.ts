@@ -17,7 +17,10 @@ import type {
 } from "../../workflow/registry/operation.js"
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
-import type { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import type {
+  PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorReportOrdinal
+} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import type {
   AttemptChoiceRequestId,
   AttemptChoiceSubject,
@@ -60,6 +63,14 @@ export type SafeContinuationRevalidationEligibility = {
   }
   readonly plannedAttempt: PlannedTaskAttempt
   readonly responsibilityBeganAt: JournalPosition
+  /** Distinguishes first lifecycle-reopen admission from retry after an exact Resume-stayed-Safe reconciliation. */
+  readonly basis:
+    | { readonly _tag: "LifecycleReopenAfterAcceptedSafe" }
+    | {
+        readonly _tag: "ReconciledResumeStillSafe"
+        readonly observedAt: JournalPosition
+        readonly resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal
+      }
 }
 
 /** Runtime guard for the private exact Safe-continuation eligibility. */
@@ -76,12 +87,13 @@ type SafeContinuationReadyFacts = Extract<
 /**
  * Mints eligibility only when Ready is backed by the exact accepted Safe
  * report for the same immutable responsibility. Recovery additionally owns
- * proving that this evidence is current, unconsumed, and outside an active
- * executing refresh before it calls this constructor.
+ * proving either an unconsumed lifecycle reopen or the exact Resume command
+ * that reconciled as still Safe, and excludes active executing refreshes.
  */
 export const safeContinuationRevalidationEligibilityOf = (
   facts: SafeContinuationReadyFacts,
-  acceptedSafe: AcceptedPlannedAttemptExecutorEvidence
+  acceptedSafe: AcceptedPlannedAttemptExecutorEvidence,
+  basis: SafeContinuationRevalidationEligibility["basis"] = { _tag: "LifecycleReopenAfterAcceptedSafe" }
 ): SafeContinuationRevalidationEligibility | undefined => {
   if (
     acceptedSafe.report._tag !== "ExecutorWorkSafelySuspended" ||
@@ -99,7 +111,8 @@ export const safeContinuationRevalidationEligibilityOf = (
       reportOrdinal: acceptedSafe.source.ordinal
     }),
     plannedAttempt: immutableSnapshot(facts.responsibility.plannedAttempt),
-    responsibilityBeganAt: facts.responsibility.beganAt
+    responsibilityBeganAt: facts.responsibility.beganAt,
+    basis: immutableSnapshot(basis)
   })
   issuedSafeContinuationRevalidationEligibilities.add(eligibility)
   return eligibility

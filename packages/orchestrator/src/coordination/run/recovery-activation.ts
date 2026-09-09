@@ -1433,6 +1433,52 @@ const exactTaskWasReopenedAfterAcceptedSafe = (
   return Option.getOrUndefined(after?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag === "Open"
 }
 
+/**
+ * An exact Safe projection after one intended Resume proves that Resume did not
+ * start. It permits a new process-local read reservation for that same command,
+ * while a later Begin/Resume intent invalidates this retry basis.
+ */
+const reconciledResumeStillSafeBasis = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt) => {
+  const resume = records.findLast(
+    ({ event }) =>
+      event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      event.command === "Resume" &&
+      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
+  )
+  if (resume?.event._tag !== "PlannedAttemptExecutorCommandIntended") return undefined
+  const lifecycleSafe = latestAcceptedPlannedAttemptExecutorEvidence(
+    records.filter(({ position }) => position < resume.position),
+    plannedAttempt
+  )
+  if (lifecycleSafe?.report._tag !== "ExecutorWorkSafelySuspended") return undefined
+  const resumeCommandOrdinal = resume.event.ordinal
+  const reconciled = records.findLast(
+    ({ event, position }) =>
+      position > resume.position &&
+      event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+      event.commandOrdinal === resumeCommandOrdinal &&
+      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt) &&
+      event.observation._tag === "ExactExecutorReport" &&
+      event.observation.report._tag === "ExecutorWorkSafelySuspended" &&
+      event.observation.report.correlation.runId === plannedAttempt.runId &&
+      event.observation.report.correlation.attemptId === plannedAttempt.attemptId
+  )
+  if (reconciled?.event._tag !== "PlannedAttemptExecutorCommandProjectionObserved") return undefined
+  const superseded = records.some(
+    ({ event, position }) =>
+      position > reconciled.position &&
+      event._tag === "PlannedAttemptExecutorCommandIntended" &&
+      (event.command === "Begin" || event.command === "Resume") &&
+      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
+  )
+  return superseded
+    ? undefined
+    : {
+        basis: { _tag: "ReconciledResumeStillSafe" as const, observedAt: reconciled.position, resumeCommandOrdinal },
+        lifecycleSafe
+      }
+}
+
 export const deriveJournalResponsibilityFacts = (
   runState: ReconstructedRunState,
   activationBaselinePosition: Option.Option<JournalPosition> = Option.none(),
@@ -1988,15 +2034,24 @@ export const deriveJournalResponsibilityFacts = (
     const disposition = taskStateDisposition() ?? constraintDisposition() ?? pauseOrReadyDisposition()
     const facts = { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
     if (disposition._tag !== "Ready" || attemptRefreshOpportunity._tag === "ActiveWorkAuthorityRefresh") return facts
-    const acceptedSafe = currentUnconsumedAcceptedSafeEvidence(records, responsibility.plannedAttempt)
+    const currentAcceptedSafe = latestAcceptedPlannedAttemptExecutorEvidence(records, responsibility.plannedAttempt)
+    const unconsumedAcceptedSafe = currentUnconsumedAcceptedSafeEvidence(records, responsibility.plannedAttempt)
+    const retry =
+      currentAcceptedSafe?.report._tag === "ExecutorWorkSafelySuspended"
+        ? reconciledResumeStillSafeBasis(records, responsibility.plannedAttempt)
+        : undefined
+    const acceptedSafe = retry === undefined ? unconsumedAcceptedSafe : currentAcceptedSafe
+    const lifecycleSafe = retry?.lifecycleSafe ?? unconsumedAcceptedSafe
     if (
       acceptedSafe === undefined ||
-      !exactTaskWasReopenedAfterAcceptedSafe(records, responsibility.plannedAttempt, acceptedSafe, immutableRunTarget)
+      lifecycleSafe === undefined ||
+      !exactTaskWasReopenedAfterAcceptedSafe(records, responsibility.plannedAttempt, lifecycleSafe, immutableRunTarget)
     )
       return facts
     const safeContinuationRevalidationEligibility = safeContinuationRevalidationEligibilityOf(
       { ...facts, disposition },
-      acceptedSafe
+      acceptedSafe,
+      retry?.basis ?? { _tag: "LifecycleReopenAfterAcceptedSafe" }
     )
     return safeContinuationRevalidationEligibility === undefined
       ? facts

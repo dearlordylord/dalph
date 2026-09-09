@@ -1759,6 +1759,7 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
   expect(isSafeContinuationRevalidationEligibility(eligibility)).toBe(true)
   expect(eligibility).toMatchObject({
     acceptedSafe: { correlation: plannedAttemptExecutorCorrelation(coverageAttempt), reportOrdinal: 7 },
+    basis: { _tag: "LifecycleReopenAfterAcceptedSafe" },
     plannedAttempt: coverageAttempt,
     responsibilityBeganAt: coverageResponsibility.beganAt
   })
@@ -1785,6 +1786,126 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
     activeRefresh?._tag === "PlannedAttemptExecutorFreshFacts"
       ? activeRefresh.safeContinuationRevalidationEligibility
       : undefined
+  ).toBeUndefined()
+
+  const command = (
+    position: number,
+    command: "Begin" | "Resume",
+    plannedAttempt = coverageAttempt,
+    ordinal = PlannedAttemptExecutorCommandOrdinal.make(3)
+  ) =>
+    coverageRecord(
+      position,
+      PlannedAttemptExecutorCommandIntendedEvent.make({
+        command,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal,
+        plannedAttempt,
+        version: workflowJournalEventVersion
+      })
+    )
+  const projection = (
+    position: number,
+    report: PlannedAttemptExecutorReport,
+    plannedAttempt = coverageAttempt,
+    ordinal = PlannedAttemptExecutorCommandOrdinal.make(3)
+  ) =>
+    coverageRecord(
+      position,
+      PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+        commandOrdinal: ordinal,
+        observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({ report }),
+        occurrenceClassification: "NonActionOccurrence",
+        plannedAttempt,
+        projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
+        version: workflowJournalEventVersion
+      })
+    )
+  const reopenedRunState = (records: ReadonlyArray<JournalRecord>) => ({
+    ...coverageRunState(records, [coverageResponsibility]),
+    graphKnowledge: {
+      taskTrackerFacts: [
+        makeCompleteTaskTrackerFactsObserved(closedOperation, closedGraph),
+        makeCompleteTaskTrackerFactsObserved(openOperation, openGraph)
+      ]
+    }
+  })
+  const retryRecords = [...reopenedRecords, command(10, "Resume"), projection(11, safe)]
+  const [retry] = deriveJournalResponsibilityFacts(
+    reopenedRunState(retryRecords),
+    Option.none(),
+    Option.none(),
+    coverageTarget
+  )
+  expect(retry).toMatchObject({
+    safeContinuationRevalidationEligibility: {
+      basis: { _tag: "ReconciledResumeStillSafe", observedAt: 11, resumeCommandOrdinal: 3 }
+    }
+  })
+  const acceptedRetryRecords = [...retryRecords, executorReport(12, safe)]
+  const [acceptedRetry] = deriveJournalResponsibilityFacts(
+    reopenedRunState(acceptedRetryRecords),
+    Option.none(),
+    Option.none(),
+    coverageTarget
+  )
+  expect(acceptedRetry).toMatchObject({
+    disposition: { _tag: "Ready", acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: 12 } },
+    safeContinuationRevalidationEligibility: {
+      acceptedSafe: { reportOrdinal: 12 },
+      basis: { _tag: "ReconciledResumeStillSafe", observedAt: 11, resumeCommandOrdinal: 3 }
+    }
+  })
+
+  const noEligibility = (records: ReadonlyArray<JournalRecord>) => {
+    const [candidate] = deriveJournalResponsibilityFacts(
+      reopenedRunState(records),
+      Option.none(),
+      Option.none(),
+      coverageTarget
+    )
+    return candidate?._tag === "PlannedAttemptExecutorFreshFacts"
+      ? candidate.safeContinuationRevalidationEligibility
+      : undefined
+  }
+  expect(noEligibility([...ordinarySafeRecords, command(8, "Resume"), projection(9, safe)])).toBeUndefined()
+  expect(noEligibility([...reopenedRecords, command(10, "Begin"), projection(11, safe)])).toBeUndefined()
+  const attemptForOtherRun = PlannedTaskAttempt.make({
+    ...coverageAttempt,
+    attemptId: AttemptId.make("safe-reopen-foreign-attempt"),
+    runId: RunId.make("safe-reopen-foreign-run")
+  })
+  expect(
+    noEligibility([
+      ...reopenedRecords,
+      command(10, "Resume"),
+      projection(
+        11,
+        PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+          correlation: plannedAttemptExecutorCorrelation(attemptForOtherRun)
+        }),
+        attemptForOtherRun
+      )
+    ])
+  ).toBeUndefined()
+  expect(
+    noEligibility([
+      ...reopenedRecords,
+      command(10, "Resume"),
+      projection(
+        11,
+        PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+          correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+        })
+      )
+    ])
+  ).toBeUndefined()
+  expect(
+    noEligibility([
+      ...retryRecords,
+      command(12, "Resume", coverageAttempt, PlannedAttemptExecutorCommandOrdinal.make(4))
+    ])
   ).toBeUndefined()
 })
 
