@@ -521,7 +521,7 @@ it("maps every typed startup boundary failure without retaining private diagnost
   expect(JSON.stringify(records)).not.toContain(privateDetail)
 })
 
-it("typed tracker throttle maps exactly to delivery.provider_throttled and status one", () => {
+it("maps a typed task-tracker throttle to a selected-Run delivery failure", () => {
   const throttle = new TaskTrackerMutationThrottled({
     detail: "private GitHub response header token=secret",
     operation: "AcquireTaskClaim",
@@ -689,7 +689,7 @@ it("rejects mismatched public failure codes details and subjects", () => {
   ])
 })
 
-it.effect("lost throttle output remains status one and never becomes graceful Exit", () =>
+it.effect("preserves original task-tracker throttle after lost Failure output without requesting graceful Exit", () =>
   Effect.gen(function* () {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
