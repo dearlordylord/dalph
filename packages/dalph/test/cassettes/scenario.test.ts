@@ -73,7 +73,9 @@ import {
   originatingActionForTargetLineageObservation,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorResumeRedeliveryOrdinal,
   PlannedAttemptExecutorStateObservationOrdinal,
   PlannedAttemptContinuationAuthorizedEvent,
   PlannedAttemptContinuationWitness,
@@ -6813,7 +6815,46 @@ it.effect(
         taskBranchRefs: [{ from: "refs/heads/dalph/attempt-A-0", to: "refs/heads/dalph/renamed-attempt-A" }],
         worktreeLocators: [{ from: "/dalph/cassettes/attempt-A-0", to: "/dalph/cassettes/renamed-attempt-A" }]
       })
+      const [graphId, specificationId, claimId, worktreeId, lineageId] = projectedOperationIds
+      if (
+        graphId === undefined ||
+        specificationId === undefined ||
+        claimId === undefined ||
+        worktreeId === undefined ||
+        lineageId === undefined
+      ) {
+        return yield* Effect.die("resume redelivery alpha-renaming fixture requires five generated operation IDs")
+      }
+      const resumeRedeliveryEntry = {
+        _tag: "PlannedAttemptExecutorResumeRedeliveryIntended" as const,
+        authorization: {
+          safeProjectionObservedAt: JournalPosition.make(7),
+          witness: {
+            activeTaskContinuationRead: {
+              graphObservationOperationId: graphId,
+              taskClaimObservationOperationId: claimId,
+              taskWorkSpecificationObservationOperationId: specificationId
+            },
+            targetLineageObservationOperationId: lineageId,
+            worktreeObservationOperationId: worktreeId
+          }
+        },
+        commandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(3),
+        initiatedBy: { _tag: "DalphCoordinator" as const },
+        occurrenceClassification: "InitiatedAction" as const,
+        plannedAttempt: executorResponsibilityEntry.plannedAttempt,
+        projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
+        redeliveryOrdinal: PlannedAttemptExecutorResumeRedeliveryOrdinal.make(1)
+      } satisfies RecordedCassetteEntry
       const renamed = yield* renameRecordedCassette(recorded, renaming)
+      const renamedRedelivery = yield* renameRecordedCassette(
+        RecordedCassette.make({ ...recorded, entries: [resumeRedeliveryEntry] }),
+        renaming
+      )
+      const renamedRedeliveryEntry = renamedRedelivery.entries[0]
+      if (renamedRedeliveryEntry?._tag !== "PlannedAttemptExecutorResumeRedeliveryIntended") {
+        return yield* Effect.die("resume redelivery entry must survive recorded alpha-renaming")
+      }
       const renamedRejectedEntry = renamed.entries.find((entry) => entry._tag === "TaskClaimAcquisitionRejected")
       if (renamedRejectedEntry?._tag !== "TaskClaimAcquisitionRejected") {
         return yield* Effect.die("alpha-renaming fixture requires the rejected claim entry")
@@ -6823,6 +6864,26 @@ it.effect(
       expect(renamedRejectedEntry.operationId).toBe("renamed-rejected-claim-operation")
       expect(renamedRejectedEntry.observed.operationId).toBe(foreignClaimOperationId)
       expect(renamedRejectedEntry.observed.token).toBe(foreignClaimToken)
+      expect(renamedRedeliveryEntry).toMatchObject({
+        authorization: {
+          safeProjectionObservedAt: resumeRedeliveryEntry.authorization.safeProjectionObservedAt,
+          witness: {
+            activeTaskContinuationRead: {
+              graphObservationOperationId: renaming.operationIds.find(({ from }) => from === graphId)?.to,
+              taskClaimObservationOperationId: renaming.operationIds.find(({ from }) => from === claimId)?.to,
+              taskWorkSpecificationObservationOperationId: renaming.operationIds.find(
+                ({ from }) => from === specificationId
+              )?.to
+            },
+            targetLineageObservationOperationId: renaming.operationIds.find(({ from }) => from === lineageId)?.to,
+            worktreeObservationOperationId: renaming.operationIds.find(({ from }) => from === worktreeId)?.to
+          }
+        },
+        commandOrdinal: resumeRedeliveryEntry.commandOrdinal,
+        plannedAttempt: { attemptId: "renamed-attempt-A", runId: "renamed-run" },
+        projectionOrdinal: resumeRedeliveryEntry.projectionOrdinal,
+        redeliveryOrdinal: resumeRedeliveryEntry.redeliveryOrdinal
+      })
       const recordedHistory = foldRecordedCassette(recorded)
       if (recordedHistory._tag !== "ValidWorkflowJournalHistory") {
         return yield* Effect.die(
@@ -7335,6 +7396,7 @@ it.effect(
             ...replacementRecorded.entries,
             ...restartFailureRecorded.entries,
             ...executorObservationVariants.entries,
+            resumeRedeliveryEntry,
             ...completionEntries,
             ...quarantineEntries
           ]
