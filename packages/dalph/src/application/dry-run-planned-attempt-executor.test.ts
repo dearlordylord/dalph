@@ -47,7 +47,7 @@ it.effect("keeps the dry-run executor deterministic without selecting a producti
       PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
     )
 
-    const running = yield* executor.begin(request)
+    const running = yield* executor.begin(request, { _tag: "InitialDelivery" })
     expect(running).toEqual(PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation }))
     const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
       correlation,
@@ -62,7 +62,7 @@ it.effect("keeps the dry-run executor deterministic without selecting a producti
 it.effect("records suspension and resume reports for the same exact attempt", () =>
   Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
-    yield* executor.begin(request)
+    yield* executor.begin(request, { _tag: "InitialDelivery" })
 
     const safelySuspended = yield* executor.requestSuspension(attempt)
     expect(safelySuspended).toEqual(

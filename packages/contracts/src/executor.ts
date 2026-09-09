@@ -184,7 +184,7 @@ export interface PlannedAttemptExecutorService {
   /** Begins the complete work for an exact planned attempt once. */
   readonly begin: (
     request: PlannedAttemptExecutorRequest,
-    delivery?: PlannedAttemptExecutorBeginDelivery
+    delivery: PlannedAttemptExecutorBeginDelivery
   ) => Effect.Effect<PlannedAttemptExecutorReport, PlannedAttemptExecutorCommandFailure>
   readonly requestSuspension: (
     plannedAttempt: PlannedTaskAttempt

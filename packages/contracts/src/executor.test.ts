@@ -5,6 +5,7 @@ import {
   PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorProjection,
   PlannedAttemptExecutorBeginProofId,
+  PlannedAttemptExecutorBeginDelivery,
   PlannedAttemptExecutorReport,
   plannedAttemptExecutorCorrelation,
   plannedAttemptExecutorCorrelationKey
@@ -26,6 +27,31 @@ const plannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/attempt-A")
 })
 const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+
+it("requires one explicit Begin delivery classification and exact recovery proof identity", () => {
+  for (const delivery of [
+    PlannedAttemptExecutorBeginDelivery.cases.InitialDelivery.make({}),
+    PlannedAttemptExecutorBeginDelivery.cases.ReconciledDelivery.make({
+      proofId: PlannedAttemptExecutorBeginProofId.make("one-exact-proof")
+    })
+  ]) {
+    expect(
+      Schema.decodeUnknownSync(PlannedAttemptExecutorBeginDelivery)(
+        Schema.encodeUnknownSync(PlannedAttemptExecutorBeginDelivery)(delivery)
+      )
+    ).toEqual(delivery)
+  }
+  for (const invalid of [
+    undefined,
+    null,
+    {},
+    { _tag: "OtherDelivery" },
+    { _tag: "ReconciledDelivery" },
+    { _tag: "ReconciledDelivery", proofId: "" }
+  ]) {
+    expect(() => Schema.decodeUnknownSync(PlannedAttemptExecutorBeginDelivery)(invalid)).toThrow()
+  }
+})
 
 it("derives the executor correlation and stable key only from the planned run and attempt", () => {
   expect(correlation).toEqual({ attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId })

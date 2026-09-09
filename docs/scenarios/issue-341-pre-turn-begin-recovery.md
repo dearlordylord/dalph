@@ -45,7 +45,9 @@ The owned turn token correlates observations; it is not a provider idempotency
 key. Generic NoReport, passive observation, Resume, and Suspend grant no Begin
 redelivery permission. Exact absent-thread replacement belongs to #342.
 InitialDelivery and ReconciledDelivery distinguish command-delivery attempts,
-not semantic Begin identities. No additional durable Begin redelivery intent
+not semantic Begin identities. Every caller supplies one explicit variant;
+omitted delivery is not a second representation of InitialDelivery.
+No additional durable Begin redelivery intent
 is needed: the original intent remains unsettled, while executor authority
 alone issues and consumes its delivery capability. Resume redelivery uses its
 own Journal-derived authority and must not recreate this executor capability.
@@ -64,6 +66,7 @@ No existing lifecycle rule changes: Begin still settles as Executing.
 | Projection followed by crash needs a new read | `rereads executor authority after a crash following Begin-not-crossed observation`; crashDiscardsBeginNotCrossedProofTest |
 | Lost or changed association after proof never allocates or starts work | `rejects stale Begin recovery delivery after MissingAssociation/ChangedAssociation/NotFoundThread without allocation or task turn` |
 | Serialized, forged, or invalidated proof cannot authorize delivery | Same provider negative matrix for ProcessRestart, ForgedProof, InterveningCommand, and NewerProof; contract codec rejects missing/empty proof identity |
+| Initial and recovery delivery have one explicit representation each | `requires one explicit Begin delivery classification and exact recovery proof identity`; `redelivers the original Begin after fresh exact pre-turn proof and preserves ordinal one` asserts both boundary arguments |
 | NoReport or ambiguous turn intent grants nothing | Provider/contract negative matrix; absenceAndTurnIntentNeverAuthorizeBeginRedeliveryTest; authorizedTurnCannotProduceBeginNotCrossedTest |
 | Turn/start intent precedes the sole provider call | Production provider boundary history/count assertions; preTurnRecoveryKeepsOneIntentAndCrossingTest |
 | Stale proof and duplicate crossing are detected | staleBeginProofMutationIsDetectedTest; duplicateBeginTurnMutationIsDetectedTest; corresponding proof negative controls |

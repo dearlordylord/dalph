@@ -339,7 +339,7 @@ const issuePlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecutorWork
   const executor = yield* PlannedAttemptExecutor
   if (invocation._tag === "Suspend") return yield* executor.requestSuspension(plannedAttempt)
   return invocation._tag === "Begin"
-    ? yield* executor.begin(invocation.request)
+    ? yield* executor.begin(invocation.request, { _tag: "InitialDelivery" })
     : yield* executor.resume(invocation.request)
 })
 

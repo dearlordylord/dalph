@@ -252,7 +252,7 @@ const configurationProgram = Effect.gen(function* () {
           yield* store.writeAttempt(threadRecordFor(configuration, thread.id))
           yield* writeEvent({ event: "associated", threadMaterialized: true, worktree: thread.cwd })
         } else if (configuration.action === "create" || configuration.action === "association-cut") {
-          yield* writeEvent(reportEvent("Begin", yield* executor.begin(request)))
+          yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
         } else if (configuration.action === "resume") {
           yield* writeEvent(reportEvent("Resume", yield* executor.resume(request)))
         } else if (configuration.action === "project" || configuration.action === "read") {
@@ -266,7 +266,7 @@ const configurationProgram = Effect.gen(function* () {
         } else if (configuration.action === "suspend" || configuration.action === "interrupt") {
           yield* writeEvent(reportEvent("Suspend", yield* executor.requestSuspension(attempt)))
         } else if (configuration.action === "settle") {
-          const initial = yield* executor.begin(request)
+          const initial = yield* executor.begin(request, { _tag: "InitialDelivery" })
           yield* writeEvent(reportEvent("Begin", initial))
           if (initial._tag === "ExecutorWorkExecuting") {
             yield* Effect.sleep("100 millis")
@@ -275,14 +275,14 @@ const configurationProgram = Effect.gen(function* () {
             )
           }
         } else if (configuration.action === "exercise-suspension") {
-          yield* writeEvent(reportEvent("Begin", yield* executor.begin(request)))
+          yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
           if (configuration.waitForOwnedChild) yield* waitForOwnedChildPublication(configuration.worktree)
           yield* Effect.sleep("100 millis")
           const suspension = yield* Effect.forkScoped(executor.requestSuspension(attempt), { startImmediately: true })
           yield* writeEvent({ event: "suspension-requested" })
           yield* writeEvent(reportEvent("Suspend", yield* Fiber.join(suspension)))
         } else if (configuration.action === "exercise-terminal-suspension") {
-          yield* writeEvent(reportEvent("Begin", yield* executor.begin(request)))
+          yield* writeEvent(reportEvent("Begin", yield* executor.begin(request, { _tag: "InitialDelivery" })))
           yield* writeEvent({ event: "suspension-ready" })
           yield* Effect.promise(
             () =>
@@ -296,7 +296,7 @@ const configurationProgram = Effect.gen(function* () {
           yield* writeEvent({ event: "suspension-requested" })
           yield* writeEvent(reportEvent("Suspend", yield* Fiber.join(suspension)))
         } else if (configuration.action === "exit" || configuration.action === "exit-stuck") {
-          const started = yield* executor.begin(request)
+          const started = yield* executor.begin(request, { _tag: "InitialDelivery" })
           yield* writeEvent(reportEvent("Begin", started))
           if (configuration.waitForOwnedChild) yield* waitForOwnedChildPublication(configuration.worktree)
           const suspendForExit = executor.requestSuspension(attempt).pipe(

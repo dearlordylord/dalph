@@ -51,7 +51,7 @@ export const plannedAttemptExecutorContract = <E>({ layer, name }: PlannedAttemp
       expect(yield* executor.observe(correlation, passiveLifecycleObservationPurpose)).toEqual(
         PlannedAttemptExecutorProjection.cases.NoReport.make({ correlation })
       )
-      expect(yield* executor.begin(request)).toEqual(
+      expect(yield* executor.begin(request, { _tag: "InitialDelivery" })).toEqual(
         PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
       )
       const projection = yield* executor.observe(correlation, passiveLifecycleObservationPurpose)

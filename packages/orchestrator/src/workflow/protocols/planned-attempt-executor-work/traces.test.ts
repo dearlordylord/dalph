@@ -56,7 +56,7 @@ it.effect("keeps begin, suspension, resume, and passive observation as distinct 
     ])
     yield* Effect.gen(function* () {
       const executor = yield* PlannedAttemptExecutor
-      expect(yield* executor.begin(request)).toEqual(executing)
+      expect(yield* executor.begin(request, { _tag: "InitialDelivery" })).toEqual(executing)
       expect(yield* executor.requestSuspension(plannedAttempt)).toEqual(safelySuspended)
       expect(yield* executor.resume(request)).toEqual(terminal)
       expect(yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })).toEqual(

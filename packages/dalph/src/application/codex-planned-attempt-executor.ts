@@ -2509,7 +2509,7 @@ const makeCodexPlannedAttemptExecutorContext = (
           ? gateFor(correlation).pipe(Effect.flatMap((gate) => gate.withPermit(project(correlation, purpose))))
           : project(correlation, purpose)
         ).pipe(Effect.catch((error: unknown) => Effect.succeed(projectFailure(correlation, error)))),
-      begin: (request, delivery = { _tag: "InitialDelivery" }) => {
+      begin: (request, delivery) => {
         const correlation = plannedAttemptExecutorCorrelation(request.plannedAttempt)
         return gateFor(correlation).pipe(
           Effect.flatMap((gate) => gate.withPermit(begin(request, delivery))),

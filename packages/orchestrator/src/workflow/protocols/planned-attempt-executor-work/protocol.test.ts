@@ -509,7 +509,7 @@ it.effect("drives one planned attempt through the generic executor boundary", ()
   Effect.gen(function* () {
     const executor = yield* PlannedAttemptExecutor
 
-    expect(yield* executor.begin(executorRequest())).toEqual(
+    expect(yield* executor.begin(executorRequest(), { _tag: "InitialDelivery" })).toEqual(
       PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
     )
     expect(yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })).toEqual(
@@ -537,7 +537,7 @@ it.effect("rejects exhausted, wrong-kind, and wrong-correlation fake requests", 
   Effect.gen(function* () {
     const emptyExecutor = yield* PlannedAttemptExecutor
     expect(yield* emptyExecutor.observe(correlation, { _tag: "PassiveLifecycleObservation" })).toEqual(noReport())
-    const exhausted = yield* emptyExecutor.begin(executorRequest()).pipe(Effect.flip)
+    const exhausted = yield* emptyExecutor.begin(executorRequest(), { _tag: "InitialDelivery" }).pipe(Effect.flip)
     expect(exhausted.detail).toContain("has no cassette entry")
 
     const suspendStep = ControlledFakeExecutorStep.cases.Suspend.make({
@@ -545,7 +545,7 @@ it.effect("rejects exhausted, wrong-kind, and wrong-correlation fake requests", 
       report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
     })
     const wrongKind = yield* PlannedAttemptExecutor.pipe(
-      Effect.flatMap((executor) => executor.begin(executorRequest())),
+      Effect.flatMap((executor) => executor.begin(executorRequest(), { _tag: "InitialDelivery" })),
       Effect.provide(makeControlledFakePlannedAttemptExecutorLayer([suspendStep])),
       Effect.flip
     )
@@ -553,7 +553,7 @@ it.effect("rejects exhausted, wrong-kind, and wrong-correlation fake requests", 
 
     const otherAttempt = PlannedTaskAttempt.make({ ...plannedAttempt, attemptId: AttemptId.make("other-attempt") })
     const wrongCorrelation = yield* PlannedAttemptExecutor.pipe(
-      Effect.flatMap((executor) => executor.begin(executorRequest(otherAttempt))),
+      Effect.flatMap((executor) => executor.begin(executorRequest(otherAttempt), { _tag: "InitialDelivery" })),
       Effect.provide(
         makeControlledFakePlannedAttemptExecutorLayer([
           ControlledFakeExecutorStep.cases.Begin.make({
@@ -577,7 +577,7 @@ it.effect("projects default fake reports and safely suspends without a survivor 
     expect(yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" })).toEqual(
       exactProjection(suspended)
     )
-    expect(yield* executor.begin(executorRequest())).toEqual(
+    expect(yield* executor.begin(executorRequest(), { _tag: "InitialDelivery" })).toEqual(
       PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({ correlation })
     )
   }).pipe(Effect.provide(controlledFakePlannedAttemptExecutorLayer))
@@ -1937,11 +1937,15 @@ it.effect("redelivers the original Begin after fresh exact pre-turn proof and pr
           })
         )
       },
-      begin: (request) =>
+      begin: (request, delivery) =>
         Effect.gen(function* () {
           expect(request).toEqual(executorRequest())
           const count = yield* Ref.updateAndGet(calls, (value) => value + 1)
-          if (count === 1) return yield* Effect.die("process lost after private association")
+          if (count === 1) {
+            expect(delivery).toEqual({ _tag: "InitialDelivery" })
+            return yield* Effect.die("process lost after private association")
+          }
+          expect(delivery).toEqual({ _tag: "ReconciledDelivery", proofId: "fresh-begin-proof" })
           return executing
         }),
       resume: () => Effect.die("Begin recovery cannot Resume"),
