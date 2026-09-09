@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import {
   acceptPendingPlannedAttemptExecutorObservationWithPermit,
   type observePlannedAttemptExecutorStateResultWithPermit,
+  type PlannedAttemptExecutorObservationResult,
   reconcileOrObservePlannedAttemptExecutorStateResultWithPermit
 } from "../../workflow/protocols/planned-attempt-executor-work/protocol.js"
 import {
@@ -17,8 +18,24 @@ import {
 } from "../run/passive-planned-attempt-observer.js"
 import type { PlannedAttemptProtocolPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type { SafeContinuationRevalidationEligibility } from "../frontier/fresh-facts.js"
-import type { DeliveryActionExecutionLease } from "./delivery-action-executor.js"
+import type {
+  DeliveryActionExecutionLease,
+  DeliveryActionProtocolAdmissionMissing
+} from "./delivery-action-executor.js"
 import type { ExecutorTransition } from "./planned-attempt-delivery-action-adapter.js"
+
+type ExecutorReportProtocolEffect =
+  | ReturnType<typeof authorizePlannedAttemptContinuationWithPermit>
+  | ReturnType<typeof observeOrAttachPassiveOwner>
+  | ReturnType<typeof reconcileOrObservePlannedAttemptExecutorStateResultWithPermit>
+  | ReturnType<typeof resumePlannedAttemptExecutorWorkWithPermit>
+  | ReturnType<typeof runPlannedAttemptExecutorResumeRedelivery>
+
+type ExecutorReportEffect = Effect.Effect<
+  PlannedAttemptExecutorObservationResult,
+  Effect.Error<ExecutorReportProtocolEffect> | DeliveryActionProtocolAdmissionMissing,
+  Effect.Services<ExecutorReportProtocolEffect>
+>
 
 export const observeOrAttachPassiveOwner = Effect.fn("DeliveryAction.observeOrAttachPassiveOwner")(function* (
   permit: PlannedAttemptProtocolPermit,
@@ -49,7 +66,7 @@ export const executorReportFor = (
   correlation: ReturnType<typeof plannedAttemptExecutorCorrelation>,
   lease: DeliveryActionExecutionLease,
   eligibility: SafeContinuationRevalidationEligibility | undefined
-) =>
+): ExecutorReportEffect =>
   transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
     ? lease.withPlannedAttemptProtocol(correlation, (permit) =>
         Effect.gen(function* () {
