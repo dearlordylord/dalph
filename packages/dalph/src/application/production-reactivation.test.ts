@@ -582,6 +582,7 @@ type ProductionRefreshHarnessOptions = {
   readonly source?: "TrackerNotification" | "Timer" | "AcceptedFactPublication" | "OperatorWake"
   readonly report?: "Running" | "SafelySuspended" | "Terminal"
   readonly coalesce?: boolean
+  readonly discoverFAndG?: boolean
   readonly editDuringActiveRead?: boolean
   readonly claim?: "Exact" | "Missing" | "Foreign" | "Unreadable"
   readonly specification?: "Exact" | "Changed"
@@ -631,9 +632,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const changedTask = options.changedTask ?? "A"
       const target = FixtureTarget.make("production-refresh-healthy-target")
       const runId = RunId.make("production-refresh-healthy-run")
-      const taskId = TaskId.make("A")
-      const independentTaskId = TaskId.make("B")
-      const thirdTaskId = TaskId.make("C")
+      const taskId = TaskId.make(options.discoverFAndG === true ? "B" : "A")
+      const independentTaskId = TaskId.make(options.discoverFAndG === true ? "C" : "B")
+      const thirdTaskId = TaskId.make(options.discoverFAndG === true ? "D" : "C")
       const blockerTaskId = TaskId.make("D")
       const constrainedTaskId = changedTask === "B" ? independentTaskId : taskId
       const specification = makeTaskWorkSpecification({ body: "Complete A.", taskId, title: "Complete A" })
@@ -685,6 +686,20 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       })
       if (projected._tag === "Invalid") return yield* Effect.die("healthy production graph must be valid")
       const snapshot = projected.snapshot
+      const expanded = projectTrackerSnapshot({
+        revision: "G5",
+        rootTaskId: taskId,
+        tasks: [
+          ...activeGraphTasks,
+          ...["F", "G"].map((id) => ({
+            id: TaskId.make(id),
+            lifecycle: { _tag: "Open" },
+            parentTaskId: null,
+            prerequisiteIds: []
+          }))
+        ]
+      })
+      if (expanded._tag === "Invalid") return yield* Effect.die("invalid expanded production graph")
       const independentBaseSha =
         gitMode === "LineageRewrite" && constrainedTaskId === independentTaskId
           ? GitCommitSha.make(
@@ -1166,6 +1181,8 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         options.laterSpecificationChange === true ? "Exact" : specificationMode
       )
       const trackerCalls = yield* Ref.make<ReadonlyArray<"graph" | "specification" | "claim" | "acquire">>([])
+      const graphReadsInFlight = yield* Ref.make(0)
+      const maximumGraphReadsInFlight = yield* Ref.make(0)
       const activeSelections = yield* Ref.make<ReadonlyArray<string>>([])
       const activeSelectionTrace = yield* Ref.make<ReadonlyArray<string>>([])
       const activeSelectionOperationKeys = yield* Ref.make<ReadonlyArray<string>>([])
@@ -1260,24 +1277,34 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             })
             const trackerGraphReader = TrackerGraphReader.of({
               read: () =>
-                Ref.update(trackerCalls, (calls) => [...calls, "graph" as const]).pipe(
-                  Effect.andThen(
-                    graphMode === "Unreadable"
-                      ? Effect.fail(
-                          new TrackerReadError({ operation: "TrackerGraphReader.parse", detail: "graph unreadable" })
-                        )
-                      : Effect.gen(function* () {
-                          if (
-                            coalesce &&
-                            options.editDuringActiveRead !== true &&
-                            (yield* Ref.get(phase)) === "Active"
-                          ) {
-                            yield* Deferred.succeed(activeReadStarted, undefined)
-                            yield* Deferred.await(releaseActiveRead)
-                          }
-                          return snapshot
-                        })
-                  )
+                Effect.acquireUseRelease(
+                  Ref.updateAndGet(graphReadsInFlight, (count) => count + 1).pipe(
+                    Effect.tap((count) => Ref.update(maximumGraphReadsInFlight, (maximum) => Math.max(maximum, count)))
+                  ),
+                  () =>
+                    Ref.update(trackerCalls, (calls) => [...calls, "graph" as const]).pipe(
+                      Effect.andThen(
+                        graphMode === "Unreadable"
+                          ? Effect.fail(
+                              new TrackerReadError({
+                                operation: "TrackerGraphReader.parse",
+                                detail: "graph unreadable"
+                              })
+                            )
+                          : Effect.gen(function* () {
+                              if (
+                                coalesce &&
+                                options.editDuringActiveRead !== true &&
+                                (yield* Ref.get(phase)) === "Active"
+                              ) {
+                                yield* Deferred.succeed(activeReadStarted, undefined)
+                                yield* Deferred.await(releaseActiveRead)
+                              }
+                              return options.discoverFAndG === true ? expanded.snapshot : snapshot
+                            })
+                      )
+                    ),
+                  () => Ref.update(graphReadsInFlight, (count) => count - 1)
                 ),
               readTaskWorkSpecification: (_target, selectedTaskId) =>
                 Effect.gen(function* () {
@@ -1727,6 +1754,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         activeActivationCount: yield* Ref.get(activeActivationCount),
         beforeSecondOpportunity: yield* Ref.get(beforeSecondOpportunity),
         maximumActiveConcurrent: yield* Ref.get(maximumActiveConcurrent),
+        maximumGraphReadsInFlight: yield* Ref.get(maximumGraphReadsInFlight),
         executorCalls: yield* Ref.get(executorCalls),
         executorEntries: yield* Ref.get(executorEntries),
         failpoint: yield* Ref.get(failpoint),
@@ -2200,6 +2228,65 @@ it.effect("accepted publication notification and timer coalesce into one trailin
     expect(result.activeSelectionOperationKeys.filter((key) => key.startsWith("ReadTrackerGraph:"))).toHaveLength(4)
     expect(result.executorEntries).toEqual([])
     expect(result.executorCalls).toEqual([])
+  })
+)
+
+it.effect("production discovers F and G without admitting them while B C and D hold capacity three", () =>
+  Effect.gen(function* () {
+    const result = yield* runProductionRefreshHarness({ discoverFAndG: true, threeExecuting: true, coalesce: true })
+    expect(result.activeActivationCount).toBe(2)
+    expect(result.maximumActiveConcurrent).toBe(1)
+    expect(result.maximumGraphReadsInFlight).toBe(1)
+    expect(result.trackerCalls.filter((call) => call === "graph")).toHaveLength(2)
+    expect(result.executorCalls).toEqual([])
+    expect(result.executorEntries).toEqual([])
+    expect(result.trackerCalls.filter((call) => call === "acquire")).toEqual([])
+    expect(result.taskWorkSnapshots.every((held) => held.toSorted().join(",") === "B,C,D")).toBe(true)
+    expect(
+      result.journalRecords.some(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "CompleteTaskTrackerFacts" &&
+          event.observation.factFamilies[0].contentIdentity === "G5"
+      )
+    ).toBe(true)
+    expect(
+      result.journalRecords.filter(
+        ({ event }) => event._tag === "TaskAttemptPlanned" && ["F", "G"].includes(event.operation.plannedAttempt.taskId)
+      )
+    ).toEqual([])
+  })
+)
+
+it.effect("unreadable F G discovery preserves B C D and waits for another independent tracker hint", () =>
+  Effect.gen(function* () {
+    const result = yield* runProductionRefreshHarness({
+      discoverFAndG: true,
+      threeExecuting: true,
+      graph: "Unreadable",
+      repeatAfterUncertainty: true
+    })
+    expect(result.beforeSecondOpportunity?.trackerCalls.filter((call) => call === "graph")).toHaveLength(1)
+    expect(result.trackerCalls.filter((call) => call === "graph")).toHaveLength(2)
+    expect(result.maximumActiveConcurrent).toBe(1)
+    expect(result.activeActivationCount).toBe(2)
+    expect(result.executorCalls).toEqual([])
+    expect(result.executorEntries).toEqual([])
+    expect(result.trackerCalls.filter((call) => call === "acquire")).toEqual([])
+    expect(result.taskWorkSnapshots.every((held) => held.toSorted().join(",") === "B,C,D")).toBe(true)
+    expect(
+      result.journalRecords.some(
+        ({ event }) =>
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "CompleteTaskTrackerFacts" &&
+          event.observation.factFamilies[0].contentIdentity === "G5"
+      )
+    ).toBe(false)
+    expect(
+      result.journalRecords.filter(
+        ({ event }) => event._tag === "TaskAttemptPlanned" && ["F", "G"].includes(event.operation.plannedAttempt.taskId)
+      )
+    ).toEqual([])
   })
 )
 

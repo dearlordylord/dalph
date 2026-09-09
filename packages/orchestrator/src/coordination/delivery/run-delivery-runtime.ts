@@ -610,24 +610,29 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
                   taskWorkPosition._tag === "TaskWorkPositionRequired" && taskWorkPosition.mode === "ReserveOrReuse"
               )
             if (live.size !== 0) return Option.none<DeliveryRuntimeQuiescence>()
-            const ordinaryTaskWorkAdmissionStalled =
-              phase._tag === "OrdinaryDeliveryRuntimePhase"
-                ? yield* admission.snapshot.pipe(
+            // Fresh candidates may still wait for exact held positions after
+            // an active refresh. Use the same live admission authority as an
+            // ordinary activation; the wait neither admits work nor proves finality.
+            // A captured Suspend/reconciliation boundary retains its existing
+            // observer and G2 protocol rather than being replaced by this wait.
+            const taskWorkAdmissionStalled =
+              phase._tag !== "OrdinaryDeliveryRuntimePhase" && current.activeRefreshBoundary !== undefined
+                ? Option.none()
+                : yield* admission.snapshot.pipe(
                     Effect.map((snapshot) =>
                       classifyTaskWorkAdmissionStalledRuntimeQuiescence(current, snapshot, locallyRunnableFrontier)
                     )
                   )
-                : Option.none()
             if (
               !activeRefreshG2Pending &&
               !everyProposalIsLocallyDeferred &&
               !postG2RetainedCapacityBlocks &&
-              Option.isNone(ordinaryTaskWorkAdmissionStalled)
+              Option.isNone(taskWorkAdmissionStalled)
             ) {
               return Option.none<DeliveryRuntimeQuiescence>()
             }
-            if (Option.isSome(ordinaryTaskWorkAdmissionStalled)) {
-              return Option.some<DeliveryRuntimeQuiescence>(ordinaryTaskWorkAdmissionStalled.value)
+            if (Option.isSome(taskWorkAdmissionStalled)) {
+              return Option.some<DeliveryRuntimeQuiescence>(taskWorkAdmissionStalled.value)
             }
             const empty: EmptyProposalFrontier = { ...locallyRunnableFrontier, freshTaskCandidates: [], proposals: [] }
             if (current.quiescence._tag === "QuiescencePassive") {

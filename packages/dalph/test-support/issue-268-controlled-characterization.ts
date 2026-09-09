@@ -78,6 +78,7 @@ import {
 } from "@dalph/orchestrator"
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Queue, Ref, Scope, Stream } from "effect"
 import { issue268ControlledDeliveryCharacterization as scenario } from "./issue-268-controlled-characterization-catalog.js"
+import { makeIssue275GraphRefresh, type Issue275GraphRefresh } from "./issue-275-active-graph-refresh.js"
 import type {
   Issue268Ds03BoundarySnapshot,
   Issue268Ds01CheckpointEvidence,
@@ -264,6 +265,7 @@ interface Issue268SharedAuthorities {
 
 interface Issue268StartupCharacterizationOptions {
   readonly retainedResume?: {
+    readonly graphRefresh?: Issue275GraphRefresh
     readonly activation: string
     readonly beforeAction?: (action: MaterializedDeliveryAction) => Effect.Effect<void>
     readonly afterCommandDeliveryHandoff?: Deferred.Deferred<void>
@@ -1875,6 +1877,9 @@ const runIssue268StartupCharacterizationFor = (
 
       if (mode === "DS09") {
         decision = yield* Fiber.join(fiber)
+        if (options.retainedResume?.graphRefresh !== undefined) {
+          yield* options.retainedResume.graphRefresh.run(makeCheckpointInput(yield* ds03Snapshot(), decision))
+        }
         if (ds09Controls !== undefined) yield* Ref.set(ds09Controls.after, yield* ds03Snapshot())
       } else if (mode === "DS01") yield* completeDs01
       else yield* completeDs02
@@ -2061,7 +2066,7 @@ export const runIssue268Ds08Characterization = Effect.scoped(
   })
 )
 
-type Issue268RestartContinuation = "DS09" | "DS10" | "DS11" | "DS12" | "DS13" | "DS19"
+type Issue268RestartContinuation = "DS09" | "DS10" | "DS11" | "DS12" | "DS13" | "DS19" | "DS20"
 
 /** Reconstructs the same Run in a fresh coordinator and optionally continues through DS-13. */
 const runIssue268RestartCharacterization = (
@@ -2213,13 +2218,17 @@ const runIssue268RestartCharacterization = (
                   ...(continuation === "DS11" ||
                   continuation === "DS12" ||
                   continuation === "DS13" ||
-                  continuation === "DS19"
+                  continuation === "DS19" ||
+                  continuation === "DS20"
                     ? { ds11: { checkpoint: ds11Checkpoint, checkpointRelease: ds11CheckpointRelease } }
                     : {}),
-                  ...(continuation === "DS12" || continuation === "DS13" || continuation === "DS19"
+                  ...(continuation === "DS12" ||
+                  continuation === "DS13" ||
+                  continuation === "DS19" ||
+                  continuation === "DS20"
                     ? { ds12: { checkpoint: ds12Checkpoint } }
                     : {}),
-                  ...(continuation === "DS13" || continuation === "DS19"
+                  ...(continuation === "DS13" || continuation === "DS19" || continuation === "DS20"
                     ? {
                         ds13: {
                           checkpoint: ds13Checkpoint,
@@ -2553,7 +2562,7 @@ const runIssue268RestartCharacterization = (
         ...ds13BeforeProcessStop,
         afterProcessStop: yield* readSecondProcessSnapshot()
       } satisfies Issue268Ds13Characterization
-      if (continuation === "DS19") {
+      if (continuation === "DS19" || continuation === "DS20") {
         if (retainedCheckpoint !== undefined) {
           const ds19Checkpoint = yield* continueRetainedCThroughCrash(
             sharedAuthorities,
@@ -2563,7 +2572,13 @@ const runIssue268RestartCharacterization = (
           )
           return { ds09, ds10, ds11, ds12, ds13, ds19Checkpoint }
         }
-        const ds19 = yield* continueRetainedC(sharedAuthorities, projectedReports, outerScope, resumeResponse)
+        const ds19 = yield* continueRetainedC(
+          sharedAuthorities,
+          projectedReports,
+          outerScope,
+          resumeResponse,
+          continuation === "DS20"
+        )
         return { ds09, ds10, ds11, ds12, ds13, ds19, occurrenceEvidence: yield* occurrenceRecorder.snapshot }
       }
       return {
@@ -2652,7 +2667,8 @@ const startRetainedC = Effect.fn("Issue274.startRetainedC")(function* (
   activation: string,
   loseResponse?: Deferred.Deferred<void>,
   beforeAction?: (action: MaterializedDeliveryAction) => Effect.Effect<void>,
-  afterCommandDeliveryHandoff?: Deferred.Deferred<void>
+  afterCommandDeliveryHandoff?: Deferred.Deferred<void>,
+  graphRefresh?: Issue275GraphRefresh
 ) {
   const publications = yield* Queue.unbounded<DeliveryRelationInputBundle>()
   const ready = yield* Deferred.make<{
@@ -2667,6 +2683,7 @@ const startRetainedC = Effect.fn("Issue274.startRetainedC")(function* (
       projectedReports,
       publications,
       ready,
+      ...(graphRefresh === undefined ? {} : { graphRefresh }),
       ...(beforeAction === undefined ? {} : { beforeAction }),
       ...(afterCommandDeliveryHandoff === undefined ? {} : { afterCommandDeliveryHandoff }),
       ...(loseResponse === undefined ? {} : { loseResponse })
@@ -2703,6 +2720,10 @@ const startRetainedC = Effect.fn("Issue274.startRetainedC")(function* (
     ...controls,
     awaitPublication,
     awaitSnapshot,
+    refreshed:
+      graphRefresh === undefined
+        ? Effect.succeed(undefined)
+        : Deferred.await(graphRefresh.result).pipe(Effect.raceFirst(processStopped)),
     scope,
     stop: Fiber.interrupt(process).pipe(Effect.andThen(Scope.close(scope, Exit.void)))
   }
@@ -2748,18 +2769,33 @@ const continueRetainedC = Effect.fn("Issue274.continueRetainedC")(function* (
   sharedAuthorities: Issue268SharedAuthorities,
   projectedReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
   outerScope: Scope.Scope,
-  resumeResponse: "Return" | "Lose"
+  resumeResponse: "Return" | "Lose",
+  discoverNewTasks = false
 ) {
   const retained = yield* sharedAuthorities.journal.read(scenario.runId)
   const resourcesBefore = yield* readRetainedCResources(sharedAuthorities)
   yield* sharedAuthorities.testTrackerGraphReader.setSnapshot(scenario.graphs.G4)
   const lostResponse = yield* Deferred.make<void>()
+  const graphRefresh = discoverNewTasks
+    ? yield* makeIssue275GraphRefresh(sharedAuthorities.trackerGraphReader, sharedAuthorities.testTrackerGraphReader)
+    : undefined
   const controls = yield* startRetainedC(
-    sharedAuthorities,
+    graphRefresh === undefined
+      ? sharedAuthorities
+      : {
+          ...sharedAuthorities,
+          trackerGraphReader: TrackerGraphReader.of({
+            ...sharedAuthorities.trackerGraphReader,
+            read: graphRefresh.read
+          })
+        },
     projectedReports,
     outerScope,
     "Reopen",
-    resumeResponse === "Lose" ? lostResponse : undefined
+    resumeResponse === "Lose" ? lostResponse : undefined,
+    undefined,
+    undefined,
+    graphRefresh
   )
   const reopened = yield* controls.awaitPublication(cRevalidationProposed)
   const beforeCapacity = yield* controls.snapshot().pipe(Effect.orDie)
@@ -2774,17 +2810,38 @@ const continueRetainedC = Effect.fn("Issue274.continueRetainedC")(function* (
       ? yield* Deferred.await(lostResponse).pipe(Effect.as(undefined))
       : yield* controls.awaitSnapshot(cExecutingSince(retained.length))
   const after = yield* controls.snapshot().pipe(Effect.orDie)
+  const refreshed = yield* controls.refreshed
   yield* controls.stop
   const recovered =
     resumeResponse === "Lose"
       ? yield* recoverRetainedC(sharedAuthorities, projectedReports, outerScope, after.records.length)
       : undefined
   const resourcesAfter = yield* readRetainedCResources(sharedAuthorities)
-  return { retained, reopened, beforeCapacity, policy, resumed, after, recovered, resourcesBefore, resourcesAfter }
+  return {
+    retained,
+    reopened,
+    beforeCapacity,
+    policy,
+    resumed,
+    after,
+    recovered,
+    resourcesBefore,
+    resourcesAfter,
+    refreshed
+  }
 })
 
 export const runIssue274LifecycleResume = runIssue268RestartCharacterization("DS19").pipe(
   Effect.flatMap((result) => ("ds19" in result ? Effect.succeed(result.ds19) : Effect.die("DS-19 was not reached")))
+)
+
+/** Continues the retained-C cassette through the notification/timer-selected DS-20 read. */
+export const runIssue275ActiveGraphRefresh = runIssue268RestartCharacterization("DS20").pipe(
+  Effect.flatMap((result) =>
+    "ds19" in result && result.ds19.refreshed !== undefined
+      ? Effect.succeed(result.ds19.refreshed)
+      : Effect.die("DS-20 was not reached")
+  )
 )
 
 const recoverRetainedC = Effect.fn("Issue274.recoverRetainedC")(function* (
