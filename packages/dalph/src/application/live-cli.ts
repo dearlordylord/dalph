@@ -8,7 +8,7 @@ import {
   type TraceReaderError,
   TraceOutput
 } from "@dalph/orchestrator"
-import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Ref } from "effect"
+import { Deferred, Effect, Fiber, FileSystem, Layer, Option } from "effect"
 import { Argument, Command, Flag } from "effect/unstable/cli"
 import { executeDryRun } from "./cli.js"
 import {
@@ -19,6 +19,7 @@ import {
   presentSelectedProductionRun,
   encodeProductionCliRecord,
   productionCliFailureRecord,
+  productionCliFailureForSelectedRun,
   type ProductionCliHostObservation,
   type ProductionCliLifecycleError,
   type ProductionCliStatusError
@@ -85,7 +86,7 @@ export const makeProductionCli = <EHost, RHost>(
     ({ config, dry, production, target }) =>
       Effect.gen(function* () {
         const output = yield* TraceOutput
-        const selectedRunId = yield* Ref.make<RunId | null>(null)
+        const selectedRunId = yield* Deferred.make<RunId>()
         return yield* Effect.gen(function* () {
           const invocation = yield* decodeRunInvocation({
             config: Option.getOrUndefined(config),
@@ -100,7 +101,7 @@ export const makeProductionCli = <EHost, RHost>(
             fileSystem.readFileString(locator)
           )
           yield* runProductionHost(loaded, (observation, applicationExitRequestBoundary) =>
-            Ref.set(selectedRunId, observation.selection.runId).pipe(
+            Deferred.succeed(selectedRunId, observation.selection.runId).pipe(
               Effect.andThen(
                 Effect.scoped(
                   Effect.gen(function* () {
@@ -145,9 +146,15 @@ export const makeProductionCli = <EHost, RHost>(
           )
         }).pipe(
           Effect.tapError((failure) =>
-            Ref.get(selectedRunId).pipe(
-              Effect.flatMap((runId) => {
-                const known = knownProductionCliFailure(failure, runId)
+            Deferred.isDone(selectedRunId).pipe(
+              Effect.flatMap((hasSelection) =>
+                hasSelection
+                  ? Deferred.await(selectedRunId).pipe(
+                      Effect.map((runId) => productionCliFailureForSelectedRun(failure, runId))
+                    )
+                  : Effect.succeed(knownProductionCliFailure(failure))
+              ),
+              Effect.flatMap((known) => {
                 return known === undefined
                   ? Effect.void
                   : output.writeLine(encodeProductionCliRecord(productionCliFailureRecord(known))).pipe(Effect.ignore)

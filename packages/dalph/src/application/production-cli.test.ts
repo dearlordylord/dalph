@@ -143,6 +143,7 @@ import {
   presentApplicationExitResult,
   presentSelectedProductionRun,
   productionCliFailureRecord,
+  productionCliFailureForSelectedRun,
   ProductionConfigurationLocator,
   ProductionCliConfigurationError,
   ProductionCliLifecycleError,
@@ -530,8 +531,9 @@ it("typed tracker throttle maps exactly to delivery.provider_throttled and statu
     })
   })
 
-  const mapped = knownProductionCliFailure(throttle, runId)
+  const mapped = productionCliFailureForSelectedRun(throttle, runId)
 
+  expect(knownProductionCliFailure(throttle)).toBeUndefined()
   expect(mapped).toMatchObject({
     _tag: "ProductionCliDeliveryError",
     code: "delivery.provider_throttled",
@@ -547,77 +549,72 @@ it("typed tracker throttle maps exactly to delivery.provider_throttled and statu
   expect(JSON.stringify(mapped)).not.toContain(throttle.detail)
 })
 
-it.effect(
-  "delivery throttle closes scope without requestExit processLifecycle workflow cleanup or provider mutation",
-  () =>
-    Effect.gen(function* () {
-      const lines = yield* Ref.make<ReadonlyArray<string>>([])
-      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
-      const selectedOutput = yield* Deferred.make<void>()
-      const exitRequests = yield* Ref.make(0)
-      const throttle = new TaskTrackerMutationThrottled({
-        detail: "private provider response",
-        operation: "AcquireTaskClaim",
-        operationId: OperationId.make("production-cli-host-throttle"),
-        retry: null
-      })
-      const application = runProductionCli((_input, use) =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            yield* Effect.addFinalizer(() => Ref.update(chronology, (current) => [...current, "host-scope-closed"]))
-            yield* use(
-              {
-                acceptedHistory: currentSignalOf(cursor),
-                current: currentSignalOf({ _tag: "NotReady" as const }),
-                runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
-                selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-                traceReader: { readAt: () => Effect.succeed(snapshot) }
-              },
-              {
-                requestExit: Ref.update(exitRequests, (count) => count + 1).pipe(
-                  Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
-                )
-              }
-            ).pipe(Effect.forkScoped)
-            yield* Deferred.await(selectedOutput)
-            return yield* throttle
-          })
-        )
-      )
-
-      const observed = yield* application([
-        "run",
-        "github:octo/dalph#42",
-        "--production",
-        "--config",
-        "/tmp/production.json"
-      ]).pipe(
-        Effect.provide(
-          liveCliLayer(lines, chronology, JSON.stringify(validProductionDocument), (line) =>
-            JSON.parse(line)._tag === "RunSelected" ? Deferred.succeed(selectedOutput, undefined) : Effect.void
-          )
-        ),
-        Effect.provide(NodeServices.layer),
-        Effect.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromUnknown({
-              DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret",
-              GITHUB_TOKEN: "github-secret"
-            })
-          )
-        ),
-        Effect.flip
-      )
-
-      expect(observed).toBe(throttle)
-      expect(yield* Ref.get(exitRequests)).toBe(0)
-      expect(yield* Ref.get(chronology)).toContain("host-scope-closed")
-      expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-1)).toMatchObject({
-        _tag: "Failure",
-        code: "delivery.provider_throttled",
-        subject: { runId }
-      })
+it.effect("delivery throttle closes presentation and host scope without requesting graceful Exit", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const selectedOutput = yield* Deferred.make<void>()
+    const exitRequests = yield* Ref.make(0)
+    const throttle = new TaskTrackerMutationThrottled({
+      detail: "private provider response",
+      operation: "AcquireTaskClaim",
+      operationId: OperationId.make("production-cli-host-throttle"),
+      retry: null
     })
+    const application = runProductionCli((_input, use) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* Effect.addFinalizer(() => Ref.update(chronology, (current) => [...current, "host-scope-closed"]))
+          yield* use(
+            {
+              acceptedHistory: currentSignalOf(cursor),
+              current: currentSignalOf({ _tag: "NotReady" as const }),
+              runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
+              selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+              traceReader: { readAt: () => Effect.succeed(snapshot) }
+            },
+            {
+              requestExit: Ref.update(exitRequests, (count) => count + 1).pipe(
+                Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+              )
+            }
+          ).pipe(Effect.forkScoped)
+          yield* Deferred.await(selectedOutput)
+          return yield* throttle
+        })
+      )
+    )
+
+    const observed = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(
+        liveCliLayer(lines, chronology, JSON.stringify(validProductionDocument), (line) =>
+          JSON.parse(line)._tag === "RunSelected" ? Deferred.succeed(selectedOutput, undefined) : Effect.void
+        )
+      ),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.flip
+    )
+
+    expect(observed).toBe(throttle)
+    expect(yield* Ref.get(exitRequests)).toBe(0)
+    expect(yield* Ref.get(chronology)).toContain("host-scope-closed")
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-1)).toMatchObject({
+      _tag: "Failure",
+      code: "delivery.provider_throttled",
+      subject: { runId }
+    })
+  })
 )
 
 it("delivery throttle output is redacted and preserves only safe R operation and retry evidence", () => {
@@ -630,7 +627,7 @@ it("delivery throttle output is redacted and preserves only safe R operation and
       seconds: TaskTrackerThrottleRetryAfterSeconds.make(17)
     })
   })
-  const mapped = knownProductionCliFailure(throttle, runId)
+  const mapped = productionCliFailureForSelectedRun(throttle, runId)
   if (mapped === undefined) throw new Error("typed throttle was not mapped")
 
   const encoded = encodeProductionCliRecord(productionCliFailureRecord(mapped))
@@ -651,6 +648,45 @@ it("delivery throttle output is redacted and preserves only safe R operation and
   expect(encoded).not.toContain(privateDetail)
   expect(encoded).not.toContain("secret")
   expect(encoded).not.toContain("x-ratelimit-reset")
+})
+
+it("rejects mismatched public failure codes details and subjects", () => {
+  const deliverySubject = {
+    _tag: "TaskTrackerMutation",
+    operation: "CompleteTask",
+    operationId: "production-cli-invalid-failure",
+    retry: null,
+    runId
+  }
+  const invalid = [
+    {
+      _tag: "Failure",
+      code: "configuration.invalid",
+      detail: "invalid configuration",
+      subject: deliverySubject,
+      version: 1
+    },
+    {
+      _tag: "Failure",
+      code: "delivery.provider_throttled",
+      detail: "provider-private detail",
+      subject: deliverySubject,
+      version: 1
+    },
+    {
+      _tag: "Failure",
+      code: "delivery.provider_throttled",
+      detail: "the task tracker throttled a production delivery mutation",
+      subject: "production repository",
+      version: 1
+    }
+  ]
+
+  expect(invalid.map((record) => Option.isNone(Schema.decodeUnknownOption(ProductionCliRecord)(record)))).toEqual([
+    true,
+    true,
+    true
+  ])
 })
 
 it.effect("lost throttle output remains status one and never becomes graceful Exit", () =>
@@ -730,7 +766,7 @@ it.effect("lost throttle output remains status one and never becomes graceful Ex
   })
 )
 
-it.effect("repeated CLI invocation recovers the same Run and opens no presentation-owned retry path", () =>
+it.effect("two CLI invocations report allocated then the same recovered Run without presentation retry", () =>
   Effect.gen(function* () {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
@@ -1454,18 +1490,15 @@ it.effect("closed status without a final value cannot report Run completion", ()
 )
 
 it("each HistoricalSnapshot contains exactly one whole canonical TraceAtCursor and current status/disposition remain separate", () => {
-  const records = [
-    ProductionCliRecord.cases.HistoricalSnapshot.make({ snapshot, version: 1 }),
-    ProductionCliRecord.cases.RunDisposition.make({
-      disposition: RunTerminationDisposition.make("Completed"),
-      runId,
-      version: 1
-    }),
-    ProductionCliRecord.cases.ApplicationExitDisposition.make({
+  const records: ReadonlyArray<ProductionCliRecord> = [
+    { _tag: "HistoricalSnapshot", snapshot, version: 1 },
+    { _tag: "RunDisposition", disposition: RunTerminationDisposition.make("Completed"), runId, version: 1 },
+    {
+      _tag: "ApplicationExitDisposition",
       disposition: ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }),
       runId,
       version: 1
-    }),
+    },
     applicationExitDispositionRecord(runId, ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
   ]
   const encoded = records.map(encodeProductionCliRecord).map((line) => JSON.parse(line))
