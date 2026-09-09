@@ -17,6 +17,7 @@ export const plannedAttemptExecutorObligations = Object.freeze({
     "eachResumeRedeliveryIntentAllowsOneCall",
     "resumeRedeliveryRetainsResponsibility",
     "crashedResumeCannotReuseDeliveryAuthorization",
+    "activationRecoveryCannotRetainResumeCallPermission",
     "everyCallHasOneDurableIntent",
     "beginTurnCrossesAtMostOnce",
     "replacementRequiresFreshExactAbsence",

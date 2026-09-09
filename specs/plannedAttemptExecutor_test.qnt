@@ -342,6 +342,23 @@ module plannedAttemptExecutorTest {
       .then(recordCommandProjection(CommandProjectionExactExecuting)).then(settleCommandProjection)
       .expect(and { state.status == StatusExecuting, state.commandIntentCount == 3, state.resumeRecovery.totalRedeliveryIntents == 2, state.commandCallCount == 3 })
   }
+  run activationRecoveryCannotBypassUncalledResumeCrashTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordResumeIntent).then(recoverActivation).fail()
+  }
+  run activationRecoveryCannotBypassResumeRedeliveryCrashTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordResumeIntent).then(crashResumeDelivery)
+      .then(recordCommandProjection(CommandProjectionExactSafelySuspended)).then(settleCommandProjection)
+      .then(readResumeContinuationWitness).then(recordResumeRedeliveryIntent)
+      .then(recoverActivation).fail()
+  }
   run completedResumeDeliveryReconcilesWithoutAnotherResumeTest = {
     init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
       .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)

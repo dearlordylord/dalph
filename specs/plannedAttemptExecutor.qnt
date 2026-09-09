@@ -299,6 +299,10 @@ module plannedAttemptExecutor {
     state.resumeRecovery.proof == NoResumeProjection,
     state.responseAmbiguous,
   }
+  val activationRecoveryCannotRetainResumeCallPermission = state.lastAction != RecoveryActivatedAction or and {
+    state.resumeRecovery.readyDelivery == NoResumeReadyDelivery,
+    state.commandState != CommandIntended(state.resumeRecovery.command),
+  }
   val resumeWitnessReadReached = state.lastAction == ResumeWitnessReadAction
   val resumeRedeliveryIntendedReached = state.lastAction == ResumeRedeliveryIntendedAction
   val resumeRedeliveryCalledReached = state.lastAction == ResumeRedeliveryCalledAction
@@ -545,7 +549,16 @@ module plannedAttemptExecutor {
     observationIsExact(freshObservation(state.evidence)),
     state' = { ...applyDistinctReport(state, reportForObservation(freshObservation(state.evidence))), evidence: NoEvidence, lastAction: FreshStateAcceptedAction },
   }
-  action recoverActivation: bool = all { state.evidence == NoEvidence or commandProjectionOutcome(state.evidence) == CommandProjectionBeginNotCrossed, state.recoveryCount < RECOVERY_LIMIT, state' = { ...state, positionHeld: if (state.resumeRecovery.witness != NoResumeWitness and isNoCommand(state.commandState)) false else state.positionHeld, resumeRecovery: { ...state.resumeRecovery, witness: NoResumeWitness }, evidence: NoEvidence, preTurnThreadRead: PreTurnNotRead, beginTurnBoundary: if (state.beginTurnBoundary == BeginReplacementAllocated) BeginEmptyReplacement else if (state.beginTurnBoundary == BeginAssociatedFreshAllocation) BeginAssociatedPreTurn else state.beginTurnBoundary, reconciliationProjectionsThisActivation: 0, recoveryCount: state.recoveryCount + 1, lastAction: RecoveryActivatedAction } }
+  // Process loss while Resume can still be called belongs to crashResumeDelivery:
+  // it consumes the live permission and reconstructs a command requiring a new
+  // projection. Generic activation recovery must not bypass that transition.
+  action recoverActivation: bool = all {
+    state.resumeRecovery.readyDelivery == NoResumeReadyDelivery,
+    match state.commandState { | CommandIntended(command) => command.kind != ResumeCommand | _ => true },
+    state.evidence == NoEvidence or commandProjectionOutcome(state.evidence) == CommandProjectionBeginNotCrossed,
+    state.recoveryCount < RECOVERY_LIMIT,
+    state' = { ...state, positionHeld: if (state.resumeRecovery.witness != NoResumeWitness and isNoCommand(state.commandState)) false else state.positionHeld, resumeRecovery: { ...state.resumeRecovery, witness: NoResumeWitness }, evidence: NoEvidence, preTurnThreadRead: PreTurnNotRead, beginTurnBoundary: if (state.beginTurnBoundary == BeginReplacementAllocated) BeginEmptyReplacement else if (state.beginTurnBoundary == BeginAssociatedFreshAllocation) BeginAssociatedPreTurn else state.beginTurnBoundary, reconciliationProjectionsThisActivation: 0, recoveryCount: state.recoveryCount + 1, lastAction: RecoveryActivatedAction },
+  }
 
 
   // The owning continuation model proves each tracker/Git witness's contents.

@@ -456,6 +456,23 @@ module plannedAttemptExecutorNegativeTest {
       .then(readResumeContinuationWitness).then(recordResumeRedeliveryIntent)
       .then(skipResumeRedeliveryOrdinal).expect(not(resumeRedeliveryOrdinalsAreExact))
   }
+  // The former generic restart could retain the pending intent and its live
+  // permission. The independent recovery law must detect that alternate edge.
+  action recoverWhileRetainingResumeCallPermission: bool = all {
+    state.resumeRecovery.redeliveryIntents.length() == 1,
+    state' = { ...state, evidence: NoEvidence, resumeRecovery: { ...state.resumeRecovery, witness: NoResumeWitness }, reconciliationProjectionsThisActivation: 0, recoveryCount: state.recoveryCount + 1, lastAction: RecoveryActivatedAction },
+  }
+  run activationRecoveryRetainingResumePermissionIsDetectedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .then(recordSuspendIntent).then(callSuspend)
+      .then(receiveCommandResponse(ExecutorWorkSafelySuspended)).then(settleCommandResponse)
+      .then(recordResumeIntent).then(crashResumeDelivery)
+      .then(recordCommandProjection(CommandProjectionExactSafelySuspended)).then(settleCommandProjection)
+      .then(readResumeContinuationWitness).then(recordResumeRedeliveryIntent)
+      .then(recoverWhileRetainingResumeCallPermission)
+      .expect(not(activationRecoveryCannotRetainResumeCallPermission))
+  }
   run crashedResumeIntentCannotRestoreOldDeliveryCapabilityTest = {
     init.then(beginResponsibility).then(recordBeginIntent).then(callBegin)
       .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
