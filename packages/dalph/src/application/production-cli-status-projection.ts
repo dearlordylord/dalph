@@ -1,5 +1,5 @@
 import type { DeliveryStatusEntry } from "@dalph/orchestrator"
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
 import {
   DeliveryStatusEntryIdentity,
   deliveryStatusObligationReference,
@@ -20,12 +20,11 @@ const commonOf = (entry: DeliveryStatusEntry) => ({
 })
 
 /** Exhaustive one-way identity projection; executable payload and private authority never cross this boundary. */
-export const publicDeliveryStatusEntryOf = (entry: DeliveryStatusEntry): PublicDeliveryStatusEntry => {
-  const common = commonOf(entry)
-  switch (entry._tag) {
-    case "DependencyWait":
+export const publicDeliveryStatusEntryOf = Match.type<DeliveryStatusEntry>().pipe(
+  Match.tagsExhaustive({
+    DependencyWait: (entry): PublicDeliveryStatusEntry => {
       return {
-        ...common,
+        ...commonOf(entry),
         _tag: entry._tag,
         classification: entry.classification,
         taskId: entry.taskId,
@@ -39,9 +38,10 @@ export const publicDeliveryStatusEntryOf = (entry: DeliveryStatusEntry): PublicD
               })
             : null
       }
-    case "TrackerFactWait":
+    },
+    TrackerFactWait: (entry): PublicDeliveryStatusEntry => {
       return {
-        ...common,
+        ...commonOf(entry),
         _tag: entry._tag,
         classification: entry.classification,
         obligationReference: obligationReference(entry.responsibility),
@@ -49,9 +49,10 @@ export const publicDeliveryStatusEntryOf = (entry: DeliveryStatusEntry): PublicD
         standingKind: entry.standing._tag,
         wakeCondition: Schema.decodeUnknownSync(PublicTrackerWakeCondition)(entry.wakeCondition)
       }
-    case "TaskWorkCapacityWait":
+    },
+    TaskWorkCapacityWait: (entry): PublicDeliveryStatusEntry => {
       return {
-        ...common,
+        ...commonOf(entry),
         _tag: entry._tag,
         classification: entry.classification,
         taskId: entry.taskId,
@@ -59,9 +60,10 @@ export const publicDeliveryStatusEntryOf = (entry: DeliveryStatusEntry): PublicD
         rank: entry.placement.rank,
         holders: entry.holders
       }
-    case "ProposedDeliveryAction":
+    },
+    ProposedDeliveryAction: (entry): PublicDeliveryStatusEntry => {
       return {
-        ...common,
+        ...commonOf(entry),
         _tag: entry._tag,
         classification: entry.classification,
         proposalId: entry.proposal.id,
@@ -69,23 +71,24 @@ export const publicDeliveryStatusEntryOf = (entry: DeliveryStatusEntry): PublicD
         waitsForLiveOperationId: entry.proposal.waitsForLiveOperationId,
         actionIdentity: entry.proposal.actionIdentity
       }
-    case "LiveDeliveryAction": {
+    },
+    LiveDeliveryAction: (entry): PublicDeliveryStatusEntry => {
       const operationId =
         entry.owner._tag === "MaterializedDeliveryAction" || entry.owner._tag === "SettledMaterializedDeliveryAction"
           ? entry.owner.operationId
           : null
       return {
-        ...common,
+        ...commonOf(entry),
         _tag: entry._tag,
         classification: entry.classification,
         proposalId: entry.owner.proposal.id,
         lifecycle: entry.owner._tag,
         operationId
       }
-    }
-    case "AcceptedFactPublicationWait":
+    },
+    AcceptedFactPublicationWait: (entry): PublicDeliveryStatusEntry => {
       return {
-        ...common,
+        ...commonOf(entry),
         _tag: entry._tag,
         classification: entry.classification,
         proposalId: entry.owner.proposal.id,
@@ -93,9 +96,10 @@ export const publicDeliveryStatusEntryOf = (entry: DeliveryStatusEntry): PublicD
         operationId: entry.owner._tag === "SettledMaterializedDeliveryAction" ? entry.owner.operationId : null,
         acceptedAt: entry.acceptedAt
       }
-    case "IntegrationTargetWait":
+    },
+    IntegrationTargetWait: (entry): PublicDeliveryStatusEntry => {
       return {
-        ...common,
+        ...commonOf(entry),
         _tag: entry._tag,
         classification: entry.classification,
         plannedAttempt: entry.plannedAttempt,
@@ -103,7 +107,8 @@ export const publicDeliveryStatusEntryOf = (entry: DeliveryStatusEntry): PublicD
         obligationReference: ObligationReference.make(deliveryStatusObligationReference(entry.responsibility)),
         queuedAt: entry.responsibility.responsibility.queuedAt
       }
-    case "EvidenceUnavailable": {
+    },
+    EvidenceUnavailable: (entry): PublicDeliveryStatusEntry => {
       const evidence =
         entry.evidence._tag === "ProposalDerivationIssue"
           ? {
@@ -123,24 +128,25 @@ export const publicDeliveryStatusEntryOf = (entry: DeliveryStatusEntry): PublicD
               }
             : { _tag: entry.evidence._tag, plannedAttempt: entry.evidence.wait.plannedAttempt }
       return {
-        ...common,
+        ...commonOf(entry),
         _tag: entry._tag,
         classification: entry.classification,
         obligationReference: obligationReference(entry.responsibility),
         evidence
       }
-    }
-    case "EvidenceConflict":
+    },
+    EvidenceConflict: (entry): PublicDeliveryStatusEntry => {
       return {
-        ...common,
+        ...commonOf(entry),
         _tag: entry._tag,
         classification: entry.classification,
         obligationReference: obligationReference(entry.responsibility),
         evidenceIdentities: entry.evidenceIdentities
       }
-    case "Settlement":
+    },
+    Settlement: (entry): PublicDeliveryStatusEntry => {
       return {
-        ...common,
+        ...commonOf(entry),
         _tag: entry._tag,
         classification: entry.classification,
         taskId: entry.subject.taskId,
@@ -158,14 +164,16 @@ export const publicDeliveryStatusEntryOf = (entry: DeliveryStatusEntry): PublicD
                 )
               }
       }
-    case "Relinquishment":
+    },
+    Relinquishment: (entry): PublicDeliveryStatusEntry => {
       return {
-        ...common,
+        ...commonOf(entry),
         _tag: entry._tag,
         classification: entry.classification,
         obligationReference: ObligationReference.make(deliveryStatusObligationReference(entry.responsibility)),
         supporting: entry.supporting,
         reason: entry.reason
       }
-  }
-}
+    }
+  })
+)

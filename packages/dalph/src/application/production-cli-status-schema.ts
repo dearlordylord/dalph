@@ -22,7 +22,7 @@ import {
   TaskClaimReacquisitionRequestId,
   TrackerRevision
 } from "@dalph/orchestrator"
-import { Schema } from "effect"
+import { Match, Schema } from "effect"
 import { ObligationReference, PublicTrackerWakeCondition } from "./production-cli-status-identity-schema.js"
 import { publicDeliveryStatusEntryOf } from "./production-cli-status-projection.js"
 
@@ -190,81 +190,65 @@ const PublicDeliveryStatusEntryShape = Schema.TaggedUnion({
 const taskMatchesSubject = (taskId: TaskId, subject: DeliveryStatusSubject): boolean =>
   subject._tag === "Run" || subject.taskId === taskId
 
-const trackerFactRelationshipIsValid = (
-  entry: Extract<typeof PublicDeliveryStatusEntryShape.Type, { readonly _tag: "TrackerFactWait" }>
-): boolean => {
-  const hasObligation = entry.obligationReference !== null
-  switch (entry.standingKind) {
-    case "GraphNotEstablished":
-      return !hasObligation && entry.fact._tag === "Unobserved" && entry.wakeCondition === "TaskTrackerFactsObserved"
-    case "ResponsibilitySituation":
-      if (!hasObligation) return false
-      switch (entry.fact._tag) {
-        case "Missing":
-        case "Foreign":
-          return entry.wakeCondition === "ExplicitAppliedTaskClaimReacquisitionDirection"
-        case "Unreadable":
-          return entry.wakeCondition === "TaskClaimFactsObserved" || entry.wakeCondition === "BoundaryRereadSucceeded"
-        case "Unobserved":
-          return entry.wakeCondition === "TaskClaimFactsObserved"
-      }
-    case "IntegrationWait":
-      if (!hasObligation) return false
-      switch (entry.fact._tag) {
-        case "Missing":
-        case "Foreign":
-          return entry.wakeCondition === "ExplicitAppliedTaskClaimReacquisitionDirection"
-        case "Unreadable":
-          return entry.wakeCondition === "TaskClaimFactsObserved"
-        case "Unobserved":
-          return entry.wakeCondition === "TaskClaimFactsObserved" || entry.wakeCondition === "TaskTrackerFactsObserved"
-      }
+type PublicTrackerFactWait = Extract<typeof PublicDeliveryStatusEntryShape.Type, { readonly _tag: "TrackerFactWait" }>
+
+/** Each standing and observed tracker fact permits only these public wake conditions. */
+const trackerFactWakeConditions: Readonly<
+  Record<
+    PublicTrackerFactWait["standingKind"],
+    Readonly<Record<PublicTrackerFactWait["fact"]["_tag"], ReadonlyArray<PublicTrackerFactWait["wakeCondition"]>>>
+  >
+> = {
+  GraphNotEstablished: { Missing: [], Foreign: [], Unreadable: [], Unobserved: ["TaskTrackerFactsObserved"] },
+  ResponsibilitySituation: {
+    Missing: ["ExplicitAppliedTaskClaimReacquisitionDirection"],
+    Foreign: ["ExplicitAppliedTaskClaimReacquisitionDirection"],
+    Unreadable: ["TaskClaimFactsObserved", "BoundaryRereadSucceeded"],
+    Unobserved: ["TaskClaimFactsObserved"]
+  },
+  IntegrationWait: {
+    Missing: ["ExplicitAppliedTaskClaimReacquisitionDirection"],
+    Foreign: ["ExplicitAppliedTaskClaimReacquisitionDirection"],
+    Unreadable: ["TaskClaimFactsObserved"],
+    Unobserved: ["TaskClaimFactsObserved", "TaskTrackerFactsObserved"]
   }
 }
+const trackerFactRelationshipIsValid = (entry: PublicTrackerFactWait): boolean =>
+  (entry.standingKind === "GraphNotEstablished") === (entry.obligationReference === null) &&
+  trackerFactWakeConditions[entry.standingKind][entry.fact._tag].includes(entry.wakeCondition)
+
+const entryRelationshipIsValid = Match.type<typeof PublicDeliveryStatusEntryShape.Type>().pipe(
+  Match.tagsExhaustive({
+    LiveDeliveryAction: (entry) => {
+      const materialized =
+        entry.lifecycle === "MaterializedDeliveryAction" || entry.lifecycle === "SettledMaterializedDeliveryAction"
+      return materialized === (entry.operationId !== null)
+    },
+    AcceptedFactPublicationWait: (entry) =>
+      (entry.lifecycle === "SettledMaterializedDeliveryAction") === (entry.operationId !== null),
+    EvidenceUnavailable: (entry) =>
+      (entry.evidence._tag === "ProposalDerivationIssue") === (entry.obligationReference === null),
+    EvidenceConflict: (entry) => new Set(entry.evidenceIdentities).size === entry.evidenceIdentities.length,
+    DependencyWait: (entry) =>
+      taskMatchesSubject(entry.taskId, entry.subject) &&
+      (entry.standingKind === "ResponsibilitySituation") === (entry.obligationReference !== null),
+    TrackerFactWait: trackerFactRelationshipIsValid,
+    TaskWorkCapacityWait: (entry) =>
+      entry.scope.runId === entry.subject.runId && taskMatchesSubject(entry.taskId, entry.subject),
+    IntegrationTargetWait: (entry) =>
+      entry.plannedAttempt.runId === entry.subject.runId &&
+      taskMatchesSubject(entry.plannedAttempt.taskId, entry.subject),
+    Settlement: (entry) => taskMatchesSubject(entry.taskId, entry.subject),
+    ProposedDeliveryAction: (entry) =>
+      !("taskId" in entry.order) || taskMatchesSubject(entry.order.taskId, entry.subject),
+    Relinquishment: () => true
+  })
+)
 
 export const PublicDeliveryStatusEntry = PublicDeliveryStatusEntryShape.pipe(
-  Schema.refine(
-    (entry): entry is typeof entry => {
-      if (entry._tag === "LiveDeliveryAction") {
-        const materialized =
-          entry.lifecycle === "MaterializedDeliveryAction" || entry.lifecycle === "SettledMaterializedDeliveryAction"
-        return materialized === (entry.operationId !== null)
-      }
-      if (entry._tag === "AcceptedFactPublicationWait") {
-        return (entry.lifecycle === "SettledMaterializedDeliveryAction") === (entry.operationId !== null)
-      }
-      if (entry._tag === "EvidenceUnavailable") {
-        return (entry.evidence._tag === "ProposalDerivationIssue") === (entry.obligationReference === null)
-      }
-      if (entry._tag === "EvidenceConflict") {
-        return new Set(entry.evidenceIdentities).size === entry.evidenceIdentities.length
-      }
-      if (entry._tag === "DependencyWait") {
-        return (
-          taskMatchesSubject(entry.taskId, entry.subject) &&
-          (entry.standingKind === "ResponsibilitySituation") === (entry.obligationReference !== null)
-        )
-      }
-      if (entry._tag === "TrackerFactWait") {
-        return trackerFactRelationshipIsValid(entry)
-      }
-      if (entry._tag === "TaskWorkCapacityWait") {
-        return entry.scope.runId === entry.subject.runId && taskMatchesSubject(entry.taskId, entry.subject)
-      }
-      if (entry._tag === "IntegrationTargetWait") {
-        return (
-          entry.plannedAttempt.runId === entry.subject.runId &&
-          taskMatchesSubject(entry.plannedAttempt.taskId, entry.subject)
-        )
-      }
-      if (entry._tag === "Settlement") return taskMatchesSubject(entry.taskId, entry.subject)
-      if (entry._tag === "ProposedDeliveryAction" && "taskId" in entry.order) {
-        return taskMatchesSubject(entry.order.taskId, entry.subject)
-      }
-      return true
-    },
-    { message: "status evidence identities and lifecycle must agree with the entry subject and kind" }
-  )
+  Schema.refine((entry): entry is typeof entry => entryRelationshipIsValid(entry), {
+    message: "status evidence identities and lifecycle must agree with the entry subject and kind"
+  })
 )
 export type PublicDeliveryStatusEntry = typeof PublicDeliveryStatusEntry.Type
 
