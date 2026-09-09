@@ -202,6 +202,36 @@ it("projects stopped-executor observation and wait dispositions distinctly", () 
   })
 })
 
+it("keeps an executor unreadable wait visible and a relinquished executor silent", () => {
+  const responsibility = executionResponsibilityFor(taskA)
+  const state = WorkflowResponsibilityState.make({ entries: [responsibility] })
+  const frontierFor = (
+    disposition: Extract<ResponsibilityFreshFacts, { readonly _tag: "PlannedAttemptExecutorFreshFacts" }>["disposition"]
+  ) =>
+    deriveRunnableFrontier({
+      freshEligibleTasks: [],
+      responsibility: state,
+      responsibilityFacts: [{ _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }]
+    })
+
+  expect(frontierFor(ResponsibilityDisposition.UnreadableFactWait({ boundary: "Git" }))).toEqual({
+    explanations: [
+      {
+        _tag: "PlannedAttemptUnreadableFactWait",
+        boundary: "Git",
+        correlation: plannedAttemptExecutorCorrelation(responsibility.plannedAttempt),
+        taskId: taskA,
+        wakeCondition: "BoundaryRereadSucceeded"
+      }
+    ],
+    transitions: []
+  })
+  expect(frontierFor(ResponsibilityDisposition.Relinquished({ reason: "AuthorizedHandoff" }))).toEqual({
+    explanations: [],
+    transitions: []
+  })
+})
+
 it("reconciles an already-intended exact claim release as its own responsibility", () => {
   const claim = ActiveTaskClaim.make({
     operationId: OperationId.make("frontier-release-acquisition"),

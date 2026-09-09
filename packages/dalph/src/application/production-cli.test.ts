@@ -60,6 +60,7 @@ import {
   JournalStorageUnavailable,
   OperationId,
   QueuedIntegrationResponsibility,
+  UnqueuedAcceptedResult,
   ProductionRunSelection,
   ProductionRunSelectionConflict,
   RunTerminationDisposition,
@@ -1746,6 +1747,12 @@ it("round-trips the ordered identity evidence of every canonical current-status 
       taskId
     }
   }
+  const accepted = UnqueuedAcceptedResult.make({
+    acceptedResult,
+    plannedAttempt: attempt,
+    terminalAt: JournalPosition.make(5)
+  })
+  const integrationConfigurationWait = { _tag: "IntegrationConfigurationWait" as const, plannedAttempt: attempt }
   const entries = [
     {
       _tag: "DependencyWait",
@@ -1833,6 +1840,55 @@ it("round-trips the ordered identity evidence of every canonical current-status 
       responsibility: obligation,
       subject,
       supporting
+    },
+    {
+      _tag: "DependencyWait",
+      classification: "Waiting",
+      prerequisiteTaskIds,
+      standing: {
+        _tag: "ResponsibilitySituation",
+        facts: {
+          _tag: "PlannedAttemptExecutorFreshFacts",
+          disposition: ResponsibilityDisposition.TaskClaimMissingConstraint(),
+          responsibility
+        }
+      },
+      subject,
+      taskId
+    },
+    {
+      _tag: "LiveDeliveryAction",
+      classification: "Progressing",
+      owner: {
+        _tag: "MaterializedDeliveryAction",
+        intent: "IntentRecorded",
+        operationId: OperationId.make("identity-fixture-live-operation"),
+        proposal
+      },
+      subject
+    },
+    {
+      _tag: "AcceptedFactPublicationWait",
+      acceptedAt: JournalPosition.make(9),
+      classification: "Waiting",
+      owner: {
+        _tag: "SettledMaterializedDeliveryAction",
+        intent: "IntentRecorded",
+        operationId: OperationId.make("identity-fixture-settled-operation"),
+        proposal
+      },
+      subject
+    },
+    {
+      _tag: "EvidenceUnavailable",
+      classification: "Blocked",
+      evidence: {
+        _tag: "IntegrationConfigurationWait",
+        standing: { _tag: "IntegrationWait", wait: integrationConfigurationWait },
+        wait: integrationConfigurationWait
+      },
+      responsibility: { _tag: "AcceptedAwaitingIntegration", accepted },
+      subject
     }
   ] satisfies ReadonlyArray<DeliveryStatusEntry>
   const available: CurrentDeliveryStatus = {
@@ -1863,6 +1919,20 @@ it("round-trips the ordered identity evidence of every canonical current-status 
     expect(projected.entries[6]).toMatchObject({ integrationTarget, plannedAttempt: attempt, queuedAt: 4 })
     expect(projected.entries[8]).toMatchObject({ evidenceIdentities })
     expect(projected.entries[10]).toMatchObject({ reason: "AuthorizedHandoff", supporting })
+    expect(projected.entries.slice(11)).toMatchObject([
+      { _tag: "DependencyWait", obligationReference: expect.any(String), standingKind: "ResponsibilitySituation" },
+      {
+        _tag: "LiveDeliveryAction",
+        lifecycle: "MaterializedDeliveryAction",
+        operationId: "identity-fixture-live-operation"
+      },
+      {
+        _tag: "AcceptedFactPublicationWait",
+        lifecycle: "SettledMaterializedDeliveryAction",
+        operationId: "identity-fixture-settled-operation"
+      },
+      { _tag: "EvidenceUnavailable", evidence: { _tag: "IntegrationConfigurationWait", plannedAttempt: attempt } }
+    ])
   }
 })
 

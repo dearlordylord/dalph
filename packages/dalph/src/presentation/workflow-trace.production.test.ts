@@ -18,6 +18,7 @@ import {
   JournalStore,
   OperationId,
   TaskWorkCapacity,
+  TrackerRevision,
   TaskTrackerReadInitiated,
   TraceAtCursor,
   TraceCursor,
@@ -52,6 +53,7 @@ import {
   historicalTraceConsoleLayer,
   renderTraceAtCursor,
   renderTraceAtCursorWithStatus,
+  renderTraceStatus,
   semanticTraceAtCursor,
   traceCursorAt,
   writeTraceAtCursor
@@ -220,6 +222,25 @@ it("renders an exact historical cursor without a transcript or internal executor
   expect(lines.at(-1)).toBe("Journal position 4 · Dalph coordinator initiated coordinator responsibility record")
   expect(lines.join("\n")).not.toMatch(/(?:transcript|session|turn|expectedTargetHead|acceptedResult)/iu)
   expect(lines.filter((line) => line.includes("Journal position 4"))).toHaveLength(1)
+})
+
+it("renders task-local available and absent status without inferring historical state", () => {
+  const subject = { _tag: "Task" as const, runId, taskId: executorAttempt.taskId }
+  const graphSource = {
+    _tag: "EstablishedGraph" as const,
+    contentIdentity: TrackerRevision.make("console-status-content"),
+    freshnessOperationId: OperationId.make("console-status-freshness"),
+    operationId: OperationId.make("console-status-graph"),
+    recordedAt: JournalPosition.make(5),
+    revision: TrackerRevision.make("console-status-revision")
+  }
+
+  expect(
+    renderTraceStatus({ _tag: "DeliveryStatusAvailable", acceptedAt: JournalPosition.make(5), entries: [], subject })
+  ).toBe(`Available · Task ${executorAttempt.taskId} in Run ${runId} · 0 exact entries`)
+  expect(renderTraceStatus({ _tag: "TaskAbsentFromCurrentGraph", graphSource, subject })).toBe(
+    `Absent from current graph · Task ${executorAttempt.taskId} in Run ${runId}`
+  )
 })
 
 it.effect("reads one exact production cursor through TraceReader and writes its schema-versioned view", () =>
