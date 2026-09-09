@@ -38,6 +38,16 @@ export const deliveryTaskPositionAt = (index: number): DeliveryTaskPosition => D
 
 export const taskOrderAt = (position: DeliveryTaskPosition): StatusTaskOrder => ({ _tag: "TaskOrder", position })
 
+/** Preserves the task position carried by an admitted proposal after its task leaves the latest delivery list. */
+export const historicalProposalTaskOrder = (order: DeliveryProposalOrderEvidence): StatusTaskOrder =>
+  Match.valueTags(order, {
+    FreshWorkflowOrder: ({ frontierOrdinal }) => taskOrderAt(deliveryTaskPositionAt(frontierOrdinal)),
+    IntegrationOrder: ({ frontierOrdinal }) => taskOrderAt(deliveryTaskPositionAt(frontierOrdinal)),
+    RecoveredWorkflowOrder: ({ frontierOrdinal }) => taskOrderAt(deliveryTaskPositionAt(frontierOrdinal)),
+    TrackerGraphOrder: () => runWideTaskOrder,
+    UnqueuedAcceptedResultOrder: ({ frontierOrdinal }) => taskOrderAt(deliveryTaskPositionAt(frontierOrdinal))
+  })
+
 /** Injective identity encoding: every typed component carries its own length. */
 export const canonicalIdentity = (parts: ReadonlyArray<IdentityPart>): string =>
   parts

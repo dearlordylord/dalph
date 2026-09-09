@@ -115,6 +115,7 @@ import {
 } from "@dalph/orchestrator"
 import { makeTestJournaledTrackerGraphObservation } from "../../../orchestrator/test/journaled-graph-observation.js"
 import { makeFreshTaskAdmissionTestBasis } from "../../../orchestrator/test/support/fresh-task-admission.js"
+import { ticketOwnerSnapshotForTest } from "../../../orchestrator/test/support/delivery-runtime-live-owner.js"
 import {
   ConfigProvider,
   Console,
@@ -122,6 +123,7 @@ import {
   Effect,
   Fiber,
   FileSystem,
+  Latch,
   Layer,
   Option,
   Queue,
@@ -1361,6 +1363,75 @@ it.effect("normal Run termination closes an open history attachment after its fi
   })
 )
 
+it.effect("an unfinished Run cannot hide status, history, or output presenter failures", () =>
+  Effect.gen(function* () {
+    const runTermination = { await: Effect.never, poll: Effect.succeed(Option.none()) }
+    const observeBeforeTimeout = <E>(presentation: Effect.Effect<void, E>) =>
+      Effect.raceFirst(
+        presentation.pipe(
+          Effect.match({
+            onFailure: (failure) => ({ _tag: "Failed" as const, failure }),
+            onSuccess: () => ({ _tag: "Completed" as const })
+          })
+        ),
+        Effect.sleep("1 second").pipe(Effect.as({ _tag: "TimedOut" as const }))
+      )
+    const writeLine = (_line: string) => Effect.void
+
+    const projectionFailure = new DeliveryStatusProjectionConflict({
+      detail: "controlled pending-Run projection conflict",
+      entryIdentity: DeliveryStatusEntryIdentity.make("pending-run-projection-conflict"),
+      subject: { _tag: "Run", runId }
+    })
+    const projectionOutcome = yield* observeBeforeTimeout(
+      presentSelectedProductionRun(
+        {
+          acceptedHistory: currentSignalOf(cursor),
+          current: currentObservationChangesFailure(projectionFailure),
+          runTermination,
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: { readAt: () => Effect.succeed(snapshot) }
+        },
+        writeLine
+      )
+    )
+    expect(projectionOutcome).toMatchObject({
+      _tag: "Failed",
+      failure: { _tag: "ProductionCliStatusError", code: "status.projection_conflict", subject: runId }
+    })
+
+    const historyFailure = new TraceProjectionInvalid({ detail: "controlled pending-Run history failure", runId })
+    const historyOutcome = yield* observeBeforeTimeout(
+      presentSelectedProductionRun(
+        {
+          acceptedHistory: currentSignalOf(cursor),
+          current: currentSignalOf({ _tag: "NotReady" as const }),
+          runTermination,
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: { readAt: () => Effect.fail(historyFailure) }
+        },
+        writeLine
+      )
+    )
+    expect(historyOutcome).toEqual({ _tag: "Failed", failure: historyFailure })
+
+    const outputFailure = new TraceOutputError({ detail: "controlled pending-Run output failure" })
+    const outputOutcome = yield* observeBeforeTimeout(
+      presentSelectedProductionRun(
+        {
+          acceptedHistory: currentSignalOf(cursor),
+          current: currentSignalOf({ _tag: "NotReady" as const }),
+          runTermination,
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: { readAt: () => Effect.succeed(snapshot) }
+        },
+        (line) => (JSON.parse(line)._tag === "HistoricalSnapshot" ? Effect.fail(outputFailure) : Effect.void)
+      )
+    )
+    expect(outputOutcome).toEqual({ _tag: "Failed", failure: outputFailure })
+  })
+)
+
 it.effect("production presentation reports the host's exact recovered Run without allocating a replacement", () =>
   Effect.gen(function* () {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
@@ -1935,8 +2006,8 @@ const projectedStatusFixture = (): DeliveryRuntimeObservationState => {
     })
   }
   const liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot> = [
-    { _tag: "AdmittedDeliveryAction", proposal: live },
-    { _tag: "SettledBeforeMaterialization", proposal: publicationWait }
+    ticketOwnerSnapshotForTest(live),
+    ticketOwnerSnapshotForTest(publicationWait, { _tag: "SettledBeforeMaterialization" })
   ]
   return { _tag: "Ready", evaluation, liveOwners }
 }
@@ -2011,6 +2082,62 @@ it.effect("projects and encodes all eleven status variants through the productio
       _tag: "CurrentStatus",
       status: { _tag: "DeliveryStatusClosed", final: { entries: publicSource.entries } }
     })
+  })
+)
+
+it.effect("presents Alice's nonterminal status change before the accepted Run termination", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const initialStatus = yield* Deferred.make<void>()
+    const statusChanged = yield* Deferred.make<void>()
+    const termination = yield* Deferred.make<{
+      readonly disposition: RunTerminationDisposition
+      readonly terminatedAt: TraceCursor
+    }>()
+    const observationState = projectedStatusFixture()
+    const changes = yield* Queue.unbounded<DeliveryRuntimeObservationState>()
+    const current = currentSignalFromCurrentFirstStream(
+      Stream.concat(Stream.make({ _tag: "NotReady" as const }), Stream.fromQueue(changes).pipe(Stream.take(1)))
+    )
+    const presentation = yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current,
+        runTermination: { await: Deferred.await(termination), poll: Effect.succeed(Option.none()) },
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) => {
+        const record = JSON.parse(line)
+        return Ref.update(lines, (current) => [...current, line]).pipe(
+          Effect.andThen(
+            record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusNotReady"
+              ? Deferred.succeed(initialStatus, undefined)
+              : record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusAvailable"
+                ? Deferred.succeed(statusChanged, undefined)
+                : Effect.void
+          )
+        )
+      }
+    ).pipe(Effect.forkChild)
+
+    yield* Deferred.await(initialStatus)
+    yield* Queue.offer(changes, observationState)
+    yield* Deferred.await(statusChanged)
+    yield* Deferred.succeed(termination, {
+      disposition: RunTerminationDisposition.make("Completed"),
+      terminatedAt: cursor
+    })
+    yield* Fiber.join(presentation)
+
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    const availableStatuses = records.filter(
+      (record) => record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusAvailable"
+    )
+    const dispositions = records.filter((record) => record._tag === "RunDisposition")
+    expect(availableStatuses).toHaveLength(1)
+    expect(dispositions).toHaveLength(1)
+    expect(records.indexOf(availableStatuses[0])).toBeLessThan(records.indexOf(dispositions[0]))
   })
 )
 
@@ -2114,14 +2241,18 @@ it("round-trips the ordered identity evidence of every canonical current-status 
     {
       _tag: "LiveDeliveryAction",
       classification: "Progressing",
-      owner: { _tag: "AdmittedDeliveryAction", proposal },
+      owner: { _tag: "AdmittedDeliveryAction", admissionAuthority: { _tag: "TicketProposalAdmission" }, proposal },
       subject
     },
     {
       _tag: "AcceptedFactPublicationWait",
       acceptedAt: JournalPosition.make(9),
       classification: "Waiting",
-      owner: { _tag: "SettledBeforeMaterialization", proposal },
+      owner: {
+        _tag: "SettledBeforeMaterialization",
+        admissionAuthority: { _tag: "TicketProposalAdmission" },
+        proposal
+      },
       subject
     },
     {
@@ -2191,6 +2322,7 @@ it("round-trips the ordered identity evidence of every canonical current-status 
       classification: "Progressing",
       owner: {
         _tag: "MaterializedDeliveryAction",
+        admissionAuthority: { _tag: "TicketProposalAdmission" },
         intent: "IntentRecorded",
         operationId: OperationId.make("identity-fixture-live-operation"),
         proposal
@@ -2203,6 +2335,7 @@ it("round-trips the ordered identity evidence of every canonical current-status 
       classification: "Waiting",
       owner: {
         _tag: "SettledMaterializedDeliveryAction",
+        admissionAuthority: { _tag: "TicketProposalAdmission" },
         intent: "IntentRecorded",
         operationId: OperationId.make("identity-fixture-settled-operation"),
         proposal
@@ -2550,6 +2683,64 @@ it.effect("a presentation failure while a signal is selecting the Run remains th
     expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
       { _tag: "RunSelected", runId, selection: "Allocated", version: 1 }
     ])
+  })
+)
+
+it.effect("a presentation failure during an accepted Exit drain remains the host failure", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const signals = yield* controlledApplicationExitSignals()
+    const currentStatusWriting = yield* Deferred.make<void>()
+    const exitRequestObserved = yield* Deferred.make<void>()
+    const presentationMayFail = yield* Latch.make()
+    const exitMayFinish = yield* Latch.make()
+    const outputFailure = new TraceOutputError({ detail: "controlled failure during application Exit drain" })
+    const application = runProductionCli(
+      (_input, use) =>
+        use(activeProductionCliObservation(), {
+          requestExit: Deferred.succeed(exitRequestObserved, undefined).pipe(
+            Effect.andThen(exitMayFinish.await),
+            Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+          )
+        }),
+      signals.boundary
+    )
+
+    const running = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(
+        liveCliLayer(lines, chronology, JSON.stringify(validProductionDocument), (line) =>
+          JSON.parse(line)._tag === "CurrentStatus"
+            ? Deferred.succeed(currentStatusWriting, undefined).pipe(
+                Effect.andThen(presentationMayFail.await),
+                Effect.andThen(Effect.fail(outputFailure))
+              )
+            : Effect.void
+        )
+      ),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.forkChild
+    )
+
+    yield* signals.installed
+    yield* Deferred.await(currentStatusWriting)
+    yield* signals.send("SIGTERM")
+    yield* Deferred.await(exitRequestObserved)
+    yield* presentationMayFail.open
+
+    expect(yield* Fiber.join(running).pipe(Effect.flip)).toBe(outputFailure)
+    expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "ApplicationExitDisposition")).toBe(false)
   })
 )
 

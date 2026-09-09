@@ -7,16 +7,18 @@ import {
   WorkflowTrace,
   type GithubGraphqlRequest
 } from "@dalph/orchestrator"
-import { Deferred, Effect, Layer, Ref, Result, Schema, Stream } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref, Result, Schema, Stream } from "effect"
 import nodeProcess from "node:process"
 import { join } from "node:path"
 import { productionRepositoryHostGraph, withProductionRepositoryHost } from "../src/application/production-host.js"
 import type { ProductionRunReconstructionObservation } from "../src/application/production.js"
+import { presentSelectedProductionRun, ProductionCliRecord } from "../src/application/production-cli.js"
 import { CodexAppServer as CodexAppServerService } from "../src/application/codex-app-server.js"
 import { CodexServerIncarnation } from "../src/application/codex-attempt-store.js"
 import {
   GithubReadStarted,
   HostCompleted,
+  PublicRecoveryStatusObserved,
   RecoveryReconstructed,
   RestartChildProcessId,
   RestartChildStarted,
@@ -157,6 +159,7 @@ const runFixture = Effect.scoped(
     // release or sequence the protocol; an early provider entry fails below.
     const reconstruction = yield* Ref.make<RecoveryEvent | undefined>(undefined)
     const selectedOperation = yield* Ref.make<TaskClaimCheckEvent | undefined>(undefined)
+    const presentationAttached = yield* Deferred.make<void>()
     // This latch only keeps the host scope alive after the provider is entered.
     const githubReadStarted = yield* Deferred.make<void>()
 
@@ -198,7 +201,31 @@ const runFixture = Effect.scoped(
     const selection = yield* withProductionRepositoryHost(
       validRawConfiguration(input),
       productionRepositoryHostGraph(adapters),
-      (observation) => Deferred.await(githubReadStarted).pipe(Effect.as(observation.selection))
+      (observation) =>
+        Effect.gen(function* () {
+          const presentation = yield* presentSelectedProductionRun(observation, (line) =>
+            Schema.decodeUnknownEffect(Schema.fromJsonString(ProductionCliRecord))(line).pipe(
+              Effect.flatMap((record) =>
+                writeEvent(
+                  PublicRecoveryStatusObserved.make({
+                    label: input.label,
+                    pid: RestartChildProcessId.make(nodeProcess.pid),
+                    record
+                  })
+                ).pipe(
+                  Effect.andThen(
+                    record._tag === "CurrentStatus" ? Deferred.succeed(presentationAttached, undefined) : Effect.void
+                  )
+                )
+              ),
+              Effect.orDie
+            )
+          ).pipe(Effect.forkScoped)
+          yield* Deferred.await(presentationAttached)
+          yield* Deferred.await(githubReadStarted)
+          yield* Fiber.interrupt(presentation)
+          return observation.selection
+        })
     )
     yield* writeEvent(HostCompleted.make({ label: input.label, selection }))
   })
