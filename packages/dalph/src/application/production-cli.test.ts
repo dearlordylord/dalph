@@ -2007,7 +2007,8 @@ it.effect("reports the selected Run when termination races with current-first st
 const liveCliLayer = (
   lines: Ref.Ref<ReadonlyArray<string>>,
   chronology: Ref.Ref<ReadonlyArray<string>>,
-  configuration = JSON.stringify(validProductionDocument)
+  configuration = JSON.stringify(validProductionDocument),
+  onLine: (line: string) => Effect.Effect<void, TraceOutputError> = () => Effect.void
 ) =>
   Layer.mergeAll(
     Layer.succeed(
@@ -2022,7 +2023,8 @@ const liveCliLayer = (
       TraceOutput.of({
         writeLine: (line) =>
           Ref.update(chronology, (current) => [...current, `output:${JSON.parse(line)._tag}`]).pipe(
-            Effect.andThen(Ref.update(lines, (current) => [...current, line]))
+            Effect.andThen(Ref.update(lines, (current) => [...current, line])),
+            Effect.andThen(onLine(line))
           )
       })
     ),
@@ -2121,6 +2123,119 @@ it.effect("SIGINT and SIGTERM enter the same configured production Exit request 
     expect(finalChronology.indexOf("output:ApplicationExitDisposition")).toBeLessThan(
       finalChronology.indexOf("host-scope-finalized")
     )
+  })
+)
+
+it.effect("a signal after Run selection interrupts presentation and reports the host Exit result", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const statusWritten = yield* Deferred.make<void>()
+    const signals = yield* controlledApplicationExitSignals()
+    const requestCount = yield* Ref.make(0)
+    const application = runProductionCli(
+      (_input, use) =>
+        use(activeProductionCliObservation(), {
+          requestExit: Ref.update(requestCount, (count) => count + 1).pipe(
+            Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+          )
+        }),
+      signals.boundary
+    )
+
+    const running = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(
+        liveCliLayer(lines, chronology, JSON.stringify(validProductionDocument), (line) =>
+          JSON.parse(line)._tag === "CurrentStatus" ? Deferred.succeed(statusWritten, undefined) : Effect.void
+        )
+      ),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.forkChild
+    )
+
+    yield* signals.installed
+    yield* Deferred.await(statusWritten)
+    yield* signals.send("SIGINT")
+    yield* Fiber.join(running)
+
+    expect(yield* Ref.get(requestCount)).toBe(1)
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-1)).toEqual({
+      _tag: "ApplicationExitDisposition",
+      disposition: { _tag: "Succeeded", requestedStatus: 0 },
+      runId,
+      version: 1
+    })
+  })
+)
+
+it.effect("a presentation failure while a signal is selecting the Run remains the host failure", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const signals = yield* controlledApplicationExitSignals()
+    const runSelectedWriting = yield* Deferred.make<void>()
+    const releaseRunSelected = yield* Deferred.make<void>()
+    const requestObserved = yield* Deferred.make<void>()
+    const outputFailure = new TraceOutputError({ detail: "controlled presentation failure" })
+    const application = runProductionCli(
+      (_input, use) =>
+        use(activeProductionCliObservation(), {
+          requestExit: Ref.update(chronology, (current) => [...current, "exit-requested"]).pipe(
+            Effect.andThen(Deferred.succeed(requestObserved, undefined)),
+            Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+          )
+        }),
+      signals.boundary
+    )
+
+    const running = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(
+        liveCliLayer(lines, chronology, JSON.stringify(validProductionDocument), (line) =>
+          JSON.parse(line)._tag === "RunSelected"
+            ? Deferred.succeed(runSelectedWriting, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseRunSelected)),
+                Effect.andThen(Effect.fail(outputFailure))
+              )
+            : Effect.void
+        )
+      ),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.forkChild
+    )
+
+    yield* signals.installed
+    yield* Deferred.await(runSelectedWriting)
+    yield* signals.send("SIGINT")
+    yield* Deferred.await(requestObserved)
+    yield* Deferred.succeed(releaseRunSelected, undefined)
+
+    expect(yield* Fiber.join(running).pipe(Effect.flip)).toBe(outputFailure)
+    expect((yield* Ref.get(chronology)).filter((entry) => entry === "exit-requested")).toHaveLength(1)
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
+      { _tag: "RunSelected", runId, selection: "Allocated", version: 1 }
+    ])
   })
 )
 
