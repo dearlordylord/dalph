@@ -6,6 +6,8 @@ import { Schema } from "effect"
 export const CodexQualificationAction = Schema.Literals([
   "allocate",
   "associate",
+  "workflow-association-cut",
+  "workflow-begin",
   "association-cut",
   "pre-thread-cut",
   "create",
@@ -31,6 +33,7 @@ export const CodexQualificationHostEvent = Schema.Struct({
     "allocated",
     "associated",
     "association-write-started",
+    "begin-journal",
     "report",
     "projection",
     "suspension-ready",
@@ -48,6 +51,9 @@ export const CodexQualificationHostEvent = Schema.Struct({
   report: Schema.optionalKey(PlannedAttemptExecutorReport),
   projection: Schema.optionalKey(PlannedAttemptExecutorProjection),
   exitResult: Schema.optionalKey(ApplicationExitResult),
-  detail: Schema.optionalKey(Schema.String)
+  detail: Schema.optionalKey(Schema.String),
+  beginIntents: Schema.optionalKey(Schema.Int),
+  beginOrdinal: Schema.optionalKey(Schema.Int),
+  beginResponses: Schema.optionalKey(Schema.Int)
 })
 export type CodexQualificationHostEvent = typeof CodexQualificationHostEvent.Type

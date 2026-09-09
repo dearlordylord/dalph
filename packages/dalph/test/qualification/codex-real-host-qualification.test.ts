@@ -240,6 +240,8 @@ class ResponsesFixture {
 }
 
 type HostAction =
+  | "workflow-association-cut"
+  | "workflow-begin"
   | "allocate"
   | "associate"
   | "association-cut"
@@ -767,6 +769,46 @@ describe("#75 built Dalph PlannedAttemptExecutor qualification", () => {
         expect(terminal.result._tag).toBe("Accepted")
         expect(fixture.model.calls).toHaveLength(2)
         expect((await attemptRecord(fixture))._tag).toBe("Terminal")
+      } finally {
+        await dispose(fixture, hosts)
+      }
+    },
+    45_000
+  )
+
+  qualificationTest(
+    "post-association process-loss production scenario completes the first Begin after Codex proves its no-turn rollout absent",
+    async () => {
+      const fixture = await makeFixture("holding")
+      const hosts: Array<BuiltHost> = []
+      try {
+        const associated = await spawnHost(fixture, "workflow-association-cut", { hold: true })
+        hosts.push(associated)
+        requireEvent(await associated.waitFor("associated"), "associated")
+        const originalThread = threadIdOf(await attemptRecord(fixture))
+        expect(originalThread).toBeDefined()
+        expect(fixture.model.calls).toHaveLength(0)
+        await associated.stop("SIGKILL")
+
+        const resumed = await spawnHost(fixture, "workflow-begin", { hold: true })
+        hosts.push(resumed)
+        expect(requireEvent(await resumed.waitForReport(1), "report").report?._tag).toBe("ExecutorWorkExecuting")
+        await fixture.model.waitForCalls(1)
+        const replacementThread = threadIdOf(await attemptRecord(fixture))
+        expect(replacementThread).toBeDefined()
+        expect(replacementThread).not.toBe(originalThread)
+        expect(fixture.model.calls).toHaveLength(1)
+        expect(await attemptRecord(fixture)).toMatchObject({
+          _tag: "Running",
+          correlationAttemptId: "real-codex-qualification-attempt",
+          correlationRunId: "real-codex-qualification-run",
+          worktree: fixture.worktree
+        })
+        expect(requireEvent(await resumed.waitFor("begin-journal"), "begin-journal")).toMatchObject({
+          beginIntents: 1,
+          beginOrdinal: 1,
+          beginResponses: 1
+        })
       } finally {
         await dispose(fixture, hosts)
       }
