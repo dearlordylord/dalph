@@ -7,7 +7,6 @@ import {
   type PlannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorReport
 } from "@dalph/contracts"
-import { immutableSnapshot } from "../immutable-snapshot.js"
 import type { WorkflowOperationResponsibility, WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type {
   CancelledAttemptTaskClaimReleaseOperation,
@@ -17,11 +16,7 @@ import type {
 } from "../../workflow/registry/operation.js"
 import type { TaskClaimReacquisitionRequestId } from "../../workflow/protocols/task-claim-reacquisition/events.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
-import type {
-  PlannedAttemptExecutorCommandOrdinal,
-  PlannedAttemptExecutorCommandProjectionOrdinal,
-  PlannedAttemptExecutorReportOrdinal
-} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import type { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import type {
   AttemptChoiceRequestId,
   AttemptChoiceSubject,
@@ -32,10 +27,13 @@ import type {
   AttemptRestartWaitReason
 } from "../../workflow/protocols/attempt-choice/restart-reasons.js"
 import type { OperationId } from "../../workflow/identity.js"
-import type {
-  AcceptedPlannedAttemptExecutorEvidence,
-  PlannedAttemptExecutorProjectionWaitReason
-} from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import type { PlannedAttemptExecutorProjectionWaitReason } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
+import type { SafeContinuationRevalidationEligibility } from "./safe-continuation-revalidation-eligibility.js"
+
+export {
+  isSafeContinuationRevalidationEligibility,
+  type SafeContinuationRevalidationEligibility
+} from "./safe-continuation-revalidation-eligibility.js"
 
 /** The exact unfinished prerequisites blocking one executing task; an empty set is not a dependency constraint. */
 export const UnfinishedPrerequisiteTaskIds = Schema.NonEmptyArray(TaskId)
@@ -45,80 +43,6 @@ export type UnfinishedPrerequisiteTaskIds = typeof UnfinishedPrerequisiteTaskIds
 export type AcceptedPlannedAttemptExecutorProgress =
   | { readonly _tag: "ExecutorResponsibilityBegan"; readonly acceptedAt: JournalPosition }
   | { readonly _tag: "ExecutorReportAccepted"; readonly ordinal: PlannedAttemptExecutorReportOrdinal }
-
-const SafeContinuationRevalidationEligibilityTypeId: unique symbol = Symbol(
-  "@dalph/SafeContinuationRevalidationEligibility"
-)
-const issuedSafeContinuationRevalidationEligibilities = new WeakSet<object>()
-
-/**
- * Process-local permission for one safely suspended responsibility to reserve
- * capacity while it rereads current continuation authority. It is not final
- * Resume authorization and cannot be reconstructed from its public fields.
- */
-export type SafeContinuationRevalidationEligibility = {
-  readonly [SafeContinuationRevalidationEligibilityTypeId]: typeof SafeContinuationRevalidationEligibilityTypeId
-  readonly acceptedSafe: {
-    readonly correlation: PlannedAttemptExecutorCorrelation
-    readonly reportOrdinal: PlannedAttemptExecutorReportOrdinal
-  }
-  readonly plannedAttempt: PlannedTaskAttempt
-  readonly responsibilityBeganAt: JournalPosition
-  /** Distinguishes first lifecycle-reopen admission from retry after an exact Resume-stayed-Safe reconciliation. */
-  readonly basis:
-    | { readonly _tag: "LifecycleReopenAfterAcceptedSafe" }
-    | {
-        readonly _tag: "ReconciledResumeStillSafe"
-        readonly observedAt: JournalPosition
-        readonly projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal
-        readonly resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal
-      }
-}
-
-/** Runtime guard for the private exact Safe-continuation eligibility. */
-export const isSafeContinuationRevalidationEligibility = (
-  value: unknown
-): value is SafeContinuationRevalidationEligibility =>
-  typeof value === "object" && value !== null && issuedSafeContinuationRevalidationEligibilities.has(value)
-
-type SafeContinuationReadyFacts = Extract<
-  ResponsibilityFreshFacts,
-  { readonly _tag: "PlannedAttemptExecutorFreshFacts" }
-> & { readonly disposition: ExecutorReadyDisposition }
-
-/**
- * Mints eligibility only when Ready is backed by the exact accepted Safe
- * report for the same immutable responsibility. Recovery additionally owns
- * proving either an unconsumed lifecycle reopen or the exact Resume command
- * that reconciled as still Safe, and excludes active executing refreshes.
- */
-export const safeContinuationRevalidationEligibilityOf = (
-  facts: SafeContinuationReadyFacts,
-  acceptedSafe: AcceptedPlannedAttemptExecutorEvidence,
-  basis: SafeContinuationRevalidationEligibility["basis"] = { _tag: "LifecycleReopenAfterAcceptedSafe" }
-): SafeContinuationRevalidationEligibility | undefined => {
-  if (
-    acceptedSafe.report._tag !== "ExecutorWorkSafelySuspended" ||
-    facts.disposition.acceptedProgress._tag !== "ExecutorReportAccepted" ||
-    facts.disposition.acceptedProgress.ordinal !== acceptedSafe.source.ordinal ||
-    facts.responsibility.plannedAttempt.runId !== acceptedSafe.report.correlation.runId ||
-    facts.responsibility.plannedAttempt.attemptId !== acceptedSafe.report.correlation.attemptId
-  ) {
-    return undefined
-  }
-  const eligibility: SafeContinuationRevalidationEligibility = Object.freeze({
-    [SafeContinuationRevalidationEligibilityTypeId]: SafeContinuationRevalidationEligibilityTypeId,
-    acceptedSafe: Object.freeze({
-      correlation: immutableSnapshot(acceptedSafe.report.correlation),
-      reportOrdinal: acceptedSafe.source.ordinal
-    }),
-    plannedAttempt: immutableSnapshot(facts.responsibility.plannedAttempt),
-    responsibilityBeganAt: facts.responsibility.beganAt,
-    basis: immutableSnapshot(basis)
-  })
-  issuedSafeContinuationRevalidationEligibilities.add(eligibility)
-  return eligibility
-}
 
 /** Fresh boundary facts governing one unfinished workflow responsibility. */
 export type ResponsibilityDisposition = Data.TaggedEnum<{

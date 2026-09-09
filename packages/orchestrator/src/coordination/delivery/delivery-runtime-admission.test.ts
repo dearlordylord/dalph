@@ -5,6 +5,7 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
@@ -45,8 +46,9 @@ import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim, TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
-import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
-import { acceptedExecutorCommandDelivery } from "../../workflow/protocols/planned-attempt-executor-work/command-delivery.js"
+import { JournalPosition } from "../../workflow-journal/identity.js"
+import { appendExecutorCommandDeliveryIntent } from "../../workflow/protocols/planned-attempt-executor-work/command-delivery.js"
+import { memoryJournalTestLayerFromPartitionRecords } from "../../workflow-journal/adapters/memory-store.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
@@ -56,6 +58,7 @@ import {
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { OperationId } from "../../workflow/identity.js"
+import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
@@ -74,10 +77,14 @@ import {
 } from "../../workflow/registry/event.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
+  PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
+  PlannedAttemptExecutorCommandProjectionObservation,
+  PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal,
-  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent,
+  PlannedAttemptExecutorWorkReportedEvent
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
@@ -101,7 +108,9 @@ import {
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { beginPlannedAttemptExecutorResponsibility } from "../../workflow/protocols/planned-attempt-executor-work/responsibility.js"
-import { safeContinuationRevalidationEligibilityOf } from "../frontier/fresh-facts.js"
+import { isSafeContinuationRevalidationEligibility } from "../frontier/fresh-facts.js"
+import { deriveJournalResponsibilityFacts } from "../run/recovery-activation.js"
+import type { ReconstructedRunState } from "../reconstruction/state.js"
 
 const makeDeliveryRuntimeAdmissionController = Effect.fn("DeliveryRuntimeAdmissionTest.make")(function* (
   initial: Parameters<typeof makeAdmissionControllerWithLifecycle>[0],
@@ -166,28 +175,161 @@ const admissionBasis = (
     })
   )
 
-const safeContinuationEligibility = (basis?: Parameters<typeof safeContinuationRevalidationEligibilityOf>[2]) => {
-  const ordinal = PlannedAttemptExecutorReportOrdinal.make(2)
-  const eligibility = safeContinuationRevalidationEligibilityOf(
-    {
-      _tag: "PlannedAttemptExecutorFreshFacts",
-      disposition: { _tag: "Ready", acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal } },
-      responsibility: {
-        _tag: "PlannedAttemptExecutorWorkResponsibility",
-        beganAt: JournalPosition.make(1),
-        plannedAttempt
-      }
-    },
-    {
-      observedAt: JournalPosition.make(2),
-      report: { _tag: "ExecutorWorkSafelySuspended", correlation },
-      source: { _tag: "AcceptedReport", ordinal }
-    },
-    basis
+const safeContinuationEligibility = (
+  basis:
+    | { readonly _tag: "LifecycleReopenAfterAcceptedSafe" }
+    | {
+        readonly _tag: "ReconciledResumeStillSafe"
+        readonly observedAt: JournalPosition
+        readonly projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal
+        readonly resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal
+      } = { _tag: "LifecycleReopenAfterAcceptedSafe" }
+) => {
+  const target = FixtureTarget.make(
+    `admission-safe:${basis._tag}:${basis._tag === "ReconciledResumeStillSafe" ? basis.observedAt : 0}`
   )
-  if (eligibility === undefined) return Effect.die("accepted Safe fixture did not establish revalidation eligibility")
+  const planOperation = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make(`admission-safe-plan:${target}`),
+    plannedAttempt,
+    predecessorOperationIds: []
+  })
+  const graphOperation = (state: "closed" | "open") =>
+    makeTrackerGraphObservationOperation(
+      { _tag: "AttemptContinuation" },
+      OperationId.make(`admission-safe-${state}:${target}`),
+      target,
+      [planOperation.operationId],
+      [plannedAttempt.taskId]
+    )
+  const closedOperation = graphOperation("closed")
+  const openOperation = graphOperation("open")
+  const graph = (state: "closed" | "open") =>
+    validSnapshot({
+      revision: `admission-safe-${state}:${target}`,
+      tasks: [
+        {
+          id: plannedAttempt.taskId,
+          lifecycle: state === "closed" ? ({ _tag: "TerminalWithoutSuccess" } as const) : ({ _tag: "Open" } as const),
+          parentTaskId: null,
+          prerequisiteIds: []
+        }
+      ]
+    })
+  const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({ correlation })
+  const record = (position: number, event: JournalRecord["event"]): JournalRecord => ({
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(position),
+    runId
+  })
+  const records: Array<JournalRecord> = [
+    makeWorkflowRunBeganRecord(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    ),
+    record(2, TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })),
+    record(3, taskTrackerReadIntent(closedOperation)),
+    record(
+      4,
+      taskTrackerFactsObservedEvent(
+        closedOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(closedOperation, graph("closed"))
+      )
+    ),
+    record(
+      5,
+      PlannedAttemptExecutorWorkReportedEvent.make({
+        ordinal: PlannedAttemptExecutorReportOrdinal.make(2),
+        report: safe,
+        version: workflowJournalEventVersion
+      })
+    ),
+    record(6, taskTrackerReadIntent(openOperation)),
+    record(
+      7,
+      taskTrackerFactsObservedEvent(
+        openOperation.operationId,
+        makeCompleteTaskTrackerFactsObserved(openOperation, graph("open"))
+      )
+    )
+  ]
+  if (basis._tag === "ReconciledResumeStillSafe") {
+    const commandPosition = Number(basis.observedAt) - 1
+    records.push(
+      record(
+        commandPosition,
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Resume",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: basis.resumeCommandOrdinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      ),
+      record(
+        Number(basis.observedAt),
+        PlannedAttemptExecutorCommandProjectionObservedEvent.make({
+          commandOrdinal: basis.resumeCommandOrdinal,
+          observation: PlannedAttemptExecutorCommandProjectionObservation.cases.ExactExecutorReport.make({
+            report: safe
+          }),
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt,
+          projectionOrdinal: basis.projectionOrdinal,
+          version: workflowJournalEventVersion
+        })
+      )
+    )
+  }
+  const responsibility = {
+    _tag: "PlannedAttemptExecutorWorkResponsibility" as const,
+    beganAt: JournalPosition.make(2),
+    plannedAttempt
+  }
+  const runState: ReconstructedRunState = {
+    appliedThrough: records.at(-1)?.position ?? null,
+    cancellation: { _tag: "RunCancellationNotApplied" },
+    controlPolicy: Option.none(),
+    graphKnowledge: {
+      taskTrackerFacts: [
+        makeCompleteTaskTrackerFactsObserved(closedOperation, graph("closed")),
+        makeCompleteTaskTrackerFactsObserved(openOperation, graph("open"))
+      ]
+    },
+    pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+    responsibility: { entries: [responsibility] },
+    runId,
+    workflowHistory: { records }
+  }
+  const facts = deriveJournalResponsibilityFacts(runState).find(
+    (candidate) => candidate._tag === "PlannedAttemptExecutorFreshFacts"
+  )
+  const eligibility = facts?.safeContinuationRevalidationEligibility
+  if (!isSafeContinuationRevalidationEligibility(eligibility)) {
+    return Effect.die("validated Safe recovery history did not establish revalidation eligibility")
+  }
   return Effect.succeed(eligibility)
 }
+
+it.effect("rejects structural Safe eligibility before it can reserve capacity", () =>
+  Effect.gen(function* () {
+    const issued = yield* safeContinuationEligibility()
+    const structuralCopy = { ...issued }
+
+    expect(isSafeContinuationRevalidationEligibility(structuralCopy)).toBe(false)
+    const basis = yield* Effect.exit(
+      makeFreshTaskAdmissionBasis({
+        capacity: TaskWorkCapacity.make(1),
+        entries: [],
+        runId,
+        safeContinuationRevalidations: [structuralCopy]
+      })
+    )
+    expect(Exit.isFailure(basis)).toBe(true)
+  })
+)
 
 it.effect(
   "reserves only the third position for Safe revalidation before fresh E and releases a rejected pre-intent lease",
@@ -252,25 +394,25 @@ it.effect("rejects stale or swapped reconciled Resume identity before reserving"
       const original = yield* safeContinuationEligibility()
       const exact = yield* safeContinuationEligibility({
         _tag: "ReconciledResumeStillSafe",
-        observedAt: JournalPosition.make(5),
+        observedAt: JournalPosition.make(10),
         projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
         resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(3)
       })
       const stale = yield* safeContinuationEligibility({
         _tag: "ReconciledResumeStillSafe",
-        observedAt: JournalPosition.make(4),
+        observedAt: JournalPosition.make(9),
         projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
         resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(3)
       })
       const swapped = yield* safeContinuationEligibility({
         _tag: "ReconciledResumeStillSafe",
-        observedAt: JournalPosition.make(5),
+        observedAt: JournalPosition.make(10),
         projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(1),
         resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(4)
       })
       const swappedProjection = yield* safeContinuationEligibility({
         _tag: "ReconciledResumeStillSafe",
-        observedAt: JournalPosition.make(5),
+        observedAt: JournalPosition.make(10),
         projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal.make(2),
         resumeCommandOrdinal: PlannedAttemptExecutorCommandOrdinal.make(3)
       })
@@ -372,20 +514,15 @@ it.effect("keeps one exact safe continuation reservation through reads and Resum
       yield* controller.bindPlannedAttemptPosition(second.reservation, plannedAttempt)
       yield* controller.synchronize(yield* basis(1))
       expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("SafeContinuationReserved")
-      const receipt = yield* acceptedExecutorCommandDelivery({
-        runId,
-        key: JournalRecordKey.make("test:resume-intent"),
-        position: JournalPosition.make(4),
-        event: {
-          _tag: "PlannedAttemptExecutorCommandIntended",
-          command: "Resume",
-          ordinal: PlannedAttemptExecutorCommandOrdinal.make(3),
-          plannedAttempt,
-          initiatedBy: { _tag: "DalphCoordinator" },
-          occurrenceClassification: "InitiatedAction",
-          version: workflowJournalEventVersion
-        }
-      })
+      const receipt = yield* appendExecutorCommandDeliveryIntent({
+        _tag: "PlannedAttemptExecutorCommandIntended",
+        command: "Resume",
+        ordinal: PlannedAttemptExecutorCommandOrdinal.make(3),
+        plannedAttempt,
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        version: workflowJournalEventVersion
+      }).pipe(Effect.provide(memoryJournalTestLayerFromPartitionRecords({ hot: exactHandoffFixture.records })))
       yield* controller.bindPlannedAttemptPosition(second.reservation, plannedAttempt, undefined, receipt)
       expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("LocallyAcceptedAttemptPosition")
       yield* controller.synchronize(yield* basis(1))

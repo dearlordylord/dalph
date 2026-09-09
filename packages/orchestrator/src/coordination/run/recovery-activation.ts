@@ -21,11 +21,8 @@ import {
   reconstructedTaskIsPaused,
   workflowResponsibilityOperationId
 } from "../reconstruction/state.js"
-import {
-  safeContinuationRevalidationEligibilityOf,
-  type PlannedAttemptExecutorDisposition,
-  type ResponsibilityFreshFacts
-} from "../frontier/fresh-facts.js"
+import { type PlannedAttemptExecutorDisposition, type ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
+import { safeContinuationRevalidationEligibilityFromRecoveryHistory } from "../frontier/safe-continuation-revalidation-eligibility.js"
 import type { DeliveryProjectionEvidence } from "../frontier/delivery-projection-evidence.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
@@ -76,7 +73,6 @@ import { targetPromotionRequestIdForCandidate } from "../../workflow/protocols/t
 import type { TargetPromotionRuntimeInput } from "../../workflow/protocols/target-promotion/runtime.js"
 import {
   currentAcceptedPlannedAttemptExecutorLifecycleFor,
-  currentUnconsumedAcceptedSafeEvidence,
   latestPlannedAttemptExecutorEvidence,
   latestAcceptedPlannedAttemptExecutorEvidence,
   latestPlannedAttemptExecutorProjectionIssue,
@@ -1394,106 +1390,6 @@ const terminalTaskStateDisposition = (
     ? ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({ report })
     : externalSuccess
 
-/**
- * A safely suspended attempt receives pre-read capacity only for the lifecycle
- * reopen that made it runnable: its last complete exact-target graph before
- * Safe showed terminal-without-success, and a causally attempt-scoped complete
- * graph after Safe now shows Open. An ordinary Safe checkpoint therefore
- * cannot reserve ahead of fresh work.
- */
-const exactTaskWasReopenedAfterAcceptedSafe = (
-  records: ReadonlyArray<JournalRecord>,
-  plannedAttempt: PlannedTaskAttempt,
-  acceptedSafe: AcceptedPlannedAttemptExecutorEvidence,
-  immutableRunTarget: TrackerTarget | undefined
-): boolean => {
-  if (immutableRunTarget === undefined) return false
-  const graphBeforeSafe = records.findLast(
-    (record): record is CompleteGraphObservationRecord =>
-      record.position <= acceptedSafe.observedAt &&
-      isCompleteGraphObservationRecord(record) &&
-      taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
-  )
-  if (graphBeforeSafe === undefined) return false
-  const before = graphReconstructedAt(records, graphBeforeSafe)
-  if (
-    Option.getOrUndefined(before?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag !==
-    "TerminalWithoutSuccess"
-  ) {
-    return false
-  }
-  const reopened = currentCompleteGraphObservationAfter(
-    records,
-    Option.some(acceptedSafe.observedAt),
-    immutableRunTarget,
-    plannedAttempt
-  )
-  if (reopened === undefined) return false
-  const after = graphReconstructedAt(records, reopened)
-  return Option.getOrUndefined(after?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag === "Open"
-}
-
-/**
- * An exact Safe projection after one intended Resume proves that Resume did not
- * start. It permits a new process-local read reservation for that same command,
- * while a later Begin/Resume intent invalidates this retry basis.
- */
-const reconciledResumeStillSafeBasis = (records: ReadonlyArray<JournalRecord>, plannedAttempt: PlannedTaskAttempt) => {
-  const resume = records.findLast(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorCommandIntended" &&
-      event.command === "Resume" &&
-      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
-  )
-  if (resume?.event._tag !== "PlannedAttemptExecutorCommandIntended") return undefined
-  const lifecycleSafe = latestAcceptedPlannedAttemptExecutorEvidence(
-    records.filter(({ position }) => position < resume.position),
-    plannedAttempt
-  )
-  if (lifecycleSafe?.report._tag !== "ExecutorWorkSafelySuspended") return undefined
-  const resumeCommandOrdinal = resume.event.ordinal
-  const reconciled = records.findLast(
-    ({ event, position }) =>
-      position > resume.position &&
-      event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
-      event.commandOrdinal === resumeCommandOrdinal &&
-      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt) &&
-      event.observation._tag === "ExactExecutorReport" &&
-      event.observation.report._tag === "ExecutorWorkSafelySuspended" &&
-      event.observation.report.correlation.runId === plannedAttempt.runId &&
-      event.observation.report.correlation.attemptId === plannedAttempt.attemptId
-  )
-  if (reconciled?.event._tag !== "PlannedAttemptExecutorCommandProjectionObserved") return undefined
-  const reconciledProjectionOrdinal = reconciled.event.projectionOrdinal
-  const consumed = records.some(
-    ({ event, position }) =>
-      position > reconciled.position &&
-      event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" &&
-      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt) &&
-      event.commandOrdinal === resumeCommandOrdinal &&
-      event.projectionOrdinal === reconciledProjectionOrdinal &&
-      event.authorization.safeProjectionObservedAt === reconciled.position
-  )
-  const superseded = records.some(
-    ({ event, position }) =>
-      position > reconciled.position &&
-      event._tag === "PlannedAttemptExecutorCommandIntended" &&
-      (event.command === "Begin" || event.command === "Resume") &&
-      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
-  )
-  return consumed || superseded
-    ? undefined
-    : {
-        basis: {
-          _tag: "ReconciledResumeStillSafe" as const,
-          observedAt: reconciled.position,
-          projectionOrdinal: reconciledProjectionOrdinal,
-          resumeCommandOrdinal
-        },
-        lifecycleSafe
-      }
-}
-
 export const deriveJournalResponsibilityFacts = (
   runState: ReconstructedRunState,
   activationBaselinePosition: Option.Option<JournalPosition> = Option.none(),
@@ -2048,25 +1944,13 @@ export const deriveJournalResponsibilityFacts = (
     }
     const disposition = taskStateDisposition() ?? constraintDisposition() ?? pauseOrReadyDisposition()
     const facts = { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
-    if (disposition._tag !== "Ready" || attemptRefreshOpportunity._tag === "ActiveWorkAuthorityRefresh") return facts
-    const currentAcceptedSafe = latestAcceptedPlannedAttemptExecutorEvidence(records, responsibility.plannedAttempt)
-    const unconsumedAcceptedSafe = currentUnconsumedAcceptedSafeEvidence(records, responsibility.plannedAttempt)
-    const retry =
-      currentAcceptedSafe?.report._tag === "ExecutorWorkSafelySuspended"
-        ? reconciledResumeStillSafeBasis(records, responsibility.plannedAttempt)
-        : undefined
-    const acceptedSafe = retry === undefined ? unconsumedAcceptedSafe : currentAcceptedSafe
-    const lifecycleSafe = retry?.lifecycleSafe ?? unconsumedAcceptedSafe
-    if (
-      acceptedSafe === undefined ||
-      lifecycleSafe === undefined ||
-      !exactTaskWasReopenedAfterAcceptedSafe(records, responsibility.plannedAttempt, lifecycleSafe, immutableRunTarget)
-    )
-      return facts
-    const safeContinuationRevalidationEligibility = safeContinuationRevalidationEligibilityOf(
-      { ...facts, disposition },
-      acceptedSafe,
-      retry?.basis ?? { _tag: "LifecycleReopenAfterAcceptedSafe" }
+    if (disposition._tag !== "Ready" || disposition.acceptedProgress._tag !== "ExecutorReportAccepted") return facts
+    const safeContinuationRevalidationEligibility = safeContinuationRevalidationEligibilityFromRecoveryHistory(
+      records,
+      responsibility.plannedAttempt,
+      responsibility.beganAt,
+      disposition.acceptedProgress,
+      attemptRefreshOpportunity
     )
     return safeContinuationRevalidationEligibility === undefined
       ? facts

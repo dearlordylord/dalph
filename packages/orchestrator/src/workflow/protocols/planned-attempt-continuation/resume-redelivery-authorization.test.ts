@@ -16,6 +16,7 @@ import {
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import { describe, expect, it } from "vitest"
+import { Option } from "effect"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { PlannedWorktreeReady } from "../../../authorities/git/worktree.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
@@ -25,10 +26,10 @@ import { TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../attempt-choice/events.js"
-import {
-  safeContinuationRevalidationEligibilityOf,
-  type SafeContinuationRevalidationEligibility
-} from "../../../coordination/frontier/fresh-facts.js"
+import type { SafeContinuationRevalidationEligibility } from "../../../coordination/frontier/fresh-facts.js"
+import { deriveJournalResponsibilityFacts } from "../../../coordination/run/recovery-activation.js"
+import type { ReconstructedRunState } from "../../../coordination/reconstruction/state.js"
+import { validSnapshot } from "../../../../test/task-dag.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
@@ -55,6 +56,7 @@ import {
   makeTrackerGraphObservationOperation
 } from "../../registry/operation.js"
 import {
+  makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskClaimFactsObserved,
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
@@ -68,7 +70,8 @@ import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorResumeRedeliveryIntendedEvent,
   PlannedAttemptExecutorResumeRedeliveryOrdinal,
-  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent,
+  PlannedAttemptExecutorWorkReportedEvent
 } from "../planned-attempt-executor-work/events.js"
 import {
   evaluatePlannedAttemptResumeRedeliveryAuthorization,
@@ -144,6 +147,56 @@ const fixture = () => {
     records,
     PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
   )
+  const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+    correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+  })
+  const lifecycleGraph = (state: "closed" | "open") =>
+    makeTrackerGraphObservationOperation(
+      { _tag: "AttemptContinuation" },
+      OperationId.make(`resume-redelivery-lifecycle-${state}`),
+      target,
+      [planOperationId],
+      [taskId]
+    )
+  const lifecycleSnapshot = (state: "closed" | "open") =>
+    validSnapshot({
+      revision: `resume-redelivery-lifecycle-${state}`,
+      tasks: [
+        {
+          id: taskId,
+          lifecycle: state === "closed" ? ({ _tag: "TerminalWithoutSuccess" } as const) : ({ _tag: "Open" } as const),
+          parentTaskId: null,
+          prerequisiteIds: []
+        }
+      ]
+    })
+  const closedGraph = lifecycleGraph("closed")
+  const reopenedGraph = lifecycleGraph("open")
+  append(records, taskTrackerReadIntent(closedGraph))
+  append(
+    records,
+    taskTrackerFactsObservedEvent(
+      closedGraph.operationId,
+      makeCompleteTaskTrackerFactsObserved(closedGraph, lifecycleSnapshot("closed"))
+    )
+  )
+  const acceptedSafeOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
+  append(
+    records,
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: acceptedSafeOrdinal,
+      report: safe,
+      version: workflowJournalEventVersion
+    })
+  )
+  append(records, taskTrackerReadIntent(reopenedGraph))
+  append(
+    records,
+    taskTrackerFactsObservedEvent(
+      reopenedGraph.operationId,
+      makeCompleteTaskTrackerFactsObserved(reopenedGraph, lifecycleSnapshot("open"))
+    )
+  )
   append(
     records,
     PlannedAttemptExecutorCommandIntendedEvent.make({
@@ -155,9 +208,6 @@ const fixture = () => {
       version: workflowJournalEventVersion
     })
   )
-  const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
-    correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
-  })
   const projection = append(
     records,
     PlannedAttemptExecutorCommandProjectionObservedEvent.make({
@@ -274,27 +324,27 @@ const fixture = () => {
     targetLineageObservationOperationId: lineage.operationId,
     worktreeObservationOperationId: worktree.operationId
   }
-  const acceptedSafeOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
-  const eligibility = safeContinuationRevalidationEligibilityOf(
-    {
-      _tag: "PlannedAttemptExecutorFreshFacts",
-      disposition: {
-        _tag: "Ready",
-        acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: acceptedSafeOrdinal }
-      },
-      responsibility: {
-        _tag: "PlannedAttemptExecutorWorkResponsibility",
-        beganAt: responsibility.position,
-        plannedAttempt
-      }
+  const runState: ReconstructedRunState = {
+    appliedThrough: records.at(-1)?.position ?? null,
+    cancellation: { _tag: "RunCancellationNotApplied" },
+    controlPolicy: Option.none(),
+    graphKnowledge: {
+      taskTrackerFacts: [
+        makeCompleteTaskTrackerFactsObserved(closedGraph, lifecycleSnapshot("closed")),
+        makeCompleteTaskTrackerFactsObserved(reopenedGraph, lifecycleSnapshot("open"))
+      ]
     },
-    {
-      observedAt: JournalPosition.make(4),
-      report: safe,
-      source: { _tag: "AcceptedReport", ordinal: acceptedSafeOrdinal }
+    pause: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } },
+    responsibility: {
+      entries: [{ _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: responsibility.position, plannedAttempt }]
     },
-    { _tag: "ReconciledResumeStillSafe", observedAt: projection.position, projectionOrdinal, resumeCommandOrdinal }
+    runId,
+    workflowHistory: { records }
+  }
+  const facts = deriveJournalResponsibilityFacts(runState).find(
+    (candidate) => candidate._tag === "PlannedAttemptExecutorFreshFacts"
   )
+  const eligibility = facts?.safeContinuationRevalidationEligibility
   if (eligibility === undefined) throw new Error("fixture must mint exact reconciled-Safe eligibility")
   return { eligibility, projection, records, witness }
 }

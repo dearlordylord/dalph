@@ -1715,14 +1715,14 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
       taskTrackerFactsObservedEvent(operation.operationId, makeCompleteTaskTrackerFactsObserved(operation, snapshot))
     )
   ]
-  const ordinarySafeRecords = [
+  const ordinarySafeRecords = coverageRecordsWithBeginning([
     ...coveragePlanRecords(),
     ...graphRecord(5, openOperation, openGraph),
     executorReport(7, safe)
-  ]
+  ])
   const [ordinarySafe] = deriveJournalResponsibilityFacts(
     {
-      ...coverageRunState(ordinarySafeRecords, [coverageResponsibility]),
+      ...coverageRunState(ordinarySafeRecords, [coverageResponsibilityAfterBeginning]),
       graphKnowledge: { taskTrackerFacts: [makeCompleteTaskTrackerFactsObserved(openOperation, openGraph)] }
     },
     Option.none(),
@@ -1736,15 +1736,15 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
       : undefined
   ).toBeUndefined()
 
-  const reopenedRecords = [
+  const reopenedRecords = coverageRecordsWithBeginning([
     ...coveragePlanRecords(),
     ...graphRecord(5, closedOperation, closedGraph),
     executorReport(7, safe),
     ...graphRecord(8, openOperation, openGraph)
-  ]
+  ])
   const [reopened] = deriveJournalResponsibilityFacts(
     {
-      ...coverageRunState(reopenedRecords, [coverageResponsibility]),
+      ...coverageRunState(reopenedRecords, [coverageResponsibilityAfterBeginning]),
       graphKnowledge: {
         taskTrackerFacts: [
           makeCompleteTaskTrackerFactsObserved(closedOperation, closedGraph),
@@ -1763,12 +1763,12 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
     acceptedSafe: { correlation: plannedAttemptExecutorCorrelation(coverageAttempt), reportOrdinal: 7 },
     basis: { _tag: "LifecycleReopenAfterAcceptedSafe" },
     plannedAttempt: coverageAttempt,
-    responsibilityBeganAt: coverageResponsibility.beganAt
+    responsibilityBeganAt: coverageResponsibilityAfterBeginning.beganAt
   })
 
   const [activeRefresh] = deriveJournalResponsibilityFacts(
     {
-      ...coverageRunState(reopenedRecords, [coverageResponsibility]),
+      ...coverageRunState(reopenedRecords, [coverageResponsibilityAfterBeginning]),
       graphKnowledge: {
         taskTrackerFacts: [
           makeCompleteTaskTrackerFactsObserved(closedOperation, closedGraph),
@@ -1858,7 +1858,7 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
       })
     )
   const reopenedRunState = (records: ReadonlyArray<JournalRecord>) => ({
-    ...coverageRunState(records, [coverageResponsibility]),
+    ...coverageRunState(records, [coverageResponsibilityAfterBeginning]),
     graphKnowledge: {
       taskTrackerFacts: [
         makeCompleteTaskTrackerFactsObserved(closedOperation, closedGraph),
@@ -1866,7 +1866,7 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
       ]
     }
   })
-  const retryRecords = [...reopenedRecords, command(10, "Resume"), projection(11, safe)]
+  const retryRecords = [...reopenedRecords, command(11, "Resume"), projection(12, safe)]
   const [retry] = deriveJournalResponsibilityFacts(
     reopenedRunState(retryRecords),
     Option.none(),
@@ -1875,10 +1875,10 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
   )
   expect(retry).toMatchObject({
     safeContinuationRevalidationEligibility: {
-      basis: { _tag: "ReconciledResumeStillSafe", observedAt: 11, projectionOrdinal: 1, resumeCommandOrdinal: 3 }
+      basis: { _tag: "ReconciledResumeStillSafe", observedAt: 12, projectionOrdinal: 1, resumeCommandOrdinal: 3 }
     }
   })
-  const acceptedRetryRecords = [...retryRecords, executorReport(12, safe)]
+  const acceptedRetryRecords = [...retryRecords, executorReport(13, safe)]
   const [acceptedRetry] = deriveJournalResponsibilityFacts(
     reopenedRunState(acceptedRetryRecords),
     Option.none(),
@@ -1886,10 +1886,10 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
     coverageTarget
   )
   expect(acceptedRetry).toMatchObject({
-    disposition: { _tag: "Ready", acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: 12 } },
+    disposition: { _tag: "Ready", acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: 13 } },
     safeContinuationRevalidationEligibility: {
-      acceptedSafe: { reportOrdinal: 12 },
-      basis: { _tag: "ReconciledResumeStillSafe", observedAt: 11, projectionOrdinal: 1, resumeCommandOrdinal: 3 }
+      acceptedSafe: { reportOrdinal: 13 },
+      basis: { _tag: "ReconciledResumeStillSafe", observedAt: 12, projectionOrdinal: 1, resumeCommandOrdinal: 3 }
     }
   })
 
@@ -1904,8 +1904,8 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
       ? candidate.safeContinuationRevalidationEligibility
       : undefined
   }
-  expect(noEligibility([...ordinarySafeRecords, command(8, "Resume"), projection(9, safe)])).toBeUndefined()
-  expect(noEligibility([...reopenedRecords, command(10, "Begin"), projection(11, safe)])).toBeUndefined()
+  expect(noEligibility([...ordinarySafeRecords, command(9, "Resume"), projection(10, safe)])).toBeUndefined()
+  expect(noEligibility([...reopenedRecords, command(11, "Begin"), projection(12, safe)])).toBeUndefined()
   const attemptForOtherRun = PlannedTaskAttempt.make({
     ...coverageAttempt,
     attemptId: AttemptId.make("safe-reopen-foreign-attempt"),
@@ -1914,9 +1914,9 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
   expect(
     noEligibility([
       ...reopenedRecords,
-      command(10, "Resume"),
+      command(11, "Resume"),
       projection(
-        11,
+        12,
         PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
           correlation: plannedAttemptExecutorCorrelation(attemptForOtherRun)
         }),
@@ -1927,9 +1927,9 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
   expect(
     noEligibility([
       ...reopenedRecords,
-      command(10, "Resume"),
+      command(11, "Resume"),
       projection(
-        11,
+        12,
         PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
           correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
         })
@@ -1939,18 +1939,18 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
   expect(
     noEligibility([
       ...retryRecords,
-      command(12, "Resume", coverageAttempt, PlannedAttemptExecutorCommandOrdinal.make(4))
+      command(13, "Resume", coverageAttempt, PlannedAttemptExecutorCommandOrdinal.make(4))
     ])
   ).toBeUndefined()
-  const firstProjectionAt = JournalPosition.make(11)
-  const consumedRetryRecords = [...retryRecords, redelivery(12, firstProjectionAt)]
+  const firstProjectionAt = JournalPosition.make(12)
+  const consumedRetryRecords = [...retryRecords, redelivery(13, firstProjectionAt)]
   expect(noEligibility(consumedRetryRecords)).toBeUndefined()
 
   expect(
     noEligibility([
       ...retryRecords,
       redelivery(
-        12,
+        13,
         firstProjectionAt,
         PlannedAttemptExecutorResumeRedeliveryOrdinal.make(1),
         coverageAttempt,
@@ -1958,22 +1958,22 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
         PlannedAttemptExecutorCommandProjectionOrdinal.make(2)
       )
     ])
-  ).toMatchObject({ basis: { observedAt: 11, projectionOrdinal: 1 } })
+  ).toMatchObject({ basis: { observedAt: 12, projectionOrdinal: 1 } })
 
   const secondProjectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(2)
   const freshlyReconciledRecords = [
     ...consumedRetryRecords,
-    projection(13, safe, coverageAttempt, PlannedAttemptExecutorCommandOrdinal.make(3), secondProjectionOrdinal)
+    projection(14, safe, coverageAttempt, PlannedAttemptExecutorCommandOrdinal.make(3), secondProjectionOrdinal)
   ]
   expect(noEligibility(freshlyReconciledRecords)).toMatchObject({
-    basis: { observedAt: 13, projectionOrdinal: 2, resumeCommandOrdinal: 3 }
+    basis: { observedAt: 14, projectionOrdinal: 2, resumeCommandOrdinal: 3 }
   })
   expect(
     noEligibility([
       ...freshlyReconciledRecords,
       redelivery(
-        14,
-        JournalPosition.make(13),
+        15,
+        JournalPosition.make(14),
         PlannedAttemptExecutorResumeRedeliveryOrdinal.make(2),
         coverageAttempt,
         PlannedAttemptExecutorCommandOrdinal.make(3),
