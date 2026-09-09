@@ -11,7 +11,7 @@ import {
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { Effect, Ref } from "effect"
+import { Cause, Effect, Ref } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
@@ -167,6 +167,11 @@ it.effect("rejects protocol work when the admitted action owns no planned-attemp
 
     const rejectedPosition = yield* Effect.exit(lease.bindPlannedAttemptPosition(ownerAttempt))
     expect(rejectedPosition._tag).toBe("Failure")
+    if (rejectedPosition._tag === "Failure") {
+      expect(Cause.squash(rejectedPosition.cause)).toBe(
+        `planned-attempt position does not match proposal ${owner.proposal.id}`
+      )
+    }
 
     const failure = yield* lease.withPlannedAttemptProtocol(correlation, () => Effect.void).pipe(Effect.flip)
     expect(failure).toEqual(

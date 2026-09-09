@@ -61,13 +61,12 @@ import {
   type DeliveryProposalDerivationIssue
 } from "./delivery-action-proposal.js"
 import {
-  DeliveryRuntimeObservationObserver,
   DeliveryRuntimeObservationPublication,
   DeliveryRuntimeObservationState,
-  makeDeliveryRuntimeObservationController,
   type DeliveryRuntimeLiveOwnerSnapshot
 } from "./delivery-runtime-observation.js"
-import { historicalProposalTaskOrder } from "./delivery-status-order.js"
+import { makeDeliveryStatusEntryIdentity } from "./delivery-status-model.js"
+import { canonicalIdentity } from "./delivery-status-order.js"
 import { ticketOwnerSnapshotForTest } from "../../../test/support/delivery-runtime-live-owner.js"
 import {
   currentSignalOf,
@@ -1123,7 +1122,13 @@ it("fails closed for duplicate or mismatched live-owner snapshots", () => {
     Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
     evaluationOf({ proposals: [proposal], liveOwners: [{ ...genuine, admissionAuthority: forgedFreshAuthority }] })
   )
-  expect(untrustedFreshOwner).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(untrustedFreshOwner).toEqual(
+    new DeliveryStatusProjectionConflict({
+      subject: Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
+      entryIdentity: makeDeliveryStatusEntryIdentity(canonicalIdentity(["live-owner", proposal.id])),
+      detail: "a fresh live owner lacks its exact admission authority"
+    })
+  )
 
   const another = taskProposalOf("another-owner-proposal", TaskId.make("A"))
   const rebound = deliveryStatusOf(
@@ -1180,69 +1185,74 @@ it("orders multiple historical owners by their admitted proposal evidence for ev
 })
 
 it("keeps Alice's historical action order when each admitted proposal kind leaves the current task graph", () => {
-  const historicalTaskId = TaskId.make("historical-order-task")
-
-  expect(
-    historicalProposalTaskOrder({
-      _tag: "IntegrationOrder",
-      frontierOrdinal: DeliveryProposalOrdinal.make(1),
-      queuedAt: JournalPosition.make(2),
-      startedAt: JournalPosition.make(3),
-      taskId: historicalTaskId
-    })
-  ).toEqual({ _tag: "TaskOrder", position: 1 })
-  expect(
-    historicalProposalTaskOrder({
-      _tag: "RecoveredWorkflowOrder",
-      acceptedAt: JournalPosition.make(1),
-      frontierOrdinal: DeliveryProposalOrdinal.make(2),
-      responsibilityBeganAt: JournalPosition.make(2),
-      taskId: historicalTaskId,
-      transition: "CheckTaskClaim"
-    })
-  ).toEqual({ _tag: "TaskOrder", position: 2 })
-  expect(historicalProposalTaskOrder({ _tag: "TrackerGraphOrder", acceptedAt: JournalPosition.make(1) })).toEqual({
-    _tag: "RunWideTaskOrder"
+  const proposalWithOrder = (
+    id: string,
+    taskId: TaskId,
+    order: DeliveryActionProposal["order"]
+  ): DeliveryActionProposal => ({ ...taskProposalOf(id, taskId), order })
+  const integrationTaskId = TaskId.make("historical-integration-task")
+  const recoveredTaskId = TaskId.make("historical-recovered-task")
+  const freshTaskId = TaskId.make("historical-fresh-task")
+  const unqueuedTaskId = TaskId.make("historical-unqueued-task")
+  const integration = proposalWithOrder("historical-integration-owner", integrationTaskId, {
+    _tag: "IntegrationOrder",
+    frontierOrdinal: DeliveryProposalOrdinal.make(1),
+    queuedAt: JournalPosition.make(2),
+    startedAt: JournalPosition.make(3),
+    taskId: integrationTaskId
   })
-  expect(
-    historicalProposalTaskOrder({
-      _tag: "UnqueuedAcceptedResultOrder",
-      frontierOrdinal: DeliveryProposalOrdinal.make(3),
-      taskId: historicalTaskId,
-      terminalAt: JournalPosition.make(4)
-    })
-  ).toEqual({ _tag: "TaskOrder", position: 3 })
-})
+  const recovered = proposalWithOrder("historical-recovered-owner", recoveredTaskId, {
+    _tag: "RecoveredWorkflowOrder",
+    acceptedAt: JournalPosition.make(1),
+    frontierOrdinal: DeliveryProposalOrdinal.make(2),
+    responsibilityBeganAt: JournalPosition.make(2),
+    taskId: recoveredTaskId,
+    transition: "CheckTaskClaim"
+  })
+  const fresh = proposalWithOrder("historical-fresh-owner", freshTaskId, {
+    _tag: "FreshWorkflowOrder",
+    frontierOrdinal: DeliveryProposalOrdinal.make(3),
+    step: "ReadCurrentTaskGraph",
+    taskId: freshTaskId
+  })
+  const unqueued = proposalWithOrder("historical-unqueued-owner", unqueuedTaskId, {
+    _tag: "UnqueuedAcceptedResultOrder",
+    frontierOrdinal: DeliveryProposalOrdinal.make(4),
+    taskId: unqueuedTaskId,
+    terminalAt: JournalPosition.make(4)
+  })
+  const integrationOwner = ticketOwnerSnapshotForTest(integration)
+  const recoveredOwner = ticketOwnerSnapshotForTest(recovered)
+  const freshOwner = ticketOwnerSnapshotForTest(fresh)
+  const unqueuedOwner = ticketOwnerSnapshotForTest(unqueued)
+  const owners = [integrationOwner, recoveredOwner, freshOwner, unqueuedOwner]
+  const permutations = [owners, owners.toReversed(), [freshOwner, integrationOwner, unqueuedOwner, recoveredOwner]]
 
-it.effect("publishes Alice's coherent runtime observation and freezes the last value after close", () =>
-  Effect.gen(function* () {
-    const initial = evaluationOf()
-    if (initial._tag !== "Ready") return yield* Effect.die("runtime observation fixture must be ready")
-    const observed = yield* Ref.make<ReadonlyArray<DeliveryRuntimeEvaluation>>([])
-    const observer = DeliveryRuntimeObservationObserver.of({
-      observe: ({ evaluation }) => Ref.update(observed, (evaluations) => [...evaluations, evaluation])
+  for (const liveOwners of permutations) {
+    const inferred = evaluationOf({ liveOwners, proposals: [] })
+    if (inferred._tag !== "Ready") return expect.fail("historical owner fixture must be ready")
+    const withoutCurrentTasks = DeliveryRuntimeObservationState.Ready({
+      evaluation: {
+        ...inferred.evaluation,
+        current: {
+          ...inferred.evaluation.current,
+          ticketDeliveries: { ...inferred.evaluation.current.ticketDeliveries, deliveries: [] },
+          trackerGraph: graphStateOf([])
+        }
+      },
+      liveOwners
     })
-    const controller = yield* makeDeliveryRuntimeObservationController().pipe(
-      Effect.provideService(DeliveryRuntimeObservationObserver, observer)
+    const status = deliveryStatusOf(
+      Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
+      withoutCurrentTasks
     )
-
-    yield* controller.publishCurrent(initial.evaluation, [])
-    expect(yield* controller.signal.get).toMatchObject({ _tag: "Ready", evaluation: initial.evaluation })
-
-    yield* controller.observe(initial.evaluation, [])
-    yield* controller.publish(initial.evaluation, [])
-    expect(yield* Ref.get(observed)).toEqual([initial.evaluation, initial.evaluation])
-
-    yield* controller.close
-    const closed = yield* controller.signal.get
-    const later = { ...initial.evaluation, acceptedAt: JournalPosition.make(6) }
-    yield* controller.publishCurrent(later, [])
-    yield* controller.publish(later, [])
-
-    expect(yield* controller.signal.get).toEqual(closed)
-    expect(yield* Ref.get(observed)).toEqual([initial.evaluation, initial.evaluation])
-  })
-)
+    expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+    if (status._tag !== "DeliveryStatusAvailable") continue
+    expect(
+      status.entries.flatMap((entry) => (entry._tag === "LiveDeliveryAction" ? [entry.owner.proposal.id] : []))
+    ).toEqual([integration.id, recovered.id, fresh.id, unqueued.id])
+  }
+})
 
 it("compares live-owner proposals canonically through causal predecessor arrays", () => {
   const taskId = TaskId.make("canonical-owner-task")

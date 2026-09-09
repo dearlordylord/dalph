@@ -2131,10 +2131,13 @@ it.effect("presents Alice's nonterminal status change before the accepted Run te
     yield* Fiber.join(presentation)
 
     const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
-    expect(records.map(({ _tag }) => _tag)).toContain("RunDisposition")
-    expect(
-      records.some((record) => record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusAvailable")
-    ).toBe(true)
+    const availableStatuses = records.filter(
+      (record) => record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusAvailable"
+    )
+    const dispositions = records.filter((record) => record._tag === "RunDisposition")
+    expect(availableStatuses).toHaveLength(1)
+    expect(dispositions).toHaveLength(1)
+    expect(records.indexOf(availableStatuses[0])).toBeLessThan(records.indexOf(dispositions[0]))
   })
 )
 
