@@ -243,8 +243,11 @@ exclusions must not hide authored logic.
 - `oxlint-complexity-suppressions.json` counts violations per file, not per
   function/value. A new or increased entry records a concrete `justification`
   for keeping the function cohesive after independent decisions have been
-  extracted. Run `pnpm check:complexity:prune` after reductions, then restore
-  the reviewed justifications because the mechanical prune writes counts only.
+  extracted. The frozen-candidate gate compares entries with its candidate SHA;
+  a direct check without `--candidate=<base sha>` treats existing entries as
+  legacy while still rejecting count mismatches and malformed entries. Run
+  `pnpm check:complexity:prune` after reductions; pruning preserves reviewed
+  justifications for every retained entry.
 - Production `floatingEffect` is an error. Test `multipleEffectProvide` and
   `unnecessaryEffectGen` stay off for deliberate Layer/generator composition;
   `lazyEffect` stays off for intentional lazy interfaces. New severity overrides

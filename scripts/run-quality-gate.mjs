@@ -44,7 +44,11 @@ const gates = [
   { args: ["typecheck:effect"], name: "Effect diagnostics", timeout: 3 * 60 * SECOND },
   { args: ["check:format"], name: "format and lint", timeout: 5 * 60 * SECOND },
   { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
-  { args: ["check:complexity"], name: "cyclomatic complexity", timeout: 60 * SECOND },
+  {
+    args: ["check:complexity", ...(candidateArgument === undefined ? [] : [candidateArgument])],
+    name: "cyclomatic complexity",
+    timeout: 60 * SECOND
+  },
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
   { args: ["test:memory"], name: "project memory scenarios", timeout: 60 * SECOND },
   {
