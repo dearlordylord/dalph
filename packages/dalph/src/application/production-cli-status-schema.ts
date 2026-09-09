@@ -217,7 +217,7 @@ const trackerFactRelationshipIsValid = (entry: PublicTrackerFactWait): boolean =
   (entry.standingKind === "GraphNotEstablished") === (entry.obligationReference === null) &&
   trackerFactWakeConditions[entry.standingKind][entry.fact._tag].includes(entry.wakeCondition)
 
-const entryRelationshipIsValid = Match.type<typeof PublicDeliveryStatusEntryShape.Type>().pipe(
+const entryRelationshipCheck = Match.type<typeof PublicDeliveryStatusEntryShape.Type>().pipe(
   Match.tagsExhaustive({
     LiveDeliveryAction: (entry) => {
       const materialized =
@@ -244,9 +244,11 @@ const entryRelationshipIsValid = Match.type<typeof PublicDeliveryStatusEntryShap
     Relinquishment: () => true
   })
 )
+const entryRelationshipIsValid = (entry: typeof PublicDeliveryStatusEntryShape.Type): entry is typeof entry =>
+  entryRelationshipCheck(entry) === true
 
 export const PublicDeliveryStatusEntry = PublicDeliveryStatusEntryShape.pipe(
-  Schema.refine((entry): entry is typeof entry => entryRelationshipIsValid(entry), {
+  Schema.refine(entryRelationshipIsValid, {
     message: "status evidence identities and lifecycle must agree with the entry subject and kind"
   })
 )
