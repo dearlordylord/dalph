@@ -915,13 +915,14 @@ export const runFullRerunPredecessorCleanupFromHistory = Effect.fn(
     )
     const records = yield* (yield* JournalStore).read(runId)
     const boundaryCalls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
-    return {
+    const result: FullRerunPredecessorCleanupFromHistoryRun = {
       boundaryCalls,
       outcomes,
       records,
       upstreamAfter: upstreamRecords(records),
       upstreamBefore
-    } satisfies FullRerunPredecessorCleanupFromHistoryRun
+    }
+    return result
   }).pipe(Effect.provide(layers))
 })
 
