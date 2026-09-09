@@ -15,6 +15,7 @@ import {
   makeApplicationHostLifecyclePorts,
   makeLinuxSupervisorApplicationExitHost,
   makeNodeApplicationHostProcessBoundary,
+  nodeApplicationExitSignalBoundary,
   nodeApplicationHostProcessBoundary
 } from "./supervisor-exit.js"
 
@@ -196,3 +197,11 @@ it.effect("installs, removes, and reports through the real Node host without end
     yield* nodeApplicationHostProcessBoundary.reportLifecycleEvent({ _tag: "AdmissionCutoffClosed" })
   })
 )
+
+it("exposes the public Node signal listener without process termination capability", () => {
+  expect(Object.keys(nodeApplicationExitSignalBoundary).toSorted()).toEqual([
+    "addSignalListener",
+    "removeSignalListener"
+  ])
+  expect("requestProcessEnd" in nodeApplicationExitSignalBoundary).toBe(false)
+})

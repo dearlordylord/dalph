@@ -116,6 +116,18 @@ const nodeApplicationProcess: NodeApplicationProcess = {
   report: (event) => writeSync(nodeProcess.stderr.fd, `${JSON.stringify({ applicationExit: event })}\n`)
 }
 
+/** Real Node signal listener boundary; it intentionally has no process-end or lifecycle-report capability. */
+export const nodeApplicationExitSignalBoundary: ApplicationExitSignalBoundary = {
+  addSignalListener: (signal, listener) =>
+    Effect.sync(() => {
+      nodeApplicationProcess.addSignalListener(signal, listener)
+    }),
+  removeSignalListener: (signal, listener) =>
+    Effect.sync(() => {
+      nodeApplicationProcess.removeSignalListener(signal, listener)
+    })
+}
+
 /** Constructs the real host adapter from the smallest exact Node process capability. */
 export const makeNodeApplicationHostProcessBoundary = (
   applicationProcess: NodeApplicationProcess

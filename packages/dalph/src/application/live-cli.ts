@@ -25,7 +25,7 @@ import {
 import {
   type ApplicationExitSignalBoundary,
   installApplicationExitSignalAdapter,
-  nodeApplicationHostProcessBoundary
+  nodeApplicationExitSignalBoundary
 } from "./supervisor-exit.js"
 import { dryRunOperationIdAllocatorLayer } from "./composition.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
@@ -59,7 +59,7 @@ const runConfiguration = { version: "0.0.0" }
 /** Builds the explicit dry/production command over one injected production host. */
 export const makeProductionCli = <EHost, RHost>(
   runProductionHost: ProductionCliHostRunner<EHost, RHost>,
-  signals: ApplicationExitSignalBoundary = nodeApplicationHostProcessBoundary
+  signals: ApplicationExitSignalBoundary = nodeApplicationExitSignalBoundary
 ) => {
   const run = Command.make(
     "run",

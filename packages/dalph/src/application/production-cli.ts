@@ -3,8 +3,8 @@
 
 import nodePath from "node:path"
 import { RunId } from "@dalph/contracts"
-import type { ApplicationExitResult } from "@dalph/orchestrator"
 import {
+  type ApplicationExitResult,
   CoordinatorLockHeld,
   CoordinatorLockObservationContradiction,
   CoordinatorLockUnavailable,

@@ -93,6 +93,7 @@ import {
   ResponsibilityDisposition,
   WorkflowResponsibilityEntry,
   makeDeliverySettlement,
+  makeProductionHostApplicationExitShell,
   makeDeliveryReflection,
   boundedParallelTicketsOf,
   deliverySettlementsOf,
@@ -125,6 +126,7 @@ import {
   Schema,
   Stream
 } from "effect"
+import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import {
   applicationExitDispositionRecord,
@@ -134,6 +136,7 @@ import {
   encodeProductionCliRecord,
   knownProductionCliFailure,
   loadProductionConfiguration,
+  presentApplicationExitResult,
   presentSelectedProductionRun,
   ProductionConfigurationLocator,
   ProductionCliConfigurationError,
@@ -2121,6 +2124,72 @@ it.effect("SIGINT and SIGTERM enter the same configured production Exit request 
   })
 )
 
+it.effect("repeated public signals join one cutoff and one five-second drain", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const signals = yield* controlledApplicationExitSignals()
+    const lifecycleEvents = yield* Ref.make<ReadonlyArray<string>>([])
+    const cutoffClosed = yield* Deferred.make<void>()
+    const application = runProductionCli(
+      (_input, use) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const shell = yield* makeProductionHostApplicationExitShell({
+              emit: (event) =>
+                Ref.update(lifecycleEvents, (current) => [...current, event._tag]).pipe(
+                  Effect.andThen(
+                    event._tag === "AdmissionCutoffClosed" ? Deferred.succeed(cutoffClosed, undefined) : Effect.void
+                  )
+                )
+            })
+            yield* shell.registerProcessLocalDrain({ closeProcessLocalResources: Effect.never })
+            yield* use(activeProductionCliObservation(), shell.requestBoundary)
+          })
+        ),
+      signals.boundary
+    )
+
+    const running = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.forkChild
+    )
+
+    yield* signals.installed
+    yield* signals.send("SIGINT")
+    yield* Deferred.await(cutoffClosed)
+    yield* TestClock.adjust("4 seconds")
+    yield* signals.send("SIGTERM")
+    yield* Effect.yieldNow
+    expect((yield* Ref.get(lifecycleEvents)).filter((event) => event === "AdmissionCutoffClosed")).toHaveLength(1)
+    expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "ApplicationExitDisposition")).toBe(false)
+
+    yield* TestClock.adjust("1 second")
+    const failure = yield* Fiber.join(running).pipe(Effect.flip)
+    expect(failure).toMatchObject({ _tag: "ProductionCliLifecycleError", code: "lifecycle.exit_timed_out" })
+    expect((yield* Ref.get(lifecycleEvents)).filter((event) => event === "ExitRequested")).toHaveLength(2)
+    expect((yield* Ref.get(lifecycleEvents)).filter((event) => event === "ExitResultReported")).toHaveLength(1)
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-2)).toEqual({
+      _tag: "ApplicationExitDisposition",
+      disposition: { _tag: "TimedOut", requestedStatus: 1 },
+      runId,
+      version: 1
+    })
+  })
+)
+
 it.effect("public conclusive Exit failure renders a stable lifecycle code and exits one", () =>
   Effect.gen(function* () {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
@@ -2177,6 +2246,26 @@ it.effect("public conclusive Exit failure renders a stable lifecycle code and ex
       }
     ])
     expect(JSON.stringify(records)).not.toContain(privateDiagnostic)
+  })
+)
+
+it.effect("public production timeout remains bounded by the first signal and exits one", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const result = ApplicationExitResult.cases.TimedOut.make({
+      diagnostics: [ApplicationExitDiagnostic.make("private timeout diagnostic")],
+      requestedStatus: 1
+    })
+
+    const failure = yield* presentApplicationExitResult(runId, result, (line) =>
+      Ref.update(lines, (current) => [...current, line])
+    ).pipe(Effect.flip)
+
+    expect(failure).toMatchObject({ _tag: "ProductionCliLifecycleError", code: "lifecycle.exit_timed_out" })
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
+      { _tag: "ApplicationExitDisposition", disposition: { _tag: "TimedOut", requestedStatus: 1 }, runId, version: 1 }
+    ])
+    expect(JSON.stringify(yield* Ref.get(lines))).not.toContain("private timeout diagnostic")
   })
 )
 
