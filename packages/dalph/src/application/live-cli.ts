@@ -1,24 +1,32 @@
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import {
+  type ApplicationExitRequestBoundaryService,
   fixtureReaderFileLayer,
   type JournalStoreError,
   type TraceOutputError,
   type TraceReaderError,
   TraceOutput
 } from "@dalph/orchestrator"
-import { Effect, FileSystem, Layer, Option } from "effect"
+import { Deferred, Effect, Fiber, FileSystem, Layer, Option } from "effect"
 import { Argument, Command, Flag } from "effect/unstable/cli"
 import { executeDryRun } from "./cli.js"
 import {
   decodeRunInvocation,
   loadProductionConfiguration,
   knownProductionCliFailure,
+  presentApplicationExitResult,
   presentSelectedProductionRun,
   encodeProductionCliRecord,
   productionCliFailureRecord,
   type ProductionCliHostObservation,
+  type ProductionCliLifecycleError,
   type ProductionCliStatusError
 } from "./production-cli.js"
+import {
+  type ApplicationExitSignalBoundary,
+  installApplicationExitSignalAdapter,
+  nodeApplicationExitSignalBoundary
+} from "./supervisor-exit.js"
 import { dryRunOperationIdAllocatorLayer } from "./composition.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
 import {
@@ -34,14 +42,25 @@ import { workflowTraceOutputLayer } from "../presentation/workflow-trace.js"
 export type ProductionCliHostRunner<E, R> = (
   input: ProductionRepositoryHostConfiguration,
   use: (
-    observation: ProductionCliHostObservation
-  ) => Effect.Effect<void, ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError>
-) => Effect.Effect<void, E | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError, R>
+    observation: ProductionCliHostObservation,
+    applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
+  ) => Effect.Effect<
+    void,
+    ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError
+  >
+) => Effect.Effect<
+  void,
+  E | ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError,
+  R
+>
 
 const runConfiguration = { version: "0.0.0" }
 
 /** Builds the explicit dry/production command over one injected production host. */
-export const makeProductionCli = <EHost, RHost>(runProductionHost: ProductionCliHostRunner<EHost, RHost>) => {
+export const makeProductionCli = <EHost, RHost>(
+  runProductionHost: ProductionCliHostRunner<EHost, RHost>,
+  signals: ApplicationExitSignalBoundary = nodeApplicationExitSignalBoundary
+) => {
   const run = Command.make(
     "run",
     {
@@ -78,7 +97,46 @@ export const makeProductionCli = <EHost, RHost>(runProductionHost: ProductionCli
           const loaded = yield* loadProductionConfiguration(invocation.configuration, invocation.target, (locator) =>
             fileSystem.readFileString(locator)
           )
-          yield* runProductionHost(loaded, (observation) => presentSelectedProductionRun(observation, output.writeLine))
+          yield* runProductionHost(loaded, (observation, applicationExitRequestBoundary) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const selected = yield* Deferred.make<void>()
+                const signalAdapter = yield* installApplicationExitSignalAdapter(
+                  applicationExitRequestBoundary,
+                  signals,
+                  ["SIGINT", "SIGTERM"]
+                )
+                const presentRun = yield* presentSelectedProductionRun(
+                  observation,
+                  output.writeLine,
+                  Deferred.succeed(selected, undefined)
+                ).pipe(Effect.forkScoped)
+                const firstCompletion = yield* Effect.raceFirst(
+                  Fiber.await(presentRun).pipe(
+                    Effect.map((exit) => ({ _tag: "RunPresentationCompleted" as const, exit }))
+                  ),
+                  signalAdapter.awaitRequest.pipe(Effect.as({ _tag: "ExitRequested" as const }))
+                )
+                if (firstCompletion._tag === "RunPresentationCompleted") {
+                  return yield* firstCompletion.exit
+                }
+                if (!(yield* Deferred.isDone(selected))) {
+                  const selection = yield* Effect.raceFirst(
+                    Deferred.await(selected).pipe(Effect.as({ _tag: "Selected" as const })),
+                    Fiber.await(presentRun).pipe(
+                      Effect.map((exit) => ({ _tag: "RunPresentationCompleted" as const, exit }))
+                    )
+                  )
+                  if (selection._tag === "RunPresentationCompleted" && selection.exit._tag === "Failure") {
+                    return yield* Effect.failCause(selection.exit.cause)
+                  }
+                }
+                yield* Fiber.interrupt(presentRun)
+                const result = yield* signalAdapter.awaitResult
+                yield* presentApplicationExitResult(observation.selection.runId, result, output.writeLine)
+              })
+            )
+          )
         }).pipe(
           Effect.tapError((failure) => {
             const known = knownProductionCliFailure(failure)
@@ -96,20 +154,28 @@ export const makeProductionCli = <EHost, RHost>(runProductionHost: ProductionCli
   return Command.make("dalph").pipe(Command.withSubcommands([run]))
 }
 
-export const runProductionCli = <EHost, RHost>(runProductionHost: ProductionCliHostRunner<EHost, RHost>) =>
-  Command.runWith(makeProductionCli(runProductionHost), runConfiguration)
+export const runProductionCli = <EHost, RHost>(
+  runProductionHost: ProductionCliHostRunner<EHost, RHost>,
+  signals?: ApplicationExitSignalBoundary
+) => Command.runWith(makeProductionCli(runProductionHost, signals), runConfiguration)
 
-export const productionCliFromStdio = <EHost, RHost>(runProductionHost: ProductionCliHostRunner<EHost, RHost>) =>
-  Command.run(makeProductionCli(runProductionHost), runConfiguration)
+export const productionCliFromStdio = <EHost, RHost>(
+  runProductionHost: ProductionCliHostRunner<EHost, RHost>,
+  signals?: ApplicationExitSignalBoundary
+) => Command.run(makeProductionCli(runProductionHost, signals), runConfiguration)
 
 const productionHostRunner = (
   input: ProductionRepositoryHostConfiguration,
   use: (
-    observation: ProductionCliHostObservation
-  ) => Effect.Effect<void, ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError>
+    observation: ProductionCliHostObservation,
+    applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
+  ) => Effect.Effect<
+    void,
+    ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError
+  >
 ) =>
   withDecodedProductionRepositoryHost(input, productionRepositoryHostGraph(), (observation) =>
-    use(productionCliHostObservationOf(observation))
+    use(productionCliHostObservationOf(observation), observation.applicationExitRequestBoundary)
   )
 
 /** Removes host lifecycle authority before the shipped presentation callback receives its observation. */
