@@ -34,7 +34,9 @@ do not model opaque JavaScript object identity or passive status projection.
 
 [D29 and D30](../DELIVERY-INVARIANTS.md#process-and-durability) forbid persisted
 derived ownership and trust in pre-crash memory. [D21 and D22](../DELIVERY-INVARIANTS.md#ambiguity-and-evidence)
-retain intent before outside calls and reconciliation before retry. The
+retain intent before ambiguity-crossing effects and reconciliation before
+retrying an ambiguous effect. Passive or read-only tracker and executor
+observations require no mutation intent. The
 [fixed-history/current-status distinction](../CONTEXT.md#language) remains
 unchanged: the witness is never workflow history or a durable fact.
 
@@ -46,9 +48,11 @@ Alice has attached to Run R's passive current-first status signal. GitHub's
 accepted graph contains task A and independent task B. Dalph has admitted exact
 proposal P for A, registered its single process-local owner, and issued an
 opaque admission witness bound to P's complete value. P may be a tracker read,
-a fresh claim action, or an already-authorized executor observation. Any
-outside call already made by P has its ordinary exact acknowledged Journal
-intent; the owner records its actual admitted, materialized, or settled state.
+a fresh claim action, or an already-authorized executor observation. An
+ambiguity-crossing effect already made by P has its ordinary exact acknowledged
+Journal intent. A passive or read-only tracker or executor observation requires
+no mutation intent. The owner records its actual admitted, materialized, or
+settled state.
 No executor-private session or transcript enters this status source.
 
 Git worktrees and executor responsibilities, when present, remain bound to
