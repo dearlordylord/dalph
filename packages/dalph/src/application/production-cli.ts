@@ -4,7 +4,7 @@
 import nodePath from "node:path"
 import { RunId } from "@dalph/contracts"
 import {
-  ApplicationExitResult,
+  type ApplicationExitResult,
   CoordinatorLockHeld,
   CoordinatorLockObservationContradiction,
   CoordinatorLockUnavailable,
@@ -112,6 +112,14 @@ const productionCliStatusFailureCodes = [
 export class ProductionCliStatusError extends Schema.TaggedError<ProductionCliStatusError>()(
   "ProductionCliStatusError",
   { code: Schema.Literals(productionCliStatusFailureCodes), detail: Schema.NonEmptyString, subject: RunId }
+) {}
+
+const productionCliLifecycleFailureCodes = ["lifecycle.exit_failed", "lifecycle.exit_timed_out"] as const
+
+/** A non-graceful application Exit result that must keep the public process status nonzero. */
+export class ProductionCliLifecycleError extends Schema.TaggedError<ProductionCliLifecycleError>()(
+  "ProductionCliLifecycleError",
+  { code: Schema.Literals(productionCliLifecycleFailureCodes), detail: Schema.NonEmptyString, subject: RunId }
 ) {}
 
 /** Normalized absolute locator for Alice's non-secret production JSON document. */
@@ -227,15 +235,22 @@ export const loadProductionConfiguration = <ERead>(
     )
   })
 
+/** Public Exit disposition retains the exact result and status without exposing private drain diagnostics. */
+export const ProductionCliApplicationExitDisposition = Schema.TaggedUnion({
+  Failed: { requestedStatus: Schema.Literal(1) },
+  Succeeded: { requestedStatus: Schema.Literal(0) },
+  TimedOut: { requestedStatus: Schema.Literal(1) }
+})
+export type ProductionCliApplicationExitDisposition = typeof ProductionCliApplicationExitDisposition.Type
+
 /** Version-one public records keep selection, history, and dispositions distinct. */
-const PublicApplicationExitResult: Schema.Codec<ApplicationExitResult, unknown, never, never> = ApplicationExitResult
 const PublicRunTerminationDisposition: Schema.Codec<RunTerminationDisposition, unknown, never, never> =
   RunTerminationDisposition
 const PublicTraceAtCursor: Schema.Codec<TraceAtCursor, unknown, never, never> = TraceAtCursor
 
 export const ProductionCliRecord = Schema.TaggedUnion({
   ApplicationExitDisposition: {
-    disposition: PublicApplicationExitResult,
+    disposition: ProductionCliApplicationExitDisposition,
     runId: RunId,
     version: Schema.Literal(productionCliWireVersion)
   },
@@ -245,6 +260,7 @@ export const ProductionCliRecord = Schema.TaggedUnion({
     code: Schema.Literals([
       "configuration.invalid",
       ...productionCliJournalFailureCodes,
+      ...productionCliLifecycleFailureCodes,
       "startup.ownership_conflict",
       "startup.ownership_contradiction",
       "startup.ownership_lost",
@@ -308,12 +324,12 @@ export const currentDeliveryStatusRecord = (status: CurrentDeliveryStatus): Prod
 export const presentSelectedProductionRun = <EOutput>(
   observation: ProductionCliHostObservation,
   writeLine: (line: string) => Effect.Effect<void, EOutput>,
-  onObservation: Effect.Effect<void> = Effect.void
+  onSelected: Effect.Effect<void> = Effect.void
 ): Effect.Effect<void, EOutput | TraceReaderError | JournalStoreError | ProductionCliStatusError> =>
   Effect.scoped(
     Effect.gen(function* () {
-      yield* onObservation
       yield* writeLine(encodeProductionCliRecord(selectedRecord(observation.selection)))
+      yield* onSelected
 
       const subject = DeliveryStatusSubject.cases.Run.make({ runId: observation.selection.runId })
       const status = yield* deliveryStatusSignalOf(observation.current, subject).pipe(
@@ -357,8 +373,56 @@ export const runDispositionRecord = (runId: RunId, disposition: RunTerminationDi
 export const applicationExitDispositionRecord = (
   runId: RunId,
   disposition: ApplicationExitResult
-): ProductionCliRecord =>
-  ProductionCliRecord.cases.ApplicationExitDisposition.make({ disposition, runId, version: productionCliWireVersion })
+): ProductionCliRecord => {
+  const publicDisposition: ProductionCliApplicationExitDisposition = (() => {
+    switch (disposition._tag) {
+      case "Failed":
+        return ProductionCliApplicationExitDisposition.cases.Failed.make({
+          requestedStatus: disposition.requestedStatus
+        })
+      case "Succeeded":
+        return ProductionCliApplicationExitDisposition.cases.Succeeded.make({
+          requestedStatus: disposition.requestedStatus
+        })
+      case "TimedOut":
+        return ProductionCliApplicationExitDisposition.cases.TimedOut.make({
+          requestedStatus: disposition.requestedStatus
+        })
+    }
+  })()
+  return ProductionCliRecord.cases.ApplicationExitDisposition.make({
+    disposition: publicDisposition,
+    runId,
+    version: productionCliWireVersion
+  })
+}
+
+const lifecycleFailure = (
+  runId: RunId,
+  disposition: Exclude<ApplicationExitResult, { readonly _tag: "Succeeded" }>
+): ProductionCliLifecycleError =>
+  disposition._tag === "Failed"
+    ? new ProductionCliLifecycleError({
+        code: "lifecycle.exit_failed",
+        detail: "graceful application Exit failed before reaching a recoverable boundary",
+        subject: runId
+      })
+    : new ProductionCliLifecycleError({
+        code: "lifecycle.exit_timed_out",
+        detail: "graceful application Exit did not reach a recoverable boundary within five seconds",
+        subject: runId
+      })
+
+/** Writes the exact redacted lifecycle disposition before selecting command success or failure. */
+export const presentApplicationExitResult = Effect.fn("ProductionCli.presentApplicationExitResult")(function* <EOutput>(
+  runId: RunId,
+  disposition: ApplicationExitResult,
+  writeLine: (line: string) => Effect.Effect<void, EOutput>
+) {
+  yield* writeLine(encodeProductionCliRecord(applicationExitDispositionRecord(runId, disposition)))
+  if (disposition._tag === "Succeeded") return
+  return yield* lifecycleFailure(runId, disposition)
+})
 
 /** Safe public form of a known command/configuration failure. */
 export const productionCliFailureRecord = (failure: ProductionCliKnownFailure): ProductionCliRecord =>
@@ -372,6 +436,7 @@ export const productionCliFailureRecord = (failure: ProductionCliKnownFailure): 
 export type ProductionCliKnownFailure =
   | ProductionCliConfigurationError
   | ProductionCliJournalError
+  | ProductionCliLifecycleError
   | ProductionCliStartupError
   | ProductionCliStatusError
   | ProductionCliUsageError
@@ -384,6 +449,7 @@ type ProductionCliBoundaryFailure =
   | DeliveryStatusProjectionError
   | JournalStoreError
   | ProductionCliConfigurationError
+  | ProductionCliLifecycleError
   | ProductionCliStatusError
   | ProductionCliUsageError
   | ProductionRunSelectionConflict
@@ -418,6 +484,7 @@ const ProductionCliBoundaryFailure = exactProductionCliBoundaryFailure(
     JournalStorageLocked,
     JournalStorageUnavailable,
     ProductionCliConfigurationError,
+    ProductionCliLifecycleError,
     ProductionCliStatusError,
     ProductionCliUsageError,
     ProductionRunSelectionConflict,
@@ -468,6 +535,7 @@ const currentStatusProjectionFailure = (failure: DeliveryStatusProjectionError):
 const mapProductionCliBoundaryFailure = (failure: ProductionCliBoundaryFailure): ProductionCliKnownFailure => {
   switch (failure._tag) {
     case "ProductionCliConfigurationError":
+    case "ProductionCliLifecycleError":
     case "ProductionCliStatusError":
     case "ProductionCliUsageError":
       return failure

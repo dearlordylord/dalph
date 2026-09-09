@@ -22,8 +22,8 @@ CLI requires Alice to choose `--dry` or `--production` explicitly. Dry-run
 retains the controlled/read-only interpreter. Production accepts one GitHub
 issue target and a decoded repository-host configuration, then reports the
 exact allocated or recovered Run and immutable historical snapshots. Passive
-current-status attachment, public recovery races, and OS-signal transport are
-delivered by the follow-on CLI slices.
+current-status attachment and bounded SIGINT/SIGTERM Exit are also available;
+public recovery races remain a follow-on CLI slice.
 
 ## Repository map
 
@@ -70,6 +70,16 @@ The JSON document contains the non-secret repository/ref, capacity/cadence,
 Journal/evidence, worktree, and Codex settings accepted by the production-host
 schema. Credential values stay in the two named environment inputs and are
 redacted from public validation records and help.
+
+While the production command is attached, Ctrl-C (`SIGINT`) and supervisor
+`SIGTERM` deliveries enter the same host-owned graceful application Exit. A
+later signal joins the first request and cannot extend its fixed five-second
+drain. The shipped Node runner does not independently interrupt the application
+fiber for those signals. The command reports the redacted application-Exit
+disposition and returns status zero only for `Succeeded`; `TimedOut`, a
+conclusive drain failure, lost output, or abrupt process death remains nonzero.
+Graceful application Exit does not terminate the selected Run: unfinished work
+remains available to the ordinary recovery path on the next invocation.
 
 For a visual preview of the intended experience, run the disposable historical
 execution-trace prototype:

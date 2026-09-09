@@ -17,6 +17,8 @@ import {
 } from "@dalph/contracts"
 import {
   ApplicationExitResult,
+  ApplicationExitDiagnostic,
+  type ApplicationExitRequestBoundaryService,
   AllocatedWorkflowRunId,
   CoordinatorLockHeld,
   CoordinatorLockObservationContradiction,
@@ -76,6 +78,7 @@ import {
   TraceJournalPrefixInvalid,
   TraceProjectionInvalid,
   TraceOutput,
+  TraceOutputError,
   TrackerAdapterReadContext,
   TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
@@ -90,6 +93,7 @@ import {
   ResponsibilityDisposition,
   WorkflowResponsibilityEntry,
   makeDeliverySettlement,
+  makeProductionHostApplicationExitShell,
   makeDeliveryReflection,
   boundedParallelTicketsOf,
   deliverySettlementsOf,
@@ -122,6 +126,7 @@ import {
   Schema,
   Stream
 } from "effect"
+import { TestClock } from "effect/testing"
 import { expect } from "vitest"
 import {
   applicationExitDispositionRecord,
@@ -131,9 +136,11 @@ import {
   encodeProductionCliRecord,
   knownProductionCliFailure,
   loadProductionConfiguration,
+  presentApplicationExitResult,
   presentSelectedProductionRun,
   ProductionConfigurationLocator,
   ProductionCliConfigurationError,
+  ProductionCliLifecycleError,
   ProductionCliRecord,
   ProductionCliUsageError
 } from "./production-cli.js"
@@ -142,6 +149,7 @@ import { ObligationReference } from "./production-cli-status-identity-schema.js"
 import { decodeCliTarget, executeDryRun } from "./cli.js"
 import { productionCliHostObservationOf, runProductionCli } from "./live-cli.js"
 import type { ProductionHostObservation } from "./production-host.js"
+import type { ApplicationExitSignal, ApplicationExitSignalBoundary } from "./supervisor-exit.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
 import { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 
@@ -176,6 +184,8 @@ const completedRunTermination = (terminatedAt = cursor) => {
   const termination = { disposition: RunTerminationDisposition.make("Completed"), terminatedAt }
   return { await: Effect.succeed(termination), poll: Effect.succeed(Option.some(termination)) }
 }
+
+const inactiveApplicationExitRequestBoundary: ApplicationExitRequestBoundaryService = { requestExit: Effect.never }
 
 const currentObservationFailure = (
   failure: DeliveryStatusProjectionError
@@ -719,13 +729,16 @@ it.effect("a TraceReader Journal failure emits one stable redacted Failure after
     const privateDetail = "sqlite /private/alice/journal.sqlite token=secret"
     const failure = new JournalStorageUnavailable({ detail: privateDetail, operation: "JournalStore.read" })
     const application = runProductionCli((_input, use) =>
-      use({
-        acceptedHistory: currentSignalOf(cursor),
-        current: currentSignalOf({ _tag: "NotReady" as const }),
-        runTermination: completedRunTermination(),
-        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-        traceReader: { readAt: () => Effect.fail(failure) }
-      })
+      use(
+        {
+          acceptedHistory: currentSignalOf(cursor),
+          current: currentSignalOf({ _tag: "NotReady" as const }),
+          runTermination: completedRunTermination(),
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: { readAt: () => Effect.fail(failure) }
+        },
+        inactiveApplicationExitRequestBoundary
+      )
     )
 
     yield* application(["run", "github:octo/dalph#42", "--production", "--config", "/tmp/production.json"]).pipe(
@@ -803,7 +816,7 @@ it.effect(
                 selection: ProductionRunSelection.cases.Allocated.make({ runId }),
                 traceReader: { readAt: () => Effect.succeed(snapshot) }
               }
-              return use(observation)
+              return use(observation, observation.applicationExitRequestBoundary)
             })
 
             const observed = yield* application([
@@ -879,7 +892,7 @@ it.effect(
           selection: ProductionRunSelection.cases.Allocated.make({ runId }),
           traceReader: { readAt: () => Effect.fail(failure) }
         }
-        return use(observation)
+        return use(observation, observation.applicationExitRequestBoundary)
       })
 
       const observed = yield* application([
@@ -1994,7 +2007,8 @@ it.effect("reports the selected Run when termination races with current-first st
 const liveCliLayer = (
   lines: Ref.Ref<ReadonlyArray<string>>,
   chronology: Ref.Ref<ReadonlyArray<string>>,
-  configuration = JSON.stringify(validProductionDocument)
+  configuration = JSON.stringify(validProductionDocument),
+  onLine: (line: string) => Effect.Effect<void, TraceOutputError> = () => Effect.void
 ) =>
   Layer.mergeAll(
     Layer.succeed(
@@ -2009,7 +2023,8 @@ const liveCliLayer = (
       TraceOutput.of({
         writeLine: (line) =>
           Ref.update(chronology, (current) => [...current, `output:${JSON.parse(line)._tag}`]).pipe(
-            Effect.andThen(Ref.update(lines, (current) => [...current, line]))
+            Effect.andThen(Ref.update(lines, (current) => [...current, line])),
+            Effect.andThen(onLine(line))
           )
       })
     ),
@@ -2017,6 +2032,487 @@ const liveCliLayer = (
     Layer.mock(WorkflowTrace, {}),
     deterministicOperationIdAllocatorLayer("production-cli-test")
   )
+
+const controlledApplicationExitSignals = Effect.fn("ProductionCli.Test.controlledApplicationExitSignals")(function* () {
+  const listeners = new Map<ApplicationExitSignal, () => void>()
+  const installed = yield* Deferred.make<void>()
+  const boundary: ApplicationExitSignalBoundary = {
+    addSignalListener: (signal, listener) =>
+      Effect.sync(() => {
+        listeners.set(signal, listener)
+      }).pipe(
+        Effect.andThen(
+          Effect.suspend(() => (listeners.size === 2 ? Deferred.succeed(installed, undefined) : Effect.void))
+        )
+      ),
+    removeSignalListener: (signal, listener) =>
+      Effect.sync(() => {
+        if (listeners.get(signal) === listener) listeners.delete(signal)
+      })
+  }
+  return {
+    boundary,
+    installed: Deferred.await(installed),
+    send: (signal: ApplicationExitSignal) =>
+      Effect.sync(() => {
+        listeners.get(signal)?.()
+      })
+  }
+})
+
+const activeProductionCliObservation = () => ({
+  acceptedHistory: currentSignalOf(cursor),
+  current: currentSignalOf({ _tag: "NotReady" as const }),
+  runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
+  selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+  traceReader: { readAt: () => Effect.succeed(snapshot) }
+})
+
+it.effect("SIGINT and SIGTERM enter the same configured production Exit request boundary", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const signals = yield* controlledApplicationExitSignals()
+    const requestCount = yield* Ref.make(0)
+    const mayFinish = yield* Deferred.make<void>()
+    const requestBoundary: ApplicationExitRequestBoundaryService = {
+      requestExit: Ref.update(requestCount, (count) => count + 1).pipe(
+        Effect.andThen(Deferred.await(mayFinish)),
+        Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+      )
+    }
+    const application = runProductionCli(
+      (_input, use) =>
+        use(activeProductionCliObservation(), requestBoundary).pipe(
+          Effect.ensuring(Ref.update(chronology, (current) => [...current, "host-scope-finalized"]))
+        ),
+      signals.boundary
+    )
+
+    const running = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.forkChild
+    )
+
+    yield* signals.installed
+    yield* signals.send("SIGINT")
+    yield* signals.send("SIGTERM")
+    yield* Effect.yieldNow
+    expect(yield* Ref.get(requestCount)).toBe(2)
+    yield* Deferred.succeed(mayFinish, undefined)
+    yield* Fiber.join(running)
+
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toEqual([
+      { _tag: "ApplicationExitDisposition", disposition: { _tag: "Succeeded", requestedStatus: 0 }, runId, version: 1 }
+    ])
+    expect(records.some(({ _tag }) => _tag === "RunDisposition")).toBe(false)
+    const finalChronology = yield* Ref.get(chronology)
+    expect(finalChronology.indexOf("output:ApplicationExitDisposition")).toBeLessThan(
+      finalChronology.indexOf("host-scope-finalized")
+    )
+  })
+)
+
+it.effect("a signal after Run selection interrupts presentation and reports the host Exit result", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const statusWritten = yield* Deferred.make<void>()
+    const signals = yield* controlledApplicationExitSignals()
+    const requestCount = yield* Ref.make(0)
+    const application = runProductionCli(
+      (_input, use) =>
+        use(activeProductionCliObservation(), {
+          requestExit: Ref.update(requestCount, (count) => count + 1).pipe(
+            Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+          )
+        }),
+      signals.boundary
+    )
+
+    const running = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(
+        liveCliLayer(lines, chronology, JSON.stringify(validProductionDocument), (line) =>
+          JSON.parse(line)._tag === "CurrentStatus" ? Deferred.succeed(statusWritten, undefined) : Effect.void
+        )
+      ),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.forkChild
+    )
+
+    yield* signals.installed
+    yield* Deferred.await(statusWritten)
+    yield* signals.send("SIGINT")
+    yield* Fiber.join(running)
+
+    expect(yield* Ref.get(requestCount)).toBe(1)
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-1)).toEqual({
+      _tag: "ApplicationExitDisposition",
+      disposition: { _tag: "Succeeded", requestedStatus: 0 },
+      runId,
+      version: 1
+    })
+  })
+)
+
+it.effect("a presentation failure while a signal is selecting the Run remains the host failure", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const signals = yield* controlledApplicationExitSignals()
+    const runSelectedWriting = yield* Deferred.make<void>()
+    const releaseRunSelected = yield* Deferred.make<void>()
+    const requestObserved = yield* Deferred.make<void>()
+    const outputFailure = new TraceOutputError({ detail: "controlled presentation failure" })
+    const application = runProductionCli(
+      (_input, use) =>
+        use(activeProductionCliObservation(), {
+          requestExit: Ref.update(chronology, (current) => [...current, "exit-requested"]).pipe(
+            Effect.andThen(Deferred.succeed(requestObserved, undefined)),
+            Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+          )
+        }),
+      signals.boundary
+    )
+
+    const running = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(
+        liveCliLayer(lines, chronology, JSON.stringify(validProductionDocument), (line) =>
+          JSON.parse(line)._tag === "RunSelected"
+            ? Deferred.succeed(runSelectedWriting, undefined).pipe(
+                Effect.andThen(Deferred.await(releaseRunSelected)),
+                Effect.andThen(Effect.fail(outputFailure))
+              )
+            : Effect.void
+        )
+      ),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.forkChild
+    )
+
+    yield* signals.installed
+    yield* Deferred.await(runSelectedWriting)
+    yield* signals.send("SIGINT")
+    yield* Deferred.await(requestObserved)
+    yield* Deferred.succeed(releaseRunSelected, undefined)
+
+    expect(yield* Fiber.join(running).pipe(Effect.flip)).toBe(outputFailure)
+    expect((yield* Ref.get(chronology)).filter((entry) => entry === "exit-requested")).toHaveLength(1)
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
+      { _tag: "RunSelected", runId, selection: "Allocated", version: 1 }
+    ])
+  })
+)
+
+it.effect("repeated public signals join one cutoff and one five-second drain", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const signals = yield* controlledApplicationExitSignals()
+    const lifecycleEvents = yield* Ref.make<ReadonlyArray<string>>([])
+    const cutoffClosed = yield* Deferred.make<void>()
+    const application = runProductionCli(
+      (_input, use) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const shell = yield* makeProductionHostApplicationExitShell({
+              emit: (event) =>
+                Ref.update(lifecycleEvents, (current) => [...current, event._tag]).pipe(
+                  Effect.andThen(
+                    event._tag === "AdmissionCutoffClosed" ? Deferred.succeed(cutoffClosed, undefined) : Effect.void
+                  )
+                )
+            })
+            yield* shell.registerProcessLocalDrain({ closeProcessLocalResources: Effect.never })
+            yield* use(activeProductionCliObservation(), shell.requestBoundary)
+          })
+        ),
+      signals.boundary
+    )
+
+    const running = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.forkChild
+    )
+
+    yield* signals.installed
+    yield* signals.send("SIGINT")
+    yield* Deferred.await(cutoffClosed)
+    yield* TestClock.adjust("4 seconds")
+    yield* signals.send("SIGTERM")
+    yield* Effect.yieldNow
+    expect((yield* Ref.get(lifecycleEvents)).filter((event) => event === "AdmissionCutoffClosed")).toHaveLength(1)
+    expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "ApplicationExitDisposition")).toBe(false)
+
+    yield* TestClock.adjust("1 second")
+    const failure = yield* Fiber.join(running).pipe(Effect.flip)
+    expect(failure).toMatchObject({ _tag: "ProductionCliLifecycleError", code: "lifecycle.exit_timed_out" })
+    expect((yield* Ref.get(lifecycleEvents)).filter((event) => event === "ExitRequested")).toHaveLength(2)
+    expect((yield* Ref.get(lifecycleEvents)).filter((event) => event === "ExitResultReported")).toHaveLength(1)
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-2)).toEqual({
+      _tag: "ApplicationExitDisposition",
+      disposition: { _tag: "TimedOut", requestedStatus: 1 },
+      runId,
+      version: 1
+    })
+  })
+)
+
+it.effect("a Run termination during an accepted Exit request cannot replace its timed-out disposition", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const signals = yield* controlledApplicationExitSignals()
+    const cutoffClosed = yield* Deferred.make<void>()
+    const runTerminated = yield* Deferred.make<{
+      readonly disposition: RunTerminationDisposition
+      readonly terminatedAt: TraceCursor
+    }>()
+    const runTerminationState = yield* Ref.make(
+      Option.none<{ readonly disposition: RunTerminationDisposition; readonly terminatedAt: TraceCursor }>()
+    )
+    const observation = {
+      ...activeProductionCliObservation(),
+      runTermination: { await: Deferred.await(runTerminated), poll: Ref.get(runTerminationState) }
+    }
+    const application = runProductionCli(
+      (_input, use) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const shell = yield* makeProductionHostApplicationExitShell({
+              emit: (event) =>
+                event._tag === "AdmissionCutoffClosed" ? Deferred.succeed(cutoffClosed, undefined) : Effect.void
+            })
+            yield* shell.registerProcessLocalDrain({ closeProcessLocalResources: Effect.never })
+            yield* use(observation, shell.requestBoundary)
+          })
+        ),
+      signals.boundary
+    )
+
+    const running = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.forkChild
+    )
+
+    yield* signals.installed
+    yield* signals.send("SIGTERM")
+    yield* Deferred.await(cutoffClosed)
+    const termination = { disposition: RunTerminationDisposition.make("Completed"), terminatedAt: cursor }
+    yield* Ref.set(runTerminationState, Option.some(termination))
+    yield* Deferred.succeed(runTerminated, termination)
+    yield* Effect.yieldNow
+
+    expect(running.pollUnsafe()).toBeUndefined()
+    expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "RunDisposition")).toBe(false)
+
+    yield* TestClock.adjust("5 seconds")
+    expect(yield* Fiber.join(running).pipe(Effect.flip)).toMatchObject({
+      _tag: "ProductionCliLifecycleError",
+      code: "lifecycle.exit_timed_out"
+    })
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)).at(-2)).toEqual({
+      _tag: "ApplicationExitDisposition",
+      disposition: { _tag: "TimedOut", requestedStatus: 1 },
+      runId,
+      version: 1
+    })
+  })
+)
+
+it.effect("public conclusive Exit failure renders a stable lifecycle code and exits one", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const signals = yield* controlledApplicationExitSignals()
+    const privateDiagnostic = "private /tmp/alice token=secret"
+    const application = runProductionCli(
+      (_input, use) =>
+        use(activeProductionCliObservation(), {
+          requestExit: Effect.succeed(
+            ApplicationExitResult.cases.Failed.make({
+              diagnostics: [ApplicationExitDiagnostic.make(privateDiagnostic)],
+              requestedStatus: 1
+            })
+          )
+        }),
+      signals.boundary
+    )
+
+    const running = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.forkChild
+    )
+
+    yield* signals.installed
+    yield* signals.send("SIGINT")
+    const failure = yield* Fiber.join(running).pipe(Effect.flip)
+    expect(failure).toMatchObject({ _tag: "ProductionCliLifecycleError", code: "lifecycle.exit_failed" })
+    expect(failure).toBeInstanceOf(ProductionCliLifecycleError)
+
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(records.filter(({ _tag }) => _tag === "ApplicationExitDisposition")).toEqual([
+      { _tag: "ApplicationExitDisposition", disposition: { _tag: "Failed", requestedStatus: 1 }, runId, version: 1 }
+    ])
+    expect(records.filter(({ _tag }) => _tag === "Failure")).toEqual([
+      {
+        _tag: "Failure",
+        code: "lifecycle.exit_failed",
+        detail: "graceful application Exit failed before reaching a recoverable boundary",
+        subject: runId,
+        version: 1
+      }
+    ])
+    expect(JSON.stringify(records)).not.toContain(privateDiagnostic)
+  })
+)
+
+it.effect("public production timeout remains bounded by the first signal and exits one", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const result = ApplicationExitResult.cases.TimedOut.make({
+      diagnostics: [ApplicationExitDiagnostic.make("private timeout diagnostic")],
+      requestedStatus: 1
+    })
+
+    const failure = yield* presentApplicationExitResult(runId, result, (line) =>
+      Ref.update(lines, (current) => [...current, line])
+    ).pipe(Effect.flip)
+
+    expect(failure).toMatchObject({ _tag: "ProductionCliLifecycleError", code: "lifecycle.exit_timed_out" })
+    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
+      { _tag: "ApplicationExitDisposition", disposition: { _tag: "TimedOut", requestedStatus: 1 }, runId, version: 1 }
+    ])
+    expect(JSON.stringify(yield* Ref.get(lines))).not.toContain("private timeout diagnostic")
+  })
+)
+
+it.effect("lost timeout output can never become a successful process result", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const signals = yield* controlledApplicationExitSignals()
+    const outputFailed = yield* Deferred.make<void>()
+    const outputFailure = new TraceOutputError({ detail: "controlled output loss" })
+    const failingOutputLayer = Layer.succeed(
+      TraceOutput,
+      TraceOutput.of({
+        writeLine: (line) => {
+          const record = JSON.parse(line)
+          return record._tag === "ApplicationExitDisposition"
+            ? Deferred.succeed(outputFailed, undefined).pipe(Effect.andThen(Effect.fail(outputFailure)))
+            : Ref.update(lines, (current) => [...current, line])
+        }
+      })
+    )
+    const application = runProductionCli(
+      (_input, use) =>
+        use(activeProductionCliObservation(), {
+          requestExit: Effect.succeed(
+            ApplicationExitResult.cases.TimedOut.make({
+              diagnostics: [ApplicationExitDiagnostic.make("private timeout diagnostic")],
+              requestedStatus: 1
+            })
+          )
+        }),
+      signals.boundary
+    )
+
+    const running = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(Layer.merge(liveCliLayer(lines, chronology), failingOutputLayer)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.forkChild
+    )
+
+    yield* signals.installed
+    yield* signals.send("SIGTERM")
+    yield* Deferred.await(outputFailed)
+    expect(yield* Fiber.join(running).pipe(Effect.flip)).toBe(outputFailure)
+    expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "RunDisposition")).toBe(false)
+  })
+)
 
 it.effect("invokes one production host only after configuration and reports its acknowledged selection", () =>
   Effect.gen(function* () {
@@ -2027,13 +2523,16 @@ it.effect("invokes one production host only after configuration and reports its 
       Ref.update(chronology, (current) => [...current, "host-acquired", "beginning-acknowledged"]).pipe(
         Effect.andThen(Ref.update(hostInputs, (current) => [...current, input])),
         Effect.andThen(
-          use({
-            acceptedHistory: currentSignalOf(cursor),
-            current: currentSignalOf({ _tag: "NotReady" as const }),
-            runTermination: completedRunTermination(),
-            selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-            traceReader: { readAt: () => Effect.succeed(snapshot) }
-          })
+          use(
+            {
+              acceptedHistory: currentSignalOf(cursor),
+              current: currentSignalOf({ _tag: "NotReady" as const }),
+              runTermination: completedRunTermination(),
+              selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+              traceReader: { readAt: () => Effect.succeed(snapshot) }
+            },
+            inactiveApplicationExitRequestBoundary
+          )
         )
       )
     )
