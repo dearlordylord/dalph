@@ -136,7 +136,10 @@ export const makeProductionCli = <EHost, RHost>(
                         return yield* Effect.failCause(selection.exit.cause)
                       }
                     }
-                    const result = yield* signalAdapter.awaitResult
+                    const presenterFailureDuringExit = Fiber.await(presentRun).pipe(
+                      Effect.flatMap((exit) => (exit._tag === "Failure" ? Effect.failCause(exit.cause) : Effect.never))
+                    )
+                    const result = yield* Effect.raceFirst(signalAdapter.awaitResult, presenterFailureDuringExit)
                     yield* Fiber.interrupt(presentRun)
                     yield* presentApplicationExitResult(observation.selection.runId, result, output.writeLine)
                   })

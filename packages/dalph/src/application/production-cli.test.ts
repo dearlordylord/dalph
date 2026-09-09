@@ -122,6 +122,7 @@ import {
   Effect,
   Fiber,
   FileSystem,
+  Latch,
   Layer,
   Option,
   Queue,
@@ -2629,6 +2630,64 @@ it.effect("a presentation failure while a signal is selecting the Run remains th
     expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
       { _tag: "RunSelected", runId, selection: "Allocated", version: 1 }
     ])
+  })
+)
+
+it.effect("a presentation failure during an accepted Exit drain remains the host failure", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const signals = yield* controlledApplicationExitSignals()
+    const currentStatusWriting = yield* Deferred.make<void>()
+    const exitRequestObserved = yield* Deferred.make<void>()
+    const presentationMayFail = yield* Latch.make()
+    const exitMayFinish = yield* Latch.make()
+    const outputFailure = new TraceOutputError({ detail: "controlled failure during application Exit drain" })
+    const application = runProductionCli(
+      (_input, use) =>
+        use(activeProductionCliObservation(), {
+          requestExit: Deferred.succeed(exitRequestObserved, undefined).pipe(
+            Effect.andThen(exitMayFinish.await),
+            Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+          )
+        }),
+      signals.boundary
+    )
+
+    const running = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(
+        liveCliLayer(lines, chronology, JSON.stringify(validProductionDocument), (line) =>
+          JSON.parse(line)._tag === "CurrentStatus"
+            ? Deferred.succeed(currentStatusWriting, undefined).pipe(
+                Effect.andThen(presentationMayFail.await),
+                Effect.andThen(Effect.fail(outputFailure))
+              )
+            : Effect.void
+        )
+      ),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.forkChild
+    )
+
+    yield* signals.installed
+    yield* Deferred.await(currentStatusWriting)
+    yield* signals.send("SIGTERM")
+    yield* Deferred.await(exitRequestObserved)
+    yield* presentationMayFail.open
+
+    expect(yield* Fiber.join(running).pipe(Effect.flip)).toBe(outputFailure)
+    expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "ApplicationExitDisposition")).toBe(false)
   })
 )
 
