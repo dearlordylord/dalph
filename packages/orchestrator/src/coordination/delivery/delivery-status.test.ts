@@ -2610,7 +2610,10 @@ it("covers scoped filtering, holder ordering, and missing task-order conflicts t
     },
     liveOwners: withoutOwnerDelivery.liveOwners
   })
-  expect(deliveryStatusOf({ _tag: "Run", runId }, ownerOrderConflict)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(deliveryStatusOf({ _tag: "Run", runId }, ownerOrderConflict)).toMatchObject({
+    _tag: "DeliveryStatusAvailable",
+    entries: [{ _tag: "LiveDeliveryAction", owner: { proposal: action } }]
+  })
 
   const otherTask = TaskId.make("other-action-task")
   const otherProposal = taskProposalOf("status-other-action", otherTask)

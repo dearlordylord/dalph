@@ -1,5 +1,5 @@
 import { plannedAttemptExecutorCorrelation, plannedAttemptExecutorCorrelationKey, type TaskId } from "@dalph/contracts"
-import type { DeliveryRuntimeLiveOwnerSnapshot } from "./delivery-runtime-observation.js"
+import { admittedProposalFor, type DeliveryRuntimeLiveOwnerSnapshot } from "./delivery-runtime-observation.js"
 import type { DeliveryActionProposal } from "./delivery-action-proposal.js"
 import type {
   DeliveryRuntimeEvaluation,
@@ -172,7 +172,30 @@ const liveOwnerConflict = (
     detail
   })
 
-/** Live owners are valid only as one exact lifecycle snapshot of one current proposal. */
+const validateLiveOwnerAdmissionForStatus = (
+  subject: DeliveryStatusSubject,
+  currentProposals: ReadonlyArray<DeliveryActionProposal>,
+  owner: DeliveryRuntimeLiveOwnerSnapshot
+): DeliveryStatusProjectionConflict | null => {
+  const proposalId = owner.proposal.id
+  const admitted = admittedProposalFor(owner.admissionAuthority)
+  if (owner.admissionAuthority._tag === "FreshTaskCandidateAdmission") {
+    return admitted === undefined || !proposalEquals(admitted, owner.proposal)
+      ? liveOwnerConflict(subject, proposalId, "a fresh live owner lacks its exact admission authority")
+      : null
+  }
+  const current = currentProposals.find(({ id }) => id === proposalId)
+  if (current !== undefined) {
+    return proposalEquals(owner.proposal, current)
+      ? null
+      : liveOwnerConflict(subject, proposalId, "a live owner proposal differs from the current frontier proposal")
+  }
+  return admitted === undefined || !proposalEquals(admitted, owner.proposal)
+    ? liveOwnerConflict(subject, proposalId, "an absent live owner lacks its exact historical admission authority")
+    : null
+}
+
+/** Live owners are valid only as one exact admitted lifecycle snapshot from this process. */
 export const validateLiveOwnersForStatus = (
   subject: DeliveryStatusSubject,
   evaluation: DeliveryRuntimeEvaluation,
@@ -196,17 +219,8 @@ export const validateLiveOwnersForStatus = (
     )
   }
   for (const owner of liveOwners) {
-    const proposalId = owner.proposal.id
-    if (owner.admissionAuthority._tag === "FreshTaskCandidateAdmission") {
-      continue
-    }
-    const current = evaluation.proposedActions.proposals.find(({ id }) => id === proposalId)
-    if (current === undefined) {
-      return liveOwnerConflict(subject, proposalId, "a live owner proposal is absent from the current frontier")
-    }
-    if (!proposalEquals(owner.proposal, current)) {
-      return liveOwnerConflict(subject, proposalId, "a live owner proposal differs from the current frontier proposal")
-    }
+    const conflict = validateLiveOwnerAdmissionForStatus(subject, evaluation.proposedActions.proposals, owner)
+    if (conflict !== null) return conflict
   }
   return null
 }

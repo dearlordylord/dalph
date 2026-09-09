@@ -662,7 +662,7 @@ it.effect("publishes current-first exact live-owner observations until standalon
       yield* Deferred.await(actionStarted)
       const active = yield* resources.runtimeObservation.get
       if (active._tag !== "Ready") return expect.fail("the admitted action must be observable")
-      expect(active.liveOwners).toEqual([
+      expect(active.liveOwners).toMatchObject([
         {
           _tag: "MaterializedDeliveryAction",
           admissionAuthority: { _tag: "TicketProposalAdmission" },
@@ -5081,11 +5081,18 @@ it.effect("moves a passive-attachment marker across an in-flight route refresh a
       if (coherentInFlight.evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") {
         return yield* Effect.die("the coherent in-flight cut must carry an available proposal frontier")
       }
-      expect(coherentInFlight.evaluation.proposedActions.proposals.some(({ id }) => id === observe.id)).toBe(true)
+      expect(coherentInFlight.evaluation.proposedActions.proposals.some(({ id }) => id === observe.id)).toBe(false)
       expect(coherentInFlight.evaluation.proposedActions.proposals.some(({ id }) => id === refreshedObserve.id)).toBe(
-        false
+        true
       )
       expect(coherentInFlight.liveOwners.some((owner) => owner.proposal.id === observe.id)).toBe(true)
+      expect(
+        validateLiveOwnersForStatus(
+          DeliveryStatusSubject.cases.Run.make({ runId }),
+          coherentInFlight.evaluation,
+          coherentInFlight.liveOwners
+        )
+      ).toBeNull()
       yield* Deferred.succeed(finishSecondObserve, undefined)
       yield* Deferred.await(secondObserveOutcome)
       const inFlightOwnerRemoved = yield* capabilities.resources.runtimeObservation.changes.pipe(

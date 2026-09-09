@@ -14,6 +14,20 @@ import { withPlannedAttemptProtocolPermit } from "../../workflow/protocols/plann
 export type DeliveryRuntimeActionIntent = "IntentNotRecorded" | "IntentRecorded"
 
 const FreshTaskCandidateAdmissionAuthorityTypeId: unique symbol = Symbol("@dalph/FreshTaskCandidateAdmissionAuthority")
+const TicketProposalAdmissionAuthorityTypeId: unique symbol = Symbol("@dalph/TicketProposalAdmissionAuthority")
+const issuedFreshTaskCandidateAdmissions = new WeakMap<object, DeliveryActionProposal>()
+const issuedTicketProposalAdmissions = new WeakMap<object, DeliveryActionProposal>()
+
+/** Opaque proof that this process admitted one exact ticket-derived proposal. */
+export interface TicketProposalAdmissionAuthority {
+  readonly _tag: "TicketProposalAdmission"
+  /** Present only on the runtime-issued witness; decoded and synthetic snapshots remain representable but untrusted. */
+  readonly [TicketProposalAdmissionAuthorityTypeId]?: typeof TicketProposalAdmissionAuthorityTypeId
+}
+
+type IssuedTicketProposalAdmissionAuthority = TicketProposalAdmissionAuthority & {
+  readonly [TicketProposalAdmissionAuthorityTypeId]: typeof TicketProposalAdmissionAuthorityTypeId
+}
 
 /** Exact authority under which runtime admitted a process-local action owner. */
 export type DeliveryRuntimeLiveOwnerAdmissionAuthority =
@@ -22,7 +36,25 @@ export type DeliveryRuntimeLiveOwnerAdmissionAuthority =
       readonly [FreshTaskCandidateAdmissionAuthorityTypeId]: typeof FreshTaskCandidateAdmissionAuthorityTypeId
       readonly candidate: FreshTaskCandidate
     }
-  | { readonly _tag: "TicketProposalAdmission" }
+  | TicketProposalAdmissionAuthority
+
+const ticketProposalAdmissionAuthorityOf = (proposal: DeliveryActionProposal): TicketProposalAdmissionAuthority => {
+  const authority: IssuedTicketProposalAdmissionAuthority = {
+    _tag: "TicketProposalAdmission",
+    [TicketProposalAdmissionAuthorityTypeId]: TicketProposalAdmissionAuthorityTypeId
+  }
+  Object.freeze(authority)
+  issuedTicketProposalAdmissions.set(authority, proposal)
+  return authority
+}
+
+/** Returns the exact proposal bound to an opaque process-local admission witness. */
+export const admittedProposalFor = (
+  authority: DeliveryRuntimeLiveOwnerAdmissionAuthority
+): DeliveryActionProposal | undefined =>
+  authority._tag === "TicketProposalAdmission"
+    ? issuedTicketProposalAdmissions.get(authority)
+    : issuedFreshTaskCandidateAdmissions.get(authority)
 
 type DeliveryRuntimeLiveOwnerLifecycle = Data.TaggedEnum<{
   AdmittedDeliveryAction: Record<never, never>
@@ -100,18 +132,10 @@ const lifecycleIsSettled = Match.type<DeliveryRuntimeLiveOwnerLifecycle>().pipe(
 )
 
 const ownerSnapshot = (
-  reservation: DeliveryAdmissionReservation,
+  admissionAuthority: DeliveryRuntimeLiveOwnerAdmissionAuthority,
+  proposal: DeliveryActionProposal,
   lifecycle: DeliveryRuntimeLiveOwnerLifecycle
 ): DeliveryRuntimeLiveOwnerSnapshot => {
-  const proposal = reservation.proposal
-  const admissionAuthority =
-    reservation.freshTaskCandidate === null
-      ? ({ _tag: "TicketProposalAdmission" } as const)
-      : ({
-          _tag: "FreshTaskCandidateAdmission",
-          [FreshTaskCandidateAdmissionAuthorityTypeId]: FreshTaskCandidateAdmissionAuthorityTypeId,
-          candidate: reservation.freshTaskCandidate
-        } as const)
   return Match.valueTags(lifecycle, {
     AdmittedDeliveryAction: () =>
       DeliveryRuntimeLiveOwnerSnapshot.AdmittedDeliveryAction({ admissionAuthority, proposal }),
@@ -142,6 +166,17 @@ export const makeDeliveryRuntimeLiveOwner = Effect.fn("DeliveryRuntime.makeLiveO
     DeliveryRuntimeLiveOwnerLifecycle.AdmittedDeliveryAction()
   )
   const proposal = reservation.proposal
+  const admissionAuthority: DeliveryRuntimeLiveOwnerAdmissionAuthority =
+    reservation.freshTaskCandidate === null
+      ? ticketProposalAdmissionAuthorityOf(proposal)
+      : Object.freeze<DeliveryRuntimeLiveOwnerAdmissionAuthority>({
+          _tag: "FreshTaskCandidateAdmission",
+          [FreshTaskCandidateAdmissionAuthorityTypeId]: FreshTaskCandidateAdmissionAuthorityTypeId,
+          candidate: reservation.freshTaskCandidate
+        })
+  if (admissionAuthority._tag === "FreshTaskCandidateAdmission") {
+    issuedFreshTaskCandidateAdmissions.set(admissionAuthority, proposal)
+  }
 
   const materialize = (operationId: OperationId) =>
     Ref.update(lifecycle, (current) =>
@@ -181,7 +216,7 @@ export const makeDeliveryRuntimeLiveOwner = Effect.fn("DeliveryRuntime.makeLiveO
     recordIntent,
     reservation,
     settle,
-    snapshot: Ref.get(lifecycle).pipe(Effect.map((current) => ownerSnapshot(reservation, current)))
+    snapshot: Ref.get(lifecycle).pipe(Effect.map((current) => ownerSnapshot(admissionAuthority, proposal, current)))
   } satisfies DeliveryRuntimeLiveOwnerSource
 })
 
