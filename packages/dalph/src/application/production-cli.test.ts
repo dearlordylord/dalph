@@ -28,14 +28,23 @@ import {
   JournalStorageCapacityExhausted,
   JournalStorageLocked,
   JournalStorageUnavailable,
+  OperationId,
   ProductionRunSelection,
   ProductionRunSelectionConflict,
   RunTerminationDisposition,
   StartupRecoveryBlocked,
   TraceAtCursor,
+  TraceCausalPredecessorContradiction,
+  TraceCausalPredecessorMissing,
+  TraceCausalPredecessorNotProjected,
   TraceCursor,
+  TraceCursorNotCommitted,
+  TraceJournalPrefixInvalid,
   TraceProjectionInvalid,
   TraceOutput,
+  TrackerAdapterReadContext,
+  TrackerAdapterReadError,
+  TrackerAdapterReadFailureReason,
   TrackerGraphReader,
   WorkflowTrace,
   traceControlDispositionFacetVersion,
@@ -44,6 +53,7 @@ import {
 import { ConfigProvider, Console, Effect, FileSystem, Layer, Option, Redacted, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import {
+  applicationExitDispositionRecord,
   decodeRunInvocation,
   decodeProductionConfigurationLocator,
   encodeProductionCliRecord,
@@ -55,6 +65,7 @@ import {
   ProductionCliRecord,
   ProductionCliUsageError
 } from "./production-cli.js"
+import { decodeCliTarget, executeDryRun } from "./cli.js"
 import { runProductionCli } from "./live-cli.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
 import { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
@@ -145,6 +156,54 @@ it.effect("keeps dry-run explicit and selects production only from --production"
   })
 )
 
+it.effect("rejects every incomplete or malformed command selection before acquiring a production host", () =>
+  Effect.gen(function* () {
+    const cases: ReadonlyArray<{ readonly args: ReadonlyArray<string>; readonly detail: string }> = [
+      { args: ["run", "github:octo/dalph#42"], detail: "exactly one of --dry or --production is required" },
+      {
+        args: ["run", "github:octo/dalph#42", "--dry", "--production", "--config", "/tmp/dalph-production.json"],
+        detail: "exactly one of --dry or --production is required"
+      },
+      {
+        args: ["run", "packages/orchestrator/fixtures/empty.json", "--dry", "--config", "/tmp/dalph-production.json"],
+        detail: "--config is available only with --production"
+      },
+      {
+        args: ["run", "github:octo/dalph#42", "--production"],
+        detail: "--production requires --config <absolute-json-path>"
+      },
+      {
+        args: ["run", "github:octo/dalph/not-an-issue", "--production", "--config", "/tmp/dalph-production.json"],
+        detail: "the target is invalid for the selected command mode"
+      },
+      { args: ["run", "", "--dry"], detail: "the target is invalid for the selected command mode" }
+    ]
+
+    for (const testCase of cases) {
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+      const hostAcquisitions = yield* Ref.make(0)
+      const application = runProductionCli(() => Ref.update(hostAcquisitions, (count) => count + 1))
+      const failure = yield* application(testCase.args).pipe(
+        Effect.provide(liveCliLayer(lines, chronology)),
+        Effect.provide(NodeServices.layer),
+        Effect.flip
+      )
+      expect(failure).toBeInstanceOf(ProductionCliUsageError)
+      expect(yield* Ref.get(hostAcquisitions)).toBe(0)
+      expect(yield* Ref.get(chronology)).toEqual(["output:Failure"])
+      expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
+        { _tag: "Failure", code: "usage.invalid", detail: testCase.detail, subject: "dalph run", version: 1 }
+      ])
+    }
+
+    // Keep the decoder assertion beside the public command proof so the
+    // malformed fixture-locator boundary remains independently diagnosed.
+    const fixtureFailure = yield* decodeCliTarget("").pipe(Effect.flip)
+    expect(fixtureFailure._tag).toBe("Cli.CliUsageError")
+  })
+)
+
 it.effect("brands only normalized absolute production configuration locators at the command boundary", () =>
   Effect.gen(function* () {
     const locator = yield* decodeProductionConfigurationLocator("/tmp/dalph-production.json")
@@ -219,6 +278,50 @@ it.effect("maps invalid production input to a stable redacted configuration code
     expect(yield* Ref.get(lines)).toHaveLength(1)
     expect((yield* Ref.get(lines))[0]).not.toContain(credential)
     expect(JSON.parse((yield* Ref.get(lines))[0] ?? "{}").code).toBe("configuration.invalid")
+  })
+)
+
+it.effect("redacts every configuration read, document, and credential failure", () =>
+  Effect.gen(function* () {
+    const cases = [
+      {
+        expectedSubject: "production configuration file",
+        provider: ConfigProvider.fromUnknown({
+          DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret",
+          GITHUB_TOKEN: "github-secret"
+        }),
+        readFile: () => Effect.fail("private read failure")
+      },
+      {
+        expectedSubject: "production configuration file",
+        provider: ConfigProvider.fromUnknown({
+          DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret",
+          GITHUB_TOKEN: "github-secret"
+        }),
+        readFile: () => Effect.succeed("[]")
+      },
+      {
+        expectedSubject: "GITHUB_TOKEN",
+        provider: ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret" }),
+        readFile: () => Effect.succeed(JSON.stringify(validProductionDocument))
+      },
+      {
+        expectedSubject: "DALPH_CODEX_PROVIDER_CREDENTIAL",
+        provider: ConfigProvider.fromUnknown({ GITHUB_TOKEN: "github-secret" }),
+        readFile: () => Effect.succeed(JSON.stringify(validProductionDocument))
+      }
+    ] as const
+
+    for (const testCase of cases) {
+      const failure = yield* loadProductionConfiguration(configurationLocator, target, testCase.readFile).pipe(
+        Effect.provide(ConfigProvider.layer(testCase.provider)),
+        Effect.flip
+      )
+      expect(failure).toBeInstanceOf(ProductionCliConfigurationError)
+      expect(failure.subject).toBe(testCase.expectedSubject)
+      expect(JSON.stringify(failure)).not.toContain("secret")
+      expect(JSON.stringify(failure)).not.toContain("private read failure")
+    }
   })
 )
 
@@ -339,11 +442,92 @@ it("maps every Journal storage failure through one exhaustive redacted public al
   expect(JSON.stringify(records)).not.toContain("/private/alice/journal.sqlite")
 })
 
+it("maps every causal trace failure to the selected Run without retaining causal identities", () => {
+  const predecessorOperationId = OperationId.make("private-predecessor-operation")
+  const successorOperationId = OperationId.make("private-successor-operation")
+  const failures = [
+    new TraceCausalPredecessorContradiction({
+      predecessorOperationId,
+      reason: "NotEarlier",
+      runId,
+      successorOperationId
+    }),
+    new TraceCausalPredecessorMissing({ predecessorOperationId, runId, successorOperationId }),
+    new TraceCausalPredecessorNotProjected({ predecessorOperationId, runId, successorOperationId }),
+    new TraceJournalPrefixInvalid({ issues: [], runId }),
+    new TraceCursorNotCommitted({ cursor })
+  ]
+
+  const records = failures.map(knownProductionCliFailure)
+  expect(records.map((failure) => failure?.code)).toEqual(
+    Array.from({ length: failures.length }, () => "status.projection_invalid")
+  )
+  expect(records.map((failure) => failure !== undefined && "subject" in failure && failure.subject)).toEqual(
+    Array.from({ length: failures.length }, () => runId)
+  )
+  expect(JSON.stringify(records)).not.toContain(predecessorOperationId)
+  expect(JSON.stringify(records)).not.toContain(successorOperationId)
+})
+
 it("leaves an unknown defect outside the public Failure algebra", () => {
   const defect = new Error("private Cause.pretty detail /private/alice/journal.sqlite token=secret")
 
   expect(knownProductionCliFailure(defect)).toBeUndefined()
 })
+
+it.effect("does not misreport an unknown production-host failure as a public known failure", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const defect = new Error("private host failure")
+    const application = runProductionCli(() => Effect.fail(defect))
+
+    const observed = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(liveCliLayer(lines, chronology)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.flip
+    )
+
+    expect(observed).toBe(defect)
+    expect(yield* Ref.get(lines)).toEqual([])
+  })
+)
+
+it.effect("preserves a non-credential tracker read failure from an explicit GitHub dry run", () =>
+  Effect.gen(function* () {
+    const failure = new TrackerAdapterReadError({
+      context: TrackerAdapterReadContext.cases.Github.make({ operation: "GithubTrackerGraphReader.readIssue" }),
+      detail: "the tracker response was unavailable",
+      reason: TrackerAdapterReadFailureReason.cases.Transport.make({})
+    })
+    const reader = Layer.succeed(
+      TrackerGraphReader,
+      TrackerGraphReader.of({
+        read: () => Effect.fail(failure),
+        readTaskWorkSpecification: () => Effect.die("the dry-run graph read must fail first")
+      })
+    )
+    const observed = yield* executeDryRun(target).pipe(
+      Effect.provide(reader),
+      Effect.provide(deterministicOperationIdAllocatorLayer("production-cli-generic-read-failure")),
+      Effect.provide(Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))),
+      Effect.flip
+    )
+
+    expect(observed).toBe(failure)
+  })
+)
 
 it.effect("startup Journal and ownership failures each emit one stable redacted Failure record", () =>
   Effect.gen(function* () {
@@ -622,7 +806,8 @@ it("each HistoricalSnapshot contains exactly one whole canonical TraceAtCursor a
       disposition: ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }),
       runId,
       version: 1
-    })
+    }),
+    applicationExitDispositionRecord(runId, ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
   ]
   const encoded = records.map(encodeProductionCliRecord).map((line) => JSON.parse(line))
 
@@ -633,7 +818,11 @@ it("each HistoricalSnapshot contains exactly one whole canonical TraceAtCursor a
   })
   expect(encoded[0]).not.toHaveProperty("current")
   expect(encoded[0]).not.toHaveProperty("disposition")
-  expect(encoded.slice(1).map(({ _tag }) => _tag)).toEqual(["RunDisposition", "ApplicationExitDisposition"])
+  expect(encoded.slice(1).map(({ _tag }) => _tag)).toEqual([
+    "RunDisposition",
+    "ApplicationExitDisposition",
+    "ApplicationExitDisposition"
+  ])
 })
 
 const liveCliLayer = (
