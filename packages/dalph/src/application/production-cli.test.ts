@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { NodeServices } from "@effect/platform-node"
-import { RunId } from "@dalph/contracts"
+import { RunId, TaskId } from "@dalph/contracts"
 import {
   ApplicationExitResult,
   AllocatedWorkflowRunId,
@@ -10,6 +10,10 @@ import {
   CoordinatorOwnershipLost,
   currentSignalFromCurrentFirstStream,
   currentSignalOf,
+  type CurrentDeliveryStatus,
+  DeliveryStatusProjectionConflict,
+  DeliveryStatusRunIdentityUnavailable,
+  DeliveryStatusRunMismatch,
   deterministicOperationIdAllocatorLayer,
   fixtureReaderFileLayer,
   GithubIssueNumber,
@@ -46,14 +50,29 @@ import {
   TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
   TrackerGraphReader,
+  TrackerRevision,
   WorkflowTrace,
   traceControlDispositionFacetVersion,
   traceReaderSchemaVersion
 } from "@dalph/orchestrator"
-import { ConfigProvider, Console, Effect, FileSystem, Layer, Option, Redacted, Ref, Schema, Stream } from "effect"
+import {
+  ConfigProvider,
+  Console,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Redacted,
+  Ref,
+  Schema,
+  Stream
+} from "effect"
 import { expect } from "vitest"
 import {
   applicationExitDispositionRecord,
+  currentDeliveryStatusRecord,
   decodeRunInvocation,
   decodeProductionConfigurationLocator,
   encodeProductionCliRecord,
@@ -66,7 +85,8 @@ import {
   ProductionCliUsageError
 } from "./production-cli.js"
 import { decodeCliTarget, executeDryRun } from "./cli.js"
-import { runProductionCli } from "./live-cli.js"
+import { productionCliHostObservationOf, runProductionCli } from "./live-cli.js"
+import type { ProductionHostObservation } from "./production-host.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
 import { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 
@@ -469,6 +489,39 @@ it("maps every causal trace failure to the selected Run without retaining causal
   expect(JSON.stringify(records)).not.toContain(successorOperationId)
 })
 
+it("maps each passive status projection failure to a stable redacted status code", () => {
+  const requestedRunId = RunId.make("requested-status-run")
+  const privateDetail = "private status evidence /tmp/alice token=secret"
+  const subject = { _tag: "Task" as const, runId: requestedRunId, taskId: TaskId.make("status-task") }
+  const failures = [
+    new DeliveryStatusRunMismatch({ expectedRunId: runId, requestedRunId }),
+    new DeliveryStatusRunIdentityUnavailable({ subject }),
+    Schema.decodeUnknownSync(DeliveryStatusProjectionConflict)({
+      _tag: "DeliveryStatusProjectionConflict",
+      detail: privateDetail,
+      entryIdentity: "private-entry",
+      subject
+    })
+  ]
+
+  const mapped = failures.map(knownProductionCliFailure)
+  expect(mapped.map((failure) => failure?.code)).toEqual([
+    "status.run_mismatch",
+    "status.run_identity_unavailable",
+    "status.projection_conflict"
+  ])
+  expect(mapped.map((failure) => failure !== undefined && "subject" in failure && failure.subject)).toEqual([
+    requestedRunId,
+    requestedRunId,
+    requestedRunId
+  ])
+  expect(JSON.stringify(mapped)).not.toContain(privateDetail)
+  expect(JSON.stringify(mapped)).not.toContain("private-entry")
+  expect(mapped.map((failure) => knownProductionCliFailure(failure)?.code)).toEqual(
+    mapped.map((failure) => failure?.code)
+  )
+})
+
 it("leaves an unknown defect outside the public Failure algebra", () => {
   const defect = new Error("private Cause.pretty detail /private/alice/journal.sqlite token=secret")
 
@@ -594,6 +647,7 @@ it.effect("a TraceReader Journal failure emits one stable redacted Failure after
     const application = runProductionCli((_input, use) =>
       use({
         acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf({ _tag: "NotReady" as const }),
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
         traceReader: { readAt: () => Effect.fail(failure) }
@@ -626,49 +680,68 @@ it.effect("a TraceReader Journal failure emits one stable redacted Failure after
   })
 )
 
-it.effect("maps a TraceAtCursor projection failure to one stable redacted public code", () =>
-  Effect.gen(function* () {
-    const lines = yield* Ref.make<ReadonlyArray<string>>([])
-    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
-    const failure = new TraceProjectionInvalid({ detail: "private projection detail", runId })
-    const application = runProductionCli((_input, use) =>
-      use({
-        acceptedHistory: currentSignalOf(cursor),
-        runTermination: completedRunTermination(),
-        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-        traceReader: { readAt: () => Effect.fail(failure) }
+it.effect(
+  "typed status or TraceAtCursor projection failure fails fast without calling ApplicationExitRequestBoundary.requestExit",
+  () =>
+    Effect.gen(function* () {
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+      const exitRequests = yield* Ref.make(0)
+      const failure = new TraceProjectionInvalid({ detail: "private projection detail", runId })
+      const application = runProductionCli((_input, use) => {
+        const observation: ProductionHostObservation = {
+          acceptedHistory: currentSignalOf(cursor),
+          applicationExitRequestBoundary: {
+            requestExit: Ref.update(exitRequests, (count) => count + 1).pipe(
+              Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+            )
+          },
+          current: currentSignalOf({ _tag: "NotReady" as const }),
+          runTermination: completedRunTermination(),
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: { readAt: () => Effect.fail(failure) }
+        }
+        return use(observation)
       })
-    )
 
-    const observed = yield* application([
-      "run",
-      "github:octo/dalph#42",
-      "--production",
-      "--config",
-      "/tmp/production.json"
-    ]).pipe(
-      Effect.provide(liveCliLayer(lines, chronology)),
-      Effect.provide(NodeServices.layer),
-      Effect.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
-        )
-      ),
-      Effect.flip
-    )
+      const observed = yield* application([
+        "run",
+        "github:octo/dalph#42",
+        "--production",
+        "--config",
+        "/tmp/production.json"
+      ]).pipe(
+        Effect.provide(liveCliLayer(lines, chronology)),
+        Effect.provide(NodeServices.layer),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromUnknown({
+              DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret",
+              GITHUB_TOKEN: "github-secret"
+            })
+          )
+        ),
+        Effect.flip
+      )
 
-    expect(observed).toBe(failure)
-    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
-      { _tag: "RunSelected", runId, selection: "Allocated", version: 1 },
-      {
-        _tag: "Failure",
-        code: "status.projection_invalid",
-        detail: "the selected Run's historical projection is invalid",
-        subject: runId,
-        version: 1
-      }
-    ])
-  })
+      expect(observed).toBe(failure)
+      expect(yield* Ref.get(exitRequests)).toBe(0)
+      expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
+        { _tag: "RunSelected", runId, selection: "Allocated", version: 1 },
+        {
+          _tag: "CurrentStatus",
+          status: { _tag: "DeliveryStatusNotReady", subject: { _tag: "Run", runId } },
+          version: 1
+        },
+        {
+          _tag: "Failure",
+          code: "status.projection_invalid",
+          detail: "the selected Run's historical projection is invalid",
+          subject: runId,
+          version: 1
+        }
+      ])
+    })
 )
 
 it.effect("combines only documented credential inputs with the non-secret production document", () =>
@@ -736,6 +809,7 @@ it.effect("cold public production command reports one allocated Run after its be
     yield* presentSelectedProductionRun(
       {
         acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf({ _tag: "NotReady" as const }),
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
         traceReader: { readAt: () => Effect.succeed(snapshot) }
@@ -746,7 +820,12 @@ it.effect("cold public production command reports one allocated Run after its be
 
     expect(yield* Ref.get(hostEntries)).toBe(1)
     const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
-    expect(records.map(({ _tag }) => _tag)).toEqual(["RunSelected", "HistoricalSnapshot", "RunDisposition"])
+    expect(records.map(({ _tag }) => _tag)).toEqual([
+      "RunSelected",
+      "CurrentStatus",
+      "HistoricalSnapshot",
+      "RunDisposition"
+    ])
     expect(records[0]).toEqual({ _tag: "RunSelected", runId, selection: "Allocated", version: 1 })
   })
 )
@@ -757,6 +836,7 @@ it.effect("normal Run termination closes an open history attachment after its fi
     yield* presentSelectedProductionRun(
       {
         acceptedHistory: currentSignalFromCurrentFirstStream(Stream.concat(Stream.make(cursor), Stream.never)),
+        current: currentSignalOf({ _tag: "NotReady" as const }),
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
         traceReader: { readAt: () => Effect.succeed(snapshot) }
@@ -766,6 +846,7 @@ it.effect("normal Run termination closes an open history attachment after its fi
 
     expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)._tag)).toEqual([
       "RunSelected",
+      "CurrentStatus",
       "HistoricalSnapshot",
       "RunDisposition"
     ])
@@ -778,6 +859,7 @@ it.effect("production presentation reports the host's exact recovered Run withou
     yield* presentSelectedProductionRun(
       {
         acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf({ _tag: "NotReady" as const }),
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Recovered.make({ runId }),
         traceReader: { readAt: () => Effect.succeed(snapshot) }
@@ -791,6 +873,111 @@ it.effect("production presentation reports the host's exact recovered Run withou
       selection: "Recovered",
       version: 1
     })
+  })
+)
+
+it.effect("attaches current-first without missing a delivery publication racing with CLI attachment", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const current = currentSignalFromCurrentFirstStream(
+      Stream.make({ _tag: "NotReady" as const }, { _tag: "Closed" as const, final: null })
+    )
+
+    yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current,
+        runTermination: completedRunTermination(),
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) => Ref.update(lines, (current) => [...current, line])
+    )
+
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(records.map(({ _tag }) => _tag)).toEqual([
+      "RunSelected",
+      "CurrentStatus",
+      "CurrentStatus",
+      "HistoricalSnapshot",
+      "RunDisposition"
+    ])
+    expect(records[1]?.status._tag).toBe("DeliveryStatusNotReady")
+    expect(records[2]?.status).toEqual({ _tag: "DeliveryStatusClosed", final: null, subject: { _tag: "Run", runId } })
+  })
+)
+
+it.effect("renders not-ready and waits without invoking a workflow boundary", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const statusWritten = yield* Deferred.make<void>()
+    const termination = yield* Deferred.make<{
+      readonly disposition: RunTerminationDisposition
+      readonly terminatedAt: TraceCursor
+    }>()
+    const runTermination = { await: Deferred.await(termination), poll: Effect.succeed(Option.none()) }
+    const presentation = yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf({ _tag: "NotReady" as const }),
+        runTermination,
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) =>
+        Ref.update(lines, (current) => [...current, line]).pipe(
+          Effect.andThen(
+            JSON.parse(line)._tag === "CurrentStatus" ? Deferred.succeed(statusWritten, undefined) : Effect.void
+          )
+        )
+    ).pipe(Effect.forkChild)
+
+    yield* Deferred.await(statusWritten)
+    const beforeTermination = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(beforeTermination.some(({ _tag }) => _tag === "RunDisposition")).toBe(false)
+    expect(beforeTermination.find(({ _tag }) => _tag === "CurrentStatus")?.status).toEqual({
+      _tag: "DeliveryStatusNotReady",
+      subject: { _tag: "Run", runId }
+    })
+
+    yield* Deferred.succeed(termination, {
+      disposition: RunTerminationDisposition.make("Completed"),
+      terminatedAt: cursor
+    })
+    yield* Fiber.join(presentation)
+  })
+)
+
+it.effect("closed status without a final value cannot report Run completion", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const closedWritten = yield* Deferred.make<void>()
+    const runTermination = { await: Effect.never, poll: Effect.succeed(Option.none()) }
+    const presentation = yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf({ _tag: "Closed" as const, final: null }),
+        runTermination,
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) =>
+        Ref.update(lines, (current) => [...current, line]).pipe(
+          Effect.andThen(
+            JSON.parse(line)._tag === "CurrentStatus" ? Deferred.succeed(closedWritten, undefined) : Effect.void
+          )
+        )
+    ).pipe(Effect.forkChild)
+
+    yield* Deferred.await(closedWritten)
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(records.find(({ _tag }) => _tag === "CurrentStatus")?.status).toEqual({
+      _tag: "DeliveryStatusClosed",
+      final: null,
+      subject: { _tag: "Run", runId }
+    })
+    expect(records.some(({ _tag }) => _tag === "RunDisposition")).toBe(false)
+    yield* Fiber.interrupt(presentation)
   })
 )
 
@@ -824,6 +1011,110 @@ it("each HistoricalSnapshot contains exactly one whole canonical TraceAtCursor a
     "ApplicationExitDisposition"
   ])
 })
+
+it("encodes the exact passive not-ready value as a separate current-status record", () => {
+  const status: CurrentDeliveryStatus = { _tag: "DeliveryStatusNotReady", subject: { _tag: "Run", runId } }
+
+  expect(JSON.parse(encodeProductionCliRecord(currentDeliveryStatusRecord(status)))).toEqual({
+    _tag: "CurrentStatus",
+    status,
+    version: 1
+  })
+})
+
+it("preserves current status subjects evidence classifications and structural order", () => {
+  const taskA = { _tag: "Task" as const, runId, taskId: TaskId.make("A") }
+  const taskB = { _tag: "Task" as const, runId, taskId: TaskId.make("B") }
+  const trackerWait = (subject: typeof taskA | typeof taskB) => ({
+    _tag: "TrackerFactWait" as const,
+    classification: "Waiting" as const,
+    fact: { _tag: "Unobserved" as const, boundary: "TaskTracker" as const },
+    responsibility: null,
+    standing: { _tag: "GraphNotEstablished" as const },
+    subject,
+    wakeCondition: "TaskTrackerFactsObserved" as const
+  })
+  const available: CurrentDeliveryStatus = {
+    _tag: "DeliveryStatusAvailable",
+    acceptedAt: JournalPosition.make(9),
+    entries: [trackerWait(taskB), trackerWait(taskA)],
+    subject: { _tag: "Run", runId }
+  }
+  const absent: CurrentDeliveryStatus = {
+    _tag: "TaskAbsentFromCurrentGraph",
+    graphSource: {
+      _tag: "EstablishedGraph",
+      contentIdentity: TrackerRevision.make("graph-revision"),
+      freshnessOperationId: OperationId.make("freshness-operation"),
+      operationId: OperationId.make("graph-operation"),
+      recordedAt: JournalPosition.make(8),
+      revision: TrackerRevision.make("graph-revision")
+    },
+    subject: taskA
+  }
+  const closed: CurrentDeliveryStatus = {
+    _tag: "DeliveryStatusClosed",
+    final: available,
+    subject: { _tag: "Run", runId }
+  }
+
+  for (const status of [available, absent, closed] as const) {
+    const encoded = JSON.parse(encodeProductionCliRecord(currentDeliveryStatusRecord(status)))
+    expect(encoded).toEqual({ _tag: "CurrentStatus", status, version: 1 })
+  }
+  expect(JSON.parse(encodeProductionCliRecord(currentDeliveryStatusRecord(available))).status.entries).toEqual([
+    trackerWait(taskB),
+    trackerWait(taskA)
+  ])
+})
+
+it("production status rendering has no tracker Git executor Integrator Journal mutation admission retry cleanup control or Exit capability", () => {
+  const observation: ProductionHostObservation = {
+    acceptedHistory: currentSignalOf(cursor),
+    applicationExitRequestBoundary: {
+      requestExit: Effect.succeed(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+    },
+    current: currentSignalOf({ _tag: "NotReady" }),
+    runTermination: completedRunTermination(),
+    selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+    traceReader: { readAt: () => Effect.succeed(snapshot) }
+  }
+
+  const presented = productionCliHostObservationOf(observation)
+  expect(Object.keys(presented).toSorted()).toEqual([
+    "acceptedHistory",
+    "current",
+    "runTermination",
+    "selection",
+    "traceReader"
+  ])
+  expect("applicationExitRequestBoundary" in presented).toBe(false)
+})
+
+it.effect("reports the selected Run when termination races with current-first status attachment", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf({ _tag: "Closed" as const, final: null }),
+        runTermination: completedRunTermination(),
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) => Ref.update(lines, (current) => [...current, line])
+    )
+
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(records[0]).toEqual({ _tag: "RunSelected", runId, selection: "Allocated", version: 1 })
+    expect(records.find(({ _tag }) => _tag === "CurrentStatus")?.status).toEqual({
+      _tag: "DeliveryStatusClosed",
+      final: null,
+      subject: { _tag: "Run", runId }
+    })
+    expect(records.at(-1)).toEqual({ _tag: "RunDisposition", disposition: "Completed", runId, version: 1 })
+  })
+)
 
 const liveCliLayer = (
   lines: Ref.Ref<ReadonlyArray<string>>,
@@ -863,6 +1154,7 @@ it.effect("invokes one production host only after configuration and reports its 
         Effect.andThen(
           use({
             acceptedHistory: currentSignalOf(cursor),
+            current: currentSignalOf({ _tag: "NotReady" as const }),
             runTermination: completedRunTermination(),
             selection: ProductionRunSelection.cases.Allocated.make({ runId }),
             traceReader: { readAt: () => Effect.succeed(snapshot) }
@@ -886,6 +1178,7 @@ it.effect("invokes one production host only after configuration and reports its 
       "host-acquired",
       "beginning-acknowledged",
       "output:RunSelected",
+      "output:CurrentStatus",
       "output:HistoricalSnapshot",
       "output:RunDisposition"
     ])
@@ -893,6 +1186,7 @@ it.effect("invokes one production host only after configuration and reports its 
     expect(Schema.is(ProductionRepositoryHostConfiguration)((yield* Ref.get(hostInputs))[0])).toBe(true)
     expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)._tag)).toEqual([
       "RunSelected",
+      "CurrentStatus",
       "HistoricalSnapshot",
       "RunDisposition"
     ])

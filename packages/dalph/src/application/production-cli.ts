@@ -1,4 +1,5 @@
 /* eslint-disable import/no-nodejs-modules -- The public CLI owns absolute configuration-path decoding. */
+/* eslint-disable max-lines -- The public CLI keeps one exhaustive versioned wire and failure mapper auditable. */
 
 import nodePath from "node:path"
 import { RunId } from "@dalph/contracts"
@@ -9,6 +10,14 @@ import {
   CoordinatorLockUnavailable,
   CoordinatorOwnershipLost,
   type CurrentSignal,
+  type CurrentDeliveryStatus,
+  type DeliveryRuntimeObservationState,
+  DeliveryStatusProjectionConflict,
+  type DeliveryStatusProjectionError,
+  DeliveryStatusRunIdentityUnavailable,
+  DeliveryStatusRunMismatch,
+  DeliveryStatusSubject,
+  deliveryStatusSignalOf,
   type GithubIssueTarget,
   type JournaledRunTerminationSource,
   JournalDataCorruption,
@@ -92,9 +101,16 @@ export class ProductionCliJournalError extends Schema.TaggedError<ProductionCliJ
   }
 ) {}
 
+const productionCliStatusFailureCodes = [
+  "status.projection_conflict",
+  "status.projection_invalid",
+  "status.run_identity_unavailable",
+  "status.run_mismatch"
+] as const
+
 export class ProductionCliStatusError extends Schema.TaggedError<ProductionCliStatusError>()(
   "ProductionCliStatusError",
-  { code: Schema.Literal("status.projection_invalid"), detail: Schema.NonEmptyString, subject: RunId }
+  { code: Schema.Literals(productionCliStatusFailureCodes), detail: Schema.NonEmptyString, subject: RunId }
 ) {}
 
 /** Normalized absolute locator for Alice's non-secret production JSON document. */
@@ -223,6 +239,7 @@ export const ProductionCliRecord = Schema.TaggedUnion({
     version: Schema.Literal(productionCliWireVersion)
   },
   HistoricalSnapshot: { snapshot: PublicTraceAtCursor, version: Schema.Literal(productionCliWireVersion) },
+  CurrentStatus: { status: Schema.Json, version: Schema.Literal(productionCliWireVersion) },
   Failure: {
     code: Schema.Literals([
       "configuration.invalid",
@@ -233,7 +250,7 @@ export const ProductionCliRecord = Schema.TaggedUnion({
       "startup.ownership_unavailable",
       "startup.recovery_blocked",
       "startup.run_selection_conflict",
-      "status.projection_invalid",
+      ...productionCliStatusFailureCodes,
       "usage.invalid"
     ]),
     detail: Schema.NonEmptyString,
@@ -256,9 +273,10 @@ export type ProductionCliRecord = typeof ProductionCliRecord.Type
 export const encodeProductionCliRecord = (record: ProductionCliRecord): string =>
   JSON.stringify(Schema.encodeUnknownSync(ProductionCliRecord)(record))
 
-/** The exact read-only subset #298 consumes from one established production host. */
+/** The exact read-only subset the shipped production CLI consumes from one established host. */
 export interface ProductionCliHostObservation {
   readonly acceptedHistory: CurrentSignal<TraceCursor>
+  readonly current: CurrentSignal<DeliveryRuntimeObservationState>
   readonly runTermination: JournaledRunTerminationSource
   readonly selection: ProductionRunSelection
   readonly traceReader: Pick<TraceReaderService, "readAt">
@@ -274,20 +292,64 @@ const selectedRecord = (selection: ProductionRunSelection): ProductionCliRecord 
 const historicalRecord = (snapshot: TraceAtCursor): ProductionCliRecord =>
   ProductionCliRecord.cases.HistoricalSnapshot.make({ snapshot, version: productionCliWireVersion })
 
+type DeliveryStatusSnapshot = Exclude<CurrentDeliveryStatus, { readonly _tag: "DeliveryStatusClosed" }>
+
+const publicDeliveryStatusSnapshot = (status: DeliveryStatusSnapshot): DeliveryStatusSnapshot => {
+  switch (status._tag) {
+    case "DeliveryStatusNotReady":
+    case "TaskAbsentFromCurrentGraph":
+      return status
+    case "DeliveryStatusAvailable":
+      return { ...status, entries: [...status.entries] }
+  }
+}
+
+/** Exhaustively removes no semantic field and retains the projector's structural entry order. */
+const publicCurrentDeliveryStatus = (status: CurrentDeliveryStatus): CurrentDeliveryStatus => {
+  switch (status._tag) {
+    case "DeliveryStatusNotReady":
+    case "DeliveryStatusAvailable":
+    case "TaskAbsentFromCurrentGraph":
+      return publicDeliveryStatusSnapshot(status)
+    case "DeliveryStatusClosed":
+      return { ...status, final: status.final === null ? null : publicDeliveryStatusSnapshot(status.final) }
+  }
+}
+
+/** Encodes one complete #217 status value without deriving presentation-owned order or classifications. */
+export const currentDeliveryStatusRecord = (status: CurrentDeliveryStatus): ProductionCliRecord =>
+  ProductionCliRecord.cases.CurrentStatus.make({
+    status: Schema.decodeUnknownSync(Schema.Json)(publicCurrentDeliveryStatus(status)),
+    version: productionCliWireVersion
+  })
+
 /**
- * Writes the already-established Run first, then converts each acknowledged
- * cursor into one complete immutable historical snapshot. No current-status
- * or disposition fact is inferred from this stream.
+ * Writes the already-established Run first, attaches the passive status source
+ * current-first, and keeps later status, history, and disposition facts distinct.
+ * No current-status or disposition fact is inferred from historical snapshots.
  */
 export const presentSelectedProductionRun = <EOutput>(
   observation: ProductionCliHostObservation,
   writeLine: (line: string) => Effect.Effect<void, EOutput>,
   onObservation: Effect.Effect<void> = Effect.void
-): Effect.Effect<void, EOutput | TraceReaderError | JournalStoreError> =>
-  onObservation.pipe(
-    Effect.andThen(writeLine(encodeProductionCliRecord(selectedRecord(observation.selection)))),
-    Effect.andThen(
-      observation.acceptedHistory.changes.pipe(
+): Effect.Effect<void, EOutput | TraceReaderError | JournalStoreError | ProductionCliStatusError> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* onObservation
+      yield* writeLine(encodeProductionCliRecord(selectedRecord(observation.selection)))
+
+      const subject = DeliveryStatusSubject.cases.Run.make({ runId: observation.selection.runId })
+      const status = yield* deliveryStatusSignalOf(observation.current, subject).pipe(
+        Effect.mapError(() => historicalProjectionFailure(observation.selection.runId))
+      )
+      const attachedStatus = yield* status.attach.pipe(Effect.mapError(currentStatusProjectionFailure))
+      yield* writeLine(encodeProductionCliRecord(currentDeliveryStatusRecord(attachedStatus.current)))
+
+      const presentStatusChanges = attachedStatus.changes.pipe(
+        Stream.mapError(currentStatusProjectionFailure),
+        Stream.runForEach((current) => writeLine(encodeProductionCliRecord(currentDeliveryStatusRecord(current))))
+      )
+      const presentHistory = observation.acceptedHistory.changes.pipe(
         Stream.takeUntilEffect((cursor) =>
           observation.runTermination.poll.pipe(
             Effect.map(
@@ -303,11 +365,11 @@ export const presentSelectedProductionRun = <EOutput>(
             .pipe(Effect.flatMap((snapshot) => writeLine(encodeProductionCliRecord(historicalRecord(snapshot)))))
         )
       )
-    ),
-    Effect.andThen(observation.runTermination.await),
-    Effect.flatMap(({ disposition }) =>
-      writeLine(encodeProductionCliRecord(runDispositionRecord(observation.selection.runId, disposition)))
-    )
+      yield* Effect.all([presentStatusChanges, presentHistory], { concurrency: "unbounded", discard: true })
+
+      const { disposition } = yield* observation.runTermination.await
+      yield* writeLine(encodeProductionCliRecord(runDispositionRecord(observation.selection.runId, disposition)))
+    })
   )
 
 /** Explicit helper for later lifecycle transport; status closure never creates this record. */
@@ -342,8 +404,10 @@ type ProductionCliBoundaryFailure =
   | CoordinatorLockObservationContradiction
   | CoordinatorLockUnavailable
   | CoordinatorOwnershipLost
+  | DeliveryStatusProjectionError
   | JournalStoreError
   | ProductionCliConfigurationError
+  | ProductionCliStatusError
   | ProductionCliUsageError
   | ProductionRunSelectionConflict
   | StartupRecoveryBlocked
@@ -365,6 +429,9 @@ const ProductionCliBoundaryFailure = exactProductionCliBoundaryFailure(
     CoordinatorLockObservationContradiction,
     CoordinatorLockUnavailable,
     CoordinatorOwnershipLost,
+    DeliveryStatusProjectionConflict,
+    DeliveryStatusRunIdentityUnavailable,
+    DeliveryStatusRunMismatch,
     JournalDataCorruption,
     JournalHistoryCorruption,
     JournalPartitionContradiction,
@@ -374,6 +441,7 @@ const ProductionCliBoundaryFailure = exactProductionCliBoundaryFailure(
     JournalStorageLocked,
     JournalStorageUnavailable,
     ProductionCliConfigurationError,
+    ProductionCliStatusError,
     ProductionCliUsageError,
     ProductionRunSelectionConflict,
     StartupRecoveryBlocked,
@@ -397,11 +465,39 @@ const historicalProjectionFailure = (runId: RunId): ProductionCliStatusError =>
     subject: runId
   })
 
+const currentStatusProjectionFailure = (failure: DeliveryStatusProjectionError): ProductionCliStatusError => {
+  switch (failure._tag) {
+    case "DeliveryStatusRunMismatch":
+      return new ProductionCliStatusError({
+        code: "status.run_mismatch",
+        detail: "the passive status source describes another Run",
+        subject: failure.requestedRunId
+      })
+    case "DeliveryStatusRunIdentityUnavailable":
+      return new ProductionCliStatusError({
+        code: "status.run_identity_unavailable",
+        detail: "the passive status source has no exact Run identity",
+        subject: failure.subject.runId
+      })
+    case "DeliveryStatusProjectionConflict":
+      return new ProductionCliStatusError({
+        code: "status.projection_conflict",
+        detail: "the passive status source contains incompatible exact evidence",
+        subject: failure.subject.runId
+      })
+  }
+}
+
 const mapProductionCliBoundaryFailure = (failure: ProductionCliBoundaryFailure): ProductionCliKnownFailure => {
   switch (failure._tag) {
     case "ProductionCliConfigurationError":
+    case "ProductionCliStatusError":
     case "ProductionCliUsageError":
       return failure
+    case "DeliveryStatusProjectionConflict":
+    case "DeliveryStatusRunIdentityUnavailable":
+    case "DeliveryStatusRunMismatch":
+      return currentStatusProjectionFailure(failure)
     case "CoordinatorLockHeld":
       return new ProductionCliStartupError({
         code: "startup.ownership_conflict",
