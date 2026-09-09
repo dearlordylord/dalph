@@ -91,8 +91,7 @@ export const renderTraceAtCursorWithStatus = (
 }
 
 /** Renders one immutable committed cursor with truthful actors and no internal transcript. */
-export const renderTraceAtCursor = (history: TraceAtCursor): ReadonlyArray<string> =>
-  renderHistoricalTraceAtCursor(history)
+export const renderTraceAtCursor = renderHistoricalTraceAtCursor
 
 /** Writes only the passive current-status region; it never rereads or rewrites history. */
 export const writeTraceStatus = (

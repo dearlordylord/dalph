@@ -1533,7 +1533,7 @@ const projectedStatusFixture = (): DeliveryRuntimeObservationState => {
   const projectedGraph = TaskDagSnapshot.project(
     TrackerSnapshot.make({ revision: TrackerRevision.make("projected-status-graph"), tasks })
   )
-  if (projectedGraph._tag === "Invalid") throw new Error("projected status fixture graph is invalid")
+  if (projectedGraph._tag === "Invalid") return expect.fail("projected status fixture graph is invalid")
   const graph = TrackerGraphState.cases.GraphEstablished.make({
     observation: makeTestJournaledTrackerGraphObservation({
       operationId: OperationId.make("projected-status-graph-read"),
