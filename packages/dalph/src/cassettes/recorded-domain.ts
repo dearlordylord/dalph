@@ -27,6 +27,8 @@ import {
   PlannedAttemptExecutorCommandProjectionObservation,
   PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorResumeRedeliveryAuthorizationIdentity,
+  PlannedAttemptExecutorResumeRedeliveryOrdinal,
   PlannedAttemptExecutorStateObservation,
   PlannedAttemptExecutorStateObservationOrdinal,
   PlannedAttemptWorktreeObservation,
@@ -546,6 +548,14 @@ export const RecordedCassetteEntry = Schema.TaggedUnion({
     observation: PlannedAttemptExecutorCommandProjectionObservation,
     plannedAttempt: PlannedTaskAttempt,
     projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal
+  },
+  PlannedAttemptExecutorResumeRedeliveryIntended: {
+    authorization: PlannedAttemptExecutorResumeRedeliveryAuthorizationIdentity,
+    commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
+    ...initiatedByCoordinator,
+    plannedAttempt: PlannedTaskAttempt,
+    projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal,
+    redeliveryOrdinal: PlannedAttemptExecutorResumeRedeliveryOrdinal
   },
   PlannedAttemptExecutorCommandResponseObserved: {
     commandOrdinal: PlannedAttemptExecutorCommandOrdinal,

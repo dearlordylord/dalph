@@ -6920,6 +6920,7 @@ it.effect(
         PlannedAttemptExecutorWorkReported: true,
         PlannedAttemptExecutorCommandIntended: true,
         PlannedAttemptExecutorCommandProjectionObserved: true,
+        PlannedAttemptExecutorResumeRedeliveryIntended: true,
         PlannedAttemptExecutorCommandResponseObserved: true,
         PlannedAttemptExecutorCommandResponseContradicted: true,
         PlannedAttemptExecutorStateObserved: true,
