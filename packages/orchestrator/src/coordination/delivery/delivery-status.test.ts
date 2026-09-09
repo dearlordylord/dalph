@@ -65,6 +65,9 @@ import {
   DeliveryRuntimeObservationState,
   type DeliveryRuntimeLiveOwnerSnapshot
 } from "./delivery-runtime-observation.js"
+import { makeDeliveryStatusEntryIdentity } from "./delivery-status-model.js"
+import { canonicalIdentity } from "./delivery-status-order.js"
+import { ticketOwnerSnapshotForTest } from "../../../test/support/delivery-runtime-live-owner.js"
 import {
   currentSignalOf,
   currentSignalFromCurrentFirstStream,
@@ -219,7 +222,7 @@ const taskProposalOf = (id: string, taskId: TaskId): DeliveryActionProposal => (
 })
 
 const ownerOf = (proposal: DeliveryActionProposal, settled: boolean): DeliveryRuntimeLiveOwnerSnapshot =>
-  settled ? { _tag: "SettledBeforeMaterialization", proposal } : { _tag: "AdmittedDeliveryAction", proposal }
+  ticketOwnerSnapshotForTest(proposal, settled ? { _tag: "SettledBeforeMaterialization" } : undefined)
 
 const taskClaimEvidenceOf = (taskId: TaskId): TicketDeliveryEvidence => ({
   _tag: "ResponsibilityFacts",
@@ -1050,18 +1053,16 @@ it("orders accepted-standing settlements by responsibility beganAt before correl
 it("retains materialized operation identity through live and settled owner chronology", () => {
   const proposal = taskProposalOf("materialized-status-proposal", TaskId.make("A"))
   const operationId = OperationId.make("materialized-status-operation")
-  const materialized: DeliveryRuntimeLiveOwnerSnapshot = {
+  const materialized = ticketOwnerSnapshotForTest(proposal, {
     _tag: "MaterializedDeliveryAction",
     intent: "IntentRecorded",
-    operationId,
-    proposal
-  }
-  const settled: DeliveryRuntimeLiveOwnerSnapshot = {
+    operationId
+  })
+  const settled = ticketOwnerSnapshotForTest(proposal, {
     _tag: "SettledMaterializedDeliveryAction",
     intent: "IntentRecorded",
-    operationId,
-    proposal
-  }
+    operationId
+  })
   const live = statusFor(evaluationOf({ proposals: [proposal], liveOwners: [materialized] }), { _tag: "Run", runId })
   const publicationPending = statusFor(evaluationOf({ proposals: [proposal], liveOwners: [settled] }), {
     _tag: "Run",
@@ -1075,6 +1076,7 @@ it("retains materialized operation identity through live and settled owner chron
 
 it("fails closed for duplicate or mismatched live-owner snapshots", () => {
   const proposal = taskProposalOf("duplicate-owner-proposal", TaskId.make("A"))
+  const genuine = ownerOf(proposal, false)
   const duplicate = deliveryStatusOf(
     Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
     evaluationOf({ proposals: [proposal], liveOwners: [ownerOf(proposal, false), ownerOf(proposal, false)] })
@@ -1090,14 +1092,50 @@ it("fails closed for duplicate or mismatched live-owner snapshots", () => {
   )
   expect(mismatched).toBeInstanceOf(DeliveryStatusProjectionConflict)
 
-  const absent = deliveryStatusOf(
+  const historical = deliveryStatusOf(
     Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
     evaluationOf({
       proposals: [proposal],
       liveOwners: [ownerOf(taskProposalOf("absent-owner-proposal", TaskId.make("A")), false)]
     })
   )
-  expect(absent).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(historical).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+
+  const untrustedAuthorities = [
+    { ...genuine.admissionAuthority },
+    JSON.parse(JSON.stringify(genuine.admissionAuthority)) as DeliveryRuntimeLiveOwnerSnapshot["admissionAuthority"],
+    { _tag: "TicketProposalAdmission" as const }
+  ]
+  for (const admissionAuthority of untrustedAuthorities) {
+    const untrusted = deliveryStatusOf(
+      Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
+      evaluationOf({ proposals: [proposal], liveOwners: [{ ...genuine, admissionAuthority }] })
+    )
+    expect(untrusted).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  }
+
+  // The public snapshot union remains decodable, but a manually constructed fresh admission has no private witness.
+  const forgedFreshAuthority: DeliveryRuntimeLiveOwnerSnapshot["admissionAuthority"] = {
+    _tag: "FreshTaskCandidateAdmission"
+  } as never
+  const untrustedFreshOwner = deliveryStatusOf(
+    Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
+    evaluationOf({ proposals: [proposal], liveOwners: [{ ...genuine, admissionAuthority: forgedFreshAuthority }] })
+  )
+  expect(untrustedFreshOwner).toEqual(
+    new DeliveryStatusProjectionConflict({
+      subject: Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
+      entryIdentity: makeDeliveryStatusEntryIdentity(canonicalIdentity(["live-owner", proposal.id])),
+      detail: "a fresh live owner lacks its exact admission authority"
+    })
+  )
+
+  const another = taskProposalOf("another-owner-proposal", TaskId.make("A"))
+  const rebound = deliveryStatusOf(
+    Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
+    evaluationOf({ proposals: [another], liveOwners: [{ ...genuine, proposal: another }] })
+  )
+  expect(rebound).toBeInstanceOf(DeliveryStatusProjectionConflict)
 
   const repeatedFrontierProposal = deliveryStatusOf(
     Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
@@ -1111,6 +1149,109 @@ it("fails closed for duplicate or mismatched live-owner snapshots", () => {
     })
   )
   expect(repeatedFrontierProposal).toBeInstanceOf(DeliveryStatusProjectionConflict)
+})
+
+it("orders multiple historical owners by their admitted proposal evidence for every input permutation", () => {
+  const earlier = {
+    ...taskProposalOf("historical-owner-earlier", TaskId.make("historical-owner-A")),
+    order: {
+      _tag: "FreshWorkflowOrder" as const,
+      frontierOrdinal: DeliveryProposalOrdinal.make(1),
+      step: "ReadCurrentTaskGraph" as const,
+      taskId: TaskId.make("historical-owner-A")
+    }
+  }
+  const later = {
+    ...taskProposalOf("historical-owner-later", TaskId.make("historical-owner-B")),
+    order: {
+      _tag: "FreshWorkflowOrder" as const,
+      frontierOrdinal: DeliveryProposalOrdinal.make(3),
+      step: "ReadCurrentTaskGraph" as const,
+      taskId: TaskId.make("historical-owner-B")
+    }
+  }
+  const owners = [ticketOwnerSnapshotForTest(earlier), ticketOwnerSnapshotForTest(later)] as const
+  for (const liveOwners of [owners, owners.toReversed()]) {
+    const status = deliveryStatusOf(
+      Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
+      evaluationOf({ liveOwners, proposals: [], tasks: [{ id: "current-task" }] })
+    )
+    expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+    if (status._tag !== "DeliveryStatusAvailable") continue
+    expect(
+      status.entries.flatMap((entry) => (entry._tag === "LiveDeliveryAction" ? [entry.owner.proposal.id] : []))
+    ).toEqual([earlier.id, later.id])
+  }
+})
+
+it("keeps Alice's historical action order when each admitted proposal kind leaves the current task graph", () => {
+  const proposalWithOrder = (
+    id: string,
+    taskId: TaskId,
+    order: DeliveryActionProposal["order"]
+  ): DeliveryActionProposal => ({ ...taskProposalOf(id, taskId), order })
+  const integrationTaskId = TaskId.make("historical-integration-task")
+  const recoveredTaskId = TaskId.make("historical-recovered-task")
+  const freshTaskId = TaskId.make("historical-fresh-task")
+  const unqueuedTaskId = TaskId.make("historical-unqueued-task")
+  const integration = proposalWithOrder("historical-integration-owner", integrationTaskId, {
+    _tag: "IntegrationOrder",
+    frontierOrdinal: DeliveryProposalOrdinal.make(1),
+    queuedAt: JournalPosition.make(2),
+    startedAt: JournalPosition.make(3),
+    taskId: integrationTaskId
+  })
+  const recovered = proposalWithOrder("historical-recovered-owner", recoveredTaskId, {
+    _tag: "RecoveredWorkflowOrder",
+    acceptedAt: JournalPosition.make(1),
+    frontierOrdinal: DeliveryProposalOrdinal.make(2),
+    responsibilityBeganAt: JournalPosition.make(2),
+    taskId: recoveredTaskId,
+    transition: "CheckTaskClaim"
+  })
+  const fresh = proposalWithOrder("historical-fresh-owner", freshTaskId, {
+    _tag: "FreshWorkflowOrder",
+    frontierOrdinal: DeliveryProposalOrdinal.make(3),
+    step: "ReadCurrentTaskGraph",
+    taskId: freshTaskId
+  })
+  const unqueued = proposalWithOrder("historical-unqueued-owner", unqueuedTaskId, {
+    _tag: "UnqueuedAcceptedResultOrder",
+    frontierOrdinal: DeliveryProposalOrdinal.make(4),
+    taskId: unqueuedTaskId,
+    terminalAt: JournalPosition.make(4)
+  })
+  const integrationOwner = ticketOwnerSnapshotForTest(integration)
+  const recoveredOwner = ticketOwnerSnapshotForTest(recovered)
+  const freshOwner = ticketOwnerSnapshotForTest(fresh)
+  const unqueuedOwner = ticketOwnerSnapshotForTest(unqueued)
+  const owners = [integrationOwner, recoveredOwner, freshOwner, unqueuedOwner]
+  const permutations = [owners, owners.toReversed(), [freshOwner, integrationOwner, unqueuedOwner, recoveredOwner]]
+
+  for (const liveOwners of permutations) {
+    const inferred = evaluationOf({ liveOwners, proposals: [] })
+    if (inferred._tag !== "Ready") return expect.fail("historical owner fixture must be ready")
+    const withoutCurrentTasks = DeliveryRuntimeObservationState.Ready({
+      evaluation: {
+        ...inferred.evaluation,
+        current: {
+          ...inferred.evaluation.current,
+          ticketDeliveries: { ...inferred.evaluation.current.ticketDeliveries, deliveries: [] },
+          trackerGraph: graphStateOf([])
+        }
+      },
+      liveOwners
+    })
+    const status = deliveryStatusOf(
+      Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Run", runId }),
+      withoutCurrentTasks
+    )
+    expect(status).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+    if (status._tag !== "DeliveryStatusAvailable") continue
+    expect(
+      status.entries.flatMap((entry) => (entry._tag === "LiveDeliveryAction" ? [entry.owner.proposal.id] : []))
+    ).toEqual([integration.id, recovered.id, fresh.id, unqueued.id])
+  }
 })
 
 it("compares live-owner proposals canonically through causal predecessor arrays", () => {
@@ -1170,6 +1311,28 @@ it.effect("fails closed when proposal ownership is contradictory", () =>
     expect(result).toBeInstanceOf(DeliveryStatusProjectionConflict)
   })
 )
+
+it("rejects invalid owners while Alice reads a task unaffected by another task's proposal conflict", () => {
+  const proposal = taskProposalOf("current-owner-A", TaskId.make("A"))
+  const other = taskProposalOf("conflicted-proposal-B", TaskId.make("B"))
+  const genuine = ownerOf(proposal, false)
+  const proposedActions: DeliveryProposalFrontier = {
+    _tag: "DeliveryProposalOwnershipConflict",
+    conflicts: [{ id: other.id, order: other.order, owners: ["TrackerGraph", "TicketDelivery"] }]
+  }
+  const subject = Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Task", runId, taskId: "A" })
+  const observation = (liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>) =>
+    evaluationOf({ tasks: [{ id: "A" }, { id: "B" }], proposedActions, liveOwners })
+  expect(deliveryStatusOf(subject, observation([genuine]))).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  const invalidOwners: ReadonlyArray<ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>> = [
+    [genuine, genuine],
+    [{ ...genuine, admissionAuthority: { _tag: "TicketProposalAdmission" } }],
+    [{ ...genuine, admissionAuthority: { ...genuine.admissionAuthority } }]
+  ]
+  for (const owners of invalidOwners) {
+    expect(deliveryStatusOf(subject, observation(owners))).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  }
+})
 
 it.effect("localizes unavailable evidence without blocking an independent task", () =>
   Effect.gen(function* () {
@@ -2606,7 +2769,10 @@ it("covers scoped filtering, holder ordering, and missing task-order conflicts t
     },
     liveOwners: withoutOwnerDelivery.liveOwners
   })
-  expect(deliveryStatusOf({ _tag: "Run", runId }, ownerOrderConflict)).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  expect(deliveryStatusOf({ _tag: "Run", runId }, ownerOrderConflict)).toMatchObject({
+    _tag: "DeliveryStatusAvailable",
+    entries: [{ _tag: "LiveDeliveryAction", owner: { proposal: action } }]
+  })
 
   const otherTask = TaskId.make("other-action-task")
   const otherProposal = taskProposalOf("status-other-action", otherTask)

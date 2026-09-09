@@ -3,6 +3,7 @@ import type { OperationId } from "../../workflow/identity.js"
 import type { DeliveryAdmissionReservation, DeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { currentSignalFromCurrentFirstStream, type CurrentSignal, type DeliveryRuntimeEvaluation } from "./relations.js"
 import type { DeliveryActionProposal, DeliveryProposalId } from "./delivery-action-proposal.js"
+import type { FreshTaskCandidate } from "./fresh-task-candidate.js"
 import {
   DeliveryActionProtocolAdmissionMissing,
   type DeliveryActionExecutionLease
@@ -11,6 +12,49 @@ import { withPlannedAttemptProtocolPermit } from "../../workflow/protocols/plann
 
 /** The process-local action's intent state after its exact OperationId exists. */
 export type DeliveryRuntimeActionIntent = "IntentNotRecorded" | "IntentRecorded"
+
+const FreshTaskCandidateAdmissionAuthorityTypeId: unique symbol = Symbol("@dalph/FreshTaskCandidateAdmissionAuthority")
+const TicketProposalAdmissionAuthorityTypeId: unique symbol = Symbol("@dalph/TicketProposalAdmissionAuthority")
+const issuedFreshTaskCandidateAdmissions = new WeakMap<object, DeliveryActionProposal>()
+const issuedTicketProposalAdmissions = new WeakMap<object, DeliveryActionProposal>()
+
+/** Opaque proof that this process admitted one exact ticket-derived proposal. */
+export interface TicketProposalAdmissionAuthority {
+  readonly _tag: "TicketProposalAdmission"
+  /** Present only on the runtime-issued witness; decoded and manually constructed snapshots remain representable but untrusted. */
+  readonly [TicketProposalAdmissionAuthorityTypeId]?: typeof TicketProposalAdmissionAuthorityTypeId
+}
+
+type IssuedTicketProposalAdmissionAuthority = TicketProposalAdmissionAuthority & {
+  readonly [TicketProposalAdmissionAuthorityTypeId]: typeof TicketProposalAdmissionAuthorityTypeId
+}
+
+/** Exact authority under which runtime admitted a process-local action owner. */
+export type DeliveryRuntimeLiveOwnerAdmissionAuthority =
+  | {
+      readonly _tag: "FreshTaskCandidateAdmission"
+      readonly [FreshTaskCandidateAdmissionAuthorityTypeId]: typeof FreshTaskCandidateAdmissionAuthorityTypeId
+      readonly candidate: FreshTaskCandidate
+    }
+  | TicketProposalAdmissionAuthority
+
+const ticketProposalAdmissionAuthorityOf = (proposal: DeliveryActionProposal): TicketProposalAdmissionAuthority => {
+  const authority: IssuedTicketProposalAdmissionAuthority = {
+    _tag: "TicketProposalAdmission",
+    [TicketProposalAdmissionAuthorityTypeId]: TicketProposalAdmissionAuthorityTypeId
+  }
+  Object.freeze(authority)
+  issuedTicketProposalAdmissions.set(authority, proposal)
+  return authority
+}
+
+/** Returns the exact proposal bound to an opaque process-local admission witness. */
+export const admittedProposalFor = (
+  authority: DeliveryRuntimeLiveOwnerAdmissionAuthority
+): DeliveryActionProposal | undefined =>
+  authority._tag === "TicketProposalAdmission"
+    ? issuedTicketProposalAdmissions.get(authority)
+    : issuedFreshTaskCandidateAdmissions.get(authority)
 
 type DeliveryRuntimeLiveOwnerLifecycle = Data.TaggedEnum<{
   AdmittedDeliveryAction: Record<never, never>
@@ -23,14 +67,22 @@ const DeliveryRuntimeLiveOwnerLifecycle = Data.taggedEnum<DeliveryRuntimeLiveOwn
 
 /** The exhaustive process-local state retained for one action owner without exposing mutable refs. */
 export type DeliveryRuntimeLiveOwnerSnapshot = Data.TaggedEnum<{
-  AdmittedDeliveryAction: { readonly proposal: DeliveryActionProposal }
+  AdmittedDeliveryAction: {
+    readonly admissionAuthority: DeliveryRuntimeLiveOwnerAdmissionAuthority
+    readonly proposal: DeliveryActionProposal
+  }
   MaterializedDeliveryAction: {
+    readonly admissionAuthority: DeliveryRuntimeLiveOwnerAdmissionAuthority
     readonly intent: DeliveryRuntimeActionIntent
     readonly operationId: OperationId
     readonly proposal: DeliveryActionProposal
   }
-  SettledBeforeMaterialization: { readonly proposal: DeliveryActionProposal }
+  SettledBeforeMaterialization: {
+    readonly admissionAuthority: DeliveryRuntimeLiveOwnerAdmissionAuthority
+    readonly proposal: DeliveryActionProposal
+  }
   SettledMaterializedDeliveryAction: {
+    readonly admissionAuthority: DeliveryRuntimeLiveOwnerAdmissionAuthority
     readonly intent: DeliveryRuntimeActionIntent
     readonly operationId: OperationId
     readonly proposal: DeliveryActionProposal
@@ -80,17 +132,31 @@ const lifecycleIsSettled = Match.type<DeliveryRuntimeLiveOwnerLifecycle>().pipe(
 )
 
 const ownerSnapshot = (
+  admissionAuthority: DeliveryRuntimeLiveOwnerAdmissionAuthority,
   proposal: DeliveryActionProposal,
   lifecycle: DeliveryRuntimeLiveOwnerLifecycle
-): DeliveryRuntimeLiveOwnerSnapshot =>
-  Match.valueTags(lifecycle, {
-    AdmittedDeliveryAction: () => DeliveryRuntimeLiveOwnerSnapshot.AdmittedDeliveryAction({ proposal }),
+): DeliveryRuntimeLiveOwnerSnapshot => {
+  return Match.valueTags(lifecycle, {
+    AdmittedDeliveryAction: () =>
+      DeliveryRuntimeLiveOwnerSnapshot.AdmittedDeliveryAction({ admissionAuthority, proposal }),
     MaterializedDeliveryAction: ({ intent, operationId }) =>
-      DeliveryRuntimeLiveOwnerSnapshot.MaterializedDeliveryAction({ intent, operationId, proposal }),
-    SettledBeforeMaterialization: () => DeliveryRuntimeLiveOwnerSnapshot.SettledBeforeMaterialization({ proposal }),
+      DeliveryRuntimeLiveOwnerSnapshot.MaterializedDeliveryAction({
+        admissionAuthority,
+        intent,
+        operationId,
+        proposal
+      }),
+    SettledBeforeMaterialization: () =>
+      DeliveryRuntimeLiveOwnerSnapshot.SettledBeforeMaterialization({ admissionAuthority, proposal }),
     SettledMaterializedDeliveryAction: ({ intent, operationId }) =>
-      DeliveryRuntimeLiveOwnerSnapshot.SettledMaterializedDeliveryAction({ intent, operationId, proposal })
+      DeliveryRuntimeLiveOwnerSnapshot.SettledMaterializedDeliveryAction({
+        admissionAuthority,
+        intent,
+        operationId,
+        proposal
+      })
   })
+}
 
 /** Creates the sole mutation authority for one admitted proposal's process-local owner lifecycle. */
 export const makeDeliveryRuntimeLiveOwner = Effect.fn("DeliveryRuntime.makeLiveOwner")(function* (
@@ -100,6 +166,17 @@ export const makeDeliveryRuntimeLiveOwner = Effect.fn("DeliveryRuntime.makeLiveO
     DeliveryRuntimeLiveOwnerLifecycle.AdmittedDeliveryAction()
   )
   const proposal = reservation.proposal
+  const admissionAuthority: DeliveryRuntimeLiveOwnerAdmissionAuthority =
+    reservation.freshTaskCandidate === null
+      ? ticketProposalAdmissionAuthorityOf(proposal)
+      : Object.freeze<DeliveryRuntimeLiveOwnerAdmissionAuthority>({
+          _tag: "FreshTaskCandidateAdmission",
+          [FreshTaskCandidateAdmissionAuthorityTypeId]: FreshTaskCandidateAdmissionAuthorityTypeId,
+          candidate: reservation.freshTaskCandidate
+        })
+  if (admissionAuthority._tag === "FreshTaskCandidateAdmission") {
+    issuedFreshTaskCandidateAdmissions.set(admissionAuthority, proposal)
+  }
 
   const materialize = (operationId: OperationId) =>
     Ref.update(lifecycle, (current) =>
@@ -139,7 +216,7 @@ export const makeDeliveryRuntimeLiveOwner = Effect.fn("DeliveryRuntime.makeLiveO
     recordIntent,
     reservation,
     settle,
-    snapshot: Ref.get(lifecycle).pipe(Effect.map((current) => ownerSnapshot(proposal, current)))
+    snapshot: Ref.get(lifecycle).pipe(Effect.map((current) => ownerSnapshot(admissionAuthority, proposal, current)))
   } satisfies DeliveryRuntimeLiveOwnerSource
 })
 
@@ -246,7 +323,10 @@ export const makeDeliveryRuntimeObservationController = Effect.fn("DeliveryRunti
       DeliveryRuntimeObservationState.NotReady()
     )
     const observer = yield* DeliveryRuntimeObservationObserver
-
+    const observationOf = (
+      evaluation: DeliveryRuntimeEvaluation,
+      liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
+    ) => DeliveryRuntimeObservationState.Ready({ evaluation, liveOwners: [...liveOwners] })
     return {
       close: SubscriptionRef.update(state, (current) =>
         DeliveryRuntimeObservationState.Closed({
@@ -259,7 +339,7 @@ export const makeDeliveryRuntimeObservationController = Effect.fn("DeliveryRunti
       ),
       publish: (evaluation, liveOwners) =>
         Effect.gen(function* () {
-          const observation = DeliveryRuntimeObservationState.Ready({ evaluation, liveOwners: [...liveOwners] })
+          const observation = observationOf(evaluation, liveOwners)
           const published = yield* SubscriptionRef.modify(state, (current) =>
             current._tag === "Closed" ? [false, current] : [true, observation]
           )

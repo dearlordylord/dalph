@@ -237,15 +237,18 @@ it.effect("matches executor actions only to the exact planned-attempt obligation
       id: DeliveryProposalId.make("pause-progress-coverage-without-permit")
     } satisfies DeliveryActionProposal
 
+    const admissionAuthority = { _tag: "TicketProposalAdmission" as const }
     const ownerCases = [
-      DeliveryRuntimeLiveOwnerSnapshot.AdmittedDeliveryAction({ proposal: matching }),
+      DeliveryRuntimeLiveOwnerSnapshot.AdmittedDeliveryAction({ admissionAuthority, proposal: matching }),
       DeliveryRuntimeLiveOwnerSnapshot.MaterializedDeliveryAction({
+        admissionAuthority,
         intent: "IntentNotRecorded",
         operationId: OperationId.make("pause-owner-materialized"),
         proposal: matching
       }),
-      DeliveryRuntimeLiveOwnerSnapshot.SettledBeforeMaterialization({ proposal: matching }),
+      DeliveryRuntimeLiveOwnerSnapshot.SettledBeforeMaterialization({ admissionAuthority, proposal: matching }),
       DeliveryRuntimeLiveOwnerSnapshot.SettledMaterializedDeliveryAction({
+        admissionAuthority,
         intent: "IntentRecorded",
         operationId: OperationId.make("pause-owner-settled"),
         proposal: matching
@@ -397,7 +400,12 @@ it.effect("matches an accepted workflow action only to the obligation carrying t
           ],
           [matching, mismatched]
         ),
-        liveOwners: [DeliveryRuntimeLiveOwnerSnapshot.AdmittedDeliveryAction({ proposal: matching })]
+        liveOwners: [
+          DeliveryRuntimeLiveOwnerSnapshot.AdmittedDeliveryAction({
+            admissionAuthority: { _tag: "TicketProposalAdmission" },
+            proposal: matching
+          })
+        ]
       }),
       emptyResources
     )

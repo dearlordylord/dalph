@@ -50,7 +50,7 @@ import {
   TaskTrackerThrottleTimingEvidence,
   type TrackerTarget
 } from "@dalph/orchestrator"
-import { Config, Effect, Option, Redacted, Schema, Stream } from "effect"
+import { Config, Effect, Fiber, Option, Redacted, Ref, Schema, Stream } from "effect"
 import { decodeCliTarget } from "./cli.js"
 import {
   decodeProductionRepositoryHostConfiguration,
@@ -377,11 +377,16 @@ export const presentSelectedProductionRun = <EOutput>(
         Effect.mapError(() => historicalProjectionFailure(observation.selection.runId))
       )
       const attachedStatus = yield* status.attach.pipe(Effect.mapError(currentStatusProjectionFailure))
+      const statusClosed = yield* Ref.make(attachedStatus.current._tag === "DeliveryStatusClosed")
       yield* writeLine(encodeProductionCliRecord(currentDeliveryStatusRecord(attachedStatus.current)))
 
       const presentStatusChanges = attachedStatus.changes.pipe(
         Stream.mapError(currentStatusProjectionFailure),
-        Stream.runForEach((current) => writeLine(encodeProductionCliRecord(currentDeliveryStatusRecord(current))))
+        Stream.runForEach((current) =>
+          writeLine(encodeProductionCliRecord(currentDeliveryStatusRecord(current))).pipe(
+            Effect.andThen(current._tag === "DeliveryStatusClosed" ? Ref.set(statusClosed, true) : Effect.void)
+          )
+        )
       )
       const presentHistory = observation.acceptedHistory.changes.pipe(
         Stream.takeUntilEffect((cursor) =>
@@ -399,9 +404,17 @@ export const presentSelectedProductionRun = <EOutput>(
             .pipe(Effect.flatMap((snapshot) => writeLine(encodeProductionCliRecord(historicalRecord(snapshot)))))
         )
       )
-      yield* Effect.all([presentStatusChanges, presentHistory], { concurrency: "unbounded", discard: true })
-
-      const { disposition } = yield* observation.runTermination.await
+      const presenters = yield* Effect.all([presentStatusChanges, presentHistory], {
+        concurrency: "unbounded",
+        discard: true
+      }).pipe(Effect.forkScoped)
+      const presenterFailure = Fiber.join(presenters).pipe(Effect.andThen(Effect.never))
+      const { disposition } = yield* Effect.raceFirst(observation.runTermination.await, presenterFailure)
+      yield* Fiber.join(presenters)
+      const synchronizedStatus = yield* status.get.pipe(Effect.mapError(currentStatusProjectionFailure))
+      if (synchronizedStatus._tag === "DeliveryStatusClosed" && !(yield* Ref.get(statusClosed))) {
+        yield* writeLine(encodeProductionCliRecord(currentDeliveryStatusRecord(synchronizedStatus)))
+      }
       yield* writeLine(encodeProductionCliRecord(runDispositionRecord(observation.selection.runId, disposition)))
     })
   )

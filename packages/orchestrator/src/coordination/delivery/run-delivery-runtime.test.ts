@@ -134,6 +134,8 @@ import {
   DeliveryRuntimeObservationObserver,
   type DeliveryRuntimeObservationState
 } from "./delivery-runtime-observation.js"
+import { deliveryStatusOf, DeliveryStatusProjectionConflict, DeliveryStatusSubject } from "./delivery-status.js"
+import { validateLiveOwnersForStatus } from "./delivery-status-support.js"
 import {
   makePlannedAttemptProtocolController,
   PlannedAttemptProtocolController,
@@ -210,10 +212,9 @@ const plannerLayer = deterministicPlannedTaskAttemptLayer({
   runId,
   worktreeRoot: WorktreeLocator.make("/runtime-test")
 })
-const identityLayers = Layer.mergeAll(
+const identitySupportLayers = Layer.mergeAll(
   deterministicOperationIdAllocatorLayer("runtime-operation"),
   plannerLayer,
-  testDeliveryRuntimeResourcesLayer,
   plannedAttemptProtocolControllerLayer,
   Layer.succeed(
     DeliveryAcceptedFactPublication,
@@ -226,6 +227,7 @@ const identityLayers = Layer.mergeAll(
     })
   )
 )
+const identityLayers = Layer.merge(identitySupportLayers, testDeliveryRuntimeResourcesLayer)
 
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("runtime-test-attempt"),
@@ -660,9 +662,10 @@ it.effect("publishes current-first exact live-owner observations until standalon
       yield* Deferred.await(actionStarted)
       const active = yield* resources.runtimeObservation.get
       if (active._tag !== "Ready") return expect.fail("the admitted action must be observable")
-      expect(active.liveOwners).toEqual([
+      expect(active.liveOwners).toMatchObject([
         {
           _tag: "MaterializedDeliveryAction",
+          admissionAuthority: { _tag: "TicketProposalAdmission" },
           intent: "IntentRecorded",
           operationId: OperationId.make("runtime-observation:0"),
           proposal: admitted
@@ -708,6 +711,18 @@ it.effect("publishes current-first exact live-owner observations until standalon
         isolatedIssues: [],
         proposals: []
       })
+      const statusSubject = DeliveryStatusSubject.cases.Run.make({ runId })
+      const finalReady = ready.at(-1)
+      if (finalReady === undefined) return expect.fail("the final Ready chronology must be present")
+      expect(deliveryStatusOf(statusSubject, finalReady)).not.toBeInstanceOf(DeliveryStatusProjectionConflict)
+      expect(published.at(-1)).toMatchObject({ _tag: "Closed", final: { liveOwners: [] } })
+      const withOwner = ready.find(({ liveOwners }) => liveOwners.length > 0)
+      const owner = withOwner?.liveOwners[0]
+      if (withOwner === undefined || owner === undefined) return expect.fail("the owner chronology must be present")
+      const unrelatedIdentityDefect = deliveryStatusOf(statusSubject, { ...withOwner, liveOwners: [owner, owner] })
+      expect(unrelatedIdentityDefect).toBeInstanceOf(DeliveryStatusProjectionConflict)
+      if (!(unrelatedIdentityDefect instanceof DeliveryStatusProjectionConflict)) return
+      expect(unrelatedIdentityDefect.detail).toBe("multiple live lifecycle snapshots claim one exact proposal")
     })
   )
 )
@@ -1220,8 +1235,11 @@ it.effect("admits independent D while recovered A and C perform read-only restar
           Effect.andThen(Effect.never)
         )
     })
+    const integrationTargets = yield* makeIntegrationTargetResourceController()
+    const capabilities = yield* deliveryRuntimeResourceCapabilitiesOf(integrationTargets)
     const runtime = yield* runDeliveryRuntimeDecision(relation).pipe(
-      Effect.provide(identityLayers),
+      Effect.provide(identitySupportLayers),
+      Effect.provide(deliveryRuntimeResourceCapabilitiesLayer(capabilities)),
       Effect.provideService(DeliveryActionExecutor, executor),
       Effect.forkChild
     )
@@ -1229,6 +1247,62 @@ it.effect("admits independent D while recovered A and C perform read-only restar
     yield* Deferred.await(allStarted)
     expect(yield* Ref.get(started)).toHaveLength(3)
     expect((yield* Ref.get(started)).slice(0, 2)).toEqual([proposalA.id, proposalC.id])
+    const held = yield* capabilities.resources.runtimeObservation.get
+    if (held._tag !== "Ready") return yield* Effect.die("held fresh-candidate ownership must be observable")
+    const freshOwner = held.liveOwners.find(
+      ({ admissionAuthority }) => admissionAuthority._tag === "FreshTaskCandidateAdmission"
+    )
+    expect(freshOwner?.admissionAuthority).toMatchObject({
+      _tag: "FreshTaskCandidateAdmission",
+      candidate: { id: freshCandidates.candidates[0]?.id }
+    })
+    const statusSubject = DeliveryStatusSubject.cases.Run.make({ runId })
+    expect(validateLiveOwnersForStatus(statusSubject, held.evaluation, held.liveOwners)).toBeNull()
+
+    if (freshOwner === undefined || held.evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") {
+      return yield* Effect.die("the fresh owner and proposal frontier must be observable")
+    }
+    const changedFreshProposal = {
+      ...freshOwner.proposal,
+      waitsForLiveOperationId: OperationId.make("changed-fresh-owner-proposal")
+    }
+    const changedFreshEvaluation: DeliveryRuntimeEvaluation = {
+      ...held.evaluation,
+      proposedActions: {
+        ...held.evaluation.proposedActions,
+        proposals: [...held.evaluation.proposedActions.proposals, changedFreshProposal]
+      }
+    }
+    const changedFreshConflict = validateLiveOwnersForStatus(statusSubject, changedFreshEvaluation, held.liveOwners)
+    expect(changedFreshConflict).toBeInstanceOf(DeliveryStatusProjectionConflict)
+    if (!(changedFreshConflict instanceof DeliveryStatusProjectionConflict)) return
+    expect(changedFreshConflict.detail).toBe("a live owner proposal differs from the current frontier proposal")
+
+    if (initial.proposedActions._tag !== "DeliveryProposalsAvailable") {
+      return yield* Effect.die("the fresh-candidate fixture must carry an available proposal frontier")
+    }
+    const malformed = {
+      ...initial,
+      proposedActions: { ...initial.proposedActions, proposals: [proposalA, proposalA, proposalC] }
+    } satisfies DeliveryRuntimeEvaluation
+    const malformedPublished = yield* capabilities.resources.runtimeObservation.changes.pipe(
+      Stream.filter((state) => state._tag === "Ready" && state.evaluation === malformed),
+      Stream.runHead,
+      Effect.forkChild
+    )
+    yield* relation.publish(malformed)
+    const malformedObservation = yield* Fiber.join(malformedPublished)
+    if (Option.isNone(malformedObservation) || malformedObservation.value._tag !== "Ready") {
+      return yield* Effect.die("the unrelated malformed frontier must remain visible")
+    }
+    const projectionFailure = validateLiveOwnersForStatus(
+      statusSubject,
+      malformedObservation.value.evaluation,
+      malformedObservation.value.liveOwners
+    )
+    expect(projectionFailure).toBeInstanceOf(DeliveryStatusProjectionConflict)
+    if (!(projectionFailure instanceof DeliveryStatusProjectionConflict)) return
+    expect(projectionFailure.detail).toBe("the current proposal frontier repeats one action identity")
     yield* Fiber.interrupt(runtime)
   }).pipe(Effect.scoped)
 )
@@ -4889,6 +4963,7 @@ it.effect("moves a passive-attachment marker across an in-flight route refresh a
       const secondObserveOutcome = yield* Deferred.make<void>()
       const thirdObserveOutcome = yield* Deferred.make<void>()
       const firstAttachmentApplied = yield* Deferred.make<void>()
+      const inFlightRouteRefreshObserved = yield* Deferred.make<void>()
       const secondObserveStarted = yield* Deferred.make<void>()
       const finishSecondObserve = yield* Deferred.make<void>()
       const keeperStarted = yield* Deferred.make<void>()
@@ -4930,6 +5005,13 @@ it.effect("moves a passive-attachment marker across an in-flight route refresh a
           DeliveryRuntimeObservationObserver.of({
             observe: (state) =>
               Effect.gen(function* () {
+                if (
+                  state.evaluation.proposedActions._tag === "DeliveryProposalsAvailable" &&
+                  state.evaluation.proposedActions.proposals.some(({ id }) => id === refreshedObserve.id) &&
+                  state.liveOwners.some((owner) => owner.proposal.id === observe.id)
+                ) {
+                  yield* Deferred.succeed(inFlightRouteRefreshObserved, undefined)
+                }
                 if (
                   state.evaluation.proposedActions._tag !== "DeliveryProposalsAvailable" ||
                   !state.evaluation.proposedActions.proposals.some(({ id }) => id === observe.id) ||
@@ -5003,18 +5085,6 @@ it.effect("moves a passive-attachment marker across an in-flight route refresh a
         }
       })
       yield* Deferred.await(secondObserveStarted)
-      const inFlightRouteRefreshed = yield* capabilities.resources.runtimeObservation.changes.pipe(
-        Stream.filter(
-          (state) =>
-            state._tag === "Ready" &&
-            state.evaluation.proposedActions._tag === "DeliveryProposalsAvailable" &&
-            !state.evaluation.proposedActions.proposals.some(({ id }) => id === observe.id) &&
-            state.evaluation.proposedActions.proposals.some(({ id }) => id === refreshedObserve.id) &&
-            state.liveOwners.some((owner) => owner.proposal.id === observe.id)
-        ),
-        Stream.runHead,
-        Effect.forkChild
-      )
       yield* relation.publish({
         ...withoutObserve,
         proposedActions: {
@@ -5024,7 +5094,24 @@ it.effect("moves a passive-attachment marker across an in-flight route refresh a
           proposals: [refreshedObserve, keeper]
         }
       })
-      expect(Option.isSome(yield* Fiber.join(inFlightRouteRefreshed))).toBe(true)
+      yield* Deferred.await(inFlightRouteRefreshObserved)
+      const coherentInFlight = yield* capabilities.resources.runtimeObservation.get
+      if (coherentInFlight._tag !== "Ready") return yield* Effect.die("the coherent in-flight cut must be Ready")
+      if (coherentInFlight.evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") {
+        return yield* Effect.die("the coherent in-flight cut must carry an available proposal frontier")
+      }
+      expect(coherentInFlight.evaluation.proposedActions.proposals.some(({ id }) => id === observe.id)).toBe(false)
+      expect(coherentInFlight.evaluation.proposedActions.proposals.some(({ id }) => id === refreshedObserve.id)).toBe(
+        true
+      )
+      expect(coherentInFlight.liveOwners.some((owner) => owner.proposal.id === observe.id)).toBe(true)
+      expect(
+        validateLiveOwnersForStatus(
+          DeliveryStatusSubject.cases.Run.make({ runId }),
+          coherentInFlight.evaluation,
+          coherentInFlight.liveOwners
+        )
+      ).toBeNull()
       yield* Deferred.succeed(finishSecondObserve, undefined)
       yield* Deferred.await(secondObserveOutcome)
       const inFlightOwnerRemoved = yield* capabilities.resources.runtimeObservation.changes.pipe(

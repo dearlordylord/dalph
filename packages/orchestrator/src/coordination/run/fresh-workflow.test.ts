@@ -73,7 +73,10 @@ import { OperationId } from "../../workflow/identity.js"
 import { deriveFreshWorkflowDecisions, responsibilityStillOwnsTask } from "./fresh-workflow.js"
 import { JournalStore } from "../../workflow-journal/store.js"
 import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
-import { appendReplacementProvenance } from "../../workflow/protocols/disposition-cleanup/provenance-fixtures.js"
+import {
+  appendReplacementProvenance,
+  replacementWorktreeObservationOperationIdFor
+} from "../../workflow/protocols/disposition-cleanup/provenance-fixtures.js"
 import {
   attempt as replacementPriorAttempt,
   runId as replacementRunId,
@@ -106,6 +109,16 @@ const plannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/fresh-workflow-no-successor")
 })
 
+const withoutWorktreeObservation = (
+  records: ReadonlyArray<JournalRecord>,
+  operationId: OperationId
+): ReadonlyArray<JournalRecord> =>
+  records.filter(({ event }) => {
+    if (event._tag === "TaskWorktreeReconciliationIntended") return event.operation.operationId !== operationId
+    if (event._tag === "TaskWorktreeReady") return event.operationId !== operationId
+    return true
+  })
+
 it.effect("continues a valid restarted replacement successor without resurrecting its original fresh commitment", () =>
   Effect.gen(function* () {
     const target = FixtureTarget.make("fresh-workflow-replacement-successor")
@@ -125,7 +138,13 @@ it.effect("continues a valid restarted replacement successor without resurrectin
       taskRevision: originalSpecification.fingerprint
     })
     yield* appendReplacementProvenance(priorAttempt, replacementSuccessorAttempt, "StartupValid")
-    const fixtureRecords = yield* journal.read(replacementRunId)
+    // This test supplies a differently identified but exact original worktree
+    // observation below. Remove the fixture's self-contained equivalent so
+    // reconstruction sees one accepted worktree authority for the attempt.
+    const fixtureWorktreeOperationId = OperationId.make(
+      `${replacementWorktreeObservationOperationIdFor(priorAttempt)}:initial-authority`
+    )
+    const fixtureRecords = withoutWorktreeObservation(yield* journal.read(replacementRunId), fixtureWorktreeOperationId)
     const originalPlanIndex = fixtureRecords.findIndex(({ event }) => event._tag === "TaskAttemptPlanned")
     const originalPlanRecord = fixtureRecords[originalPlanIndex]
     if (originalPlanRecord?.event._tag !== "TaskAttemptPlanned") {
