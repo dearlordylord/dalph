@@ -1502,8 +1502,9 @@ const makeCodexPlannedAttemptExecutorContext = (
         return yield* new CodexTurnBoundaryUnknown({})
       }
       // No allocation/replacement path is reachable from reconciled delivery.
-      const observation = yield* reconcile(attempt, correlation, current)
-      if (observation._tag !== "Idle") return yield* new CodexTurnBoundaryUnknown({})
+      // AssociatedPreTurn reconciliation returns Idle or fails; it cannot
+      // return an owned-turn lifecycle projection.
+      yield* reconcile(attempt, correlation, current)
       return current
     })
 

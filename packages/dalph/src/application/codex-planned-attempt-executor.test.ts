@@ -2532,6 +2532,7 @@ it.effect("projects Begin-not-crossed only for exact idle association and Begin 
 for (const change of [
   "MissingAssociation",
   "ChangedAssociation",
+  "ThreadBecameActive",
   "NotFoundThread",
   "InterveningCommand",
   "NewerProof",
@@ -2570,6 +2571,7 @@ for (const change of [
       if (change === "MissingAssociation") associationMissing = true
       if (change === "ChangedAssociation")
         harness.setRecord({ ...association, threadId: CodexThreadId.make("replacement-empty-thread") })
+      if (change === "ThreadBecameActive") harness.setThread({ ...thread, status: "active" })
       if (change === "NotFoundThread")
         harness.setResumeFailure(
           new CodexAppServerFailure({
