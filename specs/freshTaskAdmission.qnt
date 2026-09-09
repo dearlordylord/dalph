@@ -851,7 +851,11 @@ module freshTaskAdmission {
     state.process == ProcessUp,
     state.admission.get(task) == ExactAttemptHeld(attemptFor(task)),
     state.resumeIntentPending.get(task),
-    state' = { ...state, resumeIntentPending: state.resumeIntentPending.put(task, false) },
+    state' = {
+      ...state,
+      resumeIntentPending: state.resumeIntentPending.put(task, false),
+      continuationWitnesses: state.continuationWitnesses.put(task, Set()),
+    },
   }
 
   action readContinuationWitnessFor(task: TaskId, witness: ContinuationWitness): bool = all {
@@ -1200,9 +1204,20 @@ module freshTaskAdmission {
     releaseHeldPositionNotReady,
     releaseHeldPositionReady, reserveReadyResponsibility, handoffReadyResponsibility,
     contractCapacity, expandCapacity, crash, recover,
-    // This already-existing TaskA conformance slice adds sampling weight for
-    // the long lifecycle chronology without adding any new transition.
-    lifecycleRevalidationMbtStep,
+    // Repeat only primitive edges already present above. This gives the full
+    // TaskA provider-through-lifecycle chronology sampling weight without
+    // importing an MBT-only projection or changing the canonical next-state
+    // relation.
+    reserveFreshEntryFor(TaskA), recordClaimIntentFor(TaskA),
+    callClaimProviderFor(TaskA), acceptOwnedClaimFor(TaskA),
+    acceptPostClaimGraphFor(TaskA), readFocusedSpecificationFor(TaskA),
+    recordAttemptPlanFor(TaskA), recordWorktreeIntentFor(TaskA),
+    callWorktreeBoundaryFor(TaskA), acceptWorktreeReadyFor(TaskA),
+    handoffToExecutorResponsibilityFor(TaskA),
+    observeLifecycleClosureFor(TaskA), acceptSafeReportFor(TaskA),
+    observeLifecycleReopenFor(TaskA), selectSafeContinuationFor(TaskA),
+    reserveReadyResponsibilityFor(TaskA),
+    readContinuationWitnessFor(TaskA, AuthoredSpecification),
   }
 
   // Executable conformance uses the same transition relations as `step`, but

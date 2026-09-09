@@ -68,6 +68,40 @@ module freshTaskAdmissionTest {
       currentOccupancyHasOneClosedRepresentation,
     })
 
+  run resumedExecutingDiscardsProcessLocalContinuationWitnessesTest = cReservesThirdPositionBeforeFreshETest
+    .then(observeResumedExecutingFor(TaskC))
+    .expect(and {
+      not(state.resumeIntentPending.get(TaskC)),
+      state.admission.get(TaskC) == ExactAttemptHeld(AttemptC),
+      state.existingResponsibility.get(TaskC) == RetainedNotReadyResponsibility(AttemptC),
+      state.continuationWitnesses.get(TaskC) == Set(),
+      continuationWitnessesRemainWithinExactContinuation,
+    })
+
+  run canonicalWorktreeReadyRequiresClaimBoundaryTest = init
+    .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
+    .then(acceptWorktreeReadyFor(TaskA).fail())
+
+  run canonicalWorktreeReadyRequiresPlanBoundaryTest = init
+    .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
+    .then(callClaimProviderFor(TaskA)).then(acceptOwnedClaimFor(TaskA))
+    .then(acceptWorktreeReadyFor(TaskA).fail())
+
+  run canonicalWorktreeReadyRequiresWorktreeCallBoundaryTest = init
+    .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
+    .then(callClaimProviderFor(TaskA)).then(acceptOwnedClaimFor(TaskA))
+    .then(acceptPostClaimGraphFor(TaskA)).then(readFocusedSpecificationFor(TaskA))
+    .then(recordAttemptPlanFor(TaskA)).then(recordWorktreeIntentFor(TaskA))
+    .then(acceptWorktreeReadyFor(TaskA).fail())
+
+  run canonicalWorktreeReadyFollowsEveryProviderBoundaryTest = init
+    .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
+    .then(callClaimProviderFor(TaskA)).then(acceptOwnedClaimFor(TaskA))
+    .then(acceptPostClaimGraphFor(TaskA)).then(readFocusedSpecificationFor(TaskA))
+    .then(recordAttemptPlanFor(TaskA)).then(recordWorktreeIntentFor(TaskA))
+    .then(callWorktreeBoundaryFor(TaskA)).then(acceptWorktreeReadyFor(TaskA))
+    .expect(state.admission.get(TaskA) == exactWorktreeReady(TaskA))
+
   run failedCReadReleasesReservationAndAllowsETest = retainedCWithBD.then(expandCapacity)
     .then(reserveReadyResponsibilityFor(TaskC))
     .then(constrainSafeContinuationFor(TaskC, EvidenceUnavailable))
