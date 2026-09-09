@@ -4902,6 +4902,7 @@ it.effect("moves a passive-attachment marker across an in-flight route refresh a
       const secondObserveOutcome = yield* Deferred.make<void>()
       const thirdObserveOutcome = yield* Deferred.make<void>()
       const firstAttachmentApplied = yield* Deferred.make<void>()
+      const inFlightRouteRefreshObserved = yield* Deferred.make<void>()
       const secondObserveStarted = yield* Deferred.make<void>()
       const finishSecondObserve = yield* Deferred.make<void>()
       const keeperStarted = yield* Deferred.make<void>()
@@ -4943,6 +4944,13 @@ it.effect("moves a passive-attachment marker across an in-flight route refresh a
           DeliveryRuntimeObservationObserver.of({
             observe: (state) =>
               Effect.gen(function* () {
+                if (
+                  state.evaluation.proposedActions._tag === "DeliveryProposalsAvailable" &&
+                  state.evaluation.proposedActions.proposals.some(({ id }) => id === refreshedObserve.id) &&
+                  state.liveOwners.some((owner) => owner.proposal.id === observe.id)
+                ) {
+                  yield* Deferred.succeed(inFlightRouteRefreshObserved, undefined)
+                }
                 if (
                   state.evaluation.proposedActions._tag !== "DeliveryProposalsAvailable" ||
                   !state.evaluation.proposedActions.proposals.some(({ id }) => id === observe.id) ||
@@ -5016,18 +5024,6 @@ it.effect("moves a passive-attachment marker across an in-flight route refresh a
         }
       })
       yield* Deferred.await(secondObserveStarted)
-      const inFlightRouteRefreshed = yield* capabilities.resources.runtimeObservation.changes.pipe(
-        Stream.filter(
-          (state) =>
-            state._tag === "Ready" &&
-            state.evaluation.proposedActions._tag === "DeliveryProposalsAvailable" &&
-            !state.evaluation.proposedActions.proposals.some(({ id }) => id === observe.id) &&
-            state.evaluation.proposedActions.proposals.some(({ id }) => id === refreshedObserve.id) &&
-            state.liveOwners.some((owner) => owner.proposal.id === observe.id)
-        ),
-        Stream.runHead,
-        Effect.forkChild
-      )
       yield* relation.publish({
         ...withoutObserve,
         proposedActions: {
@@ -5037,7 +5033,17 @@ it.effect("moves a passive-attachment marker across an in-flight route refresh a
           proposals: [refreshedObserve, keeper]
         }
       })
-      expect(Option.isSome(yield* Fiber.join(inFlightRouteRefreshed))).toBe(true)
+      yield* Deferred.await(inFlightRouteRefreshObserved)
+      const coherentInFlight = yield* capabilities.resources.runtimeObservation.get
+      if (coherentInFlight._tag !== "Ready") return yield* Effect.die("the coherent in-flight cut must be Ready")
+      if (coherentInFlight.evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") {
+        return yield* Effect.die("the coherent in-flight cut must carry an available proposal frontier")
+      }
+      expect(coherentInFlight.evaluation.proposedActions.proposals.some(({ id }) => id === observe.id)).toBe(true)
+      expect(coherentInFlight.evaluation.proposedActions.proposals.some(({ id }) => id === refreshedObserve.id)).toBe(
+        false
+      )
+      expect(coherentInFlight.liveOwners.some((owner) => owner.proposal.id === observe.id)).toBe(true)
       yield* Deferred.succeed(finishSecondObserve, undefined)
       yield* Deferred.await(secondObserveOutcome)
       const inFlightOwnerRemoved = yield* capabilities.resources.runtimeObservation.changes.pipe(

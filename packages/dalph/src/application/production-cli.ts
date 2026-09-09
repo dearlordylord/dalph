@@ -367,7 +367,8 @@ export const presentSelectedProductionRun = <EOutput>(
         concurrency: "unbounded",
         discard: true
       }).pipe(Effect.forkScoped)
-      const { disposition } = yield* observation.runTermination.await
+      const presenterFailure = Fiber.join(presenters).pipe(Effect.andThen(Effect.never))
+      const { disposition } = yield* Effect.raceFirst(observation.runTermination.await, presenterFailure)
       yield* Fiber.join(presenters)
       const synchronizedStatus = yield* status.get.pipe(Effect.mapError(currentStatusProjectionFailure))
       if (synchronizedStatus._tag === "DeliveryStatusClosed" && !(yield* Ref.get(statusClosed))) {

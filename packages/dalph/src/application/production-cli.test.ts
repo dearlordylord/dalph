@@ -1044,6 +1044,75 @@ it.effect("normal Run termination closes an open history attachment after its fi
   })
 )
 
+it.effect("an unfinished Run cannot hide status, history, or output presenter failures", () =>
+  Effect.gen(function* () {
+    const runTermination = { await: Effect.never, poll: Effect.succeed(Option.none()) }
+    const observeBeforeTimeout = <E>(presentation: Effect.Effect<void, E>) =>
+      Effect.raceFirst(
+        presentation.pipe(
+          Effect.match({
+            onFailure: (failure) => ({ _tag: "Failed" as const, failure }),
+            onSuccess: () => ({ _tag: "Completed" as const })
+          })
+        ),
+        Effect.sleep("1 second").pipe(Effect.as({ _tag: "TimedOut" as const }))
+      )
+    const writeLine = (_line: string) => Effect.void
+
+    const projectionFailure = new DeliveryStatusProjectionConflict({
+      detail: "controlled pending-Run projection conflict",
+      entryIdentity: DeliveryStatusEntryIdentity.make("pending-run-projection-conflict"),
+      subject: { _tag: "Run", runId }
+    })
+    const projectionOutcome = yield* observeBeforeTimeout(
+      presentSelectedProductionRun(
+        {
+          acceptedHistory: currentSignalOf(cursor),
+          current: currentObservationChangesFailure(projectionFailure),
+          runTermination,
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: { readAt: () => Effect.succeed(snapshot) }
+        },
+        writeLine
+      )
+    )
+    expect(projectionOutcome).toMatchObject({
+      _tag: "Failed",
+      failure: { _tag: "ProductionCliStatusError", code: "status.projection_conflict", subject: runId }
+    })
+
+    const historyFailure = new TraceProjectionInvalid({ detail: "controlled pending-Run history failure", runId })
+    const historyOutcome = yield* observeBeforeTimeout(
+      presentSelectedProductionRun(
+        {
+          acceptedHistory: currentSignalOf(cursor),
+          current: currentSignalOf({ _tag: "NotReady" as const }),
+          runTermination,
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: { readAt: () => Effect.fail(historyFailure) }
+        },
+        writeLine
+      )
+    )
+    expect(historyOutcome).toEqual({ _tag: "Failed", failure: historyFailure })
+
+    const outputFailure = new TraceOutputError({ detail: "controlled pending-Run output failure" })
+    const outputOutcome = yield* observeBeforeTimeout(
+      presentSelectedProductionRun(
+        {
+          acceptedHistory: currentSignalOf(cursor),
+          current: currentSignalOf({ _tag: "NotReady" as const }),
+          runTermination,
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: { readAt: () => Effect.succeed(snapshot) }
+        },
+        (line) => (JSON.parse(line)._tag === "HistoricalSnapshot" ? Effect.fail(outputFailure) : Effect.void)
+      )
+    )
+    expect(outputOutcome).toEqual({ _tag: "Failed", failure: outputFailure })
+  })
+)
+
 it.effect("production presentation reports the host's exact recovered Run without allocating a replacement", () =>
   Effect.gen(function* () {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])

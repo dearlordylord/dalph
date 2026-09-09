@@ -293,7 +293,19 @@ it.live(
         const allocated = yield* takeMatching(first.records, (record) => record._tag === "RunSelected")
         expect(allocated).toMatchObject({ _tag: "RunSelected", selection: "Allocated" })
         if (allocated._tag !== "RunSelected") return
-        const createdClaim = yield* takeMatching(first.events, (event) => event._tag === "CreateClaimLabelStarted")
+        const createdClaimOrExit = yield* Effect.raceFirst(
+          takeMatching(first.events, (event) => event._tag === "CreateClaimLabelStarted").pipe(
+            Effect.map((event) => ({ _tag: "Claim" as const, event }))
+          ),
+          first.handle.exitCode.pipe(Effect.map((exitCode) => ({ _tag: "Exited" as const, exitCode })))
+        )
+        if (createdClaimOrExit._tag === "Exited") {
+          yield* awaitGraceful(first)
+          expect.fail(
+            `the allocated command exited with status ${createdClaimOrExit.exitCode} before claim creation: ${JSON.stringify(yield* Ref.get(first.recordLog))}`
+          )
+        }
+        const createdClaim = createdClaimOrExit.event
         if (createdClaim._tag !== "CreateClaimLabelStarted") return
         const firstExit = yield* stopAbruptly(first)
         expect(firstExit._tag).toBe("Failure")
@@ -313,14 +325,24 @@ it.live(
         expect(recovered).toEqual({ _tag: "RunSelected", runId: allocated.runId, selection: "Recovered", version: 1 })
         const recoveredClaimRead = yield* takeMatching(second.events, (event) => event._tag === "FindClaimLabelStarted")
         expect(recoveredClaimRead).toEqual({ _tag: "FindClaimLabelStarted", labelName: createdClaim.labelName })
-        const coherent = yield* takeMatching(
-          second.records,
-          (record) =>
-            record._tag === "CurrentStatus" &&
-            record.status._tag === "DeliveryStatusAvailable" &&
-            record.status.entries.length > 0 &&
-            record.status.entries.every(({ _tag }) => _tag !== "LiveDeliveryAction")
+        const coherentOrExit = yield* Effect.raceFirst(
+          takeMatching(
+            second.records,
+            (record) =>
+              record._tag === "CurrentStatus" &&
+              record.status._tag === "DeliveryStatusAvailable" &&
+              record.status.entries.length > 0 &&
+              record.status.entries.every(({ _tag }) => _tag !== "LiveDeliveryAction")
+          ).pipe(Effect.map((record) => ({ _tag: "Coherent" as const, record }))),
+          second.handle.exitCode.pipe(Effect.map((exitCode) => ({ _tag: "Exited" as const, exitCode })))
         )
+        if (coherentOrExit._tag === "Exited") {
+          yield* awaitGraceful(second)
+          expect.fail(
+            `the recovered command exited with status ${coherentOrExit.exitCode} before a coherent status: ${JSON.stringify(yield* Ref.get(second.recordLog))}`
+          )
+        }
+        const coherent = coherentOrExit.record
         expect(coherent).toMatchObject({
           _tag: "CurrentStatus",
           status: { _tag: "DeliveryStatusAvailable", subject: { _tag: "Run", runId: allocated.runId } }
@@ -506,8 +528,10 @@ it.live(
           child.handle.exitCode.pipe(Effect.map((exitCode) => ({ _tag: "Exited" as const, exitCode })))
         )
         if (selectedOrExit._tag !== "Selected") {
-          expect(yield* Ref.get(child.recordLog)).toEqual([])
-          return
+          yield* awaitGraceful(child)
+          expect.fail(
+            `the recovered command exited with status ${selectedOrExit.exitCode} before RunSelected: ${JSON.stringify(yield* Ref.get(child.recordLog))}`
+          )
         }
         const selected = selectedOrExit.record
         expect(selected).toMatchObject({ runId, selection: "Recovered" })

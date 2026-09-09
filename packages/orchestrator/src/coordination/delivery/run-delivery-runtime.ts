@@ -225,10 +225,16 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const publishRuntimeObservationInsideGate = Effect.fn("DeliveryRuntime.publishObservationInsideGate")(
         function* () {
           const evaluation = Option.getOrThrow(yield* Ref.get(latest))
-          const liveOwners = yield* RuntimeObservation.deliveryRuntimeLiveOwnerSnapshots(yield* Ref.get(owners))
+          const liveOwnerSources = yield* Ref.get(owners)
+          const liveOwners = yield* RuntimeObservation.deliveryRuntimeLiveOwnerSnapshots(liveOwnerSources)
+          const freshCandidateOwnerProposalIds = new Set(
+            [...liveOwnerSources.values()]
+              .filter(({ reservation }) => reservation.freshTaskCandidate !== null)
+              .map(({ proposal }) => proposal.id)
+          )
           const ownersMissingFromSuccessor =
             evaluation.proposedActions._tag === "DeliveryProposalsAvailable"
-              ? liveOwners.filter(({ proposal }) => !liveActionIsPresent(evaluation.proposedActions, proposal))
+              ? liveOwners.filter(({ proposal }) => !proposalIsPresent(evaluation.proposedActions, proposal.id))
               : []
           // An accepted successor frontier can arrive immediately before the matching
           // process-local completion event. Retain the previous coherent publication
@@ -247,6 +253,14 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           ) {
             yield* runtimeObservation.observe(evaluation, liveOwners)
             yield* runtimeObservation.publishCurrent(previous.value, liveOwners)
+            return
+          }
+          if (ownersMissingFromSuccessor.every(({ proposal }) => freshCandidateOwnerProposalIds.has(proposal.id))) {
+            // Fresh-candidate admission owns an action derived from the distinct candidate
+            // frontier, not from the exact ticket proposal frontier projected by status.
+            // Keep the prior coherent current value until owner removal republishes evaluation;
+            // fabricating a ticket proposal or owner identity would cross that authority boundary.
+            yield* runtimeObservation.observe(evaluation, liveOwners)
             return
           }
           // No known coherent predecessor can explain this owner/frontier pair.
