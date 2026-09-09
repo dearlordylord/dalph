@@ -827,6 +827,8 @@ export {
   type DeliveryRuntimeObservationState
 } from "./coordination/delivery/delivery-runtime-observation.js"
 export {
+  DeliveryStatusEvidenceIdentity,
+  DeliveryStatusEntryIdentity,
   DeliveryStatusSubject,
   DeliveryStatusRunMismatch,
   DeliveryStatusRunIdentityUnavailable,

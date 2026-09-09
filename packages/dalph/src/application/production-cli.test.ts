@@ -8,9 +8,13 @@ import {
   CoordinatorLockObservationContradiction,
   CoordinatorLockUnavailable,
   CoordinatorOwnershipLost,
+  type CurrentSignal,
   currentSignalFromCurrentFirstStream,
   currentSignalOf,
   type CurrentDeliveryStatus,
+  type DeliveryRuntimeObservationState,
+  DeliveryStatusEntryIdentity,
+  type DeliveryStatusProjectionError,
   DeliveryStatusProjectionConflict,
   DeliveryStatusRunIdentityUnavailable,
   DeliveryStatusRunMismatch,
@@ -121,6 +125,14 @@ const completedRunTermination = (terminatedAt = cursor) => {
   const termination = { disposition: RunTerminationDisposition.make("Completed"), terminatedAt }
   return { await: Effect.succeed(termination), poll: Effect.succeed(Option.some(termination)) }
 }
+
+const currentObservationFailure = (
+  failure: DeliveryStatusProjectionError
+): CurrentSignal<DeliveryRuntimeObservationState, DeliveryStatusProjectionError> => ({
+  attach: Effect.fail(failure),
+  changes: Stream.fail(failure),
+  get: Effect.fail(failure)
+})
 
 const validProductionDocument = {
   activationInterval: "1 minute",
@@ -684,6 +696,94 @@ it.effect(
   "typed status or TraceAtCursor projection failure fails fast without calling ApplicationExitRequestBoundary.requestExit or mutating a workflow boundary",
   () =>
     Effect.gen(function* () {
+      const privateDetail = "private status evidence /tmp/alice token=secret"
+      const statusFailures = [
+        {
+          code: "status.run_mismatch",
+          failure: new DeliveryStatusRunMismatch({ expectedRunId: RunId.make("another-run"), requestedRunId: runId })
+        },
+        {
+          code: "status.run_identity_unavailable",
+          failure: new DeliveryStatusRunIdentityUnavailable({ subject: { _tag: "Run", runId } })
+        },
+        {
+          code: "status.projection_conflict",
+          failure: new DeliveryStatusProjectionConflict({
+            detail: privateDetail,
+            entryIdentity: DeliveryStatusEntryIdentity.make("private-entry"),
+            subject: { _tag: "Run", runId }
+          })
+        }
+      ] as const
+
+      yield* Effect.forEach(statusFailures, ({ code, failure }) =>
+        Effect.gen(function* () {
+          const statusLines = yield* Ref.make<ReadonlyArray<string>>([])
+          const statusChronology = yield* Ref.make<ReadonlyArray<string>>([])
+          const statusExitRequests = yield* Ref.make(0)
+          const workflowMutations = yield* Ref.make(0)
+          const application = runProductionCli((_input, use) => {
+            const observation = {
+              acceptedHistory: currentSignalOf(cursor),
+              applicationExitRequestBoundary: {
+                requestExit: Ref.update(statusExitRequests, (count) => count + 1).pipe(
+                  Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+                )
+              },
+              current: currentObservationFailure(failure),
+              mutateWorkflow: Ref.update(workflowMutations, (count) => count + 1),
+              runTermination: completedRunTermination(),
+              selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+              traceReader: { readAt: () => Effect.succeed(snapshot) }
+            }
+            return use(observation)
+          })
+
+          const observed = yield* application([
+            "run",
+            "github:octo/dalph#42",
+            "--production",
+            "--config",
+            "/tmp/production.json"
+          ]).pipe(
+            Effect.provide(liveCliLayer(statusLines, statusChronology)),
+            Effect.provide(NodeServices.layer),
+            Effect.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromUnknown({
+                  DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret",
+                  GITHUB_TOKEN: "github-secret"
+                })
+              )
+            ),
+            Effect.flip
+          )
+
+          expect(observed).toMatchObject({ _tag: "ProductionCliStatusError", code, subject: runId })
+          expect(yield* Ref.get(statusExitRequests)).toBe(0)
+          expect(yield* Ref.get(workflowMutations)).toBe(0)
+          const records = (yield* Ref.get(statusLines)).map((line) => JSON.parse(line))
+          expect(records).toEqual([
+            { _tag: "RunSelected", runId, selection: "Allocated", version: 1 },
+            {
+              _tag: "Failure",
+              code,
+              detail:
+                code === "status.run_mismatch"
+                  ? "the passive status source describes another Run"
+                  : code === "status.run_identity_unavailable"
+                    ? "the passive status source has no exact Run identity"
+                    : "the passive status source contains incompatible exact evidence",
+              subject: runId,
+              version: 1
+            }
+          ])
+          expect(records.some(({ _tag }) => _tag === "CurrentStatus" || _tag.endsWith("Disposition"))).toBe(false)
+          expect(JSON.stringify(records)).not.toContain(privateDetail)
+          expect(JSON.stringify(records)).not.toContain("private-entry")
+        })
+      )
+
       const lines = yield* Ref.make<ReadonlyArray<string>>([])
       const chronology = yield* Ref.make<ReadonlyArray<string>>([])
       const exitRequests = yield* Ref.make(0)
@@ -1020,6 +1120,113 @@ it("encodes the exact passive not-ready value as a separate current-status recor
     status,
     version: 1
   })
+})
+
+it("rejects malformed current-status wire variants at the public codec boundary", () => {
+  const taskSubject = { _tag: "Task", runId, taskId: TaskId.make("A") } as const
+  const malformed = [
+    {
+      _tag: "CurrentStatus",
+      status: {
+        _tag: "DeliveryStatusAvailable",
+        acceptedAt: null,
+        entries: [{ _tag: "TrackerFactWait", classification: "Blocked", subject: taskSubject }],
+        subject: taskSubject
+      },
+      version: 1
+    },
+    {
+      _tag: "CurrentStatus",
+      status: {
+        _tag: "DeliveryStatusAvailable",
+        acceptedAt: null,
+        entries: [
+          {
+            _tag: "TrackerFactWait",
+            classification: "Waiting",
+            fact: { _tag: "Unobserved", boundary: "TaskTracker" },
+            responsibility: null,
+            standing: { _tag: "GraphNotEstablished" },
+            subject: { ...taskSubject, taskId: TaskId.make("B") },
+            wakeCondition: "TaskTrackerFactsObserved"
+          }
+        ],
+        subject: taskSubject
+      },
+      version: 1
+    },
+    {
+      _tag: "CurrentStatus",
+      status: {
+        _tag: "DeliveryStatusAvailable",
+        acceptedAt: null,
+        entries: [
+          {
+            _tag: "EvidenceUnavailable",
+            classification: "Blocked",
+            evidence: {
+              _tag: "IntegrationConfigurationWait",
+              standing: { _tag: "IntegrationWait" },
+              wait: { _tag: "IntegrationConfigurationWait" }
+            },
+            responsibility: null,
+            subject: taskSubject
+          }
+        ],
+        subject: taskSubject
+      },
+      version: 1
+    },
+    {
+      _tag: "CurrentStatus",
+      status: {
+        _tag: "DeliveryStatusAvailable",
+        acceptedAt: null,
+        entries: [
+          {
+            _tag: "EvidenceConflict",
+            classification: "Blocked",
+            evidenceIdentities: [],
+            responsibility: null,
+            standing: { _tag: "ExactEvidenceConflict" },
+            subject: taskSubject
+          }
+        ],
+        subject: taskSubject
+      },
+      version: 1
+    },
+    {
+      _tag: "CurrentStatus",
+      status: {
+        _tag: "TaskAbsentFromCurrentGraph",
+        graphSource: {
+          _tag: "EstablishedGraph",
+          contentIdentity: "revision-1",
+          freshnessOperationId: "freshness-1",
+          operationId: "operation-1",
+          recordedAt: 1,
+          revision: "revision-1"
+        },
+        subject: { _tag: "Run", runId }
+      },
+      version: 1
+    },
+    {
+      _tag: "CurrentStatus",
+      status: {
+        _tag: "DeliveryStatusClosed",
+        final: { _tag: "DeliveryStatusNotReady", subject: { _tag: "Run", runId: RunId.make("another-run") } },
+        subject: { _tag: "Run", runId }
+      },
+      version: 1
+    }
+  ]
+
+  for (const value of malformed) {
+    expect(Option.isNone(Schema.decodeUnknownOption(ProductionCliRecord)(value))).toBe(true)
+    expect(Option.isNone(Schema.encodeUnknownOption(ProductionCliRecord)(value))).toBe(true)
+  }
 })
 
 it("preserves current status subjects evidence classifications and structural order", () => {

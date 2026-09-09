@@ -52,6 +52,7 @@ import {
   decodeProductionRepositoryHostConfiguration,
   type ProductionRepositoryHostConfiguration
 } from "./production-configuration.js"
+import { ProductionCliCurrentDeliveryStatus } from "./production-cli-status-schema.js"
 
 export const productionCliWireVersion = 1 as const // eslint-disable-line no-magic-numbers
 
@@ -239,7 +240,7 @@ export const ProductionCliRecord = Schema.TaggedUnion({
     version: Schema.Literal(productionCliWireVersion)
   },
   HistoricalSnapshot: { snapshot: PublicTraceAtCursor, version: Schema.Literal(productionCliWireVersion) },
-  CurrentStatus: { status: Schema.Json, version: Schema.Literal(productionCliWireVersion) },
+  CurrentStatus: { status: ProductionCliCurrentDeliveryStatus, version: Schema.Literal(productionCliWireVersion) },
   Failure: {
     code: Schema.Literals([
       "configuration.invalid",
@@ -276,7 +277,7 @@ export const encodeProductionCliRecord = (record: ProductionCliRecord): string =
 /** The exact read-only subset the shipped production CLI consumes from one established host. */
 export interface ProductionCliHostObservation {
   readonly acceptedHistory: CurrentSignal<TraceCursor>
-  readonly current: CurrentSignal<DeliveryRuntimeObservationState>
+  readonly current: CurrentSignal<DeliveryRuntimeObservationState, DeliveryStatusProjectionError>
   readonly runTermination: JournaledRunTerminationSource
   readonly selection: ProductionRunSelection
   readonly traceReader: Pick<TraceReaderService, "readAt">
@@ -319,7 +320,7 @@ const publicCurrentDeliveryStatus = (status: CurrentDeliveryStatus): CurrentDeli
 /** Encodes one complete #217 status value without deriving presentation-owned order or classifications. */
 export const currentDeliveryStatusRecord = (status: CurrentDeliveryStatus): ProductionCliRecord =>
   ProductionCliRecord.cases.CurrentStatus.make({
-    status: Schema.decodeUnknownSync(Schema.Json)(publicCurrentDeliveryStatus(status)),
+    status: Schema.decodeUnknownSync(ProductionCliCurrentDeliveryStatus)(publicCurrentDeliveryStatus(status)),
     version: productionCliWireVersion
   })
 
