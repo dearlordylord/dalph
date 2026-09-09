@@ -188,7 +188,10 @@ import {
   PassivePlannedAttemptObserver,
   PassivePlannedAttemptProjectionPublication
 } from "../run/passive-planned-attempt-observer.js"
-import { evaluatePlannedAttemptContinuationAuthorization } from "../../workflow/protocols/planned-attempt-continuation/authorization-evaluation.js"
+import {
+  continuationTaskAuthorityFor,
+  evaluatePlannedAttemptContinuationAuthorization
+} from "../../workflow/protocols/planned-attempt-continuation/authorization-evaluation.js"
 import {
   authorizePlannedAttemptContinuation,
   authorizePlannedAttemptContinuationWithPermit
@@ -4490,6 +4493,11 @@ describe("delivery proposal route matrix", () => {
     expect(evaluatePlannedAttemptContinuationAuthorization(fixture.records, plannedAttempt, fixture.witness)).toEqual({
       _tag: "Authorized"
     })
+    const laterExecutorObservation = JournalPosition.make(fixture.records.length + 10)
+    expect(
+      continuationTaskAuthorityFor(fixture.records, plannedAttempt, fixture.witness, laterExecutorObservation)
+        .freshnessBaseline
+    ).toBe(laterExecutorObservation)
   })
 
   it("rejects a later specification not named by the applied Continue choice", () => {

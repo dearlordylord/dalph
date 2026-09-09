@@ -1792,7 +1792,7 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
 
   const command = (
     position: number,
-    command: "Begin" | "Resume",
+    command: "Begin" | "Resume" | "Suspend",
     plannedAttempt = coverageAttempt,
     ordinal = PlannedAttemptExecutorCommandOrdinal.make(3)
   ) =>
@@ -1942,6 +1942,19 @@ it("mints pre-read capacity eligibility only when an exact Safe task is reopened
       command(13, "Resume", coverageAttempt, PlannedAttemptExecutorCommandOrdinal.make(4))
     ])
   ).toBeUndefined()
+  expect(noEligibility([...retryRecords, command(13, "Suspend")])).toMatchObject({
+    basis: { observedAt: 12, projectionOrdinal: 1 }
+  })
+  const foreignRetryAttempt = PlannedTaskAttempt.make({
+    ...coverageAttempt,
+    attemptId: AttemptId.make("safe-reopen-foreign-retry-attempt")
+  })
+  expect(
+    noEligibility([
+      ...retryRecords,
+      command(13, "Resume", foreignRetryAttempt, PlannedAttemptExecutorCommandOrdinal.make(4))
+    ])
+  ).toMatchObject({ basis: { observedAt: 12, projectionOrdinal: 1 } })
   const firstProjectionAt = JournalPosition.make(12)
   const consumedRetryRecords = [...retryRecords, redelivery(13, firstProjectionAt)]
   expect(noEligibility(consumedRetryRecords)).toBeUndefined()

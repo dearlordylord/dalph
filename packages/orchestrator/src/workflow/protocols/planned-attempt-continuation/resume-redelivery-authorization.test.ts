@@ -415,6 +415,20 @@ describe("Resume redelivery authorization", () => {
     ).toMatchObject({ _tag: "Rejected", reason: "StaleExecutorEvidence" })
   })
 
+  it("rejects redelivery when the immutable Run target or accepted Resume intent is absent", () => {
+    const { eligibility, records, witness } = fixture()
+    if (eligibility.basis._tag !== "ReconciledResumeStillSafe") expect.fail("fixture retry basis missing")
+
+    expect(
+      evaluatePlannedAttemptResumeRedeliveryProof(records.slice(1), plannedAttempt, eligibility.basis, witness)
+    ).toMatchObject({ _tag: "Rejected", reason: "MissingWitness" })
+
+    const withoutResumeIntent = records.filter(({ event }) => event._tag !== "PlannedAttemptExecutorCommandIntended")
+    expect(
+      evaluatePlannedAttemptResumeRedeliveryProof(withoutResumeIntent, plannedAttempt, eligibility.basis, witness)
+    ).toMatchObject({ _tag: "Rejected", reason: "MissingResumeIntent" })
+  })
+
   it("rejects a later semantic command inserted before the reconciled projection", () => {
     const { eligibility, projection, records, witness } = fixture()
     if (eligibility.basis._tag !== "ReconciledResumeStillSafe") expect.fail("fixture retry basis missing")

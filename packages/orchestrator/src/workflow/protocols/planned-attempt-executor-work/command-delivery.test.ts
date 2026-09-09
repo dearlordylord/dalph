@@ -98,6 +98,17 @@ for (const event of [initial, redelivery]) {
 const alteredResults: ReadonlyArray<readonly [string, (record: JournalRecord) => JournalRecord]> = [
   ["wrong Run", (record) => ({ ...record, runId: RunId.make("foreign-run") })],
   ["wrong key", (record) => ({ ...record, key: JournalRecordKey.make("foreign-key") })],
+  [
+    "non-command event",
+    (record) => ({
+      ...record,
+      event: makeWorkflowRunBeganRecord(
+        plannedAttempt.runId,
+        FixtureTarget.make("foreign-returned-record"),
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      ).event
+    })
+  ],
   ["wrong event", (record) => ({ ...record, event: initial })],
   [
     "wrong attempt",

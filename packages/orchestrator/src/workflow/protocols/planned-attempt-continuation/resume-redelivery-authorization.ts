@@ -84,10 +84,8 @@ type ValidatedResumeRedeliveryProof = {
 
 const reject = (
   reason: ResumeRedeliveryAuthorizationReason,
-  detail: string,
-  witness?: ContinuationAuthorizationWitness | "ResumeRedeliveryBasis"
-): RejectedResumeRedeliveryAuthorization =>
-  witness === undefined ? { _tag: "Rejected", detail, reason } : { _tag: "Rejected", detail, reason, witness }
+  detail: string
+): RejectedResumeRedeliveryAuthorization => ({ _tag: "Rejected", detail, reason })
 
 const evaluateResumeRedeliveryProof = (
   records: ReadonlyArray<JournalRecord>,
