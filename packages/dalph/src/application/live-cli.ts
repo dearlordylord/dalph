@@ -1,24 +1,32 @@
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import {
+  type ApplicationExitRequestBoundaryService,
   fixtureReaderFileLayer,
   type JournalStoreError,
   type TraceOutputError,
   type TraceReaderError,
   TraceOutput
 } from "@dalph/orchestrator"
-import { Effect, FileSystem, Layer, Option } from "effect"
+import { Deferred, Effect, FileSystem, Layer, Option } from "effect"
 import { Argument, Command, Flag } from "effect/unstable/cli"
 import { executeDryRun } from "./cli.js"
 import {
   decodeRunInvocation,
   loadProductionConfiguration,
   knownProductionCliFailure,
+  presentApplicationExitResult,
   presentSelectedProductionRun,
   encodeProductionCliRecord,
   productionCliFailureRecord,
   type ProductionCliHostObservation,
+  type ProductionCliLifecycleError,
   type ProductionCliStatusError
 } from "./production-cli.js"
+import {
+  type ApplicationExitSignalBoundary,
+  installApplicationExitSignalAdapter,
+  nodeApplicationHostProcessBoundary
+} from "./supervisor-exit.js"
 import { dryRunOperationIdAllocatorLayer } from "./composition.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
 import {
@@ -34,14 +42,25 @@ import { workflowTraceOutputLayer } from "../presentation/workflow-trace.js"
 export type ProductionCliHostRunner<E, R> = (
   input: ProductionRepositoryHostConfiguration,
   use: (
-    observation: ProductionCliHostObservation
-  ) => Effect.Effect<void, ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError>
-) => Effect.Effect<void, E | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError, R>
+    observation: ProductionCliHostObservation,
+    applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
+  ) => Effect.Effect<
+    void,
+    ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError
+  >
+) => Effect.Effect<
+  void,
+  E | ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError,
+  R
+>
 
 const runConfiguration = { version: "0.0.0" }
 
 /** Builds the explicit dry/production command over one injected production host. */
-export const makeProductionCli = <EHost, RHost>(runProductionHost: ProductionCliHostRunner<EHost, RHost>) => {
+export const makeProductionCli = <EHost, RHost>(
+  runProductionHost: ProductionCliHostRunner<EHost, RHost>,
+  signals: ApplicationExitSignalBoundary = nodeApplicationHostProcessBoundary
+) => {
   const run = Command.make(
     "run",
     {
@@ -78,7 +97,30 @@ export const makeProductionCli = <EHost, RHost>(runProductionHost: ProductionCli
           const loaded = yield* loadProductionConfiguration(invocation.configuration, invocation.target, (locator) =>
             fileSystem.readFileString(locator)
           )
-          yield* runProductionHost(loaded, (observation) => presentSelectedProductionRun(observation, output.writeLine))
+          yield* runProductionHost(loaded, (observation, applicationExitRequestBoundary) =>
+            Effect.scoped(
+              Effect.gen(function* () {
+                const selected = yield* Deferred.make<void>()
+                const signalAdapter = yield* installApplicationExitSignalAdapter(
+                  applicationExitRequestBoundary,
+                  signals,
+                  ["SIGINT", "SIGTERM"]
+                )
+                const presentRun = presentSelectedProductionRun(
+                  observation,
+                  output.writeLine,
+                  Deferred.succeed(selected, undefined)
+                )
+                const presentExit = Deferred.await(selected).pipe(
+                  Effect.andThen(signalAdapter.awaitResult),
+                  Effect.flatMap((result) =>
+                    presentApplicationExitResult(observation.selection.runId, result, output.writeLine)
+                  )
+                )
+                yield* Effect.raceFirst(presentRun, presentExit)
+              })
+            )
+          )
         }).pipe(
           Effect.tapError((failure) => {
             const known = knownProductionCliFailure(failure)
@@ -96,20 +138,28 @@ export const makeProductionCli = <EHost, RHost>(runProductionHost: ProductionCli
   return Command.make("dalph").pipe(Command.withSubcommands([run]))
 }
 
-export const runProductionCli = <EHost, RHost>(runProductionHost: ProductionCliHostRunner<EHost, RHost>) =>
-  Command.runWith(makeProductionCli(runProductionHost), runConfiguration)
+export const runProductionCli = <EHost, RHost>(
+  runProductionHost: ProductionCliHostRunner<EHost, RHost>,
+  signals?: ApplicationExitSignalBoundary
+) => Command.runWith(makeProductionCli(runProductionHost, signals), runConfiguration)
 
-export const productionCliFromStdio = <EHost, RHost>(runProductionHost: ProductionCliHostRunner<EHost, RHost>) =>
-  Command.run(makeProductionCli(runProductionHost), runConfiguration)
+export const productionCliFromStdio = <EHost, RHost>(
+  runProductionHost: ProductionCliHostRunner<EHost, RHost>,
+  signals?: ApplicationExitSignalBoundary
+) => Command.run(makeProductionCli(runProductionHost, signals), runConfiguration)
 
 const productionHostRunner = (
   input: ProductionRepositoryHostConfiguration,
   use: (
-    observation: ProductionCliHostObservation
-  ) => Effect.Effect<void, ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError>
+    observation: ProductionCliHostObservation,
+    applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
+  ) => Effect.Effect<
+    void,
+    ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError
+  >
 ) =>
   withDecodedProductionRepositoryHost(input, productionRepositoryHostGraph(), (observation) =>
-    use(productionCliHostObservationOf(observation))
+    use(productionCliHostObservationOf(observation), observation.applicationExitRequestBoundary)
   )
 
 /** Removes host lifecycle authority before the shipped presentation callback receives its observation. */
