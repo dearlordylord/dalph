@@ -253,6 +253,9 @@ exclusions must not hide authored logic.
   rejecting count mismatches and malformed entries. Run
   `pnpm check:complexity:prune` after reductions; pruning preserves reviewed
   justifications for every retained entry.
+  The resolved canonical SHA is also exported to changed-line coverage as
+  `DALPH_COVERAGE_BASE_SHA`; an explicit all-zero candidate is invalid rather
+  than a request to use fallback discovery.
 - Production `floatingEffect` is an error. Test `multipleEffectProvide` and
   `unnecessaryEffectGen` stay off for deliberate Layer/generator composition;
   `lazyEffect` stays off for intentional lazy interfaces. New severity overrides

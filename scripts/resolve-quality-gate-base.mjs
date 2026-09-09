@@ -39,6 +39,9 @@ export const resolveQualityGateBase = ({
   readHead = defaultHead,
   resolveBase = resolveCoverageBase
 }) => {
+  if (candidateBase !== undefined && !isRequestedRevision(candidateBase)) {
+    throw new Error("The explicit frozen-candidate base must be a nonzero revision")
+  }
   const requested = candidateBase ?? hostedBase
   const candidateHead = canonicalize(readHead())
   const resolved = canonicalize(resolveBase(requested))

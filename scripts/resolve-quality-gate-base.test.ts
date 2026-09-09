@@ -26,6 +26,18 @@ describe("full-gate base resolution", () => {
     ).toThrow("equals candidate HEAD")
   })
 
+  it("rejects an explicit all-zero candidate instead of treating it as absent", () => {
+    expect(() =>
+      resolveQualityGateBase({
+        candidateBase: "0000000000000000000000000000000000000000",
+        canonicalize: (revision) => revision,
+        isAncestor: () => true,
+        readHead: () => "head",
+        resolveBase: () => "parent"
+      })
+    ).toThrow("must be a nonzero revision")
+  })
+
   it("skips a fallback that resolves to HEAD and uses the verified parent", () => {
     const resolveBase = (requested?: string) => (requested === "HEAD^" ? "parent" : "head")
 
