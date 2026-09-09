@@ -1224,6 +1224,28 @@ it.effect("fails closed when proposal ownership is contradictory", () =>
   })
 )
 
+it("rejects invalid owners while Alice reads a task unaffected by another task's proposal conflict", () => {
+  const proposal = taskProposalOf("current-owner-A", TaskId.make("A"))
+  const other = taskProposalOf("conflicted-proposal-B", TaskId.make("B"))
+  const genuine = ownerOf(proposal, false)
+  const proposedActions: DeliveryProposalFrontier = {
+    _tag: "DeliveryProposalOwnershipConflict",
+    conflicts: [{ id: other.id, order: other.order, owners: ["TrackerGraph", "TicketDelivery"] }]
+  }
+  const subject = Schema.decodeUnknownSync(DeliveryStatusSubject)({ _tag: "Task", runId, taskId: "A" })
+  const observation = (liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>) =>
+    evaluationOf({ tasks: [{ id: "A" }, { id: "B" }], proposedActions, liveOwners })
+  expect(deliveryStatusOf(subject, observation([genuine]))).toMatchObject({ _tag: "DeliveryStatusAvailable" })
+  const invalidOwners: ReadonlyArray<ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>> = [
+    [genuine, genuine],
+    [{ ...genuine, admissionAuthority: { _tag: "TicketProposalAdmission" } }],
+    [{ ...genuine, admissionAuthority: { ...genuine.admissionAuthority } }]
+  ]
+  for (const owners of invalidOwners) {
+    expect(deliveryStatusOf(subject, observation(owners))).toBeInstanceOf(DeliveryStatusProjectionConflict)
+  }
+})
+
 it.effect("localizes unavailable evidence without blocking an independent task", () =>
   Effect.gen(function* () {
     yield* Effect.void

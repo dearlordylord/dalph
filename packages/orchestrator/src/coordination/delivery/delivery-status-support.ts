@@ -198,8 +198,9 @@ export const validateLiveOwnersForStatus = (
   evaluation: DeliveryRuntimeEvaluation,
   liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
 ): DeliveryStatusProjectionConflict | null => {
-  if (evaluation.proposedActions._tag !== "DeliveryProposalsAvailable") return null
-  const duplicateProposal = evaluation.proposedActions.proposals.find(
+  const proposals =
+    evaluation.proposedActions._tag === "DeliveryProposalsAvailable" ? evaluation.proposedActions.proposals : []
+  const duplicateProposal = proposals.find(
     (proposal, index, proposals) => proposals.findIndex(({ id }) => id === proposal.id) !== index
   )
   if (duplicateProposal !== undefined) {
@@ -216,7 +217,7 @@ export const validateLiveOwnersForStatus = (
     )
   }
   for (const owner of liveOwners) {
-    const conflict = validateLiveOwnerAdmissionForStatus(subject, evaluation.proposedActions.proposals, owner)
+    const conflict = validateLiveOwnerAdmissionForStatus(subject, proposals, owner)
     if (conflict !== null) return conflict
   }
   return null

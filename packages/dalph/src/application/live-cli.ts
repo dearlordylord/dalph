@@ -33,6 +33,7 @@ import { dryRunOperationIdAllocatorLayer } from "./composition.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
 import {
   productionRepositoryHostGraph,
+  type ProductionRepositoryHostAdapters,
   type ProductionHostObservation,
   withDecodedProductionRepositoryHost
 } from "./production-host.js"
@@ -184,19 +185,21 @@ export const productionCliFromStdio = <EHost, RHost>(
   signals?: ApplicationExitSignalBoundary
 ) => Command.run(makeProductionCli(runProductionHost, signals), runConfiguration)
 
-const productionHostRunner = (
-  input: ProductionRepositoryHostConfiguration,
-  use: (
-    observation: ProductionCliHostObservation,
-    applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
-  ) => Effect.Effect<
-    void,
-    ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError
-  >
-) =>
-  withDecodedProductionRepositoryHost(input, productionRepositoryHostGraph(), (observation) =>
-    use(productionCliHostObservationOf(observation), observation.applicationExitRequestBoundary)
-  )
+const productionHostRunner =
+  <ECodex, EGithub, ETrace>(adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace>) =>
+  (
+    input: ProductionRepositoryHostConfiguration,
+    use: (
+      observation: ProductionCliHostObservation,
+      applicationExitRequestBoundary: ApplicationExitRequestBoundaryService
+    ) => Effect.Effect<
+      void,
+      ProductionCliLifecycleError | ProductionCliStatusError | TraceOutputError | TraceReaderError | JournalStoreError
+    >
+  ) =>
+    withDecodedProductionRepositoryHost(input, productionRepositoryHostGraph(adapters), (observation) =>
+      use(productionCliHostObservationOf(observation), observation.applicationExitRequestBoundary)
+    )
 
 /** Removes host lifecycle authority before the shipped presentation callback receives its observation. */
 export const productionCliHostObservationOf = (
@@ -209,15 +212,21 @@ export const productionCliHostObservationOf = (
   traceReader: observation.traceReader
 })
 
-/** Shipped binary composition: both modes share one command and differ only by installed interpreter boundaries. */
-export const productionCliApplication = productionCliFromStdio(productionHostRunner).pipe(
-  Effect.provide(
-    Layer.mergeAll(
-      makeDryRunTrackerGraphReaderLayer(fixtureReaderFileLayer),
-      workflowTraceOutputLayer.pipe(Layer.provide(traceOutputStdioLayer)),
-      traceOutputStdioLayer,
-      dryRunOperationIdAllocatorLayer,
-      NodeCrypto.layer
-    ).pipe(Layer.provideMerge(NodeServices.layer))
+/** One shipped command composition; qualification supplies only the host's named boundary Layers. */
+export const makeProductionCliApplication = <ECodex = never, EGithub = never, ETrace = never>(
+  adapters: ProductionRepositoryHostAdapters<ECodex, EGithub, ETrace> = {}
+) =>
+  productionCliFromStdio(productionHostRunner(adapters)).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        makeDryRunTrackerGraphReaderLayer(fixtureReaderFileLayer),
+        workflowTraceOutputLayer.pipe(Layer.provide(traceOutputStdioLayer)),
+        traceOutputStdioLayer,
+        dryRunOperationIdAllocatorLayer,
+        NodeCrypto.layer
+      ).pipe(Layer.provideMerge(NodeServices.layer))
+    )
   )
-)
+
+/** The shipped binary selects live defaults at every external boundary. */
+export const productionCliApplication = makeProductionCliApplication()

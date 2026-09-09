@@ -1,14 +1,8 @@
 /* eslint-disable import/no-nodejs-modules -- This qualification controls only the GitHub authority boundary. */
 import nodeFs from "node:fs"
 import nodeProcess from "node:process"
-import {
-  GithubGraphqlClient,
-  type GithubGraphqlRequest,
-  type githubGraphqlClientLayer as productionGithubGraphqlClientLayer
-} from "@dalph/orchestrator"
+import { GithubGraphqlClient, type GithubGraphqlRequest } from "@dalph/orchestrator"
 import { Effect, Layer, Match, Schema } from "effect"
-
-export * from "@dalph/orchestrator"
 
 const FixtureEnvironment = Schema.Struct({
   DALPH_QUALIFICATION_CLAIM_STATE: Schema.NonEmptyString,
@@ -134,6 +128,5 @@ const graphResponse = (request: GithubGraphqlRequest) =>
 
 const github = GithubGraphqlClient.of({ execute: graphResponse })
 
-/** Replaces only the documented external GitHub client acquisition boundary. */
-export const githubGraphqlClientLayer: typeof productionGithubGraphqlClientLayer = () =>
-  Layer.succeed(GithubGraphqlClient, github)
+/** Controlled GitHub service supplied at the host's explicit external boundary. */
+export const publicRecoveryGithubLayer = Layer.succeed(GithubGraphqlClient, github)

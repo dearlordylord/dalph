@@ -1,4 +1,4 @@
-/* eslint-disable import/no-nodejs-modules, max-lines -- This qualification controls real shipped Node processes. */
+/* eslint-disable import/no-nodejs-modules, max-lines -- This qualification controls real Node processes over the shipped composition. */
 import nodeProcess from "node:process"
 import { NodeCrypto, NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
@@ -69,8 +69,8 @@ const isClosedStatusRecord = (
   record._tag === "CurrentStatus" && record.status._tag === "DeliveryStatusClosed"
 
 const dalphPackageDirectory = new URL("../../", import.meta.url).pathname
-const dalphExecutable = new URL("../../dist/bin/dalph.js", import.meta.url).pathname
-const loaderRegister = new URL("../../dist/bin/production-public-recovery-loader-register.js", import.meta.url).pathname
+const qualificationExecutable = new URL("../../dist/bin/production-public-recovery-qualification.js", import.meta.url)
+  .pathname
 const codexFixture = new URL("../../dist/bin/production-public-recovery-codex-fixture.js", import.meta.url).pathname
 const gitFixture = new URL("../../dist/bin/production-public-recovery-git-fixture.js", import.meta.url).pathname
 const fixturePrefix = "DALPH_PUBLIC_RECOVERY_FIXTURE "
@@ -136,7 +136,7 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner
   const command = ChildProcess.make(
     nodeProcess.execPath,
-    [dalphExecutable, "run", target, "--production", "--config", config],
+    [qualificationExecutable, "run", target, "--production", "--config", config],
     {
       cwd: dalphPackageDirectory,
       env: {
@@ -149,7 +149,6 @@ const spawnPublicProcess = Effect.fn("ProductionPublicRecovery.spawn")(function*
         DALPH_QUALIFICATION_COMMON_DIRECTORY: commonDirectory,
         DALPH_QUALIFICATION_MODE: mode,
         GITHUB_TOKEN: "controlled-github-token",
-        NODE_OPTIONS: `--import=${loaderRegister}`,
         PATH: `${gitFixtureDirectory}:${nodeProcess.env["PATH"] ?? ""}`
       }
     }
@@ -273,6 +272,23 @@ const publicFixture = Effect.gen(function* () {
     journalDatabase
   }
 }).pipe(Effect.provide(nodeGitCommandLayer), Effect.provide(NodeServices.layer))
+
+it.effect("the shipped binary and recovery qualification select the same CLI and host composition", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem
+    const binary = yield* fileSystem.readFileString(new URL("../../bin/dalph.ts", import.meta.url).pathname)
+    const qualification = yield* fileSystem.readFileString(
+      new URL("../../bin/production-public-recovery-qualification.ts", import.meta.url).pathname
+    )
+    const composition = yield* fileSystem.readFileString(new URL("./live-cli.ts", import.meta.url).pathname)
+    expect(binary).toContain('import { productionCliApplication } from "../src/application/live-cli.js"')
+    expect(binary).toContain("runDalphNodeMain(productionCliApplication)")
+    expect(composition).toContain("productionCliApplication = makeProductionCliApplication()")
+    expect(composition).toContain("withDecodedProductionRepositoryHost(input, productionRepositoryHostGraph(adapters)")
+    expect(qualification).toContain('import { makeProductionCliApplication } from "../src/application/live-cli.js"')
+    expect(qualification).toContain("makeProductionCliApplication({ githubClient: () => publicRecoveryGithubLayer })")
+  }).pipe(Effect.provide(NodeServices.layer))
+)
 
 it.live(
   "unfinished SQLite public restart reports the same recovered Run and no second beginning",

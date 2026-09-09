@@ -48,9 +48,6 @@ const ticketProposalAdmissionAuthorityOf = (proposal: DeliveryActionProposal): T
   return authority
 }
 
-/** @internal Test seam for passive projection fixtures; grants no admission or execution capability. */
-export const issueTicketProposalAdmissionAuthorityForTest = ticketProposalAdmissionAuthorityOf
-
 /** Returns the exact proposal bound to an opaque process-local admission witness. */
 export const admittedProposalFor = (
   authority: DeliveryRuntimeLiveOwnerAdmissionAuthority
