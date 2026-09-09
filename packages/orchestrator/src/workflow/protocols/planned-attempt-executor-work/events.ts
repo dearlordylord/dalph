@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { PlannedTaskAttempt, PlannedAttemptExecutorReport } from "@dalph/contracts"
+import { PlannedTaskAttempt, PlannedAttemptExecutorReport, PlannedAttemptExecutorBeginProofId } from "@dalph/contracts"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { WorkflowActor } from "../../registry/actor.js"
 
@@ -30,6 +30,8 @@ export type PlannedAttemptExecutorCommandIntendedEvent = typeof PlannedAttemptEx
 
 export const PlannedAttemptExecutorCommandProjectionObservation = Schema.TaggedUnion({
   ExactExecutorReport: { report: PlannedAttemptExecutorReport },
+  /** The executor freshly proved the first task turn was not authorized; this history is not reusable permission. */
+  ExecutorBeginNotCrossed: { proofId: PlannedAttemptExecutorBeginProofId },
   ExecutorStateNoCurrentReport: {},
   ExecutorStateTemporarilyUnavailable: {},
   ExecutorStateUnreadable: {},

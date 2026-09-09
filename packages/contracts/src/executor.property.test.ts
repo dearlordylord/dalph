@@ -5,6 +5,7 @@ import {
   PlannedAttemptExecutorCorrelation,
   PlannedAttemptExecutorRequest,
   PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorBeginProofId,
   PlannedAttemptExecutorReport
 } from "./executor.js"
 import { AttemptId, PlannedTaskAttempt } from "./planned-attempt.js"
@@ -80,7 +81,7 @@ it("rejects a request whose specification names another task or fingerprint", ()
   expect(() => Schema.decodeUnknownSync(PlannedAttemptExecutorRequest)({ ...exact, specification: changed })).toThrow()
 })
 
-it("roundtrips all six normalized projection outcomes for arbitrary correlations", () => {
+it("roundtrips all normalized projection outcomes for arbitrary correlations", () => {
   fc.assert(
     fc.property(correlationArbitrary, correlatedReportArbitrary, (correlation, { report }) => {
       const foreignAttemptCorrelation = {
@@ -94,6 +95,11 @@ it("roundtrips all six normalized projection outcomes for arbitrary correlations
       const projections = [
         { _tag: "Exact" as const, report },
         { _tag: "NoReport" as const, correlation },
+        {
+          _tag: "BeginNotCrossed" as const,
+          correlation,
+          proofId: PlannedAttemptExecutorBeginProofId.make("fresh-begin-proof")
+        },
         { _tag: "TemporarilyUnavailable" as const, correlation },
         { _tag: "Unreadable" as const, correlation },
         {

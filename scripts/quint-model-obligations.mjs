@@ -8,6 +8,10 @@
 export const plannedAttemptExecutorObligations = Object.freeze({
   invariants: Object.freeze([
     "everyCallHasOneDurableIntent",
+    "beginTurnCrossesAtMostOnce",
+    "redeliveryRequiresFreshExactPreTurnProof",
+    "redeliveryKeepsOriginalBegin",
+    "beginNotCrossedProofHasExactPreTurnAuthority",
     "unmatchedIntentBlocksAnotherCommand",
     "acceptedReportsRequireSettledCommandOrObservation",
     "unsettledEvidenceDoesNotAppendReport",
@@ -42,6 +46,10 @@ export const plannedAttemptExecutorObligations = Object.freeze({
     "resumeIntentRecordedReached",
     "suspendIntentRecordedReached",
     "beginCalledReached",
+    "beginPreTurnDeliveryReached",
+    "beginNotCrossedProofReached",
+    "beginRedeliveredReached",
+    "beginTurnCrossedAfterRedeliveryReached",
     "resumeCalledReached",
     "suspendCalledReached",
     "responseReceivedReached",
@@ -72,6 +80,8 @@ export const plannedAttemptExecutorProofObligations = Object.freeze({
   evidence: Object.freeze({
     invariants: Object.freeze([
       "everyCallHasDurableIntent",
+      "beginTurnCrossesAtMostOnce",
+      "redeliveryRequiresFreshProof",
       "beginOccursOnce",
       "firstAcceptedReportIsExecuting",
       "acceptedSafeReportAuthorizesAtMostOneResume",
@@ -84,6 +94,11 @@ export const plannedAttemptExecutorProofObligations = Object.freeze({
     witnesses: Object.freeze([
       "beginIntentReached",
       "beginCalledReached",
+      "beginPreTurnReached",
+      "beginNotCrossedReached",
+      "beginRedeliveredReached",
+      "beginTurnCrossedReached",
+      "beginProofLostReached",
       "commandResponseReached",
       "executingAcceptedReached",
       "fourthUnchangedObservationReached",

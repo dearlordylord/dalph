@@ -7,6 +7,8 @@ import {
   PlannedAttemptExecutorLifecycleObservation,
   PlannedAttemptExecutorCommandFailure,
   PlannedAttemptExecutorProjection,
+  PlannedAttemptExecutorBeginProofId,
+  type PlannedAttemptExecutorBeginDelivery,
   type PlannedAttemptExecutorObservationPurpose,
   PlannedAttemptExecutorReport,
   PlannedAttemptExecutorResult,
@@ -848,6 +850,19 @@ const makeCodexPlannedAttemptExecutorContext = (
     const evidenceStore = yield* Effect.serviceOption(EvidenceStore)
     const replacementAuthority = yield* Effect.serviceOption(CodexReplacementAuthority)
     const gates = yield* Ref.make<ReadonlyMap<string, Semaphore.Semaphore>>(new Map())
+    // A proof is an activation-local capability, not copied provider authority.
+    // New proof replaces old proof; every attempt mutation consumes or invalidates it.
+    const beginProofs = yield* Ref.make<
+      ReadonlyMap<
+        string,
+        { readonly proofId: PlannedAttemptExecutorBeginProofId; readonly record: CodexAssociatedRecord }
+      >
+    >(new Map())
+    const invalidateBeginProof = (correlation: PlannedAttemptExecutorCorrelation) =>
+      Ref.update(
+        beginProofs,
+        (current) => new Map([...current].filter(([key]) => key !== plannedAttemptExecutorCorrelationKey(correlation)))
+      )
     const freshOwnedTurnToken = Effect.gen(function* () {
       return CodexOwnedTurnToken.make(yield* crypto.randomUUIDv4)
     }).pipe(
@@ -1468,9 +1483,43 @@ const makeCodexPlannedAttemptExecutorContext = (
       if (record._tag === "Terminal") return yield* Effect.fail(new CodexTurnBoundaryUnknown({}))
     })
 
-    const begin = Effect.fn("CodexPlannedAttemptExecutor.begin")(function* (request: PlannedAttemptExecutorRequest) {
+    const loadReconciledBeginRecord = Effect.fn("CodexPlannedAttemptExecutor.loadReconciledBeginRecord")(function* (
+      attempt: PlannedTaskAttempt,
+      correlation: PlannedAttemptExecutorCorrelation,
+      proofId: PlannedAttemptExecutorBeginProofId
+    ) {
+      const proof = (yield* Ref.get(beginProofs)).get(plannedAttemptExecutorCorrelationKey(correlation))
+      yield* invalidateBeginProof(correlation)
+      if (proof?.proofId !== proofId) return yield* new CodexTurnBoundaryUnknown({})
+      const found = yield* readRecord(correlation, attempt)
+      if (Option.isNone(found)) return yield* new CodexTurnBoundaryUnknown({})
+      const current = found.value
+      if (
+        current._tag !== "AssociatedPreTurn" ||
+        current.threadId !== proof.record.threadId ||
+        current.worktree !== proof.record.worktree
+      ) {
+        return yield* new CodexTurnBoundaryUnknown({})
+      }
+      // No allocation/replacement path is reachable from reconciled delivery.
+      // AssociatedPreTurn reconciliation returns Idle or fails; it cannot
+      // return an owned-turn lifecycle projection.
+      yield* reconcile(attempt, correlation, current)
+      return current
+    })
+
+    const begin = Effect.fn("CodexPlannedAttemptExecutor.begin")(function* (
+      request: PlannedAttemptExecutorRequest,
+      delivery: PlannedAttemptExecutorBeginDelivery
+    ) {
       const attempt = request.plannedAttempt
       const correlation = plannedAttemptExecutorCorrelation(attempt)
+      if (delivery._tag === "ReconciledDelivery") {
+        const record = yield* loadReconciledBeginRecord(attempt, correlation, delivery.proofId)
+        const report = yield* sendTurn(attempt, request.specification, correlation, record)
+        return report._tag === "ExecutorWorkExecuting" ? report : running(correlation)
+      }
+      yield* invalidateBeginProof(correlation)
       const loaded = yield* loadBeginRecord(attempt, correlation)
       let record = loaded.record
       if (loaded._tag === "Recovered" && record._tag === "AssociatedPreTurn") {
@@ -1627,9 +1676,18 @@ const makeCodexPlannedAttemptExecutorContext = (
 
     const projectIdleRecord = Effect.fn("CodexPlannedAttemptExecutor.projectIdleRecord")(function* (
       correlation: PlannedAttemptExecutorCorrelation,
-      record: CodexThreadBackedRecord
+      record: CodexThreadBackedRecord,
+      purpose: PlannedAttemptExecutorObservationPurpose
     ) {
-      if (record._tag === "AssociatedPreTurn") return noReport(correlation)
+      if (record._tag === "AssociatedPreTurn") {
+        if (!isBeginReconciliation(purpose)) return noReport(correlation)
+        const proofId = PlannedAttemptExecutorBeginProofId.make(yield* crypto.randomUUIDv4)
+        yield* Ref.update(
+          beginProofs,
+          (current) => new Map([...current, [plannedAttemptExecutorCorrelationKey(correlation), { proofId, record }]])
+        )
+        return PlannedAttemptExecutorProjection.cases.BeginNotCrossed.make({ correlation, proofId })
+      }
       const census = yield* observeOwnedActivityByThreadId(record.threadId)
       if (census._tag === "ExactLive") return exact(running(correlation))
       if (isUnusableActivityCensus(census)) return unreadable(correlation)
@@ -1665,13 +1723,14 @@ const makeCodexPlannedAttemptExecutorContext = (
         )
       }
       if (reconciliation._tag === "Unresolved") return projectionOutcome(unreadable(correlation))
-      return projectionOutcome(yield* projectIdleRecord(correlation, record))
+      return projectionOutcome(yield* projectIdleRecord(correlation, record, purpose))
     })
 
     const projectStoredRecord = Effect.fn("CodexPlannedAttemptExecutor.projectStoredRecord")(function* (
       correlation: PlannedAttemptExecutorCorrelation,
       purpose: PlannedAttemptExecutorObservationPurpose
     ) {
+      if (isBeginReconciliation(purpose)) yield* invalidateBeginProof(correlation)
       const found = yield* store.readAttempt(correlation.runId, correlation.attemptId)
       if (Option.isNone(found)) return projectionOutcome(noReport(correlation))
       const record = found.value
@@ -2447,13 +2506,14 @@ const makeCodexPlannedAttemptExecutorContext = (
 
     const executor: PlannedAttemptExecutorService = {
       observe: (correlation, purpose) =>
-        project(correlation, purpose).pipe(
-          Effect.catch((error: unknown) => Effect.succeed(projectFailure(correlation, error)))
-        ),
-      begin: (request) => {
+        (isBeginReconciliation(purpose)
+          ? gateFor(correlation).pipe(Effect.flatMap((gate) => gate.withPermit(project(correlation, purpose))))
+          : project(correlation, purpose)
+        ).pipe(Effect.catch((error: unknown) => Effect.succeed(projectFailure(correlation, error)))),
+      begin: (request, delivery) => {
         const correlation = plannedAttemptExecutorCorrelation(request.plannedAttempt)
         return gateFor(correlation).pipe(
-          Effect.flatMap((gate) => gate.withPermit(begin(request))),
+          Effect.flatMap((gate) => gate.withPermit(begin(request, delivery))),
           Effect.catch((error: unknown) =>
             error instanceof ForeignAttemptRecord ? Effect.succeed(foreignReport(error.observed)) : Effect.fail(error)
           ),
@@ -2463,7 +2523,9 @@ const makeCodexPlannedAttemptExecutorContext = (
       requestSuspension: (attempt) => {
         const correlation = plannedAttemptExecutorCorrelation(attempt)
         return gateFor(correlation).pipe(
-          Effect.flatMap((gate) => gate.withPermit(suspend(attempt))),
+          Effect.flatMap((gate) =>
+            gate.withPermit(invalidateBeginProof(correlation).pipe(Effect.andThen(suspend(attempt))))
+          ),
           Effect.catch((error: unknown) =>
             error instanceof ForeignAttemptRecord ? Effect.succeed(foreignReport(error.observed)) : Effect.fail(error)
           ),
@@ -2473,7 +2535,9 @@ const makeCodexPlannedAttemptExecutorContext = (
       resume: (request) => {
         const correlation = plannedAttemptExecutorCorrelation(request.plannedAttempt)
         return gateFor(correlation).pipe(
-          Effect.flatMap((gate) => gate.withPermit(resume(request))),
+          Effect.flatMap((gate) =>
+            gate.withPermit(invalidateBeginProof(correlation).pipe(Effect.andThen(resume(request))))
+          ),
           Effect.catch((error: unknown) =>
             error instanceof ForeignAttemptRecord ? Effect.succeed(foreignReport(error.observed)) : Effect.fail(error)
           ),
@@ -2484,7 +2548,11 @@ const makeCodexPlannedAttemptExecutorContext = (
     const replacementService: CodexProviderWorkUnitReplacementService = {
       replacePurgedProviderWorkUnit: (request) => {
         const correlation = plannedAttemptExecutorCorrelation(request.plannedAttempt)
-        return gateFor(correlation).pipe(Effect.flatMap((gate) => gate.withPermit(replacement(request))))
+        return gateFor(correlation).pipe(
+          Effect.flatMap((gate) =>
+            gate.withPermit(invalidateBeginProof(correlation).pipe(Effect.andThen(replacement(request))))
+          )
+        )
       }
     }
     const lifecycleObservation = PlannedAttemptExecutorLifecycleObservation.of({
