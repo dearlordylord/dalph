@@ -22,7 +22,7 @@ type CapabilityFamily =
   | "integrator-predecessor-candidate-cleanup"
   | "coordinator-ownership"
 
-type CapabilityRole = "controlled" | "production"
+type CapabilityRole = "controlled" | "production" | "qualification"
 
 interface ContractExecution {
   readonly role: CapabilityRole
@@ -102,6 +102,8 @@ interface CapabilityRegistration {
   readonly contract: ContractEvidence
   readonly controlled: RegisteredImplementation | NotApplicableImplementation
   readonly production: RegisteredImplementation | NotApplicableImplementation
+  /** Additional repository-owned implementation assembled only by a qualification host. */
+  readonly qualification?: RegisteredImplementation
 }
 
 interface CompositionSource {
@@ -169,6 +171,14 @@ const support = (identity: string, reason: string, source: string): CompositionS
 
 const controlledComposition = composed
 
+const implementationRoles = (capability: CapabilityRegistration) => [
+  { entry: capability.controlled, role: "controlled" as const },
+  { entry: capability.production, role: "production" as const },
+  ...(capability.qualification === undefined
+    ? []
+    : [{ entry: capability.qualification, role: "qualification" as const }])
+]
+
 /**
  * The acceptance issue is the authority for this family set. Keeping the
  * required set separate from the records makes deleting one record a real
@@ -222,6 +232,22 @@ const journalContract = contract("JournalStore", [
       "productionJournalStoreLayer",
       "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts",
       "productionJournalStoreLayer",
+      { _tag: "Argument", index: 1 }
+    )
+  },
+  {
+    invocation: {
+      marker: "journalAppendContract(",
+      selector: { _tag: "StringArgument", index: 0, value: "sqlite-qualification" },
+      source: "packages/orchestrator/src/workflow-journal/store.test.ts"
+    },
+    marker: "journalAppendContract",
+    role: "qualification",
+    source: "packages/orchestrator/src/workflow-journal/store.test.ts",
+    implementation: implementationBinding(
+      "sqliteJournalTestLayer",
+      "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts",
+      "sqliteJournalTestLayer",
       { _tag: "Argument", index: 1 }
     )
   }
@@ -672,6 +698,12 @@ export const capabilityRegistrationInventory = {
         "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts",
         "productionJournalStoreLayer",
         composed("packages/dalph/src/application/production.ts", "productionJournalStoreLayer")
+      ),
+      qualification: implementation(
+        "sqliteJournalTestLayer",
+        "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts",
+        "sqliteJournalTestLayer",
+        composed("packages/dalph/bin/codex-qualification-host.ts", "sqliteJournalTestLayer")
       )
     },
     {
@@ -998,7 +1030,7 @@ export const capabilityRegistrationInventory = {
   compositionSources: [
     { role: "production", source: "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts" },
     { role: "production", source: "packages/dalph/src/application/production.ts" },
-    { role: "production", source: "packages/dalph/bin/codex-qualification-host.ts" },
+    { role: "qualification", source: "packages/dalph/bin/codex-qualification-host.ts" },
     {
       role: "production",
       source: "packages/orchestrator/src/authorities/coordinator-ownership/live-task-work-start.ts"
@@ -1137,11 +1169,6 @@ export const capabilityRegistrationInventory = {
       "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts"
     ),
     support(
-      "sqliteJournalTestLayer",
-      "controlled SQLite journal composition used by the qualification host without replacing the registered production journal boundary",
-      "packages/orchestrator/src/workflow-journal/adapters/sqlite-store.ts"
-    ),
-    support(
       "operatorControlLayer",
       "operator-control protocol support",
       "packages/dalph/src/application/production.ts"
@@ -1244,10 +1271,9 @@ export const capabilityRegistrationIssues = (
       issues.push(`duplicate capability family ${family}`)
   }
   for (const capability of inventory.capabilities) {
-    for (const side of ["controlled", "production"] as const) {
-      const entry = capability[side]
+    for (const { entry, role } of implementationRoles(capability)) {
       if (entry._tag === "NotApplicable") {
-        if (entry.detail.trim() === "") issues.push(`${capability.family} ${side} has an empty not-applicable reason`)
+        if (entry.detail.trim() === "") issues.push(`${capability.family} ${role} has an empty not-applicable reason`)
         continue
       }
       const identityKey = `${capability.family}:${entry.identity}`
@@ -1270,10 +1296,12 @@ export const capabilityRegistrationIssues = (
     }
     const executions = capability.contract.executions
     const presentRoles = new Set(
-      executions.filter(({ role }) => capability[role]._tag === "Implementation").map(({ role }) => role)
+      executions
+        .filter(({ role }) => implementationRoles(capability).some((candidate) => candidate.role === role))
+        .map(({ role }) => role)
     )
-    for (const role of ["controlled", "production"] as const) {
-      if (capability[role]._tag === "Implementation" && !presentRoles.has(role)) {
+    for (const { entry, role } of implementationRoles(capability)) {
+      if (entry._tag === "Implementation" && !presentRoles.has(role)) {
         issues.push(`${capability.family} ${role} has no shared contract execution`)
       }
     }

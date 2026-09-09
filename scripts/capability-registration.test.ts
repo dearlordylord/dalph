@@ -33,7 +33,7 @@ describe("capability registration gate", () => {
   })
 
   it(
-    "runs every registered controlled and production implementation through its named contract family",
+    "runs every registered controlled, production, and qualification implementation through its named contract family",
     { timeout: 30_000 },
     () => {
       inspectCapabilitySourceProgram([
@@ -50,9 +50,9 @@ describe("capability registration gate", () => {
       expect(repositoryDiagnostics.rebuiltSourcePaths).toHaveLength(sourceFiles.length)
 
       for (const capability of capabilityRegistrationInventory.capabilities) {
-        for (const role of ["controlled", "production"] as const) {
+        for (const role of ["controlled", "production", "qualification"] as const) {
           const implementation = capability[role]
-          if (implementation._tag === "Implementation") {
+          if (implementation?._tag === "Implementation") {
             expect(capability.contract.executions).toContainEqual(
               expect.objectContaining({
                 implementation: expect.objectContaining({
@@ -178,7 +178,12 @@ describe("capability registration gate", () => {
       )
     }
 
-    expect(issuesFor(oneSided)).toContain("journal production has no shared contract execution")
+    expect(issuesFor(oneSided)).toEqual(
+      expect.arrayContaining([
+        "journal production has no shared contract execution",
+        "journal qualification has no shared contract execution"
+      ])
+    )
   })
 
   it("rejects a production contract test that stops invoking the shared helper", () => {
@@ -315,6 +320,7 @@ describe("capability registration gate", () => {
   })
 
   it.each([
+    ["journal", "qualification", "sqliteJournalTestLayer"],
     ["task-tracker-claim", "production", "githubTrackerMutationLayer"],
     ["task-tracker-completion-claim", "controlled", "controlledCompletionClaimBoundaryLayerFrom"],
     ["task-tracker-completion-claim", "production", "githubCompletionClaimBoundaryLayer"],

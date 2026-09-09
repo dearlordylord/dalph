@@ -17,8 +17,11 @@ executor process, or journal record is changed by this check.
 The maintainer adds or assembles an exported production adapter and runs the
 capability-registration check. The check reads the authored TypeScript source
 files and the checked-in inventory. It compares the exported Layer references
-in the listed controlled and production composition sources with registered
-implementation identities and explicit support bindings. It also checks that
+in the listed controlled, production, and qualification composition sources
+with registered implementation identities and explicit support bindings. A
+qualification implementation that supplies an audited capability is registered
+under that capability family and executes the same shared contract; only
+non-capability composition dependencies may use support bindings. It also checks that
 each registered implementation and contract marker still exists at the named
 source location and that every implementation side has a named shared-contract
 call. It also checks that the declared implementation identity is the value
@@ -48,7 +51,7 @@ provider`.
 Before the action, the inventory contains one entry for each accepted family,
 including the three separate disposition authorities for planned worktrees,
 planned branches, and quarantined Integrator predecessor candidates. The
-controlled and production implementations that exist in this repository are
+controlled, production, and qualification implementations that exist in this repository are
 named by source identity. The GitHub tracker composition registers graph read,
 active claim, completion claim, and task completion as four exact families.
 The outer Integrator still has controlled evidence and a typed production N/A
@@ -58,7 +61,7 @@ authority records.
 
 The maintainer edits the inventory or composition and runs the focused gate.
 The gate first checks the fixed accepted family set, then checks duplicate
-families and duplicate identities within a family, controlled/production
+families and duplicate identities within a family, controlled/production/qualification
 contract execution evidence, typed N/A details, source markers, composition
 uses, and unregistered exported Layers. It reads no provider and performs no
 runtime composition. Across controlled fixture audits, it retains only the
@@ -81,8 +84,8 @@ allow one environment-specific workflow path. A process crash and retry do
 not apply because the check has no external mutation or durable write; rerun
 simply reads the current source again.
 
-Acceptance tests: `runs every registered controlled and production
-implementation through its named contract family`, `rejects a missing family
+Acceptance tests: `runs every registered controlled, production, and
+qualification implementation through its named contract family`, `rejects a missing family
 even when the inventory is otherwise unchanged`, `rejects duplicate family and
 implementation registrations`, `rejects stale implementation and composition
 evidence`, `rejects one-sided contract evidence`, `rejects a production
@@ -112,7 +115,7 @@ coverage stage excludes that suite and every test named with the
 | Production adapter added without controlled evidence | Multiline direct Layer values and aliased relative re-exports remain source-backed and closed. | `audits exported Layer values without a Layer suffix and through re-exports` |
 | Production adapter added without controlled evidence | Local aliases, default exports, and namespace/default re-exports remain source-backed and closed. | `audits local aliases, default exports, and namespace/default re-exports` |
 | Production adapter added without controlled evidence | Source auditing remains read-only and dependency-neutral. | `audits source text without loading or invoking a live provider` |
-| Existing registration changed | Every current implementation has a contract execution and current source/composition evidence. | `runs every registered controlled and production implementation through its named contract family` |
+| Existing registration changed | Every current controlled, production, and qualification implementation has a contract execution and current source/composition evidence. | `runs every registered controlled, production, and qualification implementation through its named contract family` |
 | Existing registration changed | Missing, duplicate, stale, one-sided, fixed-denominator, and no-current-consumer mutations fail closed. | `rejects a missing family even when the inventory is otherwise unchanged`; `keeps the required family denominator outside a mutated inventory`; `rejects duplicate family and implementation registrations`; `rejects stale implementation and composition evidence`; `rejects one-sided contract evidence` |
 | Existing registration changed | A provider-side contract test cannot silently stop invoking the imported shared contract helper or substitute a local same-name function. | `rejects a production contract test that stops invoking the shared helper`; `rejects a local same-name contract function that is not the imported public contract` |
 | Existing registration changed | A comment or string containing a helper name cannot substitute for executing the helper call. | `rejects comment and string residue when shared-contract execution is removed` |

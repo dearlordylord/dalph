@@ -809,9 +809,9 @@ const isExportedSymbol = (symbol: ts.Symbol, indexed: CapabilitySourceProgram): 
 
 const implementationEntries = (inventory: CapabilityRegistrationInventory): ReadonlyArray<RegisteredImplementation> =>
   inventory.capabilities.flatMap((capability) =>
-    (["controlled", "production"] as const).flatMap((role) => {
+    (["controlled", "production", "qualification"] as const).flatMap((role) => {
       const implementation = capability[role]
-      return implementation._tag === "Implementation" ? [implementation] : []
+      return implementation?._tag === "Implementation" ? [implementation] : []
     })
   )
 
@@ -852,13 +852,13 @@ const contractImplementationIssues = (
   const binding = execution.implementation
   const implementation = capability[execution.role]
   if (binding === undefined) {
-    return implementation._tag === "Implementation"
+    return implementation?._tag === "Implementation"
       ? [
           `${capability.family} ${execution.role} contract implementation binding is missing: ${implementation.identity}`
         ]
       : []
   }
-  if (implementation._tag === "NotApplicable") return []
+  if (implementation === undefined || implementation._tag === "NotApplicable") return []
   const issue = `${capability.family} ${execution.role} contract implementation binding is stale: ${binding.identity}`
   if (
     binding.identity !== implementation.identity ||
@@ -901,9 +901,9 @@ const implementationSourceIssues = (
   const issues: Array<string> = []
   const indexed = sourceProgram(sourceFiles)
   for (const capability of inventory.capabilities) {
-    for (const role of ["controlled", "production"] as const) {
+    for (const role of ["controlled", "production", "qualification"] as const) {
       const implementation = capability[role]
-      if (implementation._tag === "NotApplicable") continue
+      if (implementation === undefined || implementation._tag === "NotApplicable") continue
       const source = indexed.sourceByPath.get(implementation.source)
       const implementationSymbol =
         source === undefined ? undefined : declarationSymbolFor(source, implementation.marker, indexed)
