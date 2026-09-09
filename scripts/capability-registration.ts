@@ -109,6 +109,8 @@ interface CapabilityRegistration {
 interface CompositionSource {
   readonly role: CapabilityRole
   readonly source: string
+  /** Contract fixtures prove one exact implementation identity; runtime roots additionally audit every exported Layer. */
+  readonly evidenceOnly?: true
 }
 
 /**
@@ -1046,6 +1048,64 @@ export const capabilityRegistrationInventory = {
     }
   ],
   compositionSources: [
+    { evidenceOnly: true, role: "controlled", source: "packages/orchestrator/src/workflow-journal/store.test.ts" },
+    {
+      evidenceOnly: true,
+      role: "production",
+      source: "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts"
+    },
+    { evidenceOnly: true, role: "controlled", source: "packages/orchestrator/src/workflow/interpretation/layers.ts" },
+    {
+      evidenceOnly: true,
+      role: "controlled",
+      source: "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.test.ts"
+    },
+    { evidenceOnly: true, role: "controlled", source: "packages/orchestrator/src/authorities/git/worktree.test.ts" },
+    {
+      evidenceOnly: true,
+      role: "controlled",
+      source: "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts"
+    },
+    {
+      evidenceOnly: true,
+      role: "controlled",
+      source: "packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts"
+    },
+    {
+      evidenceOnly: true,
+      role: "production",
+      source: "packages/dalph/src/application/codex-planned-attempt-executor.ts"
+    },
+    {
+      evidenceOnly: true,
+      role: "controlled",
+      source: "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts"
+    },
+    {
+      evidenceOnly: true,
+      role: "controlled",
+      source: "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts"
+    },
+    {
+      evidenceOnly: true,
+      role: "controlled",
+      source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.test.ts"
+    },
+    {
+      evidenceOnly: true,
+      role: "controlled",
+      source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/branch.test.ts"
+    },
+    {
+      evidenceOnly: true,
+      role: "controlled",
+      source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/integrator-candidate.test.ts"
+    },
+    {
+      evidenceOnly: true,
+      role: "controlled",
+      source: "packages/orchestrator/src/authorities/coordinator-ownership/ownership.test.ts"
+    },
     { role: "production", source: "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts" },
     { role: "production", source: "packages/dalph/src/application/production.ts" },
     { role: "production", source: "packages/dalph/src/application/production-host.ts" },

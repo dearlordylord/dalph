@@ -922,9 +922,9 @@ const implementationSourceIssues = (
       )?.role
       if (composition === undefined) {
         issues.push(`${capability.family} ${role} composition source is missing: ${implementation.composition.source}`)
-      } else if (compositionRole !== undefined && compositionRole !== role) {
+      } else if (compositionRole !== role) {
         issues.push(
-          `${capability.family} ${role} composition role is stale: ${implementation.composition.source} is ${compositionRole}`
+          `${capability.family} ${role} composition role is stale: ${implementation.composition.source} is ${compositionRole ?? "unregistered"}`
         )
       } else if (!hasValueReference(composition, implementation.composition.marker, indexed)) {
         issues.push(`${capability.family} ${role} composition marker is stale: ${implementation.composition.marker}`)
@@ -1004,6 +1004,7 @@ const compositionReferenceIssues = (
   }
   const reported = new Set<string>()
   for (const composition of inventory.compositionSources) {
+    if (composition.evidenceOnly === true) continue
     const compatibleRegistered = new Map(
       [...registered].flatMap(([identity, registration]) =>
         composition.role === "qualification" || registration.role === composition.role

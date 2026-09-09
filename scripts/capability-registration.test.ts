@@ -186,6 +186,47 @@ describe("capability registration gate", () => {
     )
   })
 
+  it("rejects an unclassified test consumer substituted for real production consumption", () => {
+    const unclassifiedConsumer: CapabilitySourceFile = {
+      path: "scripts/fixtures/issue-79-unclassified-evidence-consumer.test.ts",
+      source:
+        'import { nodeEvidenceStoreLayer } from "../../packages/orchestrator/src/workflow/protocols/evidence-store.js"\nexport const testEvidenceLayer = nodeEvidenceStoreLayer'
+    }
+    const substituted = {
+      ...capabilityRegistrationInventory,
+      capabilities: capabilityRegistrationInventory.capabilities.map((capability) =>
+        capability.family !== "immutable-evidence"
+          ? capability
+          : {
+              ...capability,
+              production: {
+                ...capability.production,
+                composition: {
+                  ...capability.production.composition,
+                  marker: "nodeEvidenceStoreLayer",
+                  source: unclassifiedConsumer.path
+                }
+              }
+            }
+      )
+    }
+    const withoutProductionConsumption = sourceFiles.map((file) =>
+      file.path === "packages/dalph/src/application/production-host.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "nodeEvidenceStoreLayer(configuration.evidenceStoreRoot).pipe(Layer.provide(NodeServices.layer))",
+              "Layer.empty"
+            )
+          }
+        : file
+    )
+
+    expect(
+      runCapabilityRegistrationGate(substituted, [...withoutProductionConsumption, unclassifiedConsumer])
+    ).toContain(`immutable-evidence production composition role is stale: ${unclassifiedConsumer.path} is unregistered`)
+  })
+
   it("rejects replacement of the registered evidence Layer in the production host", () => {
     const replacedProductionHost = sourceFiles.map((file) =>
       file.path === "packages/dalph/src/application/production-host.ts"
