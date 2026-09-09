@@ -1,6 +1,20 @@
 import { it } from "@effect/vitest"
 import { NodeServices } from "@effect/platform-node"
-import { RunId, TaskId } from "@dalph/contracts"
+import {
+  AcceptedResult,
+  AttemptId,
+  GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
+} from "@dalph/contracts"
 import {
   ApplicationExitResult,
   AllocatedWorkflowRunId,
@@ -12,8 +26,13 @@ import {
   currentSignalFromCurrentFirstStream,
   currentSignalOf,
   type CurrentDeliveryStatus,
+  type DeliveryStatusEntry,
   type DeliveryRuntimeObservationState,
   DeliveryStatusEntryIdentity,
+  DeliveryStatusEvidenceIdentity,
+  DeliveryProposalId,
+  DeliveryProposalOrdinal,
+  BoundedTicketRank,
   type DeliveryStatusProjectionError,
   DeliveryStatusProjectionConflict,
   DeliveryStatusRunIdentityUnavailable,
@@ -27,6 +46,8 @@ import {
   GitCommonDirectoryLocator,
   GitCommonDirectoryTarget,
   JournalPosition,
+  EvidenceDigest,
+  EvidenceReference,
   JournalDataCorruption,
   JournalHistoryCorruption,
   JournalPartitionContradiction,
@@ -37,6 +58,7 @@ import {
   JournalStorageLocked,
   JournalStorageUnavailable,
   OperationId,
+  QueuedIntegrationResponsibility,
   ProductionRunSelection,
   ProductionRunSelectionConflict,
   RunTerminationDisposition,
@@ -56,6 +78,10 @@ import {
   TrackerAdapterReadFailureReason,
   TrackerGraphReader,
   TrackerRevision,
+  TaskWorkCapacity,
+  WorkflowResponsibilityEntry,
+  makeDeliverySettlement,
+  trackerGraphReadProposalOf,
   WorkflowTrace,
   traceControlDispositionFacetVersion,
   traceReaderSchemaVersion
@@ -1397,6 +1423,188 @@ it("preserves current status subjects evidence classifications and structural or
   expect(entries.map(({ entryIdentity }: { readonly entryIdentity: string }) => entryIdentity)).toEqual(
     available.entries.map(statusEntryIdentity)
   )
+})
+
+it("round-trips the ordered identity evidence of every canonical current-status entry", () => {
+  const taskId = TaskId.make("identity-fixture-task")
+  const subject = { _tag: "Task" as const, runId, taskId }
+  const attempt = PlannedTaskAttempt.make({
+    attemptId: AttemptId.make("identity-fixture-attempt"),
+    baseSha: GitCommitSha.make("1".repeat(40)),
+    branch: TaskBranchRef.make("refs/heads/dalph/identity-fixture"),
+    executor: TaskExecutorLocator.make("executor:identity-fixture"),
+    runId,
+    taskId,
+    taskRevision: TaskRevision.make("identity-fixture-revision"),
+    worktree: WorktreeLocator.make("/worktrees/identity-fixture")
+  })
+  const integrationTarget = IntegrationTarget.make({
+    ref: IntegrationTargetRef.make("refs/heads/main"),
+    repository: GitRepositoryLocator.make("/repositories/identity-fixture.git")
+  })
+  const acceptedResult = AcceptedResult.make({
+    commit: GitCommitSha.make("2".repeat(40)),
+    evidenceManifest: EvidenceReference.make({ byteLength: 17, digest: EvidenceDigest.make("a".repeat(64)) })
+  })
+  const queued = QueuedIntegrationResponsibility.make({
+    acceptedResult,
+    integrationTarget,
+    plannedAttempt: attempt,
+    preIntegrationCancellation: { attemptId: attempt.attemptId, queuedAt: JournalPosition.make(4), runId },
+    queuedAt: JournalPosition.make(4)
+  })
+  const responsibility = WorkflowResponsibilityEntry.cases.PlannedAttemptExecutorWorkResponsibility.make({
+    beganAt: JournalPosition.make(3),
+    plannedAttempt: attempt
+  })
+  const obligation = { _tag: "WorkflowResponsibility" as const, responsibility }
+  const prerequisiteTaskIds = [TaskId.make("prerequisite-b"), TaskId.make("prerequisite-a")] as const
+  const holders = [
+    { correlation: { attemptId: AttemptId.make("holder-b"), runId }, taskId: TaskId.make("holder-b") },
+    { correlation: { attemptId: AttemptId.make("holder-a"), runId }, taskId: TaskId.make("holder-a") }
+  ] as const
+  const evidenceIdentities = [
+    DeliveryStatusEvidenceIdentity.make("evidence-b"),
+    DeliveryStatusEvidenceIdentity.make("evidence-a")
+  ] as const
+  const supporting = { _tag: "PlannedAttempt" as const, correlation: { attemptId: attempt.attemptId, runId } }
+  const proposal = {
+    ...trackerGraphReadProposalOf({
+      acceptedAt: JournalPosition.make(2),
+      purpose: "EstablishCurrentGraph",
+      runId,
+      target: GithubIssueTarget.make({
+        issueNumber: GithubIssueNumber.make(42),
+        repository: GithubRepositoryName.make("dalph"),
+        owner: GithubRepositoryOwner.make("octo")
+      })
+    }),
+    id: DeliveryProposalId.make("identity-fixture-proposal"),
+    order: {
+      _tag: "FreshWorkflowOrder" as const,
+      frontierOrdinal: DeliveryProposalOrdinal.make(7),
+      step: "ReadCurrentTaskGraph" as const,
+      taskId
+    }
+  }
+  const entries = [
+    {
+      _tag: "DependencyWait",
+      classification: "Waiting",
+      prerequisiteTaskIds,
+      standing: { _tag: "GraphExcluded", reasons: [{ _tag: "PrerequisitesIncomplete", prerequisiteTaskIds: [] }] },
+      subject,
+      taskId
+    },
+    {
+      _tag: "TrackerFactWait",
+      classification: "Waiting",
+      fact: { _tag: "Unobserved", boundary: "TaskTracker" },
+      responsibility: null,
+      standing: { _tag: "GraphNotEstablished" },
+      subject,
+      wakeCondition: "TaskTrackerFactsObserved"
+    },
+    {
+      _tag: "TaskWorkCapacityWait",
+      classification: "Waiting",
+      holders,
+      placement: { _tag: "Selected", rank: BoundedTicketRank.make(5) },
+      scope: { _tag: "RunTaskWorkCapacityScope", capacity: TaskWorkCapacity.make(2), runId },
+      subject,
+      taskId
+    },
+    { _tag: "ProposedDeliveryAction", classification: "Waiting", proposal, subject },
+    {
+      _tag: "LiveDeliveryAction",
+      classification: "Progressing",
+      owner: { _tag: "AdmittedDeliveryAction", proposal },
+      subject
+    },
+    {
+      _tag: "AcceptedFactPublicationWait",
+      acceptedAt: JournalPosition.make(9),
+      classification: "Waiting",
+      owner: { _tag: "SettledBeforeMaterialization", proposal },
+      subject
+    },
+    {
+      _tag: "IntegrationTargetWait",
+      classification: "Waiting",
+      integrationTarget,
+      plannedAttempt: attempt,
+      responsibility: { _tag: "QueuedIntegration", responsibility: queued },
+      standing: { _tag: "IntegrationWait", wait: { _tag: "IntegrationTargetWait", plannedAttempt: attempt } },
+      subject,
+      wait: { _tag: "IntegrationTargetWait", plannedAttempt: attempt }
+    },
+    {
+      _tag: "EvidenceUnavailable",
+      classification: "Blocked",
+      evidence: {
+        _tag: "ProposalDerivationIssue",
+        issue: {
+          _tag: "AcceptedOperationEvidenceMissing",
+          operationId: OperationId.make("missing-operation"),
+          taskId,
+          transition: "ContinueFreshWorkflowOperation"
+        }
+      },
+      responsibility: null,
+      subject
+    },
+    {
+      _tag: "EvidenceConflict",
+      classification: "Blocked",
+      evidenceIdentities,
+      responsibility: obligation,
+      standing: { _tag: "ExactEvidenceConflict", evidenceIdentities: ["evidence-b", "evidence-a"] },
+      subject
+    },
+    {
+      _tag: "Settlement",
+      classification: "Settled",
+      settlement: makeDeliverySettlement({ attemptId: attempt.attemptId, taskId }),
+      subject
+    },
+    {
+      _tag: "Relinquishment",
+      classification: "Relinquished",
+      reason: "AuthorizedHandoff",
+      responsibility: obligation,
+      subject,
+      supporting
+    }
+  ] satisfies ReadonlyArray<DeliveryStatusEntry>
+  const available: CurrentDeliveryStatus = {
+    _tag: "DeliveryStatusAvailable",
+    acceptedAt: JournalPosition.make(10),
+    entries,
+    subject
+  }
+  const closed: CurrentDeliveryStatus = { _tag: "DeliveryStatusClosed", final: available, subject }
+
+  for (const source of [available, closed]) {
+    const encoded = encodeProductionCliRecord(currentDeliveryStatusRecord(source))
+    const decoded = Schema.decodeUnknownSync(ProductionCliRecord)(JSON.parse(encoded))
+    expect(decoded._tag).toBe("CurrentStatus")
+    if (decoded._tag !== "CurrentStatus") continue
+    const projected = decoded.status._tag === "DeliveryStatusClosed" ? decoded.status.final : decoded.status
+    expect(projected?._tag).toBe("DeliveryStatusAvailable")
+    if (projected?._tag !== "DeliveryStatusAvailable") continue
+    expect(projected.entries.map(({ _tag }) => _tag)).toEqual(entries.map(({ _tag }) => _tag))
+    expect(projected.entries.map(({ classification }) => classification)).toEqual(
+      entries.map(({ classification }) => classification)
+    )
+    expect(projected.entries.map(({ subject: entrySubject }) => entrySubject)).toEqual(entries.map(() => subject))
+    expect(projected.entries.map(({ entryIdentity }) => entryIdentity)).toEqual(entries.map(statusEntryIdentity))
+    expect(projected.entries[0]).toMatchObject({ prerequisiteTaskIds })
+    expect(projected.entries[2]).toMatchObject({ holders, rank: 5 })
+    expect(projected.entries[3]).toMatchObject({ order: proposal.order, proposalId: proposal.id })
+    expect(projected.entries[6]).toMatchObject({ integrationTarget, plannedAttempt: attempt, queuedAt: 4 })
+    expect(projected.entries[8]).toMatchObject({ evidenceIdentities })
+    expect(projected.entries[10]).toMatchObject({ reason: "AuthorizedHandoff", supporting })
+  }
 })
 
 it("production status rendering has no tracker Git executor Integrator Journal mutation admission retry cleanup control or Exit capability", () => {

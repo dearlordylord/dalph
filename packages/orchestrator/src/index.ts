@@ -789,9 +789,12 @@ export { delivery } from "./coordination/delivery/delivery.js"
 export { deliveryActionPlanning } from "./coordination/delivery/delivery-action-planning.js"
 export {
   DeliveryProposalId,
+  DeliveryProposalOrdinal,
   deliveryProposalOrderTaskId,
-  FreshDecisionPartitionInvalid
+  FreshDecisionPartitionInvalid,
+  trackerGraphReadProposalOf
 } from "./coordination/delivery/delivery-action-proposal.js"
+export { makeDeliverySettlement } from "./coordination/delivery/relations.js"
 export {
   deliveryStatusObligationReference,
   statusEntryIdentity
@@ -867,7 +870,7 @@ export {
   TrackerGraphRelationError,
   type JournaledTrackerGraphObservation,
   type DeliveryConsequences,
-  type BoundedTicketRank,
+  BoundedTicketRank,
   type DeliveryGraphPublication,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
