@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- The closed proposal relation keeps every transition-to-admission mapping exhaustive. */
-import { plannedAttemptExecutorCorrelation } from "@dalph/contracts"
+import { plannedAttemptExecutorCorrelation, plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import type { OperationId } from "../../workflow/identity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
@@ -13,6 +13,10 @@ import {
   type RunnableFrontierTransition
 } from "../frontier/frontier.js"
 import { transitionTaskWorkPosition } from "../frontier/transition-task-work.js"
+import {
+  isSafeContinuationRevalidationEligibility,
+  type SafeContinuationRevalidationEligibility
+} from "../frontier/fresh-facts.js"
 import { workflowResponsibilityOperationId, type WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import {
   DeliveryProposalOrdinal,
@@ -54,7 +58,17 @@ const freshDecisionKey = (runId: DeliveryProposalsInput["runId"], decision: Fres
 const transitionKey = (runId: DeliveryProposalsInput["runId"], transition: RunnableFrontierTransition): string =>
   selectedTransitionKey(makeSelectedTransitionIdentity(runId, transition))
 
-const taskWorkPositionFor = (transition: RunnableFrontierTransition): TaskWorkPositionRequirement => {
+const taskWorkPositionFor = (
+  transition: RunnableFrontierTransition,
+  safeContinuationRevalidation: SafeContinuationRevalidationEligibility | undefined
+): TaskWorkPositionRequirement => {
+  if (safeContinuationRevalidation !== undefined) {
+    return {
+      _tag: "TaskWorkPositionRequired",
+      mode: "ReserveOrReuse",
+      taskId: safeContinuationRevalidation.plannedAttempt.taskId
+    }
+  }
   const mode = transitionTaskWorkPosition(transition)
   if (mode === null) return { _tag: "NoTaskWorkPosition" }
   const taskId = runnableTransitionTaskId(transition)
@@ -79,20 +93,22 @@ const plannedAttemptProtocolFor = (transition: RunnableFrontierTransition): Plan
 
 const admissionFor = (
   transition: RunnableFrontierTransition,
-  integrationResponsibilities: ReadonlyArray<IntegrationResponsibility>
+  integrationResponsibilities: ReadonlyArray<IntegrationResponsibility>,
+  safeContinuationRevalidation: SafeContinuationRevalidationEligibility | undefined
 ): DeliveryAdmissionRequirements | undefined => {
   const integrationTarget = integrationTargetFor(transition, integrationResponsibilities)
   const plannedAttemptProtocol = plannedAttemptProtocolFor(transition)
-  const taskWorkPosition = taskWorkPositionFor(transition)
+  const taskWorkPosition = taskWorkPositionFor(transition, safeContinuationRevalidation)
+  const safeContinuationAdmission = safeContinuationRevalidation === undefined ? {} : { safeContinuationRevalidation }
   if (plannedAttemptProtocol._tag === "PlannedAttemptProtocolRequired") {
-    return { integrationTarget, plannedAttemptProtocol, taskWorkPosition }
+    return { integrationTarget, plannedAttemptProtocol, ...safeContinuationAdmission, taskWorkPosition }
   }
   /* v8 ignore start -- the closed transition maps assign Existing only to guarded executor suspension. */
   if (taskWorkPosition._tag === "TaskWorkPositionRequired" && taskWorkPosition.mode === "Existing") {
     return undefined
   }
   /* v8 ignore stop */
-  return { integrationTarget, plannedAttemptProtocol, taskWorkPosition }
+  return { integrationTarget, plannedAttemptProtocol, ...safeContinuationAdmission, taskWorkPosition }
 }
 
 const integrationResponsibilityFor = (
@@ -539,6 +555,35 @@ interface DeliveryProposalDerivationFrame {
   readonly pendingReadOperationIds: ReadonlySet<OperationId>
   readonly responsibilities: ReadonlyArray<WorkflowResponsibilityEntry>
   readonly runId: DeliveryProposalsInput["runId"]
+  readonly safeContinuationRevalidations: ReadonlyArray<SafeContinuationRevalidationEligibility>
+}
+
+const safeContinuationTransitionTags: ReadonlySet<RunnableFrontierTransition["_tag"]> = new Set([
+  "ObservePlannedAttemptContinuationClaim",
+  "ObservePlannedAttemptContinuationGraph",
+  "ObservePlannedAttemptContinuationSpecification",
+  "ObservePlannedAttemptContinuationTargetLineage",
+  "ObservePlannedAttemptContinuationWorktree",
+  "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"
+])
+
+const safeContinuationRevalidationFor = (
+  transition: RunnableFrontierTransition,
+  eligibilities: ReadonlyArray<SafeContinuationRevalidationEligibility>
+): SafeContinuationRevalidationEligibility | undefined => {
+  if (!safeContinuationTransitionTags.has(transition._tag) || !("plannedAttempt" in transition)) return undefined
+  const exact = [
+    ...new Set(
+      eligibilities.filter(
+        (eligibility) =>
+          isSafeContinuationRevalidationEligibility(eligibility) &&
+          plannedTaskAttemptEquivalence(eligibility.plannedAttempt, transition.plannedAttempt) &&
+          eligibility.acceptedSafe.correlation.runId === transition.plannedAttempt.runId &&
+          eligibility.acceptedSafe.correlation.attemptId === transition.plannedAttempt.attemptId
+      )
+    )
+  ]
+  return exact.length === 1 ? exact[0] : undefined
 }
 
 const appendContributionForTransition = (
@@ -548,7 +593,8 @@ const appendContributionForTransition = (
   transition: RunnableFrontierTransition
 ): void => {
   const fresh = frame.freshByTransition.get(transitionKey(frame.runId, transition))
-  const admission = admissionFor(transition, frame.integrationResponsibilities)
+  const safeContinuationRevalidation = safeContinuationRevalidationFor(transition, frame.safeContinuationRevalidations)
+  const admission = admissionFor(transition, frame.integrationResponsibilities, safeContinuationRevalidation)
   /* v8 ignore start -- the closed transition maps make an uncorrelated Existing requirement unreachable. */
   if (admission === undefined) {
     appendDerived(contributions, routePolicyContradiction(transition))
@@ -592,7 +638,8 @@ export const deliveryProposalsOf = (input: DeliveryProposalsInput): DeliveryProp
     integrationResponsibilities: input.integrationResponsibilities ?? [],
     pendingReadOperationIds: input.pendingReadOperationIds ?? new Set(),
     responsibilities: input.responsibilities ?? [],
-    runId: input.runId
+    runId: input.runId,
+    safeContinuationRevalidations: input.safeContinuationRevalidations ?? []
   }
   const contributions: MutableDeliveryProposalContributions = { deliverySettlement: [], issues: [], ticketDelivery: [] }
 

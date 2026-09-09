@@ -21,7 +21,11 @@ import {
   reconstructedTaskIsPaused,
   workflowResponsibilityOperationId
 } from "../reconstruction/state.js"
-import type { PlannedAttemptExecutorDisposition, ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
+import {
+  safeContinuationRevalidationEligibilityOf,
+  type PlannedAttemptExecutorDisposition,
+  type ResponsibilityFreshFacts
+} from "../frontier/fresh-facts.js"
 import type { DeliveryProjectionEvidence } from "../frontier/delivery-projection-evidence.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import {
@@ -72,6 +76,7 @@ import { targetPromotionRequestIdForCandidate } from "../../workflow/protocols/t
 import type { TargetPromotionRuntimeInput } from "../../workflow/protocols/target-promotion/runtime.js"
 import {
   currentAcceptedPlannedAttemptExecutorLifecycleFor,
+  currentUnconsumedAcceptedSafeEvidence,
   latestPlannedAttemptExecutorEvidence,
   latestAcceptedPlannedAttemptExecutorEvidence,
   latestPlannedAttemptExecutorProjectionIssue,
@@ -1389,6 +1394,45 @@ const terminalTaskStateDisposition = (
     ? ResponsibilityDisposition.PlannedAttemptExecutorWorkTerminal({ report })
     : externalSuccess
 
+/**
+ * A safely suspended attempt receives pre-read capacity only for the lifecycle
+ * reopen that made it runnable: its last complete exact-target graph before
+ * Safe showed terminal-without-success, and a causally attempt-scoped complete
+ * graph after Safe now shows Open. An ordinary Safe checkpoint therefore
+ * cannot reserve ahead of fresh work.
+ */
+const exactTaskWasReopenedAfterAcceptedSafe = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  acceptedSafe: AcceptedPlannedAttemptExecutorEvidence,
+  immutableRunTarget: TrackerTarget | undefined
+): boolean => {
+  if (immutableRunTarget === undefined) return false
+  const graphBeforeSafe = records.findLast(
+    (record): record is CompleteGraphObservationRecord =>
+      record.position <= acceptedSafe.observedAt &&
+      isCompleteGraphObservationRecord(record) &&
+      taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
+  )
+  if (graphBeforeSafe === undefined) return false
+  const before = graphReconstructedAt(records, graphBeforeSafe)
+  if (
+    Option.getOrUndefined(before?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag !==
+    "TerminalWithoutSuccess"
+  ) {
+    return false
+  }
+  const reopened = currentCompleteGraphObservationAfter(
+    records,
+    Option.some(acceptedSafe.observedAt),
+    immutableRunTarget,
+    plannedAttempt
+  )
+  if (reopened === undefined) return false
+  const after = graphReconstructedAt(records, reopened)
+  return Option.getOrUndefined(after?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag === "Open"
+}
+
 export const deriveJournalResponsibilityFacts = (
   runState: ReconstructedRunState,
   activationBaselinePosition: Option.Option<JournalPosition> = Option.none(),
@@ -1942,7 +1986,21 @@ export const deriveJournalResponsibilityFacts = (
         : { _tag: "Ready", acceptedProgress: readyProgress() }
     }
     const disposition = taskStateDisposition() ?? constraintDisposition() ?? pauseOrReadyDisposition()
-    return { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
+    const facts = { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
+    if (disposition._tag !== "Ready" || attemptRefreshOpportunity._tag === "ActiveWorkAuthorityRefresh") return facts
+    const acceptedSafe = currentUnconsumedAcceptedSafeEvidence(records, responsibility.plannedAttempt)
+    if (
+      acceptedSafe === undefined ||
+      !exactTaskWasReopenedAfterAcceptedSafe(records, responsibility.plannedAttempt, acceptedSafe, immutableRunTarget)
+    )
+      return facts
+    const safeContinuationRevalidationEligibility = safeContinuationRevalidationEligibilityOf(
+      { ...facts, disposition },
+      acceptedSafe
+    )
+    return safeContinuationRevalidationEligibility === undefined
+      ? facts
+      : { ...facts, safeContinuationRevalidationEligibility }
   })
 }
 

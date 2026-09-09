@@ -29,6 +29,7 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { InitialControlPolicy, initialRunPolicyRevision } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
+import { isSafeContinuationRevalidationEligibility } from "../frontier/fresh-facts.js"
 import { UntrackedWorktreePath, PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -1670,6 +1671,121 @@ it("retains an owed Run Pause suspension after Unpause until the exact executor 
     _tag: "PlannedAttemptExecutorFreshFacts",
     disposition: { _tag: "Ready", acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: 7 } }
   })
+})
+
+it("mints pre-read capacity eligibility only when an exact Safe task is reopened", () => {
+  const graphOperation = (suffix: string) =>
+    makeTrackerGraphObservationOperation(
+      { _tag: "AttemptContinuation" },
+      OperationId.make(`safe-reopen-${suffix}`),
+      coverageTarget,
+      [coveragePlanOperation.operationId],
+      [coverageAttempt.taskId]
+    )
+  const closedOperation = graphOperation("closed")
+  const closedGraph = validSnapshot({
+    revision: "safe-reopen-closed",
+    tasks: [
+      {
+        id: coverageAttempt.taskId,
+        lifecycle: { _tag: "TerminalWithoutSuccess" },
+        parentTaskId: null,
+        prerequisiteIds: []
+      }
+    ]
+  })
+  const openOperation = graphOperation("open")
+  const openGraph = validSnapshot({
+    revision: "safe-reopen-open",
+    tasks: [{ id: coverageAttempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+  })
+  const safe = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+    correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+  })
+  const graphRecord = (
+    position: number,
+    operation: typeof closedOperation,
+    snapshot: typeof closedGraph
+  ): ReadonlyArray<JournalRecord> => [
+    coverageRecord(position, taskTrackerReadIntent(operation)),
+    coverageRecord(
+      position + 1,
+      taskTrackerFactsObservedEvent(operation.operationId, makeCompleteTaskTrackerFactsObserved(operation, snapshot))
+    )
+  ]
+  const ordinarySafeRecords = [
+    ...coveragePlanRecords(),
+    ...graphRecord(5, openOperation, openGraph),
+    executorReport(7, safe)
+  ]
+  const [ordinarySafe] = deriveJournalResponsibilityFacts(
+    {
+      ...coverageRunState(ordinarySafeRecords, [coverageResponsibility]),
+      graphKnowledge: { taskTrackerFacts: [makeCompleteTaskTrackerFactsObserved(openOperation, openGraph)] }
+    },
+    Option.none(),
+    Option.none(),
+    coverageTarget
+  )
+  expect(ordinarySafe).toMatchObject({ disposition: { _tag: "Ready" } })
+  expect(
+    ordinarySafe?._tag === "PlannedAttemptExecutorFreshFacts"
+      ? ordinarySafe.safeContinuationRevalidationEligibility
+      : undefined
+  ).toBeUndefined()
+
+  const reopenedRecords = [
+    ...coveragePlanRecords(),
+    ...graphRecord(5, closedOperation, closedGraph),
+    executorReport(7, safe),
+    ...graphRecord(8, openOperation, openGraph)
+  ]
+  const [reopened] = deriveJournalResponsibilityFacts(
+    {
+      ...coverageRunState(reopenedRecords, [coverageResponsibility]),
+      graphKnowledge: {
+        taskTrackerFacts: [
+          makeCompleteTaskTrackerFactsObserved(closedOperation, closedGraph),
+          makeCompleteTaskTrackerFactsObserved(openOperation, openGraph)
+        ]
+      }
+    },
+    Option.none(),
+    Option.none(),
+    coverageTarget
+  )
+  if (reopened?._tag !== "PlannedAttemptExecutorFreshFacts") return expect.fail("expected executor facts")
+  const eligibility = reopened.safeContinuationRevalidationEligibility
+  expect(isSafeContinuationRevalidationEligibility(eligibility)).toBe(true)
+  expect(eligibility).toMatchObject({
+    acceptedSafe: { correlation: plannedAttemptExecutorCorrelation(coverageAttempt), reportOrdinal: 7 },
+    plannedAttempt: coverageAttempt,
+    responsibilityBeganAt: coverageResponsibility.beganAt
+  })
+
+  const [activeRefresh] = deriveJournalResponsibilityFacts(
+    {
+      ...coverageRunState(reopenedRecords, [coverageResponsibility]),
+      graphKnowledge: {
+        taskTrackerFacts: [
+          makeCompleteTaskTrackerFactsObserved(closedOperation, closedGraph),
+          makeCompleteTaskTrackerFactsObserved(openOperation, openGraph)
+        ]
+      }
+    },
+    Option.none(),
+    Option.none(),
+    coverageTarget,
+    activeWorkAuthorityRefreshForOwner(
+      "Timer",
+      activeWorkAuthorityRefreshSubjectsFor([{ runId: coverageAttempt.runId, attemptId: coverageAttempt.attemptId }])
+    )
+  )
+  expect(
+    activeRefresh?._tag === "PlannedAttemptExecutorFreshFacts"
+      ? activeRefresh.safeContinuationRevalidationEligibility
+      : undefined
+  ).toBeUndefined()
 })
 
 it.each(["StateObserved", "CommandProjection"] as const)(
