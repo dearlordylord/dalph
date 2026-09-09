@@ -1,5 +1,5 @@
 import type { PlannedTaskAttempt, TaskWorkSpecification } from "@dalph/contracts"
-import { Data } from "effect"
+import { Data, Schema } from "effect"
 import type { Task } from "../../authorities/task-tracker/task.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
@@ -60,3 +60,17 @@ export type FreshWorkflowStep = Data.TaggedEnum<{
 }>
 
 export const FreshWorkflowStep = Data.taggedEnum<FreshWorkflowStep>()
+
+/** Closed canonical tags for the fresh workflow steps carried as delivery-order evidence. */
+const freshWorkflowStepTags = [
+  "ReadCurrentTaskGraph",
+  "AcquireTaskClaim",
+  "ReadPostClaimGraph",
+  "ReadRejectedTaskClaim",
+  "ReadTaskWorkSpecification",
+  "RecordTaskAttemptPlan",
+  "ReconcileTaskWorktree",
+  "BeginPlannedAttemptExecutorWork",
+  "ObservePlannedAttemptExecutorWork"
+] as const satisfies ReadonlyArray<FreshWorkflowStep["_tag"]>
+export const FreshWorkflowStepTag = Schema.Literals(freshWorkflowStepTags)

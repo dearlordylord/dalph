@@ -1,10 +1,11 @@
 import type { DeliveryStatusEntry } from "@dalph/orchestrator"
+import { Schema } from "effect"
 import {
   DeliveryStatusEntryIdentity,
   deliveryStatusObligationReference,
   statusEntryIdentity
 } from "@dalph/orchestrator"
-import { ObligationReference } from "./production-cli-status-identity-schema.js"
+import { ObligationReference, PublicTrackerWakeCondition } from "./production-cli-status-identity-schema.js"
 import type { PublicDeliveryStatusEntry } from "./production-cli-status-schema.js"
 
 type ExactWorkflowObligation = NonNullable<
@@ -46,7 +47,7 @@ export const publicDeliveryStatusEntryOf = (entry: DeliveryStatusEntry): PublicD
         obligationReference: obligationReference(entry.responsibility),
         fact: { _tag: entry.fact._tag },
         standingKind: entry.standing._tag,
-        wakeCondition: entry.wakeCondition
+        wakeCondition: Schema.decodeUnknownSync(PublicTrackerWakeCondition)(entry.wakeCondition)
       }
     case "TaskWorkCapacityWait":
       return {

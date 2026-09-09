@@ -14,24 +14,26 @@ import {
   DeliveryStatusEntryIdentity,
   DeliveryStatusEvidenceIdentity,
   DeliveryStatusSubject,
+  FreshWorkflowStepTag,
   JournalPosition,
   OperationId,
+  RunnableFrontierTransitionTag,
   TaskWorkCapacity,
   TaskClaimReacquisitionRequestId,
   TrackerRevision
 } from "@dalph/orchestrator"
 import { Schema } from "effect"
-import { ObligationReference } from "./production-cli-status-identity-schema.js"
+import { ObligationReference, PublicTrackerWakeCondition } from "./production-cli-status-identity-schema.js"
 import { publicDeliveryStatusEntryOf } from "./production-cli-status-projection.js"
 
 const ProposalOrder = Schema.TaggedUnion({
-  FreshWorkflowOrder: { frontierOrdinal: DeliveryProposalOrdinal, step: Schema.NonEmptyString, taskId: TaskId },
+  FreshWorkflowOrder: { frontierOrdinal: DeliveryProposalOrdinal, step: FreshWorkflowStepTag, taskId: TaskId },
   RecoveredWorkflowOrder: {
     acceptedAt: Schema.NullOr(JournalPosition),
     frontierOrdinal: DeliveryProposalOrdinal,
     responsibilityBeganAt: Schema.NullOr(JournalPosition),
     taskId: TaskId,
-    transition: Schema.NonEmptyString
+    transition: RunnableFrontierTransitionTag
   },
   IntegrationOrder: {
     frontierOrdinal: DeliveryProposalOrdinal,
@@ -93,7 +95,7 @@ const PublicDeliveryStatusEntryShape = Schema.TaggedUnion({
     obligationReference: Schema.NullOr(ObligationReference),
     fact: Schema.TaggedUnion({ Foreign: {}, Missing: {}, Unobserved: {}, Unreadable: {} }),
     standingKind: TrackerStandingKind,
-    wakeCondition: Schema.NonEmptyString
+    wakeCondition: PublicTrackerWakeCondition
   },
   TaskWorkCapacityWait: {
     ...entryBase,
@@ -188,6 +190,38 @@ const PublicDeliveryStatusEntryShape = Schema.TaggedUnion({
 const taskMatchesSubject = (taskId: TaskId, subject: DeliveryStatusSubject): boolean =>
   subject._tag === "Run" || subject.taskId === taskId
 
+const trackerFactRelationshipIsValid = (
+  entry: Extract<typeof PublicDeliveryStatusEntryShape.Type, { readonly _tag: "TrackerFactWait" }>
+): boolean => {
+  const hasObligation = entry.obligationReference !== null
+  switch (entry.standingKind) {
+    case "GraphNotEstablished":
+      return !hasObligation && entry.fact._tag === "Unobserved" && entry.wakeCondition === "TaskTrackerFactsObserved"
+    case "ResponsibilitySituation":
+      if (!hasObligation) return false
+      switch (entry.fact._tag) {
+        case "Missing":
+        case "Foreign":
+          return entry.wakeCondition === "ExplicitAppliedTaskClaimReacquisitionDirection"
+        case "Unreadable":
+          return entry.wakeCondition === "TaskClaimFactsObserved" || entry.wakeCondition === "BoundaryRereadSucceeded"
+        case "Unobserved":
+          return entry.wakeCondition === "TaskClaimFactsObserved"
+      }
+    case "IntegrationWait":
+      if (!hasObligation) return false
+      switch (entry.fact._tag) {
+        case "Missing":
+        case "Foreign":
+          return entry.wakeCondition === "ExplicitAppliedTaskClaimReacquisitionDirection"
+        case "Unreadable":
+          return entry.wakeCondition === "TaskClaimFactsObserved"
+        case "Unobserved":
+          return entry.wakeCondition === "TaskClaimFactsObserved" || entry.wakeCondition === "TaskTrackerFactsObserved"
+      }
+  }
+}
+
 export const PublicDeliveryStatusEntry = PublicDeliveryStatusEntryShape.pipe(
   Schema.refine(
     (entry): entry is typeof entry => {
@@ -212,11 +246,7 @@ export const PublicDeliveryStatusEntry = PublicDeliveryStatusEntryShape.pipe(
         )
       }
       if (entry._tag === "TrackerFactWait") {
-        return entry.obligationReference === null
-          ? entry.standingKind === "GraphNotEstablished" &&
-              entry.fact._tag === "Unobserved" &&
-              entry.wakeCondition === "TaskTrackerFactsObserved"
-          : entry.standingKind !== "GraphNotEstablished"
+        return trackerFactRelationshipIsValid(entry)
       }
       if (entry._tag === "TaskWorkCapacityWait") {
         return entry.scope.runId === entry.subject.runId && taskMatchesSubject(entry.taskId, entry.subject)

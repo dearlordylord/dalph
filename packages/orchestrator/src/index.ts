@@ -794,6 +794,8 @@ export {
   FreshDecisionPartitionInvalid,
   trackerGraphReadProposalOf
 } from "./coordination/delivery/delivery-action-proposal.js"
+export { FreshWorkflowStepTag } from "./coordination/delivery/fresh-workflow-step.js"
+export { RunnableFrontierTransitionTag } from "./coordination/frontier/frontier.js"
 export { makeDeliverySettlement } from "./coordination/delivery/relations.js"
 export {
   deliveryStatusObligationReference,
@@ -874,10 +876,23 @@ export {
   type DeliveryGraphPublication,
   type DeliveryRelationInputBundle,
   type DeliveryRuntimeEvaluation,
+  type DeliveryRuntimeSnapshot,
+  type DeliveryActionProposal,
+  type TicketDeliveryEvidence,
+  makeDeliveryReflection,
+  TrackerGraphState,
   type CurrentSignal,
   type CurrentSignalAttachment,
   zipCurrentSignals
 } from "./coordination/delivery/relations.js"
+export {
+  boundedParallelTicketsOf,
+  deliverySettlementsOf,
+  frontierOf,
+  ticketDeliveriesOf
+} from "./coordination/delivery/ticket-delivery-projection.js"
+export { makeTestJournaledTrackerGraphObservation } from "../test/journaled-graph-observation.js"
+export { makeFreshTaskAdmissionTestBasis } from "../test/support/fresh-task-admission.js"
 export {
   DeliveryActionCompletionPublicationMismatch,
   DeliveryRuntimeAdmissionProgressContradiction,

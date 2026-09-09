@@ -33,6 +33,7 @@ import {
   DeliveryProposalId,
   DeliveryProposalOrdinal,
   BoundedTicketRank,
+  deliveryStatusOf,
   type DeliveryStatusProjectionError,
   DeliveryStatusProjectionConflict,
   DeliveryStatusRunIdentityUnavailable,
@@ -79,8 +80,27 @@ import {
   TrackerGraphReader,
   TrackerRevision,
   TaskWorkCapacity,
+  TaskDagSnapshot,
+  TaskLifecycle,
+  TrackerSnapshot,
+  RunControlPolicy,
+  initialRunPolicyRevision,
+  ResponsibilityDisposition,
   WorkflowResponsibilityEntry,
   makeDeliverySettlement,
+  makeDeliveryReflection,
+  makeTestJournaledTrackerGraphObservation,
+  makeFreshTaskAdmissionTestBasis,
+  boundedParallelTicketsOf,
+  deliverySettlementsOf,
+  frontierOf,
+  ticketDeliveriesOf,
+  TrackerGraphState,
+  type DeliveryActionProposal,
+  type DeliveryRuntimeEvaluation,
+  type DeliveryRuntimeLiveOwnerSnapshot,
+  type DeliveryRuntimeSnapshot,
+  type TicketDeliveryEvidence,
   trackerGraphReadProposalOf,
   WorkflowTrace,
   traceControlDispositionFacetVersion,
@@ -1231,10 +1251,64 @@ it("rejects malformed current-status wire variants at the public codec boundary"
   const conflictWire = wireOf(conflict)
   const capacityWire = wireOf(capacity)
   const closedWire = wireOf({ _tag: "DeliveryStatusClosed", final: tracker, subject: taskSubject })
-  for (const valid of [trackerWire, dependencyWire, conflictWire, capacityWire, closedWire]) {
+  const projected = deliveryStatusOf({ _tag: "Run", runId }, projectedStatusFixture())
+  if (projected instanceof Error || projected._tag !== "DeliveryStatusAvailable") {
+    return expect.fail("tracker relationship fixture must project from canonical delivery evidence")
+  }
+  const projectedWire = wireOf(projected)
+  const projectedTrackerIndex = projected.entries.findIndex(({ _tag }) => _tag === "TrackerFactWait")
+  if (projectedTrackerIndex < 0) return expect.fail("canonical delivery evidence must project a tracker wait")
+  for (const valid of [trackerWire, dependencyWire, conflictWire, capacityWire, closedWire, projectedWire]) {
     expect(Option.isSome(Schema.decodeUnknownOption(ProductionCliRecord)(valid))).toBe(true)
   }
   const entryOf = (wire: typeof trackerWire) => wire.status.entries[0]
+  const nestedClosedEntrySubjectMismatch = {
+    ...closedWire,
+    status: {
+      ...closedWire.status,
+      final: {
+        ...closedWire.status.final,
+        entries: [
+          {
+            ...closedWire.status.final.entries[0],
+            subject: { ...taskSubject, taskId: TaskId.make("foreign-nested-task") }
+          }
+        ]
+      }
+    }
+  }
+  const outerClosedSubjectMismatch = {
+    ...closedWire,
+    status: { ...closedWire.status, subject: { ...taskSubject, taskId: TaskId.make("foreign-closed-task") } }
+  }
+  const projectedTrackerEntry = projectedWire.status.entries[projectedTrackerIndex]
+  const legalTrackerRelationships = [
+    ["ResponsibilitySituation", "Missing", "ExplicitAppliedTaskClaimReacquisitionDirection"],
+    ["ResponsibilitySituation", "Foreign", "ExplicitAppliedTaskClaimReacquisitionDirection"],
+    ["ResponsibilitySituation", "Unreadable", "TaskClaimFactsObserved"],
+    ["ResponsibilitySituation", "Unreadable", "BoundaryRereadSucceeded"],
+    ["ResponsibilitySituation", "Unobserved", "TaskClaimFactsObserved"],
+    ["IntegrationWait", "Missing", "ExplicitAppliedTaskClaimReacquisitionDirection"],
+    ["IntegrationWait", "Foreign", "ExplicitAppliedTaskClaimReacquisitionDirection"],
+    ["IntegrationWait", "Unreadable", "TaskClaimFactsObserved"],
+    ["IntegrationWait", "Unobserved", "TaskClaimFactsObserved"],
+    ["IntegrationWait", "Unobserved", "TaskTrackerFactsObserved"]
+  ] as const
+  for (const [standingKind, fact, wakeCondition] of legalTrackerRelationships) {
+    const legal = {
+      ...projectedWire,
+      status: {
+        ...projectedWire.status,
+        entries: projectedWire.status.entries.map((entry: Record<string, unknown>, index: number) =>
+          index === projectedTrackerIndex
+            ? { ...projectedTrackerEntry, fact: { _tag: fact }, standingKind, wakeCondition }
+            : entry
+        )
+      }
+    }
+    expect(Option.isSome(Schema.decodeUnknownOption(ProductionCliRecord)(legal))).toBe(true)
+    expect(Option.isSome(Schema.encodeUnknownOption(ProductionCliRecord)(legal))).toBe(true)
+  }
   const malformed = [
     {
       ...trackerWire,
@@ -1250,6 +1324,26 @@ it("rejects malformed current-status wire variants at the public codec boundary"
     {
       ...trackerWire,
       status: { ...trackerWire.status, entries: [{ ...entryOf(trackerWire), fact: { _tag: "Missing" } }] }
+    },
+    {
+      ...projectedWire,
+      status: {
+        ...projectedWire.status,
+        entries: projectedWire.status.entries.map((entry: Record<string, unknown>, index: number) =>
+          index === projectedTrackerIndex ? { ...projectedTrackerEntry, wakeCondition: "invented-wake" } : entry
+        )
+      }
+    },
+    {
+      ...projectedWire,
+      status: {
+        ...projectedWire.status,
+        entries: projectedWire.status.entries.map((entry: Record<string, unknown>, index: number) =>
+          index === projectedTrackerIndex
+            ? { ...projectedTrackerEntry, wakeCondition: "TaskTrackerFactsObserved" }
+            : entry
+        )
+      }
     },
     {
       ...dependencyWire,
@@ -1274,13 +1368,8 @@ it("rejects malformed current-status wire variants at the public codec boundary"
         ]
       }
     },
-    {
-      ...closedWire,
-      status: {
-        ...closedWire.status,
-        final: { ...closedWire.status.final, subject: { ...taskSubject, taskId: TaskId.make("foreign-task") } }
-      }
-    }
+    nestedClosedEntrySubjectMismatch,
+    outerClosedSubjectMismatch
   ]
 
   for (const value of malformed) {
@@ -1340,6 +1429,260 @@ it("preserves current status subjects evidence classifications and structural or
     available.entries.map(statusEntryIdentity)
   )
 })
+
+const projectedStatusFixture = (): DeliveryRuntimeObservationState => {
+  const capacity = TaskWorkCapacity.make(8)
+  const taskIds = {
+    capacity: TaskId.make("01-capacity"),
+    conflict: TaskId.make("02-conflict"),
+    dependency: TaskId.make("03-dependency"),
+    integration: TaskId.make("04-integration"),
+    live: TaskId.make("05-live"),
+    prerequisite: TaskId.make("06-prerequisite"),
+    proposed: TaskId.make("07-proposed"),
+    publication: TaskId.make("08-publication"),
+    relinquishment: TaskId.make("09-relinquishment"),
+    settlement: TaskId.make("10-settlement"),
+    tracker: TaskId.make("11-tracker"),
+    unavailable: TaskId.make("12-unavailable")
+  } as const
+  const attemptOf = (taskId: TaskId, suffix: string) =>
+    PlannedTaskAttempt.make({
+      attemptId: AttemptId.make(`projected-${suffix}`),
+      baseSha: GitCommitSha.make("3".repeat(40)),
+      branch: TaskBranchRef.make(`refs/heads/dalph/projected-${suffix}`),
+      executor: TaskExecutorLocator.make("executor:projected-status"),
+      runId,
+      taskId,
+      taskRevision: TaskRevision.make(`projected-${suffix}`),
+      worktree: WorktreeLocator.make(`/worktrees/projected-${suffix}`)
+    })
+  const executorFacts = (
+    taskId: TaskId,
+    suffix: string,
+    disposition: ReturnType<
+      | typeof ResponsibilityDisposition.TaskClaimMissingConstraint
+      | typeof ResponsibilityDisposition.UnreadableFactWait
+      | typeof ResponsibilityDisposition.CancelledAttemptSettled
+      | typeof ResponsibilityDisposition.Relinquished
+    >
+  ): TicketDeliveryEvidence => ({
+    _tag: "ResponsibilityFacts",
+    facts: {
+      _tag: "PlannedAttemptExecutorFreshFacts",
+      disposition,
+      responsibility: WorkflowResponsibilityEntry.cases.PlannedAttemptExecutorWorkResponsibility.make({
+        beganAt: JournalPosition.make(2),
+        plannedAttempt: attemptOf(taskId, suffix)
+      })
+    }
+  })
+  const trackerEvidence = executorFacts(
+    taskIds.tracker,
+    "tracker",
+    ResponsibilityDisposition.TaskClaimMissingConstraint()
+  )
+  const conflictEvidence = executorFacts(
+    taskIds.conflict,
+    "conflict",
+    ResponsibilityDisposition.TaskClaimMissingConstraint()
+  )
+  const integrationAttempt = attemptOf(taskIds.integration, "integration")
+  const integrationTarget = IntegrationTarget.make({
+    ref: IntegrationTargetRef.make("refs/heads/main"),
+    repository: GitRepositoryLocator.make("/repositories/projected-status.git")
+  })
+  const queued = QueuedIntegrationResponsibility.make({
+    acceptedResult: AcceptedResult.make({
+      commit: GitCommitSha.make("4".repeat(40)),
+      evidenceManifest: EvidenceReference.make({ byteLength: 19, digest: EvidenceDigest.make("b".repeat(64)) })
+    }),
+    integrationTarget,
+    plannedAttempt: integrationAttempt,
+    preIntegrationCancellation: { attemptId: integrationAttempt.attemptId, queuedAt: JournalPosition.make(3), runId },
+    queuedAt: JournalPosition.make(3)
+  })
+  const evidence: ReadonlyArray<TicketDeliveryEvidence> = [
+    trackerEvidence,
+    conflictEvidence,
+    conflictEvidence,
+    executorFacts(
+      taskIds.unavailable,
+      "unavailable",
+      ResponsibilityDisposition.UnreadableFactWait({ boundary: "Git" })
+    ),
+    executorFacts(
+      taskIds.settlement,
+      "settlement",
+      ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" })
+    ),
+    executorFacts(
+      taskIds.relinquishment,
+      "relinquishment",
+      ResponsibilityDisposition.Relinquished({ reason: "AuthorizedHandoff" })
+    ),
+    { _tag: "QueuedIntegration", responsibility: queued },
+    { _tag: "IntegrationWait", wait: { _tag: "IntegrationTargetWait", plannedAttempt: integrationAttempt } }
+  ]
+  const tasks = Object.values(taskIds).map((taskId) => ({
+    id: taskId,
+    lifecycle: TaskLifecycle.cases.Open.make({}),
+    parentTaskId: null,
+    prerequisiteIds: taskId === taskIds.dependency ? [taskIds.prerequisite] : []
+  }))
+  const projectedGraph = TaskDagSnapshot.project(
+    TrackerSnapshot.make({ revision: TrackerRevision.make("projected-status-graph"), tasks })
+  )
+  if (projectedGraph._tag === "Invalid") throw new Error("projected status fixture graph is invalid")
+  const graph = TrackerGraphState.cases.GraphEstablished.make({
+    observation: makeTestJournaledTrackerGraphObservation({
+      operationId: OperationId.make("projected-status-graph-read"),
+      recordedAt: JournalPosition.make(4),
+      snapshot: projectedGraph.snapshot
+    })
+  })
+  const policy = RunControlPolicy.make({ revision: initialRunPolicyRevision, taskExecutionCapacity: capacity })
+  const publication = { exactEvidence: evidence, graph, policy }
+  const tickets = boundedParallelTicketsOf(frontierOf(publication))
+  const deliveries = ticketDeliveriesOf(tickets, evidence)
+  const settlements = deliverySettlementsOf(deliveries)
+  const proposalOf = (taskId: TaskId, id: string, ordinal: number): DeliveryActionProposal => ({
+    ...trackerGraphReadProposalOf({
+      acceptedAt: JournalPosition.make(5),
+      purpose: "EstablishCurrentGraph",
+      runId,
+      target
+    }),
+    admission: {
+      integrationTarget: { _tag: "NoIntegrationTargetResource" },
+      plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" },
+      taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId }
+    },
+    id: DeliveryProposalId.make(id),
+    order: {
+      _tag: "FreshWorkflowOrder",
+      frontierOrdinal: DeliveryProposalOrdinal.make(ordinal),
+      step: "ReadCurrentTaskGraph",
+      taskId
+    },
+    owner: "TicketDelivery"
+  })
+  const proposed = proposalOf(taskIds.proposed, "projected-proposed", 2)
+  const proposedAfter = proposalOf(taskIds.proposed, "projected-proposed-after", 5)
+  const live = proposalOf(taskIds.live, "projected-live", 7)
+  const publicationWait = proposalOf(taskIds.publication, "projected-publication", 11)
+  const proposedActions = {
+    _tag: "DeliveryProposalsAvailable" as const,
+    freshTaskCandidates: [],
+    isolatedIssues: [],
+    proposals: [proposed, proposedAfter, live, publicationWait]
+  }
+  const current: DeliveryRuntimeSnapshot = {
+    _tag: "DeliveryRuntimeSnapshot",
+    cancellationApplied: false,
+    reflection: makeDeliveryReflection(settlements),
+    runId,
+    settlements,
+    ticketDeliveries: deliveries,
+    trackerGraph: graph
+  }
+  const evaluation: DeliveryRuntimeEvaluation = {
+    _tag: "DeliveryRuntimeEvaluation",
+    acceptedAt: JournalPosition.make(6),
+    cancellationApplied: false,
+    current,
+    pauseCoverage: {
+      _tag: "PauseCoverageGraphNotEstablished",
+      applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
+    },
+    proposedActions,
+    quiescence: { _tag: "TrackerReconfirmationAllowed" },
+    runId,
+    taskWork: makeFreshTaskAdmissionTestBasis({
+      capacity,
+      held: Array.from({ length: 8 }, (_, index) => attemptOf(TaskId.make(`holder-${index}`), `holder-${index}`)),
+      runId
+    })
+  }
+  const liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot> = [
+    { _tag: "AdmittedDeliveryAction", proposal: live },
+    { _tag: "SettledBeforeMaterialization", proposal: publicationWait }
+  ]
+  return { _tag: "Ready", evaluation, liveOwners }
+}
+
+it.effect("projects and encodes all eleven status variants through the production current-first attachment", () =>
+  Effect.gen(function* () {
+    const observationState = projectedStatusFixture()
+    const source = deliveryStatusOf({ _tag: "Run", runId }, observationState)
+    if (source instanceof Error || source._tag !== "DeliveryStatusAvailable") {
+      return expect.fail(
+        `real delivery projection must produce an available status: ${source._tag} ${JSON.stringify(source)}`
+      )
+    }
+    expect(new Set(source.entries.map(({ _tag }) => _tag))).toEqual(
+      new Set([
+        "DependencyWait",
+        "TrackerFactWait",
+        "TaskWorkCapacityWait",
+        "ProposedDeliveryAction",
+        "LiveDeliveryAction",
+        "AcceptedFactPublicationWait",
+        "IntegrationTargetWait",
+        "EvidenceUnavailable",
+        "EvidenceConflict",
+        "Settlement",
+        "Relinquishment"
+      ])
+    )
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf(observationState),
+        runTermination: completedRunTermination(),
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) => Ref.update(lines, (current) => [...current, line])
+    )
+    const record = (yield* Ref.get(lines)).map((line) => JSON.parse(line)).find(({ _tag }) => _tag === "CurrentStatus")
+    const decoded = Schema.decodeUnknownSync(ProductionCliRecord)(record)
+    expect(decoded._tag).toBe("CurrentStatus")
+    if (decoded._tag !== "CurrentStatus" || decoded.status._tag !== "DeliveryStatusAvailable") return
+    expect(decoded.status.entries.map(({ _tag }) => _tag)).toEqual(source.entries.map(({ _tag }) => _tag))
+    expect(decoded.status.entries.map(({ classification }) => classification)).toEqual(
+      source.entries.map(({ classification }) => classification)
+    )
+    expect(decoded.status.entries.map(({ subject }) => subject)).toEqual(source.entries.map(({ subject }) => subject))
+    expect(decoded.status.entries.map(({ entryIdentity }) => entryIdentity)).toEqual(
+      source.entries.map(statusEntryIdentity)
+    )
+    const publicSource = publicDeliveryStatusOf(source)
+    if (publicSource._tag !== "DeliveryStatusAvailable") return expect.fail("available source must remain available")
+    expect(decoded.status.entries).toEqual(publicSource.entries)
+    const proposalEntries = decoded.status.entries.flatMap((entry) =>
+      entry._tag === "ProposedDeliveryAction" ? [entry] : []
+    )
+    expect(proposalEntries.map(({ order }) => ("frontierOrdinal" in order ? order.frontierOrdinal : null))).toEqual([
+      2, 5
+    ])
+    const closedSource = deliveryStatusOf(
+      { _tag: "Run", runId },
+      { _tag: "Closed", final: observationState._tag === "Ready" ? observationState : null }
+    )
+    if (closedSource instanceof Error || closedSource._tag !== "DeliveryStatusClosed" || closedSource.final === null) {
+      return expect.fail("the real closed projection must retain its final available status")
+    }
+    const closedRecord = Schema.decodeUnknownSync(ProductionCliRecord)(
+      JSON.parse(encodeProductionCliRecord(currentDeliveryStatusRecord(closedSource)))
+    )
+    expect(closedRecord).toMatchObject({
+      _tag: "CurrentStatus",
+      status: { _tag: "DeliveryStatusClosed", final: { entries: publicSource.entries } }
+    })
+  })
+)
 
 it("round-trips the ordered identity evidence of every canonical current-status entry", () => {
   const taskId = TaskId.make("identity-fixture-task")
