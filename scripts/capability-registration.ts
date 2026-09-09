@@ -563,6 +563,22 @@ const integratorContract = contract("Integrator", [
       "controlledIntegratorContractService",
       { _tag: "ObjectProperty", property: "layer" }
     )
+  },
+  {
+    invocation: {
+      marker: "integratorContract(",
+      selector: { _tag: "ObjectProperty", property: "name", value: "node" },
+      source: "packages/dalph/src/application/codex-integrator.test.ts"
+    },
+    marker: "integratorContract",
+    role: "production",
+    source: "packages/orchestrator/test/contracts/integrator-contract.ts",
+    implementation: implementationBinding(
+      "nodeCodexIntegratorLayer",
+      "packages/dalph/src/application/codex-integrator.ts",
+      "nodeCodexIntegratorLayer",
+      { _tag: "ObjectProperty", property: "layer" }
+    )
   }
 ])
 
@@ -900,9 +916,11 @@ export const capabilityRegistrationInventory = {
       ),
       contract: integratorContract,
       family: "outer-integrator",
-      production: notApplicable(
-        "no-repository-provider",
-        "production activation accepts an outer Integrator service from its host; no repository-owned production Integrator provider is assembled"
+      production: implementation(
+        "nodeCodexIntegratorLayer",
+        "packages/dalph/src/application/codex-integrator.ts",
+        "nodeCodexIntegratorLayer",
+        composed("packages/dalph/src/application/production-host.ts", "nodeCodexIntegratorLayer")
       )
     },
     {
@@ -922,7 +940,7 @@ export const capabilityRegistrationInventory = {
         "nodeEvidenceStoreLayer",
         "packages/orchestrator/src/workflow/protocols/evidence-store.ts",
         "nodeEvidenceStoreLayer",
-        composed("packages/dalph/bin/codex-qualification-host.ts", "nodeEvidenceStoreLayer")
+        composed("packages/dalph/src/application/production-host.ts", "nodeEvidenceStoreLayer")
       )
     },
     {
@@ -1030,6 +1048,7 @@ export const capabilityRegistrationInventory = {
   compositionSources: [
     { role: "production", source: "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts" },
     { role: "production", source: "packages/dalph/src/application/production.ts" },
+    { role: "production", source: "packages/dalph/src/application/production-host.ts" },
     { role: "qualification", source: "packages/dalph/bin/codex-qualification-host.ts" },
     {
       role: "production",
@@ -1137,6 +1156,11 @@ export const capabilityRegistrationInventory = {
       "GitHub transport support behind the registered tracker provider",
       "packages/orchestrator/src/authorities/task-tracker/github/graphql-client.ts"
     ),
+    support(
+      "githubGraphqlClientLayer",
+      "configured GitHub transport beneath the registered tracker authority assembly",
+      "packages/orchestrator/src/authorities/task-tracker/github/graphql-client.ts"
+    ),
     support("journalLayer", "journaled application runtime support", "packages/dalph/src/application/production.ts"),
     support(
       "journaledRunBootstrapLayer",
@@ -1159,6 +1183,11 @@ export const capabilityRegistrationInventory = {
       "packages/dalph/src/application/codex-process-native.ts"
     ),
     support(
+      "nodeCodexOwnedActivityCensusLayer",
+      "execution-substrate observation support shared by the registered Codex executor and Integrator",
+      "packages/dalph/src/application/codex-app-server.ts"
+    ),
+    support(
       "nodeGitCommandLayer",
       "shared Git command dependency of registered Git boundaries",
       "packages/orchestrator/src/authorities/git/command.ts"
@@ -1177,6 +1206,11 @@ export const capabilityRegistrationInventory = {
       "productionRunReactivationLayer",
       "application lifecycle composition",
       "packages/dalph/src/application/production.ts"
+    ),
+    support(
+      "productionPlannedTaskAttemptLayer",
+      "production task-attempt planning support",
+      "packages/dalph/src/application/production-configuration.ts"
     ),
     support(
       "productionCoordinatorOwnershipLayer",
@@ -1199,6 +1233,11 @@ export const capabilityRegistrationInventory = {
       "packages/orchestrator/src/workflow/protocols/task-claim-reacquisition/control.ts"
     ),
     support(
+      "taskClaimAcquisitionPlannerLayer",
+      "task-claim acquisition planning support",
+      "packages/orchestrator/src/workflow/protocols/task-claim-acquisition/plan.ts"
+    ),
+    support(
       "taskWorkCapacityControlLayer",
       "task-work capacity protocol support",
       "packages/orchestrator/src/control/task-work-capacity.ts"
@@ -1207,6 +1246,11 @@ export const capabilityRegistrationInventory = {
       "traceOutputStdioLayer",
       "dry-run trace output support",
       "packages/dalph/src/presentation/stdio-trace-output.ts"
+    ),
+    support(
+      "TraceReaderLayer",
+      "workflow-journal presentation support",
+      "packages/orchestrator/src/presentation/trace-reader.ts"
     ),
     support(
       "unpublishedInRunJournalTestLayer",

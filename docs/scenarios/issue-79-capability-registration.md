@@ -21,7 +21,9 @@ in the listed controlled, production, and qualification composition sources
 with registered implementation identities and explicit support bindings. A
 qualification implementation that supplies an audited capability is registered
 under that capability family and executes the same shared contract; only
-non-capability composition dependencies may use support bindings. It also checks that
+non-capability composition dependencies may use support bindings. Production
+implementation evidence must point to a production composition; a qualification
+host cannot satisfy that edge. It also checks that
 each registered implementation and contract marker still exists at the named
 source location and that every implementation side has a named shared-contract
 call. It also checks that the declared implementation identity is the value
@@ -54,8 +56,8 @@ planned branches, and quarantined Integrator predecessor candidates. The
 controlled, production, and qualification implementations that exist in this repository are
 named by source identity. The GitHub tracker composition registers graph read,
 active claim, completion claim, and task completion as four exact families.
-The outer Integrator still has controlled evidence and a typed production N/A
-reason because no repository-owned provider exists. The three cleanup families
+The outer Integrator has controlled evidence plus a repository-owned Node
+implementation assembled by the production host. The three cleanup families
 share the production cleanup boundary implementation while remaining separate
 authority records.
 
@@ -79,7 +81,8 @@ For a deleted family, duplicate, stale marker, one-sided contract, comment or
 string-only contract residue, wrong shared-contract binding or selector, or
 unconsumed production registration, the gate reports the concrete family or
 identity and exits unsuccessfully. It must not silently infer parity from a
-filename, restore a repository lock, register TraceReader or Lab layers, or
+filename, restore a repository lock, promote TraceReader or Lab layers to
+capability implementations, or
 allow one environment-specific workflow path. A process crash and retry do
 not apply because the check has no external mutation or durable write; rerun
 simply reads the current source again.
@@ -100,7 +103,10 @@ excludes type-only references`, `rejects a registered implementation identity
 that is not consumed by its declared composition`, `rejects implementation
 evidence pointed at a consumer instead of its declaration`, `rejects a
 same-name local composition value that shadows the registered Layer`, `requires
-source-backed support binding evidence and a concrete reason`, `keeps the
+source-backed support binding evidence and a concrete reason`, `rejects
+qualification composition evidence substituted for a production implementation`,
+`rejects a qualification-only capability Layer assembled by a production composition`,
+`rejects replacement of the registered evidence Layer in the production host`, `keeps the
 required family denominator outside a mutated inventory`. `check:all` runs
 these source-audit assertions once through the focused
 `test:capability-registration` command under a 60-second process deadline. The
@@ -116,6 +122,7 @@ coverage stage excludes that suite and every test named with the
 | Production adapter added without controlled evidence | Local aliases, default exports, and namespace/default re-exports remain source-backed and closed. | `audits local aliases, default exports, and namespace/default re-exports` |
 | Production adapter added without controlled evidence | Source auditing remains read-only and dependency-neutral. | `audits source text without loading or invoking a live provider` |
 | Existing registration changed | Every current controlled, production, and qualification implementation has a contract execution and current source/composition evidence. | `runs every registered controlled, production, and qualification implementation through its named contract family` |
+| Existing registration changed | The real production host consumes its registered production implementations; qualification evidence and qualification-only Layers cannot stand in for that edge. | `rejects qualification composition evidence substituted for a production implementation`; `rejects a qualification-only capability Layer assembled by a production composition`; `rejects replacement of the registered evidence Layer in the production host` |
 | Existing registration changed | Missing, duplicate, stale, one-sided, fixed-denominator, and no-current-consumer mutations fail closed. | `rejects a missing family even when the inventory is otherwise unchanged`; `keeps the required family denominator outside a mutated inventory`; `rejects duplicate family and implementation registrations`; `rejects stale implementation and composition evidence`; `rejects one-sided contract evidence` |
 | Existing registration changed | A provider-side contract test cannot silently stop invoking the imported shared contract helper or substitute a local same-name function. | `rejects a production contract test that stops invoking the shared helper`; `rejects a local same-name contract function that is not the imported public contract` |
 | Existing registration changed | A comment or string containing a helper name cannot substitute for executing the helper call. | `rejects comment and string residue when shared-contract execution is removed` |

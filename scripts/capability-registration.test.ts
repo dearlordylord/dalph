@@ -69,7 +69,7 @@ describe("capability registration gate", () => {
     }
   )
 
-  it("registers the four real tracker authorities and keeps unrelated unavailable providers typed N/A", () => {
+  it("registers the real tracker and Integrator authorities and keeps unavailable providers typed N/A", () => {
     const graph = capabilityRegistrationInventory.capabilities.find(
       ({ family }) => family === "task-tracker-graph-read"
     )
@@ -100,7 +100,7 @@ describe("capability registration gate", () => {
       "task-tracker-completion"
     ])
     expect(integrator?.production).toEqual(
-      expect.objectContaining({ _tag: "NotApplicable", reason: "no-repository-provider" })
+      expect.objectContaining({ _tag: "Implementation", identity: "nodeCodexIntegratorLayer" })
     )
     expect(promotion?.production).toEqual(
       expect.objectContaining({ _tag: "NotApplicable", reason: "application-supplied-boundary" })
@@ -159,6 +159,48 @@ describe("capability registration gate", () => {
 
     expect(issuesFor(stale)).toContain(
       "git-worktree production composition marker is stale: removedFromProductionComposition"
+    )
+  })
+
+  it("rejects qualification composition evidence substituted for a production implementation", () => {
+    const crossRole = {
+      ...capabilityRegistrationInventory,
+      capabilities: capabilityRegistrationInventory.capabilities.map((capability) =>
+        capability.family !== "immutable-evidence"
+          ? capability
+          : {
+              ...capability,
+              production: {
+                ...capability.production,
+                composition: {
+                  ...capability.production.composition,
+                  source: "packages/dalph/bin/codex-qualification-host.ts"
+                }
+              }
+            }
+      )
+    }
+
+    expect(issuesFor(crossRole)).toContain(
+      "immutable-evidence production composition role is stale: packages/dalph/bin/codex-qualification-host.ts is qualification"
+    )
+  })
+
+  it("rejects replacement of the registered evidence Layer in the production host", () => {
+    const replacedProductionHost = sourceFiles.map((file) =>
+      file.path === "packages/dalph/src/application/production-host.ts"
+        ? {
+            ...file,
+            source: file.source.replace(
+              "nodeEvidenceStoreLayer(configuration.evidenceStoreRoot).pipe(Layer.provide(NodeServices.layer))",
+              "Layer.empty"
+            )
+          }
+        : file
+    )
+
+    expect(runCapabilityRegistrationGate(capabilityRegistrationInventory, replacedProductionHost)).toContain(
+      "immutable-evidence production composition marker is stale: nodeEvidenceStoreLayer"
     )
   })
 
@@ -651,6 +693,25 @@ describe("capability registration gate", () => {
 
     expect(runCapabilityRegistrationGate(inventory, [...sourceFiles, unknownLayer, unknownComposition])).toContain(
       "production uses unregistered exported Layer unknownProductionCapabilityLayer"
+    )
+  })
+
+  it("rejects a qualification-only capability Layer assembled by a production composition", () => {
+    const productionComposition: CapabilitySourceFile = {
+      path: "scripts/fixtures/issue-79-cross-role-composition.ts",
+      source:
+        'import { sqliteJournalTestLayer } from "../../packages/orchestrator/src/workflow-journal/adapters/sqlite-store.js"\nexport const assembled = sqliteJournalTestLayer'
+    }
+    const inventory = {
+      ...capabilityRegistrationInventory,
+      compositionSources: [
+        ...capabilityRegistrationInventory.compositionSources,
+        { role: "production" as const, source: productionComposition.path }
+      ]
+    }
+
+    expect(runCapabilityRegistrationGate(inventory, [...sourceFiles, productionComposition])).toContain(
+      "production uses unregistered exported Layer sqliteJournalTestLayer"
     )
   })
 

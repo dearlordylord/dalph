@@ -807,11 +807,15 @@ const isExportedSymbol = (symbol: ts.Symbol, indexed: CapabilitySourceProgram): 
   )
 }
 
-const implementationEntries = (inventory: CapabilityRegistrationInventory): ReadonlyArray<RegisteredImplementation> =>
+type CapabilityRole = CapabilityRegistrationInventory["compositionSources"][number]["role"]
+
+const roleImplementationEntries = (
+  inventory: CapabilityRegistrationInventory
+): ReadonlyArray<{ readonly implementation: RegisteredImplementation; readonly role: CapabilityRole }> =>
   inventory.capabilities.flatMap((capability) =>
     (["controlled", "production", "qualification"] as const).flatMap((role) => {
       const implementation = capability[role]
-      return implementation?._tag === "Implementation" ? [implementation] : []
+      return implementation?._tag === "Implementation" ? [{ implementation, role }] : []
     })
   )
 
@@ -913,8 +917,15 @@ const implementationSourceIssues = (
         issues.push(`${capability.family} ${role} implementation marker is stale: ${implementation.marker}`)
       }
       const composition = indexed.sourceByPath.get(implementation.composition.source)
+      const compositionRole = inventory.compositionSources.find(
+        ({ source }) => source === implementation.composition.source
+      )?.role
       if (composition === undefined) {
         issues.push(`${capability.family} ${role} composition source is missing: ${implementation.composition.source}`)
+      } else if (compositionRole !== undefined && compositionRole !== role) {
+        issues.push(
+          `${capability.family} ${role} composition role is stale: ${implementation.composition.source} is ${compositionRole}`
+        )
       } else if (!hasValueReference(composition, implementation.composition.marker, indexed)) {
         issues.push(`${capability.family} ${role} composition marker is stale: ${implementation.composition.marker}`)
       } else if (implementation.composition.marker !== implementation.identity) {
@@ -979,11 +990,11 @@ const compositionReferenceIssues = (
   /* eslint-disable functional/immutable-data */
   const issues: Array<string> = []
   const indexed = sourceProgram(sourceFiles)
-  const registered = new Map<string, ts.Symbol>()
-  for (const implementation of implementationEntries(inventory)) {
+  const registered = new Map<string, { readonly role: CapabilityRole; readonly symbol: ts.Symbol }>()
+  for (const { implementation, role } of roleImplementationEntries(inventory)) {
     const source = indexed.sourceByPath.get(implementation.source)
     const symbol = source === undefined ? undefined : declarationSymbolFor(source, implementation.marker, indexed)
-    if (symbol !== undefined) registered.set(implementation.identity, symbol)
+    if (symbol !== undefined) registered.set(implementation.identity, { role, symbol })
   }
   const support = new Map<string, ts.Symbol>()
   for (const binding of inventory.compositionSupportBindings) {
@@ -991,10 +1002,17 @@ const compositionReferenceIssues = (
     const symbol = source === undefined ? undefined : declarationSymbolFor(source, binding.marker, indexed)
     if (symbol !== undefined) support.set(binding.identity, symbol)
   }
-  const allowed = new Map([...registered, ...support])
-  const allowedSymbols = new Set([...allowed.values()].map((symbol) => resolveSymbol(symbol, indexed.checker)))
   const reported = new Set<string>()
   for (const composition of inventory.compositionSources) {
+    const compatibleRegistered = new Map(
+      [...registered].flatMap(([identity, registration]) =>
+        composition.role === "qualification" || registration.role === composition.role
+          ? [[identity, registration.symbol] as const]
+          : []
+      )
+    )
+    const allowed = new Map([...compatibleRegistered, ...support])
+    const allowedSymbols = new Set([...allowed.values()].map((symbol) => resolveSymbol(symbol, indexed.checker)))
     const source = indexed.sourceByPath.get(composition.source)
     if (source === undefined) {
       issues.push(`${composition.role} composition source is missing: ${composition.source}`)
