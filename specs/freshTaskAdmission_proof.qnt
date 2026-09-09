@@ -2,6 +2,11 @@
 // preserves all five task identities because stable A-E order is load-bearing.
 // The continuity projection expands one admitted task through every durable and
 // ambiguous boundary while retaining one outside-task sentinel.
+// Canonical images: SafeContinuationAwaitingRevalidation plus Unoccupied maps
+// to SafeAwaitingRevalidation; plus ExistingResponsibilityReserved maps to
+// RevalidationReserved. Authorization maps that same reserved slot to
+// RevalidatedReserved; ordinary ready reservations map to ExistingReserved.
+// Tracker/Safe evidence is supplied by the canonical model and stutters here.
 module freshTaskAdmissionCapacityProof {
   type TaskId = A | B | C | D | E
 
@@ -13,6 +18,9 @@ module freshTaskAdmissionCapacityProof {
     | Occupied
     | RetainedNotReady
     | ReadyExisting
+    | SafeAwaitingRevalidation
+    | RevalidationReserved
+    | RevalidatedReserved
     | ExistingReserved
     | ForeignBlocked
 
@@ -23,6 +31,9 @@ module freshTaskAdmissionCapacityProof {
     | ExistingBecameReady(TaskId)
     | ExistingEntered(TaskId)
     | ExistingHandedOff(TaskId)
+    | SafeContinuationSelected(TaskId)
+    | SafeContinuationReserved(TaskId)
+    | ContinuationWitnessesAccepted(TaskId)
     | FreshHandedOff(TaskId)
     | ForeignRejected(TaskId)
     | OwnedConstrained(TaskId)
@@ -54,7 +65,8 @@ module freshTaskAdmissionCapacityProof {
   }
 
   pure def isOccupied(disposition: TaskDisposition): bool =
-    disposition == Occupied or disposition == ExistingReserved
+    or { disposition == Occupied, disposition == ExistingReserved,
+      disposition == RevalidationReserved, disposition == RevalidatedReserved }
 
   pure def occupiedCount(s: State): int =
     (if (isOccupied(s.disposition.get(A))) 1 else 0)
@@ -70,11 +82,11 @@ module freshTaskAdmissionCapacityProof {
     })
 
   pure def readyExistingWaits(s: State): bool =
-    TASKS.exists(task => s.disposition.get(task) == ReadyExisting)
+    TASKS.exists(task => s.disposition.get(task) == ReadyExisting or s.disposition.get(task) == SafeAwaitingRevalidation)
 
   pure def lowerReadyExistingWaits(s: State, task: TaskId): bool =
     TASKS.exists(other => and {
-      s.disposition.get(other) == ReadyExisting,
+      s.disposition.get(other) == ReadyExisting or s.disposition.get(other) == SafeAwaitingRevalidation,
       or {
         s.existingOrder.get(other) < s.existingOrder.get(task),
         and {
@@ -113,6 +125,8 @@ module freshTaskAdmissionCapacityProof {
   val expansionReached = state.lastEvent == CapacityExpanded
   val retainedNotReadyReached =
     TASKS.exists(task => state.disposition.get(task) == RetainedNotReady)
+  val safeContinuationReservedReached = state.lastEvent == SafeContinuationReserved(C)
+  val continuationWitnessesAcceptedReached = state.lastEvent == ContinuationWitnessesAccepted(C)
 
   action init: bool = all {
     state' = {
@@ -178,8 +192,73 @@ module freshTaskAdmissionCapacityProof {
     },
   }
 
+  // The canonical model supplies closure before the exact accepted Safe report,
+  // a later complete-graph reopening, and independent control/claim/Git
+  // eligibility. Ordinary Safe checkpoints are not this transition's image.
+  // This projection preserves order
+  // and the entire pre-command capacity interval while collapsing the reads.
+  action selectSafeContinuation(task: TaskId): bool = all {
+    state.disposition.get(task) == RetainedNotReady,
+    state' = {
+      ...state,
+      disposition: state.disposition.put(task, SafeAwaitingRevalidation),
+      lastEvent: SafeContinuationSelected(task),
+    },
+  }
+
+  action reserveSafeContinuation(task: TaskId): bool = all {
+    state.disposition.get(task) == SafeAwaitingRevalidation,
+    occupiedCount(state) < state.capacity,
+    not(lowerReadyExistingWaits(state, task)),
+    state' = {
+      ...state,
+      disposition: state.disposition.put(task, RevalidationReserved),
+      lastEvent: SafeContinuationReserved(task),
+      existingEntryPastCapacity:
+        state.existingEntryPastCapacity or occupiedCount(state) >= state.capacity,
+    },
+  }
+
+  // Canonical reconciliation proves a pending exact Resume is still Safe.
+  // Its release and restored priority are one projection, without an E gap.
+  action reconcileResumeStillSafe(task: TaskId): bool = all {
+    state.disposition.get(task) == Occupied,
+    state' = {
+      ...state,
+      disposition: state.disposition.put(task, SafeAwaitingRevalidation),
+      lastEvent: SafeContinuationSelected(task),
+    },
+  }
+
+  action acceptContinuationWitnesses(task: TaskId): bool = all {
+    state.disposition.get(task) == RevalidationReserved,
+    state' = {
+      ...state,
+      disposition: state.disposition.put(task, RevalidatedReserved),
+      lastEvent: ContinuationWitnessesAccepted(task),
+    },
+  }
+
+  action rejectContinuationWitnesses(task: TaskId): bool = all {
+    state.disposition.get(task) == RevalidationReserved,
+    state' = {
+      ...state,
+      disposition: state.disposition.put(task, RetainedNotReady),
+      lastEvent: OccupiedReleased(task),
+    },
+  }
+
+  action recoverContinuationReservation(task: TaskId): bool = all {
+    state.disposition.get(task) == RevalidationReserved or state.disposition.get(task) == RevalidatedReserved,
+    state' = {
+      ...state,
+      disposition: state.disposition.put(task, SafeAwaitingRevalidation),
+      lastEvent: SafeContinuationSelected(task),
+    },
+  }
+
   action handoffExisting(task: TaskId): bool = all {
-    state.disposition.get(task) == ExistingReserved,
+    state.disposition.get(task) == ExistingReserved or state.disposition.get(task) == RevalidatedReserved,
     state' = {
       ...state,
       disposition: state.disposition.put(task, Occupied),
@@ -263,6 +342,12 @@ module freshTaskAdmissionCapacityProof {
       reserveNext(task),
       releaseOccupiedNotReady(task),
       makeExistingReady(task),
+      selectSafeContinuation(task),
+      reserveSafeContinuation(task),
+      reconcileResumeStillSafe(task),
+      acceptContinuationWitnesses(task),
+      rejectContinuationWitnesses(task),
+      recoverContinuationReservation(task),
       reserveExisting(task),
       handoffExisting(task),
       handoffFresh(task),

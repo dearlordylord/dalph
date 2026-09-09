@@ -18,6 +18,7 @@ import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import type { FreshWorkflowStep } from "./fresh-workflow-step.js"
 import type { TransitionForRoute } from "./delivery-transition-policy.js"
 import type { FreshTaskCommitment } from "../admission/fresh-task-admission.js"
+import type { SafeContinuationRevalidationEligibility } from "../frontier/fresh-facts.js"
 import { immutableSnapshot } from "../immutable-snapshot.js"
 import {
   replacementContinuationAuthorityMatchesStep,
@@ -105,7 +106,15 @@ export type IntegrationTargetResourceRequirement =
 type UncorrelatedTaskWorkPositionRequirement = Exclude<TaskWorkPositionRequirement, { readonly mode: "Existing" }>
 
 /** One coherent admission requirement; an exact attempt correlation is carried once and shared by both resources. */
-export type DeliveryAdmissionRequirements = { readonly integrationTarget: IntegrationTargetResourceRequirement } & (
+export type DeliveryAdmissionRequirements = {
+  readonly integrationTarget: IntegrationTargetResourceRequirement
+  /**
+   * Exact process-local permission to hold capacity across this retained
+   * attempt's continuation reads. Final Resume authority remains a separate
+   * journaled continuation authorization.
+   */
+  readonly safeContinuationRevalidation?: SafeContinuationRevalidationEligibility
+} & (
   | {
       readonly plannedAttemptProtocol: Extract<
         PlannedAttemptProtocolRequirement,
@@ -738,6 +747,7 @@ export interface DeliveryProposalsInput {
   readonly pendingReadOperationIds?: ReadonlySet<OperationId>
   readonly responsibilities?: ReadonlyArray<WorkflowResponsibilityEntry>
   readonly runId: RunId
+  readonly safeContinuationRevalidations?: ReadonlyArray<SafeContinuationRevalidationEligibility>
   readonly transitions: ReadonlyArray<RunnableFrontierTransition>
 }
 

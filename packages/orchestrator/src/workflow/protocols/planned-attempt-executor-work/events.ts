@@ -2,6 +2,8 @@ import { Schema } from "effect"
 import { PlannedTaskAttempt, PlannedAttemptExecutorReport, PlannedAttemptExecutorBeginProofId } from "@dalph/contracts"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { WorkflowActor } from "../../registry/actor.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
+import { PlannedAttemptContinuationWitness } from "../planned-attempt-continuation/events.js"
 
 /** Orders durable executor commands for one immutable planned attempt. */
 export const PlannedAttemptExecutorCommandOrdinal = Schema.Int.pipe(
@@ -16,6 +18,42 @@ export const PlannedAttemptExecutorCommandProjectionOrdinal = Schema.Int.pipe(
   Schema.brand("PlannedAttemptExecutorCommandProjectionOrdinal")
 )
 export type PlannedAttemptExecutorCommandProjectionOrdinal = typeof PlannedAttemptExecutorCommandProjectionOrdinal.Type
+
+/** Orders redelivery intents for one original Resume command, without allocating another semantic command. */
+export const PlannedAttemptExecutorResumeRedeliveryOrdinal = Schema.Int.pipe(
+  Schema.check(Schema.isGreaterThan(0)),
+  Schema.brand("PlannedAttemptExecutorResumeRedeliveryOrdinal")
+)
+export type PlannedAttemptExecutorResumeRedeliveryOrdinal = typeof PlannedAttemptExecutorResumeRedeliveryOrdinal.Type
+
+/** Identifies the exact Safe projection and subsequent tracker/Git witnesses consumed by one Resume redelivery. */
+export const PlannedAttemptExecutorResumeRedeliveryAuthorizationIdentity = Schema.Struct({
+  safeProjectionObservedAt: JournalPosition,
+  witness: PlannedAttemptContinuationWitness
+})
+export type PlannedAttemptExecutorResumeRedeliveryAuthorizationIdentity =
+  typeof PlannedAttemptExecutorResumeRedeliveryAuthorizationIdentity.Type
+
+/**
+ * Consumes one reconciled Safe projection before redelivering the original Resume.
+ * A crash after this intent requires a newer executor projection, not reuse of
+ * this authorization. It records command-delivery responsibility, never capacity.
+ */
+export const PlannedAttemptExecutorResumeRedeliveryIntendedEvent = Schema.TaggedStruct(
+  "PlannedAttemptExecutorResumeRedeliveryIntended",
+  {
+    authorization: PlannedAttemptExecutorResumeRedeliveryAuthorizationIdentity,
+    commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
+    initiatedBy: WorkflowActor.cases.DalphCoordinator,
+    occurrenceClassification: Schema.Literal("InitiatedAction"),
+    plannedAttempt: PlannedTaskAttempt,
+    projectionOrdinal: PlannedAttemptExecutorCommandProjectionOrdinal,
+    redeliveryOrdinal: PlannedAttemptExecutorResumeRedeliveryOrdinal,
+    version: Schema.Literal(workflowJournalEventVersion)
+  }
+)
+export type PlannedAttemptExecutorResumeRedeliveryIntendedEvent =
+  typeof PlannedAttemptExecutorResumeRedeliveryIntendedEvent.Type
 
 /** Durable intent recorded before an executor begin, resume, or suspension request crosses its boundary. */
 export const PlannedAttemptExecutorCommandIntendedEvent = Schema.TaggedStruct("PlannedAttemptExecutorCommandIntended", {
@@ -154,6 +192,7 @@ export const PlannedAttemptExecutorWorkReportedEvent = Schema.TaggedStruct("Plan
 
 export const PlannedAttemptExecutorJournalEvent = Schema.Union([
   PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorResumeRedeliveryIntendedEvent,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorCommandResponseContradictedEvent,

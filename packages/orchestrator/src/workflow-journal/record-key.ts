@@ -5,6 +5,7 @@ import type {
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorCommandProjectionOrdinal,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorResumeRedeliveryOrdinal,
   PlannedAttemptExecutorStateObservationOrdinal
 } from "../workflow/protocols/planned-attempt-executor-work/events.js"
 import type { RunPolicyRevision } from "../control/policy.js"
@@ -247,6 +248,15 @@ export const plannedAttemptExecutorCommandProjectionObservedRecordKey = (
 ): JournalRecordKey =>
   JournalRecordKey.make(
     `attempt:${attemptId}:executor-command:${commandOrdinal}:projection:${projectionOrdinal}:observation`
+  )
+
+export const plannedAttemptExecutorResumeRedeliveryIntendedRecordKey = (
+  attemptId: AttemptId,
+  commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
+  redeliveryOrdinal: PlannedAttemptExecutorResumeRedeliveryOrdinal
+): JournalRecordKey =>
+  JournalRecordKey.make(
+    `attempt:${attemptId}:executor-command:${commandOrdinal}:resume-redelivery:${redeliveryOrdinal}:intent`
   )
 
 export const plannedAttemptExecutorCommandResponseContradictedRecordKey = (

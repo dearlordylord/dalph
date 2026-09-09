@@ -7,6 +7,17 @@
  */
 export const plannedAttemptExecutorObligations = Object.freeze({
   invariants: Object.freeze([
+    "resumeRedeliveryKeepsOriginalCommand",
+    "resumeRedeliveryNeverAllocatesCommand",
+    "resumeProjectionConsumedAtMostOnce",
+    "resumeRedeliveryOrdinalsAreExact",
+    "resumeRedeliveryUsesLatestProjection",
+    "resumeRedeliveryUsesLaterExactWitnesses",
+    "resumeRedeliveryCallHasDurableIntent",
+    "eachResumeRedeliveryIntentAllowsOneCall",
+    "resumeRedeliveryRetainsResponsibility",
+    "crashedResumeCannotReuseDeliveryAuthorization",
+    "activationRecoveryCannotRetainResumeCallPermission",
     "everyCallHasOneDurableIntent",
     "beginTurnCrossesAtMostOnce",
     "replacementRequiresFreshExactAbsence",
@@ -46,6 +57,10 @@ export const plannedAttemptExecutorObligations = Object.freeze({
     "passiveReportAcceptanceHasCausalCommand"
   ]),
   witnesses: Object.freeze([
+    "resumeWitnessReadReached",
+    "resumeRedeliveryIntendedReached",
+    "resumeRedeliveryCalledReached",
+    "resumeDeliveryCrashedReached",
     "responsibilityBeganReached",
     "beginIntentRecordedReached",
     "resumeIntentRecordedReached",
@@ -89,6 +104,12 @@ export const plannedAttemptExecutorObligations = Object.freeze({
 export const plannedAttemptExecutorProofObligations = Object.freeze({
   evidence: Object.freeze({
     invariants: Object.freeze([
+      "resumeProjectionConsumedOnce",
+      "resumeRedeliveryCallHasIntent",
+      "resumeRedeliveryUsesFreshWitness",
+      "resumeRedeliveryPreservesSemanticResume",
+      "resumeRedeliveryRetainsPosition",
+      "resumeCrashDiscardsCallPermission",
       "replacementRequiresFreshAbsence",
       "beginProofRequiresAssociation",
       "allocationRequiresDurableEmptyIntent",
@@ -108,6 +129,11 @@ export const plannedAttemptExecutorProofObligations = Object.freeze({
       "evidenceProofTypeOk"
     ]),
     witnesses: Object.freeze([
+      "resumeSafeProjectionReached",
+      "resumeWitnessReadyReached",
+      "resumeRedeliveryIntentReached",
+      "resumeRedeliveryCalledReached",
+      "resumeDeliveryCrashReached",
       "emptyAbsenceReached",
       "emptyReplacementReached",
       "replacementAllocatedReached",
@@ -236,6 +262,12 @@ export const freshTaskAdmissionObligations = Object.freeze({
     "existingResponsibilityInputIsExactlyCorrelated",
     "retainedReadyResponsibilityBlocksFreshEntry",
     "readyResponsibilityEntryRespectsCapacity",
+    "constrainedSafeContinuationCannotReserve",
+    "safeContinuationAuthorizationRequiresEveryWitness",
+    "continuationWitnessesRemainWithinExactContinuation",
+    "revalidationRequiresAcceptedSafeReport",
+    "revalidationRequiresLifecycleReopen",
+    "pendingResumeRevalidationRequiresExactSafeReconciliation",
     "foreignClaimConstraintPreventsOccupancy",
     "newClaimCycleNeverReusesRejectedOperation",
     "postOwnershipConstraintRetainsOccupancy",
@@ -260,6 +292,8 @@ export const freshTaskAdmissionObligations = Object.freeze({
     "reconstructedResponsibilityAfterLossReached",
     "readyResponsibilityReached",
     "readyResponsibilityReservedReached",
+    "safeContinuationAwaitingReadsReached",
+    "safeContinuationReadWhileReservedReached",
     "processLossReached",
     "repeatedProcessLossReached",
     "contractionReached"
@@ -289,7 +323,9 @@ export const freshTaskAdmissionProofObligations = Object.freeze({
       "existingReservationReached",
       "contractionReached",
       "expansionReached",
-      "retainedNotReadyReached"
+      "retainedNotReadyReached",
+      "safeContinuationReservedReached",
+      "continuationWitnessesAcceptedReached"
     ])
   }),
   ambiguity: Object.freeze({

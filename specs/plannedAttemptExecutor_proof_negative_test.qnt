@@ -76,6 +76,43 @@ module plannedAttemptExecutorEvidenceProofNegativeTest {
     init.then(recordBeginIntent).then(callBegin).then(crossDuplicateTurn).expect(not(beginTurnCrossesAtMostOnce))
   }
 
+
+  action duplicateResumeProjectionConsumption: bool = all {
+    state' = { ...state, resumeRedeliveryCount: state.resumeRedeliveryCount + 1 },
+  }
+  action callResumeWithoutRedeliveryIntent: bool = all {
+    state' = { ...state, resumeRedeliveryCallCount: state.resumeRedeliveryCount + 1 },
+  }
+  action reuseResumeWitnessWithoutFreshRead: bool = all {
+    state' = { ...state, lastResumeRedeliveryHadFreshWitness: false, lastEvent: ResumeRedeliveryRecorded },
+  }
+  action releasePendingResumePosition: bool = all { state' = { ...state, positionHeld: false } }
+  action restoreCrashedResumePermission: bool = all { state' = { ...state, resumeDeliveryMayCall: true } }
+  run duplicateResumeProjectionConsumptionIsDetectedTest = {
+    init.then(recordBeginIntent).then(callBegin).then(observeBeginResponse(ExecutingReport)).then(settleBeginResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(observeSuspendResponse(SafeReport)).then(settleSuspendResponse)
+      .then(recordResumeIntent).then(crashResumeDelivery).then(observeResumeSafeProjection).then(readResumeContinuationWitness).then(recordResumeRedeliveryIntent).then(duplicateResumeProjectionConsumption).expect(not(resumeProjectionConsumedOnce))
+  }
+  run resumeCallWithoutDurableRedeliveryIntentIsDetectedTest = {
+    init.then(recordBeginIntent).then(callBegin).then(observeBeginResponse(ExecutingReport)).then(settleBeginResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(observeSuspendResponse(SafeReport)).then(settleSuspendResponse)
+      .then(recordResumeIntent).then(crashResumeDelivery).then(observeResumeSafeProjection).then(readResumeContinuationWitness).then(recordResumeRedeliveryIntent).then(callResumeWithoutRedeliveryIntent).expect(not(resumeRedeliveryCallHasIntent))
+  }
+  run staleResumeWitnessIsDetectedTest = {
+    init.then(recordBeginIntent).then(callBegin).then(observeBeginResponse(ExecutingReport)).then(settleBeginResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(observeSuspendResponse(SafeReport)).then(settleSuspendResponse)
+      .then(recordResumeIntent).then(crashResumeDelivery).then(observeResumeSafeProjection).then(readResumeContinuationWitness).then(recordResumeRedeliveryIntent).then(reuseResumeWitnessWithoutFreshRead).expect(not(resumeRedeliveryUsesFreshWitness))
+  }
+  run pendingResumePositionReleaseIsDetectedTest = {
+    init.then(recordBeginIntent).then(callBegin).then(observeBeginResponse(ExecutingReport)).then(settleBeginResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(observeSuspendResponse(SafeReport)).then(settleSuspendResponse)
+      .then(recordResumeIntent).then(crashResumeDelivery).then(observeResumeSafeProjection).then(readResumeContinuationWitness).then(recordResumeRedeliveryIntent).then(releasePendingResumePosition).expect(not(resumeRedeliveryRetainsPosition))
+  }
+  run restoredCrashedResumePermissionIsDetectedTest = {
+    init.then(recordBeginIntent).then(callBegin).then(observeBeginResponse(ExecutingReport)).then(settleBeginResponse)
+      .then(recordSuspendIntent).then(callSuspend).then(observeSuspendResponse(SafeReport)).then(settleSuspendResponse)
+      .then(recordResumeIntent).then(crashResumeDelivery).then(observeResumeSafeProjection).then(readResumeContinuationWitness).then(recordResumeRedeliveryIntent).then(crashResumeDelivery).then(restoreCrashedResumePermission).expect(not(resumeCrashDiscardsCallPermission))
+  }
 }
 
 module plannedAttemptExecutorSuspendBoundProofNegativeTest {

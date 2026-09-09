@@ -15,6 +15,21 @@ export const capabilityRegistrationQualityGate = Object.freeze({
   timeout: 60 * SECOND
 })
 
+/** The complexity policy compares its registry with the exact full-gate base. */
+export const complexityQualityGate = (baseSha) =>
+  Object.freeze({
+    args: Object.freeze(["check:complexity", `--candidate=${baseSha}`]),
+    name: "cyclomatic complexity",
+    timeout: 60 * SECOND
+  })
+
+/** Coverage receives the same canonical base that governs complexity suppressions. */
+export const qualityGateTestEnvironment = (baseSha, environment = process.env) => ({
+  ...environment,
+  DALPH_COVERAGE_BASE_SHA: baseSha,
+  NODE_OPTIONS: [environment.NODE_OPTIONS, "--disable-warning=ExperimentalWarning"].filter(Boolean).join(" ")
+})
+
 /** Build the process-group-bounded invocation shared by every quality stage. */
 export const boundedQualityGateCommand = ({ gate, nodeExecutable, pnpmEntryPoint }) => ({
   // Omit pnpm lifecycle banners; retain the child tool's output and exit status.

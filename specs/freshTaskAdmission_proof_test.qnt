@@ -58,6 +58,42 @@ module freshTaskAdmissionCapacityProofTest {
       .expect(and { retainedNotReadyReached, state.disposition.get(D) == Occupied })
   }
 
+  run safeCWithBD = init.then(reserveNext(A)).then(reserveNext(B)).then(reserveNext(C))
+    .then(releaseOccupiedNotReady(B)).then(reserveNext(D)).then(contract)
+    .then(releaseOccupiedNotReady(C)).then(makeExistingReady(B))
+    .then(releaseOccupiedNotReady(A)).then(reserveExisting(B)).then(handoffExisting(B))
+    .then(selectSafeContinuation(C))
+
+  run safeCWaitsAtTwoAndReservesThirdBeforeETest = safeCWithBD
+    .then(expand)
+    .then(reserveSafeContinuation(C))
+    .expect(occupiedCount(state) == 3)
+    .then(acceptContinuationWitnesses(C)).then(handoffExisting(C))
+    .expect(and { occupiedCount(state) == 3, state.disposition.get(C) == Occupied })
+
+  run safeCRejectsResumeBeforeWitnessesTest = safeCWithBD.then(expand)
+    .then(reserveSafeContinuation(C)).then(handoffExisting(C).fail())
+
+  run reconciledSafeCRetakesPositionBeforeETest = safeCWithBD.then(expand)
+    .then(reserveSafeContinuation(C)).then(acceptContinuationWitnesses(C)).then(handoffExisting(C))
+    .then(reconcileResumeStillSafe(C)).then(reserveNext(E).fail())
+
+  run crashAfterCWitnessesRequiresRevalidationTest = safeCWithBD.then(expand)
+    .then(reserveSafeContinuation(C)).then(acceptContinuationWitnesses(C))
+    .then(recoverContinuationReservation(C)).then(reserveSafeContinuation(C))
+    .then(handoffExisting(C).fail())
+
+  run unavailableCReleasesPreCommandPositionForETest = safeCWithBD.then(expand)
+    .then(reserveSafeContinuation(C)).then(rejectContinuationWitnesses(C)).then(reserveNext(E))
+    .expect(and { occupiedCount(state) == 3, state.disposition.get(C) == RetainedNotReady })
+
+  run crashedCReservationMustReacquireBeforeReadingTest = safeCWithBD.then(expand)
+    .then(reserveSafeContinuation(C)).then(recoverContinuationReservation(C))
+    .expect(and {
+      occupiedCount(state) == 2,
+    })
+    .then(reserveSafeContinuation(C)).expect(occupiedCount(state) == 3)
+
   run contractionRetainsThreeOccupantsTest = {
     init.then(reserveNext(A)).then(reserveNext(B)).then(reserveNext(C))
       .then(contract).then(contract)

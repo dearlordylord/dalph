@@ -34,6 +34,8 @@ import {
   type PlannedAttemptExecutorCommandProjectionObservation,
   type PlannedAttemptExecutorCommandProjectionOrdinal,
   type PlannedAttemptExecutorReportOrdinal,
+  type PlannedAttemptExecutorResumeRedeliveryOrdinal,
+  type PlannedAttemptContinuationWitness,
   type PlannedAttemptExecutorStateObservation,
   type PlannedAttemptExecutorStateObservationOrdinal,
   type RunPolicyRevision,
@@ -157,6 +159,7 @@ type PreservedCassetteBrand =
   | GithubRepositoryName
   | GithubRepositoryOwner
   | PlannedAttemptExecutorReportOrdinal
+  | PlannedAttemptExecutorResumeRedeliveryOrdinal
   | PlannedAttemptExecutorCommandOrdinal
   | PlannedAttemptExecutorCommandProjectionOrdinal
   | PlannedAttemptExecutorStateObservationOrdinal
@@ -217,6 +220,28 @@ function completeFieldsWithOptionalRoot(value: unknown): unknown {
 const preserveCassetteValue = <Value>(value: PreservableCassetteValue<Value>): Value => value
 
 const renamed = <Identity>(value: Identity, map: ReadonlyMap<Identity, Identity>): Identity => map.get(value) ?? value
+
+const renameContinuationWitness = (
+  witness: PlannedAttemptContinuationWitness,
+  maps: IdentityRenamingMaps
+): PlannedAttemptContinuationWitness => ({
+  activeTaskContinuationRead: {
+    graphObservationOperationId: renamed(
+      witness.activeTaskContinuationRead.graphObservationOperationId,
+      maps.operationIds
+    ),
+    taskClaimObservationOperationId: renamed(
+      witness.activeTaskContinuationRead.taskClaimObservationOperationId,
+      maps.operationIds
+    ),
+    taskWorkSpecificationObservationOperationId: renamed(
+      witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId,
+      maps.operationIds
+    )
+  },
+  targetLineageObservationOperationId: renamed(witness.targetLineageObservationOperationId, maps.operationIds),
+  worktreeObservationOperationId: renamed(witness.worktreeObservationOperationId, maps.operationIds)
+})
 
 const renameExecutorReport = (
   report: PlannedAttemptExecutorReport,
@@ -1961,6 +1986,20 @@ const renameRecordedCassetteEntry = (
           plannedAttempt: renamePlannedAttempt(observationEntry.plannedAttempt, maps),
           projectionOrdinal: preserveCassetteValue(observationEntry.projectionOrdinal)
         }),
+      PlannedAttemptExecutorResumeRedeliveryIntended: (intentEntry) =>
+        completeFields<typeof intentEntry>({
+          _tag: "PlannedAttemptExecutorResumeRedeliveryIntended",
+          authorization: completeFields<typeof intentEntry.authorization>({
+            safeProjectionObservedAt: preserveCassetteValue(intentEntry.authorization.safeProjectionObservedAt),
+            witness: renameContinuationWitness(intentEntry.authorization.witness, maps)
+          }),
+          commandOrdinal: preserveCassetteValue(intentEntry.commandOrdinal),
+          initiatedBy: preserveCassetteValue(intentEntry.initiatedBy),
+          occurrenceClassification: preserveCassetteValue(intentEntry.occurrenceClassification),
+          plannedAttempt: renamePlannedAttempt(intentEntry.plannedAttempt, maps),
+          projectionOrdinal: preserveCassetteValue(intentEntry.projectionOrdinal),
+          redeliveryOrdinal: preserveCassetteValue(intentEntry.redeliveryOrdinal)
+        }),
       PlannedAttemptExecutorCommandResponseObserved: (observationEntry) =>
         completeFields<typeof observationEntry>({
           _tag: "PlannedAttemptExecutorCommandResponseObserved",
@@ -1996,30 +2035,7 @@ const renameRecordedCassetteEntry = (
         completeFields<typeof authorizationEntry>({
           _tag: "PlannedAttemptContinuationAuthorized",
           plannedAttempt: renamePlannedAttempt(authorizationEntry.plannedAttempt, maps),
-          witness: {
-            activeTaskContinuationRead: {
-              graphObservationOperationId: renamed(
-                authorizationEntry.witness.activeTaskContinuationRead.graphObservationOperationId,
-                maps.operationIds
-              ),
-              taskClaimObservationOperationId: renamed(
-                authorizationEntry.witness.activeTaskContinuationRead.taskClaimObservationOperationId,
-                maps.operationIds
-              ),
-              taskWorkSpecificationObservationOperationId: renamed(
-                authorizationEntry.witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId,
-                maps.operationIds
-              )
-            },
-            targetLineageObservationOperationId: renamed(
-              authorizationEntry.witness.targetLineageObservationOperationId,
-              maps.operationIds
-            ),
-            worktreeObservationOperationId: renamed(
-              authorizationEntry.witness.worktreeObservationOperationId,
-              maps.operationIds
-            )
-          }
+          witness: renameContinuationWitness(authorizationEntry.witness, maps)
         }),
       PlannedAttemptWorktreeObserved: (observationEntry) =>
         completeFields<typeof observationEntry>({

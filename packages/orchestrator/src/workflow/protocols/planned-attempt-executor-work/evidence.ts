@@ -444,8 +444,18 @@ export const latestUnsettledPlannedAttemptExecutorCommand = (
   )
   if (command?.event._tag !== "PlannedAttemptExecutorCommandIntended") return undefined
   const commandEvent = command.event
+  // A redelivery reopens delivery responsibility for the original command.
+  // Earlier Safe projections cannot settle the later ambiguity-crossing intent.
+  const latestDelivery = records.findLast(
+    ({ event, position }) =>
+      position > command.position &&
+      event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" &&
+      event.commandOrdinal === commandEvent.ordinal &&
+      plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
+  )
+  const deliveryPosition = latestDelivery?.position ?? command.position
   const settled = records.some(({ event, position }) => {
-    if (position <= command.position) return false
+    if (position <= deliveryPosition) return false
     if (event._tag === "PlannedAttemptExecutorCommandResponseObserved") {
       return event.commandOrdinal === commandEvent.ordinal && exactCorrelation(event.report, plannedAttempt)
     }

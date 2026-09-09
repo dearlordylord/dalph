@@ -4,6 +4,7 @@ import {
   type TaskWorkSpecification
 } from "@dalph/contracts"
 import { Effect } from "effect"
+import type { AcceptedExecutorCommandDelivery } from "./command-delivery.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
 import { defaultPlannedAttemptExecutorSuspensionLimit, type PlannedAttemptExecutorSuspensionLimit } from "./events.js"
 import { latestUnsettledPlannedAttemptExecutorCommand } from "./evidence.js"
@@ -33,7 +34,8 @@ export const beginPlannedAttemptExecutorWorkWithPermit = (
 export const resumePlannedAttemptExecutorWorkWithPermit = (
   permit: PlannedAttemptProtocolPermit,
   plannedAttempt: PlannedTaskAttempt,
-  selectedSpecification?: TaskWorkSpecification
+  selectedSpecification?: TaskWorkSpecification,
+  onIntentAccepted?: (receipt: AcceptedExecutorCommandDelivery) => Effect.Effect<void>
 ) =>
   withPlannedAttemptProtocolPermit(
     permit,
@@ -43,7 +45,8 @@ export const resumePlannedAttemptExecutorWorkWithPermit = (
       plannedAttempt,
       "Resume",
       defaultPlannedAttemptExecutorSuspensionLimit,
-      selectedSpecification
+      selectedSpecification,
+      onIntentAccepted
     )
   )
 
