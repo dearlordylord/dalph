@@ -9,6 +9,7 @@ import {
 } from "../packages/dalph/src/cassettes/delivery-story-manifest.js"
 import { maintainedIntegrationFinalityProtocolCassetteCatalog } from "../packages/dalph/src/cassettes/integration-finality-protocol-cassette-domain.js"
 import { issue268ControlledDeliveryCassetteCatalog } from "../packages/dalph/test-support/issue-268-controlled-occurrence-cassette.js"
+import { issue274RetainedCCassetteCatalog } from "../packages/dalph/test-support/issue-274-retained-c-cassette.js"
 import {
   issue268AcceptedOccurrenceOrder,
   issue268AcceptedOccurrenceOrderDigest
@@ -27,7 +28,9 @@ it("keeps every delivery-story beat linked to maintained evidence or an explicit
     const [catalog, name] = key.split(":")
     return (
       (catalog === "authored" && name !== undefined && name in maintainedAuthoredCassetteCatalog) ||
-      (catalog === "controlled" && name !== undefined && name in issue268ControlledDeliveryCassetteCatalog) ||
+      (catalog === "controlled" &&
+        name !== undefined &&
+        (name in issue268ControlledDeliveryCassetteCatalog || name in issue274RetainedCCassetteCatalog)) ||
       (catalog === "integration-finality" &&
         name !== undefined &&
         name in maintainedIntegrationFinalityProtocolCassetteCatalog)
