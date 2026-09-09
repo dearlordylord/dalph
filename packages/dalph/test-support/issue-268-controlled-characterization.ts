@@ -258,6 +258,16 @@ interface Issue268SharedAuthorities {
 }
 
 interface Issue268StartupCharacterizationOptions {
+  readonly retainedResume?: {
+    readonly activation: "Reopen" | "ReconcileResume"
+    readonly loseResponse?: Deferred.Deferred<void>
+    readonly projectedReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>
+    readonly publications: Queue.Queue<DeliveryRelationInputBundle>
+    readonly ready: Deferred.Deferred<{
+      readonly operatorControl: JournaledRunBootstrap["Service"]["operatorControl"]
+      readonly snapshot: () => Effect.Effect<Issue268Ds03BoundarySnapshot, unknown>
+    }>
+  }
   readonly ds08?: Issue268Ds08Controls
   readonly ds09?: Issue268Ds09Controls
   readonly sharedAuthorities?: Issue268SharedAuthorities
@@ -371,6 +381,7 @@ const runIssue268StartupCharacterizationFor = (
       const ds01ClaimGate = yield* Deferred.make<void>()
       const executedActions = yield* Ref.make<ReadonlyArray<{ readonly stage: string; readonly taskId: string }>>([])
       const projectedReports =
+        options.retainedResume?.projectedReports ??
         ds08Controls?.projectedReports ??
         ds09Controls?.projectedReports ??
         (yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map()))
@@ -481,6 +492,7 @@ const runIssue268StartupCharacterizationFor = (
           }),
         begin: (request: PlannedAttemptExecutorRequest) =>
           Effect.gen(function* () {
+            if (options.retainedResume !== undefined) return yield* Effect.die("retained C must never Begin")
             yield* recordOccurrence({
               detail: request.plannedAttempt.attemptId,
               kind: "ExecutorBeginCalled",
@@ -534,7 +546,12 @@ const runIssue268StartupCharacterizationFor = (
         resume: (request) =>
           Effect.gen(function* () {
             const phase = ds09Controls?.ds10 === undefined ? undefined : yield* Ref.get(ds09Controls.ds10.phase)
-            if (phase !== "DS13" || !isIssue268ExactB1Plan(request.plannedAttempt)) {
+            const exactResume =
+              options.retainedResume === undefined
+                ? phase === "DS13" && isIssue268ExactB1Plan(request.plannedAttempt)
+                : request.plannedAttempt.runId === scenario.runId &&
+                  request.plannedAttempt.attemptId === scenario.attempts.C1
+            if (!exactResume) {
               return yield* Effect.die(`C2b startup must not resume ${request.plannedAttempt.attemptId}`)
             }
             yield* recordOccurrence({
@@ -552,6 +569,10 @@ const runIssue268StartupCharacterizationFor = (
             yield* Ref.update(projectedReports, (current) =>
               new Map(current).set(plannedAttemptExecutorCorrelationKey(report.correlation), report)
             )
+            if (options.retainedResume?.loseResponse !== undefined) {
+              yield* Deferred.succeed(options.retainedResume.loseResponse, undefined)
+              return yield* Effect.never
+            }
             yield* recordOccurrence({
               detail: `${request.plannedAttempt.attemptId}:${report._tag}`,
               kind: "ExecutorResumeReturned",
@@ -571,7 +592,7 @@ const runIssue268StartupCharacterizationFor = (
           : Stream.never
       }
       const executorLayer =
-        ds05Modes.has(mode) || ds09Controls !== undefined
+        ds05Modes.has(mode) || ds09Controls !== undefined || options.retainedResume !== undefined
           ? Layer.merge(
               Layer.succeed(PlannedAttemptExecutor, executor),
               Layer.succeed(
@@ -913,6 +934,7 @@ const runIssue268StartupCharacterizationFor = (
               }
             }
             yield* Queue.offer(publicationQueue, bundle)
+            if (options.retainedResume !== undefined) yield* Queue.offer(options.retainedResume.publications, bundle)
             const ds10Controls = ds09Controls?.ds10
             const restartPhase = ds10Controls === undefined ? undefined : yield* Ref.get(ds10Controls.phase)
             if (ds10Controls !== undefined && restartPhase === "DS10") {
@@ -1029,7 +1051,7 @@ const runIssue268StartupCharacterizationFor = (
       )
       const planningLayer = Layer.mergeAll(
         deterministicOperationIdAllocatorLayer(
-          `issue-268:${scenario.runId}:${mode === "DS09" ? "restart" : "startup"}`
+          `issue-268:${scenario.runId}:${options.retainedResume?.activation ?? (mode === "DS09" ? "restart" : "startup")}`
         ),
         deterministicTaskClaimAcquisitionPlannerLayer({
           owner: ClaimOwner.make("issue-268-controlled-owner"),
@@ -1405,6 +1427,12 @@ const runIssue268StartupCharacterizationFor = (
           trace: Ref.get(traceItems),
           worktreeCreateRequests: testGitWorktree.createRequests()
         })
+      if (options.retainedResume !== undefined) {
+        yield* Deferred.succeed(options.retainedResume.ready, {
+          operatorControl: sharedBootstrap.operatorControl,
+          snapshot: ds03Snapshot
+        })
+      }
       if (ds09Controls !== undefined) yield* Ref.set(ds09Controls.snapshot, ds03Snapshot)
 
       let decision: RunFinalityDecision | undefined
@@ -1993,10 +2021,13 @@ export const runIssue268Ds08Characterization = Effect.scoped(
   })
 )
 
-type Issue268RestartContinuation = "DS09" | "DS10" | "DS11" | "DS12" | "DS13"
+type Issue268RestartContinuation = "DS09" | "DS10" | "DS11" | "DS12" | "DS13" | "DS19"
 
 /** Reconstructs the same Run in a fresh coordinator and optionally continues through DS-13. */
-const runIssue268RestartCharacterization = (continuation: Issue268RestartContinuation) =>
+const runIssue268RestartCharacterization = (
+  continuation: Issue268RestartContinuation,
+  resumeResponse: "Return" | "Lose" = "Return"
+) =>
   Effect.scoped(
     // eslint-disable-next-line complexity -- One restart scenario owns process loss, fresh owner startup, three observation gates, and exact settlement.
     Effect.gen(function* () {
@@ -2138,13 +2169,16 @@ const runIssue268RestartCharacterization = (continuation: Issue268RestartContinu
                   activeRefreshSources,
                   cLifecycleChanges,
                   checkpoint: ds10Checkpoint,
-                  ...(continuation === "DS11" || continuation === "DS12" || continuation === "DS13"
+                  ...(continuation === "DS11" ||
+                  continuation === "DS12" ||
+                  continuation === "DS13" ||
+                  continuation === "DS19"
                     ? { ds11: { checkpoint: ds11Checkpoint, checkpointRelease: ds11CheckpointRelease } }
                     : {}),
-                  ...(continuation === "DS12" || continuation === "DS13"
+                  ...(continuation === "DS12" || continuation === "DS13" || continuation === "DS19"
                     ? { ds12: { checkpoint: ds12Checkpoint } }
                     : {}),
-                  ...(continuation === "DS13"
+                  ...(continuation === "DS13" || continuation === "DS19"
                     ? {
                         ds13: {
                           checkpoint: ds13Checkpoint,
@@ -2478,6 +2512,10 @@ const runIssue268RestartCharacterization = (continuation: Issue268RestartContinu
         ...ds13BeforeProcessStop,
         afterProcessStop: yield* readSecondProcessSnapshot()
       } satisfies Issue268Ds13Characterization
+      if (continuation === "DS19") {
+        const ds19 = yield* continueRetainedC(sharedAuthorities, projectedReports, outerScope, resumeResponse)
+        return { ds09, ds10, ds11, ds12, ds13, ds19, occurrenceEvidence: yield* occurrenceRecorder.snapshot }
+      }
       return {
         ds09,
         ds10,
@@ -2554,4 +2592,124 @@ export const runIssue268Ds13Characterization = runIssue268RestartCharacterizatio
       occurrenceEvidence: result.occurrenceEvidence
     } satisfies Issue268Ds13StartupCharacterization)
   })
+)
+
+/** Re-enters the actual DS-13 journal after process loss; the uninterrupted capstone is owned by #279. */
+const continueRetainedC = Effect.fn("Issue274.continueRetainedC")(function* (
+  sharedAuthorities: Issue268SharedAuthorities,
+  projectedReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
+  outerScope: Scope.Scope,
+  resumeResponse: "Return" | "Lose"
+) {
+  const retained = yield* sharedAuthorities.journal.read(scenario.runId)
+  const publications = yield* Queue.unbounded<DeliveryRelationInputBundle>()
+  const ready = yield* Deferred.make<{
+    readonly operatorControl: JournaledRunBootstrap["Service"]["operatorControl"]
+    readonly snapshot: () => Effect.Effect<Issue268Ds03BoundarySnapshot, unknown>
+  }>()
+  const processScope = yield* Scope.make()
+  yield* Effect.addFinalizer((exit) => Scope.close(processScope, exit))
+  yield* sharedAuthorities.testTrackerGraphReader.setSnapshot(scenario.graphs.G4)
+  const lostResponse = yield* Deferred.make<void>()
+  const process = yield* runIssue268StartupCharacterizationFor("DS09", {
+    retainedResume: {
+      activation: "Reopen",
+      projectedReports,
+      publications,
+      ready,
+      ...(resumeResponse === "Lose" ? { loseResponse: lostResponse } : {})
+    },
+    sharedAuthorities,
+    sharedScope: outerScope
+  }).pipe(Effect.provideService(Scope.Scope, processScope), Effect.forkIn(processScope))
+  const controls = yield* Deferred.await(ready)
+  const awaitPublication = (
+    predicate: (bundle: DeliveryRelationInputBundle) => boolean
+  ): Effect.Effect<DeliveryRelationInputBundle> =>
+    Queue.take(publications).pipe(
+      Effect.flatMap((bundle) => (predicate(bundle) ? Effect.succeed(bundle) : awaitPublication(predicate)))
+    )
+  const reopened = yield* awaitPublication(
+    (bundle) =>
+      bundle.publication.graph._tag === "GraphEstablished" &&
+      bundle.publication.graph.observation.snapshot.revision === scenario.graphs.G4.revision &&
+      bundle.actionInputs.proposalContributions.ticketDelivery.some(
+        ({ route }) =>
+          route._tag === "IdentityFreeWorkflowRoute" &&
+          route.transition._tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts" &&
+          route.transition.plannedAttempt.attemptId === scenario.attempts.C1
+      )
+  )
+  const beforeCapacity = yield* controls.snapshot().pipe(Effect.orDie)
+  const current = yield* controls.operatorControl.readTaskWorkCapacity(scenario.runId)
+  const policy = yield* controls.operatorControl.setTaskWorkCapacity({
+    runId: scenario.runId,
+    expectedRevision: current.revision,
+    capacity: scenario.policies.P1.taskExecutionCapacity
+  })
+  const resumed =
+    resumeResponse === "Lose"
+      ? yield* Deferred.await(lostResponse).pipe(Effect.as(undefined))
+      : yield* awaitPublication((bundle) =>
+          bundle.actionInputs.runtimeFacts.taskWork.held.some(
+            ({ correlation }) => correlation.attemptId === scenario.attempts.C1
+          )
+        )
+  const after = yield* controls.snapshot().pipe(Effect.orDie)
+  yield* Fiber.interrupt(process)
+  yield* Scope.close(processScope, Exit.void)
+  const recovered =
+    resumeResponse === "Lose"
+      ? yield* recoverRetainedC(sharedAuthorities, projectedReports, outerScope, after.records.length)
+      : undefined
+  return { retained, reopened, beforeCapacity, policy, resumed, after, recovered }
+})
+
+export const runIssue274LifecycleResume = runIssue268RestartCharacterization("DS19").pipe(
+  Effect.flatMap((result) => ("ds19" in result ? Effect.succeed(result.ds19) : Effect.die("DS-19 was not reached")))
+)
+
+const recoverRetainedC = Effect.fn("Issue274.recoverRetainedC")(function* (
+  sharedAuthorities: Issue268SharedAuthorities,
+  projectedReports: Ref.Ref<ReadonlyMap<string, PlannedAttemptExecutorReport>>,
+  outerScope: Scope.Scope,
+  prefixLength: number
+) {
+  const publications = yield* Queue.unbounded<DeliveryRelationInputBundle>()
+  const ready = yield* Deferred.make<{
+    readonly operatorControl: JournaledRunBootstrap["Service"]["operatorControl"]
+    readonly snapshot: () => Effect.Effect<Issue268Ds03BoundarySnapshot, unknown>
+  }>()
+  const scope = yield* Scope.make()
+  yield* Effect.addFinalizer((exit) => Scope.close(scope, exit))
+  const process = yield* runIssue268StartupCharacterizationFor("DS09", {
+    retainedResume: { activation: "ReconcileResume", projectedReports, publications, ready },
+    sharedAuthorities,
+    sharedScope: outerScope
+  }).pipe(Effect.provideService(Scope.Scope, scope), Effect.forkIn(scope))
+  const controls = yield* Deferred.await(ready)
+  const awaitRecovery = (): Effect.Effect<Issue268Ds03BoundarySnapshot> =>
+    Queue.take(publications).pipe(
+      Effect.andThen(controls.snapshot().pipe(Effect.orDie)),
+      Effect.flatMap((snapshot) =>
+        snapshot.records
+          .slice(prefixLength)
+          .some(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkReported" &&
+              event.report.correlation.attemptId === scenario.attempts.C1 &&
+              event.report._tag === "ExecutorWorkExecuting"
+          )
+          ? Effect.succeed(snapshot)
+          : awaitRecovery()
+      )
+    )
+  const recovered = yield* awaitRecovery()
+  yield* Fiber.interrupt(process)
+  yield* Scope.close(scope, Exit.void)
+  return recovered
+})
+
+export const runIssue274LostResume = runIssue268RestartCharacterization("DS19", "Lose").pipe(
+  Effect.flatMap((result) => ("ds19" in result ? Effect.succeed(result.ds19) : Effect.die("DS-19 was not reached")))
 )
