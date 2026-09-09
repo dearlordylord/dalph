@@ -11,7 +11,8 @@
   },
   "packages/dalph/test-support/issue-268-controlled-characterization.ts": {
     "complexity": {
-      "count": 3
+      "count": 7,
+      "justification": "The four added DS-19 fixture functions retain one chronological view of real Resume, crash-cut, capacity, and restart boundaries; splitting those test-only timelines would separate controls from the occurrence they prove."
     }
   },
   "packages/dalph/test-support/issue-268-controlled-occurrences.ts": {
@@ -29,6 +30,12 @@
       "count": 1
     }
   },
+  "packages/orchestrator/src/coordination/delivery/delivery-runtime-admission.ts": {
+    "complexity": {
+      "count": 3,
+      "justification": "The remaining functions atomically validate the complete safe-continuation reservation or delivery receipt before changing one admission position; helper extraction already removed independent comparison and position-shape decisions."
+    }
+  },
   "packages/orchestrator/src/coordination/delivery/delivery-runtime-phase.ts": {
     "complexity": {
       "count": 1
@@ -42,6 +49,12 @@
   "packages/orchestrator/src/coordination/delivery/run-delivery-runtime.ts": {
     "complexity": {
       "count": 1
+    }
+  },
+  "packages/orchestrator/src/coordination/frontier/safe-continuation-revalidation-eligibility.ts": {
+    "complexity": {
+      "count": 3,
+      "justification": "Each function reads one ordered recovery proof over journal history: exact reopening, reconciled Safe evidence, or eligibility issuance. Their branches are the fail-closed evidence clauses and remain together for auditability."
     }
   },
   "packages/orchestrator/src/coordination/frontier/task-claim-authority.ts": {
@@ -142,6 +155,12 @@
   "packages/orchestrator/src/workflow/protocols/integrator/successor-history.ts": {
     "complexity": {
       "count": 2
+    }
+  },
+  "packages/orchestrator/src/workflow/protocols/planned-attempt-continuation/resume-redelivery-authorization.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "The two functions validate one chronological Resume-redelivery proof and its exact projection before minting private authority; each early rejection corresponds to a distinct stale or missing authority fact."
     }
   },
   "packages/orchestrator/src/workflow/protocols/planned-attempt-continuation/tracker-read-freshness.ts": {

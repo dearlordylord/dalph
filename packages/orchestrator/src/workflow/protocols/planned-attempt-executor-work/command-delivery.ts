@@ -37,33 +37,33 @@ export interface AcceptedExecutorCommandDelivery {
 export const isAcceptedExecutorCommandDelivery = (value: unknown): value is AcceptedExecutorCommandDelivery =>
   typeof value === "object" && value !== null && acceptedDeliveries.has(value)
 
-/** Appends the exact delivery intent before issuing its process-local position-handoff receipt. */
-export const appendExecutorCommandDeliveryIntent = Effect.fn("ExecutorCommandDelivery.appendIntent")(function* (
-  intent: PlannedAttemptExecutorCommandIntendedEvent | PlannedAttemptExecutorResumeRedeliveryIntendedEvent
-) {
-  const event = immutableSnapshot(intent)
-  const journal = yield* InRunJournal
-  const key =
-    event._tag === "PlannedAttemptExecutorCommandIntended"
-      ? plannedAttemptExecutorCommandIntendedRecordKey(event.plannedAttempt.attemptId, event.ordinal)
-      : plannedAttemptExecutorResumeRedeliveryIntendedRecordKey(
-          event.plannedAttempt.attemptId,
-          event.commandOrdinal,
-          event.redeliveryOrdinal
-        )
-  const record = yield* journal.append(event.plannedAttempt.runId, key, event)
-  const exactEvent =
-    event._tag === "PlannedAttemptExecutorCommandIntended"
-      ? record.event._tag === event._tag &&
-        Schema.toEquivalence(PlannedAttemptExecutorCommandIntendedEvent)(record.event, event)
-      : record.event._tag === event._tag &&
-        Schema.toEquivalence(PlannedAttemptExecutorResumeRedeliveryIntendedEvent)(record.event, event)
-  if (record.runId !== event.plannedAttempt.runId || record.key !== key || !exactEvent) {
-    return yield* Effect.die("executor command delivery append returned a different Run, key, or intent")
-  }
-  const receipt = Object.freeze<AcceptedExecutorCommandDelivery>({
+const commandDeliveryRecordKey = (
+  event: PlannedAttemptExecutorCommandIntendedEvent | PlannedAttemptExecutorResumeRedeliveryIntendedEvent
+) =>
+  event._tag === "PlannedAttemptExecutorCommandIntended"
+    ? plannedAttemptExecutorCommandIntendedRecordKey(event.plannedAttempt.attemptId, event.ordinal)
+    : plannedAttemptExecutorResumeRedeliveryIntendedRecordKey(
+        event.plannedAttempt.attemptId,
+        event.commandOrdinal,
+        event.redeliveryOrdinal
+      )
+
+const appendedIntentMatches = (
+  event: PlannedAttemptExecutorCommandIntendedEvent | PlannedAttemptExecutorResumeRedeliveryIntendedEvent,
+  appended: PlannedAttemptExecutorCommandIntendedEvent | PlannedAttemptExecutorResumeRedeliveryIntendedEvent
+): boolean =>
+  event._tag === "PlannedAttemptExecutorCommandIntended"
+    ? appended._tag === event._tag && Schema.toEquivalence(PlannedAttemptExecutorCommandIntendedEvent)(appended, event)
+    : appended._tag === event._tag &&
+      Schema.toEquivalence(PlannedAttemptExecutorResumeRedeliveryIntendedEvent)(appended, event)
+
+const acceptedDeliveryOf = (
+  event: PlannedAttemptExecutorCommandIntendedEvent | PlannedAttemptExecutorResumeRedeliveryIntendedEvent,
+  acceptedAt: JournalPosition
+): AcceptedExecutorCommandDelivery =>
+  Object.freeze<AcceptedExecutorCommandDelivery>({
     [AcceptedExecutorCommandDeliveryTypeId]: AcceptedExecutorCommandDeliveryTypeId,
-    acceptedAt: record.position,
+    acceptedAt,
     plannedAttempt: event.plannedAttempt,
     commandOrdinal: event._tag === "PlannedAttemptExecutorCommandIntended" ? event.ordinal : event.commandOrdinal,
     delivery:
@@ -76,6 +76,24 @@ export const appendExecutorCommandDeliveryIntent = Effect.fn("ExecutorCommandDel
             safeProjectionObservedAt: event.authorization.safeProjectionObservedAt
           })
   })
+
+/** Appends the exact delivery intent before issuing its process-local position-handoff receipt. */
+export const appendExecutorCommandDeliveryIntent = Effect.fn("ExecutorCommandDelivery.appendIntent")(function* (
+  intent: PlannedAttemptExecutorCommandIntendedEvent | PlannedAttemptExecutorResumeRedeliveryIntendedEvent
+) {
+  const event = immutableSnapshot(intent)
+  const journal = yield* InRunJournal
+  const key = commandDeliveryRecordKey(event)
+  const record = yield* journal.append(event.plannedAttempt.runId, key, event)
+  const exactEvent =
+    record.event._tag === "PlannedAttemptExecutorCommandIntended" ||
+    record.event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended"
+      ? appendedIntentMatches(event, record.event)
+      : false
+  if (record.runId !== event.plannedAttempt.runId || record.key !== key || !exactEvent) {
+    return yield* Effect.die("executor command delivery append returned a different Run, key, or intent")
+  }
+  const receipt = acceptedDeliveryOf(event, record.position)
   acceptedDeliveries.add(receipt)
   return receipt
 })

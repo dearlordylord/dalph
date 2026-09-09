@@ -241,7 +241,10 @@ exclusions must not hide authored logic.
   `--prune-suppressions` with the explicit discovered file list and inspect the
   diff; changed files do not automatically deserve new exceptions.
 - `oxlint-complexity-suppressions.json` counts violations per file, not per
-  function/value. Run `pnpm check:complexity:prune` after reductions.
+  function/value. A new or increased entry records a concrete `justification`
+  for keeping the function cohesive after independent decisions have been
+  extracted. Run `pnpm check:complexity:prune` after reductions, then restore
+  the reviewed justifications because the mechanical prune writes counts only.
 - Production `floatingEffect` is an error. Test `multipleEffectProvide` and
   `unnecessaryEffectGen` stay off for deliberate Layer/generator composition;
   `lazyEffect` stays off for intentional lazy interfaces. New severity overrides

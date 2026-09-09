@@ -431,16 +431,25 @@ const reconcileLocallyAcceptedAttempt = (
   return { _tag: "Contradiction" }
 }
 
+const sameSafeContinuationBasis = (
+  left: SafeContinuationRevalidationEligibility["basis"],
+  right: SafeContinuationRevalidationEligibility["basis"]
+): boolean => {
+  if (left._tag !== right._tag) return false
+  if (left._tag === "LifecycleReopenAfterAcceptedSafe") return true
+  if (right._tag === "LifecycleReopenAfterAcceptedSafe") return false
+  return (
+    left.resumeCommandOrdinal === right.resumeCommandOrdinal &&
+    left.projectionOrdinal === right.projectionOrdinal &&
+    left.observedAt === right.observedAt
+  )
+}
+
 const sameSafeContinuation = (
   left: SafeContinuationRevalidationEligibility,
   right: SafeContinuationRevalidationEligibility
 ): boolean =>
-  left.basis._tag === right.basis._tag &&
-  (left.basis._tag === "LifecycleReopenAfterAcceptedSafe" ||
-    (right.basis._tag === "ReconciledResumeStillSafe" &&
-      left.basis.resumeCommandOrdinal === right.basis.resumeCommandOrdinal &&
-      left.basis.projectionOrdinal === right.basis.projectionOrdinal &&
-      left.basis.observedAt === right.basis.observedAt)) &&
+  sameSafeContinuationBasis(left.basis, right.basis) &&
   left.acceptedSafe.reportOrdinal === right.acceptedSafe.reportOrdinal &&
   left.responsibilityBeganAt === right.responsibilityBeganAt &&
   plannedTaskAttemptEquivalence(left.plannedAttempt, right.plannedAttempt)
@@ -669,14 +678,21 @@ const reserveSafeContinuationPosition = (
 ): readonly [TaskPositionReservation, AdmissionState] => {
   const requirement = proposal.admission.taskWorkPosition
   const protocol = proposal.admission.plannedAttemptProtocol
+  const exactRequirement =
+    requirement._tag === "TaskWorkPositionRequired" &&
+    requirement.mode === "ReserveOrReuse" &&
+    requirement.taskId === eligibility.plannedAttempt.taskId
+  const exactProtocol =
+    protocol._tag !== "PlannedAttemptProtocolRequired" ||
+    sameCorrelation(protocol.correlation, eligibility.acceptedSafe.correlation)
+  const acceptedEligibility = current.acceptedBasis.safeContinuationRevalidations.some((accepted) =>
+    sameSafeContinuation(accepted, eligibility)
+  )
   if (
     !isSafeContinuationRevalidationEligibility(eligibility) ||
-    requirement._tag !== "TaskWorkPositionRequired" ||
-    requirement.mode !== "ReserveOrReuse" ||
-    requirement.taskId !== eligibility.plannedAttempt.taskId ||
-    (protocol._tag === "PlannedAttemptProtocolRequired" &&
-      !sameCorrelation(protocol.correlation, eligibility.acceptedSafe.correlation)) ||
-    !current.acceptedBasis.safeContinuationRevalidations.some((accepted) => sameSafeContinuation(accepted, eligibility))
+    !exactRequirement ||
+    !exactProtocol ||
+    !acceptedEligibility
   )
     return unchangedTaskReservation(false, current)
   const existing = current.positions.get(requirement.taskId)
@@ -686,14 +702,12 @@ const reserveSafeContinuationPosition = (
       current
     )
   }
-  if (
-    current.acceptedBasis.safeContinuationRevalidations.some(
-      (waiting) =>
-        waiting.responsibilityBeganAt < eligibility.responsibilityBeganAt &&
-        !current.positions.has(waiting.plannedAttempt.taskId)
-    )
+  const earlierWaiting = current.acceptedBasis.safeContinuationRevalidations.some(
+    (waiting) =>
+      waiting.responsibilityBeganAt < eligibility.responsibilityBeganAt &&
+      !current.positions.has(waiting.plannedAttempt.taskId)
   )
-    return unchangedTaskReservation(false, current)
+  if (earlierWaiting) return unchangedTaskReservation(false, current)
   if (current.positions.size >= current.capacity) return unchangedTaskReservation(false, current)
   return [
     { admitted: true, createdFor: requirement.taskId },
@@ -768,13 +782,11 @@ const isUnboundFreshRuntimePosition = (
 ): position is FreshEntryRuntimePosition | LocallyAcceptedAttemptPosition =>
   position._tag === "FreshEntryRuntimePosition" || position._tag === "LocallyAcceptedAttemptPosition"
 
-const taskPositionMatchesAttempt = (
-  position: TaskWorkPosition | undefined,
+const definedTaskPositionMatchesAttempt = (
+  position: Exclude<TaskWorkPosition, FreshEntryRuntimePosition | LocallyAcceptedAttemptPosition>,
   proposalId: DeliveryProposalId,
   plannedAttempt: PlannedTaskAttempt
 ): boolean => {
-  if (position === undefined) return false
-  if (isUnboundFreshRuntimePosition(position)) return false
   switch (position._tag) {
     case "FreshTaskCommitted":
       return true
@@ -788,6 +800,16 @@ const taskPositionMatchesAttempt = (
     case "ExactAttemptHeld":
       return acceptedPositionMatchesAttempt(position, plannedAttempt)
   }
+}
+
+const taskPositionMatchesAttempt = (
+  position: TaskWorkPosition | undefined,
+  proposalId: DeliveryProposalId,
+  plannedAttempt: PlannedTaskAttempt
+): boolean => {
+  if (position === undefined) return false
+  if (isUnboundFreshRuntimePosition(position)) return false
+  return definedTaskPositionMatchesAttempt(position, proposalId, plannedAttempt)
 }
 
 interface PlannedAttemptPositionBinding {
@@ -821,6 +843,29 @@ const responsibilityAcceptancePositionOf = (
   binding: PlannedAttemptPositionBinding
 ): JournalPosition | null => binding.acceptedResponsibility?.acceptedAt ?? current.acceptedBasis.acceptedAt
 
+const acceptedDeliveryMatchesBinding = (binding: PlannedAttemptPositionBinding): boolean =>
+  binding.acceptedDelivery === undefined ||
+  (isAcceptedExecutorCommandDelivery(binding.acceptedDelivery) &&
+    plannedTaskAttemptEquivalence(binding.acceptedDelivery.plannedAttempt, binding.plannedAttempt))
+
+const acceptedDeliveryMatchesEligibility = (
+  receipt: AcceptedExecutorCommandDelivery,
+  eligibility: SafeContinuationRevalidationEligibility
+): boolean => {
+  if (receipt.acceptedAt <= eligibility.responsibilityBeganAt) return false
+  const basis = eligibility.basis
+  if (basis._tag === "LifecycleReopenAfterAcceptedSafe") {
+    return receipt.delivery._tag === "InitialCommandDelivery" && receipt.delivery.command === "Resume"
+  }
+  if (receipt.delivery._tag !== "ResumeRedelivery") return false
+  return (
+    receipt.commandOrdinal === basis.resumeCommandOrdinal &&
+    receipt.delivery.projectionOrdinal === basis.projectionOrdinal &&
+    receipt.delivery.safeProjectionObservedAt === basis.observedAt &&
+    receipt.acceptedAt > basis.observedAt
+  )
+}
+
 const bindPlannedAttemptPositionState = (
   current: AdmissionState,
   binding: PlannedAttemptPositionBinding
@@ -830,30 +875,11 @@ const bindPlannedAttemptPositionState = (
   // Resume first appends authorization, then its command intent. Keep the
   // pre-command reservation across that publication gap. The exact accepted
   // append receipt or Journal reconstruction hands this same entry to Held.
-  if (
-    binding.acceptedDelivery !== undefined &&
-    (!isAcceptedExecutorCommandDelivery(binding.acceptedDelivery) ||
-      !plannedTaskAttemptEquivalence(binding.acceptedDelivery.plannedAttempt, binding.plannedAttempt))
-  )
-    return [false, current]
+  if (!acceptedDeliveryMatchesBinding(binding)) return [false, current]
   const eligibility = binding.proposal.admission.safeContinuationRevalidation
   const receipt = binding.acceptedDelivery
-  if (receipt !== undefined && eligibility !== undefined) {
-    if (receipt.acceptedAt <= eligibility.responsibilityBeganAt) return [false, current]
-    const basis = eligibility.basis
-    if (basis._tag === "ReconciledResumeStillSafe") {
-      if (
-        receipt.delivery._tag !== "ResumeRedelivery" ||
-        receipt.commandOrdinal !== basis.resumeCommandOrdinal ||
-        receipt.delivery.projectionOrdinal !== basis.projectionOrdinal ||
-        receipt.delivery.safeProjectionObservedAt !== basis.observedAt ||
-        receipt.acceptedAt <= basis.observedAt
-      )
-        return [false, current]
-    } else if (receipt.delivery._tag !== "InitialCommandDelivery" || receipt.delivery.command !== "Resume") {
-      return [false, current]
-    }
-  }
+  if (receipt !== undefined && eligibility !== undefined && !acceptedDeliveryMatchesEligibility(receipt, eligibility))
+    return [false, current]
   if (position?._tag === "ExactAttemptHeld") return [true, current]
   if (position?._tag === "SafeContinuationReserved" && binding.acceptedDelivery === undefined) return [true, current]
   const responsibilityAcceptedAt =
