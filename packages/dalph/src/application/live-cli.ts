@@ -131,8 +131,8 @@ export const makeProductionCli = <EHost, RHost>(
                     return yield* Effect.failCause(selection.exit.cause)
                   }
                 }
-                yield* Fiber.interrupt(presentRun)
                 const result = yield* signalAdapter.awaitResult
+                yield* Fiber.interrupt(presentRun)
                 yield* presentApplicationExitResult(observation.selection.runId, result, output.writeLine)
               })
             )

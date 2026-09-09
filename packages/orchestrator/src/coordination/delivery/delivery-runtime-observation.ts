@@ -218,7 +218,17 @@ export const DeliveryRuntimeObservationState = Data.taggedEnum<DeliveryRuntimeOb
 
 export interface DeliveryRuntimeObservationPublicationService {
   readonly close: Effect.Effect<void>
+  /** Observes an internal transition without publishing it as coherent current state. */
+  readonly observe: (
+    evaluation: DeliveryRuntimeEvaluation,
+    liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
+  ) => Effect.Effect<void>
   readonly publish: (
+    evaluation: DeliveryRuntimeEvaluation,
+    liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
+  ) => Effect.Effect<void>
+  /** Publishes a coherent current state already reported through observe. */
+  readonly publishCurrent: (
     evaluation: DeliveryRuntimeEvaluation,
     liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
   ) => Effect.Effect<void>
@@ -241,6 +251,17 @@ export const makeDeliveryRuntimeObservationController = Effect.fn("DeliveryRunti
       DeliveryRuntimeObservationState.NotReady()
     )
     const observer = yield* DeliveryRuntimeObservationObserver
+    const observationOf = (
+      evaluation: DeliveryRuntimeEvaluation,
+      liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
+    ) => DeliveryRuntimeObservationState.Ready({ evaluation, liveOwners: [...liveOwners] })
+    const publishCurrent = (
+      evaluation: DeliveryRuntimeEvaluation,
+      liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot>
+    ) =>
+      SubscriptionRef.update(state, (current) =>
+        current._tag === "Closed" ? current : observationOf(evaluation, liveOwners)
+      )
 
     return {
       close: SubscriptionRef.update(state, (current) =>
@@ -252,14 +273,16 @@ export const makeDeliveryRuntimeObservationController = Effect.fn("DeliveryRunti
           })
         })
       ),
+      observe: (evaluation, liveOwners) => observer.observe(observationOf(evaluation, liveOwners)),
       publish: (evaluation, liveOwners) =>
         Effect.gen(function* () {
-          const observation = DeliveryRuntimeObservationState.Ready({ evaluation, liveOwners: [...liveOwners] })
+          const observation = observationOf(evaluation, liveOwners)
           const published = yield* SubscriptionRef.modify(state, (current) =>
             current._tag === "Closed" ? [false, current] : [true, observation]
           )
           if (published) yield* observer.observe(observation)
         }),
+      publishCurrent,
       signal: currentSignalFromCurrentFirstStream(
         SubscriptionRef.changes(state).pipe(Stream.takeUntil(({ _tag }) => _tag === "Closed"))
       )

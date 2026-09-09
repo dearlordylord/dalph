@@ -134,6 +134,7 @@ import {
   DeliveryRuntimeObservationObserver,
   type DeliveryRuntimeObservationState
 } from "./delivery-runtime-observation.js"
+import { deliveryStatusOf, DeliveryStatusProjectionConflict, DeliveryStatusSubject } from "./delivery-status.js"
 import {
   makePlannedAttemptProtocolController,
   PlannedAttemptProtocolController,
@@ -708,6 +709,18 @@ it.effect("publishes current-first exact live-owner observations until standalon
         isolatedIssues: [],
         proposals: []
       })
+      const statusSubject = DeliveryStatusSubject.cases.Run.make({ runId })
+      const finalReady = ready.at(-1)
+      if (finalReady === undefined) return expect.fail("the final Ready chronology must be present")
+      expect(deliveryStatusOf(statusSubject, finalReady)).not.toBeInstanceOf(DeliveryStatusProjectionConflict)
+      expect(published.at(-1)).toMatchObject({ _tag: "Closed", final: { liveOwners: [] } })
+      const withOwner = ready.find(({ liveOwners }) => liveOwners.length > 0)
+      const owner = withOwner?.liveOwners[0]
+      if (withOwner === undefined || owner === undefined) return expect.fail("the owner chronology must be present")
+      const unrelatedIdentityDefect = deliveryStatusOf(statusSubject, { ...withOwner, liveOwners: [owner, owner] })
+      expect(unrelatedIdentityDefect).toBeInstanceOf(DeliveryStatusProjectionConflict)
+      if (!(unrelatedIdentityDefect instanceof DeliveryStatusProjectionConflict)) return
+      expect(unrelatedIdentityDefect.detail).toBe("multiple live lifecycle snapshots claim one exact proposal")
     })
   )
 )

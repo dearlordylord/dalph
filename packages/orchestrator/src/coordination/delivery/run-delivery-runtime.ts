@@ -199,6 +199,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const localDeferrals = yield* Ref.make<ReadonlyMap<DeliveryProposalId, DeliveryRuntimeLocalDeferral>>(new Map())
       const pendingCompletions = yield* Ref.make<ReadonlyMap<DeliveryProposalId, Completion>>(new Map())
       const latest = yield* Ref.make<Option.Option<DeliveryRuntimeEvaluation>>(Option.none())
+      const lastPublishedEvaluation = yield* Ref.make<Option.Option<DeliveryRuntimeEvaluation>>(Option.none())
       const selectionGate = yield* Semaphore.make(1)
       const integrationTargets = resources.integrationTargets
       const attachment = yield* attachCurrentSignal(relation)
@@ -206,6 +207,7 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const first = evaluationForPhase(phase, attachment.current)
       yield* Ref.set(latest, Option.some(first))
       yield* runtimeObservation.publish(first, [])
+      yield* Ref.set(lastPublishedEvaluation, Option.some(first))
       const admission = yield* resources.makeAdmissionController(first.taskWork)
       yield* admission.synchronize(first.taskWork, freshTaskCandidateObservationOf(first.proposedActions))
       const evaluationsSubscribed = yield* Deferred.make<void>()
@@ -223,10 +225,33 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
       const publishRuntimeObservationInsideGate = Effect.fn("DeliveryRuntime.publishObservationInsideGate")(
         function* () {
           const evaluation = Option.getOrThrow(yield* Ref.get(latest))
-          yield* runtimeObservation.publish(
-            evaluation,
-            yield* RuntimeObservation.deliveryRuntimeLiveOwnerSnapshots(yield* Ref.get(owners))
-          )
+          const liveOwners = yield* RuntimeObservation.deliveryRuntimeLiveOwnerSnapshots(yield* Ref.get(owners))
+          const ownersMissingFromSuccessor =
+            evaluation.proposedActions._tag === "DeliveryProposalsAvailable"
+              ? liveOwners.filter(({ proposal }) => !liveActionIsPresent(evaluation.proposedActions, proposal))
+              : []
+          // An accepted successor frontier can arrive immediately before the matching
+          // process-local completion event. Retain the previous coherent publication
+          // while the owner remains active. Its settled lifecycle cut is paired with
+          // that same frontier, then owner removal publishes the accepted successor.
+          if (ownersMissingFromSuccessor.length === 0) {
+            yield* runtimeObservation.publish(evaluation, liveOwners)
+            yield* Ref.set(lastPublishedEvaluation, Option.some(evaluation))
+            return
+          }
+          const previous = yield* Ref.get(lastPublishedEvaluation)
+          if (
+            Option.isSome(previous) &&
+            previous.value.proposedActions._tag === "DeliveryProposalsAvailable" &&
+            liveOwners.every(({ proposal }) => proposalIsPresent(previous.value.proposedActions, proposal.id))
+          ) {
+            yield* runtimeObservation.observe(evaluation, liveOwners)
+            yield* runtimeObservation.publishCurrent(previous.value, liveOwners)
+            return
+          }
+          // No known coherent predecessor can explain this owner/frontier pair.
+          // Publish it so the typed status validator preserves fail-fast behavior.
+          yield* runtimeObservation.publish(evaluation, liveOwners)
         }
       )
       const publishRuntimeObservation = Effect.fn("DeliveryRuntime.publishObservation")(() =>
