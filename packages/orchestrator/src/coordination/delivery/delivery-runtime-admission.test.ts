@@ -590,13 +590,15 @@ it.effect("reconciles a reserved Safe continuation only with the same accepted a
       const mismatchingReservation = yield* mismatching.tryReserve(proposal("mismatching"))
       if (mismatchingReservation._tag !== "Admitted") return yield* Effect.die("Safe continuation was not admitted")
       yield* mismatching.complete(mismatchingReservation.reservation)
+      const positionBeforeMismatch = (yield* mismatching.snapshot).positions.get(taskId)
+      expect(positionBeforeMismatch?._tag).toBe("SafeContinuationReserved")
       const mismatch = yield* Effect.exit(mismatching.synchronize(yield* basis([foreignAttempt])))
       if (Exit.isSuccess(mismatch)) return yield* Effect.die("foreign accepted attempt was not rejected")
       expect(mismatch._tag).toBe("Failure")
       expect(Cause.squash(mismatch.cause)).toBe(
         `accepted task-work position contradicts locally accepted attempt ${taskId}`
       )
-      expect((yield* mismatching.snapshot).positions.get(taskId)?._tag).toBe("SafeContinuationReserved")
+      expect((yield* mismatching.snapshot).positions.get(taskId)).toEqual(positionBeforeMismatch)
     })
   )
 )
@@ -904,6 +906,8 @@ it.effect("rejects stale, foreign, and wrong-kind accepted Resume handoffs witho
         )
         const admitted = yield* controller.tryReserve(safeContinuationProposal(eligibility, id))
         if (admitted._tag !== "Admitted") return yield* Effect.die("Safe continuation was not admitted")
+        const positionBeforeRejection = (yield* controller.snapshot).positions.get(taskId)
+        expect(positionBeforeRejection?._tag).toBe("SafeContinuationReserved")
         const rejection = yield* Effect.exit(
           controller.bindPlannedAttemptPosition(admitted.reservation, plannedAttempt, undefined, receipt)
         )
@@ -912,7 +916,7 @@ it.effect("rejects stale, foreign, and wrong-kind accepted Resume handoffs witho
         expect(Cause.squash(rejection.cause)).toBe(
           `planned-attempt position rejected reservation ${admitted.reservation.proposal.id}`
         )
-        expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("SafeContinuationReserved")
+        expect((yield* controller.snapshot).positions.get(taskId)).toEqual(positionBeforeRejection)
         yield* controller.rollback(admitted.reservation, "AfterDurableClaimIntentOrAmbiguity")
       })
       const initialIntent = (attempt: PlannedTaskAttempt) =>
@@ -1008,13 +1012,15 @@ it.effect("binds an exact planned attempt once and rejects its local position as
         id: DeliveryProposalId.make("pending-runtime-repeat")
       })
       if (repeated._tag !== "Admitted") return yield* Effect.die("exact local position was not reused")
+      const positionBeforeRejection = (yield* controller.snapshot).positions.get(taskId)
+      expect(positionBeforeRejection?._tag).toBe("LocallyAcceptedAttemptPosition")
       const rejection = yield* Effect.exit(controller.bindPlannedAttemptPosition(repeated.reservation, plannedAttempt))
       if (Exit.isSuccess(rejection)) return yield* Effect.die("local accepted position was reused as binding authority")
       expect(rejection._tag).toBe("Failure")
       expect(Cause.squash(rejection.cause)).toBe(
         `planned-attempt position rejected reservation ${repeated.reservation.proposal.id}`
       )
-      expect((yield* controller.snapshot).positions.get(taskId)?._tag).toBe("LocallyAcceptedAttemptPosition")
+      expect((yield* controller.snapshot).positions.get(taskId)).toEqual(positionBeforeRejection)
     })
   )
 )
