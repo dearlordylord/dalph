@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- The complete executor protocol action map stays visible in one adapter. */
 import { it } from "@effect/vitest"
-import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
+import { defineDriver, ITFBigInt, stateCheck, quintRun } from "@firfi/quint-connect/effect"
+import { expect } from "vitest"
 import { quintIt } from "@firfi/quint-connect/vitest"
 import {
   AttemptId,
@@ -33,7 +34,15 @@ import {
   resumePlannedAttemptExecutorWork,
   TaskWorkCapacity
 } from "../../../orchestrator/src/index.js"
-import { Deferred, Effect, Fiber, Layer, Schema } from "effect"
+import { Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect"
+import { makeExecutorResumeModelFixture } from "./planned-attempt-executor-resume-fixture.js"
+import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
+import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
+import { runPlannedAttemptExecutorResumeRedelivery } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/resume-redelivery.js"
+import type { PlannedAttemptContinuationWitness } from "../../../orchestrator/src/workflow/protocols/planned-attempt-continuation/events.js"
+import type { PlannedAttemptExecutorCommandOrdinal } from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
+import type { SafeContinuationRevalidationEligibility } from "../../../orchestrator/src/coordination/frontier/fresh-facts.js"
+import { requiredPlannedAttemptPositionsOf } from "../../../orchestrator/src/coordination/run/required-planned-attempt-positions.js"
 import { ActiveTaskClaim } from "../../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../../orchestrator/src/authorities/task-tracker/claim.js"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
@@ -41,6 +50,7 @@ import { PlannedWorktreeReady } from "../../../orchestrator/src/authorities/git/
 import { reduceWorkflowJournalHistory } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import {
   makeDeliveryRuntimeAdmissionController,
+  type DeliveryAdmissionReservation,
   type DeliveryRuntimeAdmissionController
 } from "../../../orchestrator/src/coordination/delivery/delivery-runtime-admission.js"
 import {
@@ -94,7 +104,7 @@ const plannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/model-attempt")
 })
 const correlation = { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
-const freshAttemptPrefixAcceptedAt = JournalPosition.make(9)
+const freshAttemptPrefixAcceptedAt = JournalPosition.make(10)
 const plannedAttemptGraph = (() => {
   const projected = projectTrackerSnapshot({
     revision: "planned-attempt-executor-model-graph",
@@ -128,6 +138,11 @@ const continuationProposal = {
 const Variant = Schema.Struct({ tag: Schema.String, value: Schema.Unknown })
 const SpecProjection = Schema.Struct({
   state: Schema.Struct({
+    resumeRecovery: Schema.Struct({
+      projectionOrdinal: ITFBigInt,
+      totalRedeliveryIntents: ITFBigInt,
+      redeliveryCallCount: ITFBigInt
+    }),
     commandCallCount: ITFBigInt,
     beginTurnCrossingCount: ITFBigInt,
     commandIntentCount: ITFBigInt,
@@ -179,6 +194,10 @@ const executorConformanceDriver = defineDriver(
     redeliverBegin: {},
     crossRedeliveredBeginTurn: {},
     callResume: {},
+    readResumeContinuationWitness: {},
+    recordResumeRedeliveryIntent: {},
+    callResumeRedelivery: {},
+    crashResumeDelivery: {},
     callSuspend: {},
     init: {},
     loseCommandResponse: {},
@@ -226,6 +245,11 @@ const executorConformanceDriver = defineDriver(
     // state below still comes exclusively from the production journal.
     let recoveryCount = 0
     let projectionBaseline = 0
+    let resumeRecoveryRequired = false
+    let resumeWitness: PlannedAttemptContinuationWitness | undefined
+    let resumeEligibility: SafeContinuationRevalidationEligibility | undefined
+    let resumeReservation: DeliveryAdmissionReservation | undefined
+    let redeliveryCalls: ReadonlyArray<PlannedAttemptExecutorCommandOrdinal> = []
 
     const journal = JournalStore.of({
       append: (eventRunId, key, event) =>
@@ -245,7 +269,11 @@ const executorConformanceDriver = defineDriver(
               `planned-attempt executor MBT constructed invalid history: ${JSON.stringify(reduction.issues)}`
             )
           }
-          if (pauseCommandIntent && event._tag === "PlannedAttemptExecutorCommandIntended") {
+          if (
+            pauseCommandIntent &&
+            (event._tag === "PlannedAttemptExecutorCommandIntended" ||
+              event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended")
+          ) {
             pauseCommandIntent = false
             yield* Deferred.succeed(commandIntentSignal, undefined)
             yield* Deferred.await(commandIntentGate)
@@ -277,6 +305,7 @@ const executorConformanceDriver = defineDriver(
       terminateRun: () => Effect.die("executor model never terminates its Run")
     })
     const reducerValidInMemoryJournal = InRunJournal.of({ append: journal.append, read: journal.read })
+    const resumeFixture = makeExecutorResumeModelFixture(reducerValidInMemoryJournal, plannedAttempt, specification)
     const appendExactFreshAttemptPrefix = Effect.fn("ExecutorModel.appendExactFreshAttemptPrefix")(function* () {
       const claimOperation = makeTaskClaimAcquisitionOperation({
         acquisition: {
@@ -421,6 +450,13 @@ const executorConformanceDriver = defineDriver(
         Effect.gen(function* () {
           currentCommandCalled = true
           commandCalls += 1
+          const latestDelivery = records.findLast(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorCommandIntended" ||
+              event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended"
+          )?.event
+          if (latestDelivery?._tag === "PlannedAttemptExecutorResumeRedeliveryIntended")
+            redeliveryCalls = [...redeliveryCalls, latestDelivery.commandOrdinal]
           yield* Deferred.succeed(commandCallSignal, undefined)
           return yield* Deferred.await(commandResponse)
         })
@@ -458,6 +494,7 @@ const executorConformanceDriver = defineDriver(
       if (snapshot.positions.has(plannedAttempt.taskId)) yield* admission.releasePlannedAttemptPosition(correlation)
     })
     const resetCommand = (kind: typeof commandKind) => {
+      resumeRecoveryRequired = false
       currentCommandCalled = false
       commandKind = kind
       commandIntentGate = Deferred.makeUnsafe<void>()
@@ -492,6 +529,8 @@ const executorConformanceDriver = defineDriver(
         if (report._tag === "ExecutorWorkSafelySuspended" || report._tag === "ExecutorWorkTerminal")
           yield* releasePosition()
         else yield* reservePosition()
+        if (report._tag === "ExecutorWorkSafelySuspended") yield* resumeFixture.graph("Open")
+        resumeRecoveryRequired = false
       })
     const projectionEventCount = () =>
       records.filter(
@@ -503,9 +542,14 @@ const executorConformanceDriver = defineDriver(
       const intended = records.findLast(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")
       if (intended?.event._tag !== "PlannedAttemptExecutorCommandIntended") return undefined
       const intendedOrdinal = intended.event.ordinal
+      const delivery =
+        records.findLast(
+          ({ event }) =>
+            event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" && event.commandOrdinal === intendedOrdinal
+        ) ?? intended
       const settled = records.some(
         ({ event, position }, index) =>
-          position > intended.position &&
+          position > delivery.position &&
           !(
             index === records.length - 1 &&
             ((event._tag === "PlannedAttemptExecutorCommandResponseObserved" && pendingCommand !== undefined) ||
@@ -544,6 +588,7 @@ const executorConformanceDriver = defineDriver(
         | Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorCommandIntended" }>
         | undefined
       const settlements: Array<{
+        readonly ordinal: PlannedAttemptExecutorCommandOrdinal
         readonly command: "Begin" | "Resume" | "Suspend"
         readonly recordIndex: number
         readonly report: PlannedAttemptExecutorReport
@@ -552,6 +597,16 @@ const executorConformanceDriver = defineDriver(
       records.forEach(({ event }, index) => {
         if (event._tag === "PlannedAttemptExecutorCommandIntended") {
           activeIntent = event
+          return
+        }
+        if (event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended") {
+          const original = records.find(
+            ({ event: candidate }) =>
+              candidate._tag === "PlannedAttemptExecutorCommandIntended" && candidate.ordinal === event.commandOrdinal
+          )?.event
+          activeIntent = original?._tag === "PlannedAttemptExecutorCommandIntended" ? original : undefined
+          const previous = settlements.findIndex((settlement) => settlement.ordinal === event.commandOrdinal)
+          if (previous >= 0) settlements.splice(previous, 1)
           return
         }
         const report = exactReport(event)
@@ -568,6 +623,7 @@ const executorConformanceDriver = defineDriver(
           return
         }
         settlements.push({
+          ordinal: activeIntent.ordinal,
           command: activeIntent.command,
           recordIndex: index,
           report,
@@ -584,7 +640,18 @@ const executorConformanceDriver = defineDriver(
           if (pendingCommand !== undefined) yield* Fiber.interrupt(pendingCommand)
           if (pendingProjection !== undefined) yield* Fiber.interrupt(pendingProjection)
           if (pendingState !== undefined) yield* Fiber.interrupt(pendingState)
-          records = []
+          records = [
+            makeWorkflowRunBeganRecord(
+              plannedAttempt.runId,
+              FixtureTarget.make("planned-attempt-executor-model"),
+              InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+            )
+          ]
+          resumeRecoveryRequired = false
+          resumeWitness = undefined
+          resumeEligibility = undefined
+          resumeReservation = undefined
+          redeliveryCalls = []
           authorityReport = undefined
           currentProjection = undefined
           commandCalls = 0
@@ -642,11 +709,110 @@ const executorConformanceDriver = defineDriver(
           yield* Deferred.await(beginTurnSignal)
         }),
       callResume: () => call().pipe(Effect.orDie),
+      readResumeContinuationWitness: () =>
+        Effect.gen(function* () {
+          resumeEligibility = yield* resumeFixture.eligibility()
+          const eligibility = resumeEligibility
+          const admission = yield* requireController()
+          yield* admission.synchronize(
+            yield* makeFreshTaskAdmissionBasis({
+              acceptedAt: records.at(-1)?.position ?? null,
+              capacity: TaskWorkCapacity.make(1),
+              entries: [],
+              runId: plannedAttempt.runId,
+              safeContinuationRevalidations: [eligibility]
+            })
+          )
+          const proposal = {
+            ...continuationProposal,
+            admission: { ...continuationProposal.admission, safeContinuationRevalidation: eligibility }
+          }
+          const decision = yield* admission.tryReserve(proposal)
+          if (decision._tag !== "Admitted") return yield* Effect.die("retry reservation was rejected")
+          resumeReservation = decision.reservation
+          resumeWitness = yield* resumeFixture.readWitnesses()
+        }).pipe(Effect.orDie),
+      recordResumeRedeliveryIntent: () =>
+        Effect.gen(function* () {
+          if (
+            resumeWitness === undefined ||
+            resumeEligibility === undefined ||
+            resumeReservation === undefined ||
+            protocolController === undefined
+          )
+            return yield* Effect.die("retry requires actual current witnesses, eligibility, and reservation")
+          const witness = resumeWitness
+          const eligibility = resumeEligibility
+          const reservation = resumeReservation
+          if (reservation._tag !== "PlannedAttemptProtocolAdmission")
+            return yield* Effect.die("retry requires exact protocol admission")
+          if ((yield* reservation.permit.activate) !== "Active")
+            return yield* Effect.die("retry protocol admission was released")
+          const admission = yield* requireController()
+          yield* admission.bindPlannedAttemptPosition(reservation, plannedAttempt)
+          resetCommand("Resume")
+          const fiber = yield* provideWorkflow(
+            runPlannedAttemptExecutorResumeRedelivery(
+              reservation.permit,
+              plannedAttempt,
+              eligibility,
+              witness,
+              (receipt) => admission.bindPlannedAttemptPosition(reservation, plannedAttempt, undefined, receipt)
+            )
+          ).pipe(Effect.forkDetach({ startImmediately: true }))
+          pendingCommand = fiber
+          yield* Effect.raceFirst(
+            Deferred.await(commandIntentSignal),
+            Fiber.await(fiber).pipe(Effect.flatMap(() => Effect.die("retry ended before durable intent")))
+          )
+          // The append is durable while its return is deliberately paused. Ordinary
+          // recovery must already reconstruct Held on this side of the handoff.
+          const reduction = reduceWorkflowJournalHistory(plannedAttempt.runId, records)
+          if (reduction._tag !== "ValidWorkflowJournalHistory")
+            return yield* Effect.die("retry intent history is invalid")
+          yield* admission.synchronize(
+            yield* makeFreshTaskAdmissionBasis({
+              acceptedAt: records.at(-1)?.position ?? null,
+              capacity: TaskWorkCapacity.make(1),
+              entries: requiredPlannedAttemptPositionsOf(reduction.runState).map(() => ({
+                _tag: "ExactAttemptHeld" as const,
+                plannedAttempt
+              })),
+              runId: plannedAttempt.runId
+            })
+          )
+          resumeWitness = undefined
+          resumeEligibility = undefined
+        }).pipe(Effect.orDie),
+      callResumeRedelivery: () => call().pipe(Effect.orDie),
+      crashResumeDelivery: () =>
+        Effect.gen(function* () {
+          if (pendingCommand !== undefined) yield* Fiber.interrupt(pendingCommand)
+          pendingCommand = undefined
+          if (resumeReservation !== undefined) yield* (yield* requireController()).complete(resumeReservation)
+          resumeReservation = undefined
+          resumeWitness = undefined
+          resumeEligibility = undefined
+          resumeRecoveryRequired = true
+          projectionBaseline = projectionEventCount()
+          recoveryCount = Math.min(recoveryCount + 1, 5)
+        }),
       callSuspend: () => call().pipe(Effect.orDie),
       receiveCommandResponse: ({ report }) =>
         Effect.gen(function* () {
+          if (
+            !["ExecutorWorkExecuting", "ExecutorWorkSafelySuspended", "ExecutorWorkTerminal"].includes(
+              pickedTag(report)
+            )
+          )
+            return yield* Effect.die(`model report argument was not an exact lifecycle: ${JSON.stringify(report)}`)
           pauseResponse = true
           const response = reportFrom(report)
+          if (
+            response._tag === "ExecutorWorkSafelySuspended" &&
+            authorityReport?._tag !== "ExecutorWorkSafelySuspended"
+          )
+            yield* resumeFixture.graph("TerminalWithoutSuccess")
           authorityReport = response
           yield* Deferred.succeed(commandResponse, response)
           yield* Deferred.await(responseSignal)
@@ -657,12 +823,16 @@ const executorConformanceDriver = defineDriver(
           if (pendingCommand === undefined) return yield* Effect.die("command response must be pending")
           yield* settleAccepted(pendingCommand)
           pendingCommand = undefined
+          if (resumeReservation !== undefined) yield* (yield* requireController()).complete(resumeReservation)
+          resumeReservation = undefined
         }).pipe(Effect.orDie),
       loseCommandResponse: () =>
         Effect.gen(function* () {
           if (pendingCommand === undefined) return yield* Effect.die("command must be pending")
           yield* Fiber.interrupt(pendingCommand)
           pendingCommand = undefined
+          if (resumeReservation !== undefined) yield* (yield* requireController()).complete(resumeReservation)
+          resumeReservation = undefined
         }),
       recordCommandProjection: ({ commandProjection }) =>
         Effect.gen(function* () {
@@ -670,6 +840,11 @@ const executorConformanceDriver = defineDriver(
           projectionSignal = Deferred.makeUnsafe<void>()
           pauseProjection = true
           const tag = pickedTag(commandProjection)
+          if (
+            tag === "CommandProjectionExactSafelySuspended" &&
+            authorityReport?._tag !== "ExecutorWorkSafelySuspended"
+          )
+            yield* resumeFixture.graph("TerminalWithoutSuccess")
           const foreignReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
             correlation: { attemptId: AttemptId.make("other"), runId: plannedAttempt.runId }
           })
@@ -789,6 +964,12 @@ const executorConformanceDriver = defineDriver(
         }).pipe(Effect.orDie),
       recoverActivation: () =>
         Effect.gen(function* () {
+          if (resumeWitness !== undefined && resumeReservation !== undefined) {
+            yield* (yield* requireController()).rollback(resumeReservation, "BeforeDurableClaimIntent")
+            resumeReservation = undefined
+            resumeEligibility = undefined
+          }
+          resumeWitness = undefined
           if (pendingProjection !== undefined) {
             if (currentProjection?._tag === "BeginNotCrossed") {
               yield* Fiber.interrupt(pendingProjection)
@@ -827,8 +1008,25 @@ const executorConformanceDriver = defineDriver(
           const responsibilityBegan = records.some(
             ({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan"
           )
-          const responseAmbiguous = unmatched !== undefined && currentCommandCalled && pendingCommand === undefined
+          const responseAmbiguous =
+            unmatched !== undefined && (currentCommandCalled || resumeRecoveryRequired) && pendingCommand === undefined
+          const lastResume = intents.findLast((intent) => intent.command === "Resume")
           return {
+            resumeRecovery: {
+              projectionOrdinal: BigInt(
+                lastResume === undefined
+                  ? 0
+                  : records.filter(
+                      ({ event }) =>
+                        event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
+                        event.commandOrdinal === lastResume.ordinal
+                    ).length
+              ),
+              totalRedeliveryIntents: BigInt(
+                records.filter(({ event }) => event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended").length
+              ),
+              redeliveryCallCount: BigInt(redeliveryCalls.filter((ordinal) => ordinal === lastResume?.ordinal).length)
+            },
             commandCallCount: BigInt(commandCalls),
             beginTurnCrossingCount: BigInt(beginTurnCrossingCount),
             commandIntentCount: BigInt(intents.length),
@@ -838,7 +1036,13 @@ const executorConformanceDriver = defineDriver(
             commandResponseSettlementCount: BigInt(settlements.filter(({ source }) => source === "Response").length),
             commandSettlementCount: BigInt(settlements.length),
             commandState:
-              unmatched === undefined ? "NoCommand" : !currentCommandCalled ? "CommandIntended" : "CommandCalled",
+              unmatched === undefined
+                ? "NoCommand"
+                : resumeRecoveryRequired
+                  ? "CommandRecoveryRequired"
+                  : !currentCommandCalled
+                    ? "CommandIntended"
+                    : "CommandCalled",
             evidence,
             nextCommandOrdinal: BigInt(intents.length + 1),
             positionHeld: snapshot.positions.has(plannedAttempt.taskId),
@@ -887,6 +1091,21 @@ const executorConformanceDriver = defineDriver(
   }
 )
 
+const executorStateCheck = stateCheck(
+  (raw) =>
+    Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
+      Effect.map(({ state }) => ({
+        ...state,
+        commandState: variantTag(state.commandState),
+        evidence: variantTag(state.evidence),
+        status: variantTag(state.status)
+      })),
+      Effect.orDie
+    ),
+  (spec, implementation) =>
+    JSON.stringify(spec, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
+    JSON.stringify(implementation, (_, value) => (typeof value === "bigint" ? value.toString() : value))
+)
 quintIt(
   it.effect,
   "replays durable executor commands through production protocol and admission seams",
@@ -899,21 +1118,50 @@ quintIt(
     seed: "158",
     spec: "specs/plannedAttemptExecutor.qnt",
     step: "mbtStep",
-    stateCheck: stateCheck(
-      (raw) =>
-        Schema.decodeUnknownEffect(SpecProjection)(raw).pipe(
-          Effect.map(({ state }) => ({
-            ...state,
-            commandState: variantTag(state.commandState),
-            evidence: variantTag(state.evidence),
-            status: variantTag(state.status)
-          })),
-          Effect.orDie
-        ),
-      (spec, implementation) =>
-        JSON.stringify(spec, (_, value) => (typeof value === "bigint" ? value.toString() : value)) ===
-        JSON.stringify(implementation, (_, value) => (typeof value === "bigint" ? value.toString() : value))
-    )
+    stateCheck: executorStateCheck
   },
   180_000
+)
+
+it.effect(
+  "replays two same-command Resume redeliveries after distinct crashes through production authority",
+  () =>
+    Effect.gen(function* () {
+      const reached = yield* Ref.make({ intents: 0n, calls: 0n })
+      yield* quintRun({
+        backend: "typescript",
+        spec: "specs/plannedAttemptExecutor.qnt",
+        step: "resumeRedeliveryMbtStep",
+        maxSamples: 1,
+        maxSteps: 40,
+        nTraces: 1,
+        seed: "158",
+        stateCheck: executorStateCheck,
+        driverFactory: {
+          create: () =>
+            executorConformanceDriver
+              .create()
+              .pipe(
+                Effect.map((driver) => ({
+                  ...driver,
+                  getState: () =>
+                    driver.getState === undefined
+                      ? Effect.die("executor MBT state observer is missing")
+                      : driver
+                          .getState()
+                          .pipe(
+                            Effect.tap((state) =>
+                              Ref.set(reached, {
+                                intents: state.resumeRecovery.totalRedeliveryIntents,
+                                calls: state.resumeRecovery.redeliveryCallCount
+                              })
+                            )
+                          )
+                }))
+              )
+        }
+      })
+      expect(yield* Ref.get(reached)).toEqual({ intents: 2n, calls: 2n })
+    }),
+  { timeout: 180_000 }
 )

@@ -16,6 +16,9 @@ module plannedAttemptExecutor {
   // Projection and delivery ordinals are distinct branded identities at the
   // runtime boundary. Positions below order only this model's relevant
   // occurrences; the Journal stores history, never position occupancy.
+  // Safe settles the latest delivery; a new durable redelivery intent reopens
+  // it under the original command ordinal. Safe is not BeginNotCrossed proof:
+  // this model makes no provider-turn at-most-once claim for Resume retries.
   type ResumeSafeProjection = { correlation: Correlation, commandOrdinal: int, projectionOrdinal: int, observedAt: int }
   type ResumeContinuationWitness = { specification: int, claim: int, worktree: int, lineage: int, target: int }
   type ResumeProjectionProof = NoResumeProjection | ExactResumeSafeProjection(ResumeSafeProjection)

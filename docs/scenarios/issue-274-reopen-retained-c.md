@@ -136,6 +136,9 @@ Resume boundary. B/D remain the only owners of task-work positions.
 | Executor applies Resume but its response is lost | `issue-274-lifecycle-resume.test.ts`: `reconciles C's lost Resume response after restart without another Begin or Resume` |
 | Crash before the initial Resume call; Safe reconciliation permits only same-ordinal redelivery | `issue-274-lifecycle-resume.test.ts`: `recovers the real ResumeIntent crash before resuming exactly retained C1`; pure `resume-redelivery-authorization.test.ts` rejects consumed/swapped/foreign or superseded proofs; controller exact receipt test retains one position across append publication and rejects a settled lease |
 | Crash after redelivery intent, after Held handoff, or after retry effect before response | `issue-274-lifecycle-resume.test.ts`: `recovers RedeliveryIntent with a new projection and no new semantic Resume`, `recovers RedeliveryHeld with a new projection and no new semantic Resume`, and `recovers RedeliveryResponseLost with a new projection and no new semantic Resume`; each validates B/C/D reconstructed positions and unchanged resources |
+| Only an actual exact Journal append may hand C's reservation to durable command responsibility | `command-delivery.test.ts` proves exact append receipts and rejects copied receipts, structural records, wrong Run/key/attempt/ordinals/authorization, and failed appends; admission's same-position handoff test crosses the actual memory Journal append |
+| Two crashes redeliver the same Resume only after separate fresh projections and current observations | `planned-attempt-executor.mbt.test.ts`: `replays two same-command Resume redeliveries after distinct crashes through production authority` maps canonical `resumeRedeliveryMbtStep` to production recovery, admission, authorization, append, receipt, and executor boundaries; it explicitly requires two durable retry intents and two calls |
+| Exact retry authority is single-use, fresh, and preserves the original command | Canonical `exactSafeResumeRedeliveryKeepsOriginalOrdinalTest`, `crashAfterResumeRedeliveryIntentRequiresNewProjectionAndIntentTest`, `completedResumeDeliveryReconcilesWithoutAnotherResumeTest`, `crashBeforeResumeRedeliveryIntentDiscardsFocusedWitnessTest`, and `laterDurableExecutorEvidenceInvalidatesResumeProjectionTest`, with collected identity/ordinal/consumption/witness/position negative controls |
 | Invalid/superseded authority cannot contact Resume | `delivery-proposal-routes.test.ts`: `never contacts Resume for invalid or superseded continuation authority` |
 | Pending/unreadable tracker facts must be reread | `recovery-activation.test.ts`: `recovers each later pending or unreadable tracker read before proposing Resume` |
 | Uninterrupted DS-01–22 composition and passive presentation | Deferred to #279; these controlled recovery slices make no such claim |
@@ -157,7 +160,7 @@ Resume boundary. B/D remain the only owners of task-work positions.
    Run focused tests and `pnpm check:fast`; the orchestrator owns frozen-candidate
    full gates and integration. No native issue dependency changes.
 
-The command-redelivery model delta follows the qualified #341 canonical
-intent/delivery model lineage. The integration coordinator sequences that
-merge and the changed-model gate; the runtime milestone is not a final formal
-qualification or integration handoff.
+The command-redelivery model and executable conformance adapter now follow the
+merged #341 canonical intent/delivery model lineage. The integration coordinator
+owns final changed-model and frozen-candidate qualification; these development
+milestones are not an integration handoff.
