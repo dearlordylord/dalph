@@ -119,6 +119,11 @@ const activityAbsencePositionOffset = 4
 const suspensionCommandOrdinal = 2
 const safelySuspendedReportOrdinal = 2
 
+const appendStartupChronology = <E, R>(
+  chronology: "Cassette" | "StartupValid",
+  append: Effect.Effect<void, E, R>
+): Effect.Effect<void, E, R> => (chronology === "StartupValid" ? append : Effect.void)
+
 /** Builds the same typed P1 -> P2 terminal evidence used by cleanup tests and cassettes. */
 export const replacementProvenanceFor = (
   plannedAttempt: PlannedTaskAttempt,
@@ -290,28 +295,31 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
     outcomeRecordKey(event.witness.expectedClaim.operationId),
     TaskClaimAcquiredEvent.make({ claim: event.witness.expectedClaim, version: workflowJournalEventVersion })
   )
-  if (chronology === "StartupValid") {
-    // Startup recovery needs the exact post-claim graph/specification lineage
-    // before it can accept the persisted attempt plan and Restart choice.
-    yield* appendTrackerIntent(initialGraphOperation)
-    yield* journal.append(
-      plannedAttempt.runId,
-      outcomeRecordKey(initialGraphOperation.operationId),
-      taskTrackerFactsObservedEvent(
-        initialGraphOperation.operationId,
-        makeCompleteTaskTrackerFactsObserved(initialGraphOperation, graphSnapshot)
+  yield* appendStartupChronology(
+    chronology,
+    Effect.gen(function* () {
+      // Startup recovery needs the exact post-claim graph/specification lineage
+      // before it can accept the persisted attempt plan and Restart choice.
+      yield* appendTrackerIntent(initialGraphOperation)
+      yield* journal.append(
+        plannedAttempt.runId,
+        outcomeRecordKey(initialGraphOperation.operationId),
+        taskTrackerFactsObservedEvent(
+          initialGraphOperation.operationId,
+          makeCompleteTaskTrackerFactsObserved(initialGraphOperation, graphSnapshot)
+        )
       )
-    )
-    yield* appendTrackerIntent(initialSpecificationOperation)
-    yield* journal.append(
-      plannedAttempt.runId,
-      outcomeRecordKey(initialSpecificationOperation.operationId),
-      taskTrackerFactsObservedEvent(
-        initialSpecificationOperation.operationId,
-        makeFocusedTaskWorkSpecificationFactsObserved(initialSpecificationOperation, initialSpecification)
+      yield* appendTrackerIntent(initialSpecificationOperation)
+      yield* journal.append(
+        plannedAttempt.runId,
+        outcomeRecordKey(initialSpecificationOperation.operationId),
+        taskTrackerFactsObservedEvent(
+          initialSpecificationOperation.operationId,
+          makeFocusedTaskWorkSpecificationFactsObserved(initialSpecificationOperation, initialSpecification)
+        )
       )
-    )
-  }
+    })
+  )
   const planOperation = makeTaskAttemptPlanOperation({
     operationId: OperationId.make(`${ids.requestNonce}:plan`),
     plannedAttempt,
@@ -329,35 +337,38 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
     attemptPlanRecordKey(plannedAttempt.attemptId),
     TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
   )
-  if (chronology === "StartupValid") {
-    const initialWorktreeObservationOperation = makeTaskWorktreeReconciliationOperation({
-      operationId: OperationId.make(`${ids.worktreeObservationOperationId}:initial-authority`),
-      plannedAttempt,
-      predecessorOperationIds: [planOperation.operationId]
+  yield* appendStartupChronology(
+    chronology,
+    Effect.gen(function* () {
+      const initialWorktreeObservationOperation = makeTaskWorktreeReconciliationOperation({
+        operationId: OperationId.make(`${ids.worktreeObservationOperationId}:initial-authority`),
+        plannedAttempt,
+        predecessorOperationIds: [planOperation.operationId]
+      })
+      yield* journal.append(
+        plannedAttempt.runId,
+        intentRecordKey(initialWorktreeObservationOperation.operationId),
+        TaskWorktreeReconciliationIntendedEvent.make({
+          operation: initialWorktreeObservationOperation,
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        plannedAttempt.runId,
+        outcomeRecordKey(initialWorktreeObservationOperation.operationId),
+        TaskWorktreeReadyEvent.make({
+          proof: PlannedWorktreeReady.make({
+            baseSha: plannedAttempt.baseSha,
+            branch: plannedAttempt.branch,
+            headSha: plannedAttempt.baseSha,
+            worktree: plannedAttempt.worktree
+          }),
+          operationId: initialWorktreeObservationOperation.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
     })
-    yield* journal.append(
-      plannedAttempt.runId,
-      intentRecordKey(initialWorktreeObservationOperation.operationId),
-      TaskWorktreeReconciliationIntendedEvent.make({
-        operation: initialWorktreeObservationOperation,
-        version: workflowJournalEventVersion
-      })
-    )
-    yield* journal.append(
-      plannedAttempt.runId,
-      outcomeRecordKey(initialWorktreeObservationOperation.operationId),
-      TaskWorktreeReadyEvent.make({
-        proof: PlannedWorktreeReady.make({
-          baseSha: plannedAttempt.baseSha,
-          branch: plannedAttempt.branch,
-          headSha: plannedAttempt.baseSha,
-          worktree: plannedAttempt.worktree
-        }),
-        operationId: initialWorktreeObservationOperation.operationId,
-        version: workflowJournalEventVersion
-      })
-    )
-  }
+  )
   const appendExecutorQuiescenceProof = () =>
     Effect.gen(function* () {
       yield* journal.append(
@@ -443,26 +454,29 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
       )
     })
   yield* appendExecutorQuiescenceProof()
-  if (chronology === "StartupValid") {
-    yield* appendTrackerIntent(choiceGraphOperation)
-    yield* journal.append(
-      plannedAttempt.runId,
-      outcomeRecordKey(choiceGraphOperation.operationId),
-      taskTrackerFactsObservedEvent(
-        choiceGraphOperation.operationId,
-        makeCompleteTaskTrackerFactsObserved(choiceGraphOperation, graphSnapshot)
+  yield* appendStartupChronology(
+    chronology,
+    Effect.gen(function* () {
+      yield* appendTrackerIntent(choiceGraphOperation)
+      yield* journal.append(
+        plannedAttempt.runId,
+        outcomeRecordKey(choiceGraphOperation.operationId),
+        taskTrackerFactsObservedEvent(
+          choiceGraphOperation.operationId,
+          makeCompleteTaskTrackerFactsObserved(choiceGraphOperation, graphSnapshot)
+        )
       )
-    )
-    yield* appendTrackerIntent(choiceSpecificationOperation)
-    yield* journal.append(
-      plannedAttempt.runId,
-      outcomeRecordKey(choiceSpecificationOperation.operationId),
-      taskTrackerFactsObservedEvent(
-        choiceSpecificationOperation.operationId,
-        makeFocusedTaskWorkSpecificationFactsObserved(choiceSpecificationOperation, specification)
+      yield* appendTrackerIntent(choiceSpecificationOperation)
+      yield* journal.append(
+        plannedAttempt.runId,
+        outcomeRecordKey(choiceSpecificationOperation.operationId),
+        taskTrackerFactsObservedEvent(
+          choiceSpecificationOperation.operationId,
+          makeFocusedTaskWorkSpecificationFactsObserved(choiceSpecificationOperation, specification)
+        )
       )
-    )
-  }
+    })
+  )
   yield* journal.append(
     plannedAttempt.runId,
     attemptChoiceAppliedRecordKey(event.requestId),

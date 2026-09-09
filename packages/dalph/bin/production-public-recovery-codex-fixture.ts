@@ -8,25 +8,37 @@ nodeProcess.stderr.write('DALPH_PUBLIC_RECOVERY_FIXTURE {"_tag":"CodexFixtureSta
 const write = (id: unknown, result: unknown) =>
   nodeProcess.stdout.write(`${JSON.stringify({ id, jsonrpc: "2.0", result })}\n`)
 
+interface CodexRequest {
+  readonly id: unknown
+  readonly method: unknown
+}
+
+const codexRequestOf = (message: unknown): CodexRequest | undefined => {
+  if (typeof message !== "object" || message === null) return undefined
+  return { id: "id" in message ? message.id : undefined, method: "method" in message ? message.method : undefined }
+}
+
 const respond = (message: unknown) => {
-  if (typeof message !== "object" || message === null) return
-  const id = "id" in message ? message.id : undefined
-  const method = "method" in message ? message.method : undefined
-  if (method === "initialized") return
-  if (method === "initialize") {
-    write(id, {
-      codexHome: nodeProcess.env["CODEX_HOME"] ?? "/tmp",
-      platformFamily: "unix",
-      platformOs: "linux",
-      userAgent: "dalph-public-recovery-qualification"
-    })
-    return
+  const request = codexRequestOf(message)
+  if (request === undefined) return
+  switch (request.method) {
+    case "initialized":
+      return
+    case "initialize":
+      write(request.id, {
+        codexHome: nodeProcess.env["CODEX_HOME"] ?? "/tmp",
+        platformFamily: "unix",
+        platformOs: "linux",
+        userAgent: "dalph-public-recovery-qualification"
+      })
+      return
+    case "thread/list":
+    case "thread/backgroundTerminals/list":
+      write(request.id, { data: [] })
+      return
+    default:
+      write(request.id, {})
   }
-  if (method === "thread/list" || method === "thread/backgroundTerminals/list") {
-    write(id, { data: [] })
-    return
-  }
-  write(id, {})
 }
 
 nodeProcess.stdin.setEncoding("utf8")
