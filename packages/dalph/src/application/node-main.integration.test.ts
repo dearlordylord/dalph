@@ -25,7 +25,6 @@ it.live(
         const collector = yield* handle.stdout.pipe(
           Stream.decodeText(),
           Stream.splitLines,
-          Stream.take(5),
           Stream.mapEffect((line) => Schema.decodeUnknownEffect(Schema.fromJsonString(FixtureEvent))(line)),
           Stream.runForEach(({ event }) =>
             Ref.update(events, (current) => [...current, event]).pipe(
@@ -77,7 +76,6 @@ it.live(
         const collector = yield* handle.stdout.pipe(
           Stream.decodeText(),
           Stream.splitLines,
-          Stream.take(4),
           Stream.mapEffect((line) => Schema.decodeUnknownEffect(Schema.fromJsonString(FixtureEvent))(line)),
           Stream.runForEach(({ event }) =>
             Ref.update(events, (current) => [...current, event]).pipe(

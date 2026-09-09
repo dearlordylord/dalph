@@ -3,7 +3,7 @@
 import nodeProcess from "node:process"
 import { NodeStream } from "@effect/platform-node"
 import { ApplicationExitDiagnostic, ApplicationExitResult } from "@dalph/orchestrator"
-import { Effect, Option, Schema, Stream } from "effect"
+import { Effect, Option, Runtime, Schema, Stream } from "effect"
 import { runDalphNodeMain } from "../src/application/node-main.js"
 import {
   installApplicationExitSignalAdapter,
@@ -18,7 +18,10 @@ const write = (event: string): Effect.Effect<void> =>
 class NodeMainSignalFixtureFailure extends Schema.TaggedError<NodeMainSignalFixtureFailure>()(
   "NodeMainSignalFixtureFailure",
   { kind: Schema.Literals(["EndOfInput", "InvalidRelease", "ReadFailed", "ExitFailed"]) }
-) {}
+) {
+  override readonly [Runtime.errorExitCode] = 1
+  override readonly [Runtime.errorReported] = false
+}
 
 const awaitParentRelease = NodeStream.fromReadable<Uint8Array, NodeMainSignalFixtureFailure>({
   closeOnDone: false,
