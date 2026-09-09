@@ -26,7 +26,10 @@ implementation evidence must point to a production composition; a qualification
 host or an unclassified test consumer cannot satisfy that edge. Contract fixture
 composition sources may declare each role they exercise, and every declared
 source receives the same exhaustive exported-Layer audit. There is no authored
-flag that can exempt a runtime root from that audit. It also checks that
+flag that can exempt a runtime root from that audit. A separate closed
+source-and-role set controls which of those consumers may prove implementation
+assembly, so a contract fixture may exercise a production adapter without
+becoming production composition evidence. It also checks that
 each registered implementation and contract marker still exists at the named
 source location and that every implementation side has a named shared-contract
 call. It also checks that the declared implementation identity is the value
@@ -110,6 +113,7 @@ source-backed support binding evidence and a concrete reason`, `rejects
 qualification composition evidence substituted for a production implementation`,
 `rejects a qualification-only capability Layer assembled by a production composition`,
 `rejects an unclassified test consumer substituted for real production consumption`,
+`rejects a classified contract consumer substituted for real production composition evidence`,
 `cannot reclassify the production host to hide a qualification-only Layer`,
 `rejects replacement of the registered evidence Layer in the production host`, `keeps the
 required family denominator outside a mutated inventory`. `check:all` runs
@@ -129,6 +133,7 @@ coverage stage excludes that suite and every test named with the
 | Existing registration changed | Every current controlled, production, and qualification implementation has a contract execution and current source/composition evidence. | `runs every registered controlled, production, and qualification implementation through its named contract family` |
 | Existing registration changed | The real production host consumes its registered production implementations; qualification evidence, qualification-only Layers, and unclassified test consumers cannot stand in for that edge. | `rejects qualification composition evidence substituted for a production implementation`; `rejects a qualification-only capability Layer assembled by a production composition`; `rejects an unclassified test consumer substituted for real production consumption`; `rejects replacement of the registered evidence Layer in the production host` |
 | Existing registration changed | Every declared composition source receives the exported-Layer audit, so an authored flag cannot reclassify the production host out of the denominator. | `cannot reclassify the production host to hide a qualification-only Layer` |
+| Existing registration changed | A source's audited consumption roles do not make it eligible to prove runtime assembly. | `rejects a classified contract consumer substituted for real production composition evidence` |
 | Existing registration changed | Missing, duplicate, stale, one-sided, fixed-denominator, and no-current-consumer mutations fail closed. | `rejects a missing family even when the inventory is otherwise unchanged`; `keeps the required family denominator outside a mutated inventory`; `rejects duplicate family and implementation registrations`; `rejects stale implementation and composition evidence`; `rejects one-sided contract evidence` |
 | Existing registration changed | A provider-side contract test cannot silently stop invoking the imported shared contract helper or substitute a local same-name function. | `rejects a production contract test that stops invoking the shared helper`; `rejects a local same-name contract function that is not the imported public contract` |
 | Existing registration changed | A comment or string containing a helper name cannot substitute for executing the helper call. | `rejects comment and string residue when shared-contract execution is removed` |

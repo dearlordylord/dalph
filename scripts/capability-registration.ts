@@ -112,6 +112,47 @@ interface CompositionSource {
 }
 
 /**
+ * Closed set of source/role pairs allowed to prove that an implementation is
+ * assembled. Composition sources outside this set are still exhaustively
+ * audited for the roles they consume, but cannot stand in for runtime wiring.
+ */
+const implementationCompositionEvidenceSources = [
+  { role: "controlled", source: "packages/orchestrator/src/workflow-journal/store.test.ts" },
+  { role: "production", source: "packages/dalph/src/application/production.ts" },
+  { role: "qualification", source: "packages/dalph/bin/codex-qualification-host.ts" },
+  { role: "controlled", source: "packages/dalph/src/application/dry-run.ts" },
+  { role: "production", source: "packages/orchestrator/src/authorities/task-tracker/github/graph-reader.ts" },
+  { role: "controlled", source: "packages/orchestrator/src/workflow/interpretation/layers.ts" },
+  { role: "production", source: "packages/orchestrator/src/authorities/task-tracker/github/delivery-authority.ts" },
+  {
+    role: "controlled",
+    source: "packages/orchestrator/src/workflow/protocols/integration-finality/controlled-boundaries.test.ts"
+  },
+  { role: "controlled", source: "packages/orchestrator/src/authorities/git/worktree.test.ts" },
+  { role: "controlled", source: "packages/orchestrator/src/authorities/git/integrator-candidate.test.ts" },
+  {
+    role: "controlled",
+    source: "packages/orchestrator/src/workflow/protocols/target-promotion/outer-protocol.test.ts"
+  },
+  { role: "controlled", source: "packages/dalph/src/application/composition.ts" },
+  { role: "production", source: "packages/dalph/src/application/codex-planned-attempt-executor.ts" },
+  { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/integrator/protocol.test.ts" },
+  { role: "production", source: "packages/dalph/src/application/production-host.ts" },
+  { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/evidence-store.test.ts" },
+  { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/worktree.test.ts" },
+  { role: "controlled", source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/branch.test.ts" },
+  {
+    role: "controlled",
+    source: "packages/orchestrator/src/workflow/protocols/disposition-cleanup/integrator-candidate.test.ts"
+  },
+  { role: "controlled", source: "packages/orchestrator/src/authorities/coordinator-ownership/ownership.test.ts" },
+  { role: "production", source: "packages/orchestrator/src/authorities/coordinator-ownership/live-task-work-start.ts" }
+] as const satisfies ReadonlyArray<CompositionSource>
+
+export const implementationCompositionEvidenceIsEligible = (role: CapabilityRole, source: string): boolean =>
+  implementationCompositionEvidenceSources.some((candidate) => candidate.role === role && candidate.source === source)
+
+/**
  * A production composition may contain layers that are not one of #79's
  * capability families. They are explicitly recorded here so a newly used
  * exported layer cannot disappear from the audit under an ad-hoc exemption.

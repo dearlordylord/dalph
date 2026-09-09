@@ -4,6 +4,7 @@ import ts from "typescript"
 import {
   capabilityRegistrationInventory,
   capabilityRegistrationIssues,
+  implementationCompositionEvidenceIsEligible,
   type ContractImplementationBinding,
   type CapabilityRegistrationInventory,
   type RegisteredImplementation
@@ -925,6 +926,10 @@ const implementationSourceIssues = (
       } else if (!compositionRoles.includes(role)) {
         issues.push(
           `${capability.family} ${role} composition role is stale: ${implementation.composition.source} is ${compositionRoles.length === 0 ? "unregistered" : compositionRoles.join("/")}`
+        )
+      } else if (!implementationCompositionEvidenceIsEligible(role, implementation.composition.source)) {
+        issues.push(
+          `${capability.family} ${role} composition source is ineligible evidence: ${implementation.composition.source}`
         )
       } else if (!hasValueReference(composition, implementation.composition.marker, indexed)) {
         issues.push(`${capability.family} ${role} composition marker is stale: ${implementation.composition.marker}`)
