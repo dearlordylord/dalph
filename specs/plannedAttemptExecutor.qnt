@@ -2,6 +2,19 @@
 // mutation commands; Observe is an unbounded passive read. An exact boundary
 // response settles its command, while only a distinct accepted lifecycle
 // report advances reportOrdinal or changes capacity ownership.
+// #342: https://github.com/dearlordylord/dalph/issues/342
+// After restart, a fresh exact absent empty association permits recording
+// EmptyPreTurn, allocating an empty thread, and saving its association before
+// proving BeginNotCrossed. The original command remains unsettled throughout.
+// Scenario mapping: absentEmptyAssociationFinishesSameBeginTest covers success;
+// repeatedReplacementCrashCutsKeepOneBeginTest covers every private crash cut;
+// ambiguousPreTurnReadForbidsReplacementTest covers unsafe current reads.
+// The paired negative suite breaks freshness, allocation intent, association,
+// single crossing, and no-allocation delivery laws separately.
+// Scope: provider-private cuts stutter at the normalized controller adapter.
+// Production provider prefix tests own concrete request/worktree/Base/thread
+// identity and persistence I/O; this model keeps the same exact Begin identity
+// and does not pretend that empty allocation is a task-turn crossing.
 module plannedAttemptExecutor {
   // Every effectful executor boundary value belongs to one exact planned
   // attempt. A command ordinal identifies the durable intent within that
@@ -14,14 +27,17 @@ module plannedAttemptExecutor {
   type ExecutorCommand = { correlation: Correlation, commandOrdinal: int, kind: CommandKind }
   type CommandState = NoCommand | CommandIntended(ExecutorCommand) | CommandCalled(ExecutorCommand)
   // Provider-private stages distinguish an empty associated thread from an authorized task turn.
-  type BeginTurnBoundary = BeginUnassociated | BeginAssociatedPreTurn | BeginTurnAuthorized | BeginTurnCrossed
+  type BeginTurnBoundary = BeginUnassociated | BeginAssociatedPreTurn | BeginAssociatedFreshAllocation | BeginEmptyReplacement | BeginReplacementAllocated | BeginTurnAuthorized | BeginTurnCrossed
+  // Fresh provider reads authorize replacement only for conclusive absence.
+  // EmptyReplacement is durable; an allocated but unassociated thread is not.
+  type PreTurnThreadRead = PreTurnNotRead | ExactAbsent | TemporarilyUnavailable | Unreadable | Foreign | TurnBearing
   type CommandProjectionOutcome = CommandProjectionBeginNotCrossed | CommandProjectionExactExecuting | CommandProjectionExactSafelySuspended | CommandProjectionExactTerminal | CommandProjectionNoCurrentReport | CommandProjectionTemporarilyUnavailable | CommandProjectionUnreadable | CommandProjectionContradiction
   type ExecutorStateObservation = ExecutorStateExecuting | ExecutorStateSafelySuspended | ExecutorStateTerminal | ExecutorStateNoCurrentReport | ExecutorStateTemporarilyUnavailable | ExecutorStateUnreadable | ExecutorStateContradiction
   type BoundaryCommandEvidence = { correlation: Correlation, commandOrdinal: int, report: ExecutorReport }
   type CommandProjectionRecord = { correlation: Correlation, commandOrdinal: int, outcome: CommandProjectionOutcome }
   type StateProjection = { correlation: Correlation, observation: ExecutorStateObservation }
   type Evidence = NoEvidence | BoundaryCommandResponse(BoundaryCommandEvidence) | CommandProjectionEvidence(CommandProjectionRecord) | FreshStateProjection(StateProjection)
-  type ActionTag = InitializedAction | ResponsibilityBeganAction | BeginIntentRecordedAction | ResumeIntentRecordedAction | SuspendIntentRecordedAction | BeginCalledAction | ResumeCalledAction | SuspendCalledAction | ResponseReceivedAction | ResponseLostAction | CommandProjectedAction | FreshStateProjectedAction | UnchangedExactReportObservedAction | ResponseSettledAction | ProjectionSettledAction | FreshStateAcceptedAction | RecoveryActivatedAction | BeginPreTurnDeliveryAction | BeginRedeliveredAction | BeginTurnCrossedAction
+  type ActionTag = PreTurnThreadReadAction | EmptyReplacementIntentAction | ReplacementAllocatedAction | ReplacementAssociatedAction | InitializedAction | ResponsibilityBeganAction | BeginIntentRecordedAction | ResumeIntentRecordedAction | SuspendIntentRecordedAction | BeginCalledAction | ResumeCalledAction | SuspendCalledAction | ResponseReceivedAction | ResponseLostAction | CommandProjectedAction | FreshStateProjectedAction | UnchangedExactReportObservedAction | ResponseSettledAction | ProjectionSettledAction | FreshStateAcceptedAction | RecoveryActivatedAction | BeginPreTurnDeliveryAction | BeginRedeliveredAction | BeginTurnCrossedAction
   type State = {
     status: WorkStatus,
     commandState: CommandState,
@@ -40,6 +56,11 @@ module plannedAttemptExecutor {
     commandCallCount: int,
     beginRedeliveryCount: int,
     beginTurnBoundary: BeginTurnBoundary,
+    preTurnThreadRead: PreTurnThreadRead,
+    replacementAllocationCount: int,
+    replacementIntentWasFreshExactAbsence: bool,
+    lastAllocationHadDurableEmptyIntent: bool,
+    allocationCountBeforeRedelivery: int,
     beginTurnCrossingCount: int,
     lastRedeliveryHadFreshExactProof: bool,
     commandSettlementCount: int,
@@ -165,13 +186,23 @@ module plannedAttemptExecutor {
 
   val everyCallHasOneDurableIntent: bool = state.commandCallCount <= state.commandIntentCount + state.beginRedeliveryCount
   val beginTurnCrossesAtMostOnce = state.beginTurnCrossingCount <= 1
+  val replacementRequiresFreshExactAbsence = state.replacementIntentWasFreshExactAbsence
+  val replacementAllocationRequiresDurableEmptyIntent = state.lastAllocationHadDurableEmptyIntent
+  val restartDiscardsFreshAllocationAuthority = state.lastAction != RecoveryActivatedAction or state.beginTurnBoundary != BeginAssociatedFreshAllocation
+  val redeliveryNeverAllocates = state.lastAction != BeginRedeliveredAction or state.replacementAllocationCount == state.allocationCountBeforeRedelivery
+  val replacementKeepsOriginalBegin = (state.beginTurnBoundary != BeginEmptyReplacement and state.beginTurnBoundary != BeginReplacementAllocated) or and {
+    activeCommand(state.commandState) == { correlation: PLANNED_CORRELATION, commandOrdinal: 1, kind: BeginCommand },
+    state.commandIntentCount == 1,
+    state.beginTurnCrossingCount == 0,
+    state.positionHeld,
+  }
   val redeliveryRequiresFreshExactPreTurnProof = state.lastAction != BeginRedeliveredAction or state.lastRedeliveryHadFreshExactProof
   val redeliveryKeepsOriginalBegin = state.beginRedeliveryCount == 0 or and {
     state.beginIntentsSinceSafeSuspension == 1,
     state.beginEverIntended,
   }
   val beginNotCrossedProofHasExactPreTurnAuthority = commandProjectionOutcome(state.evidence) != CommandProjectionBeginNotCrossed or and {
-    state.beginTurnBoundary == BeginAssociatedPreTurn,
+    state.beginTurnBoundary == BeginAssociatedPreTurn or state.beginTurnBoundary == BeginAssociatedFreshAllocation,
     activeCommand(state.commandState).kind == BeginCommand,
     activeCommand(state.commandState).commandOrdinal == 1,
     commandEvidenceMatchesActive(state),
@@ -262,6 +293,11 @@ module plannedAttemptExecutor {
   val resumeIntentRecordedReached = state.lastAction == ResumeIntentRecordedAction
   val suspendIntentRecordedReached = state.lastAction == SuspendIntentRecordedAction
   val beginPreTurnDeliveryReached = state.lastAction == BeginPreTurnDeliveryAction
+  val exactEmptyAbsenceReached = state.preTurnThreadRead == ExactAbsent
+  val emptyReplacementIntentReached = state.beginTurnBoundary == BeginEmptyReplacement
+  val replacementAllocatedReached = state.beginTurnBoundary == BeginReplacementAllocated
+  val replacementAssociatedReached = (state.beginTurnBoundary == BeginAssociatedPreTurn or state.beginTurnBoundary == BeginAssociatedFreshAllocation) and state.replacementAllocationCount > 0
+  val freshAllocationProofReached = state.beginTurnBoundary == BeginAssociatedFreshAllocation and commandProjectionOutcome(state.evidence) == CommandProjectionBeginNotCrossed
   val beginNotCrossedProofReached = commandProjectionOutcome(state.evidence) == CommandProjectionBeginNotCrossed
   val beginRedeliveredReached = state.lastAction == BeginRedeliveredAction
   val beginTurnCrossedAfterRedeliveryReached = state.lastAction == BeginTurnCrossedAction
@@ -295,7 +331,7 @@ module plannedAttemptExecutor {
   )
 
   action init: bool = all {
-    state' = { status: ResponsibilityNotBegun, commandState: NoCommand, evidence: NoEvidence, positionHeld: false, positionHeldBeforeEvidence: false, nextCommandOrdinal: 1, beginIntentsSinceSafeSuspension: 0, resumeIntentsSinceSafeSuspension: 0, suspendIntentsSinceExecuting: 0, suspendIntentsSinceExecutingBeforeEvidence: 0, suspendCommandIntentCount: 0, lostSuspendResponseCount: 0, lostSuspendProjectionSettlementCount: 0, commandIntentCount: 0, commandCallCount: 0, beginRedeliveryCount: 0, beginTurnBoundary: BeginUnassociated, beginTurnCrossingCount: 0, lastRedeliveryHadFreshExactProof: false, commandSettlementCount: 0, commandResponseEvidenceCount: 0, commandResponseSettlementCount: 0, reconciliationProjectionsThisActivation: 0, recoveryCount: 0, responseAmbiguous: false, acceptedReportOrdinal: 0, acceptedReportOrdinalBeforeEvidence: 0, lastAcceptedReportWasDistinct: false, observationCount: 0, durableObservationCount: 0, durableObservationCountBeforePassiveRead: 0, proposalIdentityCount: 0, proposalIdentityCountBeforePassiveRead: 0, commandIntentCountBeforePassiveRead: 0, commandCallCountBeforePassiveRead: 0, beginEverIntended: false, terminalReportEverAccepted: false, lastAction: InitializedAction }
+    state' = { status: ResponsibilityNotBegun, commandState: NoCommand, evidence: NoEvidence, positionHeld: false, positionHeldBeforeEvidence: false, nextCommandOrdinal: 1, beginIntentsSinceSafeSuspension: 0, resumeIntentsSinceSafeSuspension: 0, suspendIntentsSinceExecuting: 0, suspendIntentsSinceExecutingBeforeEvidence: 0, suspendCommandIntentCount: 0, lostSuspendResponseCount: 0, lostSuspendProjectionSettlementCount: 0, commandIntentCount: 0, commandCallCount: 0, beginRedeliveryCount: 0, beginTurnBoundary: BeginUnassociated, preTurnThreadRead: PreTurnNotRead, replacementAllocationCount: 0, replacementIntentWasFreshExactAbsence: true, lastAllocationHadDurableEmptyIntent: true, allocationCountBeforeRedelivery: 0, beginTurnCrossingCount: 0, lastRedeliveryHadFreshExactProof: false, commandSettlementCount: 0, commandResponseEvidenceCount: 0, commandResponseSettlementCount: 0, reconciliationProjectionsThisActivation: 0, recoveryCount: 0, responseAmbiguous: false, acceptedReportOrdinal: 0, acceptedReportOrdinalBeforeEvidence: 0, lastAcceptedReportWasDistinct: false, observationCount: 0, durableObservationCount: 0, durableObservationCountBeforePassiveRead: 0, proposalIdentityCount: 0, proposalIdentityCountBeforePassiveRead: 0, commandIntentCountBeforePassiveRead: 0, commandCallCountBeforePassiveRead: 0, beginEverIntended: false, terminalReportEverAccepted: false, lastAction: InitializedAction }
   }
   action beginResponsibility: bool = all { state.status == ResponsibilityNotBegun, state' = { ...state, status: ResponsibilityBegan, positionHeld: true, lastAction: ResponsibilityBeganAction } }
   action recordBeginIntent: bool = all {
@@ -322,8 +358,37 @@ module plannedAttemptExecutor {
     commandProjectionOutcome(state.evidence) == CommandProjectionBeginNotCrossed,
     commandEvidenceMatchesActive(state),
     activeCommand(state.commandState).kind == BeginCommand,
+    state.beginTurnBoundary == BeginAssociatedPreTurn or state.beginTurnBoundary == BeginAssociatedFreshAllocation,
+    state' = { ...state, commandCallCount: state.commandCallCount + 1, beginRedeliveryCount: state.beginRedeliveryCount + 1, beginTurnBoundary: BeginTurnAuthorized, allocationCountBeforeRedelivery: state.replacementAllocationCount, evidence: NoEvidence, responseAmbiguous: false, lastRedeliveryHadFreshExactProof: and { commandProjectionOutcome(state.evidence) == CommandProjectionBeginNotCrossed, commandEvidenceMatchesActive(state), (state.beginTurnBoundary == BeginAssociatedPreTurn or state.beginTurnBoundary == BeginAssociatedFreshAllocation), activeCommand(state.commandState).kind == BeginCommand }, lastAction: BeginRedeliveredAction },
+  }
+  // These cuts are executor-private: none appends a second Journal Begin.
+  // A failed/foreign/turn-bearing read gives no allocation permission.
+  action recordPreTurnThreadRead(read: PreTurnThreadRead): bool = all {
     state.beginTurnBoundary == BeginAssociatedPreTurn,
-    state' = { ...state, commandCallCount: state.commandCallCount + 1, beginRedeliveryCount: state.beginRedeliveryCount + 1, beginTurnBoundary: BeginTurnAuthorized, evidence: NoEvidence, responseAmbiguous: false, lastRedeliveryHadFreshExactProof: and { commandProjectionOutcome(state.evidence) == CommandProjectionBeginNotCrossed, commandEvidenceMatchesActive(state), state.beginTurnBoundary == BeginAssociatedPreTurn, activeCommand(state.commandState).kind == BeginCommand }, lastAction: BeginRedeliveredAction },
+    state.responseAmbiguous,
+    state.evidence == NoEvidence,
+    state.preTurnThreadRead == PreTurnNotRead,
+    read != PreTurnNotRead,
+    state' = { ...state, preTurnThreadRead: read, lastAction: PreTurnThreadReadAction },
+  }
+  action recordEmptyReplacementIntent: bool = all {
+    state.beginTurnBoundary == BeginAssociatedPreTurn,
+    state.preTurnThreadRead == ExactAbsent,
+    state.evidence == NoEvidence,
+    state.responseAmbiguous,
+    state' = { ...state, beginTurnBoundary: BeginEmptyReplacement, preTurnThreadRead: PreTurnNotRead, replacementIntentWasFreshExactAbsence: state.preTurnThreadRead == ExactAbsent and state.beginTurnBoundary == BeginAssociatedPreTurn, lastAction: EmptyReplacementIntentAction },
+  }
+  action allocateReplacementThread: bool = all {
+    state.beginTurnBoundary == BeginEmptyReplacement,
+    state.evidence == NoEvidence,
+    state' = { ...state, beginTurnBoundary: BeginReplacementAllocated, replacementAllocationCount: state.replacementAllocationCount + 1, lastAllocationHadDurableEmptyIntent: state.beginTurnBoundary == BeginEmptyReplacement, lastAction: ReplacementAllocatedAction },
+  }
+  action associateReplacementThread: bool = all {
+    state.beginTurnBoundary == BeginReplacementAllocated,
+    // Exact successful thread/start and the durable association establish
+    // process-local authority. No rollout/read/resume is implied: a fresh
+    // empty thread may not yet be materialized. Restart discards this case.
+    state' = { ...state, beginTurnBoundary: BeginAssociatedFreshAllocation, lastAction: ReplacementAssociatedAction },
   }
   action crossRedeliveredBeginTurn: bool = all {
     state.beginTurnBoundary == BeginTurnAuthorized,
@@ -334,7 +399,7 @@ module plannedAttemptExecutor {
   action callSuspend: bool = all { state.commandState == CommandIntended(activeCommand(state.commandState)), activeCommand(state.commandState).kind == SuspendCommand, state' = { ...state, commandState: CommandCalled(activeCommand(state.commandState)), commandCallCount: state.commandCallCount + 1, lastAction: SuspendCalledAction } }
   action receiveCommandResponse(report: ExecutorReport): bool = all { isCalled(state.commandState), not(state.responseAmbiguous), state.evidence == NoEvidence, activeCommand(state.commandState).kind != BeginCommand or state.beginTurnBoundary == BeginTurnCrossed, state' = { ...state, evidence: BoundaryCommandResponse({ correlation: activeCommand(state.commandState).correlation, commandOrdinal: activeCommand(state.commandState).commandOrdinal, report: report }), positionHeldBeforeEvidence: state.positionHeld, acceptedReportOrdinalBeforeEvidence: state.acceptedReportOrdinal, commandResponseEvidenceCount: state.commandResponseEvidenceCount + 1, responseAmbiguous: false, lastAction: ResponseReceivedAction } }
   action loseCommandResponse: bool = all { isCalled(state.commandState), not(state.responseAmbiguous), state.evidence == NoEvidence, state' = { ...state, responseAmbiguous: true, lostSuspendResponseCount: state.lostSuspendResponseCount + (if (activeCommand(state.commandState).kind == SuspendCommand) 1 else 0), lastAction: ResponseLostAction } }
-  action recordCommandProjection(commandProjection: CommandProjectionOutcome): bool = all { isCalled(state.commandState), state.responseAmbiguous, state.evidence == NoEvidence, state.reconciliationProjectionsThisActivation == 0, commandProjection != CommandProjectionBeginNotCrossed or and { activeCommand(state.commandState).kind == BeginCommand, state.beginTurnBoundary == BeginAssociatedPreTurn }, activeCommand(state.commandState).kind != BeginCommand or not(projectionIsExact(commandProjection)) or state.beginTurnBoundary == BeginTurnCrossed, state' = { ...state, evidence: CommandProjectionEvidence({ correlation: activeCommand(state.commandState).correlation, commandOrdinal: activeCommand(state.commandState).commandOrdinal, outcome: commandProjection }), positionHeldBeforeEvidence: state.positionHeld, acceptedReportOrdinalBeforeEvidence: state.acceptedReportOrdinal, reconciliationProjectionsThisActivation: 1, lastAction: CommandProjectedAction } }
+  action recordCommandProjection(commandProjection: CommandProjectionOutcome): bool = all { isCalled(state.commandState), state.responseAmbiguous, state.evidence == NoEvidence, state.reconciliationProjectionsThisActivation == 0, commandProjection != CommandProjectionBeginNotCrossed or and { activeCommand(state.commandState).kind == BeginCommand, (state.beginTurnBoundary == BeginAssociatedPreTurn or state.beginTurnBoundary == BeginAssociatedFreshAllocation), state.preTurnThreadRead == PreTurnNotRead }, activeCommand(state.commandState).kind != BeginCommand or not(projectionIsExact(commandProjection)) or state.beginTurnBoundary == BeginTurnCrossed, state' = { ...state, evidence: CommandProjectionEvidence({ correlation: activeCommand(state.commandState).correlation, commandOrdinal: activeCommand(state.commandState).commandOrdinal, outcome: commandProjection }), positionHeldBeforeEvidence: state.positionHeld, acceptedReportOrdinalBeforeEvidence: state.acceptedReportOrdinal, reconciliationProjectionsThisActivation: 1, lastAction: CommandProjectedAction } }
   action recordFreshStateProjection(stateObservation: ExecutorStateObservation): bool = all {
     canRecordFreshStateProjection(state, stateObservation),
     state.reconciliationProjectionsThisActivation == 0,
@@ -355,13 +420,15 @@ module plannedAttemptExecutor {
     observationIsExact(freshObservation(state.evidence)),
     state' = { ...applyDistinctReport(state, reportForObservation(freshObservation(state.evidence))), evidence: NoEvidence, lastAction: FreshStateAcceptedAction },
   }
-  action recoverActivation: bool = all { state.evidence == NoEvidence or commandProjectionOutcome(state.evidence) == CommandProjectionBeginNotCrossed, state.recoveryCount < RECOVERY_LIMIT, state' = { ...state, evidence: NoEvidence, reconciliationProjectionsThisActivation: 0, recoveryCount: state.recoveryCount + 1, lastAction: RecoveryActivatedAction } }
+  action recoverActivation: bool = all { state.evidence == NoEvidence or commandProjectionOutcome(state.evidence) == CommandProjectionBeginNotCrossed, state.recoveryCount < RECOVERY_LIMIT, state' = { ...state, evidence: NoEvidence, preTurnThreadRead: PreTurnNotRead, beginTurnBoundary: if (state.beginTurnBoundary == BeginReplacementAllocated) BeginEmptyReplacement else if (state.beginTurnBoundary == BeginAssociatedFreshAllocation) BeginAssociatedPreTurn else state.beginTurnBoundary, reconciliationProjectionsThisActivation: 0, recoveryCount: state.recoveryCount + 1, lastAction: RecoveryActivatedAction } }
 
   action step: bool = {
+    nondet preTurnRead = Set(ExactAbsent, TemporarilyUnavailable, Unreadable, Foreign, TurnBearing).oneOf()
     nondet report = EXECUTOR_REPORTS.oneOf()
     nondet commandProjection = COMMAND_PROJECTIONS.oneOf()
     nondet stateObservation = STATE_OBSERVATIONS.oneOf()
     any {
+      recordPreTurnThreadRead(preTurnRead), recordEmptyReplacementIntent, allocateReplacementThread, associateReplacementThread,
       beginResponsibility, recordBeginIntent, recordResumeIntent, recordSuspendIntent, callBegin, callBeginPreTurn, redeliverBegin, crossRedeliveredBeginTurn, callResume, callSuspend,
       receiveCommandResponse(report), loseCommandResponse, recordCommandProjection(commandProjection),
       recordFreshStateProjection(stateObservation), settleCommandResponse, settleCommandProjection,

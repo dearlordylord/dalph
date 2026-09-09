@@ -9,6 +9,11 @@ export const plannedAttemptExecutorObligations = Object.freeze({
   invariants: Object.freeze([
     "everyCallHasOneDurableIntent",
     "beginTurnCrossesAtMostOnce",
+    "replacementRequiresFreshExactAbsence",
+    "replacementAllocationRequiresDurableEmptyIntent",
+    "restartDiscardsFreshAllocationAuthority",
+    "redeliveryNeverAllocates",
+    "replacementKeepsOriginalBegin",
     "redeliveryRequiresFreshExactPreTurnProof",
     "redeliveryKeepsOriginalBegin",
     "beginNotCrossedProofHasExactPreTurnAuthority",
@@ -47,6 +52,11 @@ export const plannedAttemptExecutorObligations = Object.freeze({
     "suspendIntentRecordedReached",
     "beginCalledReached",
     "beginPreTurnDeliveryReached",
+    "exactEmptyAbsenceReached",
+    "emptyReplacementIntentReached",
+    "replacementAllocatedReached",
+    "replacementAssociatedReached",
+    "freshAllocationProofReached",
     "beginNotCrossedProofReached",
     "beginRedeliveredReached",
     "beginTurnCrossedAfterRedeliveryReached",
@@ -79,6 +89,12 @@ export const plannedAttemptExecutorObligations = Object.freeze({
 export const plannedAttemptExecutorProofObligations = Object.freeze({
   evidence: Object.freeze({
     invariants: Object.freeze([
+      "replacementRequiresFreshAbsence",
+      "beginProofRequiresAssociation",
+      "allocationRequiresDurableEmptyIntent",
+      "redeliveryNeverAllocates",
+      "replacementKeepsUncrossedBegin",
+      "restartDiscardsFreshAllocationAuthority",
       "everyCallHasDurableIntent",
       "beginTurnCrossesAtMostOnce",
       "redeliveryRequiresFreshProof",
@@ -92,6 +108,12 @@ export const plannedAttemptExecutorProofObligations = Object.freeze({
       "evidenceProofTypeOk"
     ]),
     witnesses: Object.freeze([
+      "emptyAbsenceReached",
+      "emptyReplacementReached",
+      "replacementAllocatedReached",
+      "replacementAssociatedReached",
+      "replacementProcessLostReached",
+      "unsafePreTurnReadReached",
       "beginIntentReached",
       "beginCalledReached",
       "beginPreTurnReached",
