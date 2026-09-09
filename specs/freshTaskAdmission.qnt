@@ -67,7 +67,19 @@ module freshTaskAdmission {
   type ExistingResponsibility =
     | NoExistingResponsibility
     | ReadyExistingResponsibility(AttemptId)
+    // Exact accepted Safe attempt, lifecycle permitted, no independent known
+    // constraint. This is permission to reserve for reads, never to Resume.
+    | SafeContinuationAwaitingRevalidation(AttemptId)
     | RetainedNotReadyResponsibility(AttemptId)
+
+  type ContinuationWitness = AuthoredSpecification | ExactClaim | PlannedWorktree | TargetLineage
+  // Complete tracker observations surrounding this exact accepted Safe report.
+  // Ordinary Safe checkpoints without a preceding closure keep their old path.
+  type SafeLifecycleEvidence = OpenWithoutClosedSafe | ClosedBeforeSafe | ClosedAtSafe | ReopenedAfterClosedSafe
+  type SafeContinuationConstraint =
+    | ContinuationPermitted | TrackerClosed | OperatorPaused | SpecificationBlocked
+    | ClaimBlocked | GitBlocked | EvidenceUnavailable
+    | KnownAuthorityConstraint
 
   type TaskAdmissions = TaskId -> TaskAdmissionState
   type ExistingResponsibilities = TaskId -> ExistingResponsibility
@@ -91,6 +103,7 @@ module freshTaskAdmission {
     preOwnershipRejected: TaskFlags,
     freshEntryBypassedReadyResponsibility: bool,
     readyResponsibilityEnteredPastCapacity: bool,
+    continuationAuthorizedWithoutWitnesses: bool,
     blindClaimIntentReappend: bool,
     blindResponsibilityReappend: bool,
     processLosses: ProcessLossEvidence,
@@ -110,6 +123,14 @@ module freshTaskAdmission {
     existingResponsibility: ExistingResponsibilities,
     // Relative Journal order supplied with the existing-responsibility input.
     responsibilityOrder: TaskNumbers,
+    safeContinuationConstraint: TaskId -> SafeContinuationConstraint,
+    safeReportAccepted: TaskFlags,
+    safeLifecycleEvidence: TaskId -> SafeLifecycleEvidence,
+    // An intended Resume survives process loss; its exact Safe projection is
+    // separate evidence from the original accepted Safe report.
+    resumeIntentPending: TaskFlags,
+    resumeReconciledSafe: TaskFlags,
+    continuationWitnesses: TaskId -> Set[ContinuationWitness],
     // Actual Journal presence is authority; ambiguity is process knowledge.
     journalClaimIntentPresent: TaskFlags,
     journalResponsibilityPresent: TaskFlags,
@@ -235,6 +256,7 @@ module freshTaskAdmission {
     value == NoExistingResponsibility
   pure def readyExistingResponsibility(value: ExistingResponsibility): bool = match value {
     | ReadyExistingResponsibility(_) => true
+    | SafeContinuationAwaitingRevalidation(_) => true
     | _ => false
   }
   pure def freshEntryCapable(s: State, task: TaskId): bool = and {
@@ -289,6 +311,11 @@ module freshTaskAdmission {
       s.journalResponsibilityPresent.get(task),
     })
       RetainedNotReadyResponsibility(attemptFor(task))
+    else if (and {
+      s.safeReportAccepted.get(task),
+      s.safeLifecycleEvidence.get(task) == ReopenedAfterClosedSafe,
+      s.existingResponsibility.get(task) == ReadyExistingResponsibility(attemptFor(task)),
+    }) SafeContinuationAwaitingRevalidation(attemptFor(task))
     else s.existingResponsibility.get(task)
   pure def recordProcessLoss(evidence: ProcessLossEvidence): ProcessLossEvidence = match evidence {
     | NoProcessLoss => OneProcessLoss
@@ -307,6 +334,12 @@ module freshTaskAdmission {
       admission: TASKS.mapBy(task => Unoccupied),
       existingResponsibility: noResponsibilities,
       responsibilityOrder: numbers(0),
+      safeContinuationConstraint: TASKS.mapBy(_ => ContinuationPermitted),
+      safeReportAccepted: flags(false),
+      safeLifecycleEvidence: TASKS.mapBy(_ => OpenWithoutClosedSafe),
+      resumeIntentPending: flags(false),
+      resumeReconciledSafe: flags(false),
+      continuationWitnesses: TASKS.mapBy(_ => Set()),
       journalClaimIntentPresent: flags(false),
       journalResponsibilityPresent: flags(false),
       ambiguousClaimIntentAppend: flags(false),
@@ -321,6 +354,7 @@ module freshTaskAdmission {
         preOwnershipRejected: flags(false),
         freshEntryBypassedReadyResponsibility: false,
         readyResponsibilityEnteredPastCapacity: false,
+        continuationAuthorizedWithoutWitnesses: false,
         blindClaimIntentReappend: false,
         blindResponsibilityReappend: false,
         processLosses: NoProcessLoss,
@@ -714,7 +748,7 @@ module freshTaskAdmission {
     all {
       state.process == ProcessUp,
       state.admission.get(task) == Unoccupied,
-      state.existingResponsibility.get(task) == ReadyExistingResponsibility(attemptFor(task)),
+      readyExistingResponsibility(state.existingResponsibility.get(task)),
       not(earlierReadyResponsibilityExists(state, task)),
       occupiedCount(state) < state.capacity,
       state' = {
@@ -728,6 +762,137 @@ module freshTaskAdmission {
       },
     }
   }
+
+  action observeLifecycleClosureFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.admission.get(task) == ExactAttemptHeld(attemptFor(task)),
+    state' = { ...state, safeLifecycleEvidence: state.safeLifecycleEvidence.put(task, ClosedBeforeSafe) },
+  }
+
+  action observeLifecycleReopenFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.safeReportAccepted.get(task),
+    state.safeLifecycleEvidence.get(task) == ClosedAtSafe,
+    state' = { ...state, safeLifecycleEvidence: state.safeLifecycleEvidence.put(task, ReopenedAfterClosedSafe) },
+  }
+
+  action acceptSafeReportFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.admission.get(task) == ExactAttemptHeld(attemptFor(task)),
+    not(state.resumeIntentPending.get(task)),
+    state' = {
+      ...state,
+      admission: state.admission.put(task, Unoccupied),
+      safeReportAccepted: state.safeReportAccepted.put(task, true),
+      safeLifecycleEvidence: state.safeLifecycleEvidence.put(task,
+        if (state.safeLifecycleEvidence.get(task) == ClosedBeforeSafe) ClosedAtSafe else OpenWithoutClosedSafe),
+      safeContinuationConstraint: state.safeContinuationConstraint.put(task,
+        if (state.continuationConstraint.get(task) == PostOwnershipConstrained)
+          KnownAuthorityConstraint else ContinuationPermitted),
+      continuationConstraint: state.continuationConstraint.put(task, NoContinuationConstraint),
+      existingResponsibility: state.existingResponsibility.put(task, RetainedNotReadyResponsibility(attemptFor(task))),
+      trace: { ...state.trace, positionReleased: state.trace.positionReleased.put(task, true) },
+    },
+  }
+
+  // The owning executor/lifecycle/control protocols supply this exact eligibility
+  // transition after closure, an accepted Safe report, and a later reopening.
+  // Retained constrained work stays
+  // distinct and does not block fresh admission.
+  action selectSafeContinuationFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.admission.get(task) == Unoccupied,
+    state.existingResponsibility.get(task) == RetainedNotReadyResponsibility(attemptFor(task)),
+    state.safeReportAccepted.get(task),
+    state.safeLifecycleEvidence.get(task) == ReopenedAfterClosedSafe,
+    state.safeContinuationConstraint.get(task) == ContinuationPermitted,
+    state' = {
+      ...state,
+      existingResponsibility: state.existingResponsibility.put(task, SafeContinuationAwaitingRevalidation(attemptFor(task))),
+      continuationWitnesses: state.continuationWitnesses.put(task, Set()),
+    },
+  }
+
+  // The existing continuation protocol has independently accepted Alice's
+  // ordinary Continue choice and every required fact for B. Unlike C's new
+  // path, this image is already authorized, not permission to start reads.
+  action projectOrdinarySafeContinuationReadyFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.admission.get(task) == Unoccupied,
+    state.existingResponsibility.get(task) == RetainedNotReadyResponsibility(attemptFor(task)),
+    state.safeReportAccepted.get(task),
+    state.safeLifecycleEvidence.get(task) == OpenWithoutClosedSafe,
+    state.safeContinuationConstraint.get(task) == ContinuationPermitted,
+    state' = { ...state, existingResponsibility: state.existingResponsibility.put(task, ReadyExistingResponsibility(attemptFor(task))) },
+  }
+
+  // The exact pending Resume was reconciled at its executor and remains Safe.
+  // The owning executor protocol preserves the original command ordinal. Its
+  // current-facts retry needs the same priority as the original continuation,
+  // never a fresh Begin or a second occupied position.
+  action reconcileResumeAsStillSafeFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.resumeIntentPending.get(task),
+    state.admission.get(task) == ExactAttemptHeld(attemptFor(task)),
+    state.safeLifecycleEvidence.get(task) == ReopenedAfterClosedSafe,
+    state.safeContinuationConstraint.get(task) == ContinuationPermitted,
+    state' = {
+      ...state,
+      admission: state.admission.put(task, Unoccupied),
+      safeReportAccepted: state.safeReportAccepted.put(task, true),
+      resumeReconciledSafe: state.resumeReconciledSafe.put(task, true),
+      existingResponsibility: state.existingResponsibility.put(task, SafeContinuationAwaitingRevalidation(attemptFor(task))),
+      continuationWitnesses: state.continuationWitnesses.put(task, Set()),
+      trace: { ...state.trace, positionReleased: state.trace.positionReleased.put(task, true) },
+    },
+  }
+
+  action observeResumedExecutingFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.admission.get(task) == ExactAttemptHeld(attemptFor(task)),
+    state.resumeIntentPending.get(task),
+    state' = { ...state, resumeIntentPending: state.resumeIntentPending.put(task, false) },
+  }
+
+  action readContinuationWitnessFor(task: TaskId, witness: ContinuationWitness): bool = all {
+    state.process == ProcessUp,
+    state.admission.get(task) == ExistingResponsibilityReserved(attemptFor(task)),
+    state.existingResponsibility.get(task) == SafeContinuationAwaitingRevalidation(attemptFor(task)),
+    not(state.continuationWitnesses.get(task).contains(witness)),
+    state' = {
+      ...state,
+      continuationWitnesses: state.continuationWitnesses.put(task, state.continuationWitnesses.get(task).union(Set(witness))),
+    },
+  }
+
+  action authorizeSafeContinuationFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.admission.get(task) == ExistingResponsibilityReserved(attemptFor(task)),
+    state.existingResponsibility.get(task) == SafeContinuationAwaitingRevalidation(attemptFor(task)),
+    state.continuationWitnesses.get(task) == Set(AuthoredSpecification, ExactClaim, PlannedWorktree, TargetLineage),
+    state' = {
+      ...state,
+      existingResponsibility: state.existingResponsibility.put(task, ReadyExistingResponsibility(attemptFor(task))),
+      trace: {
+        ...state.trace,
+        continuationAuthorizedWithoutWitnesses: state.trace.continuationAuthorizedWithoutWitnesses or
+          state.continuationWitnesses.get(task) != Set(AuthoredSpecification, ExactClaim, PlannedWorktree, TargetLineage),
+      },
+    },
+  }
+
+  action constrainSafeContinuationFor(task: TaskId, constraint: SafeContinuationConstraint): bool = all {
+    state.process == ProcessUp,
+    constraint != ContinuationPermitted,
+    state.existingResponsibility.get(task) == SafeContinuationAwaitingRevalidation(attemptFor(task)),
+    state' = {
+      ...state,
+      admission: state.admission.put(task, Unoccupied),
+      existingResponsibility: state.existingResponsibility.put(task, RetainedNotReadyResponsibility(attemptFor(task))),
+      safeContinuationConstraint: state.safeContinuationConstraint.put(task, constraint),
+      continuationWitnesses: state.continuationWitnesses.put(task, Set()),
+    },
+  }
   action handoffReadyResponsibilityFor(task: TaskId): bool = {
     all {
       state.process == ProcessUp,
@@ -736,6 +901,10 @@ module freshTaskAdmission {
       state' = {
         ...state,
         admission: state.admission.put(task, ExactAttemptHeld(attemptFor(task))),
+        safeReportAccepted: state.safeReportAccepted.put(task, false),
+        resumeIntentPending: state.resumeIntentPending.put(task,
+          state.safeLifecycleEvidence.get(task) == ReopenedAfterClosedSafe),
+        resumeReconciledSafe: state.resumeReconciledSafe.put(task, false),
         existingResponsibility:
           state.existingResponsibility.put(task, RetainedNotReadyResponsibility(attemptFor(task))),
         trace: { ...state.trace, positionReleased: state.trace.positionReleased.put(task, false) },
@@ -772,6 +941,7 @@ module freshTaskAdmission {
       admission: TASKS.mapBy(task => recoveredAdmission(state, task)),
       existingResponsibility:
         TASKS.mapBy(task => crashExistingResponsibility(state, task)),
+      continuationWitnesses: TASKS.mapBy(_ => Set()),
       ambiguousClaimIntentAppend: flags(false),
       ambiguousResponsibilityAppend: flags(false),
     },
@@ -885,6 +1055,10 @@ module freshTaskAdmission {
         state.responsibilityOrder.get(task) >= 1,
       },
       and {
+        state.existingResponsibility.get(task) == SafeContinuationAwaitingRevalidation(attemptFor(task)),
+        state.responsibilityOrder.get(task) >= 1,
+      },
+      and {
         state.existingResponsibility.get(task) == RetainedNotReadyResponsibility(attemptFor(task)),
         state.responsibilityOrder.get(task) >= 1,
       },
@@ -894,7 +1068,10 @@ module freshTaskAdmission {
       | FreshTaskCommitted(_) => state.existingResponsibility.get(task) == NoExistingResponsibility
       | ExistingResponsibilityReserved(attempt) => and {
           attempt == attemptFor(task),
-          state.existingResponsibility.get(task) == ReadyExistingResponsibility(attemptFor(task)),
+          or {
+            state.existingResponsibility.get(task) == ReadyExistingResponsibility(attemptFor(task)),
+            state.existingResponsibility.get(task) == SafeContinuationAwaitingRevalidation(attemptFor(task)),
+          },
         }
       | ExactAttemptHeld(attempt) => and {
           attempt == attemptFor(task),
@@ -923,6 +1100,29 @@ module freshTaskAdmission {
     state.capacity <= 3,
     or { state.process == ProcessUp, state.process == ProcessDown },
   }
+
+  val constrainedSafeContinuationCannotReserve = TASKS.forall(task =>
+    state.safeContinuationConstraint.get(task) == ContinuationPermitted or
+      state.admission.get(task) == Unoccupied)
+  val safeContinuationAuthorizationRequiresEveryWitness = not(state.trace.continuationAuthorizedWithoutWitnesses)
+  val revalidationRequiresAcceptedSafeReport = TASKS.forall(task =>
+    state.existingResponsibility.get(task) != SafeContinuationAwaitingRevalidation(attemptFor(task)) or
+      state.safeReportAccepted.get(task))
+  val revalidationRequiresLifecycleReopen = TASKS.forall(task =>
+    state.existingResponsibility.get(task) != SafeContinuationAwaitingRevalidation(attemptFor(task)) or
+      state.safeLifecycleEvidence.get(task) == ReopenedAfterClosedSafe)
+  val pendingResumeRevalidationRequiresExactSafeReconciliation = TASKS.forall(task =>
+    not(and {
+      state.resumeIntentPending.get(task),
+      state.existingResponsibility.get(task) == SafeContinuationAwaitingRevalidation(attemptFor(task)),
+    }) or state.resumeReconciledSafe.get(task))
+
+  val safeContinuationAwaitingReadsReached = TASKS.exists(task =>
+    state.existingResponsibility.get(task) == SafeContinuationAwaitingRevalidation(attemptFor(task)))
+  val safeContinuationReadWhileReservedReached = TASKS.exists(task => and {
+    state.existingResponsibility.get(task) == SafeContinuationAwaitingRevalidation(attemptFor(task)),
+    state.continuationWitnesses.get(task).contains(AuthoredSpecification),
+  })
 
   val threeFreshEntriesReached = and { state.trace.entered.get(TaskA), state.trace.entered.get(TaskB), state.trace.entered.get(TaskC) }
   val outsideTaskEnteredReached = state.trace.entered.get(TaskD)
@@ -962,6 +1162,16 @@ module freshTaskAdmission {
   val contractionReached = state.capacity == 1
 
   action step: bool = any {
+    { nondet task = TASKS.oneOf() observeLifecycleClosureFor(task) },
+    { nondet task = TASKS.oneOf() observeLifecycleReopenFor(task) },
+    { nondet task = TASKS.oneOf() acceptSafeReportFor(task) },
+    { nondet task = TASKS.oneOf() selectSafeContinuationFor(task) },
+    { nondet task = TASKS.oneOf() projectOrdinarySafeContinuationReadyFor(task) },
+    { nondet task = TASKS.oneOf() reconcileResumeAsStillSafeFor(task) },
+    { nondet task = TASKS.oneOf() observeResumedExecutingFor(task) },
+    { nondet task = TASKS.oneOf() nondet witness = Set(AuthoredSpecification, ExactClaim, PlannedWorktree, TargetLineage).oneOf() readContinuationWitnessFor(task, witness) },
+    { nondet task = TASKS.oneOf() authorizeSafeContinuationFor(task) },
+    { nondet task = TASKS.oneOf() nondet constraint = Set(TrackerClosed, OperatorPaused, SpecificationBlocked, ClaimBlocked, GitBlocked, EvidenceUnavailable).oneOf() constrainSafeContinuationFor(task, constraint) },
     reserveFreshEntry, recordClaimIntent, loseClaimIntentAppendResponse,
     loseAcceptedClaimIntentAppendResponse, observeClaimIntentPresent,
     observeClaimIntentAbsent,
@@ -1027,6 +1237,54 @@ module freshTaskAdmission {
       projectAcceptedWorktreeReadyFor(task), handoffToExecutorResponsibilityFor(task),
       releaseHeldPositionReadyFor(task), reserveReadyResponsibilityFor(task),
       handoffReadyResponsibilityFor(task),
+    }
+  }
+
+  // Focused executable conformance slice: closure and reopening are accepted
+  // tracker facts; only the reservation and read leases are process-local.
+  action lifecycleRevalidationMbtStep: bool = {
+    nondet task = Set(TaskA).oneOf()
+    nondet witness = Set(AuthoredSpecification, ExactClaim, PlannedWorktree, TargetLineage).oneOf()
+    any {
+      reserveFreshEntryFor(task), recordClaimIntentFor(task),
+      projectAcceptedWorktreeReadyFor(task), handoffToExecutorResponsibilityFor(task),
+      observeLifecycleClosureFor(task), acceptSafeReportFor(task), observeLifecycleReopenFor(task),
+      selectSafeContinuationFor(task), reserveReadyResponsibilityFor(task),
+      readContinuationWitnessFor(task, witness), authorizeSafeContinuationFor(task),
+      handoffReadyResponsibilityFor(task), crash, recover,
+    }
+  }
+
+  // Rejected boundary attempts are observable stutters: no intent/read/entry
+  // is admitted. They let the executable adapter check the negative boundary.
+  action rejectSafeContinuationAtCapacityFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.admission.get(task) == Unoccupied,
+    state.existingResponsibility.get(task) == SafeContinuationAwaitingRevalidation(attemptFor(task)),
+    occupiedCount(state) >= state.capacity,
+    state' = state,
+  }
+
+  action rejectFreshBypassFor(task: TaskId): bool = all {
+    state.process == ProcessUp,
+    state.admission.get(task) == Unoccupied,
+    state.graphCandidate.get(task),
+    readyResponsibilityWaits(state),
+    state' = state,
+  }
+
+  action lifecycleCapacityMbtStep: bool = {
+    nondet task = TASKS.oneOf()
+    nondet witness = Set(AuthoredSpecification, ExactClaim, PlannedWorktree, TargetLineage).oneOf()
+    any {
+      reserveFreshEntryFor(task), recordClaimIntentFor(task),
+      projectAcceptedWorktreeReadyFor(task), handoffToExecutorResponsibilityFor(task),
+      observeLifecycleClosureFor(task), acceptSafeReportFor(task), observeLifecycleReopenFor(task),
+      projectOrdinarySafeContinuationReadyFor(task), releaseHeldPositionNotReadyFor(task),
+      selectSafeContinuationFor(task), reserveReadyResponsibilityFor(task),
+      rejectSafeContinuationAtCapacityFor(task), rejectFreshBypassFor(task),
+      readContinuationWitnessFor(task, witness), authorizeSafeContinuationFor(task),
+      handoffReadyResponsibilityFor(task), contractCapacity, expandCapacity, crash, recover,
     }
   }
 

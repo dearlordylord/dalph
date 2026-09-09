@@ -47,6 +47,7 @@ import type {
 } from "../../workflow/protocols/planned-attempt-executor-work/errors.js"
 import type { PlannedAttemptProtocolPermit } from "../../workflow/protocols/planned-attempt-executor-work/protocol-controller.js"
 import type { AcceptedPlannedAttemptExecutorResponsibility } from "../../workflow/protocols/planned-attempt-executor-work/responsibility.js"
+import type { AcceptedExecutorCommandDelivery } from "../../workflow/protocols/planned-attempt-executor-work/command-delivery.js"
 import type {
   AcceptedResultEvidenceConflict,
   AcceptedResultEvidenceUnavailable,
@@ -132,7 +133,8 @@ export interface DeliveryActionExecutionLease {
   readonly acceptIntegrationTargetOwnership: Effect.Effect<void>
   readonly bindPlannedAttemptPosition: (
     plannedAttempt: PlannedTaskAttempt,
-    acceptedResponsibility?: AcceptedPlannedAttemptExecutorResponsibility
+    acceptedResponsibility?: AcceptedPlannedAttemptExecutorResponsibility,
+    acceptedDelivery?: AcceptedExecutorCommandDelivery
   ) => Effect.Effect<void>
   readonly forwardBoundary: DeliveryActionForwardBoundary
   readonly integrationTargets: IntegrationTargetResourceController

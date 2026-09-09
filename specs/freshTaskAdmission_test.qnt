@@ -1,6 +1,143 @@
 module freshTaskAdmissionTest {
   import freshTaskAdmission.* from "./freshTaskAdmission"
 
+  // A/B/C start; B suspends and D takes B's vacancy; capacity contracts.
+  // C closes and suspends. Alice selects B; A releases and B resumes.
+  // G4 then permits C while B and D execute at capacity two.
+  run retainedCWithBD = init
+    .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
+    .then(projectAcceptedWorktreeReadyFor(TaskA)).then(handoffToExecutorResponsibilityFor(TaskA))
+    .then(reserveFreshEntryFor(TaskB)).then(recordClaimIntentFor(TaskB))
+    .then(projectAcceptedWorktreeReadyFor(TaskB)).then(handoffToExecutorResponsibilityFor(TaskB))
+    .then(reserveFreshEntryFor(TaskC)).then(recordClaimIntentFor(TaskC))
+    .then(projectAcceptedWorktreeReadyFor(TaskC)).then(handoffToExecutorResponsibilityFor(TaskC))
+    .then(acceptSafeReportFor(TaskB))
+    .then(reserveFreshEntryFor(TaskD)).then(recordClaimIntentFor(TaskD))
+    .then(projectAcceptedWorktreeReadyFor(TaskD)).then(handoffToExecutorResponsibilityFor(TaskD))
+    .then(contractCapacity)
+    .then(observeLifecycleClosureFor(TaskC)).then(acceptSafeReportFor(TaskC))
+    .then(projectOrdinarySafeContinuationReadyFor(TaskB))
+    .then(releaseHeldPositionNotReadyFor(TaskA))
+    .then(reserveReadyResponsibilityFor(TaskB)).then(handoffReadyResponsibilityFor(TaskB))
+    .then(observeLifecycleReopenFor(TaskC)).then(selectSafeContinuationFor(TaskC))
+
+  run ordinarySafeBDoesNotEnterLifecycleRevalidationTest = init
+    .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
+    .then(projectAcceptedWorktreeReadyFor(TaskA)).then(handoffToExecutorResponsibilityFor(TaskA))
+    .then(releaseHeldPositionNotReadyFor(TaskA))
+    .then(reserveFreshEntryFor(TaskB)).then(recordClaimIntentFor(TaskB))
+    .then(projectAcceptedWorktreeReadyFor(TaskB)).then(handoffToExecutorResponsibilityFor(TaskB))
+    .then(acceptSafeReportFor(TaskB)).then(selectSafeContinuationFor(TaskB).fail())
+
+  run cWaitsAtTwoBeforeAnyFocusedReadTest = retainedCWithBD
+    .expect(and {
+    state.capacity == 2,
+    state.admission.get(TaskB) == ExactAttemptHeld(AttemptB),
+    state.admission.get(TaskD) == ExactAttemptHeld(AttemptD),
+  })
+
+  run capTwoRejectsCReservationTest = retainedCWithBD.then(reserveReadyResponsibilityFor(TaskC).fail())
+  run capTwoRejectsFocusedCReadTest = retainedCWithBD.then(readContinuationWitnessFor(TaskC, AuthoredSpecification).fail())
+  run capThreeRejectsFreshEBypassTest = retainedCWithBD.then(expandCapacity).then(reserveFreshEntryFor(TaskE).fail())
+  run reservedCRejectsEarlyResumeTest = retainedCWithBD.then(expandCapacity)
+    .then(reserveReadyResponsibilityFor(TaskC)).then(handoffReadyResponsibilityFor(TaskC).fail())
+  run reservedCRejectsMissingWitnessAuthorizationTest = retainedCWithBD.then(expandCapacity)
+    .then(reserveReadyResponsibilityFor(TaskC)).then(authorizeSafeContinuationFor(TaskC).fail())
+  run reservedCRejectsDoubleOccupancyTest = retainedCWithBD.then(expandCapacity)
+    .then(reserveReadyResponsibilityFor(TaskC)).then(reserveReadyResponsibilityFor(TaskC).fail())
+  run independentlyConstrainedCRejectsReservationTest = {
+    nondet constraint = Set(TrackerClosed, OperatorPaused, SpecificationBlocked, ClaimBlocked, GitBlocked).oneOf()
+    retainedCWithBD.then(constrainSafeContinuationFor(TaskC, constraint)).then(expandCapacity)
+      .then(selectSafeContinuationFor(TaskC).fail())
+  }
+
+  run cReservesThirdPositionBeforeFreshETest = retainedCWithBD.then(expandCapacity)
+    .then(reserveReadyResponsibilityFor(TaskC))
+    .then(readContinuationWitnessFor(TaskC, AuthoredSpecification))
+    .expect(and {
+      occupiedCount(state) == 3,
+    })
+    .then(readContinuationWitnessFor(TaskC, ExactClaim))
+    .then(readContinuationWitnessFor(TaskC, PlannedWorktree))
+    .then(readContinuationWitnessFor(TaskC, TargetLineage))
+    .then(authorizeSafeContinuationFor(TaskC)).then(handoffReadyResponsibilityFor(TaskC))
+    .expect(and {
+      occupiedCount(state) == 3,
+      state.admission.get(TaskC) == ExactAttemptHeld(AttemptC),
+      safeContinuationAuthorizationRequiresEveryWitness,
+      currentOccupancyHasOneClosedRepresentation,
+    })
+
+  run failedCReadReleasesReservationAndAllowsETest = retainedCWithBD.then(expandCapacity)
+    .then(reserveReadyResponsibilityFor(TaskC))
+    .then(constrainSafeContinuationFor(TaskC, EvidenceUnavailable))
+    .then(reserveFreshEntryFor(TaskE))
+    .expect(and {
+      state.admission.get(TaskC) == Unoccupied,
+      state.existingResponsibility.get(TaskC) == RetainedNotReadyResponsibility(AttemptC),
+      occupiedCount(state) == 3,
+      constrainedSafeContinuationCannotReserve,
+    })
+
+  run pausedClosedOrConflictingCCannotReserveTest = {
+    nondet constraint = Set(TrackerClosed, OperatorPaused, SpecificationBlocked, ClaimBlocked, GitBlocked).oneOf()
+    retainedCWithBD.then(constrainSafeContinuationFor(TaskC, constraint)).then(expandCapacity)
+      .then(reserveFreshEntryFor(TaskE))
+      .expect(and {
+        state.admission.get(TaskE) == FreshEntryReserved,
+        state.admission.get(TaskC) == Unoccupied,
+      })
+  }
+
+  run crashAfterG4PreservesCapacityWaitTest = retainedCWithBD.then(crash).then(recover)
+    .expect(occupiedCount(state) == 2)
+
+  run crashAfterCapacityStillSelectsCBeforeETest = retainedCWithBD.then(expandCapacity).then(crash).then(recover)
+    .then(reserveReadyResponsibilityFor(TaskC)).expect(occupiedCount(state) == 3)
+
+  run crashDuringReadsDiscardsReservationAndRequiresReadsAgainTest = retainedCWithBD.then(expandCapacity)
+    .then(reserveReadyResponsibilityFor(TaskC)).then(readContinuationWitnessFor(TaskC, AuthoredSpecification))
+    .then(crash).then(recover)
+    .expect(and {
+      occupiedCount(state) == 2,
+      state.continuationWitnesses.get(TaskC) == Set(),
+    })
+    .then(reserveReadyResponsibilityFor(TaskC))
+    .expect(occupiedCount(state) == 3)
+
+  run crashAfterAuthorizationBeforeResumeRequiresNewReadsTest = retainedCWithBD.then(expandCapacity)
+    .then(reserveReadyResponsibilityFor(TaskC))
+    .then(readContinuationWitnessFor(TaskC, AuthoredSpecification))
+    .then(readContinuationWitnessFor(TaskC, ExactClaim))
+    .then(readContinuationWitnessFor(TaskC, PlannedWorktree))
+    .then(readContinuationWitnessFor(TaskC, TargetLineage))
+    .then(authorizeSafeContinuationFor(TaskC)).then(crash).then(recover)
+    .then(reserveReadyResponsibilityFor(TaskC))
+    .expect(and {
+      occupiedCount(state) == 3,
+    })
+
+  run intendedCResumeRecoveredStillSafe = retainedCWithBD.then(expandCapacity)
+    .then(reserveReadyResponsibilityFor(TaskC))
+    .then(readContinuationWitnessFor(TaskC, AuthoredSpecification))
+    .then(readContinuationWitnessFor(TaskC, ExactClaim))
+    .then(readContinuationWitnessFor(TaskC, PlannedWorktree))
+    .then(readContinuationWitnessFor(TaskC, TargetLineage))
+    .then(authorizeSafeContinuationFor(TaskC)).then(handoffReadyResponsibilityFor(TaskC))
+    .then(crash).then(recover).then(reconcileResumeAsStillSafeFor(TaskC))
+
+  run reconciledSafeResumeRejectsFreshEBypassTest = intendedCResumeRecoveredStillSafe
+    .then(reserveFreshEntryFor(TaskE).fail())
+
+  run reconciledSafeResumeReacquiresOnePositionBeforeReadsTest = intendedCResumeRecoveredStillSafe
+    .expect(occupiedCount(state) == 2)
+    .then(reserveReadyResponsibilityFor(TaskC))
+    .then(readContinuationWitnessFor(TaskC, AuthoredSpecification))
+    .expect(and { occupiedCount(state) == 3, pendingResumeRevalidationRequiresExactSafeReconciliation })
+
+  run safeProjectionRequiresPriorResumeIntentTest = retainedCWithBD
+    .then(reconcileResumeAsStillSafeFor(TaskC).fail())
+
   // At each reserve step the stable-order guard leaves exactly one task choice.
   run threeEntriesConsumeCapacityBeforeAnyOutsideTaskTest = {
     init

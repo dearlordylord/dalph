@@ -2,6 +2,75 @@
 module freshTaskAdmissionNegativeTest {
   import freshTaskAdmission.* from "./freshTaskAdmission"
 
+  run safeAwaitingA = init.then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
+    .then(projectAcceptedWorktreeReadyFor(TaskA)).then(handoffToExecutorResponsibilityFor(TaskA))
+    .then(observeLifecycleClosureFor(TaskA)).then(acceptSafeReportFor(TaskA))
+    .then(observeLifecycleReopenFor(TaskA)).then(selectSafeContinuationFor(TaskA))
+
+  action selectOrdinarySafeWithoutReopen: bool = all {
+    state.safeReportAccepted.get(TaskA),
+    state.safeLifecycleEvidence.get(TaskA) == OpenWithoutClosedSafe,
+    state' = { ...state, existingResponsibility: state.existingResponsibility.put(TaskA, SafeContinuationAwaitingRevalidation(AttemptA)) },
+  }
+
+  run ordinarySafeSelectionTurnsLifecycleInvariantRedTest = init
+    .then(reserveFreshEntryFor(TaskA)).then(recordClaimIntentFor(TaskA))
+    .then(projectAcceptedWorktreeReadyFor(TaskA)).then(handoffToExecutorResponsibilityFor(TaskA))
+    .then(acceptSafeReportFor(TaskA)).then(selectOrdinarySafeWithoutReopen)
+    .expect(not(revalidationRequiresLifecycleReopen))
+
+  action revalidatePendingResumeWithoutExactSafeProjection: bool = all {
+    state.existingResponsibility.get(TaskA) == SafeContinuationAwaitingRevalidation(AttemptA),
+    state' = { ...state, resumeIntentPending: state.resumeIntentPending.put(TaskA, true) },
+  }
+
+  run missingResumeReconciliationTurnsInvariantRedTest = safeAwaitingA
+    .then(revalidatePendingResumeWithoutExactSafeProjection)
+    .expect(not(pendingResumeRevalidationRequiresExactSafeReconciliation))
+
+  action bypassSafeContinuation: bool = all {
+    state.existingResponsibility.get(TaskA) == SafeContinuationAwaitingRevalidation(AttemptA),
+    state' = {
+      ...state,
+      admission: state.admission.put(TaskB, FreshEntryReserved),
+      trace: { ...state.trace, freshEntryBypassedReadyResponsibility: true },
+    },
+  }
+
+  action authorizeWithoutContinuationReads: bool = all {
+    state.admission.get(TaskA) == ExistingResponsibilityReserved(AttemptA),
+    state' = {
+      ...state,
+      existingResponsibility: state.existingResponsibility.put(TaskA, ReadyExistingResponsibility(AttemptA)),
+      trace: { ...state.trace, continuationAuthorizedWithoutWitnesses: true },
+    },
+  }
+
+  action reserveConstrainedContinuation: bool = all {
+    state.safeContinuationConstraint.get(TaskA) != ContinuationPermitted,
+    state' = { ...state, admission: state.admission.put(TaskA, ExistingResponsibilityReserved(AttemptA)) },
+  }
+
+  action selectWithoutAcceptedSafe: bool = all {
+    not(state.safeReportAccepted.get(TaskA)),
+    state' = { ...state, existingResponsibility: state.existingResponsibility.put(TaskA, SafeContinuationAwaitingRevalidation(AttemptA)) },
+  }
+
+  run freshBypassOfSafeContinuationTurnsInvariantRedTest = safeAwaitingA
+    .then(bypassSafeContinuation).expect(not(retainedReadyResponsibilityBlocksFreshEntry))
+
+  run resumeWithoutWitnessesTurnsInvariantRedTest = safeAwaitingA.then(reserveReadyResponsibilityFor(TaskA))
+    .then(authorizeWithoutContinuationReads).expect(not(safeContinuationAuthorizationRequiresEveryWitness))
+
+  run pauseClosedAndConflictsTurnReservationInvariantRedTest = {
+    nondet constraint = Set(TrackerClosed, OperatorPaused, SpecificationBlocked, ClaimBlocked, GitBlocked, EvidenceUnavailable).oneOf()
+    safeAwaitingA.then(constrainSafeContinuationFor(TaskA, constraint))
+      .then(reserveConstrainedContinuation).expect(not(constrainedSafeContinuationCannotReserve))
+  }
+
+  run missingSafeReportTurnsEligibilityInvariantRedTest = init.then(selectWithoutAcceptedSafe)
+    .expect(not(revalidationRequiresAcceptedSafeReport))
+
   action admitOutsideTaskPastCapacity: bool = all {
     occupiedCount(state) == 3,
     state.admission.get(TaskD) == Unoccupied,

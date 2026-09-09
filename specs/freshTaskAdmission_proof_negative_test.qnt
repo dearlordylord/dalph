@@ -1,6 +1,17 @@
 module freshTaskAdmissionCapacityProofNegativeTest {
   import freshTaskAdmissionCapacityProof.* from "./freshTaskAdmission_proof"
 
+  action freshBypassesSafeContinuation: bool = all {
+    state.disposition.get(C) == SafeAwaitingRevalidation,
+    state' = { ...state, disposition: state.disposition.put(E, Occupied), freshBypassedReady: true },
+  }
+
+  run freshCannotBypassCRevalidationPriorityTest = init
+    .then(reserveNext(A)).then(releaseOccupiedNotReady(A))
+    .then(reserveNext(B)).then(reserveNext(C)).then(releaseOccupiedNotReady(C))
+    .then(reserveNext(D)).then(selectSafeContinuation(C))
+    .then(freshBypassesSafeContinuation).expect(not(readyExistingPrecedesFresh))
+
   // Deliberately leave the finite capacity-proof domain. This negative
   // control makes the proof's type-bound invariant fail for an otherwise
   // unchanged initialized state.

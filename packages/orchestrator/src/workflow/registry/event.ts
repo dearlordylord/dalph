@@ -7,6 +7,7 @@ import { ActiveTaskClaim, TaskClaimRelease } from "../../authorities/task-tracke
 import { workflowJournalEventVersion } from "../kernel/event.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorResumeRedeliveryIntendedEvent,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorCommandResponseContradictedEvent,
@@ -54,6 +55,7 @@ import { RunFinalityEvidence } from "../../coordination/frontier/run-finality.js
 
 const ResponsibilityJournalEvent = Schema.Union([
   PlannedAttemptExecutorCommandIntendedEvent,
+  PlannedAttemptExecutorResumeRedeliveryIntendedEvent,
   PlannedAttemptExecutorCommandProjectionObservedEvent,
   PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorCommandResponseContradictedEvent,

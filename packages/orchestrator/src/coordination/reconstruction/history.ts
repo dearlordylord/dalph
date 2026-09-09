@@ -44,6 +44,7 @@ import {
 import { ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import { evaluatePlannedAttemptContinuationAuthorization } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
+import { evaluatePlannedAttemptResumeRedeliveryProof } from "../../workflow/protocols/planned-attempt-continuation/resume-redelivery-authorization.js"
 import {
   currentUnconsumedAcceptedSafeEvidence,
   latestPlannedAttemptExecutorEvidence,
@@ -2058,6 +2059,60 @@ const validateExecutorCommandIntent = (
   return recordUnsettledExecutorCommand(event, record, runId, withCount, issues)
 }
 
+const validateExecutorResumeRedeliveryIntent = (
+  record: JournalRecord,
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  indexes: FoldIndexes,
+  issues: Array<WorkflowJournalHistoryIssue>
+): FoldIndexes => {
+  const event = record.event
+  if (event._tag !== "PlannedAttemptExecutorResumeRedeliveryIntended") return indexes
+  const prior = records.filter(({ position }) => position < record.position)
+  const proof = evaluatePlannedAttemptResumeRedeliveryProof(
+    prior,
+    event.plannedAttempt,
+    {
+      _tag: "ReconciledResumeStillSafe",
+      observedAt: event.authorization.safeProjectionObservedAt,
+      projectionOrdinal: event.projectionOrdinal,
+      resumeCommandOrdinal: event.commandOrdinal
+    },
+    event.authorization.witness
+  )
+  if (proof._tag === "Rejected") {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor Resume redelivery lacks exact authorization: ${proof.detail}`
+    )
+  }
+  const expectedOrdinal =
+    prior.filter(
+      ({ event: candidate }) =>
+        candidate._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" &&
+        plannedTaskAttemptEquivalence(candidate.plannedAttempt, event.plannedAttempt) &&
+        candidate.commandOrdinal === event.commandOrdinal
+    ).length + 1
+  if (event.redeliveryOrdinal !== expectedOrdinal) {
+    semanticIssue(
+      issues,
+      runId,
+      record.position,
+      `executor Resume redelivery expected ordinal ${expectedOrdinal}, found ${event.redeliveryOrdinal}`
+    )
+  }
+  return {
+    ...indexes,
+    unsettledExecutorCommands: HashMap.set(
+      indexes.unsettledExecutorCommands,
+      event.plannedAttempt.attemptId,
+      event.commandOrdinal
+    )
+  }
+}
+
 type ExecutorStateObservedEvent = Extract<
   WorkflowJournalEvent,
   { readonly _tag: "PlannedAttemptExecutorStateObserved" }
@@ -2765,6 +2820,7 @@ const validateExecutorEvent = (
   }
   validateResponsibilityBegan()
   next = validateExecutorCommandIntent(record, runId, records, next, issues)
+  next = validateExecutorResumeRedeliveryIntent(record, runId, records, next, issues)
   validateCommandProjection()
   validateCommandResponse()
   validateCommandResponseContradiction()

@@ -9,6 +9,7 @@ import {
   type TaskWorkSpecification
 } from "@dalph/contracts"
 import { Effect } from "effect"
+import { acceptedExecutorCommandDelivery, type AcceptedExecutorCommandDelivery } from "./command-delivery.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   plannedAttemptExecutorCommandIntendedRecordKey,
@@ -309,7 +310,7 @@ type PlannedAttemptExecutorCommandInvocation =
   | { readonly _tag: "Resume"; readonly request: PlannedAttemptExecutorRequest }
   | { readonly _tag: "Suspend" }
 
-const issuePlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecutorWorkflow.issueCommand")(function* (
+export const issuePlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecutorWorkflow.issueCommand")(function* (
   plannedAttempt: PlannedTaskAttempt,
   invocation: PlannedAttemptExecutorCommandInvocation
 ) {
@@ -320,46 +321,43 @@ const issuePlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecutorWork
     : yield* executor.resume(invocation.request)
 })
 
-const recordPlannedAttemptExecutorCommandResponse = Effect.fn("PlannedAttemptExecutorWorkflow.recordCommandResponse")(
-  function* (
-    plannedAttempt: PlannedTaskAttempt,
-    commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
-    report: PlannedAttemptExecutorReport
-  ) {
-    const journal = yield* InRunJournal
-    const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-    if (!samePlannedAttemptExecutorCorrelation(correlation, report.correlation)) {
-      yield* journal.append(
-        plannedAttempt.runId,
-        plannedAttemptExecutorCommandResponseContradictedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-        PlannedAttemptExecutorCommandResponseContradictedEvent.make({
-          commandOrdinal,
-          observed: report,
-          occurrenceClassification: "NonActionOccurrence",
-          plannedAttempt,
-          version: workflowJournalEventVersion
-        })
-      )
-      return yield* new PlannedAttemptExecutorCorrelationMismatch({
-        expected: correlation,
-        observed: report.correlation
-      })
-    }
+export const recordPlannedAttemptExecutorCommandResponse = Effect.fn(
+  "PlannedAttemptExecutorWorkflow.recordCommandResponse"
+)(function* (
+  plannedAttempt: PlannedTaskAttempt,
+  commandOrdinal: PlannedAttemptExecutorCommandOrdinal,
+  report: PlannedAttemptExecutorReport
+) {
+  const journal = yield* InRunJournal
+  const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
+  if (!samePlannedAttemptExecutorCorrelation(correlation, report.correlation)) {
     yield* journal.append(
       plannedAttempt.runId,
-      plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
-      PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      plannedAttemptExecutorCommandResponseContradictedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+      PlannedAttemptExecutorCommandResponseContradictedEvent.make({
         commandOrdinal,
+        observed: report,
         occurrenceClassification: "NonActionOccurrence",
         plannedAttempt,
-        report,
         version: workflowJournalEventVersion
       })
     )
-    yield* acceptDistinctPlannedAttemptExecutorReport(plannedAttempt, report)
-    return report
+    return yield* new PlannedAttemptExecutorCorrelationMismatch({ expected: correlation, observed: report.correlation })
   }
-)
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+    PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal,
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      report,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* acceptDistinctPlannedAttemptExecutorReport(plannedAttempt, report)
+  return report
+})
 
 /** Journal-first executor command primitive used by guarded protocol entry points. */
 export const runPlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecutorWorkflow.runCommand")(function* (
@@ -367,7 +365,8 @@ export const runPlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecuto
   plannedAttempt: PlannedTaskAttempt,
   command: "Begin" | "Resume" | "Suspend",
   suspensionLimit: PlannedAttemptExecutorSuspensionLimit,
-  selectedSpecification?: TaskWorkSpecification
+  selectedSpecification?: TaskWorkSpecification,
+  onIntentAccepted: (receipt: AcceptedExecutorCommandDelivery) => Effect.Effect<void> = () => Effect.void
 ) {
   const journal = yield* InRunJournal
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
@@ -391,7 +390,14 @@ export const runPlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecuto
           _tag: command,
           request: yield* plannedAttemptExecutorRequestFor(records, plannedAttempt, selectedSpecification)
         }
-  yield* permit.commitIntent(appendPlannedAttemptExecutorCommandIntent(plannedAttempt, command, commandOrdinal))
+  yield* Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const intentRecord = yield* restore(
+        permit.commitIntent(appendPlannedAttemptExecutorCommandIntent(plannedAttempt, command, commandOrdinal))
+      )
+      yield* onIntentAccepted(yield* acceptedExecutorCommandDelivery(intentRecord))
+    })
+  )
   const report = yield* issuePlannedAttemptExecutorCommand(plannedAttempt, invocation)
   return yield* recordPlannedAttemptExecutorCommandResponse(plannedAttempt, commandOrdinal, report)
 })

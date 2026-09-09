@@ -31,6 +31,7 @@ import {
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
+  plannedAttemptExecutorResumeRedeliveryIntendedRecordKey,
   plannedAttemptExecutorCommandProjectionObservedRecordKey,
   plannedAttemptExecutorCommandResponseContradictedRecordKey,
   plannedAttemptExecutorCommandResponseObservedRecordKey,
@@ -339,6 +340,17 @@ export const describeJournalEvent = Match.type<WorkflowJournalEvent>().pipe(
           event.plannedAttempt.attemptId,
           event.commandOrdinal,
           event.projectionOrdinal
+        ),
+        event.plannedAttempt,
+        event.commandOrdinal
+      ),
+    PlannedAttemptExecutorResumeRedeliveryIntended: (event) =>
+      plannedAttemptExecutorEvent(
+        { attemptId: event.plannedAttempt.attemptId, runId: event.plannedAttempt.runId },
+        plannedAttemptExecutorResumeRedeliveryIntendedRecordKey(
+          event.plannedAttempt.attemptId,
+          event.commandOrdinal,
+          event.redeliveryOrdinal
         ),
         event.plannedAttempt,
         event.commandOrdinal

@@ -199,6 +199,11 @@ export const freshTaskAdmissionObligations = Object.freeze({
     "existingResponsibilityInputIsExactlyCorrelated",
     "retainedReadyResponsibilityBlocksFreshEntry",
     "readyResponsibilityEntryRespectsCapacity",
+    "constrainedSafeContinuationCannotReserve",
+    "safeContinuationAuthorizationRequiresEveryWitness",
+    "revalidationRequiresAcceptedSafeReport",
+    "revalidationRequiresLifecycleReopen",
+    "pendingResumeRevalidationRequiresExactSafeReconciliation",
     "foreignClaimConstraintPreventsOccupancy",
     "newClaimCycleNeverReusesRejectedOperation",
     "postOwnershipConstraintRetainsOccupancy",
@@ -223,6 +228,8 @@ export const freshTaskAdmissionObligations = Object.freeze({
     "reconstructedResponsibilityAfterLossReached",
     "readyResponsibilityReached",
     "readyResponsibilityReservedReached",
+    "safeContinuationAwaitingReadsReached",
+    "safeContinuationReadWhileReservedReached",
     "processLossReached",
     "repeatedProcessLossReached",
     "contractionReached"
@@ -252,7 +259,9 @@ export const freshTaskAdmissionProofObligations = Object.freeze({
       "existingReservationReached",
       "contractionReached",
       "expansionReached",
-      "retainedNotReadyReached"
+      "retainedNotReadyReached",
+      "safeContinuationReservedReached",
+      "continuationWitnessesAcceptedReached"
     ])
   }),
   ambiguity: Object.freeze({
