@@ -71,9 +71,9 @@ const addLiveOwnerEntryFor = (
   owner: DeliveryRuntimeLiveOwnerSnapshot,
   entries: Array<OrderedStatusEntry>,
   taskOrders: ReadonlyMap<TaskId, StatusTaskOrder>
-): DeliveryStatusProjectionConflict | null => {
+): void => {
   const taskId = deliveryProposalOrderTaskId(owner.proposal.order)
-  if (!includeForSubject(subject, taskId)) return null
+  if (!includeForSubject(subject, taskId)) return
   const currentTaskOrder = taskId === null ? runWideTaskOrder : taskOrderOrConflictFor(subject, taskOrders, taskId)
   const ownerTaskOrder =
     currentTaskOrder instanceof DeliveryStatusProjectionConflict
@@ -90,7 +90,6 @@ const addLiveOwnerEntryFor = (
       }
     : { _tag: "LiveDeliveryAction", classification: "Progressing", subject: entrySubject, owner }
   addEntry(entries, entry, ownerTaskOrder)
-  return null
 }
 
 const actionEntriesFor = (
@@ -109,8 +108,7 @@ const actionEntriesFor = (
   )
   if (proposedConflict !== null) return proposedConflict
   for (const owner of liveOwners) {
-    const ownerConflict = addLiveOwnerEntryFor(subject, evaluation, owner, entries, taskOrders)
-    if (ownerConflict !== null) return ownerConflict
+    addLiveOwnerEntryFor(subject, evaluation, owner, entries, taskOrders)
   }
   return null
 }
