@@ -100,6 +100,7 @@ owning issue is complete.
 |---|---:|---|
 | `issue-315-preserve-bounded-fresh-admission.md` | 315 | Implemented and verified at recovery base `b8a63ef8e`; #268 must independently re-prove its composed DS-02 result |
 | `issue-268-controlled-delivery-story.md` | 268 | Thirteen outcomes and the C2b observed order at `7100fe3af` accepted; C3--C5 proceed under the recorded stop rules |
+| `issue-300-current-status-admission-witness.md` | 300 | Accepted narrow refinement of #217 owner validation; candidate qualification and integration remain pending |
 
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state
