@@ -175,7 +175,8 @@ it.effect("rejects every incomplete or malformed command selection before acquir
       {
         args: ["run", "github:octo/dalph/not-an-issue", "--production", "--config", "/tmp/dalph-production.json"],
         detail: "the target is invalid for the selected command mode"
-      }
+      },
+      { args: ["run", "", "--dry"], detail: "the target is invalid for the selected command mode" }
     ]
 
     for (const testCase of cases) {
@@ -196,8 +197,8 @@ it.effect("rejects every incomplete or malformed command selection before acquir
       ])
     }
 
-    // This malformed unmarked target exercises the fixture-locator decoder;
-    // Effect CLI cannot represent an empty positional argument.
+    // Keep the decoder assertion beside the public command proof so the
+    // malformed fixture-locator boundary remains independently diagnosed.
     const fixtureFailure = yield* decodeCliTarget("").pipe(Effect.flip)
     expect(fixtureFailure._tag).toBe("Cli.CliUsageError")
   })
