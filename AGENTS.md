@@ -65,6 +65,12 @@ questions. Reuse guidance already read unless it changed or scope changed.
   there are none. It is separate from `check:all`. Uncollected tests,
   undefined behavior, and unreachable actions can appear green: require a
   negative control.
+- `check:all`, `test:coverage`, and `check:quint` take one of two repository
+  admission slots before they start, so concurrent agents share the machine
+  instead of contending for every core. A waiting run names the current holders
+  and is admitted in order. Take the slot by running the command; never poll for
+  another agent's gate to finish. `DALPH_GATE_SLOTS` sets the slot count for a
+  differently sized machine, and the focused tiers run unadmitted.
 - Before declaring Playwright environment-blocked, try the documented
   [browser setup](docs/DEVELOPMENT.md#browser-and-real-host-setup); report the exact unrun command
   and missing dependency if privileges block setup.
