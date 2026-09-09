@@ -38,19 +38,20 @@
     "check:lab:browser": "pnpm --filter @dalph/reducer-lab-prototype check:browser",
     "check:package-boundary": "node scripts/check-package-boundaries.mjs",
     "check:artifacts": "node scripts/workspace-artifacts.mjs",
-    "check:quint": "node scripts/check-quint-models.mjs",
+    "check:quint": "node scripts/with-gate-slot.mjs -- node scripts/check-quint-models.mjs",
     "check:quint:changed": "node scripts/run-changed-quint-gate.mjs",
     "check:secrets": "gitleaks git --redact --no-banner",
     "qualify:codex": "node scripts/qualify-codex-app-server.mjs",
     "test:codex-integrator-qualification": "pnpm --filter @dalph/dalph... build && DALPH_RUN_REAL_CODEX_QUALIFICATION=1 vitest run packages/dalph/src/application/codex-integrator-real-qualification.test.ts --pool=forks",
     "test": "vitest run",
-    "test:coverage": "vitest run --mode coverage --reporter=dot --coverage --coverage.reporter=text-summary --coverage.reporter=json-summary --coverage.reporter=json && node scripts/verify-coverage-summary.mjs && node scripts/verify-changed-coverage.mjs",
+    "coverage:body": "vitest run --mode coverage --reporter=dot --coverage --coverage.reporter=text-summary --coverage.reporter=json-summary --coverage.reporter=json && node scripts/verify-coverage-summary.mjs && node scripts/verify-changed-coverage.mjs",
+    "test:coverage": "node scripts/with-gate-slot.mjs -- pnpm coverage:body",
     "test:mbt": "vitest run --mode mbt",
     "test:watch": "vitest",
     "check:ci:quality": "node scripts/run-quality-gate.mjs --without-quint",
     "check:ci:formal": "pnpm check:quint",
     "check:ci": "pnpm check:ci:quality && pnpm check:ci:formal",
-    "check:all": "node scripts/run-quality-gate.mjs"
+    "check:all": "node scripts/with-gate-slot.mjs -- node scripts/run-quality-gate.mjs"
   },
   "lint-staged": {
     "*.{js,mjs,ts,tsx}": "node scripts/run-quality-lint.mjs --staged --fix"

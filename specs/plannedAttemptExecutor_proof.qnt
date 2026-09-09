@@ -1,8 +1,8 @@
 // Focused finite proof projections for named autonomous executor obligations.
 module plannedAttemptExecutorEvidenceProof {
-  type Stage = ResponsibilityHeld | BeginIntent | BeginCalled | BeginResponseObserved | Executing | SuspendIntent | SuspendCalled | SuspendResponseObserved | Safe | ResumeIntent | ResumeCalled | ResumeResponseObserved | Terminal
+  type Stage = BeginPreTurn | BeginNotCrossedObserved | BeginTurnIntent | ResponsibilityHeld | BeginIntent | BeginCalled | BeginResponseObserved | Executing | SuspendIntent | SuspendCalled | SuspendResponseObserved | Safe | ResumeIntent | ResumeCalled | ResumeResponseObserved | Terminal
   type Report = ExecutingReport | SafeReport | TerminalReport
-  type Event = Initialized | BeginIntentRecorded | BeginBoundaryCalled | CommandResponseRecorded | DistinctReportAccepted | PassiveExecutingObserved | PassiveTerminalObserved | SuspendIntentRecorded | SuspendBoundaryCalled | ResumeIntentRecorded | ResumeBoundaryCalled
+  type Event = BeginPreTurnDelivered | BeginNotCrossedRead | BeginRedelivered | BeginTurnBoundaryCrossed | BeginProofLost | Initialized | BeginIntentRecorded | BeginBoundaryCalled | CommandResponseRecorded | DistinctReportAccepted | PassiveExecutingObserved | PassiveTerminalObserved | SuspendIntentRecorded | SuspendBoundaryCalled | ResumeIntentRecorded | ResumeBoundaryCalled
   type State = {
     stage: Stage,
     pendingReport: Report,
@@ -20,6 +20,9 @@ module plannedAttemptExecutorEvidenceProof {
     intentCountBeforePassiveRead: int,
     callCountBeforePassiveRead: int,
     beginCount: int,
+    beginRedeliveryCount: int,
+    beginTurnCrossingCount: int,
+    lastRedeliveryHadFreshProof: bool,
     firstAcceptedReportWasExecuting: bool,
     suspendCount: int,
     resumeCountSinceSafe: int,
@@ -28,7 +31,14 @@ module plannedAttemptExecutorEvidenceProof {
   }
   var state: State
 
-  val everyCallHasDurableIntent = state.callCount <= state.intentCount
+  val everyCallHasDurableIntent = state.callCount <= state.intentCount + state.beginRedeliveryCount
+  val beginTurnCrossesAtMostOnce = state.beginTurnCrossingCount <= 1
+  val redeliveryRequiresFreshProof = state.lastEvent != BeginRedelivered or state.lastRedeliveryHadFreshProof
+  val beginPreTurnReached = state.stage == BeginPreTurn
+  val beginNotCrossedReached = state.stage == BeginNotCrossedObserved
+  val beginRedeliveredReached = state.lastEvent == BeginRedelivered
+  val beginTurnCrossedReached = state.lastEvent == BeginTurnBoundaryCrossed
+  val beginProofLostReached = state.lastEvent == BeginProofLost
   val beginOccursOnce = state.beginCount <= 1
   val firstAcceptedReportIsExecuting = state.acceptedReportOrdinal == 0 or state.firstAcceptedReportWasExecuting
   val acceptedSafeReportAuthorizesAtMostOneResume = state.resumeCountSinceSafe <= 1
@@ -65,10 +75,15 @@ module plannedAttemptExecutorEvidenceProof {
   val resumeCalledReached = state.lastEvent == ResumeBoundaryCalled
 
   action init: bool = all {
-    state' = { stage: ResponsibilityHeld, pendingReport: ExecutingReport, intentCount: 0, callCount: 0, responseCount: 0, settlementCount: 0, acceptedReportOrdinal: 0, acceptedReportOrdinalBeforePassiveRead: 0, observationCount: 0, durableObservationCount: 0, durableObservationCountBeforePassiveRead: 0, proposalIdentityCount: 0, proposalIdentityCountBeforePassiveRead: 0, intentCountBeforePassiveRead: 0, callCountBeforePassiveRead: 0, beginCount: 0, firstAcceptedReportWasExecuting: false, suspendCount: 0, resumeCountSinceSafe: 0, positionHeld: true, lastEvent: Initialized }
+    state' = { stage: ResponsibilityHeld, pendingReport: ExecutingReport, intentCount: 0, callCount: 0, responseCount: 0, settlementCount: 0, acceptedReportOrdinal: 0, acceptedReportOrdinalBeforePassiveRead: 0, observationCount: 0, durableObservationCount: 0, durableObservationCountBeforePassiveRead: 0, proposalIdentityCount: 0, proposalIdentityCountBeforePassiveRead: 0, intentCountBeforePassiveRead: 0, callCountBeforePassiveRead: 0, beginCount: 0, beginRedeliveryCount: 0, beginTurnCrossingCount: 0, lastRedeliveryHadFreshProof: false, firstAcceptedReportWasExecuting: false, suspendCount: 0, resumeCountSinceSafe: 0, positionHeld: true, lastEvent: Initialized }
   }
   action recordBeginIntent: bool = all { state.stage == ResponsibilityHeld, state' = { ...state, stage: BeginIntent, intentCount: 1, beginCount: 1, lastEvent: BeginIntentRecorded } }
-  action callBegin: bool = all { state.stage == BeginIntent, state' = { ...state, stage: BeginCalled, callCount: 1, lastEvent: BeginBoundaryCalled } }
+  action callBegin: bool = all { state.stage == BeginIntent, state' = { ...state, stage: BeginCalled, callCount: 1, beginTurnCrossingCount: 1, lastEvent: BeginBoundaryCalled } }
+  action callBeginPreTurn: bool = all { state.stage == BeginIntent, state' = { ...state, stage: BeginPreTurn, callCount: 1, lastEvent: BeginPreTurnDelivered } }
+  action observeBeginNotCrossed: bool = all { state.stage == BeginPreTurn, state' = { ...state, stage: BeginNotCrossedObserved, lastEvent: BeginNotCrossedRead } }
+  action loseBeginProof: bool = all { state.stage == BeginNotCrossedObserved, state' = { ...state, stage: BeginPreTurn, lastEvent: BeginProofLost } }
+  action redeliverBegin: bool = all { state.stage == BeginNotCrossedObserved, state' = { ...state, stage: BeginTurnIntent, callCount: state.callCount + 1, beginRedeliveryCount: state.beginRedeliveryCount + 1, lastRedeliveryHadFreshProof: state.stage == BeginNotCrossedObserved, lastEvent: BeginRedelivered } }
+  action crossBeginTurn: bool = all { state.stage == BeginTurnIntent, state' = { ...state, stage: BeginCalled, beginTurnCrossingCount: state.beginTurnCrossingCount + 1, lastEvent: BeginTurnBoundaryCrossed } }
   action observeBeginResponse(report: Report): bool = all { state.stage == BeginCalled, state' = { ...state, stage: BeginResponseObserved, pendingReport: report, responseCount: state.responseCount + 1, lastEvent: CommandResponseRecorded } }
   action settleBeginResponse: bool = all {
     state.stage == BeginResponseObserved,
@@ -103,7 +118,7 @@ module plannedAttemptExecutorEvidenceProof {
   }
   action step: bool = {
     nondet report = Set(ExecutingReport, SafeReport, TerminalReport).oneOf()
-    any { recordBeginIntent, callBegin, observeBeginResponse(report), settleBeginResponse, observeUnchangedExecuting, observeTerminal, recordSuspendIntent, callSuspend, observeSuspendResponse(report), settleSuspendResponse, recordResumeIntent, callResume, observeResumeResponse(report), settleResumeResponse }
+    any { recordBeginIntent, callBegin, callBeginPreTurn, observeBeginNotCrossed, loseBeginProof, redeliverBegin, crossBeginTurn, observeBeginResponse(report), settleBeginResponse, observeUnchangedExecuting, observeTerminal, recordSuspendIntent, callSuspend, observeSuspendResponse(report), settleSuspendResponse, recordResumeIntent, callResume, observeResumeResponse(report), settleResumeResponse }
   }
 }
 

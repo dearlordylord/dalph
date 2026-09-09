@@ -110,6 +110,10 @@ const publishPlannedAttemptExecutorProjectionResultUnserialized = Effect.fn(
       })
     )
   return yield* Match.valueTags(projected, {
+    BeginNotCrossed: () =>
+      recordObservation(PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({})).pipe(
+        Effect.andThen(new PlannedAttemptExecutorStateUnreadable({ correlation }))
+      ),
     CorrelationContradiction: ({ observed }) =>
       recordObservation(
         PlannedAttemptExecutorStateObservation.cases.ExecutorReportContradiction.make({ observed })
@@ -264,7 +268,7 @@ export const acceptPendingPlannedAttemptExecutorObservationWithPermit = (
 
 const reconcileOrObservePlannedAttemptExecutorStateResultUnserialized = Effect.fn(
   "PlannedAttemptExecutorWorkflow.reconcileOrObserveStateResultUnserialized"
-)(function* (plannedAttempt: PlannedTaskAttempt) {
+)(function* (permit: PlannedAttemptProtocolPermit, plannedAttempt: PlannedTaskAttempt) {
   const journal = yield* InRunJournal
   const records = yield* journal.read(plannedAttempt.runId)
   const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)
@@ -273,7 +277,12 @@ const reconcileOrObservePlannedAttemptExecutorStateResultUnserialized = Effect.f
   }
   const lastRecordIndex = -1
   const latestAccepted = acceptedPlannedAttemptExecutorReportRecords(records, plannedAttempt).at(lastRecordIndex)
-  const report = yield* reconcileUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt, unsettledCommand)
+  const report = yield* reconcileUnsettledPlannedAttemptExecutorCommand(
+    permit,
+    records,
+    plannedAttempt,
+    unsettledCommand
+  )
   const acceptedFacts =
     latestAccepted?.event._tag === "PlannedAttemptExecutorWorkReported" &&
     samePlannedAttemptExecutorReport(latestAccepted.event.report, report)
@@ -290,5 +299,5 @@ export const reconcileOrObservePlannedAttemptExecutorStateResultWithPermit = (
   withPlannedAttemptProtocolPermit(
     permit,
     plannedAttemptExecutorCorrelation(plannedAttempt),
-    reconcileOrObservePlannedAttemptExecutorStateResultUnserialized(plannedAttempt)
+    reconcileOrObservePlannedAttemptExecutorStateResultUnserialized(permit, plannedAttempt)
   )

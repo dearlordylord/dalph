@@ -1,6 +1,20 @@
 import { it } from "@effect/vitest"
 import { NodeServices } from "@effect/platform-node"
-import { RunId } from "@dalph/contracts"
+import {
+  AcceptedResult,
+  AttemptId,
+  GitCommitSha,
+  GitRepositoryLocator,
+  IntegrationTarget,
+  IntegrationTargetRef,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator
+} from "@dalph/contracts"
 import {
   ApplicationExitResult,
   AllocatedWorkflowRunId,
@@ -8,8 +22,23 @@ import {
   CoordinatorLockObservationContradiction,
   CoordinatorLockUnavailable,
   CoordinatorOwnershipLost,
+  type CurrentSignal,
   currentSignalFromCurrentFirstStream,
   currentSignalOf,
+  type CurrentDeliveryStatus,
+  type DeliveryStatusEntry,
+  type DeliveryRuntimeObservationState,
+  DeliveryStatusEntryIdentity,
+  DeliveryStatusEvidenceIdentity,
+  DeliveryProposalId,
+  DeliveryProposalOrdinal,
+  BoundedTicketRank,
+  deliveryStatusObligationReference,
+  deliveryStatusOf,
+  type DeliveryStatusProjectionError,
+  DeliveryStatusProjectionConflict,
+  DeliveryStatusRunIdentityUnavailable,
+  DeliveryStatusRunMismatch,
   deterministicOperationIdAllocatorLayer,
   fixtureReaderFileLayer,
   GithubIssueNumber,
@@ -19,6 +48,8 @@ import {
   GitCommonDirectoryLocator,
   GitCommonDirectoryTarget,
   JournalPosition,
+  EvidenceDigest,
+  EvidenceReference,
   JournalDataCorruption,
   JournalHistoryCorruption,
   JournalPartitionContradiction,
@@ -29,10 +60,13 @@ import {
   JournalStorageLocked,
   JournalStorageUnavailable,
   OperationId,
+  QueuedIntegrationResponsibility,
+  UnqueuedAcceptedResult,
   ProductionRunSelection,
   ProductionRunSelectionConflict,
   RunTerminationDisposition,
   StartupRecoveryBlocked,
+  statusEntryIdentity,
   TraceAtCursor,
   TraceCausalPredecessorContradiction,
   TraceCausalPredecessorMissing,
@@ -46,14 +80,52 @@ import {
   TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
   TrackerGraphReader,
+  TrackerRevision,
+  TaskWorkCapacity,
+  TaskDagSnapshot,
+  TaskLifecycle,
+  TrackerSnapshot,
+  RunControlPolicy,
+  initialRunPolicyRevision,
+  ResponsibilityDisposition,
+  WorkflowResponsibilityEntry,
+  makeDeliverySettlement,
+  makeDeliveryReflection,
+  boundedParallelTicketsOf,
+  deliverySettlementsOf,
+  frontierOf,
+  ticketDeliveriesOf,
+  TrackerGraphState,
+  type DeliveryActionProposal,
+  type DeliveryRuntimeEvaluation,
+  type DeliveryRuntimeLiveOwnerSnapshot,
+  type DeliveryRuntimeSnapshot,
+  type TicketDeliveryEvidence,
+  trackerGraphReadProposalOf,
   WorkflowTrace,
   traceControlDispositionFacetVersion,
   traceReaderSchemaVersion
 } from "@dalph/orchestrator"
-import { ConfigProvider, Console, Effect, FileSystem, Layer, Option, Redacted, Ref, Schema, Stream } from "effect"
+import { makeTestJournaledTrackerGraphObservation } from "../../../orchestrator/test/journaled-graph-observation.js"
+import { makeFreshTaskAdmissionTestBasis } from "../../../orchestrator/test/support/fresh-task-admission.js"
+import {
+  ConfigProvider,
+  Console,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  Redacted,
+  Ref,
+  Schema,
+  Stream
+} from "effect"
 import { expect } from "vitest"
 import {
   applicationExitDispositionRecord,
+  currentDeliveryStatusRecord,
   decodeRunInvocation,
   decodeProductionConfigurationLocator,
   encodeProductionCliRecord,
@@ -65,8 +137,11 @@ import {
   ProductionCliRecord,
   ProductionCliUsageError
 } from "./production-cli.js"
+import { publicDeliveryStatusOf } from "./production-cli-status-schema.js"
+import { ObligationReference } from "./production-cli-status-identity-schema.js"
 import { decodeCliTarget, executeDryRun } from "./cli.js"
-import { runProductionCli } from "./live-cli.js"
+import { productionCliHostObservationOf, runProductionCli } from "./live-cli.js"
+import type { ProductionHostObservation } from "./production-host.js"
 import { makeDryRunTrackerGraphReaderLayer } from "./dry-run.js"
 import { ProductionRepositoryHostConfiguration } from "./production-configuration.js"
 
@@ -100,6 +175,25 @@ const snapshot = TraceAtCursor.make({
 const completedRunTermination = (terminatedAt = cursor) => {
   const termination = { disposition: RunTerminationDisposition.make("Completed"), terminatedAt }
   return { await: Effect.succeed(termination), poll: Effect.succeed(Option.some(termination)) }
+}
+
+const currentObservationFailure = (
+  failure: DeliveryStatusProjectionError
+): CurrentSignal<DeliveryRuntimeObservationState, DeliveryStatusProjectionError> => ({
+  attach: Effect.fail(failure),
+  changes: Stream.fail(failure),
+  get: Effect.fail(failure)
+})
+
+const currentObservationChangesFailure = (
+  failure: DeliveryStatusProjectionError
+): CurrentSignal<DeliveryRuntimeObservationState, DeliveryStatusProjectionError> => {
+  const current: DeliveryRuntimeObservationState = { _tag: "NotReady" }
+  return {
+    attach: Effect.succeed({ changes: Stream.fail(failure), current }),
+    changes: Stream.concat(Stream.make(current), Stream.fail(failure)),
+    get: Effect.succeed(current)
+  }
 }
 
 const validProductionDocument = {
@@ -469,6 +563,39 @@ it("maps every causal trace failure to the selected Run without retaining causal
   expect(JSON.stringify(records)).not.toContain(successorOperationId)
 })
 
+it("maps each passive status projection failure to a stable redacted status code", () => {
+  const requestedRunId = RunId.make("requested-status-run")
+  const privateDetail = "private status evidence /tmp/alice token=secret"
+  const subject = { _tag: "Task" as const, runId: requestedRunId, taskId: TaskId.make("status-task") }
+  const failures = [
+    new DeliveryStatusRunMismatch({ expectedRunId: runId, requestedRunId }),
+    new DeliveryStatusRunIdentityUnavailable({ subject }),
+    Schema.decodeUnknownSync(DeliveryStatusProjectionConflict)({
+      _tag: "DeliveryStatusProjectionConflict",
+      detail: privateDetail,
+      entryIdentity: "private-entry",
+      subject
+    })
+  ]
+
+  const mapped = failures.map(knownProductionCliFailure)
+  expect(mapped.map((failure) => failure?.code)).toEqual([
+    "status.run_mismatch",
+    "status.run_identity_unavailable",
+    "status.projection_conflict"
+  ])
+  expect(mapped.map((failure) => failure !== undefined && "subject" in failure && failure.subject)).toEqual([
+    requestedRunId,
+    requestedRunId,
+    requestedRunId
+  ])
+  expect(JSON.stringify(mapped)).not.toContain(privateDetail)
+  expect(JSON.stringify(mapped)).not.toContain("private-entry")
+  expect(mapped.map((failure) => knownProductionCliFailure(failure)?.code)).toEqual(
+    mapped.map((failure) => failure?.code)
+  )
+})
+
 it("leaves an unknown defect outside the public Failure algebra", () => {
   const defect = new Error("private Cause.pretty detail /private/alice/journal.sqlite token=secret")
 
@@ -594,6 +721,7 @@ it.effect("a TraceReader Journal failure emits one stable redacted Failure after
     const application = runProductionCli((_input, use) =>
       use({
         acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf({ _tag: "NotReady" as const }),
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
         traceReader: { readAt: () => Effect.fail(failure) }
@@ -626,49 +754,172 @@ it.effect("a TraceReader Journal failure emits one stable redacted Failure after
   })
 )
 
-it.effect("maps a TraceAtCursor projection failure to one stable redacted public code", () =>
-  Effect.gen(function* () {
-    const lines = yield* Ref.make<ReadonlyArray<string>>([])
-    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
-    const failure = new TraceProjectionInvalid({ detail: "private projection detail", runId })
-    const application = runProductionCli((_input, use) =>
-      use({
-        acceptedHistory: currentSignalOf(cursor),
-        runTermination: completedRunTermination(),
-        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
-        traceReader: { readAt: () => Effect.fail(failure) }
-      })
-    )
+it.effect(
+  "typed status or TraceAtCursor projection failure fails fast without calling ApplicationExitRequestBoundary.requestExit or mutating a workflow boundary",
+  () =>
+    Effect.gen(function* () {
+      const privateDetail = "private status evidence /tmp/alice token=secret"
+      const statusFailures = [
+        {
+          code: "status.run_mismatch",
+          failure: new DeliveryStatusRunMismatch({ expectedRunId: RunId.make("another-run"), requestedRunId: runId })
+        },
+        {
+          code: "status.run_identity_unavailable",
+          failure: new DeliveryStatusRunIdentityUnavailable({ subject: { _tag: "Run", runId } })
+        },
+        {
+          code: "status.projection_conflict",
+          failure: new DeliveryStatusProjectionConflict({
+            detail: privateDetail,
+            entryIdentity: DeliveryStatusEntryIdentity.make("private-entry"),
+            subject: { _tag: "Run", runId }
+          })
+        }
+      ] as const
+      const failureCuts = [
+        { current: currentObservationFailure, currentWasWritten: false },
+        { current: currentObservationChangesFailure, currentWasWritten: true }
+      ] as const
 
-    const observed = yield* application([
-      "run",
-      "github:octo/dalph#42",
-      "--production",
-      "--config",
-      "/tmp/production.json"
-    ]).pipe(
-      Effect.provide(liveCliLayer(lines, chronology)),
-      Effect.provide(NodeServices.layer),
-      Effect.provide(
-        ConfigProvider.layer(
-          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+      yield* Effect.forEach(statusFailures, ({ code, failure }) =>
+        Effect.forEach(failureCuts, ({ current, currentWasWritten }) =>
+          Effect.gen(function* () {
+            const statusLines = yield* Ref.make<ReadonlyArray<string>>([])
+            const statusChronology = yield* Ref.make<ReadonlyArray<string>>([])
+            const statusExitRequests = yield* Ref.make(0)
+            const workflowMutations = yield* Ref.make(0)
+            const application = runProductionCli((_input, use) => {
+              const observation = {
+                acceptedHistory: currentSignalOf(cursor),
+                applicationExitRequestBoundary: {
+                  requestExit: Ref.update(statusExitRequests, (count) => count + 1).pipe(
+                    Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+                  )
+                },
+                current: current(failure),
+                mutateWorkflow: Ref.update(workflowMutations, (count) => count + 1),
+                runTermination: completedRunTermination(),
+                selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+                traceReader: { readAt: () => Effect.succeed(snapshot) }
+              }
+              return use(observation)
+            })
+
+            const observed = yield* application([
+              "run",
+              "github:octo/dalph#42",
+              "--production",
+              "--config",
+              "/tmp/production.json"
+            ]).pipe(
+              Effect.provide(liveCliLayer(statusLines, statusChronology)),
+              Effect.provide(NodeServices.layer),
+              Effect.provide(
+                ConfigProvider.layer(
+                  ConfigProvider.fromUnknown({
+                    DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret",
+                    GITHUB_TOKEN: "github-secret"
+                  })
+                )
+              ),
+              Effect.flip
+            )
+
+            expect(observed).toMatchObject({ _tag: "ProductionCliStatusError", code, subject: runId })
+            expect(yield* Ref.get(statusExitRequests)).toBe(0)
+            expect(yield* Ref.get(workflowMutations)).toBe(0)
+            const records = (yield* Ref.get(statusLines)).map((line) => JSON.parse(line))
+            expect(records).toEqual([
+              { _tag: "RunSelected", runId, selection: "Allocated", version: 1 },
+              ...(currentWasWritten
+                ? [
+                    {
+                      _tag: "CurrentStatus",
+                      status: { _tag: "DeliveryStatusNotReady", subject: { _tag: "Run", runId } },
+                      version: 1
+                    }
+                  ]
+                : []),
+              {
+                _tag: "Failure",
+                code,
+                detail:
+                  code === "status.run_mismatch"
+                    ? "the passive status source describes another Run"
+                    : code === "status.run_identity_unavailable"
+                      ? "the passive status source has no exact Run identity"
+                      : "the passive status source contains incompatible exact evidence",
+                subject: runId,
+                version: 1
+              }
+            ])
+            expect(records.filter(({ _tag }) => _tag === "CurrentStatus")).toHaveLength(currentWasWritten ? 1 : 0)
+            expect(records.some(({ _tag }) => _tag.endsWith("Disposition"))).toBe(false)
+            expect(JSON.stringify(records)).not.toContain(privateDetail)
+            expect(JSON.stringify(records)).not.toContain("private-entry")
+          })
         )
-      ),
-      Effect.flip
-    )
+      )
 
-    expect(observed).toBe(failure)
-    expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
-      { _tag: "RunSelected", runId, selection: "Allocated", version: 1 },
-      {
-        _tag: "Failure",
-        code: "status.projection_invalid",
-        detail: "the selected Run's historical projection is invalid",
-        subject: runId,
-        version: 1
-      }
-    ])
-  })
+      const lines = yield* Ref.make<ReadonlyArray<string>>([])
+      const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+      const exitRequests = yield* Ref.make(0)
+      const failure = new TraceProjectionInvalid({ detail: "private projection detail", runId })
+      const application = runProductionCli((_input, use) => {
+        const observation: ProductionHostObservation = {
+          acceptedHistory: currentSignalOf(cursor),
+          applicationExitRequestBoundary: {
+            requestExit: Ref.update(exitRequests, (count) => count + 1).pipe(
+              Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+            )
+          },
+          current: currentSignalOf({ _tag: "NotReady" as const }),
+          runTermination: completedRunTermination(),
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: { readAt: () => Effect.fail(failure) }
+        }
+        return use(observation)
+      })
+
+      const observed = yield* application([
+        "run",
+        "github:octo/dalph#42",
+        "--production",
+        "--config",
+        "/tmp/production.json"
+      ]).pipe(
+        Effect.provide(liveCliLayer(lines, chronology)),
+        Effect.provide(NodeServices.layer),
+        Effect.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromUnknown({
+              DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret",
+              GITHUB_TOKEN: "github-secret"
+            })
+          )
+        ),
+        Effect.flip
+      )
+
+      expect(observed).toBe(failure)
+      expect(yield* Ref.get(exitRequests)).toBe(0)
+      expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
+        { _tag: "RunSelected", runId, selection: "Allocated", version: 1 },
+        {
+          _tag: "CurrentStatus",
+          status: { _tag: "DeliveryStatusNotReady", subject: { _tag: "Run", runId } },
+          version: 1
+        },
+        {
+          _tag: "Failure",
+          code: "status.projection_invalid",
+          detail: "the selected Run's historical projection is invalid",
+          subject: runId,
+          version: 1
+        }
+      ])
+    })
 )
 
 it.effect("combines only documented credential inputs with the non-secret production document", () =>
@@ -736,6 +987,7 @@ it.effect("cold public production command reports one allocated Run after its be
     yield* presentSelectedProductionRun(
       {
         acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf({ _tag: "NotReady" as const }),
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
         traceReader: { readAt: () => Effect.succeed(snapshot) }
@@ -746,7 +998,12 @@ it.effect("cold public production command reports one allocated Run after its be
 
     expect(yield* Ref.get(hostEntries)).toBe(1)
     const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
-    expect(records.map(({ _tag }) => _tag)).toEqual(["RunSelected", "HistoricalSnapshot", "RunDisposition"])
+    expect(records.map(({ _tag }) => _tag)).toEqual([
+      "RunSelected",
+      "CurrentStatus",
+      "HistoricalSnapshot",
+      "RunDisposition"
+    ])
     expect(records[0]).toEqual({ _tag: "RunSelected", runId, selection: "Allocated", version: 1 })
   })
 )
@@ -757,6 +1014,7 @@ it.effect("normal Run termination closes an open history attachment after its fi
     yield* presentSelectedProductionRun(
       {
         acceptedHistory: currentSignalFromCurrentFirstStream(Stream.concat(Stream.make(cursor), Stream.never)),
+        current: currentSignalOf({ _tag: "NotReady" as const }),
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Allocated.make({ runId }),
         traceReader: { readAt: () => Effect.succeed(snapshot) }
@@ -766,6 +1024,7 @@ it.effect("normal Run termination closes an open history attachment after its fi
 
     expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)._tag)).toEqual([
       "RunSelected",
+      "CurrentStatus",
       "HistoricalSnapshot",
       "RunDisposition"
     ])
@@ -778,6 +1037,7 @@ it.effect("production presentation reports the host's exact recovered Run withou
     yield* presentSelectedProductionRun(
       {
         acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf({ _tag: "NotReady" as const }),
         runTermination: completedRunTermination(),
         selection: ProductionRunSelection.cases.Recovered.make({ runId }),
         traceReader: { readAt: () => Effect.succeed(snapshot) }
@@ -791,6 +1051,111 @@ it.effect("production presentation reports the host's exact recovered Run withou
       selection: "Recovered",
       version: 1
     })
+  })
+)
+
+it.effect("attaches current-first without missing a delivery publication racing with CLI attachment", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const current = currentSignalFromCurrentFirstStream(
+      Stream.make({ _tag: "NotReady" as const }, { _tag: "Closed" as const, final: null })
+    )
+
+    yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current,
+        runTermination: completedRunTermination(),
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) => Ref.update(lines, (current) => [...current, line])
+    )
+
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(records.map(({ _tag }) => _tag)).toEqual([
+      "RunSelected",
+      "CurrentStatus",
+      "CurrentStatus",
+      "HistoricalSnapshot",
+      "RunDisposition"
+    ])
+    expect(records[1]?.status._tag).toBe("DeliveryStatusNotReady")
+    expect(records[2]?.status).toEqual({ _tag: "DeliveryStatusClosed", final: null, subject: { _tag: "Run", runId } })
+  })
+)
+
+it.effect("renders not-ready and waits without invoking a workflow boundary", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const statusWritten = yield* Deferred.make<void>()
+    const termination = yield* Deferred.make<{
+      readonly disposition: RunTerminationDisposition
+      readonly terminatedAt: TraceCursor
+    }>()
+    const runTermination = { await: Deferred.await(termination), poll: Effect.succeed(Option.none()) }
+    const presentation = yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf({ _tag: "NotReady" as const }),
+        runTermination,
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) =>
+        Ref.update(lines, (current) => [...current, line]).pipe(
+          Effect.andThen(
+            JSON.parse(line)._tag === "CurrentStatus" ? Deferred.succeed(statusWritten, undefined) : Effect.void
+          )
+        )
+    ).pipe(Effect.forkChild)
+
+    yield* Deferred.await(statusWritten)
+    const beforeTermination = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(beforeTermination.some(({ _tag }) => _tag === "RunDisposition")).toBe(false)
+    expect(beforeTermination.find(({ _tag }) => _tag === "CurrentStatus")?.status).toEqual({
+      _tag: "DeliveryStatusNotReady",
+      subject: { _tag: "Run", runId }
+    })
+
+    yield* Deferred.succeed(termination, {
+      disposition: RunTerminationDisposition.make("Completed"),
+      terminatedAt: cursor
+    })
+    yield* Fiber.join(presentation)
+  })
+)
+
+it.effect("closed status without a final value cannot report Run completion", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const closedWritten = yield* Deferred.make<void>()
+    const runTermination = { await: Effect.never, poll: Effect.succeed(Option.none()) }
+    const presentation = yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf({ _tag: "Closed" as const, final: null }),
+        runTermination,
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) =>
+        Ref.update(lines, (current) => [...current, line]).pipe(
+          Effect.andThen(
+            JSON.parse(line)._tag === "CurrentStatus" ? Deferred.succeed(closedWritten, undefined) : Effect.void
+          )
+        )
+    ).pipe(Effect.forkChild)
+
+    yield* Deferred.await(closedWritten)
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(records.find(({ _tag }) => _tag === "CurrentStatus")?.status).toEqual({
+      _tag: "DeliveryStatusClosed",
+      final: null,
+      subject: { _tag: "Run", runId }
+    })
+    expect(records.some(({ _tag }) => _tag === "RunDisposition")).toBe(false)
+    yield* Fiber.interrupt(presentation)
   })
 )
 
@@ -824,6 +1189,807 @@ it("each HistoricalSnapshot contains exactly one whole canonical TraceAtCursor a
     "ApplicationExitDisposition"
   ])
 })
+
+it("encodes the exact passive not-ready value as a separate current-status record", () => {
+  const status: CurrentDeliveryStatus = { _tag: "DeliveryStatusNotReady", subject: { _tag: "Run", runId } }
+
+  expect(JSON.parse(encodeProductionCliRecord(currentDeliveryStatusRecord(status)))).toEqual({
+    _tag: "CurrentStatus",
+    status,
+    version: 1
+  })
+})
+
+it("rejects malformed current-status wire variants at the public codec boundary", () => {
+  const taskSubject = { _tag: "Task", runId, taskId: TaskId.make("A") } as const
+  const availableOf = (
+    entry: DeliveryStatusEntry
+  ): Exclude<CurrentDeliveryStatus, { readonly _tag: "DeliveryStatusClosed" }> => ({
+    _tag: "DeliveryStatusAvailable",
+    acceptedAt: null,
+    entries: [entry],
+    subject: taskSubject
+  })
+  const tracker = availableOf({
+    _tag: "TrackerFactWait",
+    classification: "Waiting",
+    fact: { _tag: "Unobserved", boundary: "TaskTracker" },
+    responsibility: null,
+    standing: { _tag: "GraphNotEstablished" },
+    subject: taskSubject,
+    wakeCondition: "TaskTrackerFactsObserved"
+  })
+  const dependency = availableOf({
+    _tag: "DependencyWait",
+    classification: "Waiting",
+    prerequisiteTaskIds: [TaskId.make("B")],
+    standing: { _tag: "GraphExcluded", reasons: [{ _tag: "PrerequisitesIncomplete", prerequisiteTaskIds: [] }] },
+    subject: taskSubject,
+    taskId: taskSubject.taskId
+  })
+  const conflict = availableOf({
+    _tag: "EvidenceConflict",
+    classification: "Blocked",
+    evidenceIdentities: [
+      DeliveryStatusEvidenceIdentity.make("evidence-a"),
+      DeliveryStatusEvidenceIdentity.make("evidence-b")
+    ],
+    responsibility: null,
+    standing: { _tag: "ExactEvidenceConflict", evidenceIdentities: ["evidence-a", "evidence-b"] },
+    subject: taskSubject
+  })
+  const capacity = availableOf({
+    _tag: "TaskWorkCapacityWait",
+    classification: "Waiting",
+    holders: [],
+    placement: { _tag: "Selected", rank: BoundedTicketRank.make(0) },
+    scope: { _tag: "RunTaskWorkCapacityScope", capacity: TaskWorkCapacity.make(1), runId },
+    subject: taskSubject,
+    taskId: taskSubject.taskId
+  })
+  const wireOf = (status: CurrentDeliveryStatus) =>
+    JSON.parse(encodeProductionCliRecord(currentDeliveryStatusRecord(status)))
+  const trackerWire = wireOf(tracker)
+  const dependencyWire = wireOf(dependency)
+  const conflictWire = wireOf(conflict)
+  const capacityWire = wireOf(capacity)
+  const closedWire = wireOf({ _tag: "DeliveryStatusClosed", final: tracker, subject: taskSubject })
+  const projected = deliveryStatusOf({ _tag: "Run", runId }, projectedStatusFixture())
+  if (projected instanceof Error || projected._tag !== "DeliveryStatusAvailable") {
+    return expect.fail("tracker relationship fixture must project from canonical delivery evidence")
+  }
+  const projectedWire = wireOf(projected)
+  const projectedTrackerIndex = projected.entries.findIndex(({ _tag }) => _tag === "TrackerFactWait")
+  if (projectedTrackerIndex < 0) return expect.fail("canonical delivery evidence must project a tracker wait")
+  for (const valid of [trackerWire, dependencyWire, conflictWire, capacityWire, closedWire, projectedWire]) {
+    expect(Option.isSome(Schema.decodeUnknownOption(ProductionCliRecord)(valid))).toBe(true)
+  }
+  const entryOf = (wire: typeof trackerWire) => wire.status.entries[0]
+  const nestedClosedEntrySubjectMismatch = {
+    ...closedWire,
+    status: {
+      ...closedWire.status,
+      final: {
+        ...closedWire.status.final,
+        entries: [
+          {
+            ...closedWire.status.final.entries[0],
+            subject: { ...taskSubject, taskId: TaskId.make("foreign-nested-task") }
+          }
+        ]
+      }
+    }
+  }
+  const outerClosedSubjectMismatch = {
+    ...closedWire,
+    status: { ...closedWire.status, subject: { ...taskSubject, taskId: TaskId.make("foreign-closed-task") } }
+  }
+  const projectedTrackerEntry = projectedWire.status.entries[projectedTrackerIndex]
+  const legalTrackerRelationships = [
+    ["ResponsibilitySituation", "Missing", "ExplicitAppliedTaskClaimReacquisitionDirection"],
+    ["ResponsibilitySituation", "Foreign", "ExplicitAppliedTaskClaimReacquisitionDirection"],
+    ["ResponsibilitySituation", "Unreadable", "TaskClaimFactsObserved"],
+    ["ResponsibilitySituation", "Unreadable", "BoundaryRereadSucceeded"],
+    ["ResponsibilitySituation", "Unobserved", "TaskClaimFactsObserved"],
+    ["IntegrationWait", "Missing", "ExplicitAppliedTaskClaimReacquisitionDirection"],
+    ["IntegrationWait", "Foreign", "ExplicitAppliedTaskClaimReacquisitionDirection"],
+    ["IntegrationWait", "Unreadable", "TaskClaimFactsObserved"],
+    ["IntegrationWait", "Unobserved", "TaskClaimFactsObserved"],
+    ["IntegrationWait", "Unobserved", "TaskTrackerFactsObserved"]
+  ] as const
+  for (const [standingKind, fact, wakeCondition] of legalTrackerRelationships) {
+    const legal = {
+      ...projectedWire,
+      status: {
+        ...projectedWire.status,
+        entries: projectedWire.status.entries.map((entry: Record<string, unknown>, index: number) =>
+          index === projectedTrackerIndex
+            ? { ...projectedTrackerEntry, fact: { _tag: fact }, standingKind, wakeCondition }
+            : entry
+        )
+      }
+    }
+    expect(Option.isSome(Schema.decodeUnknownOption(ProductionCliRecord)(legal))).toBe(true)
+    expect(Option.isSome(Schema.encodeUnknownOption(ProductionCliRecord)(legal))).toBe(true)
+  }
+  const malformed = [
+    {
+      ...trackerWire,
+      status: { ...trackerWire.status, entries: [{ ...entryOf(trackerWire), classification: "Blocked" }] }
+    },
+    {
+      ...trackerWire,
+      status: {
+        ...trackerWire.status,
+        entries: [{ ...entryOf(trackerWire), subject: { ...taskSubject, taskId: TaskId.make("foreign-task") } }]
+      }
+    },
+    {
+      ...trackerWire,
+      status: { ...trackerWire.status, entries: [{ ...entryOf(trackerWire), fact: { _tag: "Missing" } }] }
+    },
+    {
+      ...projectedWire,
+      status: {
+        ...projectedWire.status,
+        entries: projectedWire.status.entries.map((entry: Record<string, unknown>, index: number) =>
+          index === projectedTrackerIndex ? { ...projectedTrackerEntry, wakeCondition: "invented-wake" } : entry
+        )
+      }
+    },
+    {
+      ...projectedWire,
+      status: {
+        ...projectedWire.status,
+        entries: projectedWire.status.entries.map((entry: Record<string, unknown>, index: number) =>
+          index === projectedTrackerIndex
+            ? { ...projectedTrackerEntry, wakeCondition: "TaskTrackerFactsObserved" }
+            : entry
+        )
+      }
+    },
+    {
+      ...dependencyWire,
+      status: {
+        ...dependencyWire.status,
+        entries: [{ ...entryOf(dependencyWire), standingKind: "ExactEvidenceConflict" }]
+      }
+    },
+    {
+      ...conflictWire,
+      status: {
+        ...conflictWire.status,
+        entries: [{ ...entryOf(conflictWire), evidenceIdentities: ["evidence-a", "evidence-a"] }]
+      }
+    },
+    {
+      ...capacityWire,
+      status: {
+        ...capacityWire.status,
+        entries: [
+          { ...entryOf(capacityWire), scope: { ...entryOf(capacityWire).scope, runId: RunId.make("foreign-run") } }
+        ]
+      }
+    },
+    nestedClosedEntrySubjectMismatch,
+    outerClosedSubjectMismatch
+  ]
+
+  for (const value of malformed) {
+    expect(Option.isNone(Schema.decodeUnknownOption(ProductionCliRecord)(value))).toBe(true)
+    expect(Option.isNone(Schema.encodeUnknownOption(ProductionCliRecord)(value))).toBe(true)
+  }
+})
+
+it("preserves current status subjects evidence classifications and structural order", () => {
+  const taskA = { _tag: "Task" as const, runId, taskId: TaskId.make("A") }
+  const taskB = { _tag: "Task" as const, runId, taskId: TaskId.make("B") }
+  const trackerWait = (subject: typeof taskA | typeof taskB) => ({
+    _tag: "TrackerFactWait" as const,
+    classification: "Waiting" as const,
+    fact: { _tag: "Unobserved" as const, boundary: "TaskTracker" as const },
+    responsibility: null,
+    standing: { _tag: "GraphNotEstablished" as const },
+    subject,
+    wakeCondition: "TaskTrackerFactsObserved" as const
+  })
+  const available: CurrentDeliveryStatus = {
+    _tag: "DeliveryStatusAvailable",
+    acceptedAt: JournalPosition.make(9),
+    entries: [trackerWait(taskB), trackerWait(taskA)],
+    subject: { _tag: "Run", runId }
+  }
+  const absent: CurrentDeliveryStatus = {
+    _tag: "TaskAbsentFromCurrentGraph",
+    graphSource: {
+      _tag: "EstablishedGraph",
+      contentIdentity: TrackerRevision.make("graph-revision"),
+      freshnessOperationId: OperationId.make("freshness-operation"),
+      operationId: OperationId.make("graph-operation"),
+      recordedAt: JournalPosition.make(8),
+      revision: TrackerRevision.make("graph-revision")
+    },
+    subject: taskA
+  }
+  const closed: CurrentDeliveryStatus = {
+    _tag: "DeliveryStatusClosed",
+    final: available,
+    subject: { _tag: "Run", runId }
+  }
+
+  for (const status of [available, absent, closed] as const) {
+    const encoded = JSON.parse(encodeProductionCliRecord(currentDeliveryStatusRecord(status)))
+    expect(encoded).toEqual({ _tag: "CurrentStatus", status: publicDeliveryStatusOf(status), version: 1 })
+  }
+  const entries = JSON.parse(encodeProductionCliRecord(currentDeliveryStatusRecord(available))).status.entries
+  expect(
+    entries.map(({ _tag, classification, subject }: Record<string, unknown>) => ({ _tag, classification, subject }))
+  ).toEqual([
+    { _tag: "TrackerFactWait", classification: "Waiting", subject: taskB },
+    { _tag: "TrackerFactWait", classification: "Waiting", subject: taskA }
+  ])
+  expect(entries.map(({ entryIdentity }: { readonly entryIdentity: string }) => entryIdentity)).toEqual(
+    available.entries.map(statusEntryIdentity)
+  )
+})
+
+const projectedStatusFixture = (): DeliveryRuntimeObservationState => {
+  const capacity = TaskWorkCapacity.make(8)
+  const taskIds = {
+    capacity: TaskId.make("01-capacity"),
+    conflict: TaskId.make("02-conflict"),
+    dependency: TaskId.make("03-dependency"),
+    integration: TaskId.make("04-integration"),
+    live: TaskId.make("05-live"),
+    prerequisite: TaskId.make("06-prerequisite"),
+    proposed: TaskId.make("07-proposed"),
+    publication: TaskId.make("08-publication"),
+    relinquishment: TaskId.make("09-relinquishment"),
+    settlement: TaskId.make("10-settlement"),
+    tracker: TaskId.make("11-tracker"),
+    unavailable: TaskId.make("12-unavailable")
+  } as const
+  const attemptOf = (taskId: TaskId, suffix: string) =>
+    PlannedTaskAttempt.make({
+      attemptId: AttemptId.make(`projected-${suffix}`),
+      baseSha: GitCommitSha.make("3".repeat(40)),
+      branch: TaskBranchRef.make(`refs/heads/dalph/projected-${suffix}`),
+      executor: TaskExecutorLocator.make("executor:projected-status"),
+      runId,
+      taskId,
+      taskRevision: TaskRevision.make(`projected-${suffix}`),
+      worktree: WorktreeLocator.make(`/worktrees/projected-${suffix}`)
+    })
+  const executorFacts = (
+    taskId: TaskId,
+    suffix: string,
+    disposition: ReturnType<
+      | typeof ResponsibilityDisposition.TaskClaimMissingConstraint
+      | typeof ResponsibilityDisposition.UnreadableFactWait
+      | typeof ResponsibilityDisposition.CancelledAttemptSettled
+      | typeof ResponsibilityDisposition.Relinquished
+    >
+  ): TicketDeliveryEvidence => ({
+    _tag: "ResponsibilityFacts",
+    facts: {
+      _tag: "PlannedAttemptExecutorFreshFacts",
+      disposition,
+      responsibility: WorkflowResponsibilityEntry.cases.PlannedAttemptExecutorWorkResponsibility.make({
+        beganAt: JournalPosition.make(2),
+        plannedAttempt: attemptOf(taskId, suffix)
+      })
+    }
+  })
+  const trackerEvidence = executorFacts(
+    taskIds.tracker,
+    "tracker",
+    ResponsibilityDisposition.TaskClaimMissingConstraint()
+  )
+  const conflictEvidence = executorFacts(
+    taskIds.conflict,
+    "conflict",
+    ResponsibilityDisposition.TaskClaimMissingConstraint()
+  )
+  const integrationAttempt = attemptOf(taskIds.integration, "integration")
+  const integrationTarget = IntegrationTarget.make({
+    ref: IntegrationTargetRef.make("refs/heads/main"),
+    repository: GitRepositoryLocator.make("/repositories/projected-status.git")
+  })
+  const queued = QueuedIntegrationResponsibility.make({
+    acceptedResult: AcceptedResult.make({
+      commit: GitCommitSha.make("4".repeat(40)),
+      evidenceManifest: EvidenceReference.make({ byteLength: 19, digest: EvidenceDigest.make("b".repeat(64)) })
+    }),
+    integrationTarget,
+    plannedAttempt: integrationAttempt,
+    preIntegrationCancellation: { attemptId: integrationAttempt.attemptId, queuedAt: JournalPosition.make(3), runId },
+    queuedAt: JournalPosition.make(3)
+  })
+  const evidence: ReadonlyArray<TicketDeliveryEvidence> = [
+    trackerEvidence,
+    conflictEvidence,
+    conflictEvidence,
+    executorFacts(
+      taskIds.unavailable,
+      "unavailable",
+      ResponsibilityDisposition.UnreadableFactWait({ boundary: "Git" })
+    ),
+    executorFacts(
+      taskIds.settlement,
+      "settlement",
+      ResponsibilityDisposition.CancelledAttemptSettled({ claimDisposition: "Released" })
+    ),
+    executorFacts(
+      taskIds.relinquishment,
+      "relinquishment",
+      ResponsibilityDisposition.Relinquished({ reason: "AuthorizedHandoff" })
+    ),
+    { _tag: "QueuedIntegration", responsibility: queued },
+    { _tag: "IntegrationWait", wait: { _tag: "IntegrationTargetWait", plannedAttempt: integrationAttempt } }
+  ]
+  const tasks = Object.values(taskIds).map((taskId) => ({
+    id: taskId,
+    lifecycle: TaskLifecycle.cases.Open.make({}),
+    parentTaskId: null,
+    prerequisiteIds: taskId === taskIds.dependency ? [taskIds.prerequisite] : []
+  }))
+  const projectedGraph = TaskDagSnapshot.project(
+    TrackerSnapshot.make({ revision: TrackerRevision.make("projected-status-graph"), tasks })
+  )
+  if (projectedGraph._tag === "Invalid") return expect.fail("projected status fixture graph is invalid")
+  const graph = TrackerGraphState.cases.GraphEstablished.make({
+    observation: makeTestJournaledTrackerGraphObservation({
+      operationId: OperationId.make("projected-status-graph-read"),
+      recordedAt: JournalPosition.make(4),
+      snapshot: projectedGraph.snapshot
+    })
+  })
+  const policy = RunControlPolicy.make({ revision: initialRunPolicyRevision, taskExecutionCapacity: capacity })
+  const publication = { exactEvidence: evidence, graph, policy }
+  const tickets = boundedParallelTicketsOf(frontierOf(publication))
+  const deliveries = ticketDeliveriesOf(tickets, evidence)
+  const settlements = deliverySettlementsOf(deliveries)
+  const proposalOf = (taskId: TaskId, id: string, ordinal: number): DeliveryActionProposal => ({
+    ...trackerGraphReadProposalOf({
+      acceptedAt: JournalPosition.make(5),
+      purpose: "EstablishCurrentGraph",
+      runId,
+      target
+    }),
+    admission: {
+      integrationTarget: { _tag: "NoIntegrationTargetResource" },
+      plannedAttemptProtocol: { _tag: "NoPlannedAttemptProtocol" },
+      taskWorkPosition: { _tag: "TaskWorkPositionRequired", mode: "ReserveOrReuse", taskId }
+    },
+    id: DeliveryProposalId.make(id),
+    order: {
+      _tag: "FreshWorkflowOrder",
+      frontierOrdinal: DeliveryProposalOrdinal.make(ordinal),
+      step: "ReadCurrentTaskGraph",
+      taskId
+    },
+    owner: "TicketDelivery"
+  })
+  const proposed = proposalOf(taskIds.proposed, "projected-proposed", 2)
+  const proposedAfter = proposalOf(taskIds.proposed, "projected-proposed-after", 5)
+  const live = proposalOf(taskIds.live, "projected-live", 7)
+  const publicationWait = proposalOf(taskIds.publication, "projected-publication", 11)
+  const proposedActions = {
+    _tag: "DeliveryProposalsAvailable" as const,
+    freshTaskCandidates: [],
+    isolatedIssues: [],
+    proposals: [proposed, proposedAfter, live, publicationWait]
+  }
+  const current: DeliveryRuntimeSnapshot = {
+    _tag: "DeliveryRuntimeSnapshot",
+    cancellationApplied: false,
+    reflection: makeDeliveryReflection(settlements),
+    runId,
+    settlements,
+    ticketDeliveries: deliveries,
+    trackerGraph: graph
+  }
+  const evaluation: DeliveryRuntimeEvaluation = {
+    _tag: "DeliveryRuntimeEvaluation",
+    acceptedAt: JournalPosition.make(6),
+    cancellationApplied: false,
+    current,
+    pauseCoverage: {
+      _tag: "PauseCoverageGraphNotEstablished",
+      applied: { run: { _tag: "RunUnpaused" }, tasks: { _tag: "NoTaskPauses" } }
+    },
+    proposedActions,
+    quiescence: { _tag: "TrackerReconfirmationAllowed" },
+    runId,
+    taskWork: makeFreshTaskAdmissionTestBasis({
+      capacity,
+      held: Array.from({ length: 8 }, (_, index) => attemptOf(TaskId.make(`holder-${index}`), `holder-${index}`)),
+      runId
+    })
+  }
+  const liveOwners: ReadonlyArray<DeliveryRuntimeLiveOwnerSnapshot> = [
+    { _tag: "AdmittedDeliveryAction", proposal: live },
+    { _tag: "SettledBeforeMaterialization", proposal: publicationWait }
+  ]
+  return { _tag: "Ready", evaluation, liveOwners }
+}
+
+it.effect("projects and encodes all eleven status variants through the production current-first attachment", () =>
+  Effect.gen(function* () {
+    const observationState = projectedStatusFixture()
+    const source = deliveryStatusOf({ _tag: "Run", runId }, observationState)
+    if (source instanceof Error || source._tag !== "DeliveryStatusAvailable") {
+      return expect.fail(
+        `real delivery projection must produce an available status: ${source._tag} ${JSON.stringify(source)}`
+      )
+    }
+    expect(new Set(source.entries.map(({ _tag }) => _tag))).toEqual(
+      new Set([
+        "DependencyWait",
+        "TrackerFactWait",
+        "TaskWorkCapacityWait",
+        "ProposedDeliveryAction",
+        "LiveDeliveryAction",
+        "AcceptedFactPublicationWait",
+        "IntegrationTargetWait",
+        "EvidenceUnavailable",
+        "EvidenceConflict",
+        "Settlement",
+        "Relinquishment"
+      ])
+    )
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf(observationState),
+        runTermination: completedRunTermination(),
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) => Ref.update(lines, (current) => [...current, line])
+    )
+    const record = (yield* Ref.get(lines)).map((line) => JSON.parse(line)).find(({ _tag }) => _tag === "CurrentStatus")
+    const decoded = Schema.decodeUnknownSync(ProductionCliRecord)(record)
+    expect(decoded._tag).toBe("CurrentStatus")
+    if (decoded._tag !== "CurrentStatus" || decoded.status._tag !== "DeliveryStatusAvailable") return
+    expect(decoded.status.entries.map(({ _tag }) => _tag)).toEqual(source.entries.map(({ _tag }) => _tag))
+    expect(decoded.status.entries.map(({ classification }) => classification)).toEqual(
+      source.entries.map(({ classification }) => classification)
+    )
+    expect(decoded.status.entries.map(({ subject }) => subject)).toEqual(source.entries.map(({ subject }) => subject))
+    expect(decoded.status.entries.map(({ entryIdentity }) => entryIdentity)).toEqual(
+      source.entries.map(statusEntryIdentity)
+    )
+    const publicSource = publicDeliveryStatusOf(source)
+    if (publicSource._tag !== "DeliveryStatusAvailable") return expect.fail("available source must remain available")
+    expect(decoded.status.entries).toEqual(publicSource.entries)
+    const proposalEntries = decoded.status.entries.flatMap((entry) =>
+      entry._tag === "ProposedDeliveryAction" ? [entry] : []
+    )
+    expect(proposalEntries.map(({ order }) => ("frontierOrdinal" in order ? order.frontierOrdinal : null))).toEqual([
+      2, 5
+    ])
+    const closedSource = deliveryStatusOf(
+      { _tag: "Run", runId },
+      { _tag: "Closed", final: observationState._tag === "Ready" ? observationState : null }
+    )
+    if (closedSource instanceof Error || closedSource._tag !== "DeliveryStatusClosed" || closedSource.final === null) {
+      return expect.fail("the real closed projection must retain its final available status")
+    }
+    const closedRecord = Schema.decodeUnknownSync(ProductionCliRecord)(
+      JSON.parse(encodeProductionCliRecord(currentDeliveryStatusRecord(closedSource)))
+    )
+    expect(closedRecord).toMatchObject({
+      _tag: "CurrentStatus",
+      status: { _tag: "DeliveryStatusClosed", final: { entries: publicSource.entries } }
+    })
+  })
+)
+
+it("round-trips the ordered identity evidence of every canonical current-status entry", () => {
+  const taskId = TaskId.make("identity-fixture-task")
+  const subject = { _tag: "Task" as const, runId, taskId }
+  const attempt = PlannedTaskAttempt.make({
+    attemptId: AttemptId.make("identity-fixture-attempt"),
+    baseSha: GitCommitSha.make("1".repeat(40)),
+    branch: TaskBranchRef.make("refs/heads/dalph/identity-fixture"),
+    executor: TaskExecutorLocator.make("executor:identity-fixture"),
+    runId,
+    taskId,
+    taskRevision: TaskRevision.make("identity-fixture-revision"),
+    worktree: WorktreeLocator.make("/worktrees/identity-fixture")
+  })
+  const integrationTarget = IntegrationTarget.make({
+    ref: IntegrationTargetRef.make("refs/heads/main"),
+    repository: GitRepositoryLocator.make("/repositories/identity-fixture.git")
+  })
+  const acceptedResult = AcceptedResult.make({
+    commit: GitCommitSha.make("2".repeat(40)),
+    evidenceManifest: EvidenceReference.make({ byteLength: 17, digest: EvidenceDigest.make("a".repeat(64)) })
+  })
+  const queued = QueuedIntegrationResponsibility.make({
+    acceptedResult,
+    integrationTarget,
+    plannedAttempt: attempt,
+    preIntegrationCancellation: { attemptId: attempt.attemptId, queuedAt: JournalPosition.make(4), runId },
+    queuedAt: JournalPosition.make(4)
+  })
+  const responsibility = WorkflowResponsibilityEntry.cases.PlannedAttemptExecutorWorkResponsibility.make({
+    beganAt: JournalPosition.make(3),
+    plannedAttempt: attempt
+  })
+  const obligation = { _tag: "WorkflowResponsibility" as const, responsibility }
+  const dependencyObligationReference = ObligationReference.make(deliveryStatusObligationReference(obligation))
+  const prerequisiteTaskIds = [TaskId.make("prerequisite-b"), TaskId.make("prerequisite-a")] as const
+  const holders = [
+    { correlation: { attemptId: AttemptId.make("holder-b"), runId }, taskId: TaskId.make("holder-b") },
+    { correlation: { attemptId: AttemptId.make("holder-a"), runId }, taskId: TaskId.make("holder-a") }
+  ] as const
+  const evidenceIdentities = [
+    DeliveryStatusEvidenceIdentity.make("evidence-b"),
+    DeliveryStatusEvidenceIdentity.make("evidence-a")
+  ] as const
+  const supporting = { _tag: "PlannedAttempt" as const, correlation: { attemptId: attempt.attemptId, runId } }
+  const proposal = {
+    ...trackerGraphReadProposalOf({
+      acceptedAt: JournalPosition.make(2),
+      purpose: "EstablishCurrentGraph",
+      runId,
+      target: GithubIssueTarget.make({
+        issueNumber: GithubIssueNumber.make(42),
+        repository: GithubRepositoryName.make("dalph"),
+        owner: GithubRepositoryOwner.make("octo")
+      })
+    }),
+    id: DeliveryProposalId.make("identity-fixture-proposal"),
+    order: {
+      _tag: "FreshWorkflowOrder" as const,
+      frontierOrdinal: DeliveryProposalOrdinal.make(7),
+      step: "ReadCurrentTaskGraph" as const,
+      taskId
+    }
+  }
+  const accepted = UnqueuedAcceptedResult.make({
+    acceptedResult,
+    plannedAttempt: attempt,
+    terminalAt: JournalPosition.make(5)
+  })
+  const integrationConfigurationWait = { _tag: "IntegrationConfigurationWait" as const, plannedAttempt: attempt }
+  const entries = [
+    {
+      _tag: "DependencyWait",
+      classification: "Waiting",
+      prerequisiteTaskIds,
+      standing: { _tag: "GraphExcluded", reasons: [{ _tag: "PrerequisitesIncomplete", prerequisiteTaskIds: [] }] },
+      subject,
+      taskId
+    },
+    {
+      _tag: "TrackerFactWait",
+      classification: "Waiting",
+      fact: { _tag: "Unobserved", boundary: "TaskTracker" },
+      responsibility: null,
+      standing: { _tag: "GraphNotEstablished" },
+      subject,
+      wakeCondition: "TaskTrackerFactsObserved"
+    },
+    {
+      _tag: "TaskWorkCapacityWait",
+      classification: "Waiting",
+      holders,
+      placement: { _tag: "Selected", rank: BoundedTicketRank.make(5) },
+      scope: { _tag: "RunTaskWorkCapacityScope", capacity: TaskWorkCapacity.make(2), runId },
+      subject,
+      taskId
+    },
+    { _tag: "ProposedDeliveryAction", classification: "Waiting", proposal, subject },
+    {
+      _tag: "LiveDeliveryAction",
+      classification: "Progressing",
+      owner: { _tag: "AdmittedDeliveryAction", proposal },
+      subject
+    },
+    {
+      _tag: "AcceptedFactPublicationWait",
+      acceptedAt: JournalPosition.make(9),
+      classification: "Waiting",
+      owner: { _tag: "SettledBeforeMaterialization", proposal },
+      subject
+    },
+    {
+      _tag: "IntegrationTargetWait",
+      classification: "Waiting",
+      integrationTarget,
+      plannedAttempt: attempt,
+      responsibility: { _tag: "QueuedIntegration", responsibility: queued },
+      standing: { _tag: "IntegrationWait", wait: { _tag: "IntegrationTargetWait", plannedAttempt: attempt } },
+      subject,
+      wait: { _tag: "IntegrationTargetWait", plannedAttempt: attempt }
+    },
+    {
+      _tag: "EvidenceUnavailable",
+      classification: "Blocked",
+      evidence: {
+        _tag: "ProposalDerivationIssue",
+        issue: {
+          _tag: "AcceptedOperationEvidenceMissing",
+          operationId: OperationId.make("missing-operation"),
+          taskId,
+          transition: "ContinueFreshWorkflowOperation"
+        }
+      },
+      responsibility: null,
+      subject
+    },
+    {
+      _tag: "EvidenceConflict",
+      classification: "Blocked",
+      evidenceIdentities,
+      responsibility: obligation,
+      standing: { _tag: "ExactEvidenceConflict", evidenceIdentities: ["evidence-b", "evidence-a"] },
+      subject
+    },
+    {
+      _tag: "Settlement",
+      classification: "Settled",
+      settlement: makeDeliverySettlement({ attemptId: attempt.attemptId, taskId }),
+      subject
+    },
+    {
+      _tag: "Relinquishment",
+      classification: "Relinquished",
+      reason: "AuthorizedHandoff",
+      responsibility: obligation,
+      subject,
+      supporting
+    },
+    {
+      _tag: "DependencyWait",
+      classification: "Waiting",
+      prerequisiteTaskIds,
+      standing: {
+        _tag: "ResponsibilitySituation",
+        facts: {
+          _tag: "PlannedAttemptExecutorFreshFacts",
+          disposition: ResponsibilityDisposition.TaskClaimMissingConstraint(),
+          responsibility
+        }
+      },
+      subject,
+      taskId
+    },
+    {
+      _tag: "LiveDeliveryAction",
+      classification: "Progressing",
+      owner: {
+        _tag: "MaterializedDeliveryAction",
+        intent: "IntentRecorded",
+        operationId: OperationId.make("identity-fixture-live-operation"),
+        proposal
+      },
+      subject
+    },
+    {
+      _tag: "AcceptedFactPublicationWait",
+      acceptedAt: JournalPosition.make(9),
+      classification: "Waiting",
+      owner: {
+        _tag: "SettledMaterializedDeliveryAction",
+        intent: "IntentRecorded",
+        operationId: OperationId.make("identity-fixture-settled-operation"),
+        proposal
+      },
+      subject
+    },
+    {
+      _tag: "EvidenceUnavailable",
+      classification: "Blocked",
+      evidence: {
+        _tag: "IntegrationConfigurationWait",
+        standing: { _tag: "IntegrationWait", wait: integrationConfigurationWait },
+        wait: integrationConfigurationWait
+      },
+      responsibility: { _tag: "AcceptedAwaitingIntegration", accepted },
+      subject
+    }
+  ] satisfies ReadonlyArray<DeliveryStatusEntry>
+  const available: CurrentDeliveryStatus = {
+    _tag: "DeliveryStatusAvailable",
+    acceptedAt: JournalPosition.make(10),
+    entries,
+    subject
+  }
+  const closed: CurrentDeliveryStatus = { _tag: "DeliveryStatusClosed", final: available, subject }
+
+  for (const source of [available, closed]) {
+    const encoded = encodeProductionCliRecord(currentDeliveryStatusRecord(source))
+    const decoded = Schema.decodeUnknownSync(ProductionCliRecord)(JSON.parse(encoded))
+    expect(decoded._tag).toBe("CurrentStatus")
+    if (decoded._tag !== "CurrentStatus") continue
+    const projected = decoded.status._tag === "DeliveryStatusClosed" ? decoded.status.final : decoded.status
+    expect(projected?._tag).toBe("DeliveryStatusAvailable")
+    if (projected?._tag !== "DeliveryStatusAvailable") continue
+    expect(projected.entries.map(({ _tag }) => _tag)).toEqual(entries.map(({ _tag }) => _tag))
+    expect(projected.entries.map(({ classification }) => classification)).toEqual(
+      entries.map(({ classification }) => classification)
+    )
+    expect(projected.entries.map(({ subject: entrySubject }) => entrySubject)).toEqual(entries.map(() => subject))
+    expect(projected.entries.map(({ entryIdentity }) => entryIdentity)).toEqual(entries.map(statusEntryIdentity))
+    expect(projected.entries[0]).toMatchObject({ prerequisiteTaskIds })
+    expect(projected.entries[2]).toMatchObject({ holders, rank: 5 })
+    expect(projected.entries[3]).toMatchObject({ order: proposal.order, proposalId: proposal.id })
+    expect(projected.entries[6]).toMatchObject({ integrationTarget, plannedAttempt: attempt, queuedAt: 4 })
+    expect(projected.entries[8]).toMatchObject({ evidenceIdentities })
+    expect(projected.entries[10]).toMatchObject({ reason: "AuthorizedHandoff", supporting })
+    expect(projected.entries.slice(11)).toMatchObject([
+      {
+        _tag: "DependencyWait",
+        obligationReference: dependencyObligationReference,
+        standingKind: "ResponsibilitySituation"
+      },
+      {
+        _tag: "LiveDeliveryAction",
+        lifecycle: "MaterializedDeliveryAction",
+        operationId: "identity-fixture-live-operation"
+      },
+      {
+        _tag: "AcceptedFactPublicationWait",
+        lifecycle: "SettledMaterializedDeliveryAction",
+        operationId: "identity-fixture-settled-operation"
+      },
+      { _tag: "EvidenceUnavailable", evidence: { _tag: "IntegrationConfigurationWait", plannedAttempt: attempt } }
+    ])
+  }
+})
+
+it("production status rendering has no tracker Git executor Integrator Journal mutation admission retry cleanup control or Exit capability", () => {
+  const observation: ProductionHostObservation = {
+    acceptedHistory: currentSignalOf(cursor),
+    applicationExitRequestBoundary: {
+      requestExit: Effect.succeed(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+    },
+    current: currentSignalOf({ _tag: "NotReady" }),
+    runTermination: completedRunTermination(),
+    selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+    traceReader: { readAt: () => Effect.succeed(snapshot) }
+  }
+
+  const presented = productionCliHostObservationOf(observation)
+  expect(Object.keys(presented).toSorted()).toEqual([
+    "acceptedHistory",
+    "current",
+    "runTermination",
+    "selection",
+    "traceReader"
+  ])
+  expect("applicationExitRequestBoundary" in presented).toBe(false)
+})
+
+it.effect("reports the selected Run when termination races with current-first status attachment", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    yield* presentSelectedProductionRun(
+      {
+        acceptedHistory: currentSignalOf(cursor),
+        current: currentSignalOf({ _tag: "Closed" as const, final: null }),
+        runTermination: completedRunTermination(),
+        selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+        traceReader: { readAt: () => Effect.succeed(snapshot) }
+      },
+      (line) => Ref.update(lines, (current) => [...current, line])
+    )
+
+    const records = (yield* Ref.get(lines)).map((line) => JSON.parse(line))
+    expect(records[0]).toEqual({ _tag: "RunSelected", runId, selection: "Allocated", version: 1 })
+    expect(records.find(({ _tag }) => _tag === "CurrentStatus")?.status).toEqual({
+      _tag: "DeliveryStatusClosed",
+      final: null,
+      subject: { _tag: "Run", runId }
+    })
+    expect(records.at(-1)).toEqual({ _tag: "RunDisposition", disposition: "Completed", runId, version: 1 })
+  })
+)
 
 const liveCliLayer = (
   lines: Ref.Ref<ReadonlyArray<string>>,
@@ -863,6 +2029,7 @@ it.effect("invokes one production host only after configuration and reports its 
         Effect.andThen(
           use({
             acceptedHistory: currentSignalOf(cursor),
+            current: currentSignalOf({ _tag: "NotReady" as const }),
             runTermination: completedRunTermination(),
             selection: ProductionRunSelection.cases.Allocated.make({ runId }),
             traceReader: { readAt: () => Effect.succeed(snapshot) }
@@ -886,6 +2053,7 @@ it.effect("invokes one production host only after configuration and reports its 
       "host-acquired",
       "beginning-acknowledged",
       "output:RunSelected",
+      "output:CurrentStatus",
       "output:HistoricalSnapshot",
       "output:RunDisposition"
     ])
@@ -893,6 +2061,7 @@ it.effect("invokes one production host only after configuration and reports its 
     expect(Schema.is(ProductionRepositoryHostConfiguration)((yield* Ref.get(hostInputs))[0])).toBe(true)
     expect((yield* Ref.get(lines)).map((line) => JSON.parse(line)._tag)).toEqual([
       "RunSelected",
+      "CurrentStatus",
       "HistoricalSnapshot",
       "RunDisposition"
     ])

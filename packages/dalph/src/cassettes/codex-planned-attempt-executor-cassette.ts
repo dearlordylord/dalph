@@ -629,7 +629,7 @@ export const runCodexPlannedAttemptExecutorCassette: (
   const executeOrdinary = Effect.fn("CodexExecutorCassette.executeOrdinary")(function* (
     executor: PlannedAttemptExecutorService
   ) {
-    const first = yield* executor.begin(request)
+    const first = yield* executor.begin(request, { _tag: "InitialDelivery" })
     const activeActivity = publicActivityProjection(yield* harness.observeCurrentActivity)
     if (cassette.scenario === "FirstTurnExecutorWorkExecuting" || cassette.scenario === "LostTurnResponse") {
       return {

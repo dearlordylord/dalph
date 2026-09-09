@@ -31,6 +31,14 @@ module plannedAttemptExecutorEvidenceProofTest {
       .then(recordResumeIntent).then(callResume).then(observeResumeResponse(TerminalReport)).then(settleResumeResponse)
       .expect(and { state.stage == Terminal, state.acceptedReportOrdinal == 3, safeAndTerminalReleasePosition, beginOccursOnce })
   }
+  run preTurnRecoveryKeepsOneIntentAndCrossingTest = {
+    init.then(recordBeginIntent).then(callBeginPreTurn).then(observeBeginNotCrossed)
+      .then(loseBeginProof).expect(state.stage == BeginPreTurn)
+      .then(observeBeginNotCrossed).then(redeliverBegin).then(crossBeginTurn)
+      .then(observeBeginResponse(ExecutingReport)).then(settleBeginResponse)
+      .expect(and { state.intentCount == 1, state.callCount == 2, state.beginTurnCrossingCount == 1, everyCallHasDurableIntent, redeliveryRequiresFreshProof })
+  }
+
 }
 
 module plannedAttemptExecutorSuspendBoundProofTest {

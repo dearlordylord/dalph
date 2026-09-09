@@ -3,12 +3,13 @@ import {
   PlannedAttemptExecutor,
   type PlannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorRequest,
+  type PlannedAttemptExecutorBeginProofId,
   plannedAttemptExecutorCorrelation,
   type PlannedAttemptExecutorReport,
   samePlannedAttemptExecutorCorrelation,
   type TaskWorkSpecification
 } from "@dalph/contracts"
-import { Effect } from "effect"
+import { Effect, Match } from "effect"
 import { acceptedExecutorCommandDelivery, type AcceptedExecutorCommandDelivery } from "./command-delivery.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -63,6 +64,7 @@ const lastElementOffset = -1
 export const reconcileUnsettledPlannedAttemptExecutorCommand = Effect.fn(
   "PlannedAttemptExecutorWorkflow.reconcileUnsettledCommand"
 )(function* (
+  permit: PlannedAttemptProtocolPermit,
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
   intent: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorCommandIntended" }>
@@ -98,6 +100,24 @@ export const reconcileUnsettledPlannedAttemptExecutorCommand = Effect.fn(
         version: workflowJournalEventVersion
       })
     )
+  const redeliverBegin = Effect.fn("PlannedAttemptExecutorWorkflow.redeliverBegin")(function* (
+    proofId: PlannedAttemptExecutorBeginProofId
+  ) {
+    if (intent.command !== "Begin") {
+      return yield* new PlannedAttemptExecutorProjectionUnreadable({ commandOrdinal: intent.ordinal, correlation })
+    }
+    yield* permit.commitIntent(
+      recordProjection(
+        PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorBeginNotCrossed.make({ proofId })
+      )
+    )
+    // Never reconstruct permission from a recorded projection. This invocation
+    // owns a fresh read; the executor rechecks its private authority on delivery.
+    const request = yield* plannedAttemptExecutorRequestFor(records, plannedAttempt)
+    const report = yield* executor.begin(request, { _tag: "ReconciledDelivery", proofId })
+    return yield* recordPlannedAttemptExecutorCommandResponse(plannedAttempt, intent.ordinal, report)
+  })
+  if (projected._tag === "BeginNotCrossed") return yield* redeliverBegin(projected.proofId)
   if (projected._tag === "NoReport") {
     yield* recordProjection(
       PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorStateNoCurrentReport.make({})
@@ -123,7 +143,10 @@ export const reconcileUnsettledPlannedAttemptExecutorCommand = Effect.fn(
       detail: projected.detail
     })
   }
-  const projectedReport = projected._tag === "Exact" ? projected.report : projected.observed
+  const projectedReport = Match.valueTags(projected, {
+    Exact: ({ report }) => report,
+    CorrelationContradiction: ({ observed }) => observed
+  })
   if (!samePlannedAttemptExecutorCorrelation(correlation, projectedReport.correlation)) {
     yield* recordProjection(
       PlannedAttemptExecutorCommandProjectionObservation.cases.ExecutorReportContradiction.make({
@@ -317,7 +340,7 @@ export const issuePlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecu
   const executor = yield* PlannedAttemptExecutor
   if (invocation._tag === "Suspend") return yield* executor.requestSuspension(plannedAttempt)
   return invocation._tag === "Begin"
-    ? yield* executor.begin(invocation.request)
+    ? yield* executor.begin(invocation.request, { _tag: "InitialDelivery" })
     : yield* executor.resume(invocation.request)
 })
 
@@ -376,7 +399,7 @@ export const runPlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecuto
   if (initialResumeError !== undefined) return yield* initialResumeError
   const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)
   if (unsettledCommand !== undefined) {
-    return yield* reconcileUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt, unsettledCommand)
+    return yield* reconcileUnsettledPlannedAttemptExecutorCommand(permit, records, plannedAttempt, unsettledCommand)
   }
   const pendingReport = yield* acceptPendingPlannedAttemptExecutorReport(plannedAttempt)
   if (pendingReport !== undefined) return pendingReport

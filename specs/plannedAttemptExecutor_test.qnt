@@ -251,4 +251,30 @@ module plannedAttemptExecutorTest {
       .then(recordFreshStateProjection(ExecutorStateTemporarilyUnavailable))
       .expect(state.positionHeld and unsafeOrUnavailableNeverReleasesPosition)
   }
+  run exactPreTurnBeginIsRedeliveredTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionBeginNotCrossed))
+      .then(redeliverBegin).then(crossRedeliveredBeginTurn)
+      .then(receiveCommandResponse(ExecutorWorkExecuting)).then(settleCommandResponse)
+      .expect(and { state.commandIntentCount == 1, state.commandCallCount == 2, state.beginTurnCrossingCount == 1, state.status == StatusExecuting, everyCallHasOneDurableIntent })
+  }
+  run crashDiscardsBeginNotCrossedProofTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionBeginNotCrossed)).then(recoverActivation)
+      .expect(state.evidence == NoEvidence)
+      .then(recordCommandProjection(CommandProjectionBeginNotCrossed)).then(redeliverBegin)
+      .expect(redeliveryRequiresFreshExactPreTurnProof)
+  }
+  run absenceAndTurnIntentNeverAuthorizeBeginRedeliveryTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionNoCurrentReport))
+      .expect(commandProjectionOutcome(state.evidence) != CommandProjectionBeginNotCrossed)
+  }
+  run authorizedTurnCannotProduceBeginNotCrossedTest = {
+    init.then(beginResponsibility).then(recordBeginIntent).then(callBeginPreTurn).then(loseCommandResponse)
+      .then(recordCommandProjection(CommandProjectionBeginNotCrossed)).then(redeliverBegin)
+      .then(loseCommandResponse).then(recoverActivation)
+      .expect(and { state.beginTurnBoundary == BeginTurnAuthorized, state.responseAmbiguous, state.evidence == NoEvidence })
+  }
+
 }

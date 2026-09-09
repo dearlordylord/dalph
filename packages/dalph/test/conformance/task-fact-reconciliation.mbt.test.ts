@@ -285,7 +285,7 @@ const independentOnlyGraphSnapshot = Option.getOrThrow(
 
 const Variant = Schema.Struct({ tag: Schema.String, value: Schema.Unknown })
 
-type ExecutorObservationTag = PlannedAttemptExecutorStateObservation["_tag"]
+type ExecutorObservationTag = PlannedAttemptExecutorStateObservation["_tag"] | "ExecutorBeginNotCrossed"
 
 const executorEvidenceProjection = (
   currentFailure: ExecutorObservationTag | undefined,
