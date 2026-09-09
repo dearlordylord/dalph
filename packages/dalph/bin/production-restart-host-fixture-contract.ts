@@ -12,6 +12,7 @@ import {
   WorkflowResponsibilityEntry
 } from "@dalph/orchestrator"
 import { Schema } from "effect"
+import { ProductionCliRecord } from "../src/application/production-cli.js"
 
 export const RestartFixtureInput = Schema.Struct({
   journalDatabase: JournalDatabaseLocator,
@@ -47,6 +48,11 @@ export const GithubReadStarted = Schema.TaggedStruct("GithubReadStarted", {
   operationId: OperationId,
   target: TrackerTarget
 })
+export const PublicRecoveryStatusObserved = Schema.TaggedStruct("PublicRecoveryStatusObserved", {
+  label: Schema.String,
+  pid: RestartChildProcessId,
+  record: ProductionCliRecord
+})
 export const HostCompleted = Schema.TaggedStruct("HostCompleted", {
   label: Schema.String,
   selection: ProductionRunSelection
@@ -57,6 +63,7 @@ export const RestartFixtureEvent = Schema.Union([
   RecoveryReconstructed,
   TaskClaimCheckSelected,
   GithubReadStarted,
+  PublicRecoveryStatusObserved,
   HostCompleted,
   RestartFixtureFailed
 ])
