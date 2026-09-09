@@ -95,12 +95,24 @@ The built host exercises the real Codex/private-store connection. Bulk cuts use 
 provider. The built host uses the supported-host fixture's isolated deterministic
 local model endpoint, not production credentials.
 
-The scoped Linux host case proves the first Begin settles as Executing. The
-unchanged normal-start terminal qualification was also tried as a comparator:
-its local model finished both responses, but terminal projection remained
-Unreadable. That later terminal limitation was observed on the normal and
-replacement paths; this child neither repairs that adapter behavior nor claims
-terminal qualification. The original #75 terminal test remains unchanged.
+After that first Begin, Codex completes the task and records the final Accepted
+JSON and Git commit. When Dalph asks `thread/resume` for the same turn, current
+Codex returns its original user input as `userMessage.content` with `type: text`;
+the existing Responses-shaped representation uses `type: input_text`. Dalph
+must recover its owned token from either explicit user-text representation and
+deliver the same terminal result to the maintainer. It must not infer ownership
+from assistant text, ignore contradictory markers, or start another task turn.
+The existing process-loss chronology remains unchanged; no additional tracker
+or Journal mutation is needed to decode this boundary response.
+
+Acceptance mapping: `speaks the normalized app-server protocol with exact per-call
+cwd` proves the returned `text` marker survives resume; the protocol suite retains
+`input_text` and malformed/foreign/duplicate-marker checks. The unchanged real
+host test `a killed associated empty thread is replaced only after Codex proves
+its no-turn rollout absent` proves one replacement thread reaches Accepted with
+exactly two local model requests. This repairs the previously observed terminal
+projection limitation: the completed turn's user marker was discarded because
+the adapter recognized only `input_text`, so it reported Unreadable.
 
 #330 retains its acceptance audit and blockers of #261/#307 until both children
 are integrated and reviewed. This child changes no #303/#339 prerequisite.

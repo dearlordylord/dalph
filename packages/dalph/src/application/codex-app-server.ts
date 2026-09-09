@@ -71,7 +71,7 @@ type CodexExternalItem = typeof CodexExternalItem.Type
 const CodexTurnInputItem = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String })
 
 /** User-authored text nested inside a Codex user-message item. */
-const CodexUserMessageInputText = Schema.Struct({ type: Schema.Literal("input_text"), text: Schema.String })
+const CodexUserMessageInputText = Schema.Struct({ type: Schema.Literals(["input_text", "text"]), text: Schema.String })
 
 const CodexUserMessageByType = Schema.Struct({
   type: Schema.Literals(["userMessage", "user_message"]),
@@ -1246,7 +1246,7 @@ const userMessageContentText = (
       `user-authored turn content discriminator is invalid: ${String(discriminator.failure)}`
     )
   }
-  if (discriminator.success.type !== "input_text") return undefined
+  if (discriminator.success.type !== "input_text" && discriminator.success.type !== "text") return undefined
   const inputText = Schema.decodeUnknownResult(CodexUserMessageInputText)(content)
   return Result.isSuccess(inputText)
     ? inputText.success.text
