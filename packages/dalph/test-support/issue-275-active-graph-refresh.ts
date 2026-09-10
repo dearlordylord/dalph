@@ -113,10 +113,13 @@ export const makeIssue275GraphRefresh: (
   return { read, result, run }
 })
 
-export interface Issue275GraphRefresh {
+interface Issue275GraphRefreshOperations {
   readonly read: TrackerGraphReader["Service"]["read"]
-  readonly result: Deferred.Deferred<Issue275RefreshResult>
   readonly run: <E, R>(
     input: Issue268Ds04TimerCheckpointInput<E, R>
   ) => Effect.Effect<void, E | ApplicationExiting | RunReactivationIntervalInvalid, R>
+}
+
+export type Issue275GraphRefresh = Issue275GraphRefreshOperations & {
+  readonly result: Deferred.Deferred<Issue275RefreshResult>
 }
