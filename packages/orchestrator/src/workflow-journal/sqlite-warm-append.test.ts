@@ -31,7 +31,7 @@ const intent = (operationId: string) =>
   )
 
 describe("SQLite warm append storage checkpoint", () => {
-  it.effect("decodes a long Run once and appends successors without loading its accepted prefix again", () =>
+  it.effect("decodes a long active Run once and appends successors without loading its accepted prefix again", () =>
     Effect.gen(function* () {
       const loadedRowCounts = yield* Ref.make<ReadonlyArray<number>>([])
       const inserted = yield* Ref.make(0)
@@ -46,6 +46,11 @@ describe("SQLite warm append storage checkpoint", () => {
       yield* Effect.gen(function* () {
         const journal = yield* JournalStore
         const runId = RunId.make("warm-long-run")
+        yield* journal.beginRun(
+          runId,
+          FixtureTarget.make("warm-long-run-target"),
+          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+        )
         for (let index = 1; index <= 64; index++) {
           yield* journal.append(runId, JournalRecordKey.make(`record-${index}`), intent(`seed-${index}`))
         }
@@ -56,11 +61,11 @@ describe("SQLite warm append storage checkpoint", () => {
         }
 
         expect(yield* Ref.get(loadedRowCounts)).toEqual(beforeWarmAppends)
-        expect(beforeWarmAppends).toEqual([0, 64])
+        expect(beforeWarmAppends).toEqual([0, 1, 65])
         expect(yield* Ref.get(inserted)).toBe(80)
         expect(yield* Ref.get(keyLookups)).toBe(80)
         expect((yield* journal.read(runId)).map(({ position }) => position)).toEqual(
-          Array.from({ length: 80 }, (_, index) => index + 1)
+          Array.from({ length: 81 }, (_, index) => index + 1)
         )
       }).pipe(Effect.provide(layer))
     })
