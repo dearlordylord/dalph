@@ -77,7 +77,7 @@ export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedErro
   }
 ) {}
 
-/** One coherent runtime evaluation carries authority for a different Run. */
+/** A runtime evaluation or accepted-publication boundary carries authority for a different Run. */
 export class DeliveryRuntimeRunMismatch extends Schema.TaggedError<DeliveryRuntimeRunMismatch>()(
   "DeliveryRuntimeRunMismatch",
   { actualRunIds: Schema.Array(RunId), expectedRunId: RunId }
@@ -612,16 +612,15 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             // Fresh candidates may still wait for exact held positions after
             // an active refresh. Use the same live admission authority as an
             // ordinary activation; the wait neither admits work nor proves finality.
-            // A captured Suspend/reconciliation boundary retains its existing
-            // observer and G2 protocol rather than being replaced by this wait.
-            const taskWorkAdmissionStalled =
-              phase._tag !== "OrdinaryDeliveryRuntimePhase" && current.activeRefreshBoundary !== undefined
-                ? Option.none()
-                : yield* admission.snapshot.pipe(
-                    Effect.map((snapshot) =>
-                      classifyTaskWorkAdmissionStalledRuntimeQuiescence(current, snapshot, locallyRunnableFrontier)
-                    )
+            // Before G2, a captured Suspend/reconciliation boundary must still
+            // complete its mandatory tracker read before this wait may return.
+            const taskWorkAdmissionStalled = activeRefreshG2Pending
+              ? Option.none()
+              : yield* admission.snapshot.pipe(
+                  Effect.map((snapshot) =>
+                    classifyTaskWorkAdmissionStalledRuntimeQuiescence(current, snapshot, locallyRunnableFrontier)
                   )
+                )
             if (
               !activeRefreshG2Pending &&
               !everyProposalIsLocallyDeferred &&
@@ -680,6 +679,20 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         if (Option.isSome(exit) && Exit.isFailure(exit.value)) return yield* Effect.failCause(exit.value.cause)
       })
 
+      // A control can already be durable while its relation publication is
+      // still catching up. Capture that exact Run's accepted prefix before
+      // returning a capacity wait, without awaiting a future report or hint.
+      const capacityWaitHasNewerAcceptedPublication = Effect.fn(
+        "DeliveryRuntime.capacityWaitHasNewerAcceptedPublication"
+      )(function* (quiescence: DeliveryRuntimeQuiescence) {
+        if (quiescence._tag !== "TaskWorkAdmissionStalledRuntimeQuiescence") return false
+        const through = yield* acceptedFactPublication.awaitCurrent
+        if (through.runId !== expectedRunId) {
+          return yield* new DeliveryRuntimeRunMismatch({ actualRunIds: [through.runId], expectedRunId })
+        }
+        return quiescence.acceptedAt === null || quiescence.acceptedAt < through.acceptedThrough
+      })
+
       for (;;) {
         const current = Option.getOrThrow(yield* Ref.get(latest))
         const activeRefreshG2Pending =
@@ -690,6 +703,10 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
 
         const quiescence = yield* runtimeQuiescence()
         if (Option.isSome(quiescence)) {
+          if (yield* capacityWaitHasNewerAcceptedPublication(quiescence.value)) {
+            yield* applyRuntimeEvent(yield* Queue.take(events))
+            continue
+          }
           yield* publishRuntimeObservation()
           return quiescence.value
         }

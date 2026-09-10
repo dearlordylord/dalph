@@ -3542,7 +3542,7 @@ it.effect("ignores a stale accepted frontier before it can call the executor", (
   )
 )
 
-it.effect("accepts Pause during phase two and retains the exact G2 boundary without executor work", () =>
+it.effect("retains exact G2 and accepts Pause after capacity-stalled phase two without executor work", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const base = yield* baseEvaluation
@@ -3816,32 +3816,29 @@ it.effect("accepts Pause during phase two and retains the exact G2 boundary with
         quiescence: { _tag: "QuiescencePassive" as const, reason: "RunPaused" as const }
       } satisfies DeliveryRuntimeEvaluation
       const relation = yield* dynamicEvaluationSignal(acceptedG2)
-      const waitingDeferred = yield* Deferred.make<void>()
-      const trace = DeliverySemanticTrace.of({
-        emit: (event) =>
-          event._tag === "ProposalDeferred" && event.proposalId === waiting.id
-            ? Deferred.succeed(waitingDeferred, undefined)
-            : Effect.void
-      })
       const executorCalls = yield* Ref.make(0)
-      const runtime = yield* runDeliveryRuntimePhase(
+      const runtime = runDeliveryRuntimePhase(
         runId,
         relation,
         DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
       ).pipe(
         Effect.provide(identityLayers),
-        Effect.provideService(DeliverySemanticTrace, trace),
         Effect.provideService(
           DeliveryActionExecutor,
           DeliveryActionExecutor.of({
             execute: () => Ref.update(executorCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("unused")))
           })
-        ),
-        Effect.forkChild
+        )
       )
-      yield* Deferred.await(waitingDeferred)
+      const stalled = yield* runtime
+      expect(stalled).toMatchObject({
+        _tag: "TaskWorkAdmissionStalledRuntimeQuiescence",
+        acceptedAt: g2AcceptedAt,
+        current: { trackerGraph: graph },
+        proposedActions: { proposals: [waiting] }
+      })
       yield* relation.publish(acceptedPause)
-      const result = yield* Fiber.join(runtime)
+      const result = yield* runtime
 
       expect(result).toMatchObject({
         _tag: "PassiveRuntimeQuiescence",
@@ -4246,10 +4243,13 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
           )
         : Effect.void
   })
+  const acceptedPublicationMade = yield* Ref.make(false)
   const publication = DeliveryAcceptedFactPublication.of({
     awaitCurrent: Effect.gen(function* () {
       yield* Deferred.succeed(journalCountAtPublication, (yield* Ref.get(records)).length)
-      yield* relation.publish(accepted)
+      // Like the production boundary, rereading an already published prefix
+      // does not publish the same facts again or rewind the later guard.
+      if (!(yield* Ref.getAndSet(acceptedPublicationMade, true))) yield* relation.publish(accepted)
       return { _tag: "DeliveryAcceptedPublicationBoundary" as const, acceptedThrough, runId }
     })
   })
@@ -5355,7 +5355,164 @@ it.effect(
     )
 )
 
-it.effect("reuses a full-capacity position for its matching exact prepared attempt", () =>
+for (const { acceptedThrough, publishChange } of [
+  { acceptedThrough: JournalPosition.make(1), publishChange: false },
+  { acceptedThrough: JournalPosition.make(2), publishChange: false },
+  { acceptedThrough: JournalPosition.make(2), publishChange: true }
+]) {
+  it.effect(
+    `rejects a foreign capacity-wait publication at ${acceptedThrough} with queued change ${publishChange}`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const base = yield* baseEvaluation
+          const [blocked] = preparedBeginProposalsOf([preparedAttemptFixture("foreign-publication-blocked")])
+          if (blocked === undefined) return yield* Effect.die("prepared attempt must produce Begin")
+          const boundary = { runId, attemptId: plannedAttempt.attemptId }
+          const initial = {
+            ...withProposals(base, [blocked], 1),
+            acceptedAt: JournalPosition.make(1),
+            activeRefreshBoundary: {
+              _tag: "ActiveRefreshRuntimeBoundary" as const,
+              runId,
+              reconciledAttempts: [boundary]
+            },
+            taskWork: makeFreshTaskAdmissionTestBasis({
+              capacity: TaskWorkCapacity.make(1),
+              held: [preparedAttemptFixture("foreign-publication-held").attempt]
+            })
+          } satisfies DeliveryRuntimeEvaluation
+          const relation = yield* dynamicEvaluationSignal(initial)
+          const observedPositions = yield* Ref.make<ReadonlyArray<JournalPosition | null>>([])
+          const foreignRunId = RunId.make("foreign-publication-run")
+          const failure = yield* runDeliveryRuntimePhase(
+            runId,
+            relation,
+            DeliveryRuntimePhase.ActiveRefreshPostG2([boundary])
+          ).pipe(
+            Effect.provideService(
+              DeliveryAcceptedFactPublication,
+              DeliveryAcceptedFactPublication.of({
+                awaitCurrent: Effect.gen(function* () {
+                  if (publishChange) yield* relation.publish({ ...initial, acceptedAt: acceptedThrough })
+                  return { _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId: foreignRunId } as const
+                })
+              })
+            ),
+            Effect.provide(identityLayers),
+            Effect.provideService(
+              DeliveryRuntimeObservationObserver,
+              DeliveryRuntimeObservationObserver.of({
+                observe: ({ evaluation }) =>
+                  Ref.update(observedPositions, (positions) => [...positions, evaluation.acceptedAt])
+              })
+            ),
+            Effect.provideService(
+              DeliveryActionExecutor,
+              DeliveryActionExecutor.of({ execute: () => Effect.die("foreign publication must not authorize work") })
+            ),
+            Effect.flip
+          )
+          expect(failure).toEqual(
+            new DeliveryRuntimeRunMismatch({ actualRunIds: [foreignRunId], expectedRunId: runId })
+          )
+          // A foreign newer position must neither wait for a missing event nor
+          // consume the available change as if its position belonged to this Run.
+          expect(yield* Ref.get(observedPositions)).not.toContain(JournalPosition.make(2))
+        })
+      )
+  )
+}
+
+it.effect("consumes an already accepted publication before returning a post-G2 capacity wait", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const [blocked] = preparedBeginProposalsOf([preparedAttemptFixture("accepted-control-blocked")])
+      if (blocked === undefined) return yield* Effect.die("prepared attempt must produce Begin")
+      const acceptedControl = JournalPosition.make(2)
+      const acceptedRead = JournalPosition.make(3)
+      const boundary = { runId, attemptId: plannedAttempt.attemptId }
+      const initial = {
+        ...withProposals(base, [blocked], 1),
+        acceptedAt: JournalPosition.make(1),
+        activeRefreshBoundary: { _tag: "ActiveRefreshRuntimeBoundary" as const, runId, reconciledAttempts: [boundary] },
+        taskWork: makeFreshTaskAdmissionTestBasis({
+          capacity: TaskWorkCapacity.make(1),
+          held: [preparedAttemptFixture("accepted-control-held").attempt]
+        })
+      } satisfies DeliveryRuntimeEvaluation
+      const read = trackerGraphReadProposalOf({
+        acceptedAt: acceptedControl,
+        purpose: "EstablishCurrentGraph",
+        runId,
+        target
+      })
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const freshnessCuts = yield* Ref.make<ReadonlyArray<JournalPosition>>([])
+      const durablePosition = yield* Ref.make(acceptedControl)
+      const firstCut = yield* Deferred.make<void>()
+      const publishAcceptedControl = yield* Deferred.make<void>()
+      const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const publication = DeliveryAcceptedFactPublication.of({
+        awaitCurrent: Effect.gen(function* () {
+          // Capture the durable prefix before awaiting its projection, as the
+          // production publication boundary does; no future fact is required.
+          const acceptedThrough = yield* Ref.get(durablePosition)
+          yield* Ref.update(freshnessCuts, (cuts) => [...cuts, acceptedThrough])
+          yield* Deferred.succeed(firstCut, undefined)
+          yield* Deferred.await(publishAcceptedControl)
+          return { _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId } as const
+        })
+      })
+      const runtime = yield* runDeliveryRuntimePhase(
+        runId,
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPostG2([boundary])
+      ).pipe(
+        Effect.provideService(DeliveryAcceptedFactPublication, publication),
+        Effect.provide(identityLayers),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: ({ proposal }) =>
+              Effect.gen(function* () {
+                expect(proposal.id).toBe(read.id)
+                yield* Ref.update(executed, (ids) => [...ids, proposal.id])
+                yield* Ref.set(durablePosition, acceptedRead)
+                yield* relation.publish({ ...initial, acceptedAt: acceptedRead })
+                return { _tag: "ActionCompleted", proposalId: proposal.id } satisfies DeliveryActionResult
+              })
+          })
+        ),
+        Effect.forkChild
+      )
+      yield* Deferred.await(firstCut)
+      expect(runtime.pollUnsafe()).toBeUndefined()
+      expect(yield* Ref.get(executed)).toEqual([])
+      yield* relation.publish({
+        ...initial,
+        acceptedAt: acceptedControl,
+        proposedActions: {
+          _tag: "DeliveryProposalsAvailable",
+          freshTaskCandidates: [],
+          isolatedIssues: [],
+          proposals: [blocked, read]
+        }
+      })
+      yield* Deferred.succeed(publishAcceptedControl, undefined)
+      const result = yield* Fiber.join(runtime)
+      expect(result._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+      expect(result.acceptedAt).toBe(acceptedRead)
+      expect(result.proposedActions.proposals).toEqual([blocked])
+      expect(yield* Ref.get(executed)).toEqual([read.id])
+      // One stale-return cut, one action-completion cut, one final current cut.
+      expect(yield* Ref.get(freshnessCuts)).toEqual([acceptedControl, acceptedRead, acceptedRead])
+    })
+  )
+)
+
+const exactHeldPositionReuse = (afterG2: boolean) =>
   Effect.scoped(
     Effect.gen(function* () {
       const base = yield* baseEvaluation
@@ -5370,12 +5527,27 @@ it.effect("reuses a full-capacity position for its matching exact prepared attem
       )
       const initial = {
         ...withProposals(base, [observe], 1),
+        ...(afterG2
+          ? {
+              activeRefreshBoundary: {
+                _tag: "ActiveRefreshRuntimeBoundary" as const,
+                runId,
+                reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+              }
+            }
+          : {}),
         taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [retained.attempt] })
       } satisfies DeliveryRuntimeEvaluation
       const relation = yield* dynamicEvaluationSignal(initial)
       const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
 
-      const result = yield* runDeliveryRuntimePhase(runId, relation).pipe(
+      const result = yield* runDeliveryRuntimePhase(
+        runId,
+        relation,
+        afterG2
+          ? DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
+          : DeliveryRuntimePhase.Ordinary
+      ).pipe(
         Effect.provide(identityLayers),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -5403,15 +5575,29 @@ it.effect("reuses a full-capacity position for its matching exact prepared attem
       expect(yield* Ref.get(executed)).toEqual([observe.id])
     })
   )
-)
 
-for (const phase of [
-  DeliveryRuntimePhase.Ordinary,
-  DeliveryRuntimePhase.ActiveRefreshPreG2([]),
-  DeliveryRuntimePhase.ActiveRefreshPostG2([])
+for (const afterG2 of [false, true]) {
+  it.effect(
+    afterG2
+      ? "reuses a full-capacity exact position after G2 despite a different reconciled subject"
+      : "reuses a full-capacity position for its matching exact prepared attempt",
+    () => exactHeldPositionReuse(afterG2)
+  )
+}
+
+for (const { capturedBoundary, phase } of [
+  { phase: DeliveryRuntimePhase.Ordinary, capturedBoundary: false },
+  { phase: DeliveryRuntimePhase.ActiveRefreshPreG2([]), capturedBoundary: false },
+  { phase: DeliveryRuntimePhase.ActiveRefreshPostG2([]), capturedBoundary: false },
+  {
+    phase: DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }]),
+    capturedBoundary: true
+  }
 ]) {
   it.effect(
-    `classifies a capacity-blocked fresh candidate as stalled without creating a proposal in ${phase._tag}`,
+    capturedBoundary
+      ? "returns admission-stalled after G2 when other exact attempts fill capacity"
+      : `classifies a capacity-blocked fresh candidate as stalled without creating a proposal in ${phase._tag}`,
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -5441,13 +5627,34 @@ for (const phase of [
           })
           const candidate = frontier.candidates[0]
           if (candidate === undefined) return yield* Effect.die("fresh claim must produce a candidate")
-          const held = preparedAttemptFixture("fresh-position-holder").attempt
+          const held = [
+            preparedAttemptFixture("fresh-position-holder-A0").attempt,
+            ...(capturedBoundary ? [preparedAttemptFixture("fresh-position-holder-D0").attempt] : [])
+          ]
           const blocked = {
-            ...withProposals(base, [], 1, [candidate], frontier),
-            taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [held] })
+            ...withProposals(base, [], held.length, [candidate], frontier),
+            ...(capturedBoundary
+              ? {
+                  activeRefreshBoundary: {
+                    _tag: "ActiveRefreshRuntimeBoundary" as const,
+                    runId,
+                    reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+                  }
+                }
+              : {}),
+            taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(held.length), held })
           }
           const relation = yield* dynamicEvaluationSignal(blocked)
+          const freshnessCuts = yield* Ref.make(0)
           const result = yield* runDeliveryRuntimePhase(runId, relation, phase).pipe(
+            Effect.provideService(
+              DeliveryAcceptedFactPublication,
+              DeliveryAcceptedFactPublication.of({
+                awaitCurrent: Ref.update(freshnessCuts, (count) => count + 1).pipe(
+                  Effect.andThen(defaultAcceptedFactPublication.awaitCurrent)
+                )
+              })
+            ),
             Effect.provide(identityLayers),
             Effect.provideService(
               DeliveryActionExecutor,
@@ -5456,15 +5663,27 @@ for (const phase of [
           )
 
           expect(result._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+          expect(yield* Ref.get(freshnessCuts)).toBe(1)
           if (result._tag !== "TaskWorkAdmissionStalledRuntimeQuiescence") {
             return yield* Effect.die("capacity-blocked fresh candidate must produce stalled quiescence")
           }
           expect(result.proposedActions.freshTaskCandidates).toEqual([candidate])
           expect(result.proposedActions.proposals).toEqual([])
+          expect(result.taskWork).toEqual({
+            capacity: TaskWorkCapacity.make(held.length),
+            held: held.map(({ attemptId, runId, taskId }) => ({ correlation: { attemptId, runId }, taskId }))
+          })
 
-          // An empty exact occupancy map is the contrasting admission case.
+          // Releasing one exact position is the contrasting admission case.
           // The same candidate and same active phase must now execute once.
-          const available = yield* dynamicEvaluationSignal(withProposals(base, [], 1, [candidate], frontier))
+          const available = yield* dynamicEvaluationSignal({
+            ...blocked,
+            taskWork: makeFreshTaskAdmissionTestBasis({
+              capacity: TaskWorkCapacity.make(held.length),
+              runId,
+              held: held.slice(1)
+            })
+          })
           const executed = yield* Ref.make(0)
           const admitted = yield* runDeliveryRuntimePhase(runId, available, phase).pipe(
             Effect.provide(identityLayers),

@@ -51,6 +51,8 @@ import {
   TaskTrackerMutationThrottled,
   TaskClaimReadFailure,
   TaskWorkCapacity,
+  TaskWorkCapacityControl,
+  taskWorkCapacityControlLayer,
   TrackerGraphReader,
   TrackerReadError,
   TrackerRevision,
@@ -590,8 +592,20 @@ type ProductionRefreshHarnessOptions = {
   readonly repeatAfterUncertainty?: boolean
   readonly changedTask?: "A" | "B"
   readonly threeExecuting?: boolean
+  readonly capacityTwo?: boolean
+  readonly executingTaskIds?: { readonly primary: TaskId; readonly independent: TaskId; readonly third: TaskId }
+  readonly suspensionSubjectTaskId?: TaskId
+  readonly includeFreshWaitingTaskE?: boolean
+  readonly verifyNoSpontaneousActivation?: boolean
+  readonly publishAfterActiveReturn?: boolean
   readonly suspensionSettlement?: "Safe" | "Terminal"
-  readonly graph?: "Readable" | "Unreadable" | "TaskCompleted" | "MembershipLost" | "BlockerAdded"
+  readonly graph?:
+    | "Readable"
+    | "Unreadable"
+    | "TaskCompleted"
+    | "TaskClosedWithoutSuccess"
+    | "MembershipLost"
+    | "BlockerAdded"
   readonly git?: "Ready" | "LostWorktree" | "LineageRewrite" | "Unreadable"
   readonly includeIndependentTask?: boolean
   readonly crash?: ProductionRefreshCrash
@@ -599,6 +613,7 @@ type ProductionRefreshHarnessOptions = {
 
 type ProductionRefreshCrash =
   | "AfterConstraintBeforeSuspendIntent"
+  | "AfterG2"
   | "AfterSuspendIntentBeforeProvider"
   | "SuspendResponseLost"
 
@@ -628,15 +643,19 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const graphMode = options.graph ?? "Readable"
       const gitMode = options.git ?? "Ready"
       const threeExecuting = options.threeExecuting === true
+      const seedCapacity = TaskWorkCapacity.make(threeExecuting ? 3 : 1)
+      const configuredCapacity = TaskWorkCapacity.make(options.capacityTwo === true ? 2 : threeExecuting ? 3 : 1)
       const includeIndependentTask = options.includeIndependentTask === true || threeExecuting
       const changedTask = options.changedTask ?? "A"
       const target = FixtureTarget.make("production-refresh-healthy-target")
       const runId = RunId.make("production-refresh-healthy-run")
-      const taskId = TaskId.make(options.discoverFAndG === true ? "B" : "A")
-      const independentTaskId = TaskId.make(options.discoverFAndG === true ? "C" : "B")
-      const thirdTaskId = TaskId.make(options.discoverFAndG === true ? "D" : "C")
+      const taskId = options.executingTaskIds?.primary ?? TaskId.make(options.discoverFAndG === true ? "B" : "A")
+      const independentTaskId =
+        options.executingTaskIds?.independent ?? TaskId.make(options.discoverFAndG === true ? "C" : "B")
+      const thirdTaskId = options.executingTaskIds?.third ?? TaskId.make(options.discoverFAndG === true ? "D" : "C")
+      const freshTaskId = TaskId.make("E")
       const blockerTaskId = TaskId.make("D")
-      const constrainedTaskId = changedTask === "B" ? independentTaskId : taskId
+      const constrainedTaskId = options.suspensionSubjectTaskId ?? (changedTask === "B" ? independentTaskId : taskId)
       const specification = makeTaskWorkSpecification({ body: "Complete A.", taskId, title: "Complete A" })
       const independentSpecification = makeTaskWorkSpecification({
         body: "Complete B.",
@@ -661,7 +680,8 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const graphTaskIds = [
         taskId,
         ...(includeIndependentTask ? [independentTaskId] : []),
-        ...(threeExecuting ? [thirdTaskId] : [])
+        ...(threeExecuting ? [thirdTaskId] : []),
+        ...(options.includeFreshWaitingTaskE === true ? [freshTaskId] : [])
       ]
       const activeGraphTasks = [
         ...graphTaskIds
@@ -671,7 +691,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             lifecycle:
               graphMode === "TaskCompleted" && selectedTaskId === constrainedTaskId
                 ? ({ _tag: "CompletedSuccessfully" } as const)
-                : ({ _tag: "Open" } as const),
+                : graphMode === "TaskClosedWithoutSuccess" && selectedTaskId === constrainedTaskId
+                  ? ({ _tag: "TerminalWithoutSuccess" } as const)
+                  : ({ _tag: "Open" } as const),
             parentTaskId: null,
             prerequisiteIds: graphMode === "BlockerAdded" && selectedTaskId === constrainedTaskId ? [blockerTaskId] : []
           })),
@@ -798,6 +820,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         ])
       }
       const journalFilename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
+      const seedJournalLayer = sqliteJournalTestLayer({ filename: journalFilename })
       const acquisition = {
         operationId: OperationId.make("production-refresh-healthy-claim"),
         owner: ClaimOwner.make("dalph"),
@@ -844,11 +867,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       yield* Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* JournalStore
-          yield* journal.beginRun(
-            runId,
-            target,
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(threeExecuting ? 3 : 1) })
-          )
+          yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: seedCapacity }))
           yield* journal.append(
             runId,
             intentRecordKey(acquisition.operationId),
@@ -1103,6 +1122,11 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             yield* seedExecutingPeer(independentAttempt, independentAcquisition, independentSpecification)
             yield* seedExecutingPeer(thirdAttempt, thirdAcquisition, thirdSpecification)
           }
+          if (options.capacityTwo === true) {
+            const capacityControl = yield* TaskWorkCapacityControl
+            const current = yield* capacityControl.read(runId)
+            yield* capacityControl.apply({ capacity: configuredCapacity, expectedRevision: current.revision, runId })
+          }
           if (options.report !== undefined && options.report !== "Running") {
             const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(2)
             yield* journal.append(
@@ -1148,7 +1172,11 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               })
             )
           }
-        }).pipe(Effect.provide(sqliteJournalTestLayer({ filename: journalFilename })))
+        }).pipe(
+          Effect.provide(
+            Layer.merge(seedJournalLayer, taskWorkCapacityControlLayer.pipe(Layer.provide(seedJournalLayer)))
+          )
+        )
       )
       type ProductionExecutorCall = {
         readonly command: "observe" | "Begin" | "Resume" | "Suspend"
@@ -1192,9 +1220,13 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const activationKinds = yield* Ref.make<ReadonlyArray<"OrdinaryRunEntry" | "ActiveWorkAuthorityRefresh">>([])
       const activeSources = yield* Ref.make<ReadonlyArray<"TrackerNotification" | "Timer">>([])
       const activeActivationCount = yield* Ref.make(0)
+      const activeActivationTimeline = yield* Ref.make<ReadonlyArray<"Start" | "Return">>([])
       const activeConcurrent = yield* Ref.make(0)
       const maximumActiveConcurrent = yield* Ref.make(0)
       const taskWorkSnapshots = yield* Ref.make<ReadonlyArray<ReadonlyArray<TaskId>>>([])
+      const beforeExplicitExitCounts = yield* Ref.make<
+        ReadonlyArray<{ readonly processEnds: number; readonly requests: number }>
+      >([])
       const beforeSecondOpportunity = yield* Ref.make<
         | {
             readonly activeActivationCount: number
@@ -1321,11 +1353,11 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                     yield* Deferred.await(releaseActiveRead)
                   }
                   return selectedTaskId === taskId
-                    ? selectedSpecificationMode === "Changed" && changedTask === "A"
+                    ? selectedSpecificationMode === "Changed" && constrainedTaskId === taskId
                       ? changedSpecification
                       : specification
                     : selectedTaskId === independentTaskId
-                      ? selectedSpecificationMode === "Changed" && changedTask === "B"
+                      ? selectedSpecificationMode === "Changed" && constrainedTaskId === independentTaskId
                         ? changedIndependentSpecification
                         : independentSpecification
                       : thirdSpecification
@@ -1371,6 +1403,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                     claimMode !== "Exact" ||
                     selectedSpecificationMode === "Changed" ||
                     graphMode === "TaskCompleted" ||
+                    graphMode === "TaskClosedWithoutSuccess" ||
                     graphMode === "MembershipLost" ||
                     graphMode === "BlockerAdded" ||
                     gitMode === "LostWorktree" ||
@@ -1426,6 +1459,35 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                         const journal = yield* JournalStore
                         const append: JournalStore["Service"]["append"] = (requestedRunId, key, event) =>
                           Effect.gen(function* () {
+                            if (
+                              processCrash === "AfterG2" &&
+                              event._tag === "TaskTrackerFactsObserved" &&
+                              event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed" &&
+                              (yield* Ref.get(phase)) === "Active"
+                            ) {
+                              const beforeAppend = yield* journal.read(requestedRunId)
+                              const suspensionIsAccepted = beforeAppend.some(
+                                ({ event: recorded }) =>
+                                  recorded._tag === "PlannedAttemptExecutorWorkReported" &&
+                                  recorded.report._tag === "ExecutorWorkSafelySuspended" &&
+                                  recorded.report.correlation.attemptId === independentAttempt.attemptId
+                              )
+                              if (suspensionIsAccepted) {
+                                const consume = yield* Ref.modify(
+                                  failpointConsumed,
+                                  (current) => [!current, true] as const
+                                )
+                                if (consume) {
+                                  const record = yield* journal.append(requestedRunId, key, event)
+                                  yield* Ref.set(latestJournalPosition, record.position)
+                                  yield* Ref.set(failpoint, { tag: processCrash, position: record.position })
+                                  return yield* new JournalStorageUnavailable({
+                                    operation: "JournalStore.append",
+                                    detail: "test process cut after durable G2"
+                                  })
+                                }
+                              }
+                            }
                             const shouldFail =
                               (processCrash === "AfterConstraintBeforeSuspendIntent" &&
                                 event._tag === "PlannedAttemptExecutorCommandIntended" &&
@@ -1506,8 +1568,9 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             const startupActivation = yield* Deferred.make<void>()
             const acceptedActivation = yield* Deferred.make<void>()
             const activeActivation = yield* Deferred.make<"Success" | "Failure">()
-            const activeDecision = yield* Ref.make<RunFinalityDecision | undefined>(undefined)
+            const activeDecisions = yield* Ref.make<ReadonlyArray<RunFinalityDecision>>([])
             const settleActiveActivation = Effect.gen(function* () {
+              yield* Ref.update(activeActivationTimeline, (current) => [...current, "Return" as const])
               yield* Ref.update(activeConcurrent, (count) => count - 1)
               const completed = yield* Ref.get(activeActivationCount)
               yield* Deferred.succeed(completed === 1 ? firstActiveSettled : secondActiveSettled, undefined)
@@ -1538,7 +1601,12 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                         count === 1
                           ? Deferred.succeed(startupActivation, undefined)
                           : count === 2
-                            ? Deferred.succeed(acceptedActivation, undefined)
+                            ? Effect.gen(function* () {
+                                if (options.publishAfterActiveReturn === true) {
+                                  expect(yield* Ref.get(activeConcurrent)).toBe(0)
+                                }
+                                yield* Deferred.succeed(acceptedActivation, undefined)
+                              })
                             : Effect.void
                       ),
                       Effect.andThen(
@@ -1548,6 +1616,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   : Effect.gen(function* () {
                       yield* recordActivation
                       yield* Ref.update(activeSources, (sources) => [...sources, activationOpportunity.source])
+                      yield* Ref.update(activeActivationTimeline, (current) => [...current, "Start" as const])
                       yield* Ref.update(activeActivationCount, (count) => count + 1)
                       const concurrent = yield* Ref.updateAndGet(activeConcurrent, (count) => count + 1)
                       yield* Ref.update(maximumActiveConcurrent, (maximum) => Math.max(maximum, concurrent))
@@ -1555,7 +1624,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                         .activate(target, initialControlPolicySource, allocatedRunId, program, activationOpportunity)
                         .pipe(
                           Effect.tap((decision) =>
-                            Ref.set(activeDecision, decision).pipe(
+                            Ref.update(activeDecisions, (current) => [...current, decision]).pipe(
                               Effect.andThen(Deferred.succeed(activeActivation, "Success"))
                             )
                           ),
@@ -1579,6 +1648,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   Effect.gen(function* () {
                     yield* recordActivation
                     yield* Ref.update(activeSources, (sources) => [...sources, source])
+                    yield* Ref.update(activeActivationTimeline, (current) => [...current, "Start" as const])
                     yield* Ref.update(activeActivationCount, (count) => count + 1)
                     const concurrent = yield* Ref.updateAndGet(activeConcurrent, (count) => count + 1)
                     yield* Ref.update(maximumActiveConcurrent, (maximum) => Math.max(maximum, concurrent))
@@ -1593,8 +1663,22 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                     source
                   )
                   .pipe(
+                    Effect.tap(() =>
+                      options.publishAfterActiveReturn === true
+                        ? Effect.gen(function* () {
+                            // The production runtime has returned, so its bounded
+                            // publication-freshness cut is necessarily complete.
+                            // A later accepted-publication notice belongs to the
+                            // owner's next activation, not the finished runtime.
+                            const observers = yield* Ref.get(registeredObservers)
+                            if (observers === undefined) return yield* Effect.die("owner observers are missing")
+                            yield* observers.acceptedFactPublication()
+                            yield* observers.acceptedFactPublication()
+                          })
+                        : Effect.void
+                    ),
                     Effect.tap((decision) =>
-                      Ref.set(activeDecision, decision).pipe(
+                      Ref.update(activeDecisions, (current) => [...current, decision]).pipe(
                         Effect.andThen(Deferred.succeed(activeActivation, "Success"))
                       )
                     ),
@@ -1606,9 +1690,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             const applicationExit = Context.get(applicationContext, ApplicationExitShell)
             const ownerLayer = productionRunReactivationLayer(
               target,
-              Effect.succeed(
-                InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(threeExecuting ? 3 : 1) })
-              ),
+              Effect.succeed(InitialControlPolicy.make({ taskExecutionCapacity: configuredCapacity })),
               runId,
               {
                 activationInterval: ProductionRunReactivationInterval.make(
@@ -1677,6 +1759,12 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 yield* owner.hint(RunReactivationHint.Timer())
                 yield* Deferred.succeed(releaseActiveRead, undefined)
                 yield* Effect.raceFirst(Deferred.await(secondActiveSettled), Deferred.await(acceptedActivation))
+                if (options.verifyNoSpontaneousActivation === true) {
+                  const settledCount = yield* Ref.get(activeActivationCount)
+                  yield* TestClock.adjust("30 minutes")
+                  yield* Effect.yieldNow
+                  expect(yield* Ref.get(activeActivationCount)).toBe(settledCount)
+                }
               } else {
                 yield* Ref.set(phase, "Active")
                 if (source === "Timer") {
@@ -1686,6 +1774,13 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 }
                 yield* Deferred.await(activeActivation)
                 yield* Deferred.await(firstActiveSettled)
+                if (options.publishAfterActiveReturn === true) {
+                  yield* Deferred.await(acceptedActivation)
+                  yield* TestClock.adjust("30 minutes")
+                  yield* Effect.yieldNow
+                  expect(yield* Ref.get(ordinaryActivationCount)).toBe(2)
+                  expect(yield* Ref.get(activeActivationCount)).toBe(1)
+                }
                 if (options.laterSpecificationChange === true || options.repeatAfterUncertainty === true) {
                   if (options.laterSpecificationChange === true) {
                     yield* Ref.set(currentSpecificationMode, "Changed")
@@ -1709,9 +1804,17 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 ConfigProvider.layer(ConfigProvider.fromUnknown({ DALPH_JOURNAL_DATABASE: journalFilename }))
               )
             )
+            const requestsBeforeExplicitExit = yield* Ref.get(applicationExitRequests)
+            const processEndsBeforeExplicitExit = yield* Ref.get(applicationProcessEnds)
+            yield* Ref.update(beforeExplicitExitCounts, (current) => [
+              ...current,
+              { processEnds: processEndsBeforeExplicitExit, requests: requestsBeforeExplicitExit }
+            ])
             const applicationExitResult = yield* applicationExit.requestBoundary.requestExit
             const expectedApplicationExitResult =
-              processCrash === "AfterConstraintBeforeSuspendIntent" || processCrash === "SuspendResponseLost"
+              processCrash === "AfterConstraintBeforeSuspendIntent" ||
+              processCrash === "SuspendResponseLost" ||
+              processCrash === "AfterG2"
                 ? "Failed"
                 : "Succeeded"
             expect(applicationExitResult._tag).toBe(expectedApplicationExitResult)
@@ -1727,7 +1830,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 source === "AcceptedFactPublication" || source === "OperatorWake"
                   ? undefined
                   : yield* Deferred.await(activeActivation),
-              activeDecision: yield* Ref.get(activeDecision)
+              activeDecisions: yield* Ref.get(activeDecisions)
             }
           }).pipe(
             Effect.provide(nodePathAndFileSystemLayer),
@@ -1745,14 +1848,17 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
           source === "AcceptedFactPublication" || source === "OperatorWake"
             ? undefined
             : (secondProcess?.activeActivation ?? firstProcess.activeActivation),
-        activeDecision: secondProcess?.activeDecision ?? firstProcess.activeDecision,
+        activeDecision: secondProcess?.activeDecisions.at(-1) ?? firstProcess.activeDecisions.at(-1),
+        activeDecisions: [...firstProcess.activeDecisions, ...(secondProcess?.activeDecisions ?? [])],
         activationKinds: yield* Ref.get(activationKinds),
         activeSelectionOperationKeys: yield* Ref.get(activeSelectionOperationKeys),
         activeSelectionTrace: yield* Ref.get(activeSelectionTrace),
         activeSelections: yield* Ref.get(activeSelections),
         activeSources: yield* Ref.get(activeSources),
         activeActivationCount: yield* Ref.get(activeActivationCount),
+        activeActivationTimeline: yield* Ref.get(activeActivationTimeline),
         beforeSecondOpportunity: yield* Ref.get(beforeSecondOpportunity),
+        beforeExplicitExitCounts: yield* Ref.get(beforeExplicitExitCounts),
         maximumActiveConcurrent: yield* Ref.get(maximumActiveConcurrent),
         maximumGraphReadsInFlight: yield* Ref.get(maximumGraphReadsInFlight),
         executorCalls: yield* Ref.get(executorCalls),
@@ -2228,6 +2334,161 @@ it.effect("accepted publication notification and timer coalesce into one trailin
     expect(result.activeSelectionOperationKeys.filter((key) => key.startsWith("ReadTrackerGraph:"))).toHaveLength(4)
     expect(result.executorEntries).toEqual([])
     expect(result.executorCalls).toEqual([])
+  })
+)
+
+/** A/C/D start at capacity three; Alice reduces it to two, closes C, and E waits after C becomes Safe. */
+const postG2CapacityWaitScenario = {
+  capacityTwo: true,
+  executingTaskIds: { primary: TaskId.make("A"), independent: TaskId.make("C"), third: TaskId.make("D") },
+  graph: "TaskClosedWithoutSuccess",
+  includeFreshWaitingTaskE: true,
+  suspensionSubjectTaskId: TaskId.make("C"),
+  threeExecuting: true
+} satisfies ProductionRefreshHarnessOptions
+
+it.effect("hands a publication after the capacity-wait freshness cut to one nonconcurrent trailing activation", () =>
+  Effect.gen(function* () {
+    const result = yield* runProductionRefreshHarness({ ...postG2CapacityWaitScenario, publishAfterActiveReturn: true })
+    expect(result.activeDecisions).toEqual([RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" })])
+    expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "ActiveWorkAuthorityRefresh", "OrdinaryRunEntry"])
+    expect(result.activeActivationTimeline).toEqual(["Start", "Return"])
+    expect(result.maximumActiveConcurrent).toBe(1)
+    expect(result.trackerCalls.filter((call) => call === "graph")).toHaveLength(2)
+    expect(result.trackerCalls.filter((call) => call === "acquire")).toEqual([])
+    expect(result.executorCalls.filter(({ command }) => command !== "observe")).toEqual([
+      { command: "Suspend", taskId: "C" }
+    ])
+    expect(result.journalRecords.filter(({ event }) => event._tag === "WorkflowRunTerminated")).toEqual([])
+  })
+)
+
+it.effect(
+  "returns RunMustRemainActive RunnableTransition and starts one queued trailing activation only after the current activation returns",
+  () =>
+    Effect.gen(function* () {
+      const result = yield* runProductionRefreshHarness({
+        ...postG2CapacityWaitScenario,
+        coalesce: true,
+        verifyNoSpontaneousActivation: true
+      })
+
+      expect(result.graphTaskIds).toEqual(["A", "C", "D", "E"])
+      expect(result.taskWorkSnapshots).toContainEqual(["A", "C", "D"])
+      expect(result.taskWorkSnapshots.at(-1)).toEqual(["A", "D"])
+      expect(result.executorCalls.filter(({ command }) => command !== "observe")).toEqual([
+        { command: "Suspend", taskId: "C" }
+      ])
+      expect(result.trackerCalls.filter((call) => call === "acquire")).toEqual([])
+      expect(
+        result.journalRecords.filter(
+          ({ event }) => event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.taskId === "E"
+        )
+      ).toEqual([])
+      expect(result.activeDecision).toEqual(RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" }))
+      expect(result.activeDecisions).toEqual([
+        RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" }),
+        RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" })
+      ])
+      expect(result.activeActivationCount).toBe(2)
+      expect(result.activeSources).toEqual(["TrackerNotification", "Timer"])
+      expect(result.activeActivationTimeline).toEqual(["Start", "Return", "Start", "Return"])
+      expect(result.maximumActiveConcurrent).toBe(1)
+      expect(result.trackerCalls.filter((call) => call === "graph")).toHaveLength(3)
+      const activeGraphIntents = result.journalRecords.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.cause._tag === "ExecutingWorkAuthorityCheck"
+      )
+      const g2Intents = result.journalRecords.filter(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation._tag === "ReadTrackerGraph" &&
+          event.operation.cause._tag === "PostQuiescenceReconfirmation"
+      )
+      expect(activeGraphIntents).toHaveLength(2)
+      expect(g2Intents).toHaveLength(1)
+      const initialExecutingPositions = result.journalRecords.flatMap(({ event, position }) =>
+        event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkExecuting"
+          ? [position]
+          : []
+      )
+      const capacityChanged = result.journalRecords.find(({ event }) => event._tag === "TaskWorkCapacityChanged")
+      expect(initialExecutingPositions).toHaveLength(3)
+      expect(capacityChanged?.position).toBeDefined()
+      expect(initialExecutingPositions.every((position) => position < (capacityChanged?.position ?? position))).toBe(
+        true
+      )
+      if (capacityChanged === undefined || activeGraphIntents[0] === undefined) {
+        return yield* Effect.die("missing capacity contraction or active G1 intent")
+      }
+      expect(capacityChanged.position < activeGraphIntents[0].position).toBe(true)
+      expect(result.journalRecords.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
+      expect(result.beforeExplicitExitCounts).toEqual([{ processEnds: 0, requests: 0 }])
+    })
+)
+
+it.effect("restart after accepted G2 preserves A0 D0 C1 E identities and does not repeat C1 Suspend", () =>
+  Effect.gen(function* () {
+    const result = yield* runProductionRefreshHarness({ ...postG2CapacityWaitScenario, crash: "AfterG2" })
+
+    const firstRecords = result.firstJournalRecords ?? []
+    expect(result.failpoint?.tag).toBe("AfterG2")
+    const g2Position = result.failpoint?.position
+    expect(g2Position).toBeDefined()
+    expect(
+      firstRecords.some(
+        ({ event, position }) =>
+          position === g2Position &&
+          event._tag === "TaskTrackerFactsObserved" &&
+          event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed"
+      )
+    ).toBe(true)
+    const committedG2 = firstRecords.find(
+      ({ event, position }) => position === g2Position && event._tag === "TaskTrackerFactsObserved"
+    )
+    if (committedG2?.event._tag !== "TaskTrackerFactsObserved") {
+      return yield* Effect.die("the first process did not retain its exact committed G2")
+    }
+    const committedG2OperationId = committedG2.event.operationId
+    const committedG2Intent = firstRecords.find(
+      ({ event }) =>
+        event._tag === "TaskTrackerReadIntentRecorded" &&
+        event.operation._tag === "ReadTrackerGraph" &&
+        event.operation.operationId === committedG2OperationId
+    )
+    expect(committedG2Intent?.event).toMatchObject({ operation: { cause: { _tag: "PostQuiescenceReconfirmation" } } })
+    expect(
+      result.journalRecords.filter(
+        ({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended" && event.command === "Suspend"
+      )
+    ).toHaveLength(1)
+    expect(result.executorCalls.filter(({ command }) => command === "Suspend")).toEqual([
+      { command: "Suspend", taskId: "C" }
+    ])
+    expect(result.graphTaskIds).toEqual(["A", "C", "D", "E"])
+    expect(result.taskWorkSnapshots.at(-1)).toEqual(["A", "D"])
+    expect(result.beforeExplicitExitCounts).toEqual([
+      { processEnds: 0, requests: 0 },
+      { processEnds: 0, requests: 0 }
+    ])
+    expect(
+      result.journalRecords.filter(
+        ({ event }) => event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.taskId === "E"
+      )
+    ).toEqual([])
+    const plannedAttemptsOf = (records: ReadonlyArray<JournalRecord>) =>
+      records.flatMap(({ event }) => (event._tag === "TaskAttemptPlanned" ? [event.operation.plannedAttempt] : []))
+    const firstPlans = plannedAttemptsOf(firstRecords)
+    expect(firstPlans.map(({ attemptId, taskId }) => [taskId, attemptId])).toEqual([
+      ["A", "production-refresh-healthy-attempt"],
+      ["C", "production-refresh-independent-attempt"],
+      ["D", "production-refresh-third-attempt"]
+    ])
+    expect(plannedAttemptsOf(result.journalRecords)).toEqual(firstPlans)
+    expect(result.trackerCalls.filter((call) => call === "acquire")).toEqual([])
+    expect(result.journalRecords.some(({ event }) => event._tag === "WorkflowRunTerminated")).toBe(false)
   })
 )
 

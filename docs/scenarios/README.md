@@ -104,6 +104,7 @@ owning issue is complete.
 | `issue-275-discover-f-g-at-capacity.md` | 275 | Accepted DS-20 graph discovery while B/C/D hold capacity; final verification and integration remain pending |
 | `issue-276-release-exact-task-positions.md` | 276 | Controlled DS-21 position release and serialized integration order; ordinary finality and uninterrupted composition remain downstream |
 | [`issue-278-normal-termination.md`](issue-278-normal-termination.md) | 278 | Independent DS-22 seven-task normal termination, exact claim absence, and finality crash recovery; uninterrupted composition remains #279 |
+| `issue-348-post-g2-quiescence.md` | 348 | Controlled G2-gated capacity-stall return after C suspension; final integration and #337 composition remain pending |
 
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state
