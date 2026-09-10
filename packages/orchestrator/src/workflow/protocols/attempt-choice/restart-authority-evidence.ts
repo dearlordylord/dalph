@@ -1,7 +1,8 @@
 import { plannedTaskAttemptEquivalence, type PlannedTaskAttempt } from "@dalph/contracts"
 import { Schema } from "effect"
-import type { JournalPosition } from "../../../workflow-journal/identity.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { journalRecordsForAttempt, journalEvidenceBefore, isJournalRecordEvidence, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   attemptChoiceAppliedRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
@@ -37,11 +38,11 @@ export type PlannedAttemptReplacementRecord = Omit<JournalRecord, "event"> & {
 }
 
 export const exactAppliedRestart = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject
 ): RestartApplicationRecord | undefined => {
-  const matches = records.filter(
+  const matches = Array.from(journalRecordsForAttempt(records, subject.plannedAttempt.attemptId)).filter(
     (record): record is RestartApplicationRecord =>
       record.event._tag === "AttemptChoiceApplied" &&
       record.event.choice === "RestartTaskImplementation" &&
@@ -54,10 +55,10 @@ export const exactAppliedRestart = (
 }
 
 export const recordedReplacement = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   subject: AttemptChoiceSubject
 ): PlannedAttemptReplacementRecord | undefined => {
-  const replacements = records.filter(
+  const replacements = Array.from(journalRecordsForAttempt(records, subject.plannedAttempt.attemptId)).filter(
     (record): record is PlannedAttemptReplacementRecord =>
       record.event._tag === "PlannedAttemptReplaced" &&
       record.runId === subject.plannedAttempt.runId &&
@@ -69,11 +70,11 @@ export const recordedReplacement = (
 
 /** Canonical claim authority retained at the exact applied Restart position. */
 export const restartClaimAuthorityAtApplication = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   application: RestartApplicationRecord
 ) =>
   authorizedClaimForAttempt(
-    records.filter(({ position }) => position <= application.position),
+    isJournalRecordEvidence(records) ? journalEvidenceBefore(records, JournalPosition.make(application.position + 1)) : records.filter(({ position }) => position <= application.position),
     application.event.subject.plannedAttempt
   )
 
@@ -121,12 +122,13 @@ const proofEquals = Schema.toEquivalence(AttemptQuiescenceProof)
  * that remains current. Terminal lifecycle evidence is absorbing.
  */
 export const exactExecutorQuiescenceEvidence = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   before: JournalPosition,
   expected: AttemptQuiescenceProof
 ): boolean => {
-  const bounded = records.filter(({ position }) => position < before)
+  const attemptRecords = Array.from(journalRecordsForAttempt(records, plannedAttempt.attemptId))
+  const bounded = attemptRecords.filter(({ position }) => position < before)
   const evidence = latestPlannedAttemptExecutorEvidence(bounded, plannedAttempt)
   if (evidence === undefined || evidence.observedAt >= before) return false
   const responsibilities = bounded.filter(
@@ -162,7 +164,7 @@ export const exactExecutorQuiescenceEvidence = (
         candidate.event.report.correlation.attemptId === plannedAttempt.attemptId
     ).length === 1
   if (!exactSource) return false
-  const laterExecutorCommand = records.some(
+  const laterExecutorCommand = attemptRecords.some(
     ({ event, position }) =>
       position > evidence.observedAt &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&

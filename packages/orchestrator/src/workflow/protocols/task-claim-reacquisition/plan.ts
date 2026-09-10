@@ -3,6 +3,7 @@ import { type ActiveTaskClaim, isExactTaskClaim } from "../../../authorities/tas
 import type { TaskClaimReacquisitionRequestId } from "./events.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { journalRecordsForTask, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import { OperationId } from "../../identity.js"
 
 /** Stable acquisition operation identity derived from one applied reacquisition direction. */
@@ -81,17 +82,19 @@ const directionFollowsCurrentLossEpisode = (
  * unreadable, or different-loss evidence ends the direction's authority.
  */
 export const latestTaskClaimReacquisitionDirection = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   taskId: TaskId,
   expectedClaim: ActiveTaskClaim,
   throughPosition: JournalPosition
-) =>
-  records.findLast(
+) => {
+  const taskRecords = Array.from(journalRecordsForTask(records, taskId))
+  return taskRecords.findLast(
     ({ event, position }) =>
       event._tag === "TaskClaimReacquisitionDirected" &&
       event.subject.runId === runId &&
       event.subject.taskId === taskId &&
       position <= throughPosition &&
-      directionFollowsCurrentLossEpisode(records, taskId, expectedClaim, position, throughPosition)
+      directionFollowsCurrentLossEpisode(taskRecords, taskId, expectedClaim, position, throughPosition)
   )?.event
+}
