@@ -2,12 +2,13 @@ import type { RunId, TaskId } from "@dalph/contracts"
 import { taskTrackerTargetKey, type TrackerTarget } from "../authorities/task-tracker/target.js"
 import type { OperationId } from "../workflow/identity.js"
 import type { JournalPosition } from "./identity.js"
-import type { JournalRecord } from "./store.js"
+import { firstJournalRecordOfKind, lastJournalRecordOfKind, journalRecordsOfKind, journalRecordByKey, isJournalRecordEvidence, type JournalHistorySource } from "./record-evidence.js"
+import { intentRecordKey } from "./record-key.js"
 
 /** The immutable tracker target recorded by exactly one valid Run beginning. */
-export const exactWorkflowRunTargetFor = (records: ReadonlyArray<JournalRecord>): TrackerTarget | undefined => {
-  const beginnings = records.filter(({ event }) => event._tag === "WorkflowRunBegan")
-  const beginning = beginnings.length === 1 ? beginnings[0] : undefined
+export const exactWorkflowRunTargetFor = (records: JournalHistorySource): TrackerTarget | undefined => {
+  const first = firstJournalRecordOfKind(records, "WorkflowRunBegan")
+  const beginning = first === lastJournalRecordOfKind(records, "WorkflowRunBegan") ? first : undefined
   return beginning?.event._tag === "WorkflowRunBegan" ? beginning.event.target : undefined
 }
 
@@ -16,9 +17,9 @@ export const exactWorkflowRunTargetFor = (records: ReadonlyArray<JournalRecord>)
  * Run-identity guard when a shared journal projection contains other Runs.
  */
 export const exactWorkflowRunTargetForRun = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId
-): TrackerTarget | undefined => exactWorkflowRunTargetFor(records.filter((record) => record.runId === runId))
+): TrackerTarget | undefined => exactWorkflowRunTargetFor(Array.from(journalRecordsOfKind(records, "WorkflowRunBegan")).filter((record) => record.runId === runId))
 
 /**
  * A stopped-claim disposition may use only the focused claim read whose
@@ -27,7 +28,7 @@ export const exactWorkflowRunTargetForRun = (
  * cannot settle from a foreign-target read.
  */
 export const claimReadMatchesTarget = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   observationOperationId: OperationId,
   taskId: TaskId,
   after: JournalPosition,
@@ -35,18 +36,14 @@ export const claimReadMatchesTarget = (
   target: TrackerTarget | undefined
 ): boolean => {
   if (target === undefined) return false
-  const read = records.find(
-    ({ event, position }) =>
-      position > after &&
-      position < before &&
-      event._tag === "TaskTrackerReadIntentRecorded" &&
-      event.operation._tag === "ReadTaskClaim" &&
-      event.operation.operationId === observationOperationId &&
-      event.operation.taskId === taskId
-  )
+  const read = isJournalRecordEvidence(records)
+    ? journalRecordByKey(records, intentRecordKey(observationOperationId))
+    : records.find(({ event, position }) => position > after && position < before && event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTaskClaim" && event.operation.operationId === observationOperationId && event.operation.taskId === taskId)
   return (
+    read !== undefined && read.position > after && read.position < before &&
     read?.event._tag === "TaskTrackerReadIntentRecorded" &&
     read.event.operation._tag === "ReadTaskClaim" &&
+    read.event.operation.operationId === observationOperationId && read.event.operation.taskId === taskId &&
     taskTrackerTargetKey(read.event.operation.target) === taskTrackerTargetKey(target)
   )
 }
