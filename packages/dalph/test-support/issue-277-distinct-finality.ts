@@ -52,14 +52,16 @@ export const makeIssue277DistinctFinality = Effect.fn("Issue277.makeDistinctFina
   const cut = yield* Ref.make<
     { readonly _tag: "Disabled" } | { readonly _tag: "Armed"; readonly at: Issue277Cut; readonly attemptId: AttemptId }
   >({ _tag: "Disabled" })
-  const reached = yield* Queue.unbounded<Issue277Cut | "Finished">()
+  const reached = yield* Queue.unbounded<
+    { readonly _tag: "Crash"; readonly at: Issue277Cut } | { readonly _tag: "Finished" }
+  >()
   const events = yield* Queue.unbounded<WorkflowEvent>()
   const record = (call: Issue277FinalityCall) => Ref.update(calls, (all) => [...all, call])
   const interruptAt = (at: Issue277Cut, attemptId: AttemptId) =>
     Effect.gen(function* () {
       const selected = yield* Ref.get(cut)
       if (selected._tag === "Armed" && selected.at === at && selected.attemptId === attemptId) {
-        yield* Queue.offer(reached, at)
+        yield* Queue.offer(reached, { _tag: "Crash", at })
         return yield* Effect.interrupt
       }
     })
@@ -105,7 +107,7 @@ export const makeIssue277DistinctFinality = Effect.fn("Issue277.makeDistinctFina
           break
         case "IntegrationFinalitySettled":
           if (event.claim.plannedAttempt.taskId === "G") {
-            yield* Queue.offer(reached, "Finished")
+            yield* Queue.offer(reached, { _tag: "Finished" })
             return yield* Effect.interrupt
           }
           break

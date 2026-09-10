@@ -30,7 +30,7 @@ const taskFacts = {
 const tasks = Object.values(taskFacts)
 const taskFactsById: ReadonlyMap<TaskId, (typeof tasks)[number]> = new Map(tasks.map((task) => [task.taskId, task]))
 const baseSha = GitCommitSha.make("1".repeat(shaLength))
-export const makeSixTaskDeliveryFacts = (namespace: string) => {
+export const makeSixTaskDeliveryFacts = (namespace: "issue-276" | "issue-277") => {
   const runId = RunId.make(`run:${namespace}`)
   const target = FixtureTarget.make(`fixture:${namespace}`)
   const integrationTarget = IntegrationTarget.make({

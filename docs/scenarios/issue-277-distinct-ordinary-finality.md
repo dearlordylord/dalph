@@ -131,3 +131,29 @@ cases. `pnpm check:fast`, `pnpm check:duplicates`, and `git diff --check` pass.
 `pnpm check:quint:changed` reports no governed source/model changes. The
 orchestrator owns `pnpm check:all` and full `pnpm check:quint` on the frozen
 candidate before integration; this local evidence does not replace those gates.
+
+### Review repair: measure each identity at its owning boundary
+
+The Integrator receives the isolated candidate resource in `prepare`'s exact
+session correlation. Git's `readCandidate` API receives only the integration
+target and reported candidate text. The six-turn assertion now compares each
+actual preparation with its earlier `IntegratorSessionFixed` record, including
+the resource, and compares each actual Git read with that same fixed target and
+the durable prepared-result text. Swapping another task's resource into a
+captured preparation must fail the same assertion; changing the captured Git
+target ref must also fail. No candidate-resource argument was invented for Git.
+
+The lost-completion-ack case asserts one exact focused-success confirmation,
+including its task revision, claim, target, operation identity, and tracker
+revision, before cleanup. That conclusive owning-tracker reread requires zero
+request lookups and zero repeated completion mutations. The test separately
+asserts the three exact marker reads around original-claim release and marker
+deletion. After a lost marker-deletion response, the only finality boundary
+calls are an exact marker-absence read followed by the same task's active-claim
+absence read; no completion, original release, lookup, or deletion repeats.
+
+Shared cut controls distinguish Disabled from Armed explicitly, and #277's
+checkpoint notifications distinguish Crash from Finished. Shared diagnostics
+use six-task names; the #276 wrapper preserves its public type alias. The
+fixture identity accepts only the two current fixture names, and the runtime
+depends on the two required finality boundaries through an explicit interface.

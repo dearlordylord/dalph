@@ -17,6 +17,8 @@ import {
   AllocatedWorkflowRunId,
   attemptChoiceControlWithProvidedProtocolLayer,
   ClaimOwner,
+  type CompletionClaimBoundary,
+  type CompletionTaskBoundary,
   CoordinatorOwnership,
   controlDirectionApplicationLayer,
   controlledTrackerMutationLayerFrom,
@@ -67,11 +69,11 @@ import {
 } from "@dalph/orchestrator"
 import { Context, Deferred, Effect, Layer, Queue, Ref, Stream } from "effect"
 import { makeSixTaskGitAndEvidence } from "./six-task-finality-boundaries.js"
-import type { makeSixTaskFinalityBoundaries } from "./six-task-finality-boundaries.js"
 
 import type { makeSixTaskDeliveryFacts } from "./six-task-delivery-facts.js"
+import { makeSixTaskIntegratorGit } from "./six-task-integrator-git.js"
 
-export type Issue276TerminalCut = "BeforeObservation" | "AfterObservation" | "AfterAcceptance"
+export type SixTaskTerminalCut = "BeforeObservation" | "AfterObservation" | "AfterAcceptance"
 
 /** Independent G5 boundary controls; all admission and report decisions belong to production. */
 export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime")(function* (
@@ -79,7 +81,12 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
   control: {
     readonly beforeAppend: (event: WorkflowEvent) => Effect.Effect<void>
     readonly afterAppend: (event: WorkflowEvent) => Effect.Effect<void>
-    readonly makeFinality: typeof makeSixTaskFinalityBoundaries
+    readonly makeFinality: (
+      tracker: TrackerMutation["Service"]
+    ) => Effect.Effect<{
+      readonly claimBoundary: CompletionClaimBoundary["Service"]
+      readonly taskBoundary: CompletionTaskBoundary["Service"]
+    }>
   }
 ) {
   const { baseSha, capacity, graph, integrationTarget, namespace, runId, target, taskFacts, taskFactsById, tasks } =
@@ -104,8 +111,10 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
     )
   )
   const journal = Context.get(shared, JournalStore)
-  const cut = yield* Ref.make<Issue276TerminalCut | undefined>(undefined)
-  const cutReached = yield* Queue.unbounded<Issue276TerminalCut>()
+  const cut = yield* Ref.make<
+    { readonly _tag: "Disabled" } | { readonly _tag: "Armed"; readonly at: SixTaskTerminalCut }
+  >({ _tag: "Disabled" })
+  const cutReached = yield* Queue.unbounded<SixTaskTerminalCut>()
   const controlledJournal = JournalStore.of({
     ...journal,
     append: (id, key, event) =>
@@ -113,13 +122,14 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
         const selected = yield* Ref.get(cut)
         yield* control.beforeAppend(event)
         const matches =
-          selected === "BeforeObservation"
+          selected._tag === "Armed" &&
+          (selected.at === "BeforeObservation"
             ? event._tag === "PlannedAttemptExecutorStateObserved"
-            : selected === "AfterObservation"
+            : selected.at === "AfterObservation"
               ? event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkTerminal"
-              : selected === "AfterAcceptance" && event._tag === "IntegrationResponsibilityBegan"
-        if (selected !== undefined && matches) {
-          yield* Queue.offer(cutReached, selected)
+              : event._tag === "IntegrationResponsibilityBegan")
+        if (selected._tag === "Armed" && matches) {
+          yield* Queue.offer(cutReached, selected.at)
           return yield* Effect.interrupt
         }
         const result = yield* journal.append(id, key, event)
@@ -158,8 +168,8 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
         yield* Ref.update(reports, (all) => new Map(all).set(request.plannedAttempt.attemptId, report))
         return report
       }),
-    resume: () => Effect.die("#276 must not Resume an executing attempt"),
-    requestSuspension: () => Effect.die("#276 must not suspend task work"),
+    resume: () => Effect.die("six-task delivery must not Resume an executing attempt"),
+    requestSuspension: () => Effect.die("six-task delivery must not suspend task work"),
     observe: (correlation) =>
       Ref.get(reports).pipe(
         Effect.flatMap((all) => {
@@ -238,6 +248,7 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
     taskClaimReacquisitionControlLayer,
     taskWorkCapacityControlLayer
   )
+  const { candidateReads, git } = yield* makeSixTaskIntegratorGit(integrations, facts)
   const integratorLayer = Layer.merge(
     Layer.succeed(Integrator, {
       prepare: (request) =>
@@ -255,23 +266,7 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
           })
         })
     }),
-    Layer.succeed(IntegratorGit, {
-      readCandidate: (_target, candidateText) =>
-        Effect.gen(function* () {
-          const run = (yield* Ref.get(integrations)).find(
-            (run) => candidateText === `candidate:${run.session.plannedAttempt.taskId}`
-          )
-          if (run === undefined) return yield* Effect.die("unknown exact candidate")
-          const task = taskFactsById.get(run.session.plannedAttempt.taskId)
-          if (task === undefined) return yield* Effect.die("candidate has no controlled task")
-          return {
-            _tag: "Commit" as const,
-            candidateText,
-            commit: task.candidateCommit,
-            directParents: [run.session.expectedTargetHead, run.session.acceptedResult.commit]
-          }
-        })
-    })
+    Layer.succeed(IntegratorGit, git)
   )
   const activate = Effect.scoped(
     Effect.gen(function* () {
@@ -334,7 +329,7 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
         activate: () => ordinaryActivation,
         activationInterval: "1 hour",
         failureCooldown: "1 hour",
-        activateActiveWorkAuthorityRefresh: () => Effect.die("#276 has no tracker refresh stimulus"),
+        activateActiveWorkAuthorityRefresh: () => Effect.die("six-task delivery has no tracker refresh stimulus"),
         readControl: bootstrap.readRunReactivationControl(target, runId),
         installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
           bootstrap
@@ -407,6 +402,7 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
     commands,
     integrationEntered,
     integrations,
+    candidateReads,
     journal,
     evidence,
     evidenceReads,

@@ -2,12 +2,22 @@ import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import { Effect, Queue, Ref, Fiber, Deferred } from "effect"
 import { expect } from "vitest"
-import { TaskId } from "@dalph/contracts"
-import { type WorkflowJournalEvent as WorkflowEvent, type JournalRecord } from "@dalph/orchestrator"
+import { TaskId, IntegrationTargetRef } from "@dalph/contracts"
+import {
+  type WorkflowJournalEvent as WorkflowEvent,
+  type JournalRecord,
+  type IntegratorRunCorrelation
+} from "@dalph/orchestrator"
 import { makeIssue277DistinctFinality, type Issue277Cut } from "../../test-support/issue-277-distinct-finality.js"
+import type { SixTaskCandidateRead } from "../../test-support/six-task-integrator-git.js"
 
 type Fixture = Effect.Success<ReturnType<typeof makeIssue277DistinctFinality>>
 const names = ["B", "C", "D", "E", "F", "G"] as const
+
+const expectPreparedSession = (actual: IntegratorRunCorrelation, fixed: IntegratorRunCorrelation["session"]) =>
+  expect(actual.session).toEqual(fixed)
+const expectCandidateRead = (actual: SixTaskCandidateRead, expected: SixTaskCandidateRead) =>
+  expect(actual).toEqual(expected)
 
 const start = Effect.fn("Issue277Test.start")(function* (fixture: Fixture) {
   const running = yield* fixture.activate.pipe(Effect.forkScoped)
@@ -71,12 +81,15 @@ it.effect(
         yield* release(fixture, name)
         yield* process.event(isSettled(name))
       }
-      expect(yield* process.take(fixture.reached)).toBe("Finished")
+      expect(yield* process.take(fixture.reached)).toEqual({ _tag: "Finished" })
       yield* Fiber.interrupt(process.running)
       const records = yield* fixture.journal.read(fixture.runId)
       const runs = yield* Ref.get(fixture.integrations)
+      const candidateReads = yield* Ref.get(fixture.candidateReads)
+      expect(candidateReads).toHaveLength(names.length)
       const calls = yield* Ref.get(fixture.calls)
       const promotions = yield* Ref.get(fixture.promotions)
+      const promotionReads = yield* Ref.get(fixture.promotionReads)
       const evidenceReads = yield* Ref.get(fixture.evidenceReads)
       expect(runs.map(({ session }) => session.plannedAttempt.taskId)).toEqual(names)
       expect(promotions).toHaveLength(names.length)
@@ -104,6 +117,40 @@ it.effect(
         const run = runs[index]
         const expected = fixture.facts.taskFacts[name]
         if (run === undefined) return expect.fail("missing task integration")
+        const fixed = records.find(
+          ({ event }) => event._tag === "IntegratorSessionFixed" && event.correlation.plannedAttempt.taskId === name
+        )
+        const returned = records.find(
+          ({ event }) =>
+            event._tag === "IntegratorRunResultRecorded" && event.run.session.plannedAttempt.taskId === name
+        )
+        const candidateRead = candidateReads[index]
+        if (
+          fixed?.event._tag !== "IntegratorSessionFixed" ||
+          returned?.event._tag !== "IntegratorRunResultRecorded" ||
+          returned.event.result._tag !== "PreparedCandidate" ||
+          candidateRead === undefined
+        )
+          return expect.fail("missing fixed session, prepared result, or actual Git read")
+        const fixedSession = fixed.event.correlation
+        expectPreparedSession(run, fixedSession)
+        const expectedRead = {
+          target: fixed.event.correlation.integrationTarget,
+          candidateText: returned.event.result.candidateText
+        }
+        expectCandidateRead(candidateRead, expectedRead)
+        const foreignRun = runs.find(({ session }) => session.plannedAttempt.taskId !== name)
+        if (foreignRun === undefined) return expect.fail("missing another task for the resource-swap control")
+        const swappedPreparation = {
+          ...run,
+          session: { ...run.session, candidateResource: foreignRun.session.candidateResource }
+        }
+        expect(() => expectPreparedSession(swappedPreparation, fixedSession)).toThrow()
+        const wrongTargetRead = {
+          ...candidateRead,
+          target: { ...candidateRead.target, ref: IntegrationTargetRef.make("refs/heads/foreign") }
+        }
+        expect(() => expectCandidateRead(wrongTargetRead, expectedRead)).toThrow()
         const previous = index === 0 ? fixture.facts.baseSha : promotions[index - 1]?.candidateCommit
         expect(run.session.expectedTargetHead).toBe(previous)
         expect(run.session.acceptedResult.commit).toBe(expected.acceptedCommit)
@@ -112,6 +159,11 @@ it.effect(
           expectedTargetHead: previous,
           candidateCommit: expected.candidateCommit
         })
+        const readsForCandidate = promotionReads.filter(
+          ({ candidateCommit }) => candidateCommit === expected.candidateCommit
+        )
+        expect(readsForCandidate.length).toBeGreaterThan(0)
+        for (const read of readsForCandidate) expect(read).toEqual(promotions[index])
         expect(run.ordinal).toBe(1)
         expect(evidenceReads).toContainEqual(run.session.acceptedResult.evidenceManifest)
         const candidates = records.filter(
@@ -305,7 +357,7 @@ for (const cut of [
         yield* Ref.set(fixture.finalityCut, { _tag: "Armed", at: cut, attemptId: fixture.facts.taskFacts.D.attemptId })
         yield* release(fixture, "D")
         yield* fixture.terminal("D")
-        expect(yield* Queue.take(fixture.reached)).toBe(cut)
+        expect(yield* Queue.take(fixture.reached)).toEqual({ _tag: "Crash", at: cut })
         const prefix = yield* fixture.journal.read(fixture.runId)
         const prefixCalls = yield* Ref.get(fixture.calls)
         const prefixPromotions = yield* Ref.get(fixture.promotions)
@@ -372,12 +424,56 @@ for (const cut of [
             expect(event.report.result).toEqual({ _tag: "Accepted", acceptedResult: run.session.acceptedResult })
         }
         if (cut === "CompletionRequest") {
-          expect(
-            calls.slice(prefixCalls.length).find((call) => call._tag === "Focused" && call.facts.taskId === "D")
-          ).toMatchObject({
+          const recovery = calls.slice(prefixCalls.length)
+          const confirmations = recovery.filter((call) => call._tag === "Focused")
+          expect(confirmations).toHaveLength(1)
+          expect(confirmations[0]).toMatchObject({
             _tag: "Focused",
-            facts: { lifecycle: "CompletedSuccessfully", currentClaim: settlement.event.claim }
+            facts: {
+              lifecycle: "CompletedSuccessfully",
+              currentClaim: settlement.event.claim,
+              taskId: original.taskId,
+              taskRevision: original.taskRevision,
+              target: fixture.facts.target,
+              operationId: settlement.event.successObservation.operationId,
+              trackerRevision: settlement.event.successObservation.trackerRevision
+            }
           })
+          expect(calls.filter((call) => call._tag === "Lookup")).toEqual([])
+          expect(recovery.filter((call) => call._tag === "Complete")).toEqual([])
+          const markers = recovery.filter((call) => call._tag === "Marker")
+          expect(recovery.map((call) => call._tag)).toEqual([
+            "Focused",
+            "Marker",
+            "Active",
+            "ReleaseOriginal",
+            "Active",
+            "Marker",
+            "Active",
+            "Delete",
+            "Marker",
+            "Active"
+          ])
+          expect(markers).toHaveLength(3)
+          for (const marker of markers.slice(0, 2))
+            expect(marker).toEqual({
+              _tag: "Marker",
+              request: { taskId: original.taskId, expectedClaim: settlement.event.claim },
+              observation: settlement.event.claim
+            })
+          expect(markers[2]).toEqual({
+            _tag: "Marker",
+            request: { taskId: original.taskId, expectedClaim: settlement.event.claim },
+            observation: { _tag: "CompletionClaimMarkerAbsent", taskId: original.taskId }
+          })
+          const confirmationIndex = recovery.findIndex((call) => call._tag === "Focused")
+          const releaseIndex = recovery.findIndex((call) => call._tag === "ReleaseOriginal")
+          const deletionIndex = recovery.findIndex((call) => call._tag === "Delete")
+          const markerIndices = recovery.flatMap((call, index) => (call._tag === "Marker" ? [index] : []))
+          expect(markerIndices[0]).toBeGreaterThan(confirmationIndex)
+          expect(releaseIndex).toBeGreaterThan(markerIndices[0] ?? Number.MAX_SAFE_INTEGER)
+          expect(markerIndices[1]).toBeGreaterThan(releaseIndex)
+          expect(deletionIndex).toBeGreaterThan(markerIndices[1] ?? Number.MAX_SAFE_INTEGER)
         }
         if (cut === "ClaimDeletion") {
           expect(calls).toEqual(prefixCalls)
@@ -412,7 +508,7 @@ it.effect(
         yield* Ref.set(fixture.finalityCut, { _tag: "Armed", at: cut, attemptId: fixture.facts.taskFacts.B.attemptId })
         yield* release(fixture, "B")
         yield* fixture.terminal("B")
-        expect(yield* Queue.take(fixture.reached)).toBe(cut)
+        expect(yield* Queue.take(fixture.reached)).toEqual({ _tag: "Crash", at: cut })
         yield* Fiber.interrupt(process.running)
         const prefix = yield* fixture.journal.read(fixture.runId)
         const calls = yield* Ref.get(fixture.calls)
@@ -435,7 +531,27 @@ it.effect(
         const restarted = yield* start(fixture)
         yield* restarted.event(isSettled("B"))
         yield* Fiber.interrupt(restarted.running)
-        expect((yield* Ref.get(fixture.calls)).filter((call) => call._tag === "Delete")).toHaveLength(1)
+        const recoveredCalls = yield* Ref.get(fixture.calls)
+        expect(recoveredCalls.filter((call) => call._tag === "Delete")).toHaveLength(1)
+        if (cut === "MarkerDeletion") {
+          const deletion = calls.at(-1)
+          if (deletion?._tag !== "Delete") return expect.fail("missing the exact interrupted marker deletion")
+          expect(recoveredCalls.slice(calls.length)).toEqual([
+            {
+              _tag: "Marker",
+              request: { taskId: deletion.request.claim.plannedAttempt.taskId, expectedClaim: deletion.request.claim },
+              observation: { _tag: "CompletionClaimMarkerAbsent", taskId: deletion.request.claim.plannedAttempt.taskId }
+            },
+            {
+              _tag: "Active",
+              taskId: deletion.request.claim.plannedAttempt.taskId,
+              observation: { _tag: "UnclaimedTask", taskId: deletion.request.claim.plannedAttempt.taskId }
+            }
+          ])
+          expect(recoveredCalls.filter((call) => call._tag === "ReleaseOriginal")).toHaveLength(1)
+          expect(recoveredCalls.filter((call) => call._tag === "Complete")).toHaveLength(1)
+          expect(recoveredCalls.filter((call) => call._tag === "Lookup")).toEqual([])
+        }
       }
     }).pipe(Effect.provide(NodeCrypto.layer)),
   30_000
