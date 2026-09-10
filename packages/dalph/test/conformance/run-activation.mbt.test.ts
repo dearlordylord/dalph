@@ -255,6 +255,7 @@ const SpecProjection = Schema.Struct({
       initialPolicyEvaluations: ITFBigInt,
       processLosses: ITFBigInt,
       terminationAppends: ITFBigInt,
+      terminationAppendAttempts: ITFBigInt,
       trackerCalls: ITFBigInt
     })
   })
@@ -455,6 +456,7 @@ interface DriverProjection {
   readonly requestedRunId: RunTag
   readonly requestedTarget: TargetTag
   readonly terminationAppends: number
+  readonly terminationAppendAttempts: number
   readonly terminationDisposition: TerminalDispositionTag
   readonly terminalDisposition: TerminalDispositionTag
   readonly graphOutcome: GraphOutcomeTag
@@ -499,6 +501,7 @@ const runActivationActions = {
   settleOtherRetainedAttempt: {},
   settleRetainedAttempt: {},
   terminateRun: {},
+  terminateRunLosingAcknowledgement: {},
   trackerFactsBecomeSettled: {}
 } as const
 
@@ -528,6 +531,8 @@ const makeRunActivationDriverImplementation = () => {
   let initialPolicyEvaluations = 0
   let beginningAppends = 0
   let terminationAppends = 0
+  let terminationAppendAttempts = 0
+  let loseTerminationAcknowledgement = false
   let activationsStarted = 0
   let trackerCalls = 0
   let executorCalls = 0
@@ -731,6 +736,7 @@ const makeRunActivationDriverImplementation = () => {
       Effect.succeed({ _tag: "AlreadyRetired", partition: "Cold", runId: eventRunId } as const),
     terminateRun: (eventRunId, disposition, evidence) =>
       Effect.sync(() => {
+        terminationAppendAttempts += 1
         const decision = decideWorkflowRunTermination(
           eventRunId === runId ? records : otherRecords,
           eventRunId,
@@ -742,8 +748,17 @@ const makeRunActivationDriverImplementation = () => {
         }
         if (eventRunId === runId) records = [...records, decision.record]
         else otherRecords = [...otherRecords, decision.record]
+        terminationAppends += 1
+        terminationDisposition = disposition
+        history = "TerminatedHistory"
         return decision.record
-      })
+      }).pipe(
+        Effect.flatMap((record) =>
+          loseTerminationAcknowledgement
+            ? Effect.die("controlled loss of termination acknowledgement after durable commit")
+            : Effect.succeed(record)
+        )
+      )
   }) satisfies JournalStoreService
 
   const executor = PlannedAttemptExecutor.of({
@@ -1447,8 +1462,6 @@ const makeRunActivationDriverImplementation = () => {
                     )
                       return yield* Effect.die("terminal classification lacked exact graph identity evidence")
                     const disposition = proof.disposition
-                    terminalDisposition = disposition
-                    terminationDisposition = disposition
                     phase = "ActivationReturned"
                     yield* Deferred.succeed(command.acknowledged, undefined)
                     return {
@@ -1497,6 +1510,8 @@ const makeRunActivationDriverImplementation = () => {
         initialPolicyEvaluations = 0
         beginningAppends = 0
         terminationAppends = 0
+        terminationAppendAttempts = 0
+        loseTerminationAcknowledgement = false
         activationsStarted = 0
         trackerCalls = 0
         executorCalls = 0
@@ -1817,13 +1832,23 @@ const makeRunActivationDriverImplementation = () => {
         const completion = awaitActivation
         if (completion === undefined) return yield* Effect.die("Run activation completion was not installed")
         yield* completion
-        history = "TerminatedHistory"
-        terminationAppends += 1
+        terminalDisposition = terminationDisposition
         const commands = activationCommands
         if (commands !== undefined) yield* Queue.shutdown(commands)
         activationCommands = undefined
         awaitActivation = undefined
         interruptActivation = undefined
+      }).pipe(Effect.orDie),
+    terminateRunLosingAcknowledgement: () =>
+      Effect.gen(function* () {
+        loseTerminationAcknowledgement = true
+        yield* sendActivationCommand("TerminateRun")
+        const completion = awaitActivation
+        if (completion === undefined) return yield* Effect.die("Run activation completion was not installed")
+        const result = yield* Effect.exit(completion)
+        expect(result._tag).toBe("Failure")
+        expect(records.filter(({ event }) => event._tag === "WorkflowRunTerminated")).toHaveLength(1)
+        expect(terminalDisposition).toBe("NoTerminal")
       }).pipe(Effect.orDie),
     crash: () =>
       Effect.gen(function* () {
@@ -1883,6 +1908,7 @@ const makeRunActivationDriverImplementation = () => {
         requestedRunId: requestedRunId === otherRunId ? "R2" : "R1",
         requestedTarget: "Target1",
         terminationAppends,
+        terminationAppendAttempts,
         terminationDisposition,
         terminalDisposition,
         graphOutcome,
@@ -1915,6 +1941,39 @@ const withRunActivationDriver = <A, E>(
       return yield* use(makeRunActivationDriverImplementation())
     })
   )
+
+it.effect("reconstructs a committed termination after losing its acknowledgement without another boundary call", () =>
+  withRunActivationDriver((driver) =>
+    Effect.gen(function* () {
+      yield* driver.init()
+      yield* driver.establishAbsentHistory()
+      yield* driver.activateEstablishedRun()
+      yield* driver.readInitialTrackerGraph()
+      yield* driver.trackerFactsBecomeSettled()
+      yield* driver.reachQuiescence()
+      yield* driver.readPostQuiescenceTrackerGraph()
+      yield* driver.terminateRunLosingAcknowledgement()
+      const committed = yield* driver.getState()
+      expect(committed.terminationAppendAttempts).toBe(1)
+      expect(committed.terminationAppends).toBe(1)
+      expect(committed.terminationDisposition).toBe("Completed")
+      expect(committed.terminalDisposition).toBe("NoTerminal")
+      const before = yield* driver.getExecutorProtocolEvidence()
+      yield* driver.crash()
+      yield* driver.rejectTerminatedHistory()
+      const reconstructed = yield* driver.getState()
+      expect(reconstructed.history).toBe("TerminatedHistory")
+      expect(reconstructed.entryFailure).toBe("TerminatedRunFailure")
+      expect(reconstructed.terminationDisposition).toBe("Completed")
+      expect(reconstructed.terminationAppendAttempts).toBe(1)
+      expect(reconstructed.terminationAppends).toBe(1)
+      expect(reconstructed.trackerCalls).toBe(committed.trackerCalls)
+      expect(reconstructed.executorCalls).toBe(committed.executorCalls)
+      expect(reconstructed.activationsStarted).toBe(committed.activationsStarted)
+      expect(yield* driver.getExecutorProtocolEvidence()).toEqual(before)
+    })
+  )
+)
 
 it.effect("reconciles an ambiguous executor command before continuation through unified Run activation", () =>
   withRunActivationDriver((driver) =>
@@ -2043,6 +2102,7 @@ quintIt(
               requestedRunId: state.requestedRunId.tag,
               requestedTarget: state.requestedTarget.tag,
               terminationAppends: Number(state.trace.terminationAppends),
+              terminationAppendAttempts: Number(state.trace.terminationAppendAttempts),
               trackerCalls: Number(state.trace.trackerCalls),
               trackerSettled: state.trackerFinality.targetSettled,
               terminationDisposition: state.durable.terminationDisposition.tag,
@@ -2083,6 +2143,7 @@ quintIt(
         spec.requestedRunId === implementation.requestedRunId &&
         spec.requestedTarget === implementation.requestedTarget &&
         spec.terminationAppends === implementation.terminationAppends &&
+        spec.terminationAppendAttempts === implementation.terminationAppendAttempts &&
         spec.terminationDisposition === implementation.terminationDisposition &&
         spec.terminalDisposition === implementation.terminalDisposition &&
         spec.graphOutcome === implementation.graphOutcome &&

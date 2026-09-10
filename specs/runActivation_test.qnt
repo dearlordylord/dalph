@@ -1,6 +1,31 @@
 module runActivationTest {
   import runActivation.* from "./runActivation"
 
+  run lostTerminationAcknowledgementReentersWithoutBoundaryCallsTest = {
+    init.then(establishAbsentHistory).then(activateEstablishedRun)
+      .then(readInitialTrackerGraph).then(trackerFactsBecomeSettled)
+      .then(reachQuiescence).then(readPostQuiescenceTrackerGraph)
+      .then(terminateRunLosingAcknowledgement)
+      .expect(and {
+        state.durable.terminationDisposition == Completed,
+        state.process.terminalDisposition == NoTerminal,
+        state.trace.terminationAppendAttempts == 1,
+        state.trace.terminationAppends == 1,
+      })
+      .then(crash).then(rejectTerminatedHistory)
+      .expect(and {
+        state.process.entryFailure == TerminatedRunFailure,
+        state.durable.terminationDisposition == Completed,
+        state.trace.terminationAppendAttempts == 1,
+        state.trace.terminationAppends == 1,
+        state.trace.trackerCalls == 2,
+        state.trace.gitCalls == 0,
+        state.trace.executorCalls == 0,
+        state.trace.activationsStarted == 1,
+        terminatedRunIsFinal,
+      })
+  }
+
   run absentHistoryEstablishesOneBeginningTest = {
     init
       .then(establishAbsentHistory)

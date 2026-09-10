@@ -237,6 +237,8 @@ module runActivation {
   type TraceEvidence = {
     initialPolicyEvaluations: int,
     beginningAppends: int,
+    // Calls entering the termination boundary, independently of durable commits.
+    terminationAppendAttempts: int,
     terminationAppends: int,
     cancellationAppends: int,
     cancellationRedeliveries: int,
@@ -520,7 +522,11 @@ module runActivation {
 
   val terminatedRunIsFinal: bool = match state.durable.history {
     | TerminatedHistory(_) =>
-        state.process.phase != ActivatingRun and state.trace.terminationAppends <= 1
+        and {
+          state.process.phase != ActivatingRun,
+          state.trace.terminationAppends <= 1,
+          state.trace.terminationAppendAttempts == state.trace.terminationAppends,
+        }
     | _ => true
   }
 
@@ -681,6 +687,8 @@ module runActivation {
     state.trace.beginningAppends <= 1,
     state.trace.terminationAppends >= 0,
     state.trace.terminationAppends <= 1,
+    state.trace.terminationAppendAttempts >= 0,
+    state.trace.terminationAppendAttempts <= 1,
     state.trace.activationsStarted >= 0,
     state.trace.activationsStarted <= 2,
     state.trace.trackerCalls >= 0,
@@ -812,6 +820,7 @@ module runActivation {
       trace: {
         initialPolicyEvaluations: 0,
         beginningAppends: 0,
+        terminationAppendAttempts: 0,
         terminationAppends: 0,
         cancellationAppends: 0,
         cancellationRedeliveries: 0,
@@ -1332,7 +1341,9 @@ module runActivation {
     state' = { ...state, process: { ...state.process, phase: ActivationReturned } },
   }
 
-  action terminateRun: bool = all {
+  // A successful Journal commit can outlive its response. Local disposition
+  // represents acknowledgement; durable history alone prevents reactivation.
+  action terminateRunWithAcknowledgement(acknowledged: bool): bool = all {
     state.process.phase == ActivatingRun,
     state.process.postQuiescenceReads == 1,
     finalityObservationIsSettled(state.process.finalityObservation),
@@ -1371,18 +1382,23 @@ module runActivation {
       process: {
         ...state.process,
         phase: ActivationReturned,
-        terminalDisposition: terminalDispositionFor(
+        terminalDisposition: if (acknowledged) terminalDispositionFor(
           state.trackerFinality.graphOutcome,
           state.durable.cancellationApplied,
-        ),
+        ) else NoTerminal,
       },
       trace: {
         ...state.trace,
+        terminationAppendAttempts: state.trace.terminationAppendAttempts + 1,
         terminationAppends: state.trace.terminationAppends + 1,
         terminationHadLaterSettledObservation: true,
       },
     },
   }
+
+  action terminateRun: bool = terminateRunWithAcknowledgement(true)
+
+  action terminateRunLosingAcknowledgement: bool = terminateRunWithAcknowledgement(false)
 
   action crash: bool = all {
     state.process.phase != EntryIdle,
@@ -1438,6 +1454,7 @@ module runActivation {
     readPostQuiescenceTrackerGraph,
     returnIncomplete,
     terminateRun,
+    terminateRunLosingAcknowledgement,
     crash,
     invokeSameEntryAgain,
   }

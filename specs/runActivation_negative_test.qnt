@@ -3,6 +3,24 @@
 module runActivationNegativeTest {
   import runActivation.* from "./runActivation"
 
+  // Even a deduplicated retry is forbidden after reconstructing final history.
+  action retryTerminationAfterLostAcknowledgement: bool = all {
+    state.process.entryFailure == TerminatedRunFailure,
+    state' = {
+      ...state,
+      trace: { ...state.trace, terminationAppendAttempts: state.trace.terminationAppendAttempts + 1 },
+    },
+  }
+
+  run retryAfterLostTerminationAcknowledgementIsDetectedTest = {
+    init.then(establishAbsentHistory).then(activateEstablishedRun)
+      .then(readInitialTrackerGraph).then(trackerFactsBecomeSettled)
+      .then(reachQuiescence).then(readPostQuiescenceTrackerGraph)
+      .then(terminateRunLosingAcknowledgement).then(crash).then(rejectTerminatedHistory)
+      .then(retryTerminationAfterLostAcknowledgement)
+      .expect(state.trace.terminationAppends == 1 and not(terminatedRunIsFinal))
+  }
+
   action appendSecondBeginning: bool = all {
     state.process.establishmentSource == BeginningAppended,
     state' = {
