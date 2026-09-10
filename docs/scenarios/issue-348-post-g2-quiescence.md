@@ -89,7 +89,10 @@ admission or authorize an executor command.
    `TaskWorkAdmissionStalledRuntimeQuiescence` classification against the
    live admission snapshot. Before returning, Dalph captures the current
    accepted journal position and waits for its relation publication through
-   `DeliveryAcceptedFactPublication.awaitCurrent`. If that position is newer
+   `DeliveryAcceptedFactPublication.awaitCurrent`. The returned boundary must
+   name this exact Run before its position can be compared. A foreign Run's
+   boundary fails with `DeliveryRuntimeRunMismatch`, without consuming or
+   waiting for a queued evaluation. If that position is newer
    than the evaluated position, it consumes the publication and retries
    admission and classification. It retains E and the exact admission snapshot,
    then returns `RunMustRemainActive(RunnableTransition)`. The one
@@ -173,6 +176,7 @@ full cassette retains that coverage.
 | Before G2, the captured-boundary phase does not return admission-stalled; this is the scope of #275's exclusion | `packages/orchestrator/src/coordination/run/run-stabilization.test.ts`: `does not return admission-stalled before the mandatory G2 observation` |
 | The public handoff returns `RunMustRemainActive(RunnableTransition)` and starts at most one queued trailing activation after the current activation returns, with no extra finality read | `packages/dalph/src/application/production-reactivation.test.ts`: `returns RunMustRemainActive RunnableTransition and starts one queued trailing activation only after the current activation returns` |
 | Already accepted control publication advances the evaluation before a capacity wait; current facts require one check and no future event | `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`: `consumes an already accepted publication before returning a post-G2 capacity wait`; `returns admission-stalled after G2 when other exact attempts fill capacity` |
+| A foreign publication boundary cannot authorize a return or event consumption, even when its numeric position is newer | `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`: `rejects a foreign capacity-wait publication at 1 with queued change false`; `rejects a foreign capacity-wait publication at 2 with queued change false`; `rejects a foreign capacity-wait publication at 2 with queued change true` |
 | A publication notice after the freshness cut coalesces into one later ordinary activation, with no concurrent activation or spontaneous retry | `packages/dalph/src/application/production-reactivation.test.ts`: `hands a publication after the capacity-wait freshness cut to one nonconcurrent trailing activation` |
 | Alice's accepted Continue during G2 publication preserves DS01–DS13, including B1 Resume after A1 releases capacity, without changing the frozen oracle | `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`: `emits the exact DS01 through DS13 delivery checkpoint table` |
 | A live admitted action that can release capacity keeps the phase pending and admission continues after its exact release | `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`: `continues waiting after G2 while an in-flight action can free retained capacity` |

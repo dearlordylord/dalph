@@ -2337,17 +2337,19 @@ it.effect("accepted publication notification and timer coalesce into one trailin
   })
 )
 
+/** A/C/D start at capacity three; Alice reduces it to two, closes C, and E waits after C becomes Safe. */
+const postG2CapacityWaitScenario = {
+  capacityTwo: true,
+  executingTaskIds: { primary: TaskId.make("A"), independent: TaskId.make("C"), third: TaskId.make("D") },
+  graph: "TaskClosedWithoutSuccess",
+  includeFreshWaitingTaskE: true,
+  suspensionSubjectTaskId: TaskId.make("C"),
+  threeExecuting: true
+} satisfies ProductionRefreshHarnessOptions
+
 it.effect("hands a publication after the capacity-wait freshness cut to one nonconcurrent trailing activation", () =>
   Effect.gen(function* () {
-    const result = yield* runProductionRefreshHarness({
-      capacityTwo: true,
-      executingTaskIds: { primary: TaskId.make("A"), independent: TaskId.make("C"), third: TaskId.make("D") },
-      graph: "TaskClosedWithoutSuccess",
-      includeFreshWaitingTaskE: true,
-      publishAfterActiveReturn: true,
-      suspensionSubjectTaskId: TaskId.make("C"),
-      threeExecuting: true
-    })
+    const result = yield* runProductionRefreshHarness({ ...postG2CapacityWaitScenario, publishAfterActiveReturn: true })
     expect(result.activeDecisions).toEqual([RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" })])
     expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "ActiveWorkAuthorityRefresh", "OrdinaryRunEntry"])
     expect(result.activeActivationTimeline).toEqual(["Start", "Return"])
@@ -2366,13 +2368,8 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const result = yield* runProductionRefreshHarness({
-        capacityTwo: true,
+        ...postG2CapacityWaitScenario,
         coalesce: true,
-        executingTaskIds: { primary: TaskId.make("A"), independent: TaskId.make("C"), third: TaskId.make("D") },
-        graph: "TaskClosedWithoutSuccess",
-        includeFreshWaitingTaskE: true,
-        suspensionSubjectTaskId: TaskId.make("C"),
-        threeExecuting: true,
         verifyNoSpontaneousActivation: true
       })
 
@@ -2434,15 +2431,7 @@ it.effect(
 
 it.effect("restart after accepted G2 preserves A0 D0 C1 E identities and does not repeat C1 Suspend", () =>
   Effect.gen(function* () {
-    const result = yield* runProductionRefreshHarness({
-      capacityTwo: true,
-      crash: "AfterG2",
-      executingTaskIds: { primary: TaskId.make("A"), independent: TaskId.make("C"), third: TaskId.make("D") },
-      graph: "TaskClosedWithoutSuccess",
-      includeFreshWaitingTaskE: true,
-      suspensionSubjectTaskId: TaskId.make("C"),
-      threeExecuting: true
-    })
+    const result = yield* runProductionRefreshHarness({ ...postG2CapacityWaitScenario, crash: "AfterG2" })
 
     const firstRecords = result.firstJournalRecords ?? []
     expect(result.failpoint?.tag).toBe("AfterG2")

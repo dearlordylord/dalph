@@ -77,7 +77,7 @@ export class DeliveryRuntimeReconfirmationStateInvalid extends Schema.TaggedErro
   }
 ) {}
 
-/** One coherent runtime evaluation carries authority for a different Run. */
+/** A runtime evaluation or accepted-publication boundary carries authority for a different Run. */
 export class DeliveryRuntimeRunMismatch extends Schema.TaggedError<DeliveryRuntimeRunMismatch>()(
   "DeliveryRuntimeRunMismatch",
   { actualRunIds: Schema.Array(RunId), expectedRunId: RunId }
@@ -694,6 +694,9 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
           // accepted prefix; do not wait for a future executor report or hint.
           if (quiescence.value._tag === "TaskWorkAdmissionStalledRuntimeQuiescence") {
             const through = yield* acceptedFactPublication.awaitCurrent
+            if (through.runId !== expectedRunId) {
+              return yield* new DeliveryRuntimeRunMismatch({ actualRunIds: [through.runId], expectedRunId })
+            }
             if (quiescence.value.acceptedAt === null || quiescence.value.acceptedAt < through.acceptedThrough) {
               yield* applyRuntimeEvent(yield* Queue.take(events))
               continue

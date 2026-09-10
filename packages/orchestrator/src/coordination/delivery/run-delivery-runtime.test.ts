@@ -5355,6 +5355,75 @@ it.effect(
     )
 )
 
+for (const { acceptedThrough, publishChange } of [
+  { acceptedThrough: JournalPosition.make(1), publishChange: false },
+  { acceptedThrough: JournalPosition.make(2), publishChange: false },
+  { acceptedThrough: JournalPosition.make(2), publishChange: true }
+]) {
+  it.effect(
+    `rejects a foreign capacity-wait publication at ${acceptedThrough} with queued change ${publishChange}`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const base = yield* baseEvaluation
+          const [blocked] = preparedBeginProposalsOf([preparedAttemptFixture("foreign-publication-blocked")])
+          if (blocked === undefined) return yield* Effect.die("prepared attempt must produce Begin")
+          const boundary = { runId, attemptId: plannedAttempt.attemptId }
+          const initial = {
+            ...withProposals(base, [blocked], 1),
+            acceptedAt: JournalPosition.make(1),
+            activeRefreshBoundary: {
+              _tag: "ActiveRefreshRuntimeBoundary" as const,
+              runId,
+              reconciledAttempts: [boundary]
+            },
+            taskWork: makeFreshTaskAdmissionTestBasis({
+              capacity: TaskWorkCapacity.make(1),
+              held: [preparedAttemptFixture("foreign-publication-held").attempt]
+            })
+          } satisfies DeliveryRuntimeEvaluation
+          const relation = yield* dynamicEvaluationSignal(initial)
+          const observedPositions = yield* Ref.make<ReadonlyArray<JournalPosition | null>>([])
+          const foreignRunId = RunId.make("foreign-publication-run")
+          const failure = yield* runDeliveryRuntimePhase(
+            runId,
+            relation,
+            DeliveryRuntimePhase.ActiveRefreshPostG2([boundary])
+          ).pipe(
+            Effect.provideService(
+              DeliveryAcceptedFactPublication,
+              DeliveryAcceptedFactPublication.of({
+                awaitCurrent: Effect.gen(function* () {
+                  if (publishChange) yield* relation.publish({ ...initial, acceptedAt: acceptedThrough })
+                  return { _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId: foreignRunId } as const
+                })
+              })
+            ),
+            Effect.provide(identityLayers),
+            Effect.provideService(
+              DeliveryRuntimeObservationObserver,
+              DeliveryRuntimeObservationObserver.of({
+                observe: ({ evaluation }) =>
+                  Ref.update(observedPositions, (positions) => [...positions, evaluation.acceptedAt])
+              })
+            ),
+            Effect.provideService(
+              DeliveryActionExecutor,
+              DeliveryActionExecutor.of({ execute: () => Effect.die("foreign publication must not authorize work") })
+            ),
+            Effect.flip
+          )
+          expect(failure).toEqual(
+            new DeliveryRuntimeRunMismatch({ actualRunIds: [foreignRunId], expectedRunId: runId })
+          )
+          // A foreign newer position must neither wait for a missing event nor
+          // consume the available change as if its position belonged to this Run.
+          expect(yield* Ref.get(observedPositions)).not.toContain(JournalPosition.make(2))
+        })
+      )
+  )
+}
+
 it.effect("consumes an already accepted publication before returning a post-G2 capacity wait", () =>
   Effect.scoped(
     Effect.gen(function* () {
