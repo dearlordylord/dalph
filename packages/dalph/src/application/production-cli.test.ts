@@ -149,6 +149,7 @@ import {
   ProductionConfigurationLocator,
   ProductionCliConfigurationError,
   ProductionCliLifecycleError,
+  ProductionCliOutputError,
   ProductionCliRecord,
   ProductionCliUsageError
 } from "./production-cli.js"
@@ -353,6 +354,32 @@ it.effect("the explicit dry mode keeps the controlled dry-run interpreter and ne
   })
 )
 
+it.effect("the production output mapper does not reclassify a dry-run TraceOutputError", () =>
+  Effect.gen(function* () {
+    const hostAcquisitions = yield* Ref.make(0)
+    const publicOutputWrites = yield* Ref.make(0)
+    const outputFailure = new TraceOutputError({ detail: "controlled dry-run output failure" })
+    const application = runProductionCli(() => Ref.update(hostAcquisitions, (count) => count + 1))
+    const target = new URL("../../../orchestrator/fixtures/empty.json", import.meta.url).pathname
+    const layer = Layer.mergeAll(
+      makeDryRunTrackerGraphReaderLayer(fixtureReaderFileLayer),
+      Layer.succeed(
+        TraceOutput,
+        TraceOutput.of({ writeLine: () => Ref.update(publicOutputWrites, (count) => count + 1) })
+      ),
+      Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.fail(outputFailure) })),
+      deterministicOperationIdAllocatorLayer("production-cli-dry-output-failure")
+    ).pipe(Layer.provideMerge(NodeServices.layer))
+
+    const observed = yield* application(["run", target, "--dry"]).pipe(Effect.provide(layer), Effect.flip)
+
+    expect(observed).toBe(outputFailure)
+    expect(observed).not.toBeInstanceOf(ProductionCliOutputError)
+    expect(yield* Ref.get(hostAcquisitions)).toBe(0)
+    expect(yield* Ref.get(publicOutputWrites)).toBe(0)
+  })
+)
+
 it.effect("maps invalid production input to a stable redacted configuration code", () =>
   Effect.gen(function* () {
     const credential = "production-cli-secret-needle"
@@ -500,6 +527,53 @@ it.effect("maps a startup ownership conflict to one stable redacted public code"
   })
 )
 
+it.effect("a lost startup Failure record surfaces output.write_failed without a recursive write", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const writeAttempts = yield* Ref.make(0)
+    const startupFailure = new CoordinatorLockHeld({
+      gitCommonDirectory: GitCommonDirectoryLocator.make("/srv/dalph/repository.git")
+    })
+    const application = runProductionCli(() => Effect.fail(startupFailure))
+    const failingOutputLayer = Layer.succeed(
+      TraceOutput,
+      TraceOutput.of({
+        writeLine: () =>
+          Ref.update(writeAttempts, (count) => count + 1).pipe(
+            Effect.andThen(Effect.fail(new TraceOutputError({ detail: "private startup Failure output loss" })))
+          )
+      })
+    )
+
+    const observed = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(Layer.merge(liveCliLayer(lines, chronology), failingOutputLayer)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.flip
+    )
+
+    expect(observed).toBeInstanceOf(ProductionCliOutputError)
+    expect(observed).toMatchObject({
+      code: "output.write_failed",
+      detail: "production stdout could not be written",
+      subject: "production stdout"
+    })
+    expect(yield* Ref.get(writeAttempts)).toBe(1)
+    expect(yield* Ref.get(lines)).toEqual([])
+  })
+)
+
 it("maps every typed startup boundary failure without retaining private diagnostic fields", () => {
   const privateLocator = "/private/alice/repository.git"
   const privateDetail = "EACCES for alice@example.test"
@@ -522,6 +596,93 @@ it("maps every typed startup boundary failure without retaining private diagnost
   expect(JSON.stringify(records)).not.toContain(privateLocator)
   expect(JSON.stringify(records)).not.toContain(privateDetail)
 })
+
+it("maps a typed stdout write failure to one stable redacted public output code", () => {
+  const failure = knownProductionCliFailure(
+    new TraceOutputError({ detail: "private stdout failure /tmp/alice token=secret" })
+  )
+
+  expect(failure).toMatchObject({
+    _tag: "ProductionCliOutputError",
+    code: "output.write_failed",
+    detail: "production stdout could not be written",
+    subject: "production stdout"
+  })
+  expect(JSON.stringify(failure)).not.toContain("private stdout failure")
+  expect(JSON.stringify(failure)).not.toContain("token=secret")
+  if (failure === undefined) return expect.fail("typed output failure was not mapped")
+
+  expect(JSON.parse(encodeProductionCliRecord(productionCliFailureRecord(failure)))).toEqual({
+    _tag: "Failure",
+    code: "output.write_failed",
+    detail: "production stdout could not be written",
+    subject: "production stdout",
+    version: 1
+  })
+})
+
+it.effect("fails once when public stdout is lost without recursive Failure output or graceful Exit", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const writeAttempts = yield* Ref.make(0)
+    const exitRequests = yield* Ref.make(0)
+    const privateDetail = "private stdout failure /tmp/alice token=secret"
+    const application = runProductionCli((_input, use) =>
+      use(
+        {
+          acceptedHistory: currentSignalOf(cursor),
+          current: currentSignalOf({ _tag: "NotReady" as const }),
+          runTermination: { await: Effect.never, poll: Effect.succeed(Option.none()) },
+          selection: ProductionRunSelection.cases.Allocated.make({ runId }),
+          traceReader: { readAt: () => Effect.succeed(snapshot) }
+        },
+        {
+          requestExit: Ref.update(exitRequests, (count) => count + 1).pipe(
+            Effect.as(ApplicationExitResult.cases.Succeeded.make({ requestedStatus: 0 }))
+          )
+        }
+      )
+    )
+    const failingOutputLayer = Layer.succeed(
+      TraceOutput,
+      TraceOutput.of({
+        writeLine: () =>
+          Ref.update(writeAttempts, (count) => count + 1).pipe(
+            Effect.andThen(Effect.fail(new TraceOutputError({ detail: privateDetail })))
+          )
+      })
+    )
+
+    const observed = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(Layer.merge(liveCliLayer(lines, chronology), failingOutputLayer)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.flip
+    )
+
+    expect(observed).toBeInstanceOf(ProductionCliOutputError)
+    expect(observed).toMatchObject({
+      code: "output.write_failed",
+      detail: "production stdout could not be written",
+      subject: "production stdout"
+    })
+    expect(JSON.stringify(observed)).not.toContain(privateDetail)
+    expect(yield* Ref.get(writeAttempts)).toBe(1)
+    expect(yield* Ref.get(exitRequests)).toBe(0)
+    expect(yield* Ref.get(lines)).toEqual([])
+  })
+)
 
 it("maps a typed task-tracker throttle to a selected-Run delivery failure", () => {
   const throttle = new TaskTrackerMutationThrottled({
@@ -2626,7 +2787,7 @@ it.effect("a signal after Run selection interrupts presentation and reports the 
   })
 )
 
-it.effect("a presentation failure while a signal is selecting the Run remains the host failure", () =>
+it.effect("a presentation failure while a signal is selecting the Run becomes the public output failure", () =>
   Effect.gen(function* () {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
@@ -2678,7 +2839,10 @@ it.effect("a presentation failure while a signal is selecting the Run remains th
     yield* Deferred.await(requestObserved)
     yield* Deferred.succeed(releaseRunSelected, undefined)
 
-    expect(yield* Fiber.join(running).pipe(Effect.flip)).toBe(outputFailure)
+    expect(yield* Fiber.join(running).pipe(Effect.flip)).toMatchObject({
+      _tag: "ProductionCliOutputError",
+      code: "output.write_failed"
+    })
     expect((yield* Ref.get(chronology)).filter((entry) => entry === "exit-requested")).toHaveLength(1)
     expect((yield* Ref.get(lines)).map((line) => JSON.parse(line))).toEqual([
       { _tag: "RunSelected", runId, selection: "Allocated", version: 1 }
@@ -2686,7 +2850,7 @@ it.effect("a presentation failure while a signal is selecting the Run remains th
   })
 )
 
-it.effect("a presentation failure during an accepted Exit drain remains the host failure", () =>
+it.effect("a presentation failure during an accepted Exit drain becomes the public output failure", () =>
   Effect.gen(function* () {
     const lines = yield* Ref.make<ReadonlyArray<string>>([])
     const chronology = yield* Ref.make<ReadonlyArray<string>>([])
@@ -2739,7 +2903,10 @@ it.effect("a presentation failure during an accepted Exit drain remains the host
     yield* Deferred.await(exitRequestObserved)
     yield* presentationMayFail.open
 
-    expect(yield* Fiber.join(running).pipe(Effect.flip)).toBe(outputFailure)
+    expect(yield* Fiber.join(running).pipe(Effect.flip)).toMatchObject({
+      _tag: "ProductionCliOutputError",
+      code: "output.write_failed"
+    })
     expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "ApplicationExitDisposition")).toBe(false)
   })
 )
@@ -3014,7 +3181,10 @@ it.effect("lost timeout output can never become a successful process result", ()
     yield* signals.installed
     yield* signals.send("SIGTERM")
     yield* Deferred.await(outputFailed)
-    expect(yield* Fiber.join(running).pipe(Effect.flip)).toBe(outputFailure)
+    expect(yield* Fiber.join(running).pipe(Effect.flip)).toMatchObject({
+      _tag: "ProductionCliOutputError",
+      code: "output.write_failed"
+    })
     expect((yield* Ref.get(lines)).some((line) => JSON.parse(line)._tag === "RunDisposition")).toBe(false)
   })
 )
