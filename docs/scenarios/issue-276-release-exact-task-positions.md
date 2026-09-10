@@ -64,6 +64,15 @@ hold across restart. After C settles, X now receives its lineage check and
 integration turn before the next graph read admits D. Neither example may
 invent an activation return to postpone that available integration work.
 
+The singleton live-process regression observes A's accepted report, exact
+integration responsibility, one integration start, and valid Git lineage in
+activation 1. Its harness then cuts immediately after that lineage record is
+durable, before an Integrator call. This crash is an acceptance observation cut,
+not a production requirement or evidence of finality. To satisfy the authored
+restart contract, activation 2 reads the graph, checks A's claim, and reads the
+new blocked graph. No process loss may precede A's start; no second start,
+Integrator call, quarantine, promotion, completion, or settlement may appear.
+
 ### Task-work positions release independently of the integration target
 
 No person commands an executor to finish. B's executor independently makes its
@@ -103,6 +112,7 @@ retains the position and authorizes no E admission.
 | Exact fresh acquisition precedes complete graph, Git lineage, and B's Integrator call without a redundant claim read | `starts B integration after its exact acquired claim graph and lineage observations` |
 | Unrelated or foreign claims cannot replace fresh exact evidence | `does not use unrelated acquired claims as fresh integration claim observations` and `keeps focused integration claim observations within the exact task target and freshness boundary` in `recovery-activation.test.ts` |
 | Maintained authored examples accept the immediate lineage call and publish real moments | `preserves maintained authored moments after fresh-claim integration progress` in `issue-276-maintained-observations.test.ts`; Reducer Lab maintained-cassette smoke |
+| A starts and reaches exact lineage in activation 1 before the harness observation cut; later recovery adds no Integrator or finality work | `starts a queued accepted result in the same live coordinator process` in `scenario.test.ts` |
 | Crash before executor-state observation | `recovers B at BeforeObservation without another executor command` |
 | Crash after observation, before acceptance | `recovers B at AfterObservation without another executor command` |
 | Crash after acceptance, before responsibility | `recovers B at AfterAcceptance without another executor command` |
