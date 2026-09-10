@@ -10,6 +10,7 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { type RunId } from "@dalph/contracts"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import type { AcceptedJournalPrefix } from "../../workflow-journal/accepted-prefix.js"
 import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import { WorkflowOperation } from "../../workflow/registry/operation.js"
 import { TaskTrackerFactsObservation } from "../../workflow/task-tracker-facts/observation.js"
@@ -112,6 +113,8 @@ export const reconstructedTaskIsPaused = (
 
 export interface ReconstructedWorkflowHistory {
   readonly records: ReadonlyArray<JournalRecord>
+  /** Present only after semantic validation; raw reconstruction cannot certify it. */
+  readonly prefix?: AcceptedJournalPrefix
 }
 
 /** Validated process-local composition; never persisted frontier or capacity. */

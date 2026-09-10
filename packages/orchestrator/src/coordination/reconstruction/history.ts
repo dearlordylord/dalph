@@ -9,6 +9,11 @@ import {
 } from "@dalph/contracts"
 import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
 import { rememberValidatedJournalPrefixSuccessor } from "../../workflow-journal/prefix-lineage.js"
+import {
+  acceptedJournalPrefixFromValidatedHistory,
+  appendValidatedJournalRecord,
+  type AcceptedJournalPrefix
+} from "../../workflow-journal/accepted-prefix.js"
 import { type OperationId } from "../../workflow/identity.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
@@ -3351,18 +3356,22 @@ const finishValidation = (
   records: ReadonlyArray<JournalRecord>,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>,
-  reconstructRunState: () => ReconstructedRunState = () => reconstructValidatedRunState(runId, records)
+  reconstructRunState: () => ReconstructedRunState = () => reconstructValidatedRunState(runId, records),
+  acceptedPrefix?: () => AcceptedJournalPrefix
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
   validateOneUnfinishedAttemptPerTask(runId, indexes, issues)
   validateRunLifecycle(runId, records, issues)
   if (issues.length > 0) {
     return rememberReduction({ _tag: "InvalidWorkflowJournalHistory", issues, records, runId })
   }
+  const prefix = acceptedPrefix?.() ?? acceptedJournalPrefixFromValidatedHistory(runId, records)
+  const state = reconstructRunState()
   const valid: ValidWorkflowJournalHistory = {
     _tag: "ValidWorkflowJournalHistory",
-    runState: reconstructRunState(),
+    runState: { ...state, workflowHistory: { ...state.workflowHistory, prefix } },
     records,
-    runId
+    runId,
+    prefix
   }
   foldIndexesByHistory.set(valid, indexes)
   return rememberReduction(valid)
@@ -3402,8 +3411,13 @@ export const advanceWorkflowJournalHistory = (
   const indexes = cached
   const issues = new Array<WorkflowJournalHistoryIssue>()
   const advancedIndexes = validateRecord(record, prior.records.length, prior.runId, records, indexes, issues)
-  const advanced = finishValidation(prior.runId, records, advancedIndexes, issues, () =>
-    advanceReconstructedRunState(prior.runState, record, records)
+  const advanced = finishValidation(
+    prior.runId,
+    records,
+    advancedIndexes,
+    issues,
+    () => advanceReconstructedRunState(prior.runState, record, records),
+    () => appendValidatedJournalRecord(prior.prefix, record)
   )
   if (advanced._tag === "ValidWorkflowJournalHistory") {
     rememberValidatedJournalPrefixSuccessor(prior, advanced, record)

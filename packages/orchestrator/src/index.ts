@@ -1,4 +1,10 @@
 /* eslint-disable max-lines -- The package barrel intentionally lists the complete public API in one place. */
+export type {
+  AcceptedJournalPrefix,
+  JournalPrefixIdentity,
+  JournalSuccessorProvenance
+} from "./workflow-journal/accepted-prefix.js"
+export type { JournalRecordSequence } from "./workflow-journal/record-sequence.js"
 export { IntegratorBoundaryUnavailable } from "./coordination/delivery/integrator-boundary.js"
 export {
   AttemptChoice,
