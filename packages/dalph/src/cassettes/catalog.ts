@@ -2337,14 +2337,13 @@ const targetPromotionGitRequest = (repository: string, candidateCommit: string, 
 })
 
 const pipelineIntegrationPositions = {
-  A: { queuedAt: 21, startedAt: 22, targetLineageObservedAt: 32 },
-  B: { queuedAt: 83, startedAt: 84, targetLineageObservedAt: 94 }
+  A: { queuedAt: 21, startedAt: 22, targetLineageObservedAt: 24 },
+  B: { queuedAt: 77, startedAt: 78, targetLineageObservedAt: 80 }
 } as const
 
 const pipelineIntegrationFinality = (
   taskId: "A" | "B",
   attemptId: "attempt:A:0" | "attempt:B:0",
-  graph: typeof blockedPipelineGraph | typeof releasedPipelineGraph,
   acceptedResultCommit: string,
   candidateCommit: string
 ): ReadonlyArray<unknown> => {
@@ -2384,10 +2383,6 @@ const pipelineIntegrationFinality = (
     "2222222222222222222222222222222222222222"
   )
   return [
-    ...pipelineGraphRead(graph),
-    { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
-    { _tag: "TaskClaimCurrentReadReturned" as const, taskId },
-    ...pipelineGraphRead(graph),
     { _tag: "DalphSelects" as const, operation: { _tag: "ReadTargetLineage" as const, attemptId, taskId } },
     { _tag: "IntegratorRequestReceived" as const, correlation: { ordinal: 1, session: correlation } },
     { _tag: "IntegratorResultReturned" as const, result: { _tag: "PreparedCandidate" as const, candidateText } },
@@ -2488,18 +2483,13 @@ export const dependentTasksCompleteInOneRunAuthoredCassette: ScenarioCassette = 
       request: "Begin"
     },
     pipelineAcceptedReport("attempt:A:0", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-    ...pipelineGraphRead(blockedPipelineGraph),
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    },
     ...pipelineIntegrationFinality(
       "A",
       "attempt:A:0",
-      blockedPipelineGraph,
       "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
       "cccccccccccccccccccccccccccccccccccccccc"
     ),
+    ...pipelineGraphRead(blockedPipelineGraph),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -2521,18 +2511,13 @@ export const dependentTasksCompleteInOneRunAuthoredCassette: ScenarioCassette = 
       request: "Begin"
     },
     pipelineAcceptedReport("attempt:B:0", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
-    ...pipelineGraphRead(releasedPipelineGraph),
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    },
     ...pipelineIntegrationFinality(
       "B",
       "attempt:B:0",
-      releasedPipelineGraph,
       "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
       "dddddddddddddddddddddddddddddddddddddddd"
     ),
+    ...pipelineGraphRead(releasedPipelineGraph),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -4531,15 +4516,15 @@ type DoubleDiamondIntegrationPositions = {
 const defaultDiamondIntegrationPositions = {
   queuedAt: 21,
   startedAt: 22,
-  targetLineageObservedAt: 32
+  targetLineageObservedAt: 24
 } as const satisfies DoubleDiamondIntegrationPositions
 
 const fiveTaskDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 100, startedAt: 106, targetLineageObservedAt: 134 },
-  C: { queuedAt: 103, startedAt: 166, targetLineageObservedAt: 168 },
-  D: { queuedAt: 253, startedAt: 254, targetLineageObservedAt: 264 },
-  E: { queuedAt: 120, startedAt: 200, targetLineageObservedAt: 202 },
+  B: { queuedAt: 94, startedAt: 100, targetLineageObservedAt: 107 },
+  C: { queuedAt: 97, startedAt: 148, targetLineageObservedAt: 150 },
+  D: { queuedAt: 237, startedAt: 238, targetLineageObservedAt: 240 },
+  E: { queuedAt: 136, startedAt: 182, targetLineageObservedAt: 184 },
   F: defaultDiamondIntegrationPositions,
   G: defaultDiamondIntegrationPositions,
   H: defaultDiamondIntegrationPositions,
@@ -4549,15 +4534,15 @@ const fiveTaskDiamondIntegrationPositions = {
 
 const doubleDiamondIntegrationPositions = {
   A: defaultDiamondIntegrationPositions,
-  B: { queuedAt: 110, startedAt: 116, targetLineageObservedAt: 119 },
-  C: { queuedAt: 113, startedAt: 160, targetLineageObservedAt: 162 },
-  D: { queuedAt: 214, startedAt: 256, targetLineageObservedAt: 258 },
-  E: { queuedAt: 326, startedAt: 328, targetLineageObservedAt: 340 },
-  F: { queuedAt: 327, startedAt: 372, targetLineageObservedAt: 374 },
-  G: { queuedAt: 541, startedAt: 542, targetLineageObservedAt: 552 },
-  H: { queuedAt: 442, startedAt: 444, targetLineageObservedAt: 456 },
-  I: { queuedAt: 443, startedAt: 488, targetLineageObservedAt: 490 },
-  X: { queuedAt: 148, startedAt: 194, targetLineageObservedAt: 224 }
+  B: { queuedAt: 104, startedAt: 110, targetLineageObservedAt: 113 },
+  C: { queuedAt: 107, startedAt: 154, targetLineageObservedAt: 156 },
+  D: { queuedAt: 241, startedAt: 242, targetLineageObservedAt: 244 },
+  E: { queuedAt: 312, startedAt: 314, targetLineageObservedAt: 316 },
+  F: { queuedAt: 313, startedAt: 348, targetLineageObservedAt: 350 },
+  G: { queuedAt: 511, startedAt: 512, targetLineageObservedAt: 514 },
+  H: { queuedAt: 420, startedAt: 422, targetLineageObservedAt: 424 },
+  I: { queuedAt: 421, startedAt: 456, targetLineageObservedAt: 458 },
+  X: { queuedAt: 142, startedAt: 188, targetLineageObservedAt: 190 }
 } as const satisfies Record<DoubleDiamondTaskId, DoubleDiamondIntegrationPositions>
 
 const integrationPositionsForDiamondTask = (
@@ -4566,16 +4551,9 @@ const integrationPositionsForDiamondTask = (
 ): DoubleDiamondIntegrationPositions =>
   fiveTaskDiamond ? fiveTaskDiamondIntegrationPositions[taskId] : doubleDiamondIntegrationPositions[taskId]
 
-/** Every accepted executor result crosses the ordinary integration and completion-finality boundaries. */
+/** After the authored lineage read, cross the ordinary integration and completion-finality boundaries. */
 const doubleDiamondIntegrationFinality = (
   attempt: { readonly attemptId: string; readonly taskId: (typeof doubleDiamondTaskIds)[number] },
-  graphBeforeCompletion: DoubleDiamondGraph,
-  claimsToRead: ReadonlyArray<{ readonly taskId: (typeof doubleDiamondTaskIds)[number] }> = [attempt],
-  continueQueuedIntegration = false,
-  lineageTasks: ReadonlyArray<{
-    readonly attemptId: string
-    readonly taskId: (typeof doubleDiamondTaskIds)[number]
-  }> = [attempt],
   repository = "/dalph/cassettes/double-diamond.git"
 ) => {
   const acceptedResultCommit = doubleDiamondAcceptedCommit(attempt.taskId)
@@ -4620,20 +4598,6 @@ const doubleDiamondIntegrationFinality = (
     targetLineageObservedAt
   }
   return [
-    ...(continueQueuedIntegration
-      ? []
-      : [
-          ...doubleDiamondGraphRead(graphBeforeCompletion),
-          ...claimsToRead.flatMap(({ taskId }) => [
-            { _tag: "DalphSelects" as const, operation: { _tag: "ReadTaskClaim" as const, taskId } },
-            { _tag: "TaskClaimCurrentReadReturned" as const, taskId }
-          ]),
-          ...doubleDiamondGraphRead(graphBeforeCompletion),
-          ...lineageTasks.map(({ attemptId, taskId }) => ({
-            _tag: "DalphSelects" as const,
-            operation: { _tag: "ReadTargetLineage" as const, attemptId, taskId }
-          }))
-        ]),
     { _tag: "IntegratorRequestReceived" as const, correlation: { ordinal: 1, session: correlation } },
     { _tag: "IntegratorResultReturned" as const, result: { _tag: "PreparedCandidate" as const, candidateText } },
     {
@@ -4686,6 +4650,15 @@ const doubleDiamondIntegrationFinality = (
   ]
 }
 
+/** Fresh exact acquisition and its later complete graph already authorize the lineage read. */
+const doubleDiamondFreshIntegrationFinality = (
+  attempt: { readonly attemptId: string; readonly taskId: DoubleDiamondTaskId },
+  repository = "/dalph/cassettes/double-diamond.git"
+) => [
+  { _tag: "DalphSelects" as const, operation: { _tag: "ReadTargetLineage" as const, ...attempt } },
+  ...doubleDiamondIntegrationFinality(attempt, repository)
+]
+
 const doubleDiamondAttempts = {
   a: { attemptId: "attempt:A:0", taskId: "A" },
   b: { attemptId: "attempt:B:0", taskId: "B" },
@@ -4726,38 +4699,41 @@ const doubleDiamondRestartIntegrationAuthorization = () => [
   }
 ]
 
-/** X's held worktree selection is released after B's promotion CAS, then X starts before B's completion finality. */
-const doubleDiamondRestartedBIntegrationFinality = () =>
-  doubleDiamondIntegrationFinality(
-    doubleDiamondAttempts.b,
-    doubleDiamondGraphs.xObservedDuringRestart,
-    [],
-    true
-  ).flatMap(
+/** Release the exact held worktree after promotion, then let its Begin report release the completion-read hold. */
+const doubleDiamondIntegrationReleasingWork = (
+  promoted: { readonly attemptId: string; readonly taskId: DoubleDiamondTaskId },
+  released: { readonly attemptId: string; readonly taskId: DoubleDiamondTaskId },
+  repository = "/dalph/cassettes/double-diamond.git"
+) =>
+  doubleDiamondIntegrationFinality(promoted, repository).flatMap(
     (item): ReadonlyArray<AuthoredCassetteStoryItem> =>
       item._tag === "TargetPromotionCompareAndSetReturned"
         ? [
             decodeStoryItem(item),
             decodeStoryItem({
               _tag: "CassetteReleasesHeldTaskWorktreeSelection" as const,
-              ...doubleDiamondAttempts.x,
-              promotionRequest: doubleDiamondBPromotionRequest
+              ...released,
+              promotionRequest: targetPromotionGitRequest(
+                repository,
+                doubleDiamondCandidateCommit(promoted.taskId),
+                "2222222222222222222222222222222222222222"
+              )
             }),
             decodeStoryItem({
               _tag: "DalphSelects" as const,
-              operation: { _tag: "ReconcileTaskWorktree" as const, ...doubleDiamondAttempts.x }
+              operation: { _tag: "ReconcileTaskWorktree" as const, ...released }
             }),
-            decodeStoryItem(doubleDiamondExecutorReport(doubleDiamondAttempts.x)),
+            decodeStoryItem(doubleDiamondExecutorReport(released)),
             decodeStoryItem({
               _tag: "CassetteReleasesHeldPromotedTaskCompletionClaimRead" as const,
-              promotedAttemptId: doubleDiamondAttempts.b.attemptId,
-              promotedTaskId: doubleDiamondAttempts.b.taskId,
-              releasedByAttemptId: doubleDiamondAttempts.x.attemptId,
-              releasedByTaskId: doubleDiamondAttempts.x.taskId
+              promotedAttemptId: promoted.attemptId,
+              promotedTaskId: promoted.taskId,
+              releasedByAttemptId: released.attemptId,
+              releasedByTaskId: released.taskId
             })
           ]
         : item._tag === "CompletionTaskRequestReturned"
-          ? [decodeStoryItem(item), decodeStoryItem(doubleDiamondAcceptedReport(doubleDiamondAttempts.x))]
+          ? [decodeStoryItem(item), decodeStoryItem(doubleDiamondAcceptedReport(released))]
           : [decodeStoryItem(item)]
   )
 
@@ -4793,12 +4769,8 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     ]),
     doubleDiamondExecutorReport(doubleDiamondAttempts.a),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.a),
+    ...doubleDiamondFreshIntegrationFinality(doubleDiamondAttempts.a),
     ...doubleDiamondGraphRead(doubleDiamondGraphs.initialAEligible),
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.a, doubleDiamondGraphs.initialAEligible),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -4826,7 +4798,7 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
       releasedByAttemptId: doubleDiamondAttempts.x.attemptId,
       releasedByTaskId: doubleDiamondAttempts.x.taskId
     },
-    ...doubleDiamondRestartedBIntegrationFinality(),
+    ...doubleDiamondIntegrationReleasingWork(doubleDiamondAttempts.b, doubleDiamondAttempts.x),
     {
       _tag: "DalphSelects",
       operation: {
@@ -4835,29 +4807,14 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
         taskId: doubleDiamondAttempts.c.taskId
       }
     },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.c, doubleDiamondGraphs.bComplete, [], true),
+    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.c),
+    ...doubleDiamondFreshIntegrationFinality(doubleDiamondAttempts.x),
     ...doubleDiamondGraphClaimSpecificationPlanAndWorktreeItems(doubleDiamondGraphs.middlePairComplete, [
       doubleDiamondAttempts.d
     ]),
     doubleDiamondExecutorReport(doubleDiamondAttempts.d),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.d),
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.x, doubleDiamondGraphs.middlePairComplete, [
-      doubleDiamondAttempts.d,
-      doubleDiamondAttempts.x
-    ]),
-    {
-      _tag: "DalphSelects",
-      operation: {
-        _tag: "ReadTargetLineage",
-        attemptId: doubleDiamondAttempts.d.attemptId,
-        taskId: doubleDiamondAttempts.d.taskId
-      }
-    },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.d, doubleDiamondGraphs.middlePairComplete, [], true),
+    ...doubleDiamondFreshIntegrationFinality(doubleDiamondAttempts.d),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -4870,17 +4827,10 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     doubleDiamondExecutorReport(doubleDiamondAttempts.f),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.e),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.f),
-    ...doubleDiamondGraphRead(doubleDiamondGraphs.dAndXComplete),
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.e, doubleDiamondGraphs.dAndXComplete, [
-      doubleDiamondAttempts.e,
-      doubleDiamondAttempts.f
-    ]),
+    ...doubleDiamondFreshIntegrationFinality(doubleDiamondAttempts.e),
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:F:1", taskId: "F" } },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.f, doubleDiamondGraphs.eComplete, [], true),
+    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.f),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.dAndXComplete),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -4893,17 +4843,10 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     doubleDiamondExecutorReport(doubleDiamondAttempts.i),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.h),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.i),
-    ...doubleDiamondGraphRead(doubleDiamondGraphs.lowerPairComplete),
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.h, doubleDiamondGraphs.lowerPairComplete, [
-      doubleDiamondAttempts.h,
-      doubleDiamondAttempts.i
-    ]),
+    ...doubleDiamondFreshIntegrationFinality(doubleDiamondAttempts.h),
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:I:1", taskId: "I" } },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.i, doubleDiamondGraphs.hComplete, [], true),
+    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.i),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.lowerPairComplete),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -4913,12 +4856,8 @@ export const deliveryInvariantStoryAuthoredCassette: ScenarioCassette = Schema.d
     ]),
     doubleDiamondExecutorReport(doubleDiamondAttempts.g),
     doubleDiamondAcceptedReport(doubleDiamondAttempts.g),
-    ...doubleDiamondGraphRead(doubleDiamondGraphs.deepPairComplete),
-    {
-      _tag: "CoordinatorActivationReturned",
-      decision: { _tag: "RunMustRemainActive", reason: "UnsettledResponsibility" }
-    },
-    ...doubleDiamondIntegrationFinality(doubleDiamondAttempts.g, doubleDiamondGraphs.allComplete),
+    ...doubleDiamondFreshIntegrationFinality(doubleDiamondAttempts.g),
+    ...doubleDiamondGraphRead(doubleDiamondGraphs.allComplete),
     { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMayTerminate" } },
     {
       _tag: "ExpectedBehavior",
@@ -4969,6 +4908,14 @@ const fiveTaskDiamondAttempts = {
   d: { attemptId: "attempt:D:0", taskId: "D" }
 } as const
 
+/** E's already-admitted worktree waits for B's CAS; B's completion read waits for E's Begin report. */
+const fiveTaskDiamondBIntegrationFinality = () =>
+  doubleDiamondIntegrationReleasingWork(
+    fiveTaskDiamondAttempts.b,
+    fiveTaskDiamondAttempts.e,
+    "/dalph/cassettes/five-task-diamond.git"
+  )
+
 /** Capacity two consumes A -> (B, C, E) -> D only after exact tracker-confirmed finality. */
 export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette = Schema.decodeUnknownSync(
   AuthoredScenarioCassette
@@ -5001,16 +4948,8 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
     ]),
     doubleDiamondExecutorReport(fiveTaskDiamondAttempts.a),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.a),
+    ...doubleDiamondFreshIntegrationFinality(fiveTaskDiamondAttempts.a, "/dalph/cassettes/five-task-diamond.git"),
     ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.noneComplete),
-    { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActiveReasonUnasserted" } },
-    ...doubleDiamondIntegrationFinality(
-      fiveTaskDiamondAttempts.a,
-      fiveTaskDiamondGraphs.noneComplete,
-      undefined,
-      false,
-      undefined,
-      "/dalph/cassettes/five-task-diamond.git"
-    ),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -5036,37 +4975,29 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
     { _tag: "DalphSelects", operation: { _tag: "ReadTaskWorkSpecification", taskId: "E" } },
     { _tag: "TaskWorkSpecificationReadReturned", ...doubleDiamondSpecification("E") },
     { _tag: "DalphSelects", operation: { _tag: "RecordTaskAttemptPlan", ...fiveTaskDiamondAttempts.e } },
-    { _tag: "DalphSelects", operation: { _tag: "ReconcileTaskWorktree", ...fiveTaskDiamondAttempts.e } },
-    doubleDiamondExecutorReport(fiveTaskDiamondAttempts.e),
-    doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.e),
-    ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.aComplete),
-    { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActiveReasonUnasserted" } },
-    ...doubleDiamondIntegrationFinality(
-      fiveTaskDiamondAttempts.b,
-      fiveTaskDiamondGraphs.aComplete,
-      [fiveTaskDiamondAttempts.b, fiveTaskDiamondAttempts.c, fiveTaskDiamondAttempts.e],
-      false,
-      [fiveTaskDiamondAttempts.b],
-      "/dalph/cassettes/five-task-diamond.git"
-    ),
+    {
+      _tag: "CassetteHoldsTaskWorktreeSelectionBeforeTargetPromotion",
+      ...fiveTaskDiamondAttempts.e,
+      promotionRequest: targetPromotionGitRequest(
+        "/dalph/cassettes/five-task-diamond.git",
+        doubleDiamondCandidateCommit("B"),
+        "2222222222222222222222222222222222222222"
+      )
+    },
+    {
+      _tag: "CassetteHoldsPromotedTaskCompletionClaimReadUntilTaskWorkBegins",
+      promotedAttemptId: fiveTaskDiamondAttempts.b.attemptId,
+      promotedTaskId: "B",
+      releasedByAttemptId: fiveTaskDiamondAttempts.e.attemptId,
+      releasedByTaskId: "E"
+    },
+    { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", ...fiveTaskDiamondAttempts.b } },
+    ...fiveTaskDiamondBIntegrationFinality(),
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:C:1", taskId: "C" } },
-    ...doubleDiamondIntegrationFinality(
-      fiveTaskDiamondAttempts.c,
-      fiveTaskDiamondGraphs.abcComplete,
-      [],
-      true,
-      undefined,
-      "/dalph/cassettes/five-task-diamond.git"
-    ),
+    ...doubleDiamondIntegrationFinality(fiveTaskDiamondAttempts.c, "/dalph/cassettes/five-task-diamond.git"),
     { _tag: "DalphSelects", operation: { _tag: "ReadTargetLineage", attemptId: "attempt:E:2", taskId: "E" } },
-    ...doubleDiamondIntegrationFinality(
-      fiveTaskDiamondAttempts.e,
-      fiveTaskDiamondGraphs.abceComplete,
-      [],
-      true,
-      undefined,
-      "/dalph/cassettes/five-task-diamond.git"
-    ),
+    ...doubleDiamondIntegrationFinality(fiveTaskDiamondAttempts.e, "/dalph/cassettes/five-task-diamond.git"),
+    ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.aComplete),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }
@@ -5076,16 +5007,8 @@ export const productionShapedFiveTaskDiamondAuthoredCassette: ScenarioCassette =
     ]),
     doubleDiamondExecutorReport(fiveTaskDiamondAttempts.d),
     doubleDiamondAcceptedReport(fiveTaskDiamondAttempts.d),
+    ...doubleDiamondFreshIntegrationFinality(fiveTaskDiamondAttempts.d, "/dalph/cassettes/five-task-diamond.git"),
     ...doubleDiamondGraphRead(fiveTaskDiamondGraphs.abceComplete),
-    { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActiveReasonUnasserted" } },
-    ...doubleDiamondIntegrationFinality(
-      fiveTaskDiamondAttempts.d,
-      fiveTaskDiamondGraphs.abceComplete,
-      undefined,
-      false,
-      undefined,
-      "/dalph/cassettes/five-task-diamond.git"
-    ),
     {
       _tag: "CoordinatorActivationReturned",
       decision: { _tag: "RunMustRemainActive", reason: "TrackerTargetUnsettled" }

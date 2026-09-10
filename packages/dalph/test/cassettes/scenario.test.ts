@@ -3539,21 +3539,83 @@ it.effect("starts a queued accepted result in the same live coordinator process"
   Effect.gen(function* () {
     const source = acceptedResultRestartsIntoIntegrationAuthoredCassette.story
     const deathAt = source.findIndex(({ _tag }) => _tag === "CoordinatorProcessDies")
-    const blockedGraphAt = source.findIndex(
-      (item) => item._tag === "TrackerGraphReadReturned" && item.graph.revision === "accepted-result-new-blocker"
-    )
     const terminal = source.at(-1)
     if (terminal?._tag !== "ExpectedBehavior") return yield* Effect.die("expected terminal assertion")
-    const uninterrupted = AuthoredScenarioCassette.make({
+    const observedLiveStart = AuthoredScenarioCassette.make({
       ...acceptedResultRestartsIntoIntegrationAuthoredCassette,
-      name: "accepted result starts without coordinator restart",
-      story: [...source.slice(0, deathAt), ...source.slice(blockedGraphAt - 1, blockedGraphAt + 1), terminal]
+      name: "accepted result starts before the lineage observation-cut restart",
+      story: [
+        ...source.slice(0, deathAt),
+        {
+          _tag: "DalphSelects",
+          operation: { _tag: "ReadTargetLineage", attemptId: AttemptId.make("attempt:A:0"), taskId: TaskId.make("A") }
+        },
+        { _tag: "CoordinatorProcessDiesAfterJournalEvent", afterJournalEvent: "TargetLineageObserved" },
+        ...source.slice(deathAt + 1, -1),
+        terminal
+      ]
     })
 
-    const run = yield* runAuthoredScenarioCassette(uninterrupted)
+    const run = yield* runAuthoredScenarioCassette(observedLiveStart)
 
-    expect(run.activationOrdinals).toEqual([1])
-    expect(run.records.filter(({ event }) => event._tag === "IntegrationStarted")).toHaveLength(1)
+    expect(run.activationOrdinals).toEqual([1, 2])
+    const starts = run.records.filter(({ event }) => event._tag === "IntegrationStarted")
+    expect(starts).toHaveLength(1)
+    const started = starts[0]
+    const responsibility = run.records.find(({ event }) => event._tag === "IntegrationResponsibilityBegan")
+    const lineage = run.records.find(({ event }) => event._tag === "TargetLineageObserved")
+    if (
+      started?.event._tag !== "IntegrationStarted" ||
+      responsibility?.event._tag !== "IntegrationResponsibilityBegan" ||
+      lineage?.event._tag !== "TargetLineageObserved"
+    )
+      return yield* Effect.die("expected exact responsibility, start, and lineage records")
+    expect(started.event.plannedAttempt).toEqual(responsibility.event.plannedAttempt)
+    expect(started.event.acceptedResult).toEqual(responsibility.event.acceptedResult)
+    expect(started.event.integrationTarget).toEqual(responsibility.event.integrationTarget)
+    expect(started.event.responsibilityBeganAt).toBe(responsibility.position)
+    expect(lineage.event.plannedAttempt).toEqual(started.event.plannedAttempt)
+    expect(lineage.event.plannedAttempt).toMatchObject({ attemptId: "attempt:A:0", taskId: "A" })
+    expect(lineage.event.observation.plannedBaseIsAncestorOfTargetHead).toBe(true)
+    expect(lineage.position).toBeGreaterThan(started.position)
+    const boundaries = run.observationCaptures.flatMap((capture) =>
+      capture._tag === "AuthoredStoryOccurrenceCaptured" &&
+      (capture.occurrence._tag === "CoordinatorProcessDies" ||
+        capture.occurrence._tag === "CoordinatorProcessDiesAfterJournalEvent" ||
+        (capture.occurrence._tag === "DalphSelects" && capture.occurrence.operation._tag === "ReadTargetLineage"))
+        ? [{ activation: capture.activationOrdinal, occurrence: capture.occurrence }]
+        : []
+    )
+    expect(boundaries).toEqual([
+      {
+        activation: 1,
+        occurrence: {
+          _tag: "DalphSelects",
+          operation: { _tag: "ReadTargetLineage", attemptId: "attempt:A:0", taskId: "A" }
+        }
+      },
+      {
+        activation: 1,
+        occurrence: { _tag: "CoordinatorProcessDiesAfterJournalEvent", afterJournalEvent: "TargetLineageObserved" }
+      }
+    ])
+    expect(
+      run.records.filter(
+        ({ event }) =>
+          event._tag.startsWith("Integrator") ||
+          event._tag.startsWith("Completion") ||
+          event._tag.startsWith("TargetPromotion") ||
+          event._tag === "IntegrationQuarantined" ||
+          event._tag === "IntegrationFinalitySettled" ||
+          event._tag === "WorkflowRunTerminated"
+      )
+    ).toEqual([])
+    expect(
+      run.observationCaptures.some(
+        (capture) =>
+          capture._tag === "AuthoredStoryOccurrenceCaptured" && capture.occurrence._tag === "IntegratorRequestReceived"
+      )
+    ).toBe(false)
   })
 )
 

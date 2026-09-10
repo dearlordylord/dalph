@@ -157,6 +157,7 @@ import {
   filterFrontierForActivePauses,
   frontierForActivationOpportunity,
   makeRunRecoveryProjection,
+  latestIntegrationClaimObservationPosition,
   restartReplacementDisposition,
   pendingActiveRefreshGraphReadFor,
   pendingActiveRefreshG2OperationFor,
@@ -400,6 +401,61 @@ const coverageClaimEvent = taskTrackerFactsObservedEvent(
   coverageClaimOperation.operationId,
   makeFocusedTaskClaimFactsObserved(coverageClaimOperation, coverageClaim)
 )
+
+it("does not use unrelated acquired claims as fresh integration claim observations", () => {
+  const records = coveragePlanRecords()
+  expect(latestIntegrationClaimObservationPosition(records, coverageAttempt, coverageTarget, Option.none())).toBe(2)
+  const baseline = Option.some(JournalPosition.make(4))
+  expect(latestIntegrationClaimObservationPosition(records, coverageAttempt, coverageTarget, baseline)).toBeUndefined()
+  const unrelated = { ...coverageClaim, operationId: OperationId.make("unrelated-acquisition") }
+  for (const claim of [
+    ActiveTaskClaim.make({ ...unrelated, taskId: TaskId.make("unrelated-C") }),
+    ActiveTaskClaim.make({ ...unrelated, owner: ClaimOwner.make("foreign-owner") }),
+    ActiveTaskClaim.make({ ...unrelated, token: ClaimToken.make("foreign-token") }),
+    ActiveTaskClaim.make(unrelated)
+  ]) {
+    const later = coverageRecord(5, TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion }))
+    expect(authorizedClaimForAttempt([...records, later], coverageAttempt)?.claim).toEqual(coverageClaim)
+    expect(
+      latestIntegrationClaimObservationPosition([...records, later], coverageAttempt, coverageTarget, baseline)
+    ).toBeUndefined()
+  }
+})
+
+it("keeps focused integration claim observations within the exact task target and freshness boundary", () => {
+  const records = coveragePlanRecords()
+  const baseline = Option.some(JournalPosition.make(4))
+  const exact = coverageRecord(5, coverageClaimEvent)
+  expect(
+    latestIntegrationClaimObservationPosition([...records, exact], coverageAttempt, coverageTarget, baseline)
+  ).toBe(5)
+  expect(
+    latestIntegrationClaimObservationPosition(
+      [...records, exact],
+      coverageAttempt,
+      coverageTarget,
+      Option.some(exact.position)
+    )
+  ).toBeUndefined()
+  for (const [target, taskId] of [
+    [FixtureTarget.make("foreign-tracker-target"), coverageTaskId],
+    [coverageTarget, TaskId.make("unrelated-C")]
+  ] as const) {
+    const operation = makeTaskClaimObservationOperation(OperationId.make("unrelated-focused-read"), target, taskId, [])
+    const event = taskTrackerFactsObservedEvent(
+      operation.operationId,
+      makeFocusedTaskClaimFactsObserved(operation, ActiveTaskClaim.make({ ...coverageClaim, taskId }))
+    )
+    expect(
+      latestIntegrationClaimObservationPosition(
+        [...records, coverageRecord(5, event)],
+        coverageAttempt,
+        coverageTarget,
+        baseline
+      )
+    ).toBeUndefined()
+  }
+})
 const acceptedCoverageClaimOperation = makeTaskClaimObservationOperation(
   OperationId.make("recovery-activation-accepted-coverage-claim"),
   coverageTarget,
