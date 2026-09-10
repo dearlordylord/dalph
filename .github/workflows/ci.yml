@@ -78,7 +78,7 @@ jobs:
     needs: change-plan
     if: needs.change-plan.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
-    # The bounded check:ci stages allow 68 minutes in total, before setup.
+    # The bounded check:ci stages allow 67 minutes in total, before setup.
     # Let their own watchdogs report a failing stage instead of cancelling
     # healthy coverage after build, diagnostics, lint, and Lab consume time.
     timeout-minutes: 80
@@ -99,7 +99,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          submodules: true
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
@@ -146,7 +145,6 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-          submodules: true
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v6

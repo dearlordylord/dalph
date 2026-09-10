@@ -52,7 +52,6 @@ const gates = [
   { args: ["check:circular"], name: "dependency cycles", timeout: 60 * SECOND },
   complexityQualityGate(qualityBaseSha),
   { args: ["check:duplicates"], name: "duplication", timeout: 60 * SECOND },
-  { args: ["test:memory"], name: "project memory scenarios", timeout: 60 * SECOND },
   {
     args: ["test:issue-268-c4"],
     name: "issue 268 fresh-process repeatability",

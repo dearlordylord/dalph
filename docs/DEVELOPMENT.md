@@ -178,7 +178,7 @@ on Ubuntu/macOS in the [qualification workflow](../.github/workflows/codex-app-s
 
 For shared-host gate failures, dispatch [Candidate qualification](../.github/workflows/quint-qualification.yml)
 once with the frozen `candidate_sha`. Choose `quint` (default, ARM) or `all`
-(x64, full history, submodules, gitleaks); `all` also requires the reviewed
+(x64, full history, gitleaks); `all` also requires the reviewed
 `coverage_base_sha`. It runs the same gate on a fresh worker. Diagnose stage
 failures before retrying; different hardware is not a calibrated baseline.
 
