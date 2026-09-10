@@ -23,13 +23,30 @@ import type {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorStateObservationOrdinal
 } from "./events.js"
-import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
+import {
+  journalRecordsForAttempt,
+  journalRecordsOfKind,
+  type JournalHistorySource,type JournalRecordEvidence
+} from "../../../workflow-journal/record-evidence.js"
 
 const latestElementOffset = -1
 
+type ExecutorJournalOccurrence = Pick<JournalRecord, "event" | "position">
+type ExecutorHistorySource = ReadonlyArray<ExecutorJournalOccurrence> | JournalRecordEvidence
+const isIndexedExecutorHistory = (source: ExecutorHistorySource): source is JournalRecordEvidence =>
+  !Array.isArray(source)
+
+const executorRecordsForAttempt = (
+  source: ExecutorHistorySource,
+  attemptId: PlannedTaskAttempt["attemptId"]
+): ReadonlyArray<ExecutorJournalOccurrence> =>
+  isIndexedExecutorHistory(source)
+    ? Array.from(journalRecordsForAttempt(source, attemptId))
+    : source
+
 /** Builds the exact executor request from fresh selection or accepted recovery evidence. */
 export const plannedAttemptExecutorRequestFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   selectedSpecification?: TaskWorkSpecificationType
 ): Effect.Effect<
@@ -75,28 +92,11 @@ export const plannedAttemptExecutorRequestFor = (
 const taskWorkSpecificationsByPrefix = new WeakMap<object, ReadonlyArray<TaskWorkSpecificationType>>()
 
 const plannedAttemptExecutorTaskWorkSpecifications = (
-  records: ReadonlyArray<Pick<JournalRecord, "event">>
+  records: JournalHistorySource
 ): ReadonlyArray<TaskWorkSpecificationType> => {
   const cached = taskWorkSpecificationsByPrefix.get(records)
   if (cached !== undefined) return cached
-  const predecessor = journalPrefixPredecessorOf(records)
-  const specifications = (() => {
-    if (predecessor !== undefined) {
-      const prior = plannedAttemptExecutorTaskWorkSpecifications(predecessor.prior)
-      const event = predecessor.appended.event
-      return event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskWorkSpecificationFacts"
-        ? [
-            ...prior,
-            TaskWorkSpecification.make({
-              body: event.observation.factFamily.body,
-              fingerprint: event.observation.factFamily.fingerprint,
-              taskId: event.observation.factFamily.taskId,
-              title: event.observation.factFamily.title
-            })
-          ]
-        : prior
-    }
-    return records.flatMap(({ event }) => {
+  const specifications = Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved")).flatMap(({ event }) => {
       if (event._tag !== "TaskTrackerFactsObserved" || event.observation._tag !== "FocusedTaskWorkSpecificationFacts") {
         return []
       }
@@ -109,7 +109,6 @@ const plannedAttemptExecutorTaskWorkSpecifications = (
         })
       ]
     })
-  })()
   taskWorkSpecificationsByPrefix.set(records, specifications)
   return specifications
 }
@@ -226,11 +225,11 @@ const evidenceFromRecord = (
 
 /** Returns exact correlated executor authority while retaining how Dalph learned it. */
 export const plannedAttemptExecutorEvidence = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  records: ExecutorHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   after?: JournalPosition
 ): ReadonlyArray<PlannedAttemptExecutorEvidence> =>
-  records.flatMap((record) =>
+  executorRecordsForAttempt(records, plannedAttempt.attemptId).flatMap((record) =>
     after !== undefined && record.position <= after ? [] : evidenceFromRecord(record, plannedAttempt)
   )
 
@@ -255,10 +254,10 @@ const projectionIssueReason = (
 
 /** Returns the latest non-exact projection outcome for this exact responsibility. */
 export const latestPlannedAttemptExecutorProjectionIssue = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  records: ExecutorHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): PlannedAttemptExecutorProjectionIssue | undefined => {
-  for (const { event, position } of [...records].reverse()) {
+  for (const { event, position } of executorRecordsForAttempt(records, plannedAttempt.attemptId).toReversed()) {
     if (
       (event._tag === "PlannedAttemptExecutorCommandProjectionObserved" ||
         event._tag === "PlannedAttemptExecutorStateObserved") &&
@@ -274,22 +273,6 @@ export const latestPlannedAttemptExecutorProjectionIssue = (
 
 const latestExecutorEvidenceByPrefix = new WeakMap<object, Map<string, PlannedAttemptExecutorEvidence | undefined>>()
 
-const executorProjectionEventTags = new Set<JournalRecord["event"]["_tag"]>([
-  "PlannedAttemptExecutorCommandProjectionObserved",
-  "PlannedAttemptExecutorCommandResponseObserved",
-  "PlannedAttemptExecutorStateObserved"
-])
-
-const executorEventAffectsAttempt = (event: JournalRecord["event"], plannedAttempt: PlannedTaskAttempt): boolean => {
-  if (event._tag === "PlannedAttemptExecutorWorkReported") return exactCorrelation(event.report, plannedAttempt)
-  return (
-    executorProjectionEventTags.has(event._tag) &&
-    "plannedAttempt" in event &&
-    event.plannedAttempt.runId === plannedAttempt.runId &&
-    event.plannedAttempt.attemptId === plannedAttempt.attemptId
-  )
-}
-
 const preferredExactExecutorEvidence = (
   accepted: PlannedAttemptExecutorEvidence | undefined,
   observed: PlannedAttemptExecutorEvidence | undefined
@@ -303,7 +286,7 @@ const preferredExactExecutorEvidence = (
 }
 
 const deriveLatestExecutorEvidence = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  records: ExecutorHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   after?: JournalPosition
 ): PlannedAttemptExecutorEvidence | undefined => {
@@ -324,21 +307,13 @@ const deriveLatestExecutorEvidence = (
  * erasing its historical evidence; Dalph must reread before using it again.
  */
 export const latestPlannedAttemptExecutorEvidence = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  records: ExecutorHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   after?: JournalPosition
 ): PlannedAttemptExecutorEvidence | undefined => {
   const key = `${plannedAttempt.attemptId}:after:${after ?? "beginning"}`
   const cachedByAttempt = latestExecutorEvidenceByPrefix.get(records)
   if (cachedByAttempt?.has(key) === true) return cachedByAttempt.get(key)
-  const predecessor = journalPrefixPredecessorOf(records)
-  if (predecessor !== undefined && !executorEventAffectsAttempt(predecessor.appended.event, plannedAttempt)) {
-    const evidence = latestPlannedAttemptExecutorEvidence(predecessor.prior, plannedAttempt, after)
-    const cache = cachedByAttempt ?? new Map<string, PlannedAttemptExecutorEvidence | undefined>()
-    cache.set(key, evidence)
-    latestExecutorEvidenceByPrefix.set(records, cache)
-    return evidence
-  }
   const latest = deriveLatestExecutorEvidence(records, plannedAttempt, after)
   const cache = cachedByAttempt ?? new Map<string, PlannedAttemptExecutorEvidence | undefined>()
   cache.set(key, latest)
@@ -365,10 +340,10 @@ type CurrentAcceptedPlannedAttemptExecutorLifecycle =
   | { readonly _tag: "Ambiguous" }
 
 export const currentAcceptedPlannedAttemptExecutorLifecycleFor = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  records: ExecutorHistorySource,
   correlation: PlannedAttemptExecutorCorrelation
 ): CurrentAcceptedPlannedAttemptExecutorLifecycle => {
-  const responsibility = records.findLast(
+  const responsibility = executorRecordsForAttempt(records, correlation.attemptId).findLast(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
       event.plannedAttempt.runId === correlation.runId &&
@@ -384,7 +359,7 @@ export const currentAcceptedPlannedAttemptExecutorLifecycleFor = (
 
 /** Returns lifecycle authority only when the newest current exact evidence is the accepted report itself. */
 export const latestAcceptedPlannedAttemptExecutorEvidence = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  records: ExecutorHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   after?: JournalPosition
 ): AcceptedPlannedAttemptExecutorEvidence | undefined => {
@@ -397,7 +372,7 @@ export const latestAcceptedPlannedAttemptExecutorEvidence = (
  * Begin/Resume intent and while no executor command remains unsettled.
  */
 export const currentUnconsumedAcceptedSafeEvidence = (
-  records: ReadonlyArray<JournalRecord>,
+  records: ExecutorHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): AcceptedPlannedAttemptExecutorEvidence | undefined => {
   const safe = latestAcceptedPlannedAttemptExecutorEvidence(records, plannedAttempt)
@@ -407,7 +382,7 @@ export const currentUnconsumedAcceptedSafeEvidence = (
   ) {
     return undefined
   }
-  const consumed = records.some(
+  const consumed = executorRecordsForAttempt(records, plannedAttempt.attemptId).some(
     ({ event, position }) =>
       position > safe.observedAt &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
@@ -419,7 +394,7 @@ export const currentUnconsumedAcceptedSafeEvidence = (
 
 /** Latest distinct exact observation that still needs a lifecycle report ordinal. */
 export const latestUnacceptedPlannedAttemptExecutorReport = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  records: ExecutorHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): PlannedAttemptExecutorEvidence | undefined => {
   const all = plannedAttemptExecutorEvidence(records, plannedAttempt)
@@ -433,10 +408,11 @@ export const latestUnacceptedPlannedAttemptExecutorReport = (
 
 /** Latest exact executor command whose boundary response is still ambiguous. */
 export const latestUnsettledPlannedAttemptExecutorCommand = (
-  records: ReadonlyArray<Pick<JournalRecord, "event" | "position">>,
+  records: ExecutorHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ) => {
-  const command = records.findLast(
+  const attemptRecords = executorRecordsForAttempt(records, plannedAttempt.attemptId)
+  const command = attemptRecords.findLast(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
       event.plannedAttempt.runId === plannedAttempt.runId &&
@@ -446,7 +422,7 @@ export const latestUnsettledPlannedAttemptExecutorCommand = (
   const commandEvent = command.event
   // A redelivery reopens delivery responsibility for the original command.
   // Earlier Safe projections cannot settle the later ambiguity-crossing intent.
-  const latestDelivery = records.findLast(
+  const latestDelivery = attemptRecords.findLast(
     ({ event, position }) =>
       position > command.position &&
       event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" &&
@@ -454,7 +430,7 @@ export const latestUnsettledPlannedAttemptExecutorCommand = (
       plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt)
   )
   const deliveryPosition = latestDelivery?.position ?? command.position
-  const settled = records.some(({ event, position }) => {
+  const settled = attemptRecords.some(({ event, position }) => {
     if (position <= deliveryPosition) return false
     if (event._tag === "PlannedAttemptExecutorCommandResponseObserved") {
       return event.commandOrdinal === commandEvent.ordinal && exactCorrelation(event.report, plannedAttempt)

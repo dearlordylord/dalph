@@ -32,6 +32,11 @@ import type {
   UnchangedTaskTrackerFactsReconfirmed
 } from "../../workflow/task-tracker-facts/observation.js"
 import type { TrackerGraphReadCause } from "../../workflow/registry/operation.js"
+import type { AcceptedJournalPrefix } from "../../workflow-journal/accepted-prefix.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import { materializeJournalRecords } from "../../workflow-journal/record-sequence.js"
+import { acceptedJournalRecordForKey } from "../../workflow-journal/accepted-prefix.js"
+import { intentRecordKey } from "../../workflow-journal/record-key.js"
 
 const lastElementOffset = -1
 
@@ -50,7 +55,7 @@ export interface JournalState {
   readonly position: JournalPosition
   readonly graph: TrackerGraphState
   readonly reconstructed: ReconstructedRunState
-  readonly records: ReadonlyArray<JournalRecord>
+  readonly prefix: AcceptedJournalPrefix
 }
 
 /** The raw append operation needed beneath the journal state service. */
@@ -71,6 +76,9 @@ export interface JournalService {
     event: AppendableWorkflowJournalEvent
   ) => Effect.Effect<JournalRecord, JournalAppendError>
   readonly read: (runId: RunId) => Effect.Effect<ReadonlyArray<JournalRecord>, JournalError | InRunJournalRunMismatch>
+  readonly readAccepted: (
+    runId: RunId
+  ) => Effect.Effect<AcceptedJournalPrefix, JournalError | InRunJournalRunMismatch>
 }
 
 export class Journal extends Context.Service<Journal, JournalService>()("@dalph/Journal") {}
@@ -94,8 +102,6 @@ const readOpenJournal = (status: JournalStatus): Effect.Effect<JournalState, Jou
 
 type JournaledGraphFacts = CompleteTaskTrackerFactsObserved | UnchangedTaskTrackerFactsReconfirmed
 type JournaledGraphEvent = TaskTrackerFactsObservedEvent & { readonly observation: JournaledGraphFacts }
-type JournaledGraphRecord = Pick<JournalRecord, "position"> & { readonly event: JournaledGraphEvent }
-
 /** One complete/reconfirmed event journaled for this service's configured target. */
 interface JournaledGraphReceipt {
   readonly [JournaledGraphReceiptTypeId]: typeof JournaledGraphReceiptTypeId
@@ -139,49 +145,40 @@ const journaledTrackerGraphObservationFromReceipt = (
     })
   )
 
-const latestGraphObservationFrom = (
-  records: ReadonlyArray<JournalRecord>,
+const graphObservationFromAcceptedRecord = (
+  record: JournalRecord,
+  prefix: AcceptedJournalPrefix,
   snapshot: TaskDagSnapshot,
   target: TrackerTarget
 ): Option.Option<JournaledTrackerGraphObservation> => {
-  let latest: JournaledGraphRecord | undefined
+  const event = record.event
   const targetKey = taskTrackerTargetKey(target)
-  for (const record of records) {
-    if (record.event._tag !== "TaskTrackerFactsObserved") continue
-    if (!isJournaledGraphEvent(record.event)) continue
-    if (taskTrackerTargetKey(record.event.observation.target) !== targetKey) continue
-    latest = { event: record.event, position: record.position }
+  if (
+    event._tag !== "TaskTrackerFactsObserved" ||
+    !isJournaledGraphEvent(event) ||
+    taskTrackerTargetKey(event.observation.target) !== targetKey
+  ) {
+    return Option.none()
   }
-  return Option.flatMap(Option.fromUndefinedOr(latest), ({ event, position }) =>
-    Option.flatMap(
-      Option.fromUndefinedOr(
-        records.findLast(
-          ({ event: candidate }) =>
-            candidate._tag === "TaskTrackerReadIntentRecorded" &&
-            candidate.operation._tag === "ReadTrackerGraph" &&
-            candidate.operation.operationId === event.operationId
-        )
-      ),
-      (intent) =>
-        intent.event._tag === "TaskTrackerReadIntentRecorded" && intent.event.operation._tag === "ReadTrackerGraph"
-          ? journaledTrackerGraphObservationFromReceipt(
-              journaledGraphReceiptFromEvent({ cause: intent.event.operation.cause, event, position, snapshot })
-            )
-          : Option.none()
-    )
-  )
+  const intent = acceptedJournalRecordForKey(prefix, intentRecordKey(event.operationId))
+  return intent?.event._tag === "TaskTrackerReadIntentRecorded" && intent.event.operation._tag === "ReadTrackerGraph"
+    ? journaledTrackerGraphObservationFromReceipt(
+        journaledGraphReceiptFromEvent({ cause: intent.event.operation.cause, event, position: record.position, snapshot })
+      )
+    : Option.none()
 }
 
 const graphStateFrom = (
   reconstructed: ReconstructedRunState,
-  records: ReadonlyArray<JournalRecord>,
+  record: JournalRecord,
+  prefix: AcceptedJournalPrefix,
   target: TrackerTarget
 ): TrackerGraphState =>
   Option.match(reconstructedTaskGraphFor(reconstructed.graphKnowledge, target), {
     /* v8 ignore next -- A newly journaled complete/reconfirmed graph event necessarily reconstructs graph knowledge. */
     onNone: () => TrackerGraphState.cases.GraphNotEstablished.make({}),
     onSome: (graph) => {
-      return Option.match(latestGraphObservationFrom(records, graph, target), {
+      return Option.match(graphObservationFromAcceptedRecord(record, prefix, graph, target), {
         /* v8 ignore next -- @preserve An established graph and its latest observation derive from the same accepted journal prefix, so the source observation cannot be absent here. */
         onNone: () => TrackerGraphState.cases.GraphNotEstablished.make({}),
         onSome: (observation) => TrackerGraphState.cases.GraphEstablished.make({ observation })
@@ -189,32 +186,32 @@ const graphStateFrom = (
     }
   })
 
-const journaledGraphWasPublished = (
-  records: ReadonlyArray<JournalRecord>,
-  after: JournalPosition,
-  target: TrackerTarget
-): boolean => {
+const acceptedRecordPublishesGraph = (record: JournalRecord, target: TrackerTarget): boolean => {
   const targetKey = taskTrackerTargetKey(target)
-  return records.some(
-    ({ event, position }) =>
-      position > after &&
-      event._tag === "TaskTrackerFactsObserved" &&
-      isJournaledGraphEvent(event) &&
-      taskTrackerTargetKey(event.observation.target) === targetKey
+  const event = record.event
+  return (
+    event._tag === "TaskTrackerFactsObserved" &&
+    isJournaledGraphEvent(event) &&
+    taskTrackerTargetKey(event.observation.target) === targetKey
   )
 }
 
 const advanceJournalState = (
   history: ValidWorkflowJournalHistory,
   prior: JournalState,
+  record: JournalRecord,
   target: TrackerTarget
 ): JournalState => {
-  const records = history.records
-  const position = Option.getOrThrow(Option.fromUndefinedOr(records.at(lastElementOffset))).position
-  const graph = journaledGraphWasPublished(records, prior.position, target)
-    ? graphStateFrom(history.runState, records, target)
+  const graph = acceptedRecordPublishesGraph(record, target)
+    ? graphStateFrom(history.runState, record, history.prefix, target)
     : prior.graph
-  return { _tag: "JournalState", position, graph, reconstructed: history.runState, records }
+  return {
+    _tag: "JournalState",
+    position: record.position,
+    graph,
+    reconstructed: history.runState,
+    prefix: history.prefix
+  }
 }
 
 /**
@@ -269,7 +266,7 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
       position: initialPosition,
       graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
       reconstructed: validated.runState,
-      records: validated.records
+      prefix: validated.prefix
     }
   })
   yield* Effect.addFinalizer(() => PubSub.shutdown(publicationState.pubsub))
@@ -297,7 +294,7 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
           const record = yield* storage.append(run, key, event)
           const before = status.value
           if (record.position <= before.position) {
-            const existing = before.records.find(({ position }) => position === record.position)
+          const existing = acceptedJournalRecordForKey(before.prefix, record.key)
             if (JSON.stringify(existing) !== JSON.stringify(record)) {
               const failure = new JournalRecordMismatch({ position: record.position, key, runId })
               return yield* failJournal(failure)
@@ -318,7 +315,7 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
             })
             return yield* failJournal(failure)
           }
-          const next = advanceJournalState(nextHistory, before, target)
+          const next = advanceJournalState(nextHistory, before, record, target)
           yield* SubscriptionRef.set(publicationState, { _tag: "JournalOpen", history: nextHistory, value: next })
           yield* onAcceptedRecord(record)
           return record
@@ -327,9 +324,13 @@ export const makeJournal = Effect.fn("Journal.make")(function* (
     )
   const read: JournalService["read"] = (requestedRunId: RunId) =>
     requestedRunId === runId
-      ? state.get.pipe(Effect.map(({ records }) => records))
+      ? state.get.pipe(Effect.map(({ prefix }) => materializeJournalRecords(prefix.records)))
       : Effect.fail(new InRunJournalRunMismatch({ expectedRunId: runId, requestedRunId }))
-  return { state, append, read } satisfies JournalService
+  const readAccepted: JournalService["readAccepted"] = (requestedRunId: RunId) =>
+    requestedRunId === runId
+      ? state.get.pipe(Effect.map(({ prefix }) => prefix))
+      : Effect.fail(new InRunJournalRunMismatch({ expectedRunId: runId, requestedRunId }))
+  return { state, append, read, readAccepted } satisfies JournalService
 })
 
 /** Installs the one journal and exposes only its in-Run and descriptive capabilities. */
@@ -345,6 +346,7 @@ export const journalLayer = (
       Effect.map((journal) =>
         Context.empty().pipe(
           Context.add(Journal, journal),
+          Context.add(AcceptedJournalReader, AcceptedJournalReader.of({ readAccepted: journal.readAccepted })),
           Context.add(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read }))
         )
       )
