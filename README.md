@@ -88,12 +88,16 @@ drain. The shipped Node runner does not independently interrupt the application
 fiber for those signals. The command reports the redacted application-Exit
 disposition and returns status zero only for `Succeeded`; `TimedOut`, a
 conclusive drain failure, lost output, or abrupt process death remains nonzero.
-A typed stdout-write failure is exposed only as the stable redacted
+A typed production stdout-write failure is exposed only as the stable redacted
 `output.write_failed` boundary failure; the command does not recursively try to
-write another stdout failure record. Graceful application Exit does not itself
-terminate the selected Run. If that Run was not independently and durably
-terminated, it remains available to the ordinary recovery path on the next
-invocation.
+write another stdout failure record. If stdout is lost while reporting another
+known production failure, that output failure is terminal; the explicit
+delivery-throttle path instead retains its original typed throttle so restart
+still follows the owning provider-reconciliation protocol. Both paths remain
+nonzero. The controlled `--dry` interpreter keeps its existing output error
+type. Graceful application Exit does not itself terminate the selected Run. If
+that Run was not independently and durably terminated, it remains available to
+the ordinary recovery path on the next invocation.
 
 For a visual preview of the intended experience, run the disposable historical
 execution-trace prototype:

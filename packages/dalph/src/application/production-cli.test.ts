@@ -354,6 +354,32 @@ it.effect("the explicit dry mode keeps the controlled dry-run interpreter and ne
   })
 )
 
+it.effect("the production output mapper does not reclassify a dry-run TraceOutputError", () =>
+  Effect.gen(function* () {
+    const hostAcquisitions = yield* Ref.make(0)
+    const publicOutputWrites = yield* Ref.make(0)
+    const outputFailure = new TraceOutputError({ detail: "controlled dry-run output failure" })
+    const application = runProductionCli(() => Ref.update(hostAcquisitions, (count) => count + 1))
+    const target = new URL("../../../orchestrator/fixtures/empty.json", import.meta.url).pathname
+    const layer = Layer.mergeAll(
+      makeDryRunTrackerGraphReaderLayer(fixtureReaderFileLayer),
+      Layer.succeed(
+        TraceOutput,
+        TraceOutput.of({ writeLine: () => Ref.update(publicOutputWrites, (count) => count + 1) })
+      ),
+      Layer.succeed(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.fail(outputFailure) })),
+      deterministicOperationIdAllocatorLayer("production-cli-dry-output-failure")
+    ).pipe(Layer.provideMerge(NodeServices.layer))
+
+    const observed = yield* application(["run", target, "--dry"]).pipe(Effect.provide(layer), Effect.flip)
+
+    expect(observed).toBe(outputFailure)
+    expect(observed).not.toBeInstanceOf(ProductionCliOutputError)
+    expect(yield* Ref.get(hostAcquisitions)).toBe(0)
+    expect(yield* Ref.get(publicOutputWrites)).toBe(0)
+  })
+)
+
 it.effect("maps invalid production input to a stable redacted configuration code", () =>
   Effect.gen(function* () {
     const credential = "production-cli-secret-needle"
@@ -498,6 +524,53 @@ it.effect("maps a startup ownership conflict to one stable redacted public code"
         version: 1
       }
     ])
+  })
+)
+
+it.effect("a lost startup Failure record surfaces output.write_failed without a recursive write", () =>
+  Effect.gen(function* () {
+    const lines = yield* Ref.make<ReadonlyArray<string>>([])
+    const chronology = yield* Ref.make<ReadonlyArray<string>>([])
+    const writeAttempts = yield* Ref.make(0)
+    const startupFailure = new CoordinatorLockHeld({
+      gitCommonDirectory: GitCommonDirectoryLocator.make("/srv/dalph/repository.git")
+    })
+    const application = runProductionCli(() => Effect.fail(startupFailure))
+    const failingOutputLayer = Layer.succeed(
+      TraceOutput,
+      TraceOutput.of({
+        writeLine: () =>
+          Ref.update(writeAttempts, (count) => count + 1).pipe(
+            Effect.andThen(Effect.fail(new TraceOutputError({ detail: "private startup Failure output loss" })))
+          )
+      })
+    )
+
+    const observed = yield* application([
+      "run",
+      "github:octo/dalph#42",
+      "--production",
+      "--config",
+      "/tmp/production.json"
+    ]).pipe(
+      Effect.provide(Layer.merge(liveCliLayer(lines, chronology), failingOutputLayer)),
+      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        ConfigProvider.layer(
+          ConfigProvider.fromUnknown({ DALPH_CODEX_PROVIDER_CREDENTIAL: "codex-secret", GITHUB_TOKEN: "github-secret" })
+        )
+      ),
+      Effect.flip
+    )
+
+    expect(observed).toBeInstanceOf(ProductionCliOutputError)
+    expect(observed).toMatchObject({
+      code: "output.write_failed",
+      detail: "production stdout could not be written",
+      subject: "production stdout"
+    })
+    expect(yield* Ref.get(writeAttempts)).toBe(1)
+    expect(yield* Ref.get(lines)).toEqual([])
   })
 )
 

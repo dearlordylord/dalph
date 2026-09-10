@@ -413,6 +413,15 @@ has `_tag: "RunSelected"`, `selection: "Allocated"`, an exact `runId`, and
   failure has code `output.write_failed`, status 1, and fixed redacted detail;
   Dalph does not recursively attempt another stdout `Failure` record.
 
+This output mapping belongs only to the production command. The controlled
+`--dry` interpreter retains its existing `TraceOutputError`. If stdout fails
+while the production CLI is best-effort reporting another known failure, the
+typed output failure becomes the terminal boundary result. The selected-Run
+delivery-throttle path is the explicit exception: losing its `Failure` line
+retains the original `delivery.provider_throttled` failure so the owning
+provider protocol, not presentation, controls reconciliation. Either result
+has process status 1 and neither path attempts a second stdout write.
+
 An unexpected defect is reported through stderr and a nonzero process result;
 it does not invent an `internal.unexpected` NDJSON record. Historical snapshots,
 current status, Run disposition, and application Exit are distinct facts. An

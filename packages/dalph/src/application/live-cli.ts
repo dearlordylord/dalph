@@ -4,7 +4,7 @@ import {
   type ApplicationExitRequestBoundaryService,
   fixtureReaderFileLayer,
   type JournalStoreError,
-  type TraceOutputError,
+  TraceOutputError,
   type TraceReaderError,
   TraceOutput
 } from "@dalph/orchestrator"
@@ -148,13 +148,15 @@ export const makeProductionCli = <EHost, RHost>(
                 )
               )
             )
+          ).pipe(
+            Effect.mapError((failure) => {
+              const known = knownProductionCliFailure(failure)
+              return known instanceof ProductionCliOutputError ? known : failure
+            })
           )
         }).pipe(
-          Effect.mapError((failure) => {
-            const known = knownProductionCliFailure(failure)
-            return known instanceof ProductionCliOutputError ? known : failure
-          }),
           Effect.tapError((failure) => {
+            if (!production && failure instanceof TraceOutputError) return Effect.void
             if (failure instanceof ProductionCliOutputError) return Effect.void
             return Deferred.isDone(selectedRunId).pipe(
               Effect.flatMap((hasSelection) =>
@@ -165,9 +167,16 @@ export const makeProductionCli = <EHost, RHost>(
                   : Effect.succeed(knownProductionCliFailure(failure))
               ),
               Effect.flatMap((known) => {
-                return known === undefined
-                  ? Effect.void
-                  : output.writeLine(encodeProductionCliRecord(productionCliFailureRecord(known))).pipe(Effect.ignore)
+                if (known === undefined) return Effect.void
+                const writeFailure = output
+                  .writeLine(encodeProductionCliRecord(productionCliFailureRecord(known)))
+                  .pipe(
+                    Effect.mapError((failure) => {
+                      const mapped = knownProductionCliFailure(failure)
+                      return mapped instanceof ProductionCliOutputError ? mapped : failure
+                    })
+                  )
+                return known._tag === "ProductionCliDeliveryError" ? writeFailure.pipe(Effect.ignore) : writeFailure
               })
             )
           })
