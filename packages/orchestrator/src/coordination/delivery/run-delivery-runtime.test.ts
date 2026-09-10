@@ -3542,7 +3542,7 @@ it.effect("ignores a stale accepted frontier before it can call the executor", (
   )
 )
 
-it.effect("accepts Pause during phase two and retains the exact G2 boundary without executor work", () =>
+it.effect("retains exact G2 and accepts Pause after capacity-stalled phase two without executor work", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const base = yield* baseEvaluation
@@ -3816,32 +3816,29 @@ it.effect("accepts Pause during phase two and retains the exact G2 boundary with
         quiescence: { _tag: "QuiescencePassive" as const, reason: "RunPaused" as const }
       } satisfies DeliveryRuntimeEvaluation
       const relation = yield* dynamicEvaluationSignal(acceptedG2)
-      const waitingDeferred = yield* Deferred.make<void>()
-      const trace = DeliverySemanticTrace.of({
-        emit: (event) =>
-          event._tag === "ProposalDeferred" && event.proposalId === waiting.id
-            ? Deferred.succeed(waitingDeferred, undefined)
-            : Effect.void
-      })
       const executorCalls = yield* Ref.make(0)
-      const runtime = yield* runDeliveryRuntimePhase(
+      const runtime = runDeliveryRuntimePhase(
         runId,
         relation,
         DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
       ).pipe(
         Effect.provide(identityLayers),
-        Effect.provideService(DeliverySemanticTrace, trace),
         Effect.provideService(
           DeliveryActionExecutor,
           DeliveryActionExecutor.of({
             execute: () => Ref.update(executorCalls, (count) => count + 1).pipe(Effect.andThen(Effect.die("unused")))
           })
-        ),
-        Effect.forkChild
+        )
       )
-      yield* Deferred.await(waitingDeferred)
+      const stalled = yield* runtime
+      expect(stalled).toMatchObject({
+        _tag: "TaskWorkAdmissionStalledRuntimeQuiescence",
+        acceptedAt: g2AcceptedAt,
+        current: { trackerGraph: graph },
+        proposedActions: { proposals: [waiting] }
+      })
       yield* relation.publish(acceptedPause)
-      const result = yield* Fiber.join(runtime)
+      const result = yield* runtime
 
       expect(result).toMatchObject({
         _tag: "PassiveRuntimeQuiescence",
@@ -5355,7 +5352,7 @@ it.effect(
     )
 )
 
-it.effect("reuses a full-capacity position for its matching exact prepared attempt", () =>
+const exactHeldPositionReuse = (afterG2: boolean) =>
   Effect.scoped(
     Effect.gen(function* () {
       const base = yield* baseEvaluation
@@ -5370,12 +5367,27 @@ it.effect("reuses a full-capacity position for its matching exact prepared attem
       )
       const initial = {
         ...withProposals(base, [observe], 1),
+        ...(afterG2
+          ? {
+              activeRefreshBoundary: {
+                _tag: "ActiveRefreshRuntimeBoundary" as const,
+                runId,
+                reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+              }
+            }
+          : {}),
         taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [retained.attempt] })
       } satisfies DeliveryRuntimeEvaluation
       const relation = yield* dynamicEvaluationSignal(initial)
       const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
 
-      const result = yield* runDeliveryRuntimePhase(runId, relation).pipe(
+      const result = yield* runDeliveryRuntimePhase(
+        runId,
+        relation,
+        afterG2
+          ? DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }])
+          : DeliveryRuntimePhase.Ordinary
+      ).pipe(
         Effect.provide(identityLayers),
         Effect.provideService(
           DeliveryActionExecutor,
@@ -5403,15 +5415,29 @@ it.effect("reuses a full-capacity position for its matching exact prepared attem
       expect(yield* Ref.get(executed)).toEqual([observe.id])
     })
   )
-)
 
-for (const phase of [
-  DeliveryRuntimePhase.Ordinary,
-  DeliveryRuntimePhase.ActiveRefreshPreG2([]),
-  DeliveryRuntimePhase.ActiveRefreshPostG2([])
+for (const afterG2 of [false, true]) {
+  it.effect(
+    afterG2
+      ? "reuses a full-capacity exact position after G2 despite a different reconciled subject"
+      : "reuses a full-capacity position for its matching exact prepared attempt",
+    () => exactHeldPositionReuse(afterG2)
+  )
+}
+
+for (const { capturedBoundary, phase } of [
+  { phase: DeliveryRuntimePhase.Ordinary, capturedBoundary: false },
+  { phase: DeliveryRuntimePhase.ActiveRefreshPreG2([]), capturedBoundary: false },
+  { phase: DeliveryRuntimePhase.ActiveRefreshPostG2([]), capturedBoundary: false },
+  {
+    phase: DeliveryRuntimePhase.ActiveRefreshPostG2([{ runId, attemptId: plannedAttempt.attemptId }]),
+    capturedBoundary: true
+  }
 ]) {
   it.effect(
-    `classifies a capacity-blocked fresh candidate as stalled without creating a proposal in ${phase._tag}`,
+    capturedBoundary
+      ? "returns admission-stalled after G2 when other exact attempts fill capacity"
+      : `classifies a capacity-blocked fresh candidate as stalled without creating a proposal in ${phase._tag}`,
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -5441,10 +5467,22 @@ for (const phase of [
           })
           const candidate = frontier.candidates[0]
           if (candidate === undefined) return yield* Effect.die("fresh claim must produce a candidate")
-          const held = preparedAttemptFixture("fresh-position-holder").attempt
+          const held = [
+            preparedAttemptFixture("fresh-position-holder-A0").attempt,
+            ...(capturedBoundary ? [preparedAttemptFixture("fresh-position-holder-D0").attempt] : [])
+          ]
           const blocked = {
-            ...withProposals(base, [], 1, [candidate], frontier),
-            taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [held] })
+            ...withProposals(base, [], held.length, [candidate], frontier),
+            ...(capturedBoundary
+              ? {
+                  activeRefreshBoundary: {
+                    _tag: "ActiveRefreshRuntimeBoundary" as const,
+                    runId,
+                    reconciledAttempts: [{ runId, attemptId: plannedAttempt.attemptId }]
+                  }
+                }
+              : {}),
+            taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(held.length), held })
           }
           const relation = yield* dynamicEvaluationSignal(blocked)
           const result = yield* runDeliveryRuntimePhase(runId, relation, phase).pipe(
@@ -5461,10 +5499,21 @@ for (const phase of [
           }
           expect(result.proposedActions.freshTaskCandidates).toEqual([candidate])
           expect(result.proposedActions.proposals).toEqual([])
+          expect(result.taskWork).toEqual({
+            capacity: TaskWorkCapacity.make(held.length),
+            held: held.map(({ attemptId, runId, taskId }) => ({ correlation: { attemptId, runId }, taskId }))
+          })
 
-          // An empty exact occupancy map is the contrasting admission case.
+          // Releasing one exact position is the contrasting admission case.
           // The same candidate and same active phase must now execute once.
-          const available = yield* dynamicEvaluationSignal(withProposals(base, [], 1, [candidate], frontier))
+          const available = yield* dynamicEvaluationSignal({
+            ...blocked,
+            taskWork: makeFreshTaskAdmissionTestBasis({
+              capacity: TaskWorkCapacity.make(held.length),
+              runId,
+              held: held.slice(1)
+            })
+          })
           const executed = yield* Ref.make(0)
           const admitted = yield* runDeliveryRuntimePhase(runId, available, phase).pipe(
             Effect.provide(identityLayers),

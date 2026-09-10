@@ -612,16 +612,15 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
             // Fresh candidates may still wait for exact held positions after
             // an active refresh. Use the same live admission authority as an
             // ordinary activation; the wait neither admits work nor proves finality.
-            // A captured Suspend/reconciliation boundary retains its existing
-            // observer and G2 protocol rather than being replaced by this wait.
-            const taskWorkAdmissionStalled =
-              phase._tag !== "OrdinaryDeliveryRuntimePhase" && current.activeRefreshBoundary !== undefined
-                ? Option.none()
-                : yield* admission.snapshot.pipe(
-                    Effect.map((snapshot) =>
-                      classifyTaskWorkAdmissionStalledRuntimeQuiescence(current, snapshot, locallyRunnableFrontier)
-                    )
+            // Before G2, a captured Suspend/reconciliation boundary must still
+            // complete its mandatory tracker read before this wait may return.
+            const taskWorkAdmissionStalled = activeRefreshG2Pending
+              ? Option.none()
+              : yield* admission.snapshot.pipe(
+                  Effect.map((snapshot) =>
+                    classifyTaskWorkAdmissionStalledRuntimeQuiescence(current, snapshot, locallyRunnableFrontier)
                   )
+                )
             if (
               !activeRefreshG2Pending &&
               !everyProposalIsLocallyDeferred &&

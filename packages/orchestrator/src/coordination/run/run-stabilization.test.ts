@@ -589,19 +589,24 @@ it.effect("requests accepted G2 only after G1 becomes quiescent", () =>
   )
 )
 
-it.effect("active-work refresh and post-quiescence finality perform cause-ordered separate complete graph reads", () =>
+const causeOrderedActiveRefresh = (capacityBlocked: boolean) =>
   Effect.scoped(
     Effect.gen(function* () {
       const base = yield* baseEvaluation
       const currentSnapshot = snapshot("active-boundary", [
-        { id: TaskId.make("A"), lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+        {
+          id: TaskId.make(capacityBlocked ? "E" : "A"),
+          lifecycle: { _tag: "Open" },
+          parentTaskId: null,
+          prerequisiteIds: []
+        }
       ])
       const g1Operation = makeTrackerGraphObservationOperation(
         { _tag: "ExecutingWorkAuthorityCheck" },
         OperationId.make("active-boundary-G1"),
         target
       )
-      const attemptId = AttemptId.make("active-boundary-attempt")
+      const attemptId = AttemptId.make(capacityBlocked ? "active-boundary-C1" : "active-boundary-attempt")
       const boundary: NonNullable<DeliveryRuntimeEvaluation["activeRefreshBoundary"]> = {
         _tag: "ActiveRefreshRuntimeBoundary" as const,
         runId,
@@ -613,9 +618,22 @@ it.effect("active-work refresh and post-quiescence finality perform cause-ordere
       const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
       const journal = appendableJournalFor(records)
       const providerOperations = yield* Ref.make<ReadonlyArray<TrackerGraphObservationOperation>>([])
+      const g2Entered = yield* Deferred.make<void>()
+      const releaseG2 = yield* Deferred.make<void>()
+      const held = [
+        makePreparedBeginFixture(activeVerticalAttempt, "post-g2", "A0").attempt,
+        makePreparedBeginFixture(activeVerticalAttempt, "post-g2", "D0").attempt
+      ]
       const provider = Layer.mock(WorkflowInterpreter, {
         readTrackerGraph: (operation: TrackerGraphObservationOperation) =>
-          Ref.update(providerOperations, (current) => [...current, operation]).pipe(Effect.as(currentSnapshot))
+          Ref.update(providerOperations, (current) => [...current, operation]).pipe(
+            Effect.andThen(
+              capacityBlocked && operation.operationId !== g1Operation.operationId
+                ? Deferred.succeed(g2Entered, undefined).pipe(Effect.andThen(Deferred.await(releaseG2)))
+                : Effect.void
+            ),
+            Effect.as(currentSnapshot)
+          )
       })
       const journaledInterpreter = yield* WorkflowInterpreter.pipe(
         Effect.provide(
@@ -633,12 +651,20 @@ it.effect("active-work refresh and post-quiescence finality perform cause-ordere
                     event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
                 )
                 if (outcome === undefined) return yield* Effect.die("ordinary graph read must append its outcome")
+                const established = graph(operation.operationId, outcome.position, currentSnapshot, operation.cause)
                 yield* SubscriptionRef.set(state, {
                   ...withRunFacts(
-                    evaluation(base, graph(operation.operationId, outcome.position, currentSnapshot, operation.cause)),
+                    evaluation(
+                      base,
+                      established,
+                      capacityBlocked ? freshGraphReadFrontierWith(established, undefined, []) : emptyFrontier
+                    ),
                     false
                   ),
-                  activeRefreshBoundary: boundary
+                  activeRefreshBoundary: boundary,
+                  ...(capacityBlocked
+                    ? { taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(2), held }) }
+                    : {})
                 })
               })
             )
@@ -646,7 +672,7 @@ it.effect("active-work refresh and post-quiescence finality perform cause-ordere
       })
 
       yield* observingInterpreter.readTrackerGraph(g1Operation)
-      const proof = yield* runStabilizedDelivery(
+      const running = yield* runStabilizedDelivery(
         target,
         runId,
         signalOf(state),
@@ -658,8 +684,28 @@ it.effect("active-work refresh and post-quiescence finality perform cause-ordere
         Effect.provideService(
           DeliveryActionExecutor,
           DeliveryActionExecutor.of({ execute: () => Effect.die("separate graph reads require no delivery action") })
-        )
+        ),
+        Effect.forkChild
       )
+      if (capacityBlocked) {
+        yield* Deferred.await(g2Entered)
+        expect(running.pollUnsafe()).toBeUndefined()
+        expect((yield* Ref.get(records)).map(({ event }) => event._tag)).toEqual([
+          "TaskTrackerReadIntentRecorded",
+          "TaskTrackerFactsObserved",
+          "TaskTrackerReadIntentRecorded"
+        ])
+        yield* Deferred.succeed(releaseG2, undefined)
+      }
+      const proof = yield* Fiber.join(running)
+      if (capacityBlocked) {
+        expect(proof.decision).toEqual({ _tag: "RunMustRemainActive", reason: "RunnableTransition" })
+        const retained = yield* SubscriptionRef.get(state)
+        expect(retained.proposedActions).toMatchObject({ freshTaskCandidates: [expect.anything()], proposals: [] })
+        expect(retained.taskWork.held.map(({ correlation }) => correlation.attemptId)).toEqual(
+          held.map(({ attemptId }) => attemptId)
+        )
+      }
 
       const operations = yield* Ref.get(providerOperations)
       expect(operations).toHaveLength(2)
@@ -692,7 +738,15 @@ it.effect("active-work refresh and post-quiescence finality perform cause-ordere
       expect(proof.acceptedAt).toBe(JournalPosition.make(4))
     })
   )
-)
+
+for (const capacityBlocked of [false, true]) {
+  it.effect(
+    capacityBlocked
+      ? "does not return admission-stalled before the mandatory G2 observation"
+      : "active-work refresh and post-quiescence finality perform cause-ordered separate complete graph reads",
+    () => causeOrderedActiveRefresh(capacityBlocked)
+  )
+}
 
 it.effect("keeps a new active-refresh G2 nonterminal when its accepted publication is incomplete", () =>
   Effect.scoped(
