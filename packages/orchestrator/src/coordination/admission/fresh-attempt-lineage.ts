@@ -1,7 +1,10 @@
 import { plannedTaskAttemptEquivalence, type PlannedTaskAttempt } from "@dalph/contracts"
 import { Option } from "effect"
 import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
-import { causalPredecessorOperationIds } from "../../workflow/causal-history.js"
+import {
+  causalPredecessorOperationIds,
+  causalPredecessorOperationIdsFromEvidence
+} from "../../workflow/causal-history.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
@@ -10,6 +13,14 @@ import type { JournalPosition } from "../../workflow-journal/identity.js"
 import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import { reconstructedTaskGraphFor } from "../reconstruction/graph-knowledge.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
+import {
+  isJournalRecordEvidence,
+  journalEvidenceBefore,
+  journalRecordByKey,
+  journalRecordsForAttempt,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 
 /** The latest fresh-workflow boundary whose exact accepted causal lineage must be present. */
 type FreshAttemptLineageBoundary = "Plan" | "WorktreeReady"
@@ -54,6 +65,16 @@ type SpecificationOutcomeRecord = JournalRecord & {
 
 const exactlyOne = <A>(values: ReadonlyArray<A>): A | undefined => (values.length === 1 ? values[0] : undefined)
 
+const causalPredecessors = (records: JournalHistorySource, operation: WorkflowOperation): ReadonlySet<OperationId> =>
+  isJournalRecordEvidence(records)
+    ? causalPredecessorOperationIdsFromEvidence(records, operation)
+    : causalPredecessorOperationIds(records, operation)
+
+const evidenceThrough = (records: JournalHistorySource, position: JournalPosition): JournalHistorySource =>
+  isJournalRecordEvidence(records)
+    ? journalEvidenceBefore(records, position + 1)
+    : records.filter((record) => record.position <= position)
+
 const claimAcquisitionMatches = (
   intent: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquisitionIntended" }>,
   claim: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>["claim"]
@@ -79,15 +100,14 @@ type ClaimIntentRecord = JournalRecord & {
 }
 
 const acceptedClaimIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   claimOutcome: JournalRecord,
   claim: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>["claim"]
 ): ClaimIntentRecord | undefined => {
-  const intents = records.filter(
-    (record): record is ClaimIntentRecord =>
-      record.event._tag === "TaskClaimAcquisitionIntended" && isExactClaimIntent(record, claimOutcome, claim)
-  )
-  return exactlyOne(intents)
+  const intent = journalRecordByKey(records, intentRecordKey(claim.operationId))
+  return intent?.event._tag === "TaskClaimAcquisitionIntended" && isExactClaimIntent(intent, claimOutcome, claim)
+    ? { ...intent, event: intent.event }
+    : undefined
 }
 
 const isSpecificationOutcomeForPlan = (
@@ -105,21 +125,6 @@ const isSpecificationOutcomeForPlan = (
     event.observation.factFamily.fingerprint === plannedAttempt.taskRevision
   )
 }
-
-const specificationReadMatches = (
-  record: JournalRecord,
-  outcome: JournalRecord,
-  operationId: OperationId,
-  plannedAttempt: PlannedTaskAttempt
-): boolean =>
-  record.position < outcome.position &&
-  record.key === intentRecordKey(operationId) &&
-  record.event._tag === "TaskTrackerReadIntentRecorded" &&
-  record.event.operation._tag === "ReadTaskWorkSpecification" &&
-  record.event.operation.operationId === operationId &&
-  record.event.operation.taskId === plannedAttempt.taskId &&
-  outcome.event._tag === "TaskTrackerFactsObserved" &&
-  taskTrackerObservationMatchesRead(outcome.event.observation, record.event.operation)
 
 const isCompleteGraphOutcomeBefore = (
   record: JournalRecord,
@@ -161,14 +166,14 @@ const graphReadChronologyMatches = (
   record.event.operation.predecessorOperationIds.includes(claimOperationId)
 
 const taskWasEligibleAt = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   outcome: JournalRecord,
   taskId: PlannedTaskAttempt["taskId"]
 ): boolean => {
   if (outcome.event._tag !== "TaskTrackerFactsObserved") return false
   const reconstructed = reconstructedTaskGraphFor(
     {
-      taskTrackerFacts: records.flatMap((record) =>
+      taskTrackerFacts: Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved")).flatMap((record) =>
         record.position <= outcome.position && record.event._tag === "TaskTrackerFactsObserved"
           ? [record.event.observation]
           : []
@@ -180,20 +185,19 @@ const taskWasEligibleAt = (
 }
 
 const acceptedPlanPredecessorLineage = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   planOperation: TaskAttemptPlanOperation
 ): AcceptedFreshAttemptLineageFields | undefined => {
   const plannedAttempt = planOperation.plannedAttempt
-  const recordsBeforePlan = records.filter((record) => record.runId === plannedAttempt.runId)
-  const planPredecessors = causalPredecessorOperationIds(recordsBeforePlan, planOperation)
+  const recordsBeforePlan = records
+  const planPredecessors = causalPredecessors(recordsBeforePlan, planOperation)
   const claimOutcome = exactlyOne(
-    recordsBeforePlan.filter(
-      (record) =>
-        record.event._tag === "TaskClaimAcquired" &&
-        record.key === outcomeRecordKey(record.event.claim.operationId) &&
-        record.event.claim.taskId === plannedAttempt.taskId &&
-        planPredecessors.has(record.event.claim.operationId)
-    )
+    Array.from(planPredecessors).flatMap((operationId) => {
+      const record = journalRecordByKey(recordsBeforePlan, outcomeRecordKey(operationId))
+      return record?.event._tag === "TaskClaimAcquired" && record.event.claim.taskId === plannedAttempt.taskId
+        ? [record]
+        : []
+    })
   )
   if (claimOutcome?.event._tag !== "TaskClaimAcquired") return undefined
   const claim = claimOutcome.event.claim
@@ -202,16 +206,13 @@ const acceptedPlanPredecessorLineage = (
   if (claimIntent === undefined) return undefined
 
   const specification = exactlyOne(
-    recordsBeforePlan.flatMap((outcome) => {
+    Array.from(planPredecessors).flatMap((operationId) => {
+      const outcome = journalRecordByKey(recordsBeforePlan, outcomeRecordKey(operationId))
+      if (outcome === undefined) return []
       if (!isSpecificationOutcomeForPlan(outcome, plannedAttempt, planPredecessors)) {
         return []
       }
-      const operationId = outcome.event.operationId
-      const intent = exactlyOne(
-        recordsBeforePlan.filter((candidate) =>
-          specificationReadMatches(candidate, outcome, operationId, plannedAttempt)
-        )
-      )
+      const intent = journalRecordByKey(recordsBeforePlan, intentRecordKey(operationId))
       if (
         intent?.event._tag !== "TaskTrackerReadIntentRecorded" ||
         intent.event.operation._tag !== "ReadTaskWorkSpecification"
@@ -224,27 +225,22 @@ const acceptedPlanPredecessorLineage = (
   if (specification === undefined) return undefined
 
   const specificationOperation = specification.operation
-  const specificationPredecessors = causalPredecessorOperationIds(recordsBeforePlan, specificationOperation)
+  const specificationPredecessors = causalPredecessors(recordsBeforePlan, specificationOperation)
   const postClaimGraph = exactlyOne(
-    recordsBeforePlan.flatMap((outcome) => {
+    Array.from(specificationPredecessors).flatMap((operationId) => {
+      const outcome = journalRecordByKey(recordsBeforePlan, outcomeRecordKey(operationId))
+      if (outcome === undefined) return []
       if (!isCompleteGraphOutcomeBefore(outcome, specification.intent.position, specificationPredecessors)) {
         return []
       }
       const observation = outcome.event.observation
-      const operationId = outcome.event.operationId
-      const intent = exactlyOne(
-        recordsBeforePlan.filter(
-          (candidate) =>
-            graphReadChronologyMatches(candidate, claimOutcome, outcome, claim.operationId) &&
-            graphReadScopeMatches(candidate, operationId, plannedAttempt) &&
-            candidate.event._tag === "TaskTrackerReadIntentRecorded" &&
-            candidate.event.operation._tag === "ReadTrackerGraph" &&
-            taskTrackerObservationMatchesRead(observation, candidate.event.operation)
-        )
-      )
+      const intent = journalRecordByKey(recordsBeforePlan, intentRecordKey(operationId))
       if (
         intent?.event._tag !== "TaskTrackerReadIntentRecorded" ||
-        intent.event.operation._tag !== "ReadTrackerGraph"
+        intent.event.operation._tag !== "ReadTrackerGraph" ||
+        !graphReadChronologyMatches(intent, claimOutcome, outcome, claim.operationId) ||
+        !graphReadScopeMatches(intent, operationId, plannedAttempt) ||
+        !taskTrackerObservationMatchesRead(observation, intent.event.operation)
       ) {
         return []
       }
@@ -270,7 +266,7 @@ const acceptedPlanPredecessorLineage = (
 
 /** Whether an unrecorded fresh plan operation has every exact accepted predecessor required before append. */
 export const freshAttemptPlanPredecessorLineageWasAccepted = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operation: TaskAttemptPlanOperation
 ): boolean => acceptedPlanPredecessorLineage(records, operation) !== undefined
 
@@ -279,29 +275,25 @@ export const freshAttemptPlanPredecessorLineageWasAccepted = (
  * exists in exact chronological and causal order through the requested boundary.
  */
 export const acceptedFreshAttemptLineage = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   boundary: FreshAttemptLineageBoundary
 ): AcceptedFreshAttemptLineage | undefined => {
-  const planRecord = exactlyOne(
-    records.filter(
-      (record) =>
-        record.runId === plannedAttempt.runId &&
-        record.key === attemptPlanRecordKey(plannedAttempt.attemptId) &&
-        record.event._tag === "TaskAttemptPlanned" &&
-        plannedTaskAttemptEquivalence(record.event.operation.plannedAttempt, plannedAttempt)
-    )
-  )
+  const planRecord = journalRecordByKey(records, attemptPlanRecordKey(plannedAttempt.attemptId))
   if (planRecord?.event._tag !== "TaskAttemptPlanned") return undefined
-  const recordsThroughPlan = records.filter(
-    (record) => record.runId === plannedAttempt.runId && record.position <= planRecord.position
-  )
+  if (
+    planRecord.runId !== plannedAttempt.runId ||
+    !plannedTaskAttemptEquivalence(planRecord.event.operation.plannedAttempt, plannedAttempt)
+  ) {
+    return undefined
+  }
+  const recordsThroughPlan = evidenceThrough(records, planRecord.position)
   const plan = acceptedPlanPredecessorLineage(recordsThroughPlan, planRecord.event.operation)
   if (plan === undefined) return undefined
   if (boundary === "Plan") return { _tag: "AcceptedFreshAttemptPlanLineage", ...plan }
 
   const worktree = exactlyOne(
-    records.flatMap((outcome) => {
+    Array.from(journalRecordsForAttempt(records, plannedAttempt.attemptId)).flatMap((outcome) => {
       if (
         outcome.runId !== plannedAttempt.runId ||
         outcome.event._tag !== "TaskWorktreeReady" ||
@@ -311,19 +303,17 @@ export const acceptedFreshAttemptLineage = (
         return []
       }
       const operationId = outcome.event.operationId
-      const intent = exactlyOne(
-        records.filter(
-          (candidate) =>
-            candidate.runId === plannedAttempt.runId &&
-            candidate.position < outcome.position &&
-            candidate.key === intentRecordKey(operationId) &&
-            candidate.event._tag === "TaskWorktreeReconciliationIntended" &&
-            candidate.event.operation.operationId === operationId &&
-            plannedTaskAttemptEquivalence(candidate.event.operation.plannedAttempt, plannedAttempt) &&
-            causalPredecessorOperationIds(records, candidate.event.operation).has(plan.planOperationId)
-        )
-      )
-      if (intent?.event._tag !== "TaskWorktreeReconciliationIntended") return []
+      const intent = journalRecordByKey(records, intentRecordKey(operationId))
+      if (
+        intent?.event._tag !== "TaskWorktreeReconciliationIntended" ||
+        intent.runId !== plannedAttempt.runId ||
+        intent.position >= outcome.position ||
+        intent.event.operation.operationId !== operationId ||
+        !plannedTaskAttemptEquivalence(intent.event.operation.plannedAttempt, plannedAttempt) ||
+        !causalPredecessors(records, intent.event.operation).has(plan.planOperationId)
+      ) {
+        return []
+      }
       return [{ intent, operation: intent.event.operation, outcome }]
     })
   )
