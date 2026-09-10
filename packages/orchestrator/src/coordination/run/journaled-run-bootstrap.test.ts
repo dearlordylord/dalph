@@ -41,6 +41,7 @@ import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import {
   TrackerAdapterReadContext,
@@ -360,6 +361,25 @@ const publicationBundle = (runId: RunId, acceptedAt: JournalPosition | null = nu
     trackerGraphProposals: []
   },
   publication: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy: runtimePolicy }
+})
+
+const makeRuntimeCreatedRelations = Effect.fn("JournaledRunBootstrapTest.makeRuntimeCreatedRelations")(function* (
+  runId: RunId,
+  target: TrackerTarget
+) {
+  const journal = yield* Journal
+  const resources = yield* DeliveryRuntimeResources
+  const recovery = yield* RunRecoveryProjection
+  return yield* makeReactiveDeliveryRelationsLayer(
+    runId,
+    target,
+    journal,
+    {
+      readDeliveryProjection: recovery.readDeliveryProjection,
+      reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
+    },
+    resources.integrationTargets
+  )
 })
 
 const runtimeLayer = (
@@ -3294,19 +3314,7 @@ it.effect("runtime-created relations notify scheduling and ambient publication o
           Effect.succeed(initialPolicy),
           runId,
           Effect.gen(function* () {
-            const journal = yield* Journal
-            const resources = yield* DeliveryRuntimeResources
-            const recovery = yield* RunRecoveryProjection
-            const relations = yield* makeReactiveDeliveryRelationsLayer(
-              runId,
-              target,
-              journal,
-              {
-                readDeliveryProjection: recovery.readDeliveryProjection,
-                reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
-              },
-              resources.integrationTargets
-            )
+            const relations = yield* makeRuntimeCreatedRelations(runId, target)
             yield* completedFinalityProof(runId, target)
             yield* DeliveryAcceptedFactPublication.use((publication) => publication.awaitCurrent).pipe(
               Effect.provide(relations)
@@ -3415,19 +3423,7 @@ it.effect(
           })
         const program = (refresh: boolean) =>
           Effect.gen(function* () {
-            const journal = yield* Journal
-            const resources = yield* DeliveryRuntimeResources
-            const recovery = yield* RunRecoveryProjection
-            const relations = yield* makeReactiveDeliveryRelationsLayer(
-              runId,
-              target,
-              journal,
-              {
-                readDeliveryProjection: recovery.readDeliveryProjection,
-                reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
-              },
-              resources.integrationTargets
-            )
+            const relations = yield* makeRuntimeCreatedRelations(runId, target)
             if (refresh) {
               for (const ordinal of [1, 2, 3]) {
                 yield* completedFinalityProof(runId, target, OperationId.make(`accepted-publication:${ordinal}`))

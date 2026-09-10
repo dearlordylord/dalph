@@ -5,11 +5,11 @@ import {
   plannedTaskAttemptEquivalence
 } from "@dalph/contracts"
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
-import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
+import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { immutableSnapshot } from "../immutable-snapshot.js"
 import { reconstructedTaskGraphFromEvents } from "../reconstruction/graph-knowledge.js"
 import type { RunActivationOpportunity } from "../run/run-activation-opportunity.js"
-import { intentRecordKey } from "../../workflow-journal/record-key.js"
+import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import { exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
@@ -109,13 +109,12 @@ const exactContinuationGraphReadIntentFor = (
     : undefined
 }
 
-const exactTaskWasReopenedAfterAcceptedSafe = (
+const taskWasClosedAtAcceptedSafe = (
   records: ReadonlyArray<JournalRecord>,
   plannedAttempt: PlannedTaskAttempt,
-  acceptedSafe: AcceptedPlannedAttemptExecutorEvidence
+  acceptedSafe: AcceptedPlannedAttemptExecutorEvidence,
+  immutableRunTarget: TrackerTarget
 ): boolean => {
-  const immutableRunTarget = exactWorkflowRunTargetFor(records)
-  if (immutableRunTarget === undefined) return false
   const graphBeforeSafe = records.findLast(
     (record): record is CompleteGraphObservationRecord =>
       record.position <= acceptedSafe.observedAt &&
@@ -124,12 +123,79 @@ const exactTaskWasReopenedAfterAcceptedSafe = (
   )
   if (graphBeforeSafe === undefined) return false
   const before = graphReconstructedAt(records, graphBeforeSafe)
-  if (
-    Option.getOrUndefined(before?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag !==
+  return (
+    Option.getOrUndefined(before?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag ===
     "TerminalWithoutSuccess"
-  ) {
+  )
+}
+
+/**
+ * Finds the latest global tracker observation after accepted Safe only when
+ * the same task was closed at Safe and is Open in that latest observation.
+ * This is lifecycle-reopen evidence, not exact continuation-read eligibility.
+ */
+const latestTaskReopenAfterAcceptedSafe = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  acceptedSafe: AcceptedPlannedAttemptExecutorEvidence
+): CompleteGraphObservationRecord | undefined => {
+  const immutableRunTarget = exactWorkflowRunTargetFor(records)
+  if (immutableRunTarget === undefined) return undefined
+  if (!taskWasClosedAtAcceptedSafe(records, plannedAttempt, acceptedSafe, immutableRunTarget)) return undefined
+  const reopened = records.findLast(
+    (record): record is CompleteGraphObservationRecord =>
+      record.position > acceptedSafe.observedAt &&
+      isCompleteGraphObservationRecord(record) &&
+      taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
+  )
+  if (reopened === undefined) return undefined
+  const after = graphReconstructedAt(records, reopened)
+  return Option.getOrUndefined(after?.lifecycleOf(plannedAttempt.taskId) ?? Option.none())?._tag === "Open"
+    ? reopened
+    : undefined
+}
+
+/**
+ * Bootstrap authority for the ordinary activation queued by an accepted
+ * active-work refresh: the latest global reopen must be the exact accepted
+ * B/D-style authority read, not a general bootstrap or C continuation read.
+ */
+export const hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt
+): boolean => {
+  const acceptedSafe = currentUnconsumedAcceptedSafeEvidence(records, plannedAttempt)
+  if (acceptedSafe?.report._tag !== "ExecutorWorkSafelySuspended") return false
+  const reopened = latestTaskReopenAfterAcceptedSafe(records, plannedAttempt, acceptedSafe)
+  if (reopened === undefined || reopened.key !== outcomeRecordKey(reopened.event.operationId)) return false
+  const intent = records.findLast(
+    ({ event, key }) =>
+      event._tag === "TaskTrackerReadIntentRecorded" &&
+      event.operation._tag === "ReadTrackerGraph" &&
+      event.operation.operationId === reopened.event.operationId &&
+      key === intentRecordKey(reopened.event.operationId)
+  )
+  if (intent?.event._tag !== "TaskTrackerReadIntentRecorded" || intent.event.operation._tag !== "ReadTrackerGraph") {
     return false
   }
+  const operation = intent.event.operation
+  return (
+    operation.cause._tag === "ExecutingWorkAuthorityCheck" &&
+    taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(reopened.event.observation.target) &&
+    operation.predecessorOperationIds.length > 0 &&
+    operation.readShape.explicitlyCoveredTaskIds.length > 0 &&
+    !operation.readShape.explicitlyCoveredTaskIds.includes(plannedAttempt.taskId)
+  )
+}
+
+const exactTaskWasReopenedAfterAcceptedSafe = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  acceptedSafe: AcceptedPlannedAttemptExecutorEvidence
+): boolean => {
+  const immutableRunTarget = exactWorkflowRunTargetFor(records)
+  if (immutableRunTarget === undefined) return false
+  if (!taskWasClosedAtAcceptedSafe(records, plannedAttempt, acceptedSafe, immutableRunTarget)) return false
   const reopened = records.findLast(
     (record): record is CompleteGraphObservationRecord =>
       record.position > acceptedSafe.observedAt &&

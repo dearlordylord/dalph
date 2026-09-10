@@ -68,14 +68,17 @@ no new ambiguous boundary or retry policy.
 | Runtime-created relations send an accepted Journal publication to scheduling and ambient diagnostics | `journaled-run-bootstrap.test.ts`: `runtime-created relations notify scheduling and ambient publication observers` |
 | Several publications during active refresh become one ordinary entry after return, with maximum concurrency one and no extra timer/hint | `journaled-run-bootstrap.test.ts`: `coalesces runtime accepted publications into one nonconcurrent ordinary activation after active refresh returns` |
 | Initial, repeated, and older publications do not add scheduling hints | `journaled-run-bootstrap.test.ts`: `does not turn the activation's initial publication into another Run activation`; `signals once only when a relation publication advances beyond the activation entry position` |
-| A startup publication queues one ordinary obligation; the held DS-10 notification upgrades it to active refresh after startup returns, preserving exact provider/executor calls | `delivery-story-capstone.execution.test.ts`: `refreshes closed C through the same owner and keeps its position`; the shared fixture asserts publication precedes trailing recording, startup returns before handoff, and notification does not add another activation |
+| G4 is accepted during active refresh; after that activation returns, its publication queues exactly one nonconcurrent ordinary entry that publishes exact waiting C1 at capacity two without another external notification or duplicate provider/executor mutation | `issue-349-accepted-publication-observer.test.ts`: `accepted publication from active refresh starts one trailing ordinary activation` |
+| Ordinary recovery retains one Run-level graph proposal while exact accepted-Safe C1 needs its C-covered continuation read; no reopen, or a later re-close, does not create that authority | `reactive-delivery-relations.test.ts`: `establishes the current graph while a recovered continuation graph read waits for capacity` |
 | G4 publishes exact C1 revalidation eligibility at capacity two; capacity three resumes original C1 before fresh work | `issue-274-lifecycle-resume.test.ts`: `reopens C and resumes its original attempt only after accepted capacity three` |
 | G4 accepted before process loss survives without duplicate executor commands or resources | `issue-274-lifecycle-resume.test.ts`: `recovers the real G4 crash before resuming exactly retained C1` |
 | A lost Resume response is reconciled before another command | `issue-274-lifecycle-resume.test.ts`: `reconciles C's lost Resume response after restart without another Begin or Resume` |
 
-The new bootstrap tests isolate the missing context/composition seam using real
-reactive relations, Journal publications, and the real reactivation owner.
-They do not simulate C's full lifecycle. The existing #274 cassette owns that
-exact identity, capacity, and recovery evidence. The uninterrupted seven-task
-composition belongs to downstream #337 and is not required to prove this
-bootstrap repair. No accepted outcome or blocking dependency is removed.
+The focused #349 cassette composes the real bootstrap owner with the existing
+#268/#274 controlled authorities. It preserves C1's accepted Safe history,
+B1/D1 at capacity two, the B/D-covered G4 active read, activation return, and
+the callback-driven ordinary C-covered continuation read in one chronology.
+The existing #274 cassette continues through capacity three and therefore owns
+the later exact Resume and C-before-E evidence. The uninterrupted seven-task
+composition belongs to downstream #337 and is not required for this repair.
+No accepted outcome or blocking dependency is removed.

@@ -230,7 +230,14 @@ interface Issue268Ds10Controls {
   readonly idleHandoffCount: Ref.Ref<number>
   readonly idleHandoffReleases: ReadonlyArray<Deferred.Deferred<void>>
   readonly idleHandoffs: Queue.Queue<number>
-  readonly phase: Ref.Ref<"DS09" | "DS10" | "DS11" | "DS12" | "DS13">
+  readonly issue349?: {
+    readonly activeReturned: Deferred.Deferred<void>
+    readonly establishmentPublication: Deferred.Deferred<DeliveryRelationInputBundle>
+    readonly ordinaryEntered: Deferred.Deferred<void>
+    readonly publication: Deferred.Deferred<DeliveryRelationInputBundle>
+    readonly timeline: Ref.Ref<ReadonlyArray<string>>
+  }
+  readonly phase: Ref.Ref<"DS09" | "DS10" | "DS11" | "DS12" | "DS13" | "DS349">
   readonly trailingActivationCount: Ref.Ref<number>
 }
 
@@ -447,6 +454,17 @@ const runIssue268StartupCharacterizationFor = (
               return yield* Effect.die(`DS-09 must not reconcile ${correlation.attemptId}`)
             }
             const phase = ds09Controls.ds10 === undefined ? undefined : yield* Ref.get(ds09Controls.ds10.phase)
+            if (phase === "DS349") {
+              if (correlation.runId !== scenario.runId || projection._tag !== "Exact") {
+                return yield* Effect.die(`#349 lacks the exact retained report for ${correlation.attemptId}`)
+              }
+              yield* recordOccurrence({
+                detail: `${correlation.attemptId}:${projection._tag}`,
+                kind: "ExecutorObserveReturned",
+                source: "Executor"
+              })
+              return projection
+            }
             if (
               phase === "DS13" &&
               correlation.runId === scenario.runId &&
@@ -956,6 +974,33 @@ const runIssue268StartupCharacterizationFor = (
             if (options.retainedResume !== undefined) yield* Queue.offer(options.retainedResume.publications, bundle)
             const ds10Controls = ds09Controls?.ds10
             const restartPhase = ds10Controls === undefined ? undefined : yield* Ref.get(ds10Controls.phase)
+            if (
+              ds10Controls?.issue349 !== undefined &&
+              restartPhase === "DS349" &&
+              bundle.publication.graph._tag === "GraphNotEstablished" &&
+              bundle.actionInputs.trackerGraphProposals.length === 1
+            ) {
+              yield* Deferred.succeed(ds10Controls.issue349.establishmentPublication, bundle)
+            }
+            if (
+              ds10Controls?.issue349 !== undefined &&
+              restartPhase === "DS349" &&
+              bundle.publication.graph._tag === "GraphEstablished" &&
+              bundle.publication.graph.observation.snapshot.revision === scenario.graphs.G4.revision
+            ) {
+              const marker = bundle.actionInputs.runtimeFacts.taskWork.safeContinuationRevalidations.some(
+                ({ plannedAttempt }) => plannedAttempt.attemptId === scenario.attempts.C1
+              )
+                ? "C1:revalidation-published"
+                : "G4:accepted"
+              const timeline = yield* Ref.get(ds10Controls.issue349.timeline)
+              if (!timeline.includes(marker)) {
+                yield* Ref.set(ds10Controls.issue349.timeline, [...timeline, marker])
+                if (marker === "C1:revalidation-published") {
+                  yield* Deferred.succeed(ds10Controls.issue349.publication, bundle)
+                }
+              }
+            }
             if (ds10Controls !== undefined && restartPhase === "DS10") {
               const records = yield* sharedJournal
                 .read(scenario.runId)
@@ -1144,6 +1189,24 @@ const runIssue268StartupCharacterizationFor = (
                 return
               }
               const ds10Phase = ds09Controls.ds10 === undefined ? undefined : yield* Ref.get(ds09Controls.ds10.phase)
+              if (ds10Phase === "DS349") {
+                const orderedTaskId = deliveryProposalOrderTaskId(action.proposal.order)
+                if (
+                  action._tag === "FreshOperationAction" &&
+                  action.proposal.route._tag === "RecoveredNewActionRoute" &&
+                  action.proposal.route.action.plannedAttempt !== null &&
+                  ((orderedTaskId === scenario.taskIds.B &&
+                    action.proposal.route.action.plannedAttempt.taskId === scenario.taskIds.B) ||
+                    (orderedTaskId === scenario.taskIds.D &&
+                      action.proposal.route.action.plannedAttempt.taskId === scenario.taskIds.D) ||
+                    (orderedTaskId === scenario.taskIds.C &&
+                      action.proposal.route.action._tag === "ReadTrackerGraph" &&
+                      action.proposal.route.action.plannedAttempt.attemptId === scenario.attempts.C1))
+                ) {
+                  return
+                }
+                return yield* Effect.die(`#349 materialized unexpected action for ${orderedTaskId ?? "the Run"}`)
+              }
               if (ds10Phase === "DS13") {
                 return yield* validateDs13Action(action, ds09Controls.ds10?.ds13)
               }
@@ -1348,6 +1411,13 @@ const runIssue268StartupCharacterizationFor = (
                   return Effect.die(`DS-10 received unexpected active refresh source ${source}`)
                 }
                 return Effect.gen(function* () {
+                  const phase = yield* Ref.get(ds10Controls.phase)
+                  if (phase === "DS349" && ds10Controls.issue349 !== undefined) {
+                    yield* Ref.update(ds10Controls.issue349.timeline, (current) => [
+                      ...current,
+                      "ActiveWorkAuthorityRefresh:enter"
+                    ])
+                  }
                   yield* recordOccurrence({ detail: source, kind: "ActiveRefreshStarted", source: "Control" })
                   yield* Ref.update(ds10Controls.activeRefreshCount, (count) => count + 1)
                   yield* Ref.update(ds10Controls.activeRefreshSources, (current) => [...current, source])
@@ -1361,6 +1431,13 @@ const runIssue268StartupCharacterizationFor = (
                   ).pipe(Effect.provide(activationLayer))
                   yield* Ref.set(ds10Controls.activeRefreshDecision, result)
                   yield* recordOccurrence({ detail: "NoDecision", kind: "ActiveRefreshReturned", source: "Control" })
+                  if (phase === "DS349" && ds10Controls.issue349 !== undefined) {
+                    yield* Ref.update(ds10Controls.issue349.timeline, (current) => [
+                      ...current,
+                      "ActiveWorkAuthorityRefresh:return"
+                    ])
+                    yield* Deferred.succeed(ds10Controls.issue349.activeReturned, undefined)
+                  }
                   return result
                 })
               }
@@ -1369,6 +1446,14 @@ const runIssue268StartupCharacterizationFor = (
                   Effect.gen(function* () {
                     if (opportunity._tag !== "OrdinaryRunEntry") {
                       return yield* Effect.die("DS-09 owner invoked its ordinary callback with an active refresh")
+                    }
+                    const phase = ds10Controls === undefined ? undefined : yield* Ref.get(ds10Controls.phase)
+                    if (phase === "DS349" && ds10Controls?.issue349 !== undefined) {
+                      yield* Ref.update(ds10Controls.issue349.timeline, (current) => [
+                        ...current,
+                        "TrailingOrdinary:enter"
+                      ])
+                      yield* Deferred.succeed(ds10Controls.issue349.ordinaryEntered, undefined)
                     }
                     yield* Ref.update(ds09Controls.ordinaryOwnerActivationCount, (count) => count + 1)
                     yield* Ref.update(ds09Controls.ordinaryOwnerActivationOpportunities, (current) => [
@@ -2084,7 +2169,7 @@ export const runIssue268Ds08Characterization = Effect.scoped(
   })
 )
 
-type Issue268RestartContinuation = "DS09" | "DS10" | "DS11" | "DS12" | "DS13" | "DS19" | "DS20"
+type Issue268RestartContinuation = "DS09" | "DS10" | "DS11" | "DS12" | "DS13" | "DS19" | "DS20" | "DS349"
 
 /** Reconstructs the same Run in a fresh coordinator and optionally continues through DS-13. */
 const runIssue268RestartCharacterization = (
@@ -2184,11 +2269,20 @@ const runIssue268RestartCharacterization = (
       const ds13CheckpointRelease = yield* Deferred.make<void>()
       const ds13IntegrationQueueActionCount = yield* Ref.make(0)
       const idleHandoffCount = yield* Ref.make(0)
-      const idleHandoffReleases = [yield* Deferred.make<void>()]
+      const idleHandoffReleases = [
+        yield* Deferred.make<void>(),
+        yield* Deferred.make<void>(),
+        yield* Deferred.make<void>()
+      ]
       const idleHandoffs = yield* Queue.unbounded<number>()
-      const restartPhase = yield* Ref.make<"DS09" | "DS10" | "DS11" | "DS12" | "DS13">("DS09")
+      const restartPhase = yield* Ref.make<"DS09" | "DS10" | "DS11" | "DS12" | "DS13" | "DS349">("DS09")
       const trailingActivationCount = yield* Ref.make(0)
       const notificationCount = yield* Ref.make(0)
+      const issue349ActiveReturned = yield* Deferred.make<void>()
+      const issue349EstablishmentPublication = yield* Deferred.make<DeliveryRelationInputBundle>()
+      const issue349OrdinaryEntered = yield* Deferred.make<void>()
+      const issue349Publication = yield* Deferred.make<DeliveryRelationInputBundle>()
+      const issue349Timeline = yield* Ref.make<ReadonlyArray<string>>([])
       const ownerFailure = yield* Deferred.make<unknown>()
       const ownerRelease = yield* Deferred.make<void>()
       const ownerStartup = yield* Deferred.make<{
@@ -2237,16 +2331,21 @@ const runIssue268RestartCharacterization = (
                   continuation === "DS12" ||
                   continuation === "DS13" ||
                   continuation === "DS19" ||
-                  continuation === "DS20"
+                  continuation === "DS20" ||
+                  continuation === "DS349"
                     ? { ds11: { checkpoint: ds11Checkpoint, checkpointRelease: ds11CheckpointRelease } }
                     : {}),
                   ...(continuation === "DS12" ||
                   continuation === "DS13" ||
                   continuation === "DS19" ||
-                  continuation === "DS20"
+                  continuation === "DS20" ||
+                  continuation === "DS349"
                     ? { ds12: { checkpoint: ds12Checkpoint } }
                     : {}),
-                  ...(continuation === "DS13" || continuation === "DS19" || continuation === "DS20"
+                  ...(continuation === "DS13" ||
+                  continuation === "DS19" ||
+                  continuation === "DS20" ||
+                  continuation === "DS349"
                     ? {
                         ds13: {
                           checkpoint: ds13Checkpoint,
@@ -2258,6 +2357,17 @@ const runIssue268RestartCharacterization = (
                   idleHandoffCount,
                   idleHandoffReleases,
                   idleHandoffs,
+                  ...(continuation === "DS349"
+                    ? {
+                        issue349: {
+                          activeReturned: issue349ActiveReturned,
+                          establishmentPublication: issue349EstablishmentPublication,
+                          ordinaryEntered: issue349OrdinaryEntered,
+                          publication: issue349Publication,
+                          timeline: issue349Timeline
+                        }
+                      }
+                    : {}),
                   phase: restartPhase,
                   trailingActivationCount
                 }
@@ -2578,6 +2688,71 @@ const runIssue268RestartCharacterization = (
         ordinaryOwnerActivationCount: yield* Ref.get(ordinaryOwnerActivationCount),
         terminalReport
       }
+      if (continuation === "DS349") {
+        const preG4HandoffCount = 2
+        const trailingOrdinaryHandoffCount = 3
+        yield* awaitLiveSecondProcess(Deferred.await(activeRefreshSettled), "pre-G4 active refresh return")
+        yield* Ref.set(restartPhase, "DS349")
+        const secondIdle = yield* awaitLiveSecondProcess(Queue.take(idleHandoffs), "pre-G4 owner handoff")
+        if (secondIdle !== preG4HandoffCount) {
+          return yield* Effect.die(`#349 expected handoff ${preG4HandoffCount}, received ${secondIdle}`)
+        }
+        const before = yield* readSecondProcessSnapshot()
+        const activeRefreshBaseline = yield* Ref.get(activeRefreshCount)
+        const notificationBaseline = yield* Ref.get(notificationCount)
+        const ordinaryBaseline = yield* Ref.get(ordinaryOwnerActivationCount)
+        const trailingBaseline = yield* Ref.get(trailingActivationCount)
+        yield* sharedAuthorities.testTrackerGraphReader.setSnapshot(scenario.graphs.G4)
+        yield* Ref.update(notificationCount, (count) => count + 1)
+        yield* startup.owner.hint(RunReactivationHint.TrackerNotification())
+        const secondIdleRelease = idleHandoffReleases[1]
+        if (secondIdleRelease === undefined) return yield* Effect.die("#349 lacks its guarded handoff release")
+        yield* Deferred.succeed(secondIdleRelease, undefined)
+        yield* awaitLiveSecondProcess(Deferred.await(issue349ActiveReturned), "G4 active refresh return")
+        const trailingCountAfterActive = yield* Ref.get(trailingActivationCount)
+        const thirdIdle = yield* awaitLiveSecondProcess(Queue.take(idleHandoffs), "trailing ordinary handoff")
+        if (thirdIdle !== trailingOrdinaryHandoffCount) {
+          return yield* Effect.die(`#349 expected handoff ${trailingOrdinaryHandoffCount}, received ${thirdIdle}`)
+        }
+        yield* Ref.update(issue349Timeline, (current) => [...current, "OwnerIdle:3"])
+        const thirdIdleRelease = idleHandoffReleases[2]
+        if (thirdIdleRelease === undefined) return yield* Effect.die("#349 lacks its trailing ordinary handoff release")
+        yield* Deferred.succeed(thirdIdleRelease, undefined)
+        yield* awaitLiveSecondProcess(Deferred.await(issue349OrdinaryEntered), "trailing ordinary entry")
+        const establishmentPublication = yield* awaitLiveSecondProcess(
+          Deferred.await(issue349EstablishmentPublication),
+          "ordinary graph establishment publication"
+        )
+        const reopened = yield* awaitLiveSecondProcess(
+          Deferred.await(issue349Publication),
+          "C1 revalidation publication"
+        )
+        const after = yield* readSecondProcessSnapshot()
+        yield* Fiber.interrupt(secondProcess)
+        yield* Scope.close(secondProcessScope, Exit.void)
+        const ds13 = {
+          ...ds13BeforeProcessStop,
+          afterProcessStop: yield* readSecondProcessSnapshot()
+        } satisfies Issue268Ds13Characterization
+        return {
+          ds09,
+          ds10,
+          ds11,
+          ds12,
+          ds13,
+          ds349: {
+            activationTimeline: yield* Ref.get(issue349Timeline),
+            activeRefreshCount: (yield* Ref.get(activeRefreshCount)) - activeRefreshBaseline,
+            after,
+            before,
+            establishmentPublication,
+            notificationCount: (yield* Ref.get(notificationCount)) - notificationBaseline,
+            ordinaryActivationCount: (yield* Ref.get(ordinaryOwnerActivationCount)) - ordinaryBaseline,
+            reopened,
+            trailingActivationCount: trailingCountAfterActive - trailingBaseline
+          }
+        }
+      }
       yield* Fiber.interrupt(secondProcess)
       yield* Scope.close(secondProcessScope, Exit.void)
       const ds13 = {
@@ -2855,6 +3030,12 @@ const continueRetainedC = Effect.fn("Issue274.continueRetainedC")(function* (
 
 export const runIssue274LifecycleResume = runIssue268RestartCharacterization("DS19").pipe(
   Effect.flatMap((result) => ("ds19" in result ? Effect.succeed(result.ds19) : Effect.die("DS-19 was not reached")))
+)
+
+export const runIssue349AcceptedPublicationObserver = runIssue268RestartCharacterization("DS349").pipe(
+  Effect.flatMap((result) =>
+    "ds349" in result ? Effect.succeed(result.ds349) : Effect.die("#349 continuation was not reached")
+  )
 )
 
 /** Continues the retained-C cassette through the notification/timer-selected DS-20 read. */

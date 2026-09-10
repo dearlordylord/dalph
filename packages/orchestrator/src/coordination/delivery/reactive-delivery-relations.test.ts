@@ -88,6 +88,7 @@ import { plannedAttemptProtocolControllerLayer } from "../../workflow/protocols/
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeIntegrationTargetResourceController } from "../admission/integration-target-resource.js"
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
+import { hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck } from "../frontier/safe-continuation-revalidation-eligibility.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
 import { makeRunRecoveryProjection, readDeliveryProjectionFrom } from "../run/recovery-activation.js"
@@ -322,6 +323,43 @@ const appendAcceptedExecutingExecutorHistory = Effect.fn("ReactiveDeliveryTest.a
     yield* appendDirectExecutorReport(journal, executingReport, 1)
   }
 )
+
+const appendRecoveredTaskGraph = Effect.fn("ReactiveDeliveryTest.appendRecoveredTaskGraph")(function* (
+  journal: Effect.Success<typeof makeJournalService>,
+  operationId: OperationId,
+  predecessorOperationId: OperationId,
+  lifecycle: "Open" | "TerminalWithoutSuccess",
+  cause: Parameters<typeof makeTrackerGraphObservationOperation>[0] = { _tag: "ExecutingWorkAuthorityCheck" },
+  explicitlyCoveredTaskIds: ReadonlyArray<TaskId> = [
+    lifecycle === "Open" ? TaskId.make("unrelated-active-task") : recoveredAttempt.taskId
+  ]
+) {
+  const operation = makeTrackerGraphObservationOperation(
+    cause,
+    operationId,
+    target,
+    [predecessorOperationId],
+    explicitlyCoveredTaskIds
+  )
+  yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+  yield* journal.append(
+    runId,
+    outcomeRecordKey(operation.operationId),
+    taskTrackerFactsObservedEvent(
+      operation.operationId,
+      makeCompleteTaskTrackerFactsObserved(
+        operation,
+        validSnapshot({
+          revision: `${operationId}-revision`,
+          tasks: [
+            { id: recoveredAttempt.taskId, lifecycle: { _tag: lifecycle }, parentTaskId: null, prerequisiteIds: [] }
+          ]
+        })
+      )
+    )
+  )
+  return operation
+})
 
 const appendCommandProjection = Effect.fn("ReactiveDeliveryTest.appendCommandProjection")(function* (
   journal: Effect.Success<typeof makeJournalService>,
@@ -1252,6 +1290,140 @@ it.effect("establishes the current graph before proposing an external-success cl
         _tag: "DeliveryProposalsAvailable",
         proposals: [{ route: { _tag: "TrackerGraphReadRoute", purpose: "EstablishCurrentGraph" } }]
       })
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
+it.effect("establishes the current graph while a recovered continuation graph read waits for capacity", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const priorActivationJournal = yield* makeJournalService
+      yield* appendAcceptedExecutingExecutorHistory(priorActivationJournal)
+      const closedGraphOperation = yield* appendRecoveredTaskGraph(
+        priorActivationJournal,
+        OperationId.make("reactive-delivery-safe-closed-graph"),
+        OperationId.make("reactive-delivery-recovered-plan"),
+        "TerminalWithoutSuccess"
+      )
+      yield* appendExecutorCommand(priorActivationJournal, 2, "Suspend")
+      const safeReport = PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+        correlation: plannedAttemptExecutorCorrelation(recoveredAttempt)
+      })
+      yield* appendCommandResponse(priorActivationJournal, safeReport, 2)
+      yield* appendDirectExecutorReport(priorActivationJournal, safeReport, 2)
+      const storage = yield* JournalStore
+      expect(
+        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(yield* storage.read(runId), recoveredAttempt)
+      ).toBe(false)
+      const globalOpenGraphOperation = yield* appendRecoveredTaskGraph(
+        priorActivationJournal,
+        OperationId.make("reactive-delivery-global-open-graph"),
+        closedGraphOperation.operationId,
+        "Open"
+      )
+      const globallyReopenedRecords = yield* storage.read(runId)
+      expect(
+        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(globallyReopenedRecords, recoveredAttempt)
+      ).toBe(true)
+      const resumeOrdinal = PlannedAttemptExecutorCommandOrdinal.make(3)
+      const resume = PlannedAttemptExecutorCommandIntendedEvent.make({
+        command: "Resume",
+        initiatedBy: { _tag: "DalphCoordinator" },
+        occurrenceClassification: "InitiatedAction",
+        ordinal: resumeOrdinal,
+        plannedAttempt: recoveredAttempt,
+        version: workflowJournalEventVersion
+      })
+      expect(
+        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(
+          [
+            ...globallyReopenedRecords,
+            {
+              event: resume,
+              key: plannedAttemptExecutorCommandIntendedRecordKey(recoveredAttempt.attemptId, resumeOrdinal),
+              position: JournalPosition.make(Number(globallyReopenedRecords.at(-1)?.position ?? 0) + 1),
+              runId
+            }
+          ],
+          recoveredAttempt
+        )
+      ).toBe(false)
+      const workflowOpen = yield* appendRecoveredTaskGraph(
+        priorActivationJournal,
+        OperationId.make("reactive-delivery-workflow-open-graph"),
+        globalOpenGraphOperation.operationId,
+        "Open",
+        { _tag: "WorkflowEstablishment" }
+      )
+      expect(
+        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(yield* storage.read(runId), recoveredAttempt)
+      ).toBe(false)
+      const continuationOpen = yield* appendRecoveredTaskGraph(
+        priorActivationJournal,
+        OperationId.make("reactive-delivery-continuation-open-graph"),
+        workflowOpen.operationId,
+        "Open",
+        { _tag: "AttemptContinuation" },
+        [recoveredAttempt.taskId]
+      )
+      expect(
+        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(yield* storage.read(runId), recoveredAttempt)
+      ).toBe(false)
+      const cCoveredActiveOpen = yield* appendRecoveredTaskGraph(
+        priorActivationJournal,
+        OperationId.make("reactive-delivery-c-covered-active-open-graph"),
+        continuationOpen.operationId,
+        "Open",
+        { _tag: "ExecutingWorkAuthorityCheck" },
+        [recoveredAttempt.taskId]
+      )
+      expect(
+        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(yield* storage.read(runId), recoveredAttempt)
+      ).toBe(false)
+      yield* appendRecoveredTaskGraph(
+        priorActivationJournal,
+        OperationId.make("reactive-delivery-latest-closed-graph"),
+        cCoveredActiveOpen.operationId,
+        "TerminalWithoutSuccess"
+      )
+      expect(
+        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(yield* storage.read(runId), recoveredAttempt)
+      ).toBe(false)
+
+      const recoveredHistory = reduceWorkflowJournalHistory(runId, globallyReopenedRecords)
+      if (recoveredHistory._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(recoveredHistory)
+      const journal = yield* makeJournal(runId, target, recoveredHistory, storage)
+      const recoveredProjection = yield* makeRunRecoveryProjection(runId).pipe(
+        Effect.provideService(InRunJournal, journal)
+      )
+      const projection = yield* recoveredProjection.readDeliveryProjection
+      expect(
+        projection.frontier.transitions.some(
+          (transition) =>
+            transition._tag === "ObservePlannedAttemptContinuationGraph" &&
+            transition.plannedAttempt.attemptId === recoveredAttempt.attemptId
+        )
+      ).toBe(true)
+      expect(
+        projection.evidence._tag === "AvailableDeliveryProjectionEvidence"
+          ? projection.evidence.facts.some(
+              (facts) =>
+                facts._tag === "PlannedAttemptExecutorFreshFacts" &&
+                facts.responsibility.plannedAttempt.attemptId === recoveredAttempt.attemptId &&
+                facts.safeContinuationRevalidationEligibility === undefined
+            )
+          : false
+      ).toBe(true)
+      const layer = yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recoveredProjection)
+      const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
+      const initial = Option.getOrThrow(yield* relation.changes.pipe(Stream.runHead))
+
+      expect(initial.current.trackerGraph._tag).toBe("GraphNotEstablished")
+      expect(
+        initial.proposedActions._tag === "DeliveryProposalsAvailable"
+          ? initial.proposedActions.proposals.filter(({ route }) => route._tag === "TrackerGraphReadRoute")
+          : []
+      ).toMatchObject([{ route: { purpose: "EstablishCurrentGraph" } }])
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
 )
