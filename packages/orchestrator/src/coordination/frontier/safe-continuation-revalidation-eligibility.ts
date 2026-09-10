@@ -24,6 +24,7 @@ import type {
   PlannedAttemptExecutorReportOrdinal
 } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import {
+  acceptedExecutingAttemptsForAuthorityCheckIntent,
   continuationTrackerReadHasExactPlanPredecessor,
   type ContinuationTrackerReadOperation
 } from "../../workflow/protocols/planned-attempt-continuation/tracker-read-freshness.js"
@@ -167,9 +168,16 @@ export const hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck 
   const acceptedSafe = currentUnconsumedAcceptedSafeEvidence(records, plannedAttempt)
   if (acceptedSafe?.report._tag !== "ExecutorWorkSafelySuspended") return false
   const reopened = latestTaskReopenAfterAcceptedSafe(records, plannedAttempt, acceptedSafe)
-  if (reopened === undefined || reopened.key !== outcomeRecordKey(reopened.event.operationId)) return false
+  if (
+    reopened === undefined ||
+    reopened.runId !== plannedAttempt.runId ||
+    reopened.key !== outcomeRecordKey(reopened.event.operationId)
+  ) {
+    return false
+  }
   const intent = records.findLast(
-    ({ event, key }) =>
+    ({ event, key, runId }) =>
+      runId === plannedAttempt.runId &&
       event._tag === "TaskTrackerReadIntentRecorded" &&
       event.operation._tag === "ReadTrackerGraph" &&
       event.operation.operationId === reopened.event.operationId &&
@@ -180,10 +188,9 @@ export const hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck 
   }
   const operation = intent.event.operation
   return (
-    operation.cause._tag === "ExecutingWorkAuthorityCheck" &&
+    intent.position < reopened.position &&
+    acceptedExecutingAttemptsForAuthorityCheckIntent(records, intent) !== undefined &&
     taskTrackerTargetKey(operation.target) === taskTrackerTargetKey(reopened.event.observation.target) &&
-    operation.predecessorOperationIds.length > 0 &&
-    operation.readShape.explicitlyCoveredTaskIds.length > 0 &&
     !operation.readShape.explicitlyCoveredTaskIds.includes(plannedAttempt.taskId)
   )
 }

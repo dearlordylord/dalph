@@ -65,7 +65,7 @@ import {
   plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
-import { InRunJournal, JournalHistoryInvalid, JournalStore } from "../../workflow-journal/store.js"
+import { InRunJournal, JournalHistoryInvalid, type JournalRecord, JournalStore } from "../../workflow-journal/store.js"
 import {
   ControlDirectionApplicationOrdinal,
   ControlDirectionAppliedEvent
@@ -157,6 +157,38 @@ const recoveredSpecificationOperation = makeTaskWorkSpecificationObservationOper
   recoveredAttempt.taskId,
   [recoveredGraphOperation.operationId]
 )
+const recoveredPlanOperation = makeTaskAttemptPlanOperation({
+  operationId: OperationId.make("reactive-delivery-recovered-plan"),
+  plannedAttempt: recoveredAttempt,
+  predecessorOperationIds: [recoveredSpecificationOperation.operationId]
+})
+const recoveredWorktreeOperation = makeTaskWorktreeReconciliationOperation({
+  operationId: OperationId.make("reactive-delivery-recovered-worktree"),
+  plannedAttempt: recoveredAttempt,
+  predecessorOperationIds: [recoveredPlanOperation.operationId]
+})
+
+type ExecutorResponsibilityFixture = {
+  readonly attempt: PlannedTaskAttempt
+  readonly claim: ActiveTaskClaim
+  readonly claimOperation: ReturnType<typeof makeTaskClaimAcquisitionOperation>
+  readonly graphOperation: ReturnType<typeof makeTrackerGraphObservationOperation>
+  readonly planOperation: ReturnType<typeof makeTaskAttemptPlanOperation>
+  readonly specification: typeof recoveredSpecification
+  readonly specificationOperation: ReturnType<typeof makeTaskWorkSpecificationObservationOperation>
+  readonly worktreeOperation: ReturnType<typeof makeTaskWorktreeReconciliationOperation>
+}
+
+const recoveredExecutorResponsibilityFixture: ExecutorResponsibilityFixture = {
+  attempt: recoveredAttempt,
+  claim: recoveredClaim,
+  claimOperation: recoveredClaimOperation,
+  graphOperation: recoveredGraphOperation,
+  planOperation: recoveredPlanOperation,
+  specification: recoveredSpecification,
+  specificationOperation: recoveredSpecificationOperation,
+  worktreeOperation: recoveredWorktreeOperation
+}
 
 const makeJournalService = Effect.gen(function* () {
   const storage = yield* JournalStore
@@ -167,90 +199,84 @@ const makeJournalService = Effect.gen(function* () {
 })
 
 const appendExecutorResponsibility = Effect.fn("ReactiveDeliveryTest.appendExecutorResponsibility")(function* (
-  journal: Effect.Success<typeof makeJournalService>
+  journal: Effect.Success<typeof makeJournalService>,
+  fixture: ExecutorResponsibilityFixture = recoveredExecutorResponsibilityFixture
 ) {
-  const plan = makeTaskAttemptPlanOperation({
-    operationId: OperationId.make("reactive-delivery-recovered-plan"),
-    plannedAttempt: recoveredAttempt,
-    predecessorOperationIds: [recoveredSpecificationOperation.operationId]
-  })
-  const worktree = makeTaskWorktreeReconciliationOperation({
-    operationId: OperationId.make("reactive-delivery-recovered-worktree"),
-    plannedAttempt: recoveredAttempt,
-    predecessorOperationIds: [plan.operationId]
-  })
   const worktreeProof = PlannedWorktreeReady.make({
-    baseSha: recoveredAttempt.baseSha,
-    branch: recoveredAttempt.branch,
-    headSha: recoveredAttempt.baseSha,
-    worktree: recoveredAttempt.worktree
+    baseSha: fixture.attempt.baseSha,
+    branch: fixture.attempt.branch,
+    headSha: fixture.attempt.baseSha,
+    worktree: fixture.attempt.worktree
   })
   yield* journal.append(
     runId,
-    intentRecordKey(recoveredClaim.operationId),
-    TaskClaimAcquisitionIntendedEvent.make({ operation: recoveredClaimOperation, version: workflowJournalEventVersion })
+    intentRecordKey(fixture.claim.operationId),
+    TaskClaimAcquisitionIntendedEvent.make({ operation: fixture.claimOperation, version: workflowJournalEventVersion })
   )
   yield* journal.append(
     runId,
-    outcomeRecordKey(recoveredClaim.operationId),
-    TaskClaimAcquiredEvent.make({ claim: recoveredClaim, version: workflowJournalEventVersion })
+    outcomeRecordKey(fixture.claim.operationId),
+    TaskClaimAcquiredEvent.make({ claim: fixture.claim, version: workflowJournalEventVersion })
   )
   yield* journal.append(
     runId,
-    intentRecordKey(recoveredGraphOperation.operationId),
-    taskTrackerReadIntent(recoveredGraphOperation)
+    intentRecordKey(fixture.graphOperation.operationId),
+    taskTrackerReadIntent(fixture.graphOperation)
   )
   yield* journal.append(
     runId,
-    outcomeRecordKey(recoveredGraphOperation.operationId),
+    outcomeRecordKey(fixture.graphOperation.operationId),
     taskTrackerFactsObservedEvent(
-      recoveredGraphOperation.operationId,
+      fixture.graphOperation.operationId,
       makeCompleteTaskTrackerFactsObserved(
-        recoveredGraphOperation,
+        fixture.graphOperation,
         validSnapshot({
-          revision: "reactive-delivery-recovered-graph-revision",
-          tasks: [{ id: recoveredAttempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+          revision: `${fixture.graphOperation.operationId}-revision`,
+          tasks: [{ id: fixture.attempt.taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
         })
       )
     )
   )
   yield* journal.append(
     runId,
-    intentRecordKey(recoveredSpecificationOperation.operationId),
-    taskTrackerReadIntent(recoveredSpecificationOperation)
+    intentRecordKey(fixture.specificationOperation.operationId),
+    taskTrackerReadIntent(fixture.specificationOperation)
   )
   yield* journal.append(
     runId,
-    outcomeRecordKey(recoveredSpecificationOperation.operationId),
+    outcomeRecordKey(fixture.specificationOperation.operationId),
     taskTrackerFactsObservedEvent(
-      recoveredSpecificationOperation.operationId,
-      makeFocusedTaskWorkSpecificationFactsObserved(recoveredSpecificationOperation, recoveredSpecification)
+      fixture.specificationOperation.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(fixture.specificationOperation, fixture.specification)
     )
   )
   yield* journal.append(
     runId,
-    attemptPlanRecordKey(recoveredAttempt.attemptId),
-    TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+    attemptPlanRecordKey(fixture.attempt.attemptId),
+    TaskAttemptPlannedEvent.make({ operation: fixture.planOperation, version: workflowJournalEventVersion })
   )
   yield* journal.append(
     runId,
-    intentRecordKey(worktree.operationId),
-    TaskWorktreeReconciliationIntendedEvent.make({ operation: worktree, version: workflowJournalEventVersion })
+    intentRecordKey(fixture.worktreeOperation.operationId),
+    TaskWorktreeReconciliationIntendedEvent.make({
+      operation: fixture.worktreeOperation,
+      version: workflowJournalEventVersion
+    })
   )
   yield* journal.append(
     runId,
-    outcomeRecordKey(worktree.operationId),
+    outcomeRecordKey(fixture.worktreeOperation.operationId),
     TaskWorktreeReadyEvent.make({
-      operationId: worktree.operationId,
+      operationId: fixture.worktreeOperation.operationId,
       proof: worktreeProof,
       version: workflowJournalEventVersion
     })
   )
   yield* journal.append(
     runId,
-    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(recoveredAttempt.attemptId),
+    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(fixture.attempt.attemptId),
     PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-      plannedAttempt: recoveredAttempt,
+      plannedAttempt: fixture.attempt,
       version: workflowJournalEventVersion
     })
   )
@@ -259,18 +285,19 @@ const appendExecutorResponsibility = Effect.fn("ReactiveDeliveryTest.appendExecu
 const appendExecutorCommand = Effect.fn("ReactiveDeliveryTest.appendExecutorCommand")(function* (
   journal: Effect.Success<typeof makeJournalService>,
   ordinal: number,
-  command: "Begin" | "Resume" | "Suspend"
+  command: "Begin" | "Resume" | "Suspend",
+  plannedAttempt: PlannedTaskAttempt = recoveredAttempt
 ) {
   const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(ordinal)
   yield* journal.append(
     runId,
-    plannedAttemptExecutorCommandIntendedRecordKey(recoveredAttempt.attemptId, commandOrdinal),
+    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
     PlannedAttemptExecutorCommandIntendedEvent.make({
       command,
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
       ordinal: commandOrdinal,
-      plannedAttempt: recoveredAttempt,
+      plannedAttempt,
       version: workflowJournalEventVersion
     })
   )
@@ -279,16 +306,17 @@ const appendExecutorCommand = Effect.fn("ReactiveDeliveryTest.appendExecutorComm
 const appendCommandResponse = Effect.fn("ReactiveDeliveryTest.appendCommandResponse")(function* (
   journal: Effect.Success<typeof makeJournalService>,
   report: PlannedAttemptExecutorReport,
-  commandOrdinalValue = 1
+  commandOrdinalValue = 1,
+  plannedAttempt: PlannedTaskAttempt = recoveredAttempt
 ) {
   const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(commandOrdinalValue)
   yield* journal.append(
     runId,
-    plannedAttemptExecutorCommandResponseObservedRecordKey(recoveredAttempt.attemptId, commandOrdinal),
+    plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
     PlannedAttemptExecutorCommandResponseObservedEvent.make({
       commandOrdinal,
       occurrenceClassification: "NonActionOccurrence",
-      plannedAttempt: recoveredAttempt,
+      plannedAttempt,
       report,
       version: workflowJournalEventVersion
     })
@@ -298,12 +326,13 @@ const appendCommandResponse = Effect.fn("ReactiveDeliveryTest.appendCommandRespo
 const appendDirectExecutorReport = Effect.fn("ReactiveDeliveryTest.appendDirectExecutorReport")(function* (
   journal: Effect.Success<typeof makeJournalService>,
   report: PlannedAttemptExecutorReport,
-  ordinal: number
+  ordinal: number,
+  plannedAttempt: PlannedTaskAttempt = recoveredAttempt
 ) {
   const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(ordinal)
   yield* journal.append(
     runId,
-    plannedAttemptExecutorWorkReportedRecordKey(recoveredAttempt.attemptId, reportOrdinal),
+    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
     PlannedAttemptExecutorWorkReportedEvent.make({
       ordinal: reportOrdinal,
       report,
@@ -313,14 +342,17 @@ const appendDirectExecutorReport = Effect.fn("ReactiveDeliveryTest.appendDirectE
 })
 
 const appendAcceptedExecutingExecutorHistory = Effect.fn("ReactiveDeliveryTest.appendAcceptedExecutingExecutorHistory")(
-  function* (journal: Effect.Success<typeof makeJournalService>) {
-    yield* appendExecutorResponsibility(journal)
-    yield* appendExecutorCommand(journal, 1, "Begin")
+  function* (
+    journal: Effect.Success<typeof makeJournalService>,
+    fixture: ExecutorResponsibilityFixture = recoveredExecutorResponsibilityFixture
+  ) {
+    yield* appendExecutorResponsibility(journal, fixture)
+    yield* appendExecutorCommand(journal, 1, "Begin", fixture.attempt)
     const executingReport = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-      correlation: plannedAttemptExecutorCorrelation(recoveredAttempt)
+      correlation: plannedAttemptExecutorCorrelation(fixture.attempt)
     })
-    yield* appendCommandResponse(journal, executingReport)
-    yield* appendDirectExecutorReport(journal, executingReport, 1)
+    yield* appendCommandResponse(journal, executingReport, 1, fixture.attempt)
+    yield* appendDirectExecutorReport(journal, executingReport, 1, fixture.attempt)
   }
 )
 
@@ -1298,6 +1330,62 @@ it.effect("establishes the current graph while a recovered continuation graph re
   Effect.scoped(
     Effect.gen(function* () {
       const priorActivationJournal = yield* makeJournalService
+      const activeSpecification = makeTaskWorkSpecification({
+        body: "Keep the active task running.",
+        taskId: TaskId.make("reactive-delivery-active-task"),
+        title: "Active reactive-delivery task"
+      })
+      const activeAttempt = PlannedTaskAttempt.make({
+        ...recoveredAttempt,
+        attemptId: AttemptId.make("reactive-delivery-active-attempt"),
+        branch: TaskBranchRef.make("refs/heads/dalph/reactive-delivery-active"),
+        taskId: activeSpecification.taskId,
+        taskRevision: TaskRevision.make(activeSpecification.fingerprint),
+        worktree: WorktreeLocator.make("/worktrees/reactive-delivery-active")
+      })
+      const activeClaim = ActiveTaskClaim.make({
+        operationId: OperationId.make("reactive-delivery-active-claim"),
+        owner: ClaimOwner.make("reactive-delivery-test"),
+        taskId: activeAttempt.taskId,
+        token: ClaimToken.make("reactive-delivery-active-token")
+      })
+      const activeClaimOperation = makeTaskClaimAcquisitionOperation({
+        acquisition: activeClaim,
+        predecessorOperationIds: []
+      })
+      const activeGraphOperation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("reactive-delivery-active-graph"),
+        target,
+        [activeClaim.operationId],
+        [activeAttempt.taskId]
+      )
+      const activeSpecificationOperation = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("reactive-delivery-active-specification"),
+        target,
+        activeAttempt.taskId,
+        [activeGraphOperation.operationId]
+      )
+      const activePlanOperation = makeTaskAttemptPlanOperation({
+        operationId: OperationId.make("reactive-delivery-active-plan"),
+        plannedAttempt: activeAttempt,
+        predecessorOperationIds: [activeSpecificationOperation.operationId]
+      })
+      const activeFixture: ExecutorResponsibilityFixture = {
+        attempt: activeAttempt,
+        claim: activeClaim,
+        claimOperation: activeClaimOperation,
+        graphOperation: activeGraphOperation,
+        planOperation: activePlanOperation,
+        specification: activeSpecification,
+        specificationOperation: activeSpecificationOperation,
+        worktreeOperation: makeTaskWorktreeReconciliationOperation({
+          operationId: OperationId.make("reactive-delivery-active-worktree"),
+          plannedAttempt: activeAttempt,
+          predecessorOperationIds: [activePlanOperation.operationId]
+        })
+      }
+      yield* appendAcceptedExecutingExecutorHistory(priorActivationJournal, activeFixture)
       yield* appendAcceptedExecutingExecutorHistory(priorActivationJournal)
       const closedGraphOperation = yield* appendRecoveredTaskGraph(
         priorActivationJournal,
@@ -1318,13 +1406,104 @@ it.effect("establishes the current graph while a recovered continuation graph re
       const globalOpenGraphOperation = yield* appendRecoveredTaskGraph(
         priorActivationJournal,
         OperationId.make("reactive-delivery-global-open-graph"),
-        closedGraphOperation.operationId,
-        "Open"
+        activePlanOperation.operationId,
+        "Open",
+        { _tag: "ExecutingWorkAuthorityCheck" },
+        [activeAttempt.taskId]
       )
       const globallyReopenedRecords = yield* storage.read(runId)
       expect(
         hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(globallyReopenedRecords, recoveredAttempt)
       ).toBe(true)
+      const authorityIntent = globallyReopenedRecords.find(
+        ({ event }) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          event.operation.operationId === globalOpenGraphOperation.operationId
+      )
+      if (
+        authorityIntent?.event._tag !== "TaskTrackerReadIntentRecorded" ||
+        authorityIntent.event.operation._tag !== "ReadTrackerGraph"
+      ) {
+        return yield* Effect.die("missing #349 authority-check intent")
+      }
+      const replaceAuthorityIntent = (
+        records: ReadonlyArray<JournalRecord>,
+        operation: ReturnType<typeof makeTrackerGraphObservationOperation>
+      ): ReadonlyArray<JournalRecord> =>
+        records.map((record) =>
+          record === authorityIntent ? { ...record, event: taskTrackerReadIntent(operation) } : record
+        )
+      const authorityOperation = authorityIntent.event.operation
+      const authorityOperationWith = (
+        predecessorOperationIds: ReadonlyArray<OperationId>,
+        explicitlyCoveredTaskIds: ReadonlyArray<TaskId>
+      ) =>
+        makeTrackerGraphObservationOperation(
+          { _tag: "ExecutingWorkAuthorityCheck" },
+          authorityOperation.operationId,
+          target,
+          predecessorOperationIds,
+          explicitlyCoveredTaskIds
+        )
+      const missingPlan = replaceAuthorityIntent(
+        globallyReopenedRecords.filter(
+          ({ event }) =>
+            event._tag !== "TaskAttemptPlanned" || event.operation.operationId !== activePlanOperation.operationId
+        ),
+        authorityOperation
+      )
+      const foreignAttempt = PlannedTaskAttempt.make({
+        ...activeAttempt,
+        attemptId: AttemptId.make("reactive-delivery-foreign-attempt"),
+        runId: RunId.make("reactive-delivery-foreign-run")
+      })
+      const foreignPlan = makeTaskAttemptPlanOperation({ ...activePlanOperation, plannedAttempt: foreignAttempt })
+      const foreignPlanRecords = globallyReopenedRecords.map((record) =>
+        record.event._tag === "TaskAttemptPlanned" &&
+        record.event.operation.operationId === activePlanOperation.operationId
+          ? {
+              ...record,
+              event: TaskAttemptPlannedEvent.make({ operation: foreignPlan, version: workflowJournalEventVersion })
+            }
+          : record
+      )
+      const coverageMismatch = replaceAuthorityIntent(
+        globallyReopenedRecords,
+        authorityOperationWith([activePlanOperation.operationId], [TaskId.make("unplanned-active-task")])
+      )
+      const nonExecutingPredecessor = replaceAuthorityIntent(
+        globallyReopenedRecords,
+        authorityOperationWith([recoveredPlanOperation.operationId], [recoveredAttempt.taskId])
+      )
+      const extraNonPlanPredecessor = replaceAuthorityIntent(
+        globallyReopenedRecords,
+        authorityOperationWith(
+          [activePlanOperation.operationId, closedGraphOperation.operationId],
+          [activeAttempt.taskId]
+        )
+      )
+      const activePlanRecord = globallyReopenedRecords.find(
+        ({ event }) =>
+          event._tag === "TaskAttemptPlanned" && event.operation.operationId === activePlanOperation.operationId
+      )
+      if (activePlanRecord === undefined) return yield* Effect.die("missing active plan record")
+      const duplicatePlan = [
+        ...globallyReopenedRecords,
+        { ...activePlanRecord, position: JournalPosition.make(Number(authorityIntent.position) - 1) }
+      ]
+      for (const { name, records: invalidRecords } of [
+        { name: "missing plan", records: missingPlan },
+        { name: "foreign plan", records: foreignPlanRecords },
+        { name: "coverage mismatch", records: coverageMismatch },
+        { name: "non-executing predecessor", records: nonExecutingPredecessor },
+        { name: "extra non-plan predecessor", records: extraNonPlanPredecessor },
+        { name: "duplicate plan", records: duplicatePlan }
+      ]) {
+        expect(
+          hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(invalidRecords, recoveredAttempt),
+          name
+        ).toBe(false)
+      }
       const resumeOrdinal = PlannedAttemptExecutorCommandOrdinal.make(3)
       const resume = PlannedAttemptExecutorCommandIntendedEvent.make({
         command: "Resume",
