@@ -17,8 +17,6 @@ import {
   AllocatedWorkflowRunId,
   attemptChoiceControlWithProvidedProtocolLayer,
   ClaimOwner,
-  type CompletionClaimBoundary,
-  type CompletionTaskBoundary,
   CoordinatorOwnership,
   controlDirectionApplicationLayer,
   controlledTrackerMutationLayerFrom,
@@ -65,7 +63,7 @@ import {
   OperationIdAllocator,
   TaskClaimAcquisitionPlanner,
   type IntegratorRunCorrelation,
-  type WorkflowJournalEvent as WorkflowEvent
+  DeliveryRuntimeObservationObserver
 } from "@dalph/orchestrator"
 import { Context, Deferred, Effect, Layer, Queue, Ref, Stream } from "effect"
 import { makeSixTaskGitAndEvidence } from "./six-task-finality-boundaries.js"
@@ -73,21 +71,13 @@ import { makeSixTaskGitAndEvidence } from "./six-task-finality-boundaries.js"
 import type { makeSixTaskDeliveryFacts } from "./six-task-delivery-facts.js"
 import { makeSixTaskIntegratorGit } from "./six-task-integrator-git.js"
 
-export type SixTaskTerminalCut = "BeforeObservation" | "AfterObservation" | "AfterAcceptance"
+import { makeSixTaskRuntimeObservation, type SixTaskRuntimeControl } from "./six-task-runtime-observation.js"
+export type { SixTaskTerminalCut } from "./six-task-runtime-observation.js"
 
 /** Independent G5 boundary controls; all admission and report decisions belong to production. */
 export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime")(function* (
   facts: ReturnType<typeof makeSixTaskDeliveryFacts>,
-  control: {
-    readonly beforeAppend: (event: WorkflowEvent) => Effect.Effect<void>
-    readonly afterAppend: (event: WorkflowEvent) => Effect.Effect<void>
-    readonly makeFinality: (
-      tracker: TrackerMutation["Service"]
-    ) => Effect.Effect<{
-      readonly claimBoundary: CompletionClaimBoundary["Service"]
-      readonly taskBoundary: CompletionTaskBoundary["Service"]
-    }>
-  }
+  control: SixTaskRuntimeControl
 ) {
   const { baseSha, capacity, graph, integrationTarget, namespace, runId, target, taskFacts, taskFactsById, tasks } =
     facts
@@ -111,37 +101,23 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
     )
   )
   const journal = Context.get(shared, JournalStore)
-  const cut = yield* Ref.make<
-    { readonly _tag: "Disabled" } | { readonly _tag: "Armed"; readonly at: SixTaskTerminalCut }
-  >({ _tag: "Disabled" })
-  const cutReached = yield* Queue.unbounded<SixTaskTerminalCut>()
-  const controlledJournal = JournalStore.of({
-    ...journal,
-    append: (id, key, event) =>
-      Effect.gen(function* () {
-        const selected = yield* Ref.get(cut)
-        yield* control.beforeAppend(event)
-        const matches =
-          selected._tag === "Armed" &&
-          (selected.at === "BeforeObservation"
-            ? event._tag === "PlannedAttemptExecutorStateObserved"
-            : selected.at === "AfterObservation"
-              ? event._tag === "PlannedAttemptExecutorWorkReported" && event.report._tag === "ExecutorWorkTerminal"
-              : event._tag === "IntegrationResponsibilityBegan")
-        if (selected._tag === "Armed" && matches) {
-          yield* Queue.offer(cutReached, selected.at)
-          return yield* Effect.interrupt
-        }
-        const result = yield* journal.append(id, key, event)
-        yield* control.afterAppend(event)
-        return result
-      })
-  })
+  const {
+    appendAttempts,
+    controlledJournal,
+    cut,
+    cutReached,
+    processEndRequests,
+    runtimeEntries,
+    runtimeObservationQueue,
+    runtimeObservations,
+    terminationAttempts
+  } = yield* makeSixTaskRuntimeObservation(journal, control)
   const { evidence, evidenceReads, head, promotionGit, promotionReads, promotions } = yield* makeSixTaskGitAndEvidence(
     Context.get(shared, EvidenceStore),
     baseSha
   )
   const settlementControl = yield* control.makeFinality(Context.get(shared, TrackerMutation))
+  if (control.initialize !== undefined) yield* control.initialize({ journal, evidence })
   const publications = yield* Ref.make<ReadonlyArray<DeliveryRelationInputBundle>>([])
   const publicationQueue = yield* Queue.unbounded<DeliveryRelationInputBundle>()
   const commands = yield* Ref.make<ReadonlyArray<PlannedTaskAttempt>>([])
@@ -226,7 +202,11 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
   const interpreter = workflowInterpreterLayer.pipe(
     Layer.provide(
       Layer.mergeAll(
-        Layer.succeed(TrackerGraphReader, Context.get(shared, TrackerGraphReader)),
+        Layer.succeed(
+          TrackerGraphReader,
+          control.makeTrackerReader?.(Context.get(shared, TrackerGraphReader), journal) ??
+            Context.get(shared, TrackerGraphReader)
+        ),
         Layer.succeed(TrackerMutation, Context.get(shared, TrackerMutation)),
         Layer.succeed(GitWorktree, Context.get(shared, GitWorktree)),
         Layer.succeed(GitTargetLineage, {
@@ -272,7 +252,9 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
     Effect.gen(function* () {
       const failure = yield* Deferred.make<unknown>()
       const ownership = CoordinatorOwnership.of({ release: Effect.void, runMutation: (effect) => effect })
-      const shell = yield* makeApplicationExitShell(ownership, { requestEnd: () => Effect.void })
+      const shell = yield* makeApplicationExitShell(ownership, {
+        requestEnd: () => Ref.update(processEndRequests, (count) => count + 1)
+      })
       const runtime = ({ opportunity }: JournaledRuntimeLayerInput) =>
         validatedRunActivationLayer(
           runId,
@@ -292,14 +274,25 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
               executorLayer,
               sharedPlanning,
               journaledWorkflowInterpreterLayer(runId, interpreter),
-              Layer.succeed(WorkflowTrace, { emit: () => Effect.void })
+              Layer.succeed(WorkflowTrace, { emit: () => Effect.void }),
+              Layer.effectDiscard(Ref.update(runtimeEntries, (count) => count + 1))
             )
           )
         )
       const application = journaledRunBootstrapLayer(runId, runtime, shell, noopJournalMaintenanceObservation).pipe(
         Layer.provide(journalStoreCapabilities(Layer.succeed(JournalStore, controlledJournal))),
         Layer.provide(Layer.succeed(CoordinatorOwnership, ownership)),
-        Layer.provide(executorLayer)
+        Layer.provide(executorLayer),
+        Layer.provide(
+          Layer.succeed(DeliveryRuntimeObservationObserver, {
+            observe: (observation) =>
+              Ref.update(runtimeObservations, (all) => [...all, observation]).pipe(
+                Effect.andThen(Queue.offer(runtimeObservationQueue, observation)),
+                Effect.andThen(control.observeRuntime?.(observation) ?? Effect.void),
+                Effect.asVoid
+              )
+          })
+        )
       )
       const applicationContext = yield* Layer.build(application)
       const ordinaryActivation = runWorkflowWithControlledDeliveryActionExecutor(
@@ -397,6 +390,12 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
     })
   return {
     activate,
+    runtimeEntries,
+    terminationAttempts,
+    runtimeObservations,
+    runtimeObservationQueue,
+    appendAttempts,
+    processEndRequests,
     cut,
     cutReached,
     commands,
@@ -414,6 +413,7 @@ export const makeSixTaskDeliveryRuntime = Effect.fn("SixTaskDelivery.makeRuntime
     releaseIntegration,
     runId,
     terminal,
+    publish,
     unresolved
   }
 })

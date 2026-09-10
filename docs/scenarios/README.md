@@ -103,6 +103,7 @@ owning issue is complete.
 | `issue-300-current-status-admission-witness.md` | 300 | Accepted narrow refinement of #217 owner validation; candidate qualification and integration remain pending |
 | `issue-275-discover-f-g-at-capacity.md` | 275 | Accepted DS-20 graph discovery while B/C/D hold capacity; final verification and integration remain pending |
 | `issue-276-release-exact-task-positions.md` | 276 | Controlled DS-21 position release and serialized integration order; ordinary finality and uninterrupted composition remain downstream |
+| [`issue-278-normal-termination.md`](issue-278-normal-termination.md) | 278 | Independent DS-22 seven-task normal termination, exact claim absence, and finality crash recovery; uninterrupted composition remains #279 |
 
 **Superseded or awaiting integration-boundary reconciliation** — these files
 remain as historical or current-runtime evidence, but their banners state

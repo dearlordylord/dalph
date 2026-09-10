@@ -52,7 +52,7 @@ settlement after exact absence is established.
 
 Alice sees six completed tasks and six distinct settled deliveries. This
 recording stops at G's settlement: the later post-quiescence graph read and Run
-termination belong to #278, and uninterrupted DS-01–DS-22 composition belongs
+termination belong to [#278's independent scenario](issue-278-normal-termination.md), and uninterrupted DS-01–DS-22 composition belongs
 to #279. DS-21 therefore remains `NotImplemented` in the whole-story manifest.
 
 ## Crash, retry, and forbidden results
