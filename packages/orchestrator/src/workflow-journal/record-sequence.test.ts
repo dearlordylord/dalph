@@ -10,7 +10,8 @@ import {
   acceptedJournalRecordForKey,
   acceptedJournalRecordsForKind,
   acceptedJournalSuccessorProvenance,
-  appendValidatedJournalRecord
+  appendValidatedJournalRecord,
+  inspectAcceptedPrefixStorage
 } from "./accepted-prefix.js"
 import { TaskWorkCapacityChangedEvent } from "../workflow/registry/event.js"
 import { taskWorkCapacityPolicyRecordKey } from "./record-key.js"
@@ -20,6 +21,7 @@ import {
   emptyJournalRecords,
   journalRecordAt,
   journalRecordsBefore,
+  inspectJournalRecordStorage,
   materializeJournalRecords
 } from "./record-sequence.js"
 
@@ -55,8 +57,12 @@ describe("Alice retains an earlier journal observation", () => {
   }
 
   it("shares retained storage across increasing histories instead of retaining every full array", () => {
-    const small = retainedSlotCount(retainedPrefixes(256))
-    const large = retainedSlotCount(retainedPrefixes(1024))
+    const small = retainedSlotCount(
+      retainedPrefixes(256).flatMap((prefix) => [prefix, inspectJournalRecordStorage(prefix)])
+    )
+    const large = retainedSlotCount(
+      retainedPrefixes(1024).flatMap((prefix) => [prefix, inspectJournalRecordStorage(prefix)])
+    )
     // Four times the records may grow HAMT paths, but not sixteen times the
     // retained full-prefix storage. This counts the reachable structure, not GC.
     expect(large).toBeLessThan(small * 6)
@@ -86,8 +92,14 @@ describe("Alice retains an earlier journal observation", () => {
   it("keeps only shared accepted storage and an opaque predecessor identity in provenance", () => {
     const small = acceptedPrefix(256)
     const large = acceptedPrefix(1024)
-    const smallSlots = retainedSlotCount([small, acceptedJournalSuccessorProvenance(small)])
-    const largeSlots = retainedSlotCount([large, acceptedJournalSuccessorProvenance(large)])
+    const smallSlots = retainedSlotCount([
+      ...inspectAcceptedPrefixStorage(small),
+      acceptedJournalSuccessorProvenance(small)
+    ])
+    const largeSlots = retainedSlotCount([
+      ...inspectAcceptedPrefixStorage(large),
+      acceptedJournalSuccessorProvenance(large)
+    ])
     expect(largeSlots).toBeLessThan(smallSlots * 5)
     expect(acceptedJournalSuccessorProvenance(large)?.predecessor).not.toHaveProperty("records")
     expect(acceptedJournalRecordForKey(large, initial.key)).toBe(initial)

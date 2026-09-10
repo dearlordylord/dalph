@@ -1,8 +1,8 @@
-import { HashMap, Option } from "effect"
 import type { RunId } from "@dalph/contracts"
 import type { JournalRecordKey } from "./identity.js"
 import type { JournalRecord } from "./store.js"
-import { appendJournalRecord, emptyJournalRecords, type JournalRecordSequence } from "./record-sequence.js"
+import { type JournalRecordSequence } from "./record-sequence.js"
+import { appendJournalEvidence, emptyJournalEvidence, retainJournalEvidence, journalRecordByKey, journalEvidenceKindSequence, inspectJournalEvidenceStorage, type JournalRecordEvidence } from "./record-evidence.js"
 
 const AcceptedJournalPrefixTypeId: unique symbol = Symbol("AcceptedJournalPrefix")
 const JournalSuccessorProvenanceTypeId: unique symbol = Symbol("JournalSuccessorProvenance")
@@ -23,17 +23,12 @@ const prefixIdentity = (prefix: AcceptedJournalPrefix): JournalPrefixIdentity =>
   return identity
 }
 
-interface AcceptedRecordIndexes {
-  readonly byKey: HashMap.HashMap<JournalRecordKey, JournalRecord>
-  readonly byKind: HashMap.HashMap<JournalRecord["event"]["_tag"], JournalRecordSequence>
-}
-
 /**
  * The exact immutable records whose semantics the chronological validator has
  * accepted. It certifies journal history only, never current outside facts.
  */
-export interface AcceptedJournalPrefix {
-  readonly [AcceptedJournalPrefixTypeId]: AcceptedRecordIndexes
+export interface AcceptedJournalPrefix extends JournalRecordEvidence {
+  readonly [AcceptedJournalPrefixTypeId]: true
   readonly records: JournalRecordSequence
   readonly runId: RunId
 }
@@ -52,11 +47,8 @@ export const acceptedJournalPrefixFromValidatedHistory = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
 ): AcceptedJournalPrefix => {
-  const empty: AcceptedJournalPrefix = {
-    [AcceptedJournalPrefixTypeId]: { byKey: HashMap.empty(), byKind: HashMap.empty() },
-    records: emptyJournalRecords(),
-    runId
-  }
+  const source = emptyJournalEvidence()
+  const empty: AcceptedJournalPrefix = retainJournalEvidence(source, { ...source, [AcceptedJournalPrefixTypeId]: true, runId })
   return records.reduce(appendValidatedJournalRecord, empty)
 }
 
@@ -65,16 +57,12 @@ export const appendValidatedJournalRecord = (
   prior: AcceptedJournalPrefix,
   record: JournalRecord
 ): AcceptedJournalPrefix => {
-  const indexes = prior[AcceptedJournalPrefixTypeId]
-  const kindRecords = Option.getOrElse(HashMap.get(indexes.byKind, record.event._tag), emptyJournalRecords)
-  const next: AcceptedJournalPrefix = {
-    [AcceptedJournalPrefixTypeId]: {
-      byKey: HashMap.set(indexes.byKey, record.key, record),
-      byKind: HashMap.set(indexes.byKind, record.event._tag, appendJournalRecord(kindRecords, record))
-    },
-    records: appendJournalRecord(prior.records, record),
+  const source = appendJournalEvidence(prior, record)
+  const next: AcceptedJournalPrefix = retainJournalEvidence(source, {
+    ...source,
+    [AcceptedJournalPrefixTypeId]: true,
     runId: prior.runId
-  }
+  })
   provenanceByPrefix.set(next, { [JournalSuccessorProvenanceTypeId]: true, predecessor: prefixIdentity(prior), record })
   return next
 }
@@ -82,14 +70,18 @@ export const appendValidatedJournalRecord = (
 export const acceptedJournalRecordForKey = (
   prefix: AcceptedJournalPrefix,
   key: JournalRecordKey
-): JournalRecord | undefined => Option.getOrUndefined(HashMap.get(prefix[AcceptedJournalPrefixTypeId].byKey, key))
+): JournalRecord | undefined => journalRecordByKey(prefix, key)
 
 export const acceptedJournalRecordsForKind = (
   prefix: AcceptedJournalPrefix,
   kind: JournalRecord["event"]["_tag"]
-): JournalRecordSequence =>
-  Option.getOrElse(HashMap.get(prefix[AcceptedJournalPrefixTypeId].byKind, kind), emptyJournalRecords)
+): JournalRecordSequence => journalEvidenceKindSequence(prefix, kind)
 
 export const acceptedJournalSuccessorProvenance = (
   prefix: AcceptedJournalPrefix
 ): JournalSuccessorProvenance | undefined => provenanceByPrefix.get(prefix)
+
+/** Test-only retained roots, including private per-kind and ordered record storage. */
+export const inspectAcceptedPrefixStorage = (prefix: AcceptedJournalPrefix): ReadonlyArray<object> => {
+  return inspectJournalEvidenceStorage(prefix)
+}
