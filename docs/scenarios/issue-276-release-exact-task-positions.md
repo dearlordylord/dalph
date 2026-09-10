@@ -47,6 +47,23 @@ new claim evidence; this change must not reuse the old acquisition or retry work
 The terminal-journal cuts below separately prove recovery without another Begin
 or Resume. No live-provider retry occurs in these controlled tests.
 
+The same fresh-claim rule applies when Alice replays the maintained two-task
+pipeline, five-task diamond, or staggered double diamond in Reducer Lab. After
+their first accepted result, Dalph now calls Git for lineage in that activation;
+the authored boundary sequence must accept that call rather than demand an
+unearned activation return and redundant claim reads. The runner publishes only
+the real story, journal, runtime-owner, and delivery observations it captures.
+Those existing examples must still execute their declared behavior, not fail
+with an interaction mismatch or fabricate missing observation moments. This is
+maintenance of their existing examples, not #279's seven-task composition.
+In the five-task example, E already has its claim and plan when B takes the
+integration target. The cassette holds E's worktree call until B's promotion,
+then holds B's completion-claim read until E begins; E must therefore begin
+before B settles. The double-diamond example retains its corresponding B-to-X
+hold across restart. After C settles, X now receives its lineage check and
+integration turn before the next graph read admits D. Neither example may
+invent an activation return to postpone that available integration work.
+
 ### Task-work positions release independently of the integration target
 
 No person commands an executor to finish. B's executor independently makes its
@@ -85,6 +102,7 @@ retains the position and authorizes no E admission.
 | Integration retains B/C/D/E/F/G order and distinct identities | `serializes distinct B through G sessions resources and candidates in accepted order` |
 | Exact fresh acquisition precedes complete graph, Git lineage, and B's Integrator call without a redundant claim read | `starts B integration after its exact acquired claim graph and lineage observations` |
 | Unrelated or foreign claims cannot replace fresh exact evidence | `does not use unrelated acquired claims as fresh integration claim observations` and `keeps focused integration claim observations within the exact task target and freshness boundary` in `recovery-activation.test.ts` |
+| Maintained authored examples accept the immediate lineage call and publish real moments | `preserves maintained authored moments after fresh-claim integration progress` in `issue-276-maintained-observations.test.ts`; Reducer Lab maintained-cassette smoke |
 | Crash before executor-state observation | `recovers B at BeforeObservation without another executor command` |
 | Crash after observation, before acceptance | `recovers B at AfterObservation without another executor command` |
 | Crash after acceptance, before responsibility | `recovers B at AfterAcceptance without another executor command` |

@@ -1,0 +1,49 @@
+import { it } from "@effect/vitest"
+import { NodeCrypto } from "@effect/platform-node"
+import { Effect } from "effect"
+import { expect } from "vitest"
+import { maintainedAuthoredCassetteCatalog, runAuthoredScenarioCassette } from "../../src/cassettes/index.js"
+
+it.effect(
+  "preserves maintained authored moments after fresh-claim integration progress",
+  () =>
+    Effect.gen(function* () {
+      for (const key of [
+        "dependentTasksCompleteInOneRun",
+        "productionShapedFiveTaskDiamond",
+        "deliveryInvariantStory"
+      ] as const) {
+        const run = yield* runAuthoredScenarioCassette(maintainedAuthoredCassetteCatalog[key]).pipe(
+          Effect.mapError((failure) => ({ key, failure }))
+        )
+        expect(run.observationMoments.map(({ captureOrder }) => captureOrder)).toEqual(
+          run.observationCaptures.map(({ captureOrder }) => captureOrder)
+        )
+        expect(run.observationMoments.some(({ _tag }) => _tag === "AuthoredStoryOccurrenceMoment")).toBe(true)
+        expect(run.observationMoments.some(({ _tag }) => _tag === "DeliveryRuntimeOwnersMoment")).toBe(true)
+        expect(
+          run.observationMoments
+            .filter(({ _tag }) => _tag === "DeliveryPublicationMoment")
+            .map((moment) => moment.deliveryFrame)
+        ).toEqual(run.deliveryFrames)
+        const acquired = run.records.find(
+          ({ event }) => event._tag === "TaskClaimAcquired" && event.claim.taskId === "A"
+        )
+        const lineage = run.records.find(
+          ({ event }) => event._tag === "TargetLineageObserved" && event.plannedAttempt.taskId === "A"
+        )
+        expect(lineage?.position).toBeGreaterThan(acquired?.position ?? 0)
+        if (key === "productionShapedFiveTaskDiamond") {
+          const beganE = run.records.find(
+            ({ event }) =>
+              event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" && event.plannedAttempt.taskId === "E"
+          )
+          const settledB = run.records.find(
+            ({ event }) => event._tag === "IntegrationFinalitySettled" && event.claim.plannedAttempt.taskId === "B"
+          )
+          expect(beganE?.position).toBeLessThan(settledB?.position ?? 0)
+        }
+      }
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+  60_000
+)
