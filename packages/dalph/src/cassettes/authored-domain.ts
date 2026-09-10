@@ -18,6 +18,10 @@ import {
   ControlDirection,
   InitialControlPolicy,
   IntegratorCandidateText,
+  IntegratorCandidateCleanupMutationResult,
+  IntegratorCandidateCleanupObservation,
+  IntegratorCandidateCleanupEvidenceSubject,
+  IntegratorCandidateCleanupEvidenceRevision,
   IntegratorRunCorrelation,
   IntegratorGitObservation,
   IntegratorNotPreparedDetail,
@@ -875,6 +879,15 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   IntegratorGitObservationReturned: { candidateText: IntegratorCandidateText, observation: IntegratorGitObservation },
   /** Git cannot read the explicitly reported candidate text. */
   IntegratorGitObservationFailed: { candidateText: IntegratorCandidateText, detail: Schema.String },
+  /** The provider returns fresh facts for the exact FullRerun predecessor candidate. */
+  IntegratorCandidateCleanupObservationReturned: { observation: IntegratorCandidateCleanupObservation },
+  /** The provider binds its private revision read to the exact FullRerun predecessor subject. */
+  IntegratorCandidateCleanupEvidenceRevisionReturned: {
+    revision: IntegratorCandidateCleanupEvidenceRevision,
+    subject: IntegratorCandidateCleanupEvidenceSubject
+  },
+  /** The provider returns the typed result of removing the exact FullRerun predecessor candidate. */
+  IntegratorCandidateCleanupRemovalReturned: { result: IntegratorCandidateCleanupMutationResult },
   /** Git's exact H -> M compare-and-set result, or its lost response. */
   TargetPromotionCompareAndSetReturned: {
     request: TargetPromotionGitRequest,
@@ -1089,6 +1102,11 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
     "IntegratorResultReturned",
     "IntegratorGitObservationReturned",
     "IntegratorGitObservationFailed"
+  ],
+  IntegratorCandidateCleanup: [
+    "IntegratorCandidateCleanupEvidenceRevisionReturned",
+    "IntegratorCandidateCleanupObservationReturned",
+    "IntegratorCandidateCleanupRemovalReturned"
   ],
   TargetPromotion: [
     "TargetPromotionCompareAndSetReturned",

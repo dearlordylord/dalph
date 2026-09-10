@@ -16,6 +16,7 @@ import {
   Scope,
   type Result,
   Schema,
+  Semaphore,
   Stream
 } from "effect"
 import {
@@ -149,6 +150,7 @@ import {
 import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
 import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
+import { authoredCandidateCleanupBoundaryLayer } from "./authored-candidate-cleanup.js"
 
 export interface AuthoredScenarioCassetteRun {
   readonly activationOrdinals: ReadonlyArray<AuthoredRunActivationOrdinalType>
@@ -1432,6 +1434,13 @@ const runAuthoredScenarioCassetteWith = (request: {
             AuthoredStoryPosition.make(storyPosition)
           ).pipe(Effect.asVoid)
       })
+      const dispositionCleanupBoundaryLayer = cassette.story.some(
+        ({ _tag }) =>
+          _tag === "IntegratorCandidateCleanupObservationReturned" ||
+          _tag === "IntegratorCandidateCleanupRemovalReturned"
+      )
+        ? authoredCandidateCleanupBoundaryLayer(cursor)
+        : preservingDispositionCleanupBoundaryLayer
       const offerRunReactivationHint = yield* Ref.make<(hint: "TrackerNotification" | "Timer") => Effect.Effect<void>>(
         () => Effect.die("the authored Run reactivation owner is not active")
       )
@@ -2093,7 +2102,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           command.targetPromotionConfigured === true || targetPromotionStory ? { git: targetPromotionGit } : undefined,
           completionFinalityConfigured ? completionClaimBoundary : undefined,
           completionTaskConfigured ? completionTaskBoundary : undefined,
-          preservingDispositionCleanupBoundaryLayer,
+          dispositionCleanupBoundaryLayer,
           evidenceStore,
           false,
           opportunity
@@ -2146,7 +2155,10 @@ const runAuthoredScenarioCassetteWith = (request: {
         ).pipe(Layer.provide(journalLayer), Layer.provide(coordinatorOwnershipLayer), Layer.provide(executorLayer))
         return { application, applicationExit }
       })
-      const withAuthoredOperatorDriver = <A, E, R>(program: Effect.Effect<A, E, R>) =>
+      const withAuthoredOperatorDriver = <A, E, R>(
+        program: Effect.Effect<A, E, R>,
+        directItemCompletion?: Semaphore.Semaphore
+      ) =>
         Effect.scoped(
           Effect.gen(function* () {
             const bootstrap = yield* JournaledRunBootstrap
@@ -2441,7 +2453,8 @@ const runAuthoredScenarioCassetteWith = (request: {
               ).pipe(Effect.orDie)
               yield* Deferred.await(promotionStaleQuarantineDurable)
               yield* Effect.yieldNow
-              const quarantineObserved = (yield* sharedJournal.read(runId)).some(
+              const quarantineRecords = yield* sharedJournal.read(runId)
+              const quarantineObserved = quarantineRecords.some(
                 (record) =>
                   record.position === request.fingerprint.quarantineAt &&
                   record.event._tag === "IntegrationQuarantined" &&
@@ -2449,7 +2462,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               )
               if (!quarantineObserved) {
                 return yield* Effect.die(
-                  `authored FullRerun choice reached before quarantine ${request.fingerprint.quarantineAt} was durable`
+                  `authored FullRerun choice reached before quarantine ${request.fingerprint.quarantineAt} was durable; recorded quarantines: ${JSON.stringify(quarantineRecords.filter(({ event }) => event._tag === "IntegrationQuarantined"))}`
                 )
               }
               const applied = yield* bootstrap.operatorControl.applyIntegrationQuarantineDirection(request)
@@ -2803,7 +2816,10 @@ const runAuthoredScenarioCassetteWith = (request: {
               })
             })
             const driver = yield* nextDirectlyDrivenItem.pipe(
-              Effect.flatMap(driveAuthoredOperatorItem),
+              Effect.flatMap((item) => {
+                const action = driveAuthoredOperatorItem(item)
+                return directItemCompletion === undefined ? action : directItemCompletion.withPermits(1)(action)
+              }),
               Effect.forever,
               Effect.forkScoped
             )
@@ -2916,19 +2932,17 @@ const runAuthoredScenarioCassetteWith = (request: {
             )
           )
         )
-      const activateRunInNewApplicationProcess = (activationOrdinal: AuthoredRunActivationOrdinalType) =>
-        Effect.scoped(
-          Effect.gen(function* () {
-            const { application } = yield* makeApplicationProcess
-            return yield* activateRun(activationOrdinal).pipe(Effect.provide(application))
-          })
-        )
       const runThroughProductionReactivationOwner = Effect.gen(function* () {
+        const directItemCompletion = yield* Semaphore.make(1)
         const { application, applicationExit } = yield* makeApplicationProcess
         const applicationContext = yield* Layer.build(application)
         const bootstrap = Context.get(applicationContext, JournaledRunBootstrap)
-        const failure = yield* Deferred.make<unknown>()
+        const activationExits = yield* Queue.unbounded<Exit.Exit<CoordinatorFinalityDecision, unknown>>()
+        const reportActivationExit = <E, R>(activation: Effect.Effect<CoordinatorFinalityDecision, E, R>) =>
+          activation.pipe(Effect.onExit((exit) => Queue.offer(activationExits, exit).pipe(Effect.asVoid)))
         const quietInterval = Duration.hours(1)
+        const currentFirstNotification =
+          (yield* cursor.currentStoryItem)?._tag === "CassettePublishesCurrentTrackerNotification"
         const trackerNotificationSource = {
           attach: Effect.gen(function* () {
             const authored = yield* cursor.consumeCurrentTrackerNotification
@@ -2942,34 +2956,38 @@ const runAuthoredScenarioCassetteWith = (request: {
         }
         const ownerLayer = runReactivationOwnerLayer({
           activate: (opportunity) =>
-            Ref.get(latestRuntimeActivationOrdinal).pipe(
-              Effect.flatMap((ordinal) =>
-                runWorkflowWithControlledDeliveryActionExecutor(
-                  command.target,
-                  initialControlPolicySource,
-                  runId,
-                  controlledExecutorFactory,
-                  false,
-                  opportunity
-                ).pipe(
-                  Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
-                  Effect.provideService(JournaledRunBootstrap, bootstrap)
+            reportActivationExit(
+              Ref.get(latestRuntimeActivationOrdinal).pipe(
+                Effect.flatMap((ordinal) =>
+                  runWorkflowWithControlledDeliveryActionExecutor(
+                    command.target,
+                    initialControlPolicySource,
+                    runId,
+                    controlledExecutorFactory,
+                    false,
+                    opportunity
+                  ).pipe(
+                    Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
+                    Effect.provideService(JournaledRunBootstrap, bootstrap)
+                  )
                 )
               )
             ),
           activateActiveWorkAuthorityRefresh: (source) =>
-            Ref.get(latestRuntimeActivationOrdinal).pipe(
-              Effect.flatMap((ordinal) =>
-                runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh(
-                  command.target,
-                  initialControlPolicySource,
-                  runId,
-                  controlledExecutorFactory,
-                  source,
-                  false
-                ).pipe(
-                  Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
-                  Effect.provideService(JournaledRunBootstrap, bootstrap)
+            reportActivationExit(
+              Ref.get(latestRuntimeActivationOrdinal).pipe(
+                Effect.flatMap((ordinal) =>
+                  runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh(
+                    command.target,
+                    initialControlPolicySource,
+                    runId,
+                    controlledExecutorFactory,
+                    source,
+                    false
+                  ).pipe(
+                    Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
+                    Effect.provideService(JournaledRunBootstrap, bootstrap)
+                  )
                 )
               )
             ),
@@ -2981,14 +2999,14 @@ const runAuthoredScenarioCassetteWith = (request: {
               acceptedFactPublication: () => acceptedFactPublication
             }),
           isTerminationFailure: (cause) => cause instanceof WorkflowRunAlreadyTerminated,
-          onFailure: (cause) => Deferred.succeed(failure, cause).pipe(Effect.asVoid),
+          onFailure: (cause) => Queue.offer(activationExits, Exit.fail(cause)).pipe(Effect.asVoid),
           readControl: bootstrap.readRunReactivationControl(command.target, runId),
           runId,
-          trackerNotificationSource
+          ...(currentFirstNotification ? { trackerNotificationSource } : {})
         }).pipe(Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)))
         const ownerContext = yield* Layer.build(ownerLayer)
         const processContext = Context.merge(applicationContext, ownerContext)
-        yield* withAuthoredOperatorDriver(
+        return yield* withAuthoredOperatorDriver(
           Effect.gen(function* () {
             const owner = yield* RunReactivationOwner
             yield* Ref.set(offerRunReactivationHint, (hint) =>
@@ -2996,12 +3014,58 @@ const runAuthoredScenarioCassetteWith = (request: {
                 hint === "TrackerNotification" ? RunReactivationHint.TrackerNotification() : RunReactivationHint.Timer()
               )
             )
-            yield* Effect.raceFirst(
-              cursor.awaitTerminalAssertions,
-              Deferred.await(failure).pipe(Effect.flatMap((cause) => Effect.die(cause)))
+            const declaredProcessDeath = cursor.storyItems.pipe(
+              Stream.filter((item) => item?._tag === "CoordinatorProcessDies"),
+              Stream.mapEffect(() =>
+                Effect.exit(directItemCompletion.withPermits(1)(cursor.pauseAtCoordinatorProcessDeath))
+              ),
+              Stream.filter(Exit.isFailure),
+              Stream.runHead,
+              Effect.flatMap((exit) =>
+                Option.isSome(exit)
+                  ? Effect.succeed({ _tag: "DeclaredProcessDeath" as const, exit: exit.value })
+                  : Effect.never
+              )
             )
-          })
-        ).pipe(Effect.provide(processContext))
+            for (;;) {
+              const boundary = yield* Effect.raceFirst(
+                Queue.take(activationExits).pipe(Effect.map((exit) => ({ _tag: "ActivationExited" as const, exit }))),
+                Effect.raceFirst(
+                  cursor.awaitTerminalAssertions.pipe(Effect.as({ _tag: "AssertionsReached" as const })),
+                  declaredProcessDeath
+                )
+              )
+              if (boundary._tag === "AssertionsReached") return "AssertionsReached" as const
+              const interactionFailure = yield* Ref.get(authoredInteractionFailure)
+              if (interactionFailure !== undefined) return yield* interactionFailure
+              if (boundary._tag === "DeclaredProcessDeath") {
+                if (isAuthoredCoordinatorProcessDeath(boundary.exit)) return "CoordinatorDied" as const
+                return yield* Effect.failCause(boundary.exit.cause)
+              }
+              const exit = boundary.exit
+              if (Exit.isFailure(exit)) {
+                const onlyAuthoredDeath =
+                  isAuthoredCoordinatorProcessDeath(exit) &&
+                  exit.cause.reasons.every(
+                    (reason) =>
+                      Cause.isInterruptReason(reason) ||
+                      (Cause.isDieReason(reason) && reason.defect instanceof AuthoredCoordinatorProcessDies)
+                  )
+                if (onlyAuthoredDeath) return "CoordinatorDied" as const
+                return yield* Effect.failCause(exit.cause)
+              }
+              if ((yield* cursor.currentStoryItem)?._tag === "CoordinatorActivationReturned") {
+                yield* settleCoordinatorActivationReturn(cursor, exit)
+              }
+            }
+          }),
+          directItemCompletion
+        ).pipe(
+          Effect.provide(processContext),
+          Effect.ensuring(
+            Ref.set(offerRunReactivationHint, () => Effect.die("the authored Run reactivation owner is not active"))
+          )
+        )
       })
       const runAcrossActivations = Effect.gen(function* () {
         const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
@@ -3052,17 +3116,11 @@ const runAuthoredScenarioCassetteWith = (request: {
         return { activationOrdinals, coordinatorExitAtAssertions, records: yield* sharedJournal.read(runId) }
       })
       const runReactivationOwnerStory = Effect.gen(function* () {
-        const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
-        const coordinator = yield* Effect.forkScoped(activateRunInNewApplicationProcess(firstActivationOrdinal))
-        const boundaryExit = yield* Fiber.await(coordinator)
-        const interactionFailure = yield* Ref.get(authoredInteractionFailure)
-        if (interactionFailure !== undefined) return yield* interactionFailure
-        if (!isAuthoredCoordinatorProcessDeath(boundaryExit)) {
-          return yield* Effect.die(
-            "the authored current-first reactivation story requires one coordinator process death"
-          )
+        // Only an exact authored process-loss control replaces this entire scoped
+        // bootstrap/owner/driver. Outside authorities and the cursor stay shared.
+        while ((yield* Effect.scoped(runThroughProductionReactivationOwner)) === "CoordinatorDied") {
+          // The prior process scope is closed before any replacement is built.
         }
-        yield* runThroughProductionReactivationOwner
         const activationCount = yield* Ref.get(latestRuntimeActivationOrdinal)
         return {
           activationOrdinals: Array.from({ length: activationCount }, (_, index) =>

@@ -65,6 +65,9 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       IntegratorResultReturned: noLandmark,
       IntegratorGitObservationReturned: noLandmark,
       IntegratorGitObservationFailed: noLandmark,
+      IntegratorCandidateCleanupObservationReturned: noLandmark,
+      IntegratorCandidateCleanupEvidenceRevisionReturned: noLandmark,
+      IntegratorCandidateCleanupRemovalReturned: noLandmark,
       InitialControlPolicy: noLandmark,
       OperatorAppliesControlDirection: (item) => {
         const target = item.subject._tag === "Run" ? "the Run" : `task ${item.subject.taskId}`
@@ -489,6 +492,12 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         `Git returns ${item.observation._tag} for reported candidate ${item.candidateText}.`,
       IntegratorGitObservationFailed: (item) =>
         `Git cannot observe reported candidate ${item.candidateText}: ${item.detail}`,
+      IntegratorCandidateCleanupObservationReturned: (item) =>
+        `The provider returns ${item.observation._tag} for the exact FullRerun predecessor candidate ${item.observation.locator}.`,
+      IntegratorCandidateCleanupEvidenceRevisionReturned: (item) =>
+        `The provider returns revision ${item.revision} for FullRerun predecessor session ${item.subject.predecessor.sessionId} at ${item.subject.locator}.`,
+      IntegratorCandidateCleanupRemovalReturned: (item) =>
+        `The provider returns ${item.result._tag} after Dalph asks to remove the exact FullRerun predecessor candidate ${item.result.locator}.`,
       PlannedAttemptExecutorWorkReported: (item) =>
         `The executor reports ${item.report._tag} for attempt ${item.report.attemptId}.`,
       PlannedAttemptExecutorPassiveLifecycleChanged: (item) =>
