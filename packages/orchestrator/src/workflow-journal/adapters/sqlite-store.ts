@@ -53,6 +53,48 @@ interface SqliteJournalTestConfig extends SqliteJournalStoreConfig {
   readonly onAppendKeyLookup?: (runId: RunId, key: JournalRecordKey) => Effect.Effect<void>
 }
 
+const appendCheckpointError = (checkpoint: SqliteStorageCheckpoint, runId: RunId) => {
+  if (checkpoint.terminalPosition !== undefined) {
+    return new WorkflowRunAlreadyTerminated({ runId, terminatedAt: checkpoint.terminalPosition })
+  }
+  /* v8 ignore next -- @preserve a decoded Cold snapshot must contain a terminal record. */
+  if (checkpoint.partition === "Cold") {
+    return new JournalHistoryCorruption({
+      detail: "cold partition contains nonterminal history",
+      operation: "JournalStore.append",
+      partition: "Cold",
+      runId
+    })
+  }
+  return undefined
+}
+
+/** The append transaction's typed outcome before it crosses the SQLite insert boundary. */
+type SqliteAppendDecision =
+  | { readonly _tag: "Replay"; readonly record: JournalRecord }
+  | { readonly _tag: "Contradiction"; readonly error: JournalStoreContradiction }
+  | { readonly _tag: "Insert"; readonly position: JournalPosition }
+
+const decideSqliteAppend = (
+  checkpoint: SqliteStorageCheckpoint,
+  runId: RunId,
+  key: JournalRecordKey,
+  event: AppendableWorkflowJournalEvent
+): SqliteAppendDecision => {
+  const existing = HashMap.get(checkpoint.recordsByKey, key)
+  if (Option.isNone(existing)) {
+    return { _tag: "Insert", position: JournalPosition.make((checkpoint.decodedThrough ?? 0) + 1) }
+  }
+  const evidence = existing.value
+  if (equalJournalEvents(evidence.event, event)) {
+    return { _tag: "Replay", record: { event, key, position: evidence.position, runId } satisfies JournalRecord }
+  }
+  return {
+    _tag: "Contradiction",
+    error: new JournalStoreContradiction({ existingPosition: evidence.position, key, runId })
+  }
+}
+
 export { classifyJournalStorageFailure } from "./sqlite-store-errors.js"
 
 /**
@@ -127,31 +169,13 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           return yield* serialization.withPermit(
             Effect.gen(function* () {
               const checkpoint = yield* loadCurrentSnapshot(runId, "JournalStore.append")
-              if (checkpoint.terminalPosition !== undefined) {
-                return yield* new WorkflowRunAlreadyTerminated({ runId, terminatedAt: checkpoint.terminalPosition })
-              }
-              /* v8 ignore next -- @preserve a decoded Cold snapshot must contain a terminal record. */
-              if (checkpoint.partition === "Cold") {
-                return yield* new JournalHistoryCorruption({
-                  detail: "cold partition contains nonterminal history",
-                  operation: "JournalStore.append",
-                  partition: "Cold",
-                  runId
-                })
-              }
+              const checkpointFailure = appendCheckpointError(checkpoint, runId)
+              if (checkpointFailure !== undefined) return yield* checkpointFailure
               if (testConfig?.onAppendKeyLookup !== undefined) yield* testConfig.onAppendKeyLookup(runId, key)
-              const existing = HashMap.get(checkpoint.recordsByKey, key)
-              if (Option.isSome(existing)) {
-                const evidence = existing.value
-                if (equalJournalEvents(evidence.event, event)) {
-                  return {
-                    checkpoint,
-                    record: { event, key, position: evidence.position, runId } satisfies JournalRecord
-                  }
-                }
-                return yield* new JournalStoreContradiction({ existingPosition: evidence.position, key, runId })
-              }
-              const position = JournalPosition.make((checkpoint.decodedThrough ?? 0) + 1)
+              const decision = decideSqliteAppend(checkpoint, runId, key, event)
+              if (decision._tag === "Contradiction") return yield* decision.error
+              if (decision._tag === "Replay") return { checkpoint, record: decision.record }
+              const { position } = decision
               yield* sql`
             INSERT INTO journal_records (
               run_id, position, record_key, event_kind, event_version, payload_json
