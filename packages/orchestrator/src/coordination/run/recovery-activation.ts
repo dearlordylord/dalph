@@ -3881,16 +3881,25 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   })
   const integrationResourceSnapshot = currentIntegrationResources ?? (yield* integrationResources.snapshot)
   const integrationResponsibilities = deriveIntegrationAdmission(runState.workflowHistory.records).responsibilities
-  const latestClaimObservationPositionFor = (taskId: TaskId) =>
-    runState.workflowHistory.records.findLast(
+  const latestClaimObservationPositionFor = (plannedAttempt: PlannedTaskAttempt) => {
+    const taskId = plannedAttempt.taskId
+    const authorizedClaim = authorizedClaimForAttempt(runState.workflowHistory.records, plannedAttempt)?.claim
+    return runState.workflowHistory.records.findLast(
       ({ event, position }) =>
         positionIsAfter(position, freshnessBaselineForTask(taskId)) &&
-        event._tag === "TaskTrackerFactsObserved" &&
-        (event.observation._tag === "FocusedTaskClaimFacts" ||
-          event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
-        event.observation.coverage.taskId === taskId &&
-        taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(establishedRunTarget)
+        // Successful acquisition is also a fresh exact claim observation. A
+        // newly accepted attempt need not invent a second claim read merely
+        // to establish the chronology before its integration-lineage read.
+        ((event._tag === "TaskClaimAcquired" &&
+          authorizedClaim !== undefined &&
+          isExactTaskClaim(event.claim, authorizedClaim)) ||
+          (event._tag === "TaskTrackerFactsObserved" &&
+            (event.observation._tag === "FocusedTaskClaimFacts" ||
+              event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+            event.observation.coverage.taskId === taskId &&
+            taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(establishedRunTarget)))
     )?.position
+  }
   const directionLineageByAttemptId = new Map(
     integrationResponsibilities.flatMap((responsibility) => {
       if (responsibility._tag !== "StartedIntegrationResponsibility") return []
@@ -3997,7 +4006,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           responsibility
         )
         const quarantineDirection = appliedQuarantineDirection
-        const claimObservedAt = latestClaimObservationPositionFor(responsibility.plannedAttempt.taskId)
+        const claimObservedAt = latestClaimObservationPositionFor(responsibility.plannedAttempt)
         const taskGraphObservation = currentGraphObservationForTask(responsibility.plannedAttempt.taskId)
         const graphWasCheckedAfterClaim =
           claimObservedAt !== undefined &&

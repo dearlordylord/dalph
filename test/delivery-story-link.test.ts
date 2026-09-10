@@ -16,6 +16,30 @@ import {
   issue268AcceptedOccurrenceOrderDigest
 } from "../packages/dalph/test-support/issue-268-controlled-occurrence-cassette-data.js"
 
+it("keeps the issue 276 position slice separate from unresolved DS-21 finality and composition", () => {
+  const beat = deliveryStoryManifest.beats.find(({ beatId }) => beatId === "DS-21")
+  expect(beat?.coverage._tag).toBe("NotImplemented")
+  if (beat?.coverage._tag !== "NotImplemented") return expect.fail("DS-21 remainder was erased")
+  expect(beat.coverage.reason).toContain("#276 proves position release and serialized integration order")
+  expect(beat.coverage.reason).toContain("#277 still owns ordinary finality")
+  expect(beat.coverage.reason).toContain("#279 owns uninterrupted composition")
+  const scenarioName = "issue-276-release-exact-task-positions.md"
+  const index = readFileSync(new URL("../docs/scenarios/README.md", import.meta.url), "utf8")
+  expect(index).toContain(scenarioName)
+  const scenario = readFileSync(new URL(`../docs/scenarios/${scenarioName}`, import.meta.url), "utf8")
+  const tests = readFileSync(
+    new URL("../packages/dalph/test/cassettes/issue-276-position-release.test.ts", import.meta.url),
+    "utf8"
+  )
+  for (const name of [
+    "releases B C and D positions to E F and G while B holds integration",
+    "serializes distinct B through G sessions resources and candidates in accepted order"
+  ]) {
+    expect(scenario).toContain(name)
+    expect(tests).toContain(JSON.stringify(name))
+  }
+})
+
 it("keeps every delivery-story beat linked to maintained evidence or an explicit implementation gap", () => {
   const document = readFileSync(new URL("../docs/DELIVERY-STORY.md", import.meta.url), "utf8")
   const documentedBeatIds = Array.from(

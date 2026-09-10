@@ -252,7 +252,10 @@ export const deliveryStoryManifest = {
       sourceFile: "packages/dalph/test/cassettes/issue-275-active-graph-refresh.test.ts",
       name: "observes F and G without admitting either while B C and D retain every exact position"
     }),
-    missing("DS-21", "No maintained authored run finalizes B, C, and D and admits E, F, and G in one chronology."),
+    missing(
+      "DS-21",
+      "Issue #276 proves position release and serialized integration order in an independent G5 fixture; #277 still owns ordinary finality and #279 owns uninterrupted composition."
+    ),
     missing(
       "DS-22",
       "The maintained staggered ten-task cassette finalizes all ten accepted results and terminates, but it is not the prose beat's seven-task G5 chronology for E, F, and G."
