@@ -1,6 +1,5 @@
 import type { JournalRecord } from "../workflow-journal/store.js"
-import type { WorkflowOperation } from "./registry/operation.js"
-import type { workflowOperationId } from "./registry/operation.js"
+import type { WorkflowOperation, workflowOperationId } from "./registry/operation.js"
 import {
   journalEvidenceFrom,
   journalOperationById,

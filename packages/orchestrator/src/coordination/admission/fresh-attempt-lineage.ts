@@ -75,6 +75,12 @@ const evidenceThrough = (records: JournalHistorySource, position: JournalPositio
     ? journalEvidenceBefore(records, position + 1)
     : records.filter((record) => record.position <= position)
 
+const recordsForRun = (
+  records: JournalHistorySource,
+  runId: PlannedTaskAttempt["runId"]
+): JournalHistorySource =>
+  isJournalRecordEvidence(records) ? records : records.filter((record) => record.runId === runId)
+
 const claimAcquisitionMatches = (
   intent: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquisitionIntended" }>,
   claim: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimAcquired" }>["claim"]
@@ -279,7 +285,8 @@ export const acceptedFreshAttemptLineage = (
   plannedAttempt: PlannedTaskAttempt,
   boundary: FreshAttemptLineageBoundary
 ): AcceptedFreshAttemptLineage | undefined => {
-  const planRecord = journalRecordByKey(records, attemptPlanRecordKey(plannedAttempt.attemptId))
+  const runRecords = recordsForRun(records, plannedAttempt.runId)
+  const planRecord = journalRecordByKey(runRecords, attemptPlanRecordKey(plannedAttempt.attemptId))
   if (planRecord?.event._tag !== "TaskAttemptPlanned") return undefined
   if (
     planRecord.runId !== plannedAttempt.runId ||
@@ -287,30 +294,28 @@ export const acceptedFreshAttemptLineage = (
   ) {
     return undefined
   }
-  const recordsThroughPlan = evidenceThrough(records, planRecord.position)
+  const recordsThroughPlan = evidenceThrough(runRecords, planRecord.position)
   const plan = acceptedPlanPredecessorLineage(recordsThroughPlan, planRecord.event.operation)
   if (plan === undefined) return undefined
   if (boundary === "Plan") return { _tag: "AcceptedFreshAttemptPlanLineage", ...plan }
 
   const worktree = exactlyOne(
-    Array.from(journalRecordsForAttempt(records, plannedAttempt.attemptId)).flatMap((outcome) => {
+    Array.from(journalRecordsForAttempt(runRecords, plannedAttempt.attemptId)).flatMap((intent) => {
       if (
-        outcome.runId !== plannedAttempt.runId ||
-        outcome.event._tag !== "TaskWorktreeReady" ||
-        outcome.key !== outcomeRecordKey(outcome.event.operationId) ||
-        !plannedAttemptWorktreeObservationMatchesPlan(outcome.event.proof, plannedAttempt)
+        intent.event._tag !== "TaskWorktreeReconciliationIntended" ||
+        !plannedTaskAttemptEquivalence(intent.event.operation.plannedAttempt, plannedAttempt)
       ) {
         return []
       }
-      const operationId = outcome.event.operationId
-      const intent = journalRecordByKey(records, intentRecordKey(operationId))
+      const operationId = intent.event.operation.operationId
+      const outcome = journalRecordByKey(runRecords, outcomeRecordKey(operationId))
       if (
-        intent?.event._tag !== "TaskWorktreeReconciliationIntended" ||
-        intent.runId !== plannedAttempt.runId ||
+        outcome?.event._tag !== "TaskWorktreeReady" ||
+        outcome.runId !== plannedAttempt.runId ||
         intent.position >= outcome.position ||
-        intent.event.operation.operationId !== operationId ||
-        !plannedTaskAttemptEquivalence(intent.event.operation.plannedAttempt, plannedAttempt) ||
-        !causalPredecessors(records, intent.event.operation).has(plan.planOperationId)
+        outcome.event.operationId !== operationId ||
+        !plannedAttemptWorktreeObservationMatchesPlan(outcome.event.proof, plannedAttempt) ||
+        !causalPredecessors(runRecords, intent.event.operation).has(plan.planOperationId)
       ) {
         return []
       }
