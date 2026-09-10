@@ -28,9 +28,9 @@ type EstablishedRuntimeSnapshot = Omit<DeliveryRuntimeSnapshot, "trackerGraph"> 
 }
 
 /**
- * Exact unfinished attempts hold every position while exact prepared attempts
- * still require one. A position bound by this activation can lead its
- * descriptive relation projection; after every local owner settles, the sole
+ * Exact unfinished attempts hold every position while fresh candidates or exact
+ * prepared attempts still require one. A position bound by this activation can
+ * lead its descriptive relation projection; after every local owner settles, the sole
  * activation owner must regain control without mistaking the Run for final.
  */
 interface TaskWorkAdmissionStalledRuntimeQuiescence {
@@ -42,7 +42,10 @@ interface TaskWorkAdmissionStalledRuntimeQuiescence {
   readonly taskWork: DeliveryRuntimeTaskWorkSnapshot
 }
 
-/** Classifies only exact prepared attempts that cannot reuse any currently held position. */
+/**
+ * Classifies fresh candidates and exact prepared attempts waiting behind exact
+ * occupied positions, with no reusable position.
+ */
 export const classifyTaskWorkAdmissionStalledRuntimeQuiescence = (
   current: DeliveryRuntimeEvaluation,
   admission: DeliveryRuntimeAdmissionSnapshot,
