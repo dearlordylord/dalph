@@ -32,7 +32,24 @@ it.effect(
         const lineage = run.records.find(
           ({ event }) => event._tag === "TargetLineageObserved" && event.plannedAttempt.taskId === "A"
         )
-        expect(lineage?.position).toBeGreaterThan(acquired?.position ?? 0)
+        const intended = run.records.find(
+          ({ event }) => event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.taskId === "A"
+        )
+        if (
+          acquired?.event._tag !== "TaskClaimAcquired" ||
+          lineage?.event._tag !== "TargetLineageObserved" ||
+          intended?.event._tag !== "TaskClaimAcquisitionIntended"
+        ) {
+          return yield* Effect.die(`${key}: A requires acquisition intent, acquired claim, and target lineage records`)
+        }
+        expect(acquired.event.claim).toMatchObject(intended.event.operation.acquisition)
+        expect(lineage.event.plannedAttempt).toMatchObject({
+          attemptId: "attempt:A:0",
+          runId: acquired.runId,
+          taskId: acquired.event.claim.taskId
+        })
+        expect(acquired.position).toBeGreaterThan(intended.position)
+        expect(lineage.position).toBeGreaterThan(acquired.position)
         if (key === "productionShapedFiveTaskDiamond") {
           const beganE = run.records.find(
             ({ event }) =>
