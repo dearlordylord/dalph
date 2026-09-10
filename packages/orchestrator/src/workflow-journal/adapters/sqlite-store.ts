@@ -44,7 +44,7 @@ interface SqliteJournalTestConfig extends SqliteJournalStoreConfig {
   /** Deterministic lost-response seam after the retirement transaction commits. */
   readonly afterRetirementCommit?: () => Effect.Effect<void, string>
   /** Counts complete partition loads without exposing mutable adapter state. */
-  readonly onPartitionLoaded?: (partition: "Hot" | "Cold", runId: RunId, rowCount: number) => Effect.Effect<void>
+  readonly onPartitionRowsQueried?: (partition: "Hot" | "Cold", runId: RunId, rowCount: number) => Effect.Effect<void>
   /** Deterministic lost-response or concurrency cut after append COMMIT and before checkpoint publication. */
   readonly afterAppendCommit?: () => Effect.Effect<void, string>
   /** Counts rows inserted through the append path. */
@@ -73,7 +73,7 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
         )
         yield* migrateJournal(sql, testConfig?.afterColdTableCreated)
         yield* acquireExclusiveJournalWriter(sql)
-        const queries = makeSqliteJournalQueries(sql, testConfig?.beforeReadLoad, testConfig?.onPartitionLoaded)
+        const queries = makeSqliteJournalQueries(sql, testConfig?.beforeReadLoad, testConfig?.onPartitionRowsQueried)
         const { hasPartitionRows, insertLifecycleRecord, loadRunRecords, loadRunSnapshot, scanPartition } = queries
         const serialization = yield* Semaphore.make(1)
         const checkpoints = yield* Ref.make(HashMap.empty<RunId, SqliteStorageCheckpoint>())
@@ -161,7 +161,7 @@ const sqliteJournalStoreLayerInternal = (config: SqliteJournalStoreConfig, testC
           `
               if (testConfig?.onAppendInserted !== undefined) yield* testConfig.onAppendInserted(runId)
               const record = { event, key, position, runId } satisfies JournalRecord
-              return { checkpoint: appendSqliteStorageCheckpoint(checkpoint, record, encoded), record }
+              return { checkpoint: appendSqliteStorageCheckpoint(checkpoint, record), record }
             }).pipe(
               sql.withTransaction,
               Effect.tap(() => testConfig?.afterAppendCommit?.() ?? Effect.void),

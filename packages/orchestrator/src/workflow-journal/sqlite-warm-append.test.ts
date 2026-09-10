@@ -33,15 +33,15 @@ const intent = (operationId: string) =>
 describe("SQLite warm append storage checkpoint", () => {
   it.effect("decodes a long active Run once and appends successors without loading its accepted prefix again", () =>
     Effect.gen(function* () {
-      const loadedRowCounts = yield* Ref.make<ReadonlyArray<number>>([])
+      const partitionRowQueries = yield* Ref.make<ReadonlyArray<number>>([])
       const inserted = yield* Ref.make(0)
       const keyLookups = yield* Ref.make(0)
       const layer = sqliteJournalTestLayer({
         filename: JournalDatabaseLocator.make(":memory:"),
         onAppendInserted: () => Ref.update(inserted, (count) => count + 1),
         onAppendKeyLookup: () => Ref.update(keyLookups, (count) => count + 1),
-        onPartitionLoaded: (_partition, _runId, rowCount) =>
-          Ref.update(loadedRowCounts, (counts) => [...counts, rowCount])
+        onPartitionRowsQueried: (_partition, _runId, rowCount) =>
+          Ref.update(partitionRowQueries, (counts) => [...counts, rowCount])
       })
       yield* Effect.gen(function* () {
         const journal = yield* JournalStore
@@ -55,12 +55,13 @@ describe("SQLite warm append storage checkpoint", () => {
           yield* journal.append(runId, JournalRecordKey.make(`record-${index}`), intent(`seed-${index}`))
         }
         yield* journal.read(runId)
-        const beforeWarmAppends = yield* Ref.get(loadedRowCounts)
+        const beforeWarmAppends = yield* Ref.get(partitionRowQueries)
         for (let index = 65; index <= 80; index++) {
           yield* journal.append(runId, JournalRecordKey.make(`record-${index}`), intent(`successor-${index}`))
         }
 
-        expect(yield* Ref.get(loadedRowCounts)).toEqual(beforeWarmAppends)
+        expect(yield* Ref.get(partitionRowQueries)).toHaveLength(3)
+        expect(yield* Ref.get(partitionRowQueries)).toEqual(beforeWarmAppends)
         expect(beforeWarmAppends).toEqual([0, 1, 65])
         expect(yield* Ref.get(inserted)).toBe(80)
         expect(yield* Ref.get(keyLookups)).toBe(80)
@@ -90,7 +91,7 @@ describe("SQLite warm append storage checkpoint", () => {
             ),
           filename: JournalDatabaseLocator.make(":memory:"),
           onAppendInserted: () => Ref.update(inserts, (count) => count + 1),
-          onPartitionLoaded: (_partition, _runId, rowCount) => Ref.update(loads, (counts) => [...counts, rowCount])
+          onPartitionRowsQueried: (_partition, _runId, rowCount) => Ref.update(loads, (counts) => [...counts, rowCount])
         })
         yield* Effect.gen(function* () {
           const journal = yield* JournalStore

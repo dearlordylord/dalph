@@ -179,7 +179,7 @@ export interface SqliteJournalQueries {
 export const makeSqliteJournalQueries = (
   sql: SqliteClient.SqliteClient,
   beforeReadLoad: (() => Effect.Effect<void>) | undefined,
-  onPartitionLoaded?: (partition: JournalPartition, runId: RunId, rowCount: number) => Effect.Effect<void>
+  onPartitionRowsQueried?: (partition: JournalPartition, runId: RunId, rowCount: number) => Effect.Effect<void>
 ): SqliteJournalQueries => {
   const loadPartitionSnapshot = Effect.fn("JournalStore.Sqlite.loadPartitionSnapshot")(function* (
     partition: JournalPartition,
@@ -200,15 +200,11 @@ export const makeSqliteJournalQueries = (
     const rows = yield* decodeBoundary(PersistedJournalRows, input, operation).pipe(
       Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
     )
-    if (onPartitionLoaded !== undefined) yield* onPartitionLoaded(partition, runId, rows.length)
+    if (onPartitionRowsQueried !== undefined) yield* onPartitionRowsQueried(partition, runId, rows.length)
     const decodedRows = yield* Effect.forEach(rows, (row) =>
       parseEvent(row, operation).pipe(
         Effect.map((event) => ({
-          evidence: {
-            encoded: { kind: row.event_kind, payloadJson: row.payload_json, version: row.event_version },
-            event,
-            position: row.position
-          },
+          evidence: { event, position: row.position },
           record: { event, key: row.record_key, position: row.position, runId: row.run_id } satisfies JournalRecord
         })),
         Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
