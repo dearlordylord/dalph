@@ -6,6 +6,7 @@ import {
 } from "./capability-registration.js"
 import {
   inspectCapabilitySourceProgram,
+  inspectCapabilitySyntaxIndexBuildCount,
   repositoryCapabilitySourceFiles,
   runCapabilityRegistrationGate,
   type CapabilitySourceFile
@@ -23,6 +24,49 @@ const issuesFor = (inventory: CapabilityRegistrationInventory): ReadonlyArray<st
   runCapabilityRegistrationGate(inventory, sourceFiles)
 
 describe("capability registration gate", () => {
+  it("indexes unchanged syntax once while resolving replacement exports in each current program", () => {
+    const provider = {
+      path: "scripts/fixtures/issue-343-provider.ts",
+      source: "declare const Layer: { succeed: (value: unknown) => unknown }; export const value = Layer.succeed({})"
+    }
+    const consumer = {
+      path: "scripts/fixtures/issue-343-consumer.ts",
+      source: 'import { value } from "./issue-343-provider.js"; export const assembly = value'
+    }
+    const sources = [provider, consumer]
+    const inventory = {
+      ...capabilityRegistrationInventory,
+      compositionSources: [{ role: "production" as const, source: consumer.path }]
+    }
+    const before = inspectCapabilitySyntaxIndexBuildCount()
+    const findings = runCapabilityRegistrationGate(inventory, sources)
+    const built = inspectCapabilitySyntaxIndexBuildCount()
+    expect(built - before).toBe(1)
+    expect(findings).toContain("production uses unregistered exported Layer value")
+    expect(runCapabilityRegistrationGate(inventory, sources)).toEqual(findings)
+    expect(
+      runCapabilityRegistrationGate(
+        inventory,
+        sources.map((file) => ({ ...file }))
+      )
+    ).toEqual(findings)
+    expect(inspectCapabilitySyntaxIndexBuildCount()).toBe(built)
+
+    const replacementProvider = { ...provider, source: "export const value = 1" }
+    const replacement = [replacementProvider, consumer]
+    const replacementFindings = runCapabilityRegistrationGate(inventory, replacement)
+    expect(replacementFindings).toEqual(
+      findings.filter((issue) => issue !== "production uses unregistered exported Layer value")
+    )
+    expect(inspectCapabilitySyntaxIndexBuildCount()).toBe(built)
+    const changedConsumer = [
+      replacementProvider,
+      { ...consumer, source: `${consumer.source}; export const second = value` }
+    ]
+    expect(runCapabilityRegistrationGate(inventory, changedConsumer)).toEqual(replacementFindings)
+    expect(inspectCapabilitySyntaxIndexBuildCount()).toBe(built + 1)
+  })
+
   it("fails closed for a first-audit virtual source under a repository source root", () => {
     const path = "packages/contracts/src/issue-262-invalid-added-root.ts"
     const issues = runCapabilityRegistrationGate(capabilityRegistrationInventory, [
