@@ -1,7 +1,7 @@
 import { type PlannedTaskAttempt, plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import { exactWorkflowRunTargetForRun } from "../../../workflow-journal/run-target.js"
-import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { journalRecordsForAttempt, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   isSafeContinuationRevalidationEligibility,
   type SafeContinuationRevalidationEligibility
@@ -88,11 +88,12 @@ const reject = (
 ): RejectedResumeRedeliveryAuthorization => ({ _tag: "Rejected", detail, reason })
 
 const evaluateResumeRedeliveryProof = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   basis: ReconciledResumeStillSafeBasis,
   witness: PlannedAttemptContinuationWitness
 ): ValidatedResumeRedeliveryProof | RejectedResumeRedeliveryAuthorization => {
+  const attemptRecords = Array.from(journalRecordsForAttempt(records, plannedAttempt.attemptId))
   const immutableRunTarget = exactWorkflowRunTargetForRun(records, plannedAttempt.runId)
   if (immutableRunTarget === undefined) {
     return reject("MissingWitness", "Resume redelivery requires exactly one immutable WorkflowRunBegan target")
@@ -100,7 +101,7 @@ const evaluateResumeRedeliveryProof = (
   if (appliedTerminalChoiceFor(records, plannedAttempt) !== undefined) {
     return reject("StaleExecutorEvidence", "Resume redelivery follows an applied terminal choice")
   }
-  const intended = records.findLast(
+  const intended = attemptRecords.findLast(
     ({ event, position }) =>
       position < basis.observedAt &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
@@ -112,7 +113,7 @@ const evaluateResumeRedeliveryProof = (
     return reject("MissingResumeIntent", "Resume redelivery requires its exact accepted Resume intent")
   }
   const supersededBeforeProjection =
-    records.some(
+    attemptRecords.some(
       ({ event, position }) =>
         position > intended.position &&
         position < basis.observedAt &&
@@ -131,7 +132,7 @@ const evaluateResumeRedeliveryProof = (
   if (supersededBeforeProjection) {
     return reject("StaleExecutorEvidence", "Resume redelivery follows intervening executor command evidence")
   }
-  const projection = records.find(
+  const projection = attemptRecords.find(
     ({ event, position }) =>
       position === basis.observedAt &&
       event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
@@ -148,7 +149,7 @@ const evaluateResumeRedeliveryProof = (
   }
   if (
     plannedAttemptExecutorEvidence(records, plannedAttempt).some(({ observedAt }) => observedAt > basis.observedAt) ||
-    records.some(
+    attemptRecords.some(
       ({ event, position }) =>
         position > basis.observedAt &&
         event._tag === "PlannedAttemptExecutorCommandIntended" &&
@@ -159,7 +160,7 @@ const evaluateResumeRedeliveryProof = (
     return reject("StaleExecutorEvidence", "Resume redelivery eligibility was superseded by later executor evidence")
   }
   if (
-    records.some(
+    attemptRecords.some(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" &&
         plannedTaskAttemptEquivalence(event.plannedAttempt, plannedAttempt) &&
@@ -229,7 +230,7 @@ const evaluateResumeRedeliveryProof = (
  * an existing event against only the journal prefix that precedes that event.
  */
 export const evaluatePlannedAttemptResumeRedeliveryProof = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   basis: ReconciledResumeStillSafeBasis,
   witness: PlannedAttemptContinuationWitness
@@ -240,7 +241,7 @@ export const evaluatePlannedAttemptResumeRedeliveryProof = (
 
 /** Proves that one issued, reserved retry eligibility may redeliver its exact original Resume. */
 export const evaluatePlannedAttemptResumeRedeliveryAuthorization = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   eligibility: SafeContinuationRevalidationEligibility,
   witness: PlannedAttemptContinuationWitness

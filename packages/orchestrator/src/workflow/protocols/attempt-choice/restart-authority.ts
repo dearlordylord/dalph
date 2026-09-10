@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect"
 import { type JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { journalRecordsForAttempt, journalRecordsOfKind, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import { OperationId } from "../../identity.js"
 import {
   latestPlannedAttemptExecutorEvidence,
@@ -38,12 +39,12 @@ export type AttemptRestartAdvanceResult =
 
 /** Once a later authored fingerprint differs, the exact earlier Restart choice can never authorize a successor. */
 export const restartChoiceWasInvalidatedByLaterSpecification = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   applicationPosition: JournalRecord["position"],
   subject: AttemptChoiceSubject,
   immutableRunTarget?: TrackerTarget
 ): boolean =>
-  records.some(
+  Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved")).some(
     ({ event, position }) =>
       position > applicationPosition &&
       event._tag === "TaskTrackerFactsObserved" &&
@@ -54,7 +55,7 @@ export const restartChoiceWasInvalidatedByLaterSpecification = (
       event.observation.factFamily.fingerprint !== subject.observedTaskRevision
   )
 
-const currentQuiescence = (records: ReadonlyArray<JournalRecord>, subject: AttemptChoiceSubject): RestartQuiescence => {
+const currentQuiescence = (records: JournalHistorySource, subject: AttemptChoiceSubject): RestartQuiescence => {
   const evidence = latestPlannedAttemptExecutorEvidence(records, subject.plannedAttempt)
   if (evidence === undefined) return { _tag: "Pending", reason: "ExecutorUnavailable" }
   if (!isAcceptedPlannedAttemptExecutorEvidence(evidence)) {
@@ -66,7 +67,7 @@ const currentQuiescence = (records: ReadonlyArray<JournalRecord>, subject: Attem
   if (evidence.report._tag !== "ExecutorWorkSafelySuspended") {
     return { _tag: "Rejected", reason: "ExecutingDoesNotAuthorizeReplacement" }
   }
-  const laterCommand = records.some(
+  const laterCommand = Array.from(journalRecordsForAttempt(records, subject.plannedAttempt.attemptId)).some(
     ({ event, position }) =>
       position > evidence.observedAt &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
@@ -105,6 +106,6 @@ export const nextRestartReadOperationId = (
 }
 
 export const currentRestartQuiescence = Effect.fn("AttemptRestart.establishQuiescence")(
-  (records: ReadonlyArray<JournalRecord>, subject: AttemptChoiceSubject) =>
+  (records: JournalHistorySource, subject: AttemptChoiceSubject) =>
     Effect.succeed(currentQuiescence(records, subject))
 )
