@@ -1985,6 +1985,13 @@ const latestJournalPosition = (
 const positionIsAfter = (position: JournalPosition, baseline: Option.Option<JournalPosition>): boolean =>
   Option.match(baseline, { onNone: () => true, onSome: (baselinePosition) => position > baselinePosition })
 
+const isFocusedClaimObservationFor = (event: JournalRecord["event"], taskId: TaskId, target: TrackerTarget): boolean =>
+  event._tag === "TaskTrackerFactsObserved" &&
+  (event.observation._tag === "FocusedTaskClaimFacts" ||
+    event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+  event.observation.coverage.taskId === taskId &&
+  taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(target)
+
 /** Finds the fresh exact claim-check point that must precede the integration graph and lineage reads. */
 export const latestIntegrationClaimObservationPosition = (
   records: ReadonlyArray<JournalRecord>,
@@ -1999,11 +2006,7 @@ export const latestIntegrationClaimObservationPosition = (
       ((event._tag === "TaskClaimAcquired" &&
         authorizedClaim !== undefined &&
         isExactTaskClaim(event.claim, authorizedClaim)) ||
-        (event._tag === "TaskTrackerFactsObserved" &&
-          (event.observation._tag === "FocusedTaskClaimFacts" ||
-            event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
-          event.observation.coverage.taskId === plannedAttempt.taskId &&
-          taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(target)))
+        isFocusedClaimObservationFor(event, plannedAttempt.taskId, target))
   )?.position
 }
 
