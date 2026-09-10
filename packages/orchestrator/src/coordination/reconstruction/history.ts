@@ -8,7 +8,6 @@ import {
   type TaskId
 } from "@dalph/contracts"
 import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
-import { rememberValidatedJournalPrefixSuccessor } from "../../workflow-journal/prefix-lineage.js"
 import {
   acceptedJournalPrefixFromValidatedHistory,
   appendValidatedJournalRecord,
@@ -19,28 +18,24 @@ import { describeJournalEvent } from "../../workflow/registry/event-descriptor.j
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
-import { HashMap, HashSet, Option } from "effect"
+import { HashMap, HashSet, Iterable, Option } from "effect"
+import { firstJournalRecordOfKind, lastJournalRecordOfKind, journalRecordByPosition, journalRecordByKey, journalRecordsOfKind, journalRecordsForTask, journalEvidenceBefore, appendJournalEvidence, isJournalRecordEvidence, type JournalHistorySource } from "../../workflow-journal/record-evidence.js"
+import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import { journalRecordAt, materializeJournalRecords } from "../../workflow-journal/record-sequence.js"
 import {
   duplicateUnfinishedTaskAttemptIssue,
   type InvalidWorkflowJournalHistory,
-  WorkflowJournalHistoryIdentityIssue,
   type WorkflowJournalHistoryIssue,
   WorkflowJournalHistorySemanticIssue,
   type ValidWorkflowJournalHistory
 } from "./history-result.js"
 import { advanceReconstructedRunState, reconstructValidatedRunState } from "./reduce.js"
-import type { ReconstructedRunState } from "./state.js"
+import type { ReconstructedRunState, ReconstructedWorkflowHistory } from "./state.js"
 import { runGraphTaskFactsOutcome } from "../frontier/run-finality.js"
-import {
-  invalidTaskTrackerReconfirmationReference,
-  makeTaskTrackerReconfirmationIndex,
-  type TaskTrackerReconfirmationIndex
-} from "../../workflow/task-tracker-facts/reconfirmation.js"
+import { invalidTaskTrackerReconfirmationReference } from "../../workflow/task-tracker-facts/reconfirmation.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 import { validateRunPolicyHistory } from "./run-policy-history.js"
-import type { IntegrationHistoryIndexes } from "./integration-history.js"
 import { validateIntegrationHistoryRecord } from "./integration-history-validation.js"
-import type { TargetPromotionHistoryIndexes } from "./target-promotion-history.js"
 import { validateTaskClaimRelease } from "./claim-release-history.js"
 import {
   latestTaskClaimReacquisitionDirection,
@@ -58,10 +53,7 @@ import {
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { defaultPlannedAttemptExecutorSuspensionLimit } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { authorizedClaimForAttempt } from "../../workflow/claim-authority-history.js"
-import {
-  validateIntegrationFinalityHistoryRecord,
-  type IntegrationFinalityHistoryIndexes
-} from "../../workflow/protocols/integration-finality/history.js"
+import { validateIntegrationFinalityHistoryRecord } from "../../workflow/protocols/integration-finality/history.js"
 import {
   attemptChoiceSubjectKey,
   sameAttemptChoiceRequestId,
@@ -82,113 +74,62 @@ import { validateCancelledAttemptHistory } from "./cancelled-attempt-history.js"
 import { appliedTerminalChoiceFor } from "../../workflow/protocols/attempt-choice/terminal-choice-authority.js"
 import { plannedAttemptExecutorLifecycleTransitionError } from "../../workflow/protocols/planned-attempt-executor-work/report-acceptance.js"
 import { acceptedFreshAttemptLineage } from "../admission/fresh-attempt-lineage.js"
+import { identityIssue, semanticIssue, mapGet, emptyIndexes, type FoldIndexes } from "./history-kernel-state.js"
 
 const finalArrayElementOffset = -1
 
-const identityIssue = (
-  issues: Array<WorkflowJournalHistoryIssue>,
-  runId: RunId,
-  position: JournalPosition,
-  detail: string
-): void => {
-  issues.push(new WorkflowJournalHistoryIdentityIssue({ detail, position, runId }))
+/** Cold malformed envelopes retain their original predicate search; live evidence uses the exact key. */
+const keyedCandidates = (records: JournalHistorySource, key: JournalRecordKey): Iterable<JournalRecord> => {
+  if (!isJournalRecordEvidence(records)) return records
+  const record = journalRecordByKey(records, key)
+  return record === undefined ? [] : [record]
 }
-
-const semanticIssue = (
-  issues: Array<WorkflowJournalHistoryIssue> | Array<WorkflowJournalHistorySemanticIssue>,
-  runId: RunId,
-  position: JournalPosition,
-  detail: string
-): void => {
-  issues.push(new WorkflowJournalHistorySemanticIssue({ detail, position, runId }))
-}
-
-interface FoldIndexes extends IntegrationHistoryIndexes {
-  readonly abandonedExecutorAttempts: HashSet.HashSet<AttemptId>
-  readonly integrationFinalityHistory: IntegrationFinalityHistoryIndexes
-  readonly attemptChoiceSubjects: HashSet.HashSet<string>
-  readonly latestControlDirectionOrdinal: number
-  readonly executorCommandOrdinals: HashMap.HashMap<AttemptId, number>
-  readonly executorCommandCountsSinceSafeSuspension: HashMap.HashMap<string, number>
-  readonly executorCommandProjectionOrdinals: HashMap.HashMap<string, number>
-  readonly executorReportOrdinals: HashMap.HashMap<AttemptId, number>
-  readonly executorStateObservationOrdinals: HashMap.HashMap<AttemptId, number>
-  readonly executorResponsibilitiesBegan: HashMap.HashMap<
-    AttemptId,
-    { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
-  >
-  readonly plans: HashMap.HashMap<AttemptId, PlannedTaskAttempt>
-  readonly gitReadIntents: HashMap.HashMap<
-    OperationId,
-    Extract<WorkflowOperation, { readonly _tag: "ReadTargetLineage" | "ReadTaskWorktree" }>
-  >
-  readonly latestRunPolicyRevision: number | undefined
-  readonly seenEventKindsByOperation: HashMap.HashMap<OperationId, HashSet.HashSet<WorkflowJournalEvent["_tag"]>>
-  readonly seenKeys: HashSet.HashSet<JournalRecordKey>
-  readonly seenOperationIds: HashSet.HashSet<OperationId>
-  readonly terminalExecutorAttempts: HashSet.HashSet<AttemptId>
-  readonly supersededExecutorAttempts: HashSet.HashSet<AttemptId>
-  readonly unsettledExecutorCommands: HashMap.HashMap<AttemptId, number>
-  readonly trackerReconfirmations: TaskTrackerReconfirmationIndex
-}
-
-const emptyTargetPromotionHistoryIndexes = (): TargetPromotionHistoryIndexes => ({
-  attempts: HashMap.empty(),
-  deferrals: HashMap.empty(),
-  intents: HashMap.empty(),
-  terminals: HashSet.empty()
-})
-
-const emptyIntegrationFinalityHistoryIndexes = (): IntegrationFinalityHistoryIndexes => ({
-  deletionAttempts: HashMap.empty(),
-  deletionIntents: HashMap.empty(),
-  deletionTerminals: HashSet.empty(),
-  replacementAttempts: HashMap.empty(),
-  replacementIntents: HashMap.empty(),
-  replacementTerminals: HashMap.empty(),
-  settlements: HashSet.empty()
-})
-
-const emptyIndexes = (): FoldIndexes => ({
-  acceptedExecutorResults: HashMap.empty(),
-  abandonedExecutorAttempts: HashSet.empty(),
-  attemptChoiceSubjects: HashSet.empty(),
-  executorCommandOrdinals: HashMap.empty(),
-  executorCommandCountsSinceSafeSuspension: HashMap.empty(),
-  executorCommandProjectionOrdinals: HashMap.empty(),
-  executorReportOrdinals: HashMap.empty(),
-  executorStateObservationOrdinals: HashMap.empty(),
-  executorResponsibilitiesBegan: HashMap.empty(),
-  integrationResponsibilitiesBegan: HashMap.empty(),
-  integrationStarted: HashMap.empty(),
-  targetLineageReadIntents: HashMap.empty(),
-  targetLineageObservations: HashMap.empty(),
-  integratorSessionFixed: HashMap.empty(),
-  integratorSessionsByStartedAt: HashMap.empty(),
-  integratorSessionsBySessionId: HashMap.empty(),
-  integratorSessionsByCandidateResource: HashMap.empty(),
-  integratorSuccessorSessionFixed: HashMap.empty(),
-  integratorSuccessorSessionsByPredecessor: HashMap.empty(),
-  integratorRunStarted: HashMap.empty(),
-  integratorRunResults: HashMap.empty(),
-  integratorRunCandidateGitReadIntents: HashMap.empty(),
-  integratorRunCandidateGitObservations: HashMap.empty(),
-  targetPromotionHistory: emptyTargetPromotionHistoryIndexes(),
-  integrationFinalityHistory: emptyIntegrationFinalityHistoryIndexes(),
-  latestControlDirectionOrdinal: 0,
-  plans: HashMap.empty(),
-  gitReadIntents: HashMap.empty(),
-  latestRunPolicyRevision: undefined,
-  seenEventKindsByOperation: HashMap.empty(),
-  seenKeys: HashSet.empty(),
-  seenOperationIds: HashSet.empty(),
-  terminalExecutorAttempts: HashSet.empty(),
-  supersededExecutorAttempts: HashSet.empty(),
-  unsettledExecutorCommands: HashMap.empty(),
-  trackerReconfirmations: makeTaskTrackerReconfirmationIndex()
-})
 
 const foldIndexesByHistory = new WeakMap<ValidWorkflowJournalHistory, FoldIndexes>()
+type UnfinishedAttempt = { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
+const unfinishedByHistory = new WeakMap<ValidWorkflowJournalHistory, HashMap.HashMap<TaskId, UnfinishedAttempt>>()
+
+/** The export closure captures only this prefix, never the predecessor history. */
+const acceptedWorkflowHistory = (prefix: AcceptedJournalPrefix): ReconstructedWorkflowHistory => {
+  let exported: ReadonlyArray<JournalRecord> | undefined
+  return { prefix, get records() { return exported ??= materializeJournalRecords(prefix.records) } }
+}
+
+const acceptedHistoryResult = (prefix: AcceptedJournalPrefix, runState: ReconstructedRunState): ValidWorkflowJournalHistory => ({
+  _tag: "ValidWorkflowJournalHistory",
+  prefix,
+  runId: prefix.runId,
+  get records() { return runState.workflowHistory.records },
+  runState
+})
+
+const attemptIsFinished = (indexes: FoldIndexes, attemptId: AttemptId): boolean =>
+  HashSet.has(indexes.terminalExecutorAttempts, attemptId) || HashSet.has(indexes.abandonedExecutorAttempts, attemptId) || HashSet.has(indexes.supersededExecutorAttempts, attemptId)
+
+const unfinishedTasksFrom = (indexes: FoldIndexes): HashMap.HashMap<TaskId, UnfinishedAttempt> => {
+  let unfinished: HashMap.HashMap<TaskId, UnfinishedAttempt> = HashMap.empty()
+  for (const [attemptId, responsibility] of indexes.executorResponsibilitiesBegan) {
+    if (!attemptIsFinished(indexes, attemptId)) unfinished = HashMap.set(unfinished, responsibility.plannedAttempt.taskId, responsibility)
+  }
+  return unfinished
+}
+
+/** Only responsibility acquisition or exact terminal/supersession changes can affect this invariant. */
+const advanceUnfinishedTasks = (prior: HashMap.HashMap<TaskId, UnfinishedAttempt>, indexes: FoldIndexes, record: JournalRecord): HashMap.HashMap<TaskId, UnfinishedAttempt> | undefined => {
+  const event = record.event
+  const attemptId = event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" ? event.plannedAttempt.attemptId
+    : event._tag === "PlannedAttemptExecutorWorkReported" ? event.report.correlation.attemptId
+    : event._tag === "AttemptImplementationAbandoned" || event._tag === "PlannedAttemptReplaced" ? event.subject.plannedAttempt.attemptId
+    : undefined
+  if (attemptId === undefined) return prior
+  const responsibility = mapGet(indexes.executorResponsibilitiesBegan, attemptId)
+  if (responsibility === undefined) return prior
+  const taskId = responsibility.plannedAttempt.taskId
+  const existing = mapGet(prior, taskId)
+  if (attemptIsFinished(indexes, attemptId)) return existing?.plannedAttempt.attemptId === attemptId ? HashMap.remove(prior, taskId) : prior
+  if (existing !== undefined && existing.plannedAttempt.attemptId !== attemptId) return undefined
+  return HashMap.set(prior, taskId, responsibility)
+}
 type WorkflowJournalHistoryReduction = ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory
 
 /**
@@ -209,9 +150,6 @@ const rememberReduction = (reduction: WorkflowJournalHistoryReduction): Workflow
   reductionsByPrefix.set(reduction.records, byRun)
   return reduction
 }
-
-const mapGet = <Key, Value>(map: HashMap.HashMap<Key, Value>, key: Key): Value | undefined =>
-  Option.getOrUndefined(HashMap.get(map, key))
 
 const validateRecordEnvelope = (
   record: JournalRecord,
@@ -1737,15 +1675,15 @@ const acquiredClaimMatchesIntent = (
 const validateClaim = (
   record: JournalRecord,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   if (record.event._tag !== "TaskClaimAcquired") return
   const acquired = record.event.claim
-  const intent = records.find(
+  const intent = Option.getOrUndefined(Iterable.findFirst(keyedCandidates(records, intentRecordKey(acquired.operationId)),
     ({ event }) =>
       event._tag === "TaskClaimAcquisitionIntended" && event.operation.acquisition.operationId === acquired.operationId
-  )?.event
+  ))?.event
   const intended = intent?._tag === "TaskClaimAcquisitionIntended" ? intent.operation.acquisition : undefined
   if (intended === undefined || !acquiredClaimMatchesIntent(acquired, intended)) {
     identityIssue(issues, runId, record.position, `acquired task claim contradicts operation ${acquired.operationId}`)
@@ -1755,17 +1693,17 @@ const validateClaim = (
 const validateClaimRejection = (
   record: JournalRecord,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   if (record.event._tag !== "TaskClaimAcquisitionRejected") return
   const rejected = record.event
-  const intent = records.find(
+  const intent = Option.getOrUndefined(Iterable.findFirst(keyedCandidates(records, intentRecordKey(rejected.operationId)),
     ({ event, position }) =>
       position < record.position &&
       event._tag === "TaskClaimAcquisitionIntended" &&
       event.operation.acquisition.operationId === rejected.operationId
-  )?.event
+  ))?.event
   /* v8 ignore next -- @preserve The event descriptor separately reports a rejection without its required intent. */
   if (intent?._tag !== "TaskClaimAcquisitionIntended") return
   const attempted = ActiveTaskClaim.make(intent.operation.acquisition)
@@ -1779,14 +1717,14 @@ const validateClaimRejection = (
   }
 }
 
-const matchingReacquisitionDirection = (record: JournalRecord, runId: RunId, records: ReadonlyArray<JournalRecord>) => {
+const matchingReacquisitionDirection = (record: JournalRecord, runId: RunId, records: JournalHistorySource) => {
   /* v8 ignore next -- @preserve The caller invokes this helper only for an explicit acquisition intent. */
   if (record.event._tag !== "TaskClaimAcquisitionIntended") return undefined
   const { acquisition } = record.event.operation
-  const expectedClaim = records.findLast(
+  const expectedClaim = Option.getOrUndefined(Iterable.findLast(journalRecordsForTask(records, acquisition.taskId),
     ({ event, position }) =>
       position < record.position && event._tag === "TaskClaimAcquired" && event.claim.taskId === acquisition.taskId
-  )?.event
+  ))?.event
   /* v8 ignore start -- @preserve Missing prior acquisition authority is rejected by the caller's undefined direction result. */
   const direction =
     expectedClaim?._tag === "TaskClaimAcquired"
@@ -1799,7 +1737,7 @@ const matchingReacquisitionDirection = (record: JournalRecord, runId: RunId, rec
 const validateClaimReacquisitionIntent = (
   record: JournalRecord,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   if (record.event._tag !== "TaskClaimAcquisitionIntended") return
@@ -1820,16 +1758,16 @@ const validateClaimReacquisitionIntent = (
 }
 
 const findTrackerReadIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   observedEvent: Extract<WorkflowJournalEvent, { readonly _tag: "TaskTrackerFactsObserved" }>,
   observedAt: JournalPosition
 ) =>
-  records.find(
+  Option.getOrUndefined(Iterable.findFirst(keyedCandidates(records, intentRecordKey(observedEvent.operationId)),
     ({ event, position }) =>
       position < observedAt &&
       event._tag === "TaskTrackerReadIntentRecorded" &&
       event.operation.operationId === observedEvent.operationId
-  )?.event
+  ))?.event
 
 const validateReconfirmationReference = (
   record: JournalRecord,
@@ -1845,7 +1783,7 @@ const validateReconfirmationReference = (
 const validateTrackerObservation = (
   record: JournalRecord,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   if (record.event._tag !== "TaskTrackerFactsObserved") return
@@ -2886,7 +2824,7 @@ const validateOneUnfinishedAttemptPerTask = (
 
 const validateLifecycleBoundaries = (
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   began: JournalRecord | undefined,
   terminated: JournalRecord | undefined,
   issues: Array<WorkflowJournalHistoryIssue>
@@ -2897,7 +2835,8 @@ const validateLifecycleBoundaries = (
   if (terminated !== undefined && began === undefined) {
     semanticIssue(issues, runId, terminated.position, "WorkflowRunTerminated requires prior WorkflowRunBegan")
   }
-  if (terminated !== undefined && terminated !== records.at(finalArrayElementOffset)) {
+  const lastRecord = isJournalRecordEvidence(records) ? journalRecordAt(records.records, finalArrayElementOffset) : records.at(finalArrayElementOffset)
+  if (terminated !== undefined && terminated !== lastRecord) {
     semanticIssue(issues, runId, terminated.position, "WorkflowRunTerminated must be the final record")
   }
 }
@@ -2917,12 +2856,12 @@ const validateCancellationMultiplicity = (
 /** Reuses the canonical one-cancellation rule at a presentation boundary. */
 export const validateCancellationMultiplicityHistory = (
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): ReadonlyArray<WorkflowJournalHistorySemanticIssue> => {
   const issues = new Array<WorkflowJournalHistorySemanticIssue>()
   validateCancellationMultiplicity(
     runId,
-    records.filter(({ event }) => event._tag === "RunCancellationApplied"),
+    Array.from(journalRecordsOfKind(records, "RunCancellationApplied")),
     issues
   )
   return issues
@@ -2942,12 +2881,12 @@ const validateCancellationBeginning = (
 
 const validateRunLifecycle = (
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
-  const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
-  const terminated = records.find(({ event }) => event._tag === "WorkflowRunTerminated")
-  const cancellations = records.filter(({ event }) => event._tag === "RunCancellationApplied")
+  const began = firstJournalRecordOfKind(records, "WorkflowRunBegan")
+  const terminated = firstJournalRecordOfKind(records, "WorkflowRunTerminated")
+  const cancellations = Array.from(journalRecordsOfKind(records, "RunCancellationApplied"))
   validateLifecycleBoundaries(runId, records, began, terminated, issues)
   validateCancellationMultiplicity(runId, cancellations, issues)
   validateCancellationBeginning(runId, began, cancellations, issues)
@@ -2994,12 +2933,12 @@ const isTerminationTrackerRecord = (
 }
 
 const terminationObservationsFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
   terminatedAt: JournalPosition,
   reject: (detail: string) => void
 ): { readonly fresh: TerminationTrackerObservation; readonly complete: CompleteTrackerObservation } | undefined => {
-  const observed = records.find(({ position }) => position === evidence.observedAt)
+  const observed = journalRecordByPosition(records, evidence.observedAt)
   if (!isTerminationTrackerRecord(observed, terminatedAt)) {
     reject("termination evidence must name one earlier complete or unchanged tracker observation position")
     return undefined
@@ -3008,12 +2947,12 @@ const terminationObservationsFor = (
   const completeObservationRecord =
     fresh._tag === "CompleteTaskTrackerFacts"
       ? observed
-      : records.find(
+      : Option.getOrUndefined(Iterable.findFirst(keyedCandidates(records, outcomeRecordKey(fresh.priorFullObservationOperationId)),
           ({ event }) =>
             event._tag === "TaskTrackerFactsObserved" &&
             event.operationId === fresh.priorFullObservationOperationId &&
             event.observation._tag === "CompleteTaskTrackerFacts"
-        )
+        ))
   if (
     completeObservationRecord?.event._tag !== "TaskTrackerFactsObserved" ||
     completeObservationRecord.event.observation._tag !== "CompleteTaskTrackerFacts"
@@ -3025,14 +2964,14 @@ const terminationObservationsFor = (
 }
 
 const validateTerminationIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
   reject: (detail: string) => void
 ): void => {
-  const intent = records.find(
+  const intent = Option.getOrUndefined(Iterable.findFirst(keyedCandidates(records, intentRecordKey(evidence.operationId)),
     ({ event }) =>
       event._tag === "TaskTrackerReadIntentRecorded" && event.operation.operationId === evidence.operationId
-  )
+  ))
   if (intent?.event._tag !== "TaskTrackerReadIntentRecorded" || intent.event.operation._tag !== "ReadTrackerGraph") {
     reject("termination evidence must name the exact complete graph-read intent")
   } else if (
@@ -3163,7 +3102,7 @@ const validateTerminationDisposition = (
 }
 
 const validateLatestTerminationObservation = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
   terminatedAt: JournalPosition,
   reject: (detail: string) => void
@@ -3174,11 +3113,11 @@ const validateLatestTerminationObservation = (
 }
 
 const validateCancellationTerminationObservation = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   termination: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>,
   reject: (detail: string) => void
 ): void => {
-  const cancellation = records.findLast(({ event }) => event._tag === "RunCancellationApplied")
+  const cancellation = lastJournalRecordOfKind(records, "RunCancellationApplied")
   if (cancellation !== undefined && termination.evidence.observedAt <= cancellation.position) {
     reject("cancellation terminal evidence must use a graph observation after RunCancellationApplied")
   }
@@ -3226,10 +3165,10 @@ const isCompleteGraphObservationForTarget = (
   taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(target)
 
 const firstTrackerRootOf = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   target: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"]["target"]
 ): TaskId | undefined => {
-  const firstRootObservation = records.find((record) => isCompleteGraphObservationForTarget(record, target))
+  const firstRootObservation = Option.getOrUndefined(Iterable.findFirst(journalRecordsOfKind(records, "TaskTrackerFactsObserved"), (record) => isCompleteGraphObservationForTarget(record, target)))
   return firstRootObservation?.event._tag === "TaskTrackerFactsObserved" &&
     firstRootObservation.event.observation._tag === "CompleteTaskTrackerFacts"
     ? firstRootObservation.event.observation.rootTaskId
@@ -3237,7 +3176,7 @@ const firstTrackerRootOf = (
 }
 
 const validateFirstTrackerRoot = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   evidence: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>["evidence"],
   reject: (detail: string) => void
 ): void => {
@@ -3248,7 +3187,7 @@ const validateFirstTrackerRoot = (
 
 const validateTerminationEvidence = (
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   began: JournalRecord | undefined,
   terminatedAt: JournalPosition,
   termination: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>,
@@ -3284,7 +3223,7 @@ const validateRecord = (
   record: JournalRecord,
   index: number,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
 ): FoldIndexes => {
@@ -3316,7 +3255,8 @@ const validateRecord = (
   validateAttemptRestartAuthorityReadFailure(record, runId, records, issues)
   next = validatePlannedAttemptReplacement(record, runId, records, next, issues)
   validateContinuationAuthorization(record, runId, records, issues)
-  next = validatePlan(record, runId, records.slice(0, index + 1), next, issues)
+  const recordsThroughCurrent = isJournalRecordEvidence(records) ? journalEvidenceBefore(records, index + 2) : records.slice(0, index + 1)
+  next = validatePlan(record, runId, recordsThroughCurrent, next, issues)
   validateClaimReacquisitionIntent(record, runId, records, issues)
   validateClaim(record, runId, records, issues)
   validateClaimRejection(record, runId, records, issues)
@@ -3330,7 +3270,7 @@ const validateRecord = (
     next,
     (detail) => identityIssue(issues, runId, record.position, detail),
     (detail) => semanticIssue(issues, runId, record.position, detail),
-    records.slice(0, index + 1)
+    recordsThroughCurrent
   )
   next = {
     ...next,
@@ -3356,15 +3296,14 @@ const finishValidation = (
   records: ReadonlyArray<JournalRecord>,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>,
-  reconstructRunState: () => ReconstructedRunState = () => reconstructValidatedRunState(runId, records),
-  acceptedPrefix?: () => AcceptedJournalPrefix
+  reconstructRunState: () => ReconstructedRunState = () => reconstructValidatedRunState(runId, records)
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
   validateOneUnfinishedAttemptPerTask(runId, indexes, issues)
   validateRunLifecycle(runId, records, issues)
   if (issues.length > 0) {
     return rememberReduction({ _tag: "InvalidWorkflowJournalHistory", issues, records, runId })
   }
-  const prefix = acceptedPrefix?.() ?? acceptedJournalPrefixFromValidatedHistory(runId, records)
+  const prefix = acceptedJournalPrefixFromValidatedHistory(runId, records)
   const state = reconstructRunState()
   const valid: ValidWorkflowJournalHistory = {
     _tag: "ValidWorkflowJournalHistory",
@@ -3374,6 +3313,7 @@ const finishValidation = (
     prefix
   }
   foldIndexesByHistory.set(valid, indexes)
+  unfinishedByHistory.set(valid, unfinishedTasksFrom(indexes))
   return rememberReduction(valid)
 }
 
@@ -3399,9 +3339,10 @@ export const advanceWorkflowJournalHistory = (
   prior: ValidWorkflowJournalHistory,
   record: JournalRecord
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
-  const records = [...prior.records, record]
   const cached = foldIndexesByHistory.get(prior)
-  if (cached === undefined) return reduceWorkflowJournalHistory(prior.runId, records)
+  const unfinished = unfinishedByHistory.get(prior)
+  const replay = () => reduceWorkflowJournalHistory(prior.runId, [...materializeJournalRecords(prior.prefix.records), record])
+  if (cached === undefined || unfinished === undefined) return replay()
 
   /*
    * Fork the immutable index roots for this successor. Effect HashMap and
@@ -3410,19 +3351,17 @@ export const advanceWorkflowJournalHistory = (
    */
   const indexes = cached
   const issues = new Array<WorkflowJournalHistoryIssue>()
-  const advancedIndexes = validateRecord(record, prior.records.length, prior.runId, records, indexes, issues)
-  const advanced = finishValidation(
-    prior.runId,
-    records,
-    advancedIndexes,
-    issues,
-    () => advanceReconstructedRunState(prior.runState, record, records),
-    () => appendValidatedJournalRecord(prior.prefix, record)
-  )
-  if (advanced._tag === "ValidWorkflowJournalHistory") {
-    rememberValidatedJournalPrefixSuccessor(prior, advanced, record)
-    return advanced
-  }
-
+  const candidate = appendJournalEvidence(prior.prefix, record)
+  const advancedIndexes = validateRecord(record, prior.prefix.records.length, prior.runId, candidate, indexes, issues)
+  const advancedUnfinished = advanceUnfinishedTasks(unfinished, advancedIndexes, record)
+  validateRunLifecycle(prior.runId, candidate, issues)
+  // The cold reducer retains the exact ordered diagnostics for malformed input;
+  // failed candidates never receive acceptance or alter their predecessor.
+  if (issues.length > 0 || advancedUnfinished === undefined) return replay()
+  const prefix = appendValidatedJournalRecord(prior.prefix, record)
+  const history = acceptedWorkflowHistory(prefix)
+  const advanced = acceptedHistoryResult(prefix, advanceReconstructedRunState(prior.runState, record, history))
+  foldIndexesByHistory.set(advanced, advancedIndexes)
+  unfinishedByHistory.set(advanced, advancedUnfinished)
   return advanced
 }

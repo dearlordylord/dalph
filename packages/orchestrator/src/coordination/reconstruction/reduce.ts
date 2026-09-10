@@ -3,6 +3,9 @@ import { Option } from "effect"
 import { type RunId, type TaskId } from "@dalph/contracts"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import type { AcceptedJournalPrefix } from "../../workflow-journal/accepted-prefix.js"
+import { journalRecordsOfKind } from "../../workflow-journal/record-evidence.js"
+import { advanceDurableGraphKnowledge, initializeDurableGraphKnowledge } from "./graph-knowledge.js"
 import { workflowJournalTransitionRuleFor } from "./history-transition.js"
 import {
   BestAvailableDurableGraphKnowledge,
@@ -22,11 +25,13 @@ import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy
 
 /** Pure graph-knowledge reducer. */
 const reduceGraphKnowledge = (records: ReadonlyArray<JournalRecord>): BestAvailableDurableGraphKnowledge => {
-  return BestAvailableDurableGraphKnowledge.make({
+  const knowledge = BestAvailableDurableGraphKnowledge.make({
     taskTrackerFacts: records.flatMap(({ event }) =>
       event._tag === "TaskTrackerFactsObserved" ? [event.observation] : []
     )
   })
+  initializeDurableGraphKnowledge(knowledge)
+  return knowledge
 }
 
 const taskBoundaryResponsibility = (record: JournalRecord): WorkflowResponsibilityEntry | undefined => {
@@ -91,9 +96,7 @@ const appendGraphKnowledge = (
   record: JournalRecord
 ): BestAvailableDurableGraphKnowledge =>
   record.event._tag === "TaskTrackerFactsObserved"
-    ? BestAvailableDurableGraphKnowledge.make({
-        taskTrackerFacts: [...prior.taskTrackerFacts, record.event.observation]
-      })
+    ? advanceDurableGraphKnowledge(prior, record.event.observation)
     : prior
 
 const appendResponsibility = (
@@ -111,6 +114,22 @@ const appendResponsibility = (
   }
   const entry = responsibilityForRecord(record)
   return entry === undefined ? prior : WorkflowResponsibilityState.make({ entries: [...prior.entries, entry] })
+}
+
+const responsibilityFromPrefix = (prefix: AcceptedJournalPrefix): WorkflowResponsibilityState => {
+  let entries: WorkflowResponsibilityState["entries"] | undefined
+  return {
+    get entries() {
+      if (entries !== undefined) return entries
+      const replaced = new Set(Array.from(journalRecordsOfKind(prefix, "PlannedAttemptReplaced")).flatMap(({ event }) => event._tag === "PlannedAttemptReplaced" ? [event.subject.plannedAttempt.attemptId] : []))
+      const kinds = ["TaskClaimAcquisitionIntended", "TaskClaimReleaseIntended", "TaskWorktreeReconciliationIntended", "PlannedAttemptExecutorWorkResponsibilityBegan"] as const
+      entries = kinds.flatMap((kind) => Array.from(journalRecordsOfKind(prefix, kind))).sort((left, right) => left.position - right.position).flatMap((record) => {
+        const entry = responsibilityForRecord(record)
+        return entry === undefined || (entry._tag === "PlannedAttemptExecutorWorkResponsibility" && replaced.has(entry.plannedAttempt.attemptId)) ? [] : [entry]
+      })
+      return entries
+    }
+  }
 }
 
 const appendControlPolicy = (
@@ -159,17 +178,19 @@ const appendCancellationState = (
 export const advanceReconstructedRunState = (
   prior: ReconstructedRunState,
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord> = [...prior.workflowHistory.records, record]
+  records: ReadonlyArray<JournalRecord> | ReconstructedWorkflowHistory = [...prior.workflowHistory.records, record]
 ): ReconstructedRunState => {
+  const history = "records" in records ? records : { records }
+  const prefix = history.prefix
   return {
     appliedThrough: record.position,
     controlPolicy: appendControlPolicy(prior.controlPolicy, record),
     graphKnowledge: appendGraphKnowledge(prior.graphKnowledge, record),
     pause: appendPauseState(prior.pause, record),
     cancellation: appendCancellationState(prior.cancellation, record),
-    responsibility: appendResponsibility(prior.responsibility, record),
+    responsibility: prefix === undefined ? appendResponsibility(prior.responsibility, record) : responsibilityFromPrefix(prefix),
     runId: prior.runId,
-    workflowHistory: { records }
+    workflowHistory: history
   }
 }
 

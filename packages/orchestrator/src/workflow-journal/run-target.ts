@@ -41,7 +41,7 @@ export const claimReadMatchesTarget = (
     : records.find(({ event, position }) => position > after && position < before && event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTaskClaim" && event.operation.operationId === observationOperationId && event.operation.taskId === taskId)
   return (
     read !== undefined && read.position > after && read.position < before &&
-    read?.event._tag === "TaskTrackerReadIntentRecorded" &&
+    read.event._tag === "TaskTrackerReadIntentRecorded" &&
     read.event.operation._tag === "ReadTaskClaim" &&
     read.event.operation.operationId === observationOperationId && read.event.operation.taskId === taskId &&
     taskTrackerTargetKey(read.event.operation.target) === taskTrackerTargetKey(target)
