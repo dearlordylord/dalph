@@ -534,6 +534,7 @@ the local root with this guarded command. It moves the complete root into a
 fresh sibling retention directory, so the local files remain recoverable:
 
 ```bash
+unset GITHUB_TOKEN DALPH_CODEX_PROVIDER_CREDENTIAL
 (
 case "${DALPH_DEMO_ROOT##*/}" in
   dalph-production-walkthrough.?*) ;;
@@ -557,11 +558,10 @@ else
   exit 1
 fi
 )
-unset GITHUB_TOKEN DALPH_CODEX_PROVIDER_CREDENTIAL
 ```
 
-The subshell exits on a failed guard or move even when Bash `errexit` is off;
-the credential cleanup afterward does not authorize another filesystem action.
+The block returns status 1 on a failed guard or move even when Bash `errexit`
+is off. Credentials are cleared first so that cleanup cannot mask this status.
 The path and marker checks guard one exact disposable root. A failed guard,
 failed GitHub deletion, live process, or unsettled ambiguity means preserve
 rather than broaden or repeat cleanup. If moving fails, inspect both exact

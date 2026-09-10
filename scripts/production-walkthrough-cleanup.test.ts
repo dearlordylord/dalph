@@ -62,6 +62,7 @@ it.each(["missing", "foreign", "directory", "symlink", "extra-lines"])(
     const result = runCleanup(parent, root)
 
     expect(result.error).toBeUndefined()
+    expect(result.status).toBe(1)
     expect(result.stderr).toContain("refusing cleanup")
     expect(result.stdout).not.toContain("Local files retained at:")
     expect(readFileSync(join(root, "journal.sqlite"), "utf8")).toBe("local recovery facts")
@@ -95,6 +96,7 @@ it.each(["nested", "symlink", "unexpected-name"])(
     const result = runCleanup(parent, rootState === "symlink" ? selectedRoot : actualRoot)
 
     expect(result.error).toBeUndefined()
+    expect(result.status).toBe(1)
     expect(result.stderr).toContain("refusing")
     expect(readFileSync(join(actualRoot, "journal.sqlite"), "utf8")).toBe("local recovery facts")
     expect(readdirSync(parent).filter((name) => name.startsWith("dalph-retained."))).toEqual([])
