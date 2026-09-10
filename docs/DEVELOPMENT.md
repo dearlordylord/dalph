@@ -176,7 +176,13 @@ The browser runner owns its host; no manual Vite or `REDUCER_LAB_URL` is needed.
 Git repositories/worktrees. It is outside `check:all`; the same contract runs
 on Ubuntu/macOS in the [qualification workflow](../.github/workflows/codex-app-server-qualification.yml).
 
-## Disposable production repository walkthrough
+For shared-host gate failures, dispatch [Candidate qualification](../.github/workflows/quint-qualification.yml)
+once with the frozen `candidate_sha`. Choose `quint` (default, ARM) or `all`
+(x64, full history, submodules, gitleaks); `all` also requires the reviewed
+`coverage_base_sha`. It runs the same gate on a fresh worker. Diagnose stage
+failures before retrying; different hardware is not a calibrated baseline.
+
+### Disposable production repository walkthrough
 
 This walkthrough lets Alice run the shipped production command against one
 dedicated disposable GitHub repository and one unblocked issue. Production can
@@ -189,7 +195,10 @@ This is an operator walkthrough of already implemented behavior. It is not the
 repeatable live-provider qualification owned by GitHub issue #261 and supplies
 no #261 closure evidence.
 
-### 1. Create the isolated GitHub and credential boundary
+Run every shell block in this walkthrough with Bash; the credential prompts
+and guarded marker reads intentionally use Bash built-ins.
+
+#### 1. Create the isolated GitHub and credential boundary
 
 In GitHub, create a private repository named
 `dalph-production-walkthrough`, initialize its `main` branch with a README, and
@@ -207,7 +216,7 @@ the repository. The Codex credential below is an OpenAI API project key allowed
 to run the installed Codex CLI. Read both values without echoing them and keep
 them in environment variables only:
 
-```sh
+```bash
 read -r -s -p "Disposable-repository GitHub token: " GITHUB_TOKEN
 printf '\n'
 export GITHUB_TOKEN
@@ -225,7 +234,7 @@ Set the repository identity, create an exact disposable local root, clone the
 initialized repository, and create its only issue. Replace `YOUR_LOGIN`; keep
 the repository name dedicated to this exercise.
 
-```sh
+```bash
 export DALPH_DEMO_OWNER=YOUR_LOGIN
 export DALPH_DEMO_REPOSITORY=dalph-production-walkthrough
 export DALPH_DEMO_TEMP_PARENT
@@ -255,12 +264,12 @@ Confirm that the URL ends in the numeric issue number and that the GitHub issue
 shows no blocked-by or sub-issue relationship. That makes the sole task
 immediately eligible; an ordinary label is not a dependency.
 
-### 2. Build Dalph and pin the local Git facts
+#### 2. Build Dalph and pin the local Git facts
 
 Run these commands from the Dalph source checkout. The disposable target clone
 is separate from this source checkout.
 
-```sh
+```bash
 export DALPH_SOURCE="$(pwd -P)"
 pnpm install --frozen-lockfile
 pnpm build
@@ -289,7 +298,7 @@ also the exact OS-backed coordinator-lock target. The Codex executable is the
 built workspace dependency, not an inferred executable from a target
 repository.
 
-### 3. Write the complete non-secret configuration
+#### 3. Write the complete non-secret configuration
 
 Create disjoint sibling locations under the disposable root. The two worktree
 roots must not contain each other or the repository/private state. The Journal
@@ -297,7 +306,7 @@ database, evidence root, Codex state directory, and Integrator private-store
 file must also be pairwise disjoint. Every path below is normalized and
 absolute because it is derived from the absolute `mktemp` root.
 
-```sh
+```bash
 export DALPH_DEMO_JOURNAL="${DALPH_DEMO_ROOT}/journal.sqlite"
 export DALPH_DEMO_EVIDENCE="${DALPH_DEMO_ROOT}/evidence"
 export DALPH_DEMO_CODEX_STATE="${DALPH_DEMO_ROOT}/codex-state"
@@ -373,11 +382,11 @@ GitHub target parsed from the command and the two redacted credentials parsed
 from the environment; adding `target`, `githubToken`, or
 `codexProviderCredential` to the JSON is rejected as an excess property.
 
-### 4. Run and read the public output
+#### 4. Run and read the public output
 
 Run exactly this public command from any directory:
 
-```sh
+```bash
 node "${DALPH_EXECUTABLE}" \
   run "github:${DALPH_DEMO_OWNER}/${DALPH_DEMO_REPOSITORY}#${DALPH_DEMO_ISSUE_NUMBER}" \
   --production \
@@ -400,7 +409,9 @@ has `_tag: "RunSelected"`, `selection: "Allocated"`, an exact `runId`, and
   `TimedOut` and status 1, after a signal-requested application Exit; or
 - `Failure`, with a stable redacted `code`, `detail`, and safe `subject`, after a
   known usage, configuration, startup/ownership, Journal, delivery-throttle,
-  status/projection, or lifecycle failure.
+  status/projection, output-write, or lifecycle failure. A typed stdout-write
+  failure has code `output.write_failed`, status 1, and fixed redacted detail;
+  Dalph does not recursively attempt another stdout `Failure` record.
 
 An unexpected defect is reported through stderr and a nonzero process result;
 it does not invent an `internal.unexpected` NDJSON record. Historical snapshots,
@@ -429,17 +440,22 @@ The run can change each owning system:
   candidate-worktree root. Public output omits provider-private transcripts and
   session data.
 
-### 5. Optionally prove graceful same-Run recovery
+#### 5. Observe graceful Exit and demonstrate unfinished-Run recovery
 
-For a recovery demonstration, press Ctrl-C promptly after the first
-`RunSelected` record and before `RunDisposition`. `SIGINT` and `SIGTERM` both
-submit the same graceful application Exit request. Repeated signals join the
-first request and do not restart the fixed five-second drain.
+To observe graceful Exit, press Ctrl-C after the first `RunSelected` record.
+`SIGINT` and `SIGTERM` both submit the same graceful application Exit request.
+Repeated signals join the first request and do not restart the fixed
+five-second drain. A final `ApplicationExitDisposition` with
+`disposition._tag: "Succeeded"` means the process returned 0 after the bounded
+shutdown protocol; it does not by itself prove whether the Run had already
+durably terminated.
 
-If the final record is `ApplicationExitDisposition` with
-`disposition._tag: "Succeeded"`, the process returns 0 but the unfinished Run
-is not terminated. Repeat the identical command from step 4. Its first
-selection record must have the same `runId` and `selection: "Recovered"`:
+On an identical next invocation, selection is `Recovered` with the same
+`runId` only when SQLite still contains that exact unfinished Run. If the Run
+was already durably terminated, ordinary discovery applies instead and may
+allocate or select work according to the current GitHub, Git, and Journal
+authorities. This sequence is therefore possible, not promised merely because
+Ctrl-C followed `RunSelected`:
 
 ```text
 {"_tag":"RunSelected","runId":"...","selection":"Allocated","version":1}
@@ -454,16 +470,33 @@ SQLite prefix, and checks the authority that owns any acknowledged ambiguous
 effect before another mutation. It neither appends another Run beginning nor
 recovers stdout, an old status subscription, or an Exit timer.
 
+For a deterministic Allocated-to-Recovered demonstration, use the controlled
+unfinished target in the shipped abrupt-stop process test. It kills the first
+process without termination evidence, preserves the exact SQLite/Git facts,
+then invokes the same public command and asserts that the same Run is
+recovered:
+
+```bash
+pnpm exec vitest run \
+  packages/dalph/src/application/production-public-recovery.integration.test.ts \
+  -t "unfinished SQLite public restart reports the same recovered Run and no second beginning"
+```
+
+That controlled fixture proves the recovery sequence; it is not #261 live
+qualification evidence. In the disposable live repository, report
+`Recovered` only after the next command actually emits it.
+
 Graceful Exit is different from abrupt death. After `Succeeded`, admitted work
 has reached the accepted bounded shutdown result and the host releases its
 scoped resources and coordinator lock; the Run may still be unfinished. A
-crash, `SIGKILL`, machine loss, or process disappearance emits no
+crash, an abrupt `SIGKILL` at a controlled unfinished cut, machine loss, or
+process disappearance emits no
 `ApplicationExitDisposition` and proves no graceful result. Preserve every
 local and GitHub fact after abrupt death, then use the identical step-4 command
 to reconcile and recover the same unfinished Run. Never interpret a missing
 stdout line as permission to retry a provider mutation.
 
-### 6. Dispose exactly, or preserve everything
+#### 6. Dispose exactly, or preserve everything
 
 Let the command return before cleanup. If it is still running, its final output
 is missing, a GitHub/Git fact is unreadable, or any resource identity is
@@ -475,7 +508,7 @@ records; partial deletion destroys the facts needed for fail-closed recovery.
 When the command has returned and you intentionally abandon the entire
 disposable exercise, first verify both exact identities:
 
-```sh
+```bash
 test "$(<"${DALPH_DEMO_ROOT}/.dalph-walkthrough-repository")" = \
   "${DALPH_DEMO_OWNER}/${DALPH_DEMO_REPOSITORY}"
 test "$(GH_TOKEN="${GITHUB_TOKEN}" gh repo view \
@@ -490,7 +523,7 @@ Zone using the repository name confirmation. The deliberately restricted token
 above cannot delete it. Only after GitHub confirms that exact deletion, remove
 the local root with this guarded command:
 
-```sh
+```bash
 case "${DALPH_DEMO_ROOT}" in
   "${DALPH_DEMO_TEMP_PARENT}"/dalph-production-walkthrough.*) ;;
   *) printf '%s\n' "refusing unexpected cleanup root: ${DALPH_DEMO_ROOT}" >&2; exit 1 ;;
@@ -505,12 +538,6 @@ unset GITHUB_TOKEN DALPH_CODEX_PROVIDER_CREDENTIAL
 The path-shape and marker checks are fail-closed guards around one exact
 disposable root. A failed guard, failed GitHub deletion, live process, or
 unsettled ambiguity means preserve rather than broaden or repeat cleanup.
-
-For shared-host gate failures, dispatch [Candidate qualification](../.github/workflows/quint-qualification.yml)
-once with the frozen `candidate_sha`. Choose `quint` (default, ARM) or `all`
-(x64, full history, submodules, gitleaks); `all` also requires the reviewed
-`coverage_base_sha`. It runs the same gate on a fresh worker. Diagnose stage
-failures before retrying; different hardware is not a calibrated baseline.
 
 ### Coverage and output budgets
 

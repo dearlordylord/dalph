@@ -20,6 +20,7 @@ import {
   encodeProductionCliRecord,
   productionCliFailureRecord,
   productionCliFailureForSelectedRun,
+  ProductionCliOutputError,
   type ProductionCliHostObservation,
   type ProductionCliLifecycleError,
   type ProductionCliStatusError
@@ -149,8 +150,13 @@ export const makeProductionCli = <EHost, RHost>(
             )
           )
         }).pipe(
-          Effect.tapError((failure) =>
-            Deferred.isDone(selectedRunId).pipe(
+          Effect.mapError((failure) => {
+            const known = knownProductionCliFailure(failure)
+            return known instanceof ProductionCliOutputError ? known : failure
+          }),
+          Effect.tapError((failure) => {
+            if (failure instanceof ProductionCliOutputError) return Effect.void
+            return Deferred.isDone(selectedRunId).pipe(
               Effect.flatMap((hasSelection) =>
                 hasSelection
                   ? Deferred.await(selectedRunId).pipe(
@@ -164,7 +170,7 @@ export const makeProductionCli = <EHost, RHost>(
                   : output.writeLine(encodeProductionCliRecord(productionCliFailureRecord(known))).pipe(Effect.ignore)
               })
             )
-          )
+          })
         )
       })
   ).pipe(
