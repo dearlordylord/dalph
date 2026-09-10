@@ -87,7 +87,11 @@ admission or authorize an executor command.
    position.
 5. Only now does Dalph apply the existing
    `TaskWorkAdmissionStalledRuntimeQuiescence` classification against the
-   live admission snapshot. It retains E and the exact admission snapshot,
+   live admission snapshot. Before returning, Dalph captures the current
+   accepted journal position and waits for its relation publication through
+   `DeliveryAcceptedFactPublication.awaitCurrent`. If that position is newer
+   than the evaluated position, it consumes the publication and retries
+   admission and classification. It retains E and the exact admission snapshot,
    then returns `RunMustRemainActive(RunnableTransition)`. The one
    reactivation owner completes this activation's handoff.
 
@@ -96,6 +100,30 @@ permits it. If a tracker or timer hint arrives while this activation is
 finishing, the owner retains one coalesced trailing activation and starts it
 only after the current activation returns. Without another hint or accepted
 publication, no new activation begins.
+
+### Alice's Continue is already accepted while G2 is being published
+
+In the existing #268 chronology, A1 and D1 occupy both P2 positions and C1's
+Safe report has been accepted. G2 is durably reconfirmed at position 116.
+While its publication observer is completing, Alice's exact Continue for
+retained B1 is accepted at position 117. Dalph must not return a capacity wait
+from the older position-116 evaluation and discard this already accepted
+control. The publication boundary captures position 117, awaits that prefix,
+and the runtime consumes its changed evaluation before trying admission again.
+B's current-authority checks can then execute without a task-work position.
+The existing DS12 checkpoint releases the later A1 terminal report; its accepted
+position release permits exact B1 Resume before fresh E. No extra hint, process
+death, or frozen occurrence-oracle change is introduced.
+
+The freshness boundary waits only for the prefix captured when called, not for
+a future control, executor report, or tracker notification. With no newer fact,
+one freshness check returns the unchanged capacity wait. If an accepted-publication
+notice arrives after that cut, the production reactivation owner retains one
+trailing ordinary activation, starts it only after this activation returns,
+and coalesces duplicate notices. The focused owner test controls this notice
+boundary; it does not fabricate a tracker lifecycle change or another journal fact.
+This process-local synchronization writes no new workflow event, so a crash
+uses the existing durable-prefix reconstruction rather than a new retry protocol.
 
 ## Crash, retry, and forbidden results
 
@@ -144,6 +172,9 @@ full cassette retains that coverage.
 | After G2, A0/D0 fill live capacity, E is fresh, no owner remains, and the result retains E and the exact admission snapshot without an executor call | `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`: `returns admission-stalled after G2 when other exact attempts fill capacity` |
 | Before G2, the captured-boundary phase does not return admission-stalled; this is the scope of #275's exclusion | `packages/orchestrator/src/coordination/run/run-stabilization.test.ts`: `does not return admission-stalled before the mandatory G2 observation` |
 | The public handoff returns `RunMustRemainActive(RunnableTransition)` and starts at most one queued trailing activation after the current activation returns, with no extra finality read | `packages/dalph/src/application/production-reactivation.test.ts`: `returns RunMustRemainActive RunnableTransition and starts one queued trailing activation only after the current activation returns` |
+| Already accepted control publication advances the evaluation before a capacity wait; current facts require one check and no future event | `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`: `consumes an already accepted publication before returning a post-G2 capacity wait`; `returns admission-stalled after G2 when other exact attempts fill capacity` |
+| A publication notice after the freshness cut coalesces into one later ordinary activation, with no concurrent activation or spontaneous retry | `packages/dalph/src/application/production-reactivation.test.ts`: `hands a publication after the capacity-wait freshness cut to one nonconcurrent trailing activation` |
+| Alice's accepted Continue during G2 publication preserves DS01–DS13, including B1 Resume after A1 releases capacity, without changing the frozen oracle | `packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts`: `emits the exact DS01 through DS13 delivery checkpoint table` |
 | A live admitted action that can release capacity keeps the phase pending and admission continues after its exact release | `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`: `continues waiting after G2 while an in-flight action can free retained capacity` |
 | Positionless work proceeds before an admission-stalled return | `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`: `does not report admission-stalled quiescence while a local owner can finish or for work that needs no task position` |
 | Exact held-position reuse proceeds before an admission-stalled return, including after G2 with a different reconciled subject | `packages/orchestrator/src/coordination/delivery/run-delivery-runtime.test.ts`: `reuses a full-capacity exact position after G2 despite a different reconciled subject` |

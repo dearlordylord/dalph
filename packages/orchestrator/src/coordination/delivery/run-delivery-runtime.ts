@@ -689,6 +689,16 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
 
         const quiescence = yield* runtimeQuiescence()
         if (Option.isSome(quiescence)) {
+          // A control can already be durable while its relation publication is
+          // still catching up. Before returning a capacity wait, consume that
+          // accepted prefix; do not wait for a future executor report or hint.
+          if (quiescence.value._tag === "TaskWorkAdmissionStalledRuntimeQuiescence") {
+            const through = yield* acceptedFactPublication.awaitCurrent
+            if (quiescence.value.acceptedAt === null || quiescence.value.acceptedAt < through.acceptedThrough) {
+              yield* applyRuntimeEvent(yield* Queue.take(events))
+              continue
+            }
+          }
           yield* publishRuntimeObservation()
           return quiescence.value
         }

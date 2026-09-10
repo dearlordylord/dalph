@@ -597,6 +597,7 @@ type ProductionRefreshHarnessOptions = {
   readonly suspensionSubjectTaskId?: TaskId
   readonly includeFreshWaitingTaskE?: boolean
   readonly verifyNoSpontaneousActivation?: boolean
+  readonly publishAfterActiveReturn?: boolean
   readonly suspensionSettlement?: "Safe" | "Terminal"
   readonly graph?:
     | "Readable"
@@ -1600,7 +1601,12 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                         count === 1
                           ? Deferred.succeed(startupActivation, undefined)
                           : count === 2
-                            ? Deferred.succeed(acceptedActivation, undefined)
+                            ? Effect.gen(function* () {
+                                if (options.publishAfterActiveReturn === true) {
+                                  expect(yield* Ref.get(activeConcurrent)).toBe(0)
+                                }
+                                yield* Deferred.succeed(acceptedActivation, undefined)
+                              })
                             : Effect.void
                       ),
                       Effect.andThen(
@@ -1657,6 +1663,20 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                     source
                   )
                   .pipe(
+                    Effect.tap(() =>
+                      options.publishAfterActiveReturn === true
+                        ? Effect.gen(function* () {
+                            // The production runtime has returned, so its bounded
+                            // publication-freshness cut is necessarily complete.
+                            // A later accepted-publication notice belongs to the
+                            // owner's next activation, not the finished runtime.
+                            const observers = yield* Ref.get(registeredObservers)
+                            if (observers === undefined) return yield* Effect.die("owner observers are missing")
+                            yield* observers.acceptedFactPublication()
+                            yield* observers.acceptedFactPublication()
+                          })
+                        : Effect.void
+                    ),
                     Effect.tap((decision) =>
                       Ref.update(activeDecisions, (current) => [...current, decision]).pipe(
                         Effect.andThen(Deferred.succeed(activeActivation, "Success"))
@@ -1754,6 +1774,13 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 }
                 yield* Deferred.await(activeActivation)
                 yield* Deferred.await(firstActiveSettled)
+                if (options.publishAfterActiveReturn === true) {
+                  yield* Deferred.await(acceptedActivation)
+                  yield* TestClock.adjust("30 minutes")
+                  yield* Effect.yieldNow
+                  expect(yield* Ref.get(ordinaryActivationCount)).toBe(2)
+                  expect(yield* Ref.get(activeActivationCount)).toBe(1)
+                }
                 if (options.laterSpecificationChange === true || options.repeatAfterUncertainty === true) {
                   if (options.laterSpecificationChange === true) {
                     yield* Ref.set(currentSpecificationMode, "Changed")
@@ -2307,6 +2334,30 @@ it.effect("accepted publication notification and timer coalesce into one trailin
     expect(result.activeSelectionOperationKeys.filter((key) => key.startsWith("ReadTrackerGraph:"))).toHaveLength(4)
     expect(result.executorEntries).toEqual([])
     expect(result.executorCalls).toEqual([])
+  })
+)
+
+it.effect("hands a publication after the capacity-wait freshness cut to one nonconcurrent trailing activation", () =>
+  Effect.gen(function* () {
+    const result = yield* runProductionRefreshHarness({
+      capacityTwo: true,
+      executingTaskIds: { primary: TaskId.make("A"), independent: TaskId.make("C"), third: TaskId.make("D") },
+      graph: "TaskClosedWithoutSuccess",
+      includeFreshWaitingTaskE: true,
+      publishAfterActiveReturn: true,
+      suspensionSubjectTaskId: TaskId.make("C"),
+      threeExecuting: true
+    })
+    expect(result.activeDecisions).toEqual([RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" })])
+    expect(result.activationKinds).toEqual(["OrdinaryRunEntry", "ActiveWorkAuthorityRefresh", "OrdinaryRunEntry"])
+    expect(result.activeActivationTimeline).toEqual(["Start", "Return"])
+    expect(result.maximumActiveConcurrent).toBe(1)
+    expect(result.trackerCalls.filter((call) => call === "graph")).toHaveLength(2)
+    expect(result.trackerCalls.filter((call) => call === "acquire")).toEqual([])
+    expect(result.executorCalls.filter(({ command }) => command !== "observe")).toEqual([
+      { command: "Suspend", taskId: "C" }
+    ])
+    expect(result.journalRecords.filter(({ event }) => event._tag === "WorkflowRunTerminated")).toEqual([])
   })
 )
 

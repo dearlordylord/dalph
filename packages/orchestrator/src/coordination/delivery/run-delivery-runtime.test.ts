@@ -4243,10 +4243,13 @@ const runEffectiveAdmissionSnapshotScenario = Effect.fn("Test.runEffectiveAdmiss
           )
         : Effect.void
   })
+  const acceptedPublicationMade = yield* Ref.make(false)
   const publication = DeliveryAcceptedFactPublication.of({
     awaitCurrent: Effect.gen(function* () {
       yield* Deferred.succeed(journalCountAtPublication, (yield* Ref.get(records)).length)
-      yield* relation.publish(accepted)
+      // Like the production boundary, rereading an already published prefix
+      // does not publish the same facts again or rewind the later guard.
+      if (!(yield* Ref.getAndSet(acceptedPublicationMade, true))) yield* relation.publish(accepted)
       return { _tag: "DeliveryAcceptedPublicationBoundary" as const, acceptedThrough, runId }
     })
   })
@@ -5352,6 +5355,94 @@ it.effect(
     )
 )
 
+it.effect("consumes an already accepted publication before returning a post-G2 capacity wait", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const base = yield* baseEvaluation
+      const [blocked] = preparedBeginProposalsOf([preparedAttemptFixture("accepted-control-blocked")])
+      if (blocked === undefined) return yield* Effect.die("prepared attempt must produce Begin")
+      const acceptedControl = JournalPosition.make(2)
+      const acceptedRead = JournalPosition.make(3)
+      const boundary = { runId, attemptId: plannedAttempt.attemptId }
+      const initial = {
+        ...withProposals(base, [blocked], 1),
+        acceptedAt: JournalPosition.make(1),
+        activeRefreshBoundary: { _tag: "ActiveRefreshRuntimeBoundary" as const, runId, reconciledAttempts: [boundary] },
+        taskWork: makeFreshTaskAdmissionTestBasis({
+          capacity: TaskWorkCapacity.make(1),
+          held: [preparedAttemptFixture("accepted-control-held").attempt]
+        })
+      } satisfies DeliveryRuntimeEvaluation
+      const read = trackerGraphReadProposalOf({
+        acceptedAt: acceptedControl,
+        purpose: "EstablishCurrentGraph",
+        runId,
+        target
+      })
+      const relation = yield* dynamicEvaluationSignal(initial)
+      const freshnessCuts = yield* Ref.make<ReadonlyArray<JournalPosition>>([])
+      const durablePosition = yield* Ref.make(acceptedControl)
+      const firstCut = yield* Deferred.make<void>()
+      const publishAcceptedControl = yield* Deferred.make<void>()
+      const executed = yield* Ref.make<ReadonlyArray<DeliveryProposalId>>([])
+      const publication = DeliveryAcceptedFactPublication.of({
+        awaitCurrent: Effect.gen(function* () {
+          // Capture the durable prefix before awaiting its projection, as the
+          // production publication boundary does; no future fact is required.
+          const acceptedThrough = yield* Ref.get(durablePosition)
+          yield* Ref.update(freshnessCuts, (cuts) => [...cuts, acceptedThrough])
+          yield* Deferred.succeed(firstCut, undefined)
+          yield* Deferred.await(publishAcceptedControl)
+          return { _tag: "DeliveryAcceptedPublicationBoundary", acceptedThrough, runId } as const
+        })
+      })
+      const runtime = yield* runDeliveryRuntimePhase(
+        runId,
+        relation,
+        DeliveryRuntimePhase.ActiveRefreshPostG2([boundary])
+      ).pipe(
+        Effect.provideService(DeliveryAcceptedFactPublication, publication),
+        Effect.provide(identityLayers),
+        Effect.provideService(
+          DeliveryActionExecutor,
+          DeliveryActionExecutor.of({
+            execute: ({ proposal }) =>
+              Effect.gen(function* () {
+                expect(proposal.id).toBe(read.id)
+                yield* Ref.update(executed, (ids) => [...ids, proposal.id])
+                yield* Ref.set(durablePosition, acceptedRead)
+                yield* relation.publish({ ...initial, acceptedAt: acceptedRead })
+                return { _tag: "ActionCompleted", proposalId: proposal.id } satisfies DeliveryActionResult
+              })
+          })
+        ),
+        Effect.forkChild
+      )
+      yield* Deferred.await(firstCut)
+      expect(runtime.pollUnsafe()).toBeUndefined()
+      expect(yield* Ref.get(executed)).toEqual([])
+      yield* relation.publish({
+        ...initial,
+        acceptedAt: acceptedControl,
+        proposedActions: {
+          _tag: "DeliveryProposalsAvailable",
+          freshTaskCandidates: [],
+          isolatedIssues: [],
+          proposals: [blocked, read]
+        }
+      })
+      yield* Deferred.succeed(publishAcceptedControl, undefined)
+      const result = yield* Fiber.join(runtime)
+      expect(result._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+      expect(result.acceptedAt).toBe(acceptedRead)
+      expect(result.proposedActions.proposals).toEqual([blocked])
+      expect(yield* Ref.get(executed)).toEqual([read.id])
+      // One stale-return cut, one action-completion cut, one final current cut.
+      expect(yield* Ref.get(freshnessCuts)).toEqual([acceptedControl, acceptedRead, acceptedRead])
+    })
+  )
+)
+
 const exactHeldPositionReuse = (afterG2: boolean) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -5485,7 +5576,16 @@ for (const { capturedBoundary, phase } of [
             taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(held.length), held })
           }
           const relation = yield* dynamicEvaluationSignal(blocked)
+          const freshnessCuts = yield* Ref.make(0)
           const result = yield* runDeliveryRuntimePhase(runId, relation, phase).pipe(
+            Effect.provideService(
+              DeliveryAcceptedFactPublication,
+              DeliveryAcceptedFactPublication.of({
+                awaitCurrent: Ref.update(freshnessCuts, (count) => count + 1).pipe(
+                  Effect.andThen(defaultAcceptedFactPublication.awaitCurrent)
+                )
+              })
+            ),
             Effect.provide(identityLayers),
             Effect.provideService(
               DeliveryActionExecutor,
@@ -5494,6 +5594,7 @@ for (const { capturedBoundary, phase } of [
           )
 
           expect(result._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+          expect(yield* Ref.get(freshnessCuts)).toBe(1)
           if (result._tag !== "TaskWorkAdmissionStalledRuntimeQuiescence") {
             return yield* Effect.die("capacity-blocked fresh candidate must produce stalled quiescence")
           }
