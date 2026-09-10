@@ -60,6 +60,12 @@ export type ProductionCliHostRunner<E, R> = (
 
 const runConfiguration = { version: "0.0.0" }
 
+/** Redacts only the typed production stdout failure while preserving every other failure identity. */
+const mapProductionOutputFailure = <E>(failure: E): E | ProductionCliOutputError => {
+  const known = knownProductionCliFailure(failure)
+  return known instanceof ProductionCliOutputError ? known : failure
+}
+
 /** Builds the explicit dry/production command over one injected production host. */
 export const makeProductionCli = <EHost, RHost>(
   runProductionHost: ProductionCliHostRunner<EHost, RHost>,
@@ -148,12 +154,7 @@ export const makeProductionCli = <EHost, RHost>(
                 )
               )
             )
-          ).pipe(
-            Effect.mapError((failure) => {
-              const known = knownProductionCliFailure(failure)
-              return known instanceof ProductionCliOutputError ? known : failure
-            })
-          )
+          ).pipe(Effect.mapError(mapProductionOutputFailure))
         }).pipe(
           Effect.tapError((failure) => {
             if (!production && failure instanceof TraceOutputError) return Effect.void
@@ -170,12 +171,7 @@ export const makeProductionCli = <EHost, RHost>(
                 if (known === undefined) return Effect.void
                 const writeFailure = output
                   .writeLine(encodeProductionCliRecord(productionCliFailureRecord(known)))
-                  .pipe(
-                    Effect.mapError((failure) => {
-                      const mapped = knownProductionCliFailure(failure)
-                      return mapped instanceof ProductionCliOutputError ? mapped : failure
-                    })
-                  )
+                  .pipe(Effect.mapError(mapProductionOutputFailure))
                 return known._tag === "ProductionCliDeliveryError" ? writeFailure.pipe(Effect.ignore) : writeFailure
               })
             )

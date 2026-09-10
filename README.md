@@ -62,9 +62,10 @@ only to that repository (metadata read, issues read/write, and contents
 read for the local clone), keep both credentials in the environment,
 and never put either value in the JSON file. The complete, copyable
 [disposable production walkthrough](docs/DEVELOPMENT.md#disposable-production-repository-walkthrough)
-creates disjoint local state and worktree paths, explains every configuration
-field and consequence, shows the version-1 NDJSON records, exercises recovery,
-and disposes or deliberately preserves the exact resources.
+creates disjoint local state and worktree paths, lists every non-secret
+configuration field, explains the state-changing consequences, shows the
+version-1 NDJSON records, exercises recovery, and disposes or deliberately
+preserves the exact resources.
 
 Production is selected only with an explicit GitHub target and a normalized
 absolute configuration path. Its exact public command is:
