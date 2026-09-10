@@ -18,7 +18,7 @@ export interface SqliteStorageCheckpoint {
 }
 
 /** Exact persisted content and position established while building a checkpoint. */
-export interface SqliteStorageRecordEvidence {
+interface SqliteStorageRecordEvidence {
   readonly event: WorkflowJournalEvent
   readonly position: JournalPosition
 }
