@@ -5234,6 +5234,10 @@ it("replays G1 only when its exact run target subjects predecessors and missing 
     [coveragePlanOperation.operationId],
     [coverageAttempt.taskId]
   )
+  const executing = executorReport(9, {
+    _tag: "ExecutorWorkExecuting",
+    correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+  })
   const intent = coverageRecord(10, taskTrackerReadIntent(activeG1))
   const otherTarget = FixtureTarget.make("recovery-activation-other-target")
   const wrongTarget = makeTrackerGraphObservationOperation(
@@ -5267,16 +5271,28 @@ it("replays G1 only when its exact run target subjects predecessors and missing 
   const observed = coverageRecord(11, { ...coverageGraphEvent, operationId: activeG1.operationId })
 
   expect(
-    pendingActiveRefreshGraphReadFor([...coveragePlanRecords(), intent], coverageRunId, coverageTarget, [
+    pendingActiveRefreshGraphReadFor([...coveragePlanRecords(), executing, intent], coverageRunId, coverageTarget, [
       coverageAttempt
     ])
   ).toEqual(activeG1)
+  const settledAfterIntent = executorReport(11, {
+    _tag: "ExecutorWorkSafelySuspended",
+    correlation: plannedAttemptExecutorCorrelation(coverageAttempt)
+  })
+  expect(
+    pendingActiveRefreshGraphReadFor(
+      [...coveragePlanRecords(), executing, intent, settledAfterIntent],
+      coverageRunId,
+      coverageTarget,
+      [coverageAttempt]
+    )
+  ).toEqual(activeG1)
   for (const records of [
-    [...coveragePlanRecords(), coverageRecord(10, taskTrackerReadIntent(wrongTarget))],
-    [...coveragePlanRecords(), coverageRecord(10, taskTrackerReadIntent(wrongSubjects))],
-    [...coveragePlanRecords(), coverageRecord(10, taskTrackerReadIntent(wrongPredecessors))],
-    [...coveragePlanRecords(), coverageRecord(10, taskTrackerReadIntent(wrongCause))],
-    [...coveragePlanRecords(), intent, observed]
+    [...coveragePlanRecords(), executing, coverageRecord(10, taskTrackerReadIntent(wrongTarget))],
+    [...coveragePlanRecords(), executing, coverageRecord(10, taskTrackerReadIntent(wrongSubjects))],
+    [...coveragePlanRecords(), executing, coverageRecord(10, taskTrackerReadIntent(wrongPredecessors))],
+    [...coveragePlanRecords(), executing, coverageRecord(10, taskTrackerReadIntent(wrongCause))],
+    [...coveragePlanRecords(), executing, intent, observed]
   ]) {
     expect(pendingActiveRefreshGraphReadFor(records, coverageRunId, coverageTarget, [coverageAttempt])).toBeUndefined()
   }
@@ -5854,9 +5870,7 @@ it("rejects a pending active-refresh graph without its exact plan or Run identit
     [coverageAttempt.taskId]
   )
   const pending = coverageRecord(1, taskTrackerReadIntent(operation))
-  expect(pendingActiveRefreshGraphReadFor([pending], coverageRunId, coverageTarget, [coverageAttempt])).toEqual(
-    operation
-  )
+  expect(pendingActiveRefreshGraphReadFor([pending], coverageRunId, coverageTarget, [coverageAttempt])).toBeUndefined()
 
   const foreignRun = coverageRecord(1, taskTrackerReadIntent(operation), RunId.make("recovery-activation-foreign-run"))
   expect(

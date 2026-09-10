@@ -41,6 +41,7 @@ import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import {
   TrackerAdapterReadContext,
@@ -55,6 +56,8 @@ import { InitialControlPolicy, initialRunPolicyRevision, RunControlPolicy } from
 import { taskWorkCapacityControlLayer } from "../../control/task-work-capacity.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { DeliveryRuntimeResources } from "../delivery/delivery-runtime-resources.js"
+import { makeReactiveDeliveryRelationsLayer } from "../delivery/reactive-delivery-relations.js"
+import { DeliveryAcceptedFactPublication } from "../delivery/delivery-accepted-fact-publication.js"
 import { makeFreshTaskAdmissionTestBasis } from "../../../test/support/fresh-task-admission.js"
 import { Journal } from "../delivery/journal.js"
 import { DeliveryRuntimeObservationPublication } from "../delivery/delivery-runtime-observation.js"
@@ -150,10 +153,12 @@ import {
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { requiredPlannedAttemptPositionsOf } from "./required-planned-attempt-positions.js"
 import {
+  ApplicationExitShell,
   type ApplicationExitShellService,
   type ApplicationProcessLifecycleService,
   makeApplicationExitShell
 } from "../application-exit/application-shell.js"
+import { RunReactivationHint, RunReactivationOwner, runReactivationOwnerLayer } from "./run-reactivation-owner.js"
 import { ApplicationExitDiagnostic, ApplicationExitResult } from "../application-exit/lifecycle-decision.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { controlDirectionApplicationLayer } from "../../workflow/protocols/control-direction-application/protocol.js"
@@ -356,6 +361,25 @@ const publicationBundle = (runId: RunId, acceptedAt: JournalPosition | null = nu
     trackerGraphProposals: []
   },
   publication: { exactEvidence: [], graph: TrackerGraphState.cases.GraphNotEstablished.make({}), policy: runtimePolicy }
+})
+
+const makeRuntimeCreatedRelations = Effect.fn("JournaledRunBootstrapTest.makeRuntimeCreatedRelations")(function* (
+  runId: RunId,
+  target: TrackerTarget
+) {
+  const journal = yield* Journal
+  const resources = yield* DeliveryRuntimeResources
+  const recovery = yield* RunRecoveryProjection
+  return yield* makeReactiveDeliveryRelationsLayer(
+    runId,
+    target,
+    journal,
+    {
+      readDeliveryProjection: recovery.readDeliveryProjection,
+      reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
+    },
+    resources.integrationTargets
+  )
 })
 
 const runtimeLayer = (
@@ -3267,6 +3291,49 @@ it.effect("does not turn the activation's initial publication into another Run a
   ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
+it.effect("runtime-created relations notify scheduling and ambient publication observers", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("journaled-bootstrap-runtime-publication")
+      const runId = yield* freshWorkflowRunId(target)
+      const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+      const storage = Context.get(journalContext, JournalStore)
+      const observed = yield* Ref.make<ReadonlyArray<DeliveryRelationInputBundle>>([])
+      const hints = yield* Ref.make(0)
+      const observer = DeliveryRelationPublicationObserver.of({
+        observe: (bundle) => Ref.update(observed, (current) => [...current, bundle])
+      })
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      yield* bootstrap.registerAcceptedRunReactivationObservers({
+        control: () => Effect.void,
+        acceptedFactPublication: () => Ref.update(hints, (current) => current + 1)
+      })
+      yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.gen(function* () {
+            const relations = yield* makeRuntimeCreatedRelations(runId, target)
+            yield* completedFinalityProof(runId, target)
+            yield* DeliveryAcceptedFactPublication.use((publication) => publication.awaitCurrent).pipe(
+              Effect.provide(relations)
+            )
+            expect(yield* Ref.get(hints)).toBeGreaterThan(0)
+            const bundles = yield* Ref.get(observed)
+            expect(bundles[0]?.actionInputs.runtimeFacts.acceptedAt).toBe(1)
+            expect(bundles.at(-1)?.publication.graph._tag).toBe("GraphEstablished")
+            expect(bundles.at(-1)?.actionInputs.runtimeFacts.acceptedAt).toBe(
+              (yield* storage.read(runId)).at(-1)?.position
+            )
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          })
+        )
+        .pipe(Effect.provideService(DeliveryRelationPublicationObserver, observer))
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 it.effect("signals once only when a relation publication advances beyond the activation entry position", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -3275,6 +3342,7 @@ it.effect("signals once only when a relation publication advances beyond the act
       const journalContext = yield* Layer.build(memoryJournalStoreLayer)
       const storage = Context.get(journalContext, JournalStore)
       const hints = yield* Ref.make(0)
+      const ambientPositions = yield* Ref.make<ReadonlyArray<JournalPosition | null>>([])
       const observerCapture = yield* Deferred.make<DeliveryRelationPublicationObservation>()
       const bootstrap = yield* buildBootstrap(
         runId,
@@ -3295,23 +3363,155 @@ it.effect("signals once only when a relation publication advances beyond the act
         acceptedFactPublication: () => Ref.update(hints, (current) => current + 1)
       })
 
-      yield* bootstrap.activate(
-        target,
-        Effect.succeed(initialPolicy),
-        runId,
-        Effect.gen(function* () {
-          const observer = yield* Deferred.await(observerCapture)
-          yield* observer.observe(publicationBundle(runId, JournalPosition.make(1)))
-          yield* observer.observe(publicationBundle(runId, JournalPosition.make(2)))
-          yield* observer.observe(publicationBundle(runId, JournalPosition.make(2)))
-          yield* observer.observe(publicationBundle(runId, JournalPosition.make(1)))
-          return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
-        })
-      )
+      yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.gen(function* () {
+            const observer = yield* Deferred.await(observerCapture)
+            expect(yield* DeliveryRelationPublicationObserver).toBe(observer)
+            yield* observer.observe(publicationBundle(runId, JournalPosition.make(1)))
+            yield* observer.observe(publicationBundle(runId, JournalPosition.make(2)))
+            yield* observer.observe(publicationBundle(runId, JournalPosition.make(2)))
+            yield* observer.observe(publicationBundle(runId, JournalPosition.make(1)))
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          })
+        )
+        .pipe(
+          Effect.provideService(DeliveryRelationPublicationObserver, {
+            observe: (bundle) =>
+              Ref.update(ambientPositions, (positions) => [...positions, bundle.actionInputs.runtimeFacts.acceptedAt])
+          })
+        )
 
       expect(yield* Ref.get(hints)).toBe(1)
+      expect(yield* Ref.get(ambientPositions)).toEqual([1, 2, 2, 1])
     })
   ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
+it.effect(
+  "coalesces runtime accepted publications into one nonconcurrent ordinary activation after active refresh returns",
+  () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const target = FixtureTarget.make("journaled-bootstrap-publication-owner")
+        const runId = yield* freshWorkflowRunId(target)
+        const journalContext = yield* Layer.build(memoryJournalStoreLayer)
+        const storage = Context.get(journalContext, JournalStore)
+        const applicationExit = yield* makeApplicationExitShell(defaultOwnership, { requestEnd: () => Effect.void })
+        const bootstrap = yield* buildBootstrap(runId, storage, defaultTrackerGraphReader, applicationExit)
+        const timeline = yield* Ref.make<ReadonlyArray<string>>([])
+        const concurrent = yield* Ref.make(0)
+        const maximumConcurrent = yield* Ref.make(0)
+        const ordinaryEntries = yield* Ref.make(0)
+        const hints = yield* Ref.make(0)
+        const startupReturned = yield* Deferred.make<void>()
+        const trailingReturned = yield* Deferred.make<void>()
+        const publicationPositions = yield* Ref.make<ReadonlyArray<JournalPosition | null>>([])
+        const enter = (kind: string) =>
+          Effect.gen(function* () {
+            yield* Ref.update(timeline, (current) => [...current, `${kind}:enter`])
+            const active = yield* Ref.updateAndGet(concurrent, (current) => current + 1)
+            yield* Ref.update(maximumConcurrent, (maximum) => Math.max(maximum, active))
+          })
+        const returned = (kind: string) =>
+          Effect.gen(function* () {
+            yield* Ref.update(timeline, (current) => [...current, `${kind}:return`])
+            yield* Ref.update(concurrent, (current) => current - 1)
+          })
+        const program = (refresh: boolean) =>
+          Effect.gen(function* () {
+            const relations = yield* makeRuntimeCreatedRelations(runId, target)
+            if (refresh) {
+              for (const ordinal of [1, 2, 3]) {
+                yield* completedFinalityProof(runId, target, OperationId.make(`accepted-publication:${ordinal}`))
+                yield* DeliveryAcceptedFactPublication.use((publication) => publication.awaitCurrent).pipe(
+                  Effect.provide(relations)
+                )
+              }
+              // Missing scheduling callbacks fail here rather than leaving the trailing-entry wait hanging.
+              expect(yield* Ref.get(hints)).toBeGreaterThanOrEqual(3)
+            }
+            return finalityProof(RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" }))
+          })
+        const ownerLayer = runReactivationOwnerLayer({
+          runId,
+          activationInterval: "1 hour",
+          failureCooldown: "1 second",
+          readControl: bootstrap.readRunReactivationControl(target, runId),
+          isTerminationFailure: () => false,
+          onFailure: (failure) => Effect.die(failure),
+          installAcceptedRunReactivationObservers: (observers) =>
+            bootstrap.registerAcceptedRunReactivationObservers({
+              control: observers.control,
+              acceptedFactPublication: () =>
+                Ref.update(hints, (current) => current + 1).pipe(Effect.andThen(observers.acceptedFactPublication))
+            }),
+          activate: (opportunity) =>
+            Effect.gen(function* () {
+              const count = yield* Ref.updateAndGet(ordinaryEntries, (current) => current + 1)
+              yield* enter("Ordinary")
+              const decision = yield* bootstrap.activate(
+                target,
+                Effect.succeed(initialPolicy),
+                runId,
+                program(false),
+                opportunity
+              )
+              yield* returned("Ordinary")
+              yield* Deferred.succeed(count === 1 ? startupReturned : trailingReturned, undefined)
+              return decision
+            }).pipe(Effect.orDie),
+          activateActiveWorkAuthorityRefresh: (source) =>
+            Effect.gen(function* () {
+              yield* enter("ActiveWorkAuthorityRefresh")
+              const decision = yield* bootstrap.activateActiveWorkAuthorityRefresh(
+                target,
+                Effect.succeed(initialPolicy),
+                runId,
+                () => program(true),
+                source
+              )
+              expect(decision._tag).toBe("RunMustRemainActive")
+              yield* returned("ActiveWorkAuthorityRefresh")
+              return decision
+            }).pipe(Effect.orDie)
+        }).pipe(Layer.provide(Layer.succeed(ApplicationExitShell, applicationExit)))
+        yield* Effect.gen(function* () {
+          const owner = yield* RunReactivationOwner
+          yield* Deferred.await(startupReturned)
+          yield* owner.hint(RunReactivationHint.TrackerNotification())
+          yield* Deferred.await(trailingReturned)
+          yield* TestClock.adjust("30 minutes")
+          expect(yield* Ref.get(ordinaryEntries)).toBe(2)
+          expect(yield* Ref.get(maximumConcurrent)).toBe(1)
+          expect(yield* Ref.get(timeline)).toEqual([
+            "Ordinary:enter",
+            "Ordinary:return",
+            "ActiveWorkAuthorityRefresh:enter",
+            "ActiveWorkAuthorityRefresh:return",
+            "Ordinary:enter",
+            "Ordinary:return"
+          ])
+          const records = yield* storage.read(runId)
+          const acceptedPositions = records
+            .filter(({ event }) => event._tag === "TaskTrackerFactsObserved")
+            .map(({ position }) => position)
+          expect(acceptedPositions).toHaveLength(3)
+          expect(yield* Ref.get(publicationPositions)).toEqual(expect.arrayContaining(acceptedPositions))
+          expect(records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
+          expect(records.filter(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toEqual([])
+        }).pipe(
+          Effect.provide(ownerLayer),
+          Effect.provideService(DeliveryRelationPublicationObserver, {
+            observe: (bundle) =>
+              Ref.update(publicationPositions, (current) => [...current, bundle.actionInputs.runtimeFacts.acceptedAt])
+          })
+        )
+      })
+    ).pipe(Effect.provide(NodeCrypto.layer))
 )
 
 it.effect("observes live terminal executor change once and releases the exact position", () =>

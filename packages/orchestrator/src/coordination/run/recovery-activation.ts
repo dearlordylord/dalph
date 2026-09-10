@@ -118,7 +118,9 @@ import { decideTargetLineage } from "../../workflow/protocols/git-reconciliation
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
 import {
+  acceptedExecutingAttemptsForAuthorityCheckIntent,
   continuationTrackerReadHasExactPlanPredecessor,
+  exactAcceptedExecutingPlansBefore,
   latestContinuationTrackerReadStatusAfter,
   type ContinuationTrackerReadOperation,
   type ContinuationTrackerReadStatus
@@ -2752,24 +2754,17 @@ export const pendingActiveRefreshGraphReadFor = (
   target: NonNullable<ReturnType<typeof exactWorkflowRunTargetFor>>,
   activeAttempts: ReadonlyArray<PlannedTaskAttempt>
 ): TrackerGraphObservationOperation | undefined => {
-  const expectedTaskIds = activeAttempts.map(({ taskId }) => taskId).toSorted()
-  const expectedPredecessorOperationIds = activeAttempts
-    .flatMap((plannedAttempt) => {
-      const operationId = recordedTaskAttemptPlanFor(records, plannedAttempt)?.operationId
-      return operationId === undefined ? [] : [operationId]
-    })
-    .toSorted()
   return records.findLast((record): record is TrackerGraphReadIntentRecord => {
     const { event } = record
     if (event._tag !== "TaskTrackerReadIntentRecorded" || event.operation._tag !== "ReadTrackerGraph") return false
-    if (event.operation.cause._tag !== "ExecutingWorkAuthorityCheck") return false
     if (record.runId !== runId) return false
     if (trackerGraphReadHasOutcome(records, event.operation.operationId)) return false
     if (taskTrackerTargetKey(event.operation.target) !== taskTrackerTargetKey(target)) return false
-    if (!sameStringSequence([...event.operation.readShape.explicitlyCoveredTaskIds].toSorted(), expectedTaskIds)) {
-      return false
-    }
-    return sameStringSequence([...event.operation.predecessorOperationIds].toSorted(), expectedPredecessorOperationIds)
+    const authorizedAttempts = acceptedExecutingAttemptsForAuthorityCheckIntent(records, record)
+    if (authorizedAttempts === undefined || authorizedAttempts.length !== activeAttempts.length) return false
+    return activeAttempts.every((plannedAttempt) =>
+      authorizedAttempts.some((candidate) => plannedTaskAttemptEquivalence(candidate, plannedAttempt))
+    )
   })?.event.operation
 }
 
@@ -2810,10 +2805,9 @@ const activeRefreshGraphReadSelectionFor = (
   const representativeAttempt = activeAttempts[0]
   if (representativeAttempt === undefined) return undefined
   const baseline = activationBaselinePosition.value
-  const predecessorOperationIds = activeAttempts.flatMap((plannedAttempt) => {
-    const plan = recordedTaskAttemptPlanFor(records, plannedAttempt)
-    return plan === undefined ? [] : [plan.operationId]
-  })
+  const activePlans = exactAcceptedExecutingPlansBefore(records, runState.runId, activeAttempts)
+  if (activePlans === undefined) return undefined
+  const predecessorOperationIds = activePlans.map(({ operationId }) => operationId)
   const pendingOperation = pendingActiveRefreshGraphReadFor(records, runState.runId, target, activeAttempts)
   return {
     _tag: "ActiveRefreshGraphReadSelection",

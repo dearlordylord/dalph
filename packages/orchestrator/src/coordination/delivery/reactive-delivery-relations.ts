@@ -17,6 +17,7 @@ import {
   isSafeContinuationRevalidationEligibility,
   type SafeContinuationRevalidationEligibility
 } from "../frontier/fresh-facts.js"
+import { hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck } from "../frontier/safe-continuation-revalidation-eligibility.js"
 import { readDeliveryProjectionFrom, type RunRecoveryProjectionSource } from "../run/recovery-activation.js"
 import { journaledCurrentDeliveryFrameOf, type CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import {
@@ -141,6 +142,26 @@ const activeRefreshNeedsCurrentGraph = (
   )
 }
 
+/**
+ * An ordinary activation keeps a Run-level graph proposal available when an
+ * exact accepted-Safe lifecycle reopen has reached its continuation graph
+ * read. The planner may select that exact C-covered read first; either read
+ * establishes activation-local graph knowledge without granting capacity or
+ * Resume authority from this predicate.
+ */
+const ordinaryContinuationNeedsCurrentGraph = (
+  journal: JournalProjection,
+  opportunity: RunActivationOpportunityValue,
+  recovered: ReadonlyArray<RunnableFrontierTransition>
+): boolean =>
+  opportunity._tag === "OrdinaryRunEntry" &&
+  journal.graph._tag === "GraphNotEstablished" &&
+  recovered.some(
+    (transition) =>
+      transition._tag === "ObservePlannedAttemptContinuationGraph" &&
+      hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(journal.records, transition.plannedAttempt)
+  )
+
 const trackerGraphProposalsOf = (
   journal: JournalProjection,
   recoveredTransitionCount: number,
@@ -217,10 +238,11 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
     )
     const admittedFresh =
       admittedFreshResult._tag === "Success" ? admittedFreshResult.success : yield* admittedFreshResult.failure
-    const currentGraphRequired = activeRefreshNeedsCurrentGraph(journal, opportunity)
+    const safeContinuationRevalidations = safeContinuationRevalidationsOf(projection)
+    const activeCurrentGraphRequired = activeRefreshNeedsCurrentGraph(journal, opportunity)
     const recovered = eligibleRecoveredTransitions(journal, projection, freshTaskIds).filter((transition) => {
       if (
-        !currentGraphRequired ||
+        !activeCurrentGraphRequired ||
         opportunity._tag !== "ActiveWorkAuthorityRefresh" ||
         !transitionHasPlannedAttempt(transition)
       ) {
@@ -228,9 +250,10 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
       }
       return !activeWorkAuthorityRefreshSubjectsContain(opportunity.subjects, transition.plannedAttempt)
     })
+    const ordinaryCurrentGraphRequired = ordinaryContinuationNeedsCurrentGraph(journal, opportunity, recovered)
+    const currentGraphRequired = activeCurrentGraphRequired || ordinaryCurrentGraphRequired
     const transitions = [...recovered, ...admittedFresh.map(({ transition }) => transition)]
     const records = journal.records
-    const safeContinuationRevalidations = safeContinuationRevalidationsOf(projection)
     const integrationResponsibilities = deriveIntegrationAdmission(records).responsibilities
     const proposalContributions = deliveryProposalsOf({
       acceptedAt: journal.position,

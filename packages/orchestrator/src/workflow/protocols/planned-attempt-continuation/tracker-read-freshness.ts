@@ -1,10 +1,16 @@
-import { type PlannedTaskAttempt, plannedTaskAttemptEquivalence } from "@dalph/contracts"
+import { type PlannedTaskAttempt, type RunId, plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
-import { intentRecordKey, outcomeRecordKey } from "../../../workflow-journal/record-key.js"
+import {
+  attemptPlanRecordKey,
+  intentRecordKey,
+  outcomeRecordKey,
+  plannedAttemptReplacedRecordKey
+} from "../../../workflow-journal/record-key.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import type { WorkflowOperation } from "../../registry/operation.js"
 import { recordedTaskAttemptPlans } from "../task-attempt-planning/journal-evidence.js"
+import { currentAcceptedPlannedAttemptExecutorLifecycleFor } from "../planned-attempt-executor-work/evidence.js"
 
 /** Tracker reads whose facts can authorize a resumed planned attempt. */
 export type ContinuationTrackerReadOperation =
@@ -44,6 +50,111 @@ const continuationTrackerReadMatchesTask = (
   if (!operationNamesTask(operation, target, taskId)) return false
   if (plannedAttempt === undefined) return true
   return continuationTrackerReadHasExactPlanPredecessor(records, operation, plannedAttempt)
+}
+
+type RecordedTaskAttemptPlan = typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
+
+const recordedPlanEntriesBefore = (
+  records: ReadonlyArray<JournalRecord>,
+  runId: RunId,
+  before?: JournalPosition
+): ReadonlyArray<RecordedTaskAttemptPlan> =>
+  records.flatMap((record) => {
+    if (record.runId !== runId || (before !== undefined && record.position >= before)) return []
+    if (
+      record.event._tag === "TaskAttemptPlanned" &&
+      record.key === attemptPlanRecordKey(record.event.operation.plannedAttempt.attemptId)
+    ) {
+      return [record.event.operation]
+    }
+    if (
+      record.event._tag === "PlannedAttemptReplaced" &&
+      record.event.subject.plannedAttempt.runId === runId &&
+      record.key === plannedAttemptReplacedRecordKey(record.event.subject.plannedAttempt.attemptId)
+    ) {
+      return [record.event.successorPlan]
+    }
+    return []
+  })
+
+/**
+ * Resolves one durable same-Run plan and accepted Executing lifecycle for each
+ * active attempt at a boundary. Missing, duplicate, foreign, or same-task
+ * competing plans fail closed instead of shrinking the causal predecessor set.
+ */
+export const exactAcceptedExecutingPlansBefore = (
+  records: ReadonlyArray<JournalRecord>,
+  runId: RunId,
+  plannedAttempts: ReadonlyArray<PlannedTaskAttempt>,
+  before?: JournalPosition
+): ReadonlyArray<RecordedTaskAttemptPlan> | undefined => {
+  if (
+    plannedAttempts.length === 0 ||
+    plannedAttempts.some(({ runId: attemptRunId }) => attemptRunId !== runId) ||
+    new Set(plannedAttempts.map(({ taskId }) => taskId)).size !== plannedAttempts.length
+  ) {
+    return undefined
+  }
+  const prefix = records.filter(
+    (record) => record.runId === runId && (before === undefined || record.position < before)
+  )
+  const planEntries = recordedPlanEntriesBefore(records, runId, before)
+  const resolved = plannedAttempts.map((plannedAttempt) =>
+    planEntries.filter(
+      (operation) =>
+        operation.plannedAttempt.runId === runId &&
+        plannedTaskAttemptEquivalence(operation.plannedAttempt, plannedAttempt)
+    )
+  )
+  if (
+    resolved.some(({ length }) => length !== 1) ||
+    plannedAttempts.some(
+      (plannedAttempt) => currentAcceptedPlannedAttemptExecutorLifecycleFor(prefix, plannedAttempt)._tag !== "Executing"
+    )
+  ) {
+    return undefined
+  }
+  return resolved.flatMap((entries) => entries)
+}
+
+/**
+ * Validates the durable authority-check intent's exact bijection: every
+ * predecessor is one same-Run plan, every covered task has one such plan, and
+ * every named attempt had accepted Executing authority before the intent.
+ */
+export const acceptedExecutingAttemptsForAuthorityCheckIntent = (
+  records: ReadonlyArray<JournalRecord>,
+  intent: JournalRecord
+): ReadonlyArray<PlannedTaskAttempt> | undefined => {
+  if (intent.event._tag !== "TaskTrackerReadIntentRecorded" || intent.event.operation._tag !== "ReadTrackerGraph") {
+    return undefined
+  }
+  const operation = intent.event.operation
+  if (
+    intent.key !== intentRecordKey(operation.operationId) ||
+    operation.cause._tag !== "ExecutingWorkAuthorityCheck" ||
+    operation.predecessorOperationIds.length === 0 ||
+    operation.readShape.explicitlyCoveredTaskIds.length === 0
+  ) {
+    return undefined
+  }
+  const planEntries = recordedPlanEntriesBefore(records, intent.runId, intent.position)
+  const namedEntries = operation.predecessorOperationIds.map((operationId) =>
+    planEntries.filter((plan) => plan.operationId === operationId)
+  )
+  if (namedEntries.some(({ length }) => length !== 1)) return undefined
+  const plannedAttempts = namedEntries.flatMap((entries) => entries.map((plan) => plan.plannedAttempt))
+  const exactPlans = exactAcceptedExecutingPlansBefore(records, intent.runId, plannedAttempts, intent.position)
+  if (exactPlans === undefined) return undefined
+  const coveredTaskIds = [...operation.readShape.explicitlyCoveredTaskIds].toSorted()
+  const plannedTaskIds = plannedAttempts.map(({ taskId }) => taskId).toSorted()
+  if (
+    coveredTaskIds.length !== plannedTaskIds.length ||
+    !coveredTaskIds.every((taskId, index) => taskId === plannedTaskIds[index])
+  ) {
+    return undefined
+  }
+  return plannedAttempts
 }
 
 /**

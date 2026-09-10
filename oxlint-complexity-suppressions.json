@@ -177,7 +177,8 @@
   },
   "packages/orchestrator/src/workflow/protocols/planned-attempt-continuation/tracker-read-freshness.ts": {
     "complexity": {
-      "count": 1
+      "count": 3,
+      "justification": "The two added validators keep the exact same-Run plan, accepted Executing lifecycle, intent predecessor bijection, and covered-task identity checks in their fail-closed record-aware boundaries; the shared durable plan-entry extraction is already separate, while splitting these remaining evidence clauses would obscure the causal proof without changing behavior."
     }
   }
 }
