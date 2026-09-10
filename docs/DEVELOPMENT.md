@@ -529,24 +529,48 @@ git -C "${DALPH_DEMO_COMMON_DIRECTORY}" worktree list --porcelain
 
 Delete exactly `YOUR_LOGIN/dalph-production-walkthrough` in GitHub's Danger
 Zone using the repository name confirmation. The deliberately restricted token
-above cannot delete it. Only after GitHub confirms that exact deletion, remove
-the local root with this guarded command:
+above cannot delete it. Only after GitHub confirms that exact deletion, retire
+the local root with this guarded command. It moves the complete root into a
+fresh sibling retention directory, so the local files remain recoverable:
 
 ```bash
-case "${DALPH_DEMO_ROOT}" in
-  "${DALPH_DEMO_TEMP_PARENT}"/dalph-production-walkthrough.*) ;;
+(
+case "${DALPH_DEMO_ROOT##*/}" in
+  dalph-production-walkthrough.?*) ;;
   *) printf '%s\n' "refusing unexpected cleanup root: ${DALPH_DEMO_ROOT}" >&2; exit 1 ;;
 esac
-test -f "${DALPH_DEMO_ROOT}/.dalph-walkthrough-repository"
-test "$(<"${DALPH_DEMO_ROOT}/.dalph-walkthrough-repository")" = \
-  "${DALPH_DEMO_OWNER}/${DALPH_DEMO_REPOSITORY}"
-rm -rf -- "${DALPH_DEMO_ROOT}"
+if test -n "${DALPH_DEMO_OWNER}" &&
+  test "${DALPH_DEMO_REPOSITORY}" = dalph-production-walkthrough &&
+  test "${DALPH_DEMO_ROOT%/*}" = "${DALPH_DEMO_TEMP_PARENT}" &&
+  test ! -L "${DALPH_DEMO_ROOT}" &&
+  test "$(cd "${DALPH_DEMO_ROOT}" && pwd -P)" = "${DALPH_DEMO_ROOT}" &&
+  test ! -L "${DALPH_DEMO_ROOT}/.dalph-walkthrough-repository" &&
+  test -f "${DALPH_DEMO_ROOT}/.dalph-walkthrough-repository" &&
+  DALPH_DEMO_MARKER="$(<"${DALPH_DEMO_ROOT}/.dalph-walkthrough-repository")" &&
+  test "${DALPH_DEMO_MARKER}" = "${DALPH_DEMO_OWNER}/${DALPH_DEMO_REPOSITORY}"
+then
+  DALPH_DEMO_RETAINED="$(mktemp -d "${DALPH_DEMO_TEMP_PARENT}/dalph-retained.XXXXXX")" || exit 1
+  mv -- "${DALPH_DEMO_ROOT}" "${DALPH_DEMO_RETAINED}/workspace" || exit 1
+  printf 'Local files retained at: %s/workspace\n' "${DALPH_DEMO_RETAINED}"
+else
+  printf '%s\n' "refusing cleanup: root or repository marker did not verify" >&2
+  exit 1
+fi
+)
 unset GITHUB_TOKEN DALPH_CODEX_PROVIDER_CREDENTIAL
 ```
 
-The path-shape and marker checks are fail-closed guards around one exact
-disposable root. A failed guard, failed GitHub deletion, live process, or
-unsettled ambiguity means preserve rather than broaden or repeat cleanup.
+The subshell exits on a failed guard or move even when Bash `errexit` is off;
+the credential cleanup afterward does not authorize another filesystem action.
+The path and marker checks guard one exact disposable root. A failed guard,
+failed GitHub deletion, live process, or unsettled ambiguity means preserve
+rather than broaden or repeat cleanup. If moving fails, inspect both exact
+locations before doing anything else. Retained files are not an active
+workspace: Git worktree pointers and configuration still name the original
+paths. To inspect them at their original paths, restore the complete retained
+`workspace` directory to the now-absent exact `DALPH_DEMO_ROOT`; the deleted
+GitHub repository is not restored by this local recovery. Permanent deletion
+of retained files is a separate, deliberate operator action.
 
 ### Coverage and output budgets
 
