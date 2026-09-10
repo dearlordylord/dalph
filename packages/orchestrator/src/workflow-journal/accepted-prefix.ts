@@ -15,7 +15,7 @@ export interface JournalPrefixIdentity {
 
 const identityByPrefix = new WeakMap<AcceptedJournalPrefix, JournalPrefixIdentity>()
 
-const prefixIdentity = (prefix: AcceptedJournalPrefix): JournalPrefixIdentity => {
+export const acceptedJournalPrefixIdentity = (prefix: AcceptedJournalPrefix): JournalPrefixIdentity => {
   const existing = identityByPrefix.get(prefix)
   if (existing !== undefined) return existing
   const identity = { [JournalPrefixIdentityTypeId]: Symbol() }
@@ -63,7 +63,11 @@ export const appendValidatedJournalRecord = (
     [AcceptedJournalPrefixTypeId]: true,
     runId: prior.runId
   })
-  provenanceByPrefix.set(next, { [JournalSuccessorProvenanceTypeId]: true, predecessor: prefixIdentity(prior), record })
+  provenanceByPrefix.set(next, {
+    [JournalSuccessorProvenanceTypeId]: true,
+    predecessor: acceptedJournalPrefixIdentity(prior),
+    record
+  })
   return next
 }
 
