@@ -679,6 +679,20 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
         if (Option.isSome(exit) && Exit.isFailure(exit.value)) return yield* Effect.failCause(exit.value.cause)
       })
 
+      // A control can already be durable while its relation publication is
+      // still catching up. Capture that exact Run's accepted prefix before
+      // returning a capacity wait, without awaiting a future report or hint.
+      const capacityWaitHasNewerAcceptedPublication = Effect.fn(
+        "DeliveryRuntime.capacityWaitHasNewerAcceptedPublication"
+      )(function* (quiescence: DeliveryRuntimeQuiescence) {
+        if (quiescence._tag !== "TaskWorkAdmissionStalledRuntimeQuiescence") return false
+        const through = yield* acceptedFactPublication.awaitCurrent
+        if (through.runId !== expectedRunId) {
+          return yield* new DeliveryRuntimeRunMismatch({ actualRunIds: [through.runId], expectedRunId })
+        }
+        return quiescence.acceptedAt === null || quiescence.acceptedAt < through.acceptedThrough
+      })
+
       for (;;) {
         const current = Option.getOrThrow(yield* Ref.get(latest))
         const activeRefreshG2Pending =
@@ -689,18 +703,9 @@ export const runDeliveryRuntimePhase = Effect.fn("DeliveryRuntime.runPhase")(fun
 
         const quiescence = yield* runtimeQuiescence()
         if (Option.isSome(quiescence)) {
-          // A control can already be durable while its relation publication is
-          // still catching up. Before returning a capacity wait, consume that
-          // accepted prefix; do not wait for a future executor report or hint.
-          if (quiescence.value._tag === "TaskWorkAdmissionStalledRuntimeQuiescence") {
-            const through = yield* acceptedFactPublication.awaitCurrent
-            if (through.runId !== expectedRunId) {
-              return yield* new DeliveryRuntimeRunMismatch({ actualRunIds: [through.runId], expectedRunId })
-            }
-            if (quiescence.value.acceptedAt === null || quiescence.value.acceptedAt < through.acceptedThrough) {
-              yield* applyRuntimeEvent(yield* Queue.take(events))
-              continue
-            }
+          if (yield* capacityWaitHasNewerAcceptedPublication(quiescence.value)) {
+            yield* applyRuntimeEvent(yield* Queue.take(events))
+            continue
           }
           yield* publishRuntimeObservation()
           return quiescence.value
