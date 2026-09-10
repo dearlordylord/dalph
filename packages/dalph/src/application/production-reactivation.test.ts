@@ -593,7 +593,9 @@ type ProductionRefreshHarnessOptions = {
   readonly changedTask?: "A" | "B"
   readonly threeExecuting?: boolean
   readonly capacityTwo?: boolean
-  readonly freshE?: boolean
+  readonly executingTaskIds?: { readonly primary: TaskId; readonly independent: TaskId; readonly third: TaskId }
+  readonly suspensionSubjectTaskId?: TaskId
+  readonly includeFreshWaitingTaskE?: boolean
   readonly verifyNoSpontaneousActivation?: boolean
   readonly suspensionSettlement?: "Safe" | "Terminal"
   readonly graph?:
@@ -646,12 +648,13 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       const changedTask = options.changedTask ?? "A"
       const target = FixtureTarget.make("production-refresh-healthy-target")
       const runId = RunId.make("production-refresh-healthy-run")
-      const taskId = TaskId.make(options.discoverFAndG === true ? "B" : "A")
-      const independentTaskId = TaskId.make(options.freshE === true || options.discoverFAndG === true ? "C" : "B")
-      const thirdTaskId = TaskId.make(options.freshE === true || options.discoverFAndG === true ? "D" : "C")
+      const taskId = options.executingTaskIds?.primary ?? TaskId.make(options.discoverFAndG === true ? "B" : "A")
+      const independentTaskId =
+        options.executingTaskIds?.independent ?? TaskId.make(options.discoverFAndG === true ? "C" : "B")
+      const thirdTaskId = options.executingTaskIds?.third ?? TaskId.make(options.discoverFAndG === true ? "D" : "C")
       const freshTaskId = TaskId.make("E")
       const blockerTaskId = TaskId.make("D")
-      const constrainedTaskId = changedTask === "B" ? independentTaskId : taskId
+      const constrainedTaskId = options.suspensionSubjectTaskId ?? (changedTask === "B" ? independentTaskId : taskId)
       const specification = makeTaskWorkSpecification({ body: "Complete A.", taskId, title: "Complete A" })
       const independentSpecification = makeTaskWorkSpecification({
         body: "Complete B.",
@@ -677,7 +680,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         taskId,
         ...(includeIndependentTask ? [independentTaskId] : []),
         ...(threeExecuting ? [thirdTaskId] : []),
-        ...(options.freshE === true ? [freshTaskId] : [])
+        ...(options.includeFreshWaitingTaskE === true ? [freshTaskId] : [])
       ]
       const activeGraphTasks = [
         ...graphTaskIds
@@ -1349,11 +1352,11 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                     yield* Deferred.await(releaseActiveRead)
                   }
                   return selectedTaskId === taskId
-                    ? selectedSpecificationMode === "Changed" && changedTask === "A"
+                    ? selectedSpecificationMode === "Changed" && constrainedTaskId === taskId
                       ? changedSpecification
                       : specification
                     : selectedTaskId === independentTaskId
-                      ? selectedSpecificationMode === "Changed" && changedTask === "B"
+                      ? selectedSpecificationMode === "Changed" && constrainedTaskId === independentTaskId
                         ? changedIndependentSpecification
                         : independentSpecification
                       : thirdSpecification
@@ -1564,7 +1567,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             const startupActivation = yield* Deferred.make<void>()
             const acceptedActivation = yield* Deferred.make<void>()
             const activeActivation = yield* Deferred.make<"Success" | "Failure">()
-            const activeDecision = yield* Ref.make<RunFinalityDecision | undefined>(undefined)
+            const activeDecisions = yield* Ref.make<ReadonlyArray<RunFinalityDecision>>([])
             const settleActiveActivation = Effect.gen(function* () {
               yield* Ref.update(activeActivationTimeline, (current) => [...current, "Return" as const])
               yield* Ref.update(activeConcurrent, (count) => count - 1)
@@ -1615,7 +1618,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                         .activate(target, initialControlPolicySource, allocatedRunId, program, activationOpportunity)
                         .pipe(
                           Effect.tap((decision) =>
-                            Ref.set(activeDecision, decision).pipe(
+                            Ref.update(activeDecisions, (current) => [...current, decision]).pipe(
                               Effect.andThen(Deferred.succeed(activeActivation, "Success"))
                             )
                           ),
@@ -1655,7 +1658,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                   )
                   .pipe(
                     Effect.tap((decision) =>
-                      Ref.set(activeDecision, decision).pipe(
+                      Ref.update(activeDecisions, (current) => [...current, decision]).pipe(
                         Effect.andThen(Deferred.succeed(activeActivation, "Success"))
                       )
                     ),
@@ -1800,7 +1803,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
                 source === "AcceptedFactPublication" || source === "OperatorWake"
                   ? undefined
                   : yield* Deferred.await(activeActivation),
-              activeDecision: yield* Ref.get(activeDecision)
+              activeDecisions: yield* Ref.get(activeDecisions)
             }
           }).pipe(
             Effect.provide(nodePathAndFileSystemLayer),
@@ -1818,7 +1821,8 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
           source === "AcceptedFactPublication" || source === "OperatorWake"
             ? undefined
             : (secondProcess?.activeActivation ?? firstProcess.activeActivation),
-        activeDecision: secondProcess?.activeDecision ?? firstProcess.activeDecision,
+        activeDecision: secondProcess?.activeDecisions.at(-1) ?? firstProcess.activeDecisions.at(-1),
+        activeDecisions: [...firstProcess.activeDecisions, ...(secondProcess?.activeDecisions ?? [])],
         activationKinds: yield* Ref.get(activationKinds),
         activeSelectionOperationKeys: yield* Ref.get(activeSelectionOperationKeys),
         activeSelectionTrace: yield* Ref.get(activeSelectionTrace),
@@ -2312,10 +2316,11 @@ it.effect(
     Effect.gen(function* () {
       const result = yield* runProductionRefreshHarness({
         capacityTwo: true,
-        changedTask: "B",
         coalesce: true,
-        freshE: true,
+        executingTaskIds: { primary: TaskId.make("A"), independent: TaskId.make("C"), third: TaskId.make("D") },
         graph: "TaskClosedWithoutSuccess",
+        includeFreshWaitingTaskE: true,
+        suspensionSubjectTaskId: TaskId.make("C"),
         threeExecuting: true,
         verifyNoSpontaneousActivation: true
       })
@@ -2333,6 +2338,10 @@ it.effect(
         )
       ).toEqual([])
       expect(result.activeDecision).toEqual(RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" }))
+      expect(result.activeDecisions).toEqual([
+        RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" }),
+        RunFinalityDecision.RunMustRemainActive({ reason: "RunnableTransition" })
+      ])
       expect(result.activeActivationCount).toBe(2)
       expect(result.activeSources).toEqual(["TrackerNotification", "Timer"])
       expect(result.activeActivationTimeline).toEqual(["Start", "Return", "Start", "Return"])
@@ -2376,10 +2385,11 @@ it.effect("restart after accepted G2 preserves A0 D0 C1 E identities and does no
   Effect.gen(function* () {
     const result = yield* runProductionRefreshHarness({
       capacityTwo: true,
-      changedTask: "B",
       crash: "AfterG2",
-      freshE: true,
+      executingTaskIds: { primary: TaskId.make("A"), independent: TaskId.make("C"), third: TaskId.make("D") },
       graph: "TaskClosedWithoutSuccess",
+      includeFreshWaitingTaskE: true,
+      suspensionSubjectTaskId: TaskId.make("C"),
       threeExecuting: true
     })
 
