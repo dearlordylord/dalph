@@ -3,6 +3,19 @@ import type { JournalRecord } from "./store.js"
 
 const JournalRecordSequenceTypeId: unique symbol = Symbol("JournalRecordSequence")
 
+export type JournalRecordSequenceOperation =
+  | { readonly _tag: "IndexedRecordVisit" }
+  | { readonly _tag: "HistoricalMaterialization"; readonly length: number }
+
+let operationObserver: ((operation: JournalRecordSequenceOperation) => void) | undefined
+
+/** Test-only synchronous operation observer; the returned cleanup restores the previous observer. */
+export const observeJournalRecordSequenceOperations = (observer: (operation: JournalRecordSequenceOperation) => void): (() => void) => {
+  const prior = operationObserver
+  operationObserver = observer
+  return () => { operationObserver = prior }
+}
+
 /**
  * An immutable ordered sequence of decoded journal records. The sequence does
  * not certify semantic validity. Appends share persistent storage, and a prefix
@@ -31,6 +44,7 @@ export const appendJournalRecord = (prior: JournalRecordSequence, record: Journa
 
 /** Zero-based access; a negative offset counts back from this exact prefix. */
 export const journalRecordAt = (records: JournalRecordSequence, offset: number): JournalRecord | undefined => {
+  operationObserver?.({ _tag: "IndexedRecordVisit" })
   const index = offset < 0 ? records.length + offset : offset
   return index < 0 || index >= records.length
     ? undefined
@@ -42,8 +56,10 @@ export const journalRecordsBefore = (records: JournalRecordSequence, exclusiveEn
   sequence(storageFor(records), Math.max(0, Math.min(records.length, exclusiveEnd)))
 
 /** Explicit export boundary; live successor validation must use indexed access. */
-export const materializeJournalRecords = (records: JournalRecordSequence): ReadonlyArray<JournalRecord> =>
-  Array.from({ length: records.length }, (_, index) => Option.getOrThrow(HashMap.get(storageFor(records), index)))
+export const materializeJournalRecords = (records: JournalRecordSequence): ReadonlyArray<JournalRecord> => {
+  operationObserver?.({ _tag: "HistoricalMaterialization", length: records.length })
+  return Array.from({ length: records.length }, (_, index) => Option.getOrThrow(HashMap.get(storageFor(records), index)))
+}
 
 /** Imports decoded storage history once at establishment, without certifying its semantics. */
 export const journalRecordsFrom = (records: ReadonlyArray<JournalRecord>): JournalRecordSequence =>

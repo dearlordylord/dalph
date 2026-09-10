@@ -9,8 +9,9 @@ import { JournalPosition } from "../../workflow-journal/identity.js"
 import { TaskWorkCapacityChangedEvent } from "../../workflow/registry/event.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory } from "./history.js"
+import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 
-it("Alice changes capacity without reading any record in the already accepted historical array", () => {
+it.each([64, 256])("Alice changes capacity after %i accepted records without materializing or traversing the prefix", (size) => {
   const runId = RunId.make("capacity-scaling")
   const began = makeWorkflowRunBeganRecord(runId, FixtureTarget.make("capacity-scaling"), InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }))
   const capacityRecord = (position: number) => ({
@@ -20,7 +21,7 @@ it("Alice changes capacity without reading any record in the already accepted hi
     runId
   })
   let historicalReads = 0
-  const records = new Proxy([began, ...Array.from({ length: 63 }, (_, offset) => capacityRecord(offset + 2))], {
+  const records = new Proxy([began, ...Array.from({ length: size - 1 }, (_, offset) => capacityRecord(offset + 2))], {
     get(target, property, receiver) {
       if (typeof property === "string" && /^\d+$/.test(property)) historicalReads += 1
       return Reflect.get(target, property, receiver)
@@ -30,7 +31,19 @@ it("Alice changes capacity without reading any record in the already accepted hi
   expect(prior._tag).toBe("ValidWorkflowJournalHistory")
   if (prior._tag !== "ValidWorkflowJournalHistory") return
   historicalReads = 0
-  const next = advanceWorkflowJournalHistory(prior, capacityRecord(65))
-  expect(next._tag).toBe("ValidWorkflowJournalHistory")
+  let indexedVisits = 0
+  let materializations = 0
+  const stop = observeJournalRecordSequenceOperations((operation) => {
+    if (operation._tag === "IndexedRecordVisit") indexedVisits += 1
+    else materializations += 1
+  })
+  try {
+    const next = advanceWorkflowJournalHistory(prior, capacityRecord(size + 1))
+    expect(next._tag).toBe("ValidWorkflowJournalHistory")
+  } finally {
+    stop()
+  }
   expect(historicalReads).toBe(0)
+  expect(materializations).toBe(0)
+  expect(indexedVisits).toBeLessThanOrEqual(16)
 })

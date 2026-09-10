@@ -22,6 +22,7 @@ import {
   journalRecordAt,
   journalRecordsBefore,
   inspectJournalRecordStorage,
+  observeJournalRecordSequenceOperations,
   materializeJournalRecords
 } from "./record-sequence.js"
 
@@ -32,6 +33,18 @@ const initial = makeWorkflowRunBeganRecord(
 )
 
 describe("Alice retains an earlier journal observation", () => {
+  it("counts explicit historical export and indexed lookup at the actual sequence boundary", () => {
+    const operations: Array<string> = []
+    const stop = observeJournalRecordSequenceOperations((operation) => operations.push(operation._tag))
+    try {
+      const records = appendJournalRecord(emptyJournalRecords(), initial)
+      journalRecordAt(records, 0)
+      materializeJournalRecords(records)
+    } finally {
+      stop()
+    }
+    expect(operations).toEqual(["IndexedRecordVisit", "HistoricalMaterialization"])
+  })
   const retainedSlotCount = (roots: ReadonlyArray<unknown>): number => {
     const retained = new Set<object>()
     let slots = 0

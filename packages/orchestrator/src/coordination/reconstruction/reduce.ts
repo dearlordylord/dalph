@@ -1,10 +1,8 @@
 /* eslint-disable functional/immutable-data -- Pure reducers mutate only local scratch that never escapes. */
-import { Option } from "effect"
-import { type RunId, type TaskId } from "@dalph/contracts"
+import { HashMap, HashSet, Option } from "effect"
+import { type AttemptId, type RunId, type TaskId } from "@dalph/contracts"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
-import type { AcceptedJournalPrefix } from "../../workflow-journal/accepted-prefix.js"
-import { journalRecordsOfKind } from "../../workflow-journal/record-evidence.js"
 import { advanceDurableGraphKnowledge, initializeDurableGraphKnowledge } from "./graph-knowledge.js"
 import { workflowJournalTransitionRuleFor } from "./history-transition.js"
 import {
@@ -85,7 +83,9 @@ const reduceWorkflowResponsibility = (records: ReadonlyArray<JournalRecord>): Wo
       ? []
       : [entry]
   })
-  return WorkflowResponsibilityState.make({ entries })
+  const state = WorkflowResponsibilityState.make({ entries })
+  responsibilityIndexFor(state)
+  return state
 }
 
 /** Pure workflow-history reducer; it retains every exact decoded record. */
@@ -105,31 +105,42 @@ const appendResponsibility = (
 ): WorkflowResponsibilityState => {
   if (record.event._tag === "PlannedAttemptReplaced") {
     const attemptId = record.event.subject.plannedAttempt.attemptId
-    return WorkflowResponsibilityState.make({
-      entries: prior.entries.filter(
-        (entry) =>
-          entry._tag !== "PlannedAttemptExecutorWorkResponsibility" || entry.plannedAttempt.attemptId !== attemptId
-      )
-    })
+    const index = responsibilityIndexFor(prior)
+    const positions = Option.getOrElse(HashMap.get(index.attemptPositions, attemptId), () => HashSet.empty<number>())
+    let entries = index.entries
+    for (const position of positions) entries = HashMap.remove(entries, position)
+    return responsibilityWithIndex({ ...index, entries, attemptPositions: HashMap.remove(index.attemptPositions, attemptId) })
   }
   const entry = responsibilityForRecord(record)
-  return entry === undefined ? prior : WorkflowResponsibilityState.make({ entries: [...prior.entries, entry] })
+  return entry === undefined ? prior : responsibilityWithIndex(addResponsibility(responsibilityIndexFor(prior), entry))
 }
 
-const responsibilityFromPrefix = (prefix: AcceptedJournalPrefix): WorkflowResponsibilityState => {
-  let entries: WorkflowResponsibilityState["entries"] | undefined
-  return {
-    get entries() {
-      if (entries !== undefined) return entries
-      const replaced = new Set(Array.from(journalRecordsOfKind(prefix, "PlannedAttemptReplaced")).flatMap(({ event }) => event._tag === "PlannedAttemptReplaced" ? [event.subject.plannedAttempt.attemptId] : []))
-      const kinds = ["TaskClaimAcquisitionIntended", "TaskClaimReleaseIntended", "TaskWorktreeReconciliationIntended", "PlannedAttemptExecutorWorkResponsibilityBegan"] as const
-      entries = kinds.flatMap((kind) => Array.from(journalRecordsOfKind(prefix, kind))).sort((left, right) => left.position - right.position).flatMap((record) => {
-        const entry = responsibilityForRecord(record)
-        return entry === undefined || (entry._tag === "PlannedAttemptExecutorWorkResponsibility" && replaced.has(entry.plannedAttempt.attemptId)) ? [] : [entry]
-      })
-      return entries
-    }
+interface ResponsibilityIndex {
+  readonly entries: HashMap.HashMap<number, WorkflowResponsibilityEntry>
+  readonly length: number
+  readonly attemptPositions: HashMap.HashMap<AttemptId, HashSet.HashSet<number>>
+}
+const responsibilityIndexes = new WeakMap<WorkflowResponsibilityState, ResponsibilityIndex>()
+const addResponsibility = (prior: ResponsibilityIndex, entry: WorkflowResponsibilityEntry): ResponsibilityIndex => ({
+  entries: HashMap.set(prior.entries, prior.length, entry),
+  length: prior.length + 1,
+  attemptPositions: entry._tag === "PlannedAttemptExecutorWorkResponsibility" ? HashMap.set(prior.attemptPositions, entry.plannedAttempt.attemptId, HashSet.add(Option.getOrElse(HashMap.get(prior.attemptPositions, entry.plannedAttempt.attemptId), () => HashSet.empty<number>()), prior.length)) : prior.attemptPositions
+})
+const responsibilityIndexFor = (state: WorkflowResponsibilityState): ResponsibilityIndex => {
+  const cached = responsibilityIndexes.get(state)
+  if (cached !== undefined) return cached
+  const initial: ResponsibilityIndex = { entries: HashMap.empty(), length: 0, attemptPositions: HashMap.empty() }
+  const index = state.entries.reduce(addResponsibility, initial)
+  responsibilityIndexes.set(state, index)
+  return index
+}
+const responsibilityWithIndex = (index: ResponsibilityIndex): WorkflowResponsibilityState => {
+  let exported: WorkflowResponsibilityState["entries"] | undefined
+  const state: WorkflowResponsibilityState = {
+    get entries() { return exported ??= Array.from({ length: index.length }, (_, offset) => Option.getOrUndefined(HashMap.get(index.entries, offset))).filter((entry) => entry !== undefined) }
   }
+  responsibilityIndexes.set(state, index)
+  return state
 }
 
 const appendControlPolicy = (
@@ -181,14 +192,13 @@ export const advanceReconstructedRunState = (
   records: ReadonlyArray<JournalRecord> | ReconstructedWorkflowHistory = [...prior.workflowHistory.records, record]
 ): ReconstructedRunState => {
   const history = "records" in records ? records : { records }
-  const prefix = history.prefix
   return {
     appliedThrough: record.position,
     controlPolicy: appendControlPolicy(prior.controlPolicy, record),
     graphKnowledge: appendGraphKnowledge(prior.graphKnowledge, record),
     pause: appendPauseState(prior.pause, record),
     cancellation: appendCancellationState(prior.cancellation, record),
-    responsibility: prefix === undefined ? appendResponsibility(prior.responsibility, record) : responsibilityFromPrefix(prefix),
+    responsibility: appendResponsibility(prior.responsibility, record),
     runId: prior.runId,
     workflowHistory: history
   }
