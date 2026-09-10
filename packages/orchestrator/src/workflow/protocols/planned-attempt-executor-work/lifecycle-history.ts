@@ -15,6 +15,10 @@ import {
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import {
+  journalRecordsForAttempt,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
+import {
   PlannedAttemptExecutorBeginReportContradiction,
   PlannedAttemptExecutorInitialReportCausalityContradiction,
   PlannedAttemptExecutorLifecycleTransitionContradiction,
@@ -29,10 +33,10 @@ type PlannedAttemptExecutorWorkReportedRecord = JournalRecord & {
 }
 
 export const acceptedPlannedAttemptExecutorReportRecords = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ) =>
-  records.filter(
+  Array.from(journalRecordsForAttempt(records, plannedAttempt.attemptId)).filter(
     (record): record is PlannedAttemptExecutorWorkReportedRecord =>
       record.event._tag === "PlannedAttemptExecutorWorkReported" &&
       record.event.report.correlation.runId === plannedAttempt.runId &&
@@ -186,16 +190,17 @@ const distinctAcceptedLifecycleReportError = (
 
 /** Validates a distinct report against accepted lifecycle authority and exact command causality. */
 export const plannedAttemptExecutorLifecycleTransitionError = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   observed: PlannedAttemptExecutorReport
 ): PlannedAttemptExecutorLifecycleTransitionError | undefined => {
+  const attemptRecords = Array.from(journalRecordsForAttempt(records, plannedAttempt.attemptId))
   const latest = acceptedPlannedAttemptExecutorReportRecords(records, plannedAttempt).at(lastElementOffset)
   if (latest?.event._tag !== "PlannedAttemptExecutorWorkReported") {
-    return initialLifecycleReportError(records, plannedAttempt, observed)
+    return initialLifecycleReportError(attemptRecords, plannedAttempt, observed)
   }
   if (samePlannedAttemptExecutorReport(latest.event.report, observed)) return undefined
-  return distinctAcceptedLifecycleReportError(records, plannedAttempt, latest, observed)
+  return distinctAcceptedLifecycleReportError(attemptRecords, plannedAttempt, latest, observed)
 }
 
 const exactReportFromUnacceptedEvidence = (
@@ -229,13 +234,14 @@ const isExecutorEvidenceFor = (record: JournalRecord, plannedAttempt: PlannedTas
 
 /** Proves every accepted lifecycle report has exact preceding evidence and valid command causality. */
 export const hasValidAcceptedPlannedAttemptExecutorLifecycleHistory = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): boolean => {
+  const attemptRecords = Array.from(journalRecordsForAttempt(records, plannedAttempt.attemptId))
   const accepted = acceptedPlannedAttemptExecutorReportRecords(records, plannedAttempt)
   const firstAccepted = accepted[0]
   if (firstAccepted === undefined) return false
-  const responsibilities = records.filter(
+  const responsibilities = attemptRecords.filter(
     (record) =>
       record.position < firstAccepted.position &&
       record.runId === plannedAttempt.runId &&
@@ -253,7 +259,7 @@ export const hasValidAcceptedPlannedAttemptExecutorLifecycleHistory = (
     ) {
       return false
     }
-    const evidence = records.findLast(
+    const evidence = attemptRecords.findLast(
       (candidate) =>
         candidate.position < record.position &&
         (priorAccepted === undefined || candidate.position > priorAccepted.position) &&
@@ -263,7 +269,7 @@ export const hasValidAcceptedPlannedAttemptExecutorLifecycleHistory = (
     if (evidenceReport === undefined || !samePlannedAttemptExecutorReport(evidenceReport, record.event.report)) {
       return false
     }
-    const priorRecords = records.filter(({ position }) => position < record.position)
+    const priorRecords = attemptRecords.filter(({ position }) => position < record.position)
     return (
       plannedAttemptExecutorLifecycleTransitionError(priorRecords, plannedAttempt, record.event.report) === undefined
     )
