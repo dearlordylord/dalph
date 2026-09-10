@@ -6,7 +6,7 @@ import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { IntegrationHistoryIndexes } from "./integration-history.js"
 import type { IntegrationFinalityHistoryIndexes } from "../../workflow/protocols/integration-finality/history.js"
-import type { TaskTrackerReconfirmationIndex } from "../../workflow/task-tracker-facts/reconfirmation.js"
+import { makeTaskTrackerReconfirmationIndex, type TaskTrackerReconfirmationIndex } from "../../workflow/task-tracker-facts/reconfirmation.js"
 import { WorkflowJournalHistoryIdentityIssue, WorkflowJournalHistorySemanticIssue, type WorkflowJournalHistoryIssue } from "./history-result.js"
 
 /** Process-local immutable semantic fold facts, never persisted external authority. */
@@ -43,3 +43,45 @@ export const identityIssue = (issues: Array<WorkflowJournalHistoryIssue>, runId:
 export const semanticIssue = (issues: Array<WorkflowJournalHistoryIssue> | Array<WorkflowJournalHistorySemanticIssue>, runId: RunId, position: JournalPosition, detail: string): void => {
   issues.push(new WorkflowJournalHistorySemanticIssue({ detail, position, runId }))
 }
+
+export const emptyIndexes = (): FoldIndexes => ({
+  acceptedExecutorResults: HashMap.empty(),
+  abandonedExecutorAttempts: HashSet.empty(),
+  attemptChoiceSubjects: HashSet.empty(),
+  executorCommandOrdinals: HashMap.empty(),
+  executorCommandCountsSinceSafeSuspension: HashMap.empty(),
+  executorCommandProjectionOrdinals: HashMap.empty(),
+  executorReportOrdinals: HashMap.empty(),
+  executorStateObservationOrdinals: HashMap.empty(),
+  executorResponsibilitiesBegan: HashMap.empty(),
+  integrationResponsibilitiesBegan: HashMap.empty(),
+  integrationStarted: HashMap.empty(),
+  targetLineageReadIntents: HashMap.empty(),
+  targetLineageObservations: HashMap.empty(),
+  integratorSessionFixed: HashMap.empty(),
+  integratorSessionsByStartedAt: HashMap.empty(),
+  integratorSessionsBySessionId: HashMap.empty(),
+  integratorSessionsByCandidateResource: HashMap.empty(),
+  integratorSuccessorSessionFixed: HashMap.empty(),
+  integratorSuccessorSessionsByPredecessor: HashMap.empty(),
+  integratorRunStarted: HashMap.empty(),
+  integratorRunResults: HashMap.empty(),
+  integratorRunCandidateGitReadIntents: HashMap.empty(),
+  integratorRunCandidateGitObservations: HashMap.empty(),
+  targetPromotionHistory: { attempts: HashMap.empty(), deferrals: HashMap.empty(), intents: HashMap.empty(), terminals: HashSet.empty() },
+  integrationFinalityHistory: {
+    deletionAttempts: HashMap.empty(), deletionIntents: HashMap.empty(), deletionTerminals: HashSet.empty(),
+    replacementAttempts: HashMap.empty(), replacementIntents: HashMap.empty(), replacementTerminals: HashMap.empty(), settlements: HashSet.empty()
+  },
+  latestControlDirectionOrdinal: 0,
+  plans: HashMap.empty(),
+  gitReadIntents: HashMap.empty(),
+  latestRunPolicyRevision: undefined,
+  seenEventKindsByOperation: HashMap.empty(),
+  seenKeys: HashSet.empty(),
+  seenOperationIds: HashSet.empty(),
+  terminalExecutorAttempts: HashSet.empty(),
+  supersededExecutorAttempts: HashSet.empty(),
+  unsettledExecutorCommands: HashMap.empty(),
+  trackerReconfirmations: makeTaskTrackerReconfirmationIndex()
+})
