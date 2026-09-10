@@ -4,6 +4,7 @@ import type { OperationId } from "../workflow/identity.js"
 import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import type { JournalPosition, JournalRecordKey } from "./identity.js"
+import { outcomeRecordKey } from "./record-key.js"
 import type { JournalRecord } from "./store.js"
 import {
   appendJournalRecord,
@@ -86,7 +87,37 @@ const attemptIdsOf = (record: JournalRecord): ReadonlySet<AttemptId> => {
   return ids
 }
 
-const taskIdsOf = (record: JournalRecord): ReadonlySet<TaskId> => {
+const graphObservationTaskIds = (
+  record: JournalRecord,
+  indexes: EvidenceIndexes | undefined
+): ReadonlySet<TaskId> => {
+  if (record.event._tag !== "TaskTrackerFactsObserved") return new Set()
+  const observation = record.event.observation
+  if (observation._tag === "CompleteTaskTrackerFacts") {
+    return new Set([
+      ...observation.factFamilies[0].taskIds,
+      ...observation.factFamilies.flatMap(({ coverage }) => coverage.explicitlyCoveredTaskIds)
+    ])
+  }
+  if (observation._tag !== "UnchangedTaskTrackerFactsReconfirmed") return new Set()
+  const prior =
+    indexes === undefined
+      ? undefined
+      : Option.getOrUndefined(
+          HashMap.get(indexes.byKey, outcomeRecordKey(observation.priorFullObservationOperationId))
+        )
+  const priorTaskIds =
+    prior?.event._tag === "TaskTrackerFactsObserved" &&
+    prior.event.observation._tag === "CompleteTaskTrackerFacts"
+      ? prior.event.observation.factFamilies[0].taskIds
+      : []
+  return new Set([
+    ...priorTaskIds,
+    ...observation.factFamilies.flatMap(({ coverage }) => coverage.explicitlyCoveredTaskIds)
+  ])
+}
+
+const taskIdsOf = (record: JournalRecord, indexes?: EvidenceIndexes): ReadonlySet<TaskId> => {
   const ids = new Set<TaskId>()
   const descriptor = describeJournalEvent(record.event)
   if (descriptor._tag === "PlannedAttemptExecutorEventDescriptor" && descriptor.plannedAttempt !== undefined) {
@@ -116,6 +147,7 @@ const taskIdsOf = (record: JournalRecord): ReadonlySet<TaskId> => {
     ids.add(event.subject.plannedAttempt.taskId)
     ids.add(event.successorPlan.plannedAttempt.taskId)
   }
+  for (const taskId of graphObservationTaskIds(record, indexes)) ids.add(taskId)
   return ids
 }
 
@@ -151,7 +183,7 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     }
   }
   let byTask = indexes.byTask
-  for (const taskId of taskIdsOf(record)) {
+  for (const taskId of taskIdsOf(record, indexes)) {
     const priorTask = Option.getOrElse(HashMap.get(byTask, taskId), emptyJournalRecords)
     byTask = HashMap.set(byTask, taskId, appendJournalRecord(priorTask, record))
   }
@@ -318,7 +350,7 @@ export const journalRecordCountForAttemptCommandKind = (
 export const journalRecordsForTask = (source: JournalHistorySource, taskId: TaskId): Iterable<JournalRecord> =>
   isJournalRecordEvidence(source)
     ? indexedRecords(source, Option.getOrElse(HashMap.get(indexesFor(source).byTask, taskId), emptyJournalRecords))
-    : source.filter((record) => taskIdsOf(record).has(taskId))
+    : journalRecordsForTask(journalEvidenceFrom(source), taskId)
 
 /** Test-only retained storage roots; no array of records is constructed. */
 export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): ReadonlyArray<object> => {
@@ -326,6 +358,13 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
   return [
     source,
     indexes,
+    indexes.byKey,
+    indexes.byKind,
+    indexes.byAttempt,
+    indexes.byAttemptKind,
+    indexes.byAttemptCommandKind,
+    indexes.byTask,
+    indexes.operations,
     inspectJournalRecordStorage(source.records),
     ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage),
@@ -335,6 +374,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     ...Array.from(HashMap.values(indexes.byAttemptCommandKind)).flatMap((kinds) =>
       Array.from(HashMap.values(kinds), inspectJournalRecordStorage)
     ),
-    ...Array.from(HashMap.values(indexes.byTask), inspectJournalRecordStorage)
+    ...Array.from(HashMap.values(indexes.byTask), inspectJournalRecordStorage),
+    ...Array.from(HashMap.values(indexes.operations), inspectJournalRecordStorage)
   ]
 }
