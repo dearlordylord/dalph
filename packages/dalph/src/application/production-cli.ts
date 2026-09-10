@@ -39,6 +39,7 @@ import {
   type TraceCursor,
   TraceCursorNotCommitted,
   TraceJournalPrefixInvalid,
+  TraceOutputError,
   TraceProjectionInvalid,
   TraceRunNotFound,
   type TraceReaderError,
@@ -135,6 +136,16 @@ const productionCliStatusFailureCodes = [
 export class ProductionCliStatusError extends Schema.TaggedError<ProductionCliStatusError>()(
   "ProductionCliStatusError",
   { code: Schema.Literals(productionCliStatusFailureCodes), detail: Schema.NonEmptyString, subject: RunId }
+) {}
+
+/** A public output boundary failure retains no rejected bytes or private transport diagnostic. */
+export class ProductionCliOutputError extends Schema.TaggedError<ProductionCliOutputError>()(
+  "ProductionCliOutputError",
+  {
+    code: Schema.Literal("output.write_failed"),
+    detail: Schema.Literal("production stdout could not be written"),
+    subject: Schema.Literal("production stdout")
+  }
 ) {}
 
 const productionCliLifecycleFailureCodes = ["lifecycle.exit_failed", "lifecycle.exit_timed_out"] as const
@@ -302,6 +313,7 @@ const ProductionCliOrdinaryFailureRecord = Schema.TaggedStruct("Failure", {
     "startup.ownership_unavailable",
     "startup.recovery_blocked",
     "startup.run_selection_conflict",
+    "output.write_failed",
     ...productionCliStatusFailureCodes,
     "usage.invalid"
   ]),
@@ -506,6 +518,7 @@ export type ProductionCliKnownFailure =
   | ProductionCliDeliveryError
   | ProductionCliJournalError
   | ProductionCliLifecycleError
+  | ProductionCliOutputError
   | ProductionCliStartupError
   | ProductionCliStatusError
   | ProductionCliUsageError
@@ -519,6 +532,8 @@ type ProductionCliBoundaryFailure =
   | JournalStoreError
   | ProductionCliConfigurationError
   | ProductionCliLifecycleError
+  | ProductionCliOutputError
+  | TraceOutputError
   | ProductionCliStatusError
   | ProductionCliUsageError
   | ProductionRunSelectionConflict
@@ -554,6 +569,7 @@ const ProductionCliBoundaryFailure = exactProductionCliBoundaryFailure(
     JournalStorageUnavailable,
     ProductionCliConfigurationError,
     ProductionCliLifecycleError,
+    ProductionCliOutputError,
     ProductionCliStatusError,
     ProductionCliUsageError,
     ProductionRunSelectionConflict,
@@ -563,6 +579,7 @@ const ProductionCliBoundaryFailure = exactProductionCliBoundaryFailure(
     TraceCausalPredecessorNotProjected,
     TraceCursorNotCommitted,
     TraceJournalPrefixInvalid,
+    TraceOutputError,
     TraceProjectionInvalid,
     TraceRunNotFound
   ])
@@ -605,9 +622,16 @@ const mapProductionCliBoundaryFailure = (failure: ProductionCliBoundaryFailure):
   switch (failure._tag) {
     case "ProductionCliConfigurationError":
     case "ProductionCliLifecycleError":
+    case "ProductionCliOutputError":
     case "ProductionCliStatusError":
     case "ProductionCliUsageError":
       return failure
+    case "TraceOutput.TraceOutputError":
+      return new ProductionCliOutputError({
+        code: "output.write_failed",
+        detail: "production stdout could not be written",
+        subject: "production stdout"
+      })
     case "DeliveryStatusProjectionConflict":
     case "DeliveryStatusRunIdentityUnavailable":
     case "DeliveryStatusRunMismatch":

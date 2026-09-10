@@ -4,7 +4,7 @@ import {
   type ApplicationExitRequestBoundaryService,
   fixtureReaderFileLayer,
   type JournalStoreError,
-  type TraceOutputError,
+  TraceOutputError,
   type TraceReaderError,
   TraceOutput
 } from "@dalph/orchestrator"
@@ -20,6 +20,7 @@ import {
   encodeProductionCliRecord,
   productionCliFailureRecord,
   productionCliFailureForSelectedRun,
+  ProductionCliOutputError,
   type ProductionCliHostObservation,
   type ProductionCliLifecycleError,
   type ProductionCliStatusError
@@ -58,6 +59,12 @@ export type ProductionCliHostRunner<E, R> = (
 >
 
 const runConfiguration = { version: "0.0.0" }
+
+/** Redacts only the typed production stdout failure while preserving every other failure identity. */
+const mapProductionOutputFailure = <E>(failure: E): E | ProductionCliOutputError => {
+  const known = knownProductionCliFailure(failure)
+  return known instanceof ProductionCliOutputError ? known : failure
+}
 
 /** Builds the explicit dry/production command over one injected production host. */
 export const makeProductionCli = <EHost, RHost>(
@@ -147,10 +154,12 @@ export const makeProductionCli = <EHost, RHost>(
                 )
               )
             )
-          )
+          ).pipe(Effect.mapError(mapProductionOutputFailure))
         }).pipe(
-          Effect.tapError((failure) =>
-            Deferred.isDone(selectedRunId).pipe(
+          Effect.tapError((failure) => {
+            if (!production && failure instanceof TraceOutputError) return Effect.void
+            if (failure instanceof ProductionCliOutputError) return Effect.void
+            return Deferred.isDone(selectedRunId).pipe(
               Effect.flatMap((hasSelection) =>
                 hasSelection
                   ? Deferred.await(selectedRunId).pipe(
@@ -159,12 +168,14 @@ export const makeProductionCli = <EHost, RHost>(
                   : Effect.succeed(knownProductionCliFailure(failure))
               ),
               Effect.flatMap((known) => {
-                return known === undefined
-                  ? Effect.void
-                  : output.writeLine(encodeProductionCliRecord(productionCliFailureRecord(known))).pipe(Effect.ignore)
+                if (known === undefined) return Effect.void
+                const writeFailure = output
+                  .writeLine(encodeProductionCliRecord(productionCliFailureRecord(known)))
+                  .pipe(Effect.mapError(mapProductionOutputFailure))
+                return known._tag === "ProductionCliDeliveryError" ? writeFailure.pipe(Effect.ignore) : writeFailure
               })
             )
-          )
+          })
         )
       })
   ).pipe(
