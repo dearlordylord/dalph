@@ -20,6 +20,18 @@
       "count": 1
     }
   },
+  "packages/dalph/test-support/issue-278-normal-termination.ts": {
+    "complexity": {
+      "count": 1,
+      "justification": "This controlled six-task harness keeps tracker lifecycle, exact claim observations, Gfinal freshness, crash cuts, and lost termination acknowledgement in one production-shaped chronology so restart assertions share the same durable prefix; splitting it would make the cross-boundary evidence non-equivalent."
+    }
+  },
+  "packages/dalph/test-support/issue-278-settled-a.ts": {
+    "complexity": {
+      "count": 2,
+      "justification": "This controlled A-prefix fixture keeps one exact ordinary-settlement chronology, validating production reconstruction and evidence reseeding before the six-task finality composition; splitting it would detach the seed from the history it proves."
+    }
+  },
   "packages/orchestrator/src/coordination/delivery/delivery-proposal-derivation.ts": {
     "complexity": {
       "count": 1
