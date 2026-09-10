@@ -116,6 +116,7 @@ const sourceDependencyPaths = (
   sourceFiles: ReadonlyArray<CapabilitySourceFile>,
   options: ts.CompilerOptions,
   host: ts.CompilerHost,
+  moduleResolutionCache: ts.ModuleResolutionCache,
   previous: CapabilitySourceProgram | undefined
 ): CapabilitySourceDependencies => {
   const sourcePaths = new Set(sourceFiles.map(({ path }) => path))
@@ -143,7 +144,8 @@ const sourceDependencyPaths = (
           fileName,
           source?.fileName ?? virtualPath(file.path),
           options,
-          host
+          host,
+          moduleResolutionCache
         ).resolvedModule
         const dependencyPath = resolved === undefined ? undefined : sourcePath(resolved.resolvedFileName)
         return dependencyPath === undefined ? [] : [dependencyPath]
@@ -398,8 +400,19 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
     const normalized = normalizedVirtualPath(directoryName)
     return virtualDirectories.has(normalized) || (defaultDirectoryExists?.(directoryName) ?? false)
   }
+  // Compiler construction and dependency indexing resolve the same imports.
+  // Share their lookups only within this Program: changed roots or source text
+  // always get a fresh cache, including previously unresolved module names.
+  const moduleResolutionCache = ts.createModuleResolutionCache(
+    virtualRoot,
+    (path) => host.getCanonicalFileName(path),
+    options
+  )
   host.resolveModuleNames = (moduleNames, containingFile) =>
-    moduleNames.map((moduleName) => ts.resolveModuleName(moduleName, containingFile, options, host).resolvedModule)
+    moduleNames.map(
+      (moduleName) =>
+        ts.resolveModuleName(moduleName, containingFile, options, host, moduleResolutionCache).resolvedModule
+    )
   const program = ts.createProgram(
     sourceFiles.map(({ path }) => virtualPath(path)),
     options,
@@ -407,7 +420,7 @@ const sourceProgram = (sourceFiles: ReadonlyArray<CapabilitySourceFile>): Capabi
     previous?.program
   )
   const checker = program.getTypeChecker()
-  const dependencies = sourceDependencyPaths(program, sourceFiles, options, host, previous)
+  const dependencies = sourceDependencyPaths(program, sourceFiles, options, host, moduleResolutionCache, previous)
   const { dependenciesByPath } = dependencies
   const compiler = compilerDiagnostics(program, sourceFiles, previous, dependenciesByPath)
   const indexed = {
@@ -538,9 +551,7 @@ const declarationFor = (
   indexed: CapabilitySourceProgram
 ): ts.Identifier | undefined => {
   const expected = normalizedMarker(marker)
-  return sourceNodes(parsedSource(file, indexed))
-    .map(declarationName)
-    .find((name) => name?.text === expected)
+  return sourceSyntaxIndex(parsedSource(file, indexed)).declarations.get(expected)
 }
 
 const declarationSymbolFor = (
@@ -711,10 +722,8 @@ const callExpressions = (
   indexed: CapabilitySourceProgram
 ): ReadonlyArray<ts.CallExpression> => {
   const expected = normalizedMarker(marker)
-  return sourceNodes(parsedSource(file, indexed)).flatMap((node) => {
+  return (sourceSyntaxIndex(parsedSource(file, indexed)).calls.get(expected) ?? []).flatMap((node) => {
     if (
-      !ts.isCallExpression(node) ||
-      propertyAccessText(node.expression) !== expected ||
       (selector !== undefined && !callMatchesSelector(node, selector)) ||
       !callResolvesToContractOrigin(node, origin, originName, indexed)
     ) {
@@ -820,16 +829,56 @@ const roleImplementationEntries = (
     })
   )
 
+interface SourceSyntaxIndex {
+  readonly declarations: ReadonlyMap<string, ts.Identifier>
+  readonly calls: ReadonlyMap<string, ReadonlyArray<ts.CallExpression>>
+  readonly runtimeReferences: ReadonlyArray<ts.Identifier | ts.PropertyAccessExpression>
+}
+
+// Only syntax belongs here: a reused tree can have different bindings in a
+// later Program. Symbols, exports, diagnostics and findings are never cached
+// in this index. Tree reuse already requires exact path and complete text.
+const sourceSyntaxIndexes = new WeakMap<ts.SourceFile, SourceSyntaxIndex>()
+let sourceSyntaxIndexBuildCount = 0
+
+/** Counts complete syntax-index builds, independently of machine speed. */
+export const inspectCapabilitySyntaxIndexBuildCount = (): number => sourceSyntaxIndexBuildCount
+
+const sourceSyntaxIndex = (tree: ts.SourceFile): SourceSyntaxIndex => {
+  const cached = sourceSyntaxIndexes.get(tree)
+  if (cached !== undefined) return cached
+  const declarations = new Map<string, ts.Identifier>()
+  const calls = new Map<string, Array<ts.CallExpression>>()
+  const runtimeReferences: Array<ts.Identifier | ts.PropertyAccessExpression> = []
+  /* eslint-disable functional/immutable-data -- build a syntax-only index once per exact source tree. */
+  for (const node of sourceNodes(tree)) {
+    const name = declarationName(node)
+    if (name !== undefined && !declarations.has(name.text)) declarations.set(name.text, name)
+    if (ts.isCallExpression(node)) {
+      const marker = propertyAccessText(node.expression)
+      if (marker !== undefined) {
+        const matches = calls.get(marker) ?? []
+        matches.push(node)
+        calls.set(marker, matches)
+      }
+    }
+    if (!ts.isIdentifier(node) && !ts.isPropertyAccessExpression(node)) continue
+    if (isTypePosition(node)) continue
+    if (ts.isIdentifier(node) && (isDeclarationName(node) || isImportOrExportDeclaration(node))) continue
+    runtimeReferences.push(node)
+  }
+  const indexed = { calls, declarations, runtimeReferences }
+  sourceSyntaxIndexes.set(tree, indexed)
+  sourceSyntaxIndexBuildCount++
+  /* eslint-enable functional/immutable-data */
+  return indexed
+}
+
 const runtimeValueReferences = (
   file: CapabilitySourceFile,
   indexed: CapabilitySourceProgram
 ): ReadonlyArray<ts.Identifier | ts.PropertyAccessExpression> =>
-  sourceNodes(parsedSource(file, indexed)).flatMap((node) => {
-    if (!ts.isIdentifier(node) && !ts.isPropertyAccessExpression(node)) return []
-    if (isTypePosition(node)) return []
-    if (ts.isIdentifier(node) && (isDeclarationName(node) || isImportOrExportDeclaration(node))) return []
-    return [node]
-  })
+  sourceSyntaxIndex(parsedSource(file, indexed)).runtimeReferences
 
 const valueReferenceMatchesSymbol = (
   file: CapabilitySourceFile,
