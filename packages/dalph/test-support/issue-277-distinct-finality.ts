@@ -1,4 +1,4 @@
-import { Effect, Queue, Ref } from "effect"
+import { Effect, Match, Queue, Ref } from "effect"
 import {
   CompletionClaimBoundary,
   CompletionTaskBoundary,
@@ -65,53 +65,34 @@ export const makeIssue277DistinctFinality = Effect.fn("Issue277.makeDistinctFina
         return yield* Effect.interrupt
       }
     })
+  const applyAfterAppendCut = (event: WorkflowEvent) =>
+    Match.value(event).pipe(
+      Match.tags({
+        PlannedAttemptExecutorWorkReported: ({ report }) =>
+          report._tag === "ExecutorWorkTerminal"
+            ? interruptAt("AcceptedResult", report.correlation.attemptId)
+            : Effect.void,
+        IntegratorRunResultRecorded: ({ run }) => interruptAt("IntegratorResult", run.session.plannedAttempt.attemptId),
+        TargetPromotionObservedSuccess: ({ correlation }) =>
+          interruptAt("Promotion", correlation.qualifiedCandidate.run.session.plannedAttempt.attemptId),
+        TargetPromotionIntended: ({ correlation }) =>
+          interruptAt("PromotionIntent", correlation.qualifiedCandidate.run.session.plannedAttempt.attemptId),
+        CompletionClaimDeletionIntended: ({ claim }) =>
+          interruptAt("ClaimDeletionIntent", claim.plannedAttempt.attemptId),
+        CompletionTaskAcknowledged: ({ request }) =>
+          interruptAt("CompletionAcknowledgement", request.claim.plannedAttempt.attemptId),
+        CompletionClaimDeleted: ({ claim }) => interruptAt("ClaimDeletion", claim.plannedAttempt.attemptId),
+        IntegrationFinalitySettled: ({ claim }) =>
+          claim.plannedAttempt.taskId === "G"
+            ? Queue.offer(reached, { _tag: "Finished" }).pipe(Effect.andThen(Effect.interrupt))
+            : Effect.void
+      }),
+      Match.orElse(() => Effect.void)
+    )
   const afterAppend = (event: WorkflowEvent) =>
     Effect.gen(function* () {
       yield* Queue.offer(events, event)
-      if (
-        event._tag !== "PlannedAttemptExecutorWorkReported" &&
-        event._tag !== "IntegratorRunResultRecorded" &&
-        event._tag !== "TargetPromotionObservedSuccess" &&
-        event._tag !== "TargetPromotionIntended" &&
-        event._tag !== "CompletionClaimDeletionIntended" &&
-        event._tag !== "CompletionTaskAcknowledged" &&
-        event._tag !== "CompletionClaimDeleted" &&
-        event._tag !== "IntegrationFinalitySettled"
-      )
-        return
-      switch (event._tag) {
-        case "PlannedAttemptExecutorWorkReported":
-          if (event.report._tag === "ExecutorWorkTerminal")
-            yield* interruptAt("AcceptedResult", event.report.correlation.attemptId)
-          break
-        case "IntegratorRunResultRecorded":
-          yield* interruptAt("IntegratorResult", event.run.session.plannedAttempt.attemptId)
-          break
-        case "TargetPromotionObservedSuccess":
-          yield* interruptAt("Promotion", event.correlation.qualifiedCandidate.run.session.plannedAttempt.attemptId)
-          break
-        case "TargetPromotionIntended":
-          yield* interruptAt(
-            "PromotionIntent",
-            event.correlation.qualifiedCandidate.run.session.plannedAttempt.attemptId
-          )
-          break
-        case "CompletionClaimDeletionIntended":
-          yield* interruptAt("ClaimDeletionIntent", event.claim.plannedAttempt.attemptId)
-          break
-        case "CompletionTaskAcknowledged":
-          yield* interruptAt("CompletionAcknowledgement", event.request.claim.plannedAttempt.attemptId)
-          break
-        case "CompletionClaimDeleted":
-          yield* interruptAt("ClaimDeletion", event.claim.plannedAttempt.attemptId)
-          break
-        case "IntegrationFinalitySettled":
-          if (event.claim.plannedAttempt.taskId === "G") {
-            yield* Queue.offer(reached, { _tag: "Finished" })
-            return yield* Effect.interrupt
-          }
-          break
-      }
+      yield* applyAfterAppendCut(event)
     })
   const runtime = yield* makeSixTaskDeliveryRuntime(facts, {
     beforeAppend: (event) =>
