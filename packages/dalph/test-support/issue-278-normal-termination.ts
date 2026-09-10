@@ -65,6 +65,8 @@ export const makeIssue278NormalTermination = Effect.fn("Issue278.makeNormalTermi
     baseSha: settledA.claim.promotionCorrelation.qualifiedCandidate.candidateCommit
   }
   const graphReads = yield* Ref.make<ReadonlyArray<Issue278GraphRead>>([])
+  // Tracker-owned lifecycle state: only successful completion provider calls change it.
+  const completedTasks = yield* Ref.make<ReadonlySet<TaskId>>(new Set([TaskId.make("A")]))
   const specificationReads = yield* Ref.make<
     ReadonlyArray<{ readonly target: TrackerTarget; readonly taskId: TaskId }>
   >([])
@@ -113,6 +115,8 @@ export const makeIssue278NormalTermination = Effect.fn("Issue278.makeNormalTermi
             ({ intent, revision }) =>
               revision.startsWith("Gfinal") &&
               intent.event._tag === "TaskTrackerReadIntentRecorded" &&
+              intent.event.operation._tag === "ReadTrackerGraph" &&
+              intent.event.operation.cause._tag === "PostQuiescenceReconfirmation" &&
               intent.event.operation.operationId === event.operationId
           )
         if (matches) {
@@ -151,26 +155,28 @@ export const makeIssue278NormalTermination = Effect.fn("Issue278.makeNormalTermi
             const settledTaskIds = records.flatMap(({ event }) =>
               event._tag === "IntegrationFinalitySettled" ? [event.claim.plannedAttempt.taskId] : []
             )
-            const final =
-              intent.event.operation.cause._tag === "PostQuiescenceReconfirmation" &&
-              settledTaskIds.length === allTaskNames.length &&
-              allTaskNames.every((name) => settledTaskIds.includes(TaskId.make(name)))
-            const revision = final ? "Gfinal" : "G5"
+            const completed = yield* Ref.get(completedTasks)
+            const completedNames = allTaskNames.filter((name) => completed.has(TaskId.make(name)))
+            const revision =
+              completedNames.length === allTaskNames.length
+                ? "Gfinal"
+                : completedNames.length === 1
+                  ? "G5"
+                  : `G5:${completedNames.join(",")}`
             const runtime = yield* Ref.get(runtimeAtRead)
             const recordGraph = (snapshot: TaskDagSnapshot) =>
               Ref.update(graphReads, (all) => [...all, { target, intent, settledTaskIds, revision, runtime, snapshot }])
-            if (!final) return yield* reader.read(target).pipe(Effect.tap(recordGraph))
             const projection = projectTrackerSnapshot({
               revision,
               rootTaskId: TaskId.make("A"),
               tasks: allTaskNames.map((id) => ({
                 id: TaskId.make(id),
-                lifecycle: { _tag: "CompletedSuccessfully" },
+                lifecycle: completed.has(TaskId.make(id)) ? { _tag: "CompletedSuccessfully" } : { _tag: "Open" },
                 parentTaskId: null,
                 prerequisiteIds: []
               }))
             })
-            if (projection._tag === "Invalid") return yield* Effect.die("invalid controlled Gfinal")
+            if (projection._tag === "Invalid") return yield* Effect.die("invalid controlled tracker snapshot")
             yield* recordGraph(projection.snapshot)
             return projection.snapshot
           })
@@ -204,7 +210,10 @@ export const makeIssue278NormalTermination = Effect.fn("Issue278.makeNormalTermi
         taskBoundary: CompletionTaskBoundary.of({
           ...underlying.taskBoundary,
           completeTask: (request) =>
-            underlying.taskBoundary.completeTask(request).pipe(Effect.tap(() => record({ _tag: "Complete", request }))),
+            underlying.taskBoundary.completeTask(request).pipe(
+              Effect.tap(() => Ref.update(completedTasks, (all) => new Set(all).add(request.taskId))),
+              Effect.tap(() => record({ _tag: "Complete", request }))
+            ),
           readCompletionRequest: (request) =>
             underlying.taskBoundary
               .readCompletionRequest(request)

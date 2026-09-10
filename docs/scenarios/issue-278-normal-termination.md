@@ -35,6 +35,11 @@ read intent and call the tracker for Gfinal. The fixture correlates the actual
 target-only provider call with that exact pending durable
 `PostQuiescenceReconfirmation` operation. Gfinal has different lifecycle content
 from G5 and reports all seven exact tasks successful. It contains no claim facts.
+The controlled tracker starts with A successful and B–G open. Only successful
+`CompletionTaskBoundary.completeTask` calls change its lifecycle state; every
+graph response is projected from that state, never from Journal settlements.
+The Journal supplies read-intent correlation and independently checked finality
+history, not tracker lifecycle authority.
 
 The termination boundary validates that exact read and current empty
 responsibilities, then appends one `WorkflowRunTerminated(Completed)`. Alice sees
@@ -68,6 +73,7 @@ The two outstanding-work tests live in
 | Successful termination append loses acknowledgement | `reconstructs lost termination acknowledgement without another append attempt or boundary call` |
 | Actual proposal, live owner, held/executor work, integration, finality, and pending exact claim cleanup forbid termination | `keeps proposals live owners held executor integration finality and claim-cleanup work nonterminal` |
 | Another exact executor's report cannot settle B | `keeps an exact executor correlation conflict and its retained position nonterminal` |
+| Deferred #256 capstone: A FullRerun predecessor cleanup and lost-response reconciliation | #337/#279 must add the downstream acceptance test `completes the uninterrupted seven-task run after reconciling A FullRerun predecessor cleanup`: exact predecessor candidate cleanup, preserved predecessor history/evidence, and cleanup crash reconciliation must precede terminal proof. It composes the FullRerun cleanup seam with B–G delivery and this termination seam; the ordinary singleton A prefix here does not satisfy that future test. |
 
 The shared runtime now provides explicit tracker-reader injection and records
 actual ordinary append and `terminateRun` calls separately. A's existing

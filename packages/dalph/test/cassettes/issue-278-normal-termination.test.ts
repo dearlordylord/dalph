@@ -83,13 +83,20 @@ it.effect(
       yield* deliver(fixture, process)
       yield* process.event((event) => event._tag === "WorkflowRunTerminated")
       const records = yield* fixture.journal.read(fixture.runId)
-      const finalRead = (yield* Ref.get(fixture.graphReads)).find(({ revision }) => revision.startsWith("Gfinal"))
+      const reads = yield* Ref.get(fixture.graphReads)
+      const finalRead = reads.find(({ revision }) => revision.startsWith("Gfinal"))
       if (finalRead === undefined) return expect.fail("missing actual final tracker read")
       expect(finalRead.settledTaskIds).toEqual(allNames)
       expect(finalRead.snapshot.toWire().tasks.map(({ id, lifecycle }) => [id, lifecycle._tag])).toEqual(
         allNames.map((name) => [name, "CompletedSuccessfully"])
       )
-      expect(finalRead.snapshot.toWire().tasks.every((task) => !("claim" in task))).toBe(true)
+      const initialRead = reads.find(({ revision }) => revision === "G5")
+      expect(initialRead?.snapshot.toWire().tasks.map(({ id, lifecycle }) => [id, lifecycle._tag])).toEqual(
+        allNames.map((name) => [name, name === "A" ? "CompletedSuccessfully" : "Open"])
+      )
+      expect(
+        (yield* Ref.get(fixture.claimCalls)).flatMap((call) => (call._tag === "Complete" ? [call.request.taskId] : []))
+      ).toEqual(allNames.filter((name) => name !== "A"))
       expect(finalRead.snapshot.revision).not.toBe("G5")
       expect(fixture.settledA.history._tag).toBe("ValidWorkflowJournalHistory")
       expect(fixture.settledA.folded._tag).toBe("ValidWorkflowJournalHistory")
@@ -210,7 +217,12 @@ it.effect(
       yield* restarted.event((event) => event._tag === "WorkflowRunTerminated")
       const records = yield* fixture.journal.read(fixture.runId)
       expect(records.slice(0, prefix.length)).toEqual(prefix)
-      const reads = (yield* Ref.get(fixture.graphReads)).filter(({ revision }) => revision.startsWith("Gfinal"))
+      const reads = (yield* Ref.get(fixture.graphReads)).filter(
+        ({ intent }) =>
+          intent.event._tag === "TaskTrackerReadIntentRecorded" &&
+          intent.event.operation._tag === "ReadTrackerGraph" &&
+          intent.event.operation.cause._tag === "PostQuiescenceReconfirmation"
+      )
       expect(reads).toHaveLength(2)
       expect(reads[1]?.intent.position).toBeGreaterThan(prefix.length)
       const operations = reads.flatMap(({ intent }) =>
