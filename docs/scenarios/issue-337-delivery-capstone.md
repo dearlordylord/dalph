@@ -64,7 +64,12 @@ authorizes another append. No synthetic crash occurrence enters the Journal.
 
 The harness now starts the existing production owner from process entry and
 rebuilds it only at the declared process cut. Focused owner, causal-sync, and
-cleanup checks pass. The complete-story diagnostic reaches A's successor
-promotion and exact claim cleanup. Predecessor cleanup composition, the later
-DS18–DS22 chronology, and manifest publication remain unfinished. The draft
-capstone is not yet registered as maintained coverage.
+cleanup checks pass. The corrected complete-story diagnostic is blocked after
+DS10's post-suspension G2. C1 is safely suspended; A0 and D0 fill capacity two;
+E is a fresh candidate; no proposal or delivery-action owner remains. The
+production post-G2 phase does not classify this as an admission-stalled return,
+so it waits for a runtime event and cannot reach DS11's subsequent activation.
+This requires an architectural disposition before production changes. No extra
+crash, broader captured subject set, or forged return may bypass this boundary.
+The later FullRerun/cleanup and DS18–DS22 suffix remains unfinished. The draft
+capstone is not registered as maintained coverage.

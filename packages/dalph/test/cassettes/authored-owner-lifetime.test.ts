@@ -56,6 +56,14 @@ it.effect("propagates an unrelated authored boundary failure without restarting 
 it.effect("consumes each idle-boundary process death once before installing the next owner", () =>
   Effect.gen(function* () {
     const startingCassette = yield* Schema.decodeUnknownEffect(AuthoredScenarioCassette)(explicitLaterNotification)
+    const restart = [
+      { _tag: "CoordinatorProcessDies" },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: startingCassette.startingFacts.trackerGraph },
+      { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
+      { _tag: "TrackerGraphReadReturned", graph: startingCassette.startingFacts.trackerGraph },
+      { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActiveReasonUnasserted" } }
+    ]
     const cassette = {
       ...explicitLaterNotification,
       story: [
@@ -63,12 +71,8 @@ it.effect("consumes each idle-boundary process death once before installing the 
           0,
           startingCassette.story.findIndex((item) => item._tag === "CoordinatorActivationReturned") + 1
         ),
-        { _tag: "CoordinatorProcessDies" },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-        { _tag: "TrackerGraphReadReturned", graph: startingCassette.startingFacts.trackerGraph },
-        { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
-        { _tag: "TrackerGraphReadReturned", graph: startingCassette.startingFacts.trackerGraph },
-        { _tag: "CoordinatorActivationReturned", decision: { _tag: "RunMustRemainActiveReasonUnasserted" } },
+        ...restart,
+        ...restart,
         { _tag: "CassetteOffersRunReactivationHints", hints: ["Timer"] },
         { _tag: "DalphSelects", operation: { _tag: "ReadTrackerGraph", target: "cassette-target" } },
         { _tag: "TrackerGraphReadReturned", graph: startingCassette.startingFacts.trackerGraph },
@@ -106,8 +110,8 @@ it.effect("consumes each idle-boundary process death once before installing the 
       (capture) =>
         capture._tag === "AuthoredStoryOccurrenceCaptured" && capture.occurrence._tag === "CoordinatorProcessDies"
     )
-    expect(deaths).toHaveLength(1)
+    expect(deaths).toHaveLength(2)
     expect(run.records.filter(({ event }) => event._tag === "WorkflowRunBegan")).toHaveLength(1)
-    expect(run.activationOrdinals).toEqual([1, 2, 3])
+    expect(run.activationOrdinals).toEqual([1, 2, 3, 4])
   }).pipe(Effect.provide(NodeCrypto.layer))
 )

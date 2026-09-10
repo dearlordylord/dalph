@@ -112,7 +112,9 @@ describe("authored candidate cleanup boundary", () => {
         ({ event }) => !isCandidateCleanupEvent(event._tag) && event._tag !== "WorkflowRunTerminated"
       )
       const predecessor = authorization.disposition.predecessor
-      const foreignLocator = IntegratorCandidateResourceLocator.make("candidate:foreign-full-rerun-predecessor")
+      const foreignLocator = IntegratorCandidateResourceLocator.make(
+        "candidate:$authored-run:foreign-full-rerun-predecessor"
+      )
       const cursor = yield* makeStoryCursor([
         AuthoredCassetteStoryItem.cases.IntegratorCandidateCleanupEvidenceRevisionReturned.make({
           revision: authorization.evidenceRevision,
@@ -121,7 +123,7 @@ describe("authored candidate cleanup boundary", () => {
             predecessor: {
               ...predecessor,
               candidateResource: foreignLocator,
-              sessionId: IntegratorSessionId.make("session:foreign-full-rerun-predecessor")
+              sessionId: IntegratorSessionId.make("session:$authored-run:foreign-full-rerun-predecessor")
             }
           })
         })
@@ -131,7 +133,9 @@ describe("authored candidate cleanup boundary", () => {
         CoordinatorOwnership.of({ release: Effect.void, runMutation: (mutation) => mutation })
       )
       const journal = memoryJournalTestLayerFromPartitionRecords({ hot: upstream })
-      const cleanup = authoredCandidateCleanupBoundaryLayer(cursor).pipe(Layer.provide(ownership))
+      const cleanup = authoredCandidateCleanupBoundaryLayer(cursor, predecessor.plannedAttempt.runId).pipe(
+        Layer.provide(ownership)
+      )
 
       const records = yield* Effect.gen(function* () {
         const runId = authorization.disposition.predecessor.plannedAttempt.runId

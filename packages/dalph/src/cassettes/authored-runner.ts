@@ -1434,13 +1434,6 @@ const runAuthoredScenarioCassetteWith = (request: {
             AuthoredStoryPosition.make(storyPosition)
           ).pipe(Effect.asVoid)
       })
-      const dispositionCleanupBoundaryLayer = cassette.story.some(
-        ({ _tag }) =>
-          _tag === "IntegratorCandidateCleanupObservationReturned" ||
-          _tag === "IntegratorCandidateCleanupRemovalReturned"
-      )
-        ? authoredCandidateCleanupBoundaryLayer(cursor)
-        : preservingDispositionCleanupBoundaryLayer
       const offerRunReactivationHint = yield* Ref.make<(hint: "TrackerNotification" | "Timer") => Effect.Effect<void>>(
         () => Effect.die("the authored Run reactivation owner is not active")
       )
@@ -1951,6 +1944,15 @@ const runAuthoredScenarioCassetteWith = (request: {
       const gitWorktreeLayer = Layer.succeed(GitWorktree, authoredGitWorktree)
       const gitTargetLineage = Context.get(sharedContext, GitTargetLineage)
       const authoredTargetLineage = yield* Ref.make(cassette.startingFacts.targetLineageObservations ?? [])
+      const authoredCleanupStory = cassette.story.some(
+        ({ _tag }) =>
+          _tag === "IntegratorCandidateCleanupEvidenceRevisionReturned" ||
+          _tag === "IntegratorCandidateCleanupObservationReturned" ||
+          _tag === "IntegratorCandidateCleanupRemovalReturned"
+      )
+      const dispositionCleanupBoundaryLayer = authoredCleanupStory
+        ? authoredCandidateCleanupBoundaryLayer(cursor, runId)
+        : preservingDispositionCleanupBoundaryLayer
       const authoredGitTargetLineage = GitTargetLineage.of({
         read: (plannedBaseSha, target) =>
           Effect.gen(function* () {
@@ -2104,7 +2106,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           completionTaskConfigured ? completionTaskBoundary : undefined,
           dispositionCleanupBoundaryLayer,
           evidenceStore,
-          false,
+          authoredCleanupStory,
           opportunity
         ).pipe(
           Layer.provide(integratorLayer),
@@ -2927,7 +2929,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 initialControlPolicySource,
                 runId,
                 controlledExecutorFactory,
-                false
+                authoredCleanupStory
               ).pipe(Effect.provide(planningLayer(activationOrdinal)))
             )
           )
@@ -2964,7 +2966,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                     initialControlPolicySource,
                     runId,
                     controlledExecutorFactory,
-                    false,
+                    authoredCleanupStory,
                     opportunity
                   ).pipe(
                     Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
@@ -2983,7 +2985,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                     runId,
                     controlledExecutorFactory,
                     source,
-                    false
+                    authoredCleanupStory
                   ).pipe(
                     Effect.provide(planningLayer(AuthoredRunActivationOrdinal.make(ordinal + 1))),
                     Effect.provideService(JournaledRunBootstrap, bootstrap)
