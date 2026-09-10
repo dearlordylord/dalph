@@ -2,7 +2,9 @@ import { it } from "@effect/vitest"
 import { NodeCrypto } from "@effect/platform-node"
 import { Effect, Queue, Ref, Fiber, Deferred } from "effect"
 import { expect } from "vitest"
+import { TaskId } from "@dalph/contracts"
 import { makeIssue276PositionRelease, type Issue276TerminalCut } from "../../test-support/issue-276-position-release.js"
+import { target, integrationTarget } from "../../test-support/issue-276-g5-facts.js"
 
 type Fixture = Effect.Success<ReturnType<typeof makeIssue276PositionRelease>>
 const taskNames = ["B", "C", "D", "E", "F", "G"] as const
@@ -40,6 +42,81 @@ const handoffs = Effect.fn("Issue276Test.handoffs")(function* () {
   yield* process.awaitHeld(["E", "F", "G"])
   return { fixture, process }
 })
+
+it.effect(
+  "starts B integration after its exact acquired claim graph and lineage observations",
+  () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeIssue276PositionRelease()
+      const process = yield* start(fixture)
+      yield* process.awaitHeld(["B", "C", "D"])
+      yield* fixture.terminal("B")
+      const run = yield* process.take(fixture.integrationEntered)
+      const records = yield* fixture.journal.read(fixture.runId)
+      const acquired = records.find(({ event }) => event._tag === "TaskClaimAcquired" && event.claim.taskId === "B")
+      const started = records.find(
+        ({ event }) => event._tag === "IntegrationStarted" && event.plannedAttempt.taskId === "B"
+      )
+      if (acquired === undefined || started === undefined) return expect.fail("missing B claim or integration start")
+      const graph = records.find(
+        ({ event, position }) =>
+          position > acquired.position &&
+          event._tag === "TaskTrackerFactsObserved" &&
+          (event.observation._tag === "CompleteTaskTrackerFacts" ||
+            event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
+      )
+      if (graph?.event._tag !== "TaskTrackerFactsObserved") return expect.fail("missing complete graph after B claim")
+      expect(graph.event.observation.target).toEqual(target)
+      const plan = records.find(
+        ({ event }) => event._tag === "TaskAttemptPlanned" && event.operation.plannedAttempt.taskId === "B"
+      )
+      if (plan?.event._tag !== "TaskAttemptPlanned" || acquired.event._tag !== "TaskClaimAcquired")
+        return expect.fail("missing exact B plan and acquired claim")
+      expect(plan.event.operation.plannedAttempt).toEqual(run.session.plannedAttempt)
+      expect(plan.position).toBeGreaterThan(graph.position)
+      const acquiredClaim = acquired.event.claim
+      const acquisition = records.find(
+        ({ event }) =>
+          event._tag === "TaskClaimAcquisitionIntended" &&
+          event.operation.acquisition.operationId === acquiredClaim.operationId
+      )
+      if (acquisition?.event._tag !== "TaskClaimAcquisitionIntended")
+        return expect.fail("missing exact B acquisition intent")
+      expect(acquiredClaim).toMatchObject(acquisition.event.operation.acquisition)
+      expect(acquisition.position).toBeLessThan(acquired.position)
+      const lineage = records.find(
+        ({ event, position }) =>
+          position > started.position && event._tag === "TargetLineageObserved" && event.plannedAttempt.taskId === "B"
+      )
+      if (lineage?.event._tag !== "TargetLineageObserved")
+        return expect.fail("missing B integration lineage observation")
+      const lineageOperationId = lineage.event.operationId
+      const intent = records.find(
+        ({ event }) => event._tag === "GitReadIntentRecorded" && event.operation.operationId === lineageOperationId
+      )
+      if (intent?.event._tag !== "GitReadIntentRecorded" || intent.event.operation._tag !== "ReadTargetLineage")
+        return expect.fail("missing exact Git lineage boundary")
+      expect(intent.position).toBeGreaterThan(graph.position)
+      expect(lineage.position).toBeGreaterThan(intent.position)
+      expect(intent.event.operation.integrationTarget).toEqual(integrationTarget)
+      expect(intent.event.operation.plannedAttempt).toEqual(run.session.plannedAttempt)
+      expect(lineage.event.plannedAttempt).toEqual(run.session.plannedAttempt)
+      const integrator = records.find(
+        ({ event }) => event._tag === "IntegratorRunStarted" && event.run.session.plannedAttempt.taskId === "B"
+      )
+      expect(integrator?.position).toBeGreaterThan(lineage.position)
+      expect(
+        records.filter(
+          ({ event }) =>
+            event._tag === "TaskTrackerFactsObserved" &&
+            (event.observation._tag === "FocusedTaskClaimFacts" ||
+              event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+            event.observation.coverage.taskId === "B"
+        )
+      ).toEqual([])
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+  30_000
+)
 
 it.effect(
   "releases B C and D positions to E F and G while B holds integration",
@@ -106,7 +183,7 @@ it.effect(
         yield* process.awaitHeld(held)
       }
       for (const name of taskNames) {
-        const release = fixture.releaseIntegration.get(name)
+        const release = fixture.releaseIntegration.get(TaskId.make(name))
         if (release === undefined) return expect.fail("missing controlled integration turn")
         expect((yield* Ref.get(fixture.integrations)).at(-1)?.session.plannedAttempt.taskId).toBe(name)
         yield* Deferred.succeed(release, undefined)

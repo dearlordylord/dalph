@@ -22,6 +22,33 @@ they hold all three positions. E, F, and G are open and unstarted. Git owns one
 shared target ref. The executor, tracker, Git, Integrator, evidence store, and
 Journal are controlled boundaries interpreting the production workflow.
 
+### A newly acquired claim permits the next integration lineage check
+
+Alice watches B finish in that Run. The tracker previously returned a successful
+claim acquisition for B's exact owner, token, and operation, and Dalph durably
+recorded `TaskClaimAcquired`, then read and recorded a complete G5 graph for the
+Run's tracker target, and then fixed B's planned attempt. There is no later
+coordinator recovery boundary and no redundant focused claim-read result.
+
+B's executor publishes its accepted result. Dalph accepts that report and starts
+B's separate integration responsibility. The successful claim acquisition is the
+claim-check point before the complete graph observation: Dalph can now call Git
+to read lineage for B's exact planned attempt and integration target. After that
+read is durable, Dalph calls the Integrator for B. Alice sees integration progress
+instead of a responsibility waiting forever for a claim read that is not owed.
+
+A later acquired claim for C, or a different B owner, token, or operation, must
+not stand in for B's authorized acquisition. A focused claim observation from
+another tracker target must not authorize B's lineage check either. The focused
+negative tests place those unrelated records after a recovery freshness boundary;
+the old valid acquisition must stay stale, with no fresh claim-check point.
+If the coordinator actually dies, its recovered freshness boundary still requires
+new claim evidence; this change must not reuse the old acquisition or retry work.
+The terminal-journal cuts below separately prove recovery without another Begin
+or Resume. No live-provider retry occurs in these controlled tests.
+
+### Task-work positions release independently of the integration target
+
 No person commands an executor to finish. B's executor independently makes its
 exact terminal Accepted report available through the passive report boundary.
 Dalph records the correlated executor observation and then accepts the terminal
@@ -56,6 +83,8 @@ retains the position and authorizes no E admission.
 | --- | --- |
 | B/C/D release only after durable acceptance, admitting E/F/G while B integrates | `releases B C and D positions to E F and G while B holds integration` |
 | Integration retains B/C/D/E/F/G order and distinct identities | `serializes distinct B through G sessions resources and candidates in accepted order` |
+| Exact fresh acquisition precedes complete graph, Git lineage, and B's Integrator call without a redundant claim read | `starts B integration after its exact acquired claim graph and lineage observations` |
+| Unrelated or foreign claims cannot replace fresh exact evidence | `does not use unrelated acquired claims as fresh integration claim observations` and `keeps focused integration claim observations within the exact task target and freshness boundary` in `recovery-activation.test.ts` |
 | Crash before executor-state observation | `recovers B at BeforeObservation without another executor command` |
 | Crash after observation, before acceptance | `recovers B at AfterObservation without another executor command` |
 | Crash after acceptance, before responsibility | `recovers B at AfterAcceptance without another executor command` |
@@ -66,14 +95,7 @@ Forbidden release and duplication preserve delivery invariants D12, D14,
 and the executor/integration laws linked above. There is no live-provider retry:
 all interruptions and responses are deterministic local boundary controls.
 
-When Dalph has just acquired the exact authorized task claim, that successful
-GitHub boundary result already establishes the claim-check chronology. After
-checking the graph, Dalph must proceed to the Git lineage read and Integrator
-without waiting for a redundant focused claim read. The six-session test covers
-this path for freshly acquired B through G. Recovery retains the existing
-freshness baseline, exact claim identity, and focused-observation target guards.
-
-The DS-21 manifest remains `NotImplemented`: these seven tests establish its
+The DS-21 manifest remains `NotImplemented`: these tests establish its
 position-release and serialized-order slice only. Issue #277 owns ordinary
 finality and #279 owns uninterrupted composition; the settlement control here
 is not evidence for either remaining acceptance boundary.

@@ -1,7 +1,6 @@
 import {
   AcceptedResultEvidenceManifest,
-  AttemptId,
-  GitCommitSha,
+  type AttemptId,
   makeTaskWorkSpecification,
   PlannedAttemptExecutor,
   PlannedAttemptExecutorLifecycleObservation,
@@ -11,7 +10,7 @@ import {
   PlannedTaskAttempt,
   TaskBranchRef,
   TaskExecutorLocator,
-  TaskId,
+  type TaskId,
   WorktreeLocator
 } from "@dalph/contracts"
 import {
@@ -72,13 +71,12 @@ import {
 } from "./issue-276-integration-settlement-control.js"
 
 import {
-  names,
+  tasks,
+  taskFacts,
+  taskFactsById,
   runId,
   target,
-  shaLength,
   capacity,
-  candidateDigits,
-  acceptedDigits,
   baseSha,
   integrationTarget,
   graph
@@ -96,11 +94,11 @@ export const makeIssue276PositionRelease = Effect.fn("Issue276.makePositionRelea
       controlledTrackerMutationLayerFrom([]),
       trackerGraphReaderTestLayer(
         graph.snapshot,
-        names.map((name) =>
+        tasks.map(({ taskId }) =>
           makeTaskWorkSpecification({
-            taskId: TaskId.make(name),
-            title: `Implement ${name}`,
-            body: `Implement controlled task ${name}.`
+            taskId,
+            title: `Implement ${taskId}`,
+            body: `Implement controlled task ${taskId}.`
           })
         )
       ),
@@ -136,17 +134,17 @@ export const makeIssue276PositionRelease = Effect.fn("Issue276.makePositionRelea
   const failure = yield* Deferred.make<unknown>()
   const publicationQueue = yield* Queue.unbounded<DeliveryRelationInputBundle>()
   const commands = yield* Ref.make<ReadonlyArray<PlannedTaskAttempt>>([])
-  const reports = yield* Ref.make<ReadonlyMap<string, PlannedAttemptExecutorReport>>(new Map())
+  const reports = yield* Ref.make<ReadonlyMap<AttemptId, PlannedAttemptExecutorReport>>(new Map())
   const changes = new Map(
-    yield* Effect.forEach(names, (name) =>
-      Queue.unbounded<PlannedAttemptExecutorProjection>().pipe(Effect.map((queue) => [name, queue] as const))
+    yield* Effect.forEach(tasks, ({ taskId }) =>
+      Queue.unbounded<PlannedAttemptExecutorProjection>().pipe(Effect.map((queue) => [taskId, queue] as const))
     )
   )
   const integrations = yield* Ref.make<ReadonlyArray<IntegratorRunCorrelation>>([])
   const integrationEntered = yield* Queue.unbounded<IntegratorRunCorrelation>()
-  const releaseIntegration: ReadonlyMap<string, Deferred.Deferred<void>> = new Map(
-    yield* Effect.forEach(names, (name) =>
-      Deferred.make<void>().pipe(Effect.map((release) => [name, release] as const))
+  const releaseIntegration: ReadonlyMap<TaskId, Deferred.Deferred<void>> = new Map(
+    yield* Effect.forEach(tasks, ({ taskId }) =>
+      Deferred.make<void>().pipe(Effect.map((release) => [taskId, release] as const))
     )
   )
   const executor = PlannedAttemptExecutor.of({
@@ -176,8 +174,8 @@ export const makeIssue276PositionRelease = Effect.fn("Issue276.makePositionRelea
     Layer.succeed(PlannedAttemptExecutorLifecycleObservation, {
       attach: (correlation) =>
         Effect.gen(function* () {
-          const name = names.find((name) => correlation.attemptId === `attempt:${name}`)
-          const queue = name === undefined ? undefined : changes.get(name)
+          const task = tasks.find(({ attemptId }) => correlation.attemptId === attemptId)
+          const queue = task === undefined ? undefined : changes.get(task.taskId)
           if (queue === undefined) return yield* Effect.die("missing exact executor stream")
           return {
             current: yield* executor.observe(correlation, { _tag: "PassiveLifecycleObservation" }),
@@ -192,9 +190,11 @@ export const makeIssue276PositionRelease = Effect.fn("Issue276.makePositionRelea
     deterministicTaskClaimAcquisitionPlannerLayer({ owner: ClaimOwner.make("issue-276"), tokenPrefix: "issue-276" }),
     Layer.succeed(PlannedTaskAttemptPlanner, {
       plan: (request) =>
-        Effect.succeed(
-          PlannedTaskAttempt.make({
-            attemptId: AttemptId.make(`attempt:${request.specification.taskId}`),
+        Effect.gen(function* () {
+          const task = taskFactsById.get(request.specification.taskId)
+          if (task === undefined) return yield* Effect.die("cannot plan an unknown controlled task")
+          return PlannedTaskAttempt.make({
+            attemptId: task.attemptId,
             baseSha,
             branch: TaskBranchRef.make(`refs/heads/issue-276-${request.specification.taskId}`),
             executor: TaskExecutorLocator.make(`executor:${request.specification.taskId}`),
@@ -203,7 +203,7 @@ export const makeIssue276PositionRelease = Effect.fn("Issue276.makePositionRelea
             taskRevision: request.specification.fingerprint,
             worktree: WorktreeLocator.make(`/controlled/issue-276/${request.specification.taskId}`)
           })
-        )
+        })
     })
   )
   const planningContext = yield* Layer.build(planning)
@@ -261,13 +261,12 @@ export const makeIssue276PositionRelease = Effect.fn("Issue276.makePositionRelea
             (run) => candidateText === `candidate:${run.session.plannedAttempt.taskId}`
           )
           if (run === undefined) return yield* Effect.die("unknown exact candidate")
-          const digit = candidateDigits[names.findIndex((name) => name === run.session.plannedAttempt.taskId)]
-          if (digit === undefined) return yield* Effect.die("candidate has no controlled commit")
-          const commit = GitCommitSha.make(digit.repeat(shaLength))
+          const task = taskFactsById.get(run.session.plannedAttempt.taskId)
+          if (task === undefined) return yield* Effect.die("candidate has no controlled task")
           return {
             _tag: "Commit" as const,
             candidateText,
-            commit,
+            commit: task.candidateCommit,
             directParents: [run.session.expectedTargetHead, run.session.acceptedResult.commit]
           }
         })
@@ -352,15 +351,13 @@ export const makeIssue276PositionRelease = Effect.fn("Issue276.makePositionRelea
       )
     })
   )
-  const terminalReport = (name: (typeof names)[number]) =>
+  const terminalReport = (name: keyof typeof taskFacts) =>
     Effect.gen(function* () {
       const attempt = (yield* Ref.get(commands)).find((attempt) => attempt.taskId === name)
-      const queue = changes.get(name)
+      const queue = changes.get(taskFacts[name].taskId)
       if (attempt === undefined || queue === undefined) return yield* Effect.die(`task ${name} has not begun`)
       const correlation = plannedAttemptExecutorCorrelation(attempt)
-      const digit = acceptedDigits[names.indexOf(name)]
-      if (digit === undefined) return yield* Effect.die("accepted result has no controlled commit")
-      const commit = GitCommitSha.make(digit.repeat(shaLength))
+      const commit = taskFacts[name].acceptedCommit
       const evidenceManifest = yield* evidence.put(
         new TextEncoder().encode(
           JSON.stringify(
@@ -379,11 +376,11 @@ export const makeIssue276PositionRelease = Effect.fn("Issue276.makePositionRelea
         result: { _tag: "Accepted", acceptedResult: { commit, evidenceManifest } }
       })
     })
-  const publish = (name: (typeof names)[number], projection: PlannedAttemptExecutorProjection) => {
-    const queue = changes.get(name)
+  const publish = (name: keyof typeof taskFacts, projection: PlannedAttemptExecutorProjection) => {
+    const queue = changes.get(taskFacts[name].taskId)
     return queue === undefined ? Effect.die("missing exact executor stream") : Queue.offer(queue, projection)
   }
-  const terminal = (name: (typeof names)[number]) =>
+  const terminal = (name: keyof typeof taskFacts) =>
     Effect.gen(function* () {
       const report = yield* terminalReport(name)
       yield* Ref.update(reports, (all) => new Map(all).set(report.correlation.attemptId, report))
@@ -391,7 +388,7 @@ export const makeIssue276PositionRelease = Effect.fn("Issue276.makePositionRelea
     })
   const unresolved = (kind: "Unavailable" | "Foreign") =>
     Effect.gen(function* () {
-      const expected = { runId, attemptId: AttemptId.make("attempt:B") }
+      const expected = { runId, attemptId: taskFacts.B.attemptId }
       const projection =
         kind === "Unavailable"
           ? PlannedAttemptExecutorProjection.cases.TemporarilyUnavailable.make({ correlation: expected })

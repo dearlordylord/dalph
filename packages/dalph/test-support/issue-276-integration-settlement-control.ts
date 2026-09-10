@@ -15,7 +15,7 @@ import {
   type TrackerMutation
 } from "@dalph/orchestrator"
 import { Effect, Ref } from "effect"
-import type { GitCommitSha } from "@dalph/contracts"
+import type { GitCommitSha, TaskId } from "@dalph/contracts"
 
 /** Exact expected-head control shared by the six serialized integration turns. */
 export const makeIssue276PromotionGit = (head: Ref.Ref<GitCommitSha>) =>
@@ -43,8 +43,8 @@ export const makeIssue276PromotionGit = (head: Ref.Ref<GitCommitSha>) =>
  */
 export const makeIssue276IntegrationSettlementControl = Effect.fn("Issue276.makeIntegrationSettlementControl")(
   function* (tracker: TrackerMutation["Service"]) {
-    const boundaries = yield* Ref.make<ReadonlyMap<string, CompletionClaimBoundary["Service"]>>(new Map())
-    const completed = yield* Ref.make<ReadonlyMap<string, CompletionTaskRequest>>(new Map())
+    const boundaries = yield* Ref.make<ReadonlyMap<TaskId, CompletionClaimBoundary["Service"]>>(new Map())
+    const completed = yield* Ref.make<ReadonlyMap<TaskId, CompletionTaskRequest>>(new Map())
     const boundaryFor = (claim: CompletionTaskClaim) =>
       Effect.gen(function* () {
         const taskId = claim.plannedAttempt.taskId
@@ -57,7 +57,7 @@ export const makeIssue276IntegrationSettlementControl = Effect.fn("Issue276.make
         yield* Ref.update(boundaries, (all) => new Map(all).set(taskId, boundary))
         return boundary
       })
-    const existingFor = (taskId: string) =>
+    const existingFor = (taskId: TaskId) =>
       Ref.get(boundaries).pipe(
         Effect.flatMap((all) => {
           const boundary = all.get(taskId)

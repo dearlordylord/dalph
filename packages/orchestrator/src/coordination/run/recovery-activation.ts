@@ -1985,6 +1985,28 @@ const latestJournalPosition = (
 const positionIsAfter = (position: JournalPosition, baseline: Option.Option<JournalPosition>): boolean =>
   Option.match(baseline, { onNone: () => true, onSome: (baselinePosition) => position > baselinePosition })
 
+/** Finds the fresh exact claim-check point that must precede the integration graph and lineage reads. */
+export const latestIntegrationClaimObservationPosition = (
+  records: ReadonlyArray<JournalRecord>,
+  plannedAttempt: PlannedTaskAttempt,
+  target: TrackerTarget,
+  freshnessBaseline: Option.Option<JournalPosition>
+): JournalPosition | undefined => {
+  const authorizedClaim = authorizedClaimForAttempt(records, plannedAttempt)?.claim
+  return records.findLast(
+    ({ event, position }) =>
+      positionIsAfter(position, freshnessBaseline) &&
+      ((event._tag === "TaskClaimAcquired" &&
+        authorizedClaim !== undefined &&
+        isExactTaskClaim(event.claim, authorizedClaim)) ||
+        (event._tag === "TaskTrackerFactsObserved" &&
+          (event.observation._tag === "FocusedTaskClaimFacts" ||
+            event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+          event.observation.coverage.taskId === plannedAttempt.taskId &&
+          taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(target)))
+  )?.position
+}
+
 const latestCompletedRunPauseCyclePosition = (runState: ReconstructedRunState): JournalPosition | undefined => {
   if (runState.pause.run._tag === "RunPaused") return undefined
   const wasPaused = runState.workflowHistory.records.some(
@@ -3881,25 +3903,6 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   })
   const integrationResourceSnapshot = currentIntegrationResources ?? (yield* integrationResources.snapshot)
   const integrationResponsibilities = deriveIntegrationAdmission(runState.workflowHistory.records).responsibilities
-  const latestClaimObservationPositionFor = (plannedAttempt: PlannedTaskAttempt) => {
-    const taskId = plannedAttempt.taskId
-    const authorizedClaim = authorizedClaimForAttempt(runState.workflowHistory.records, plannedAttempt)?.claim
-    return runState.workflowHistory.records.findLast(
-      ({ event, position }) =>
-        positionIsAfter(position, freshnessBaselineForTask(taskId)) &&
-        // Successful acquisition is also a fresh exact claim observation. A
-        // newly accepted attempt need not invent a second claim read merely
-        // to establish the chronology before its integration-lineage read.
-        ((event._tag === "TaskClaimAcquired" &&
-          authorizedClaim !== undefined &&
-          isExactTaskClaim(event.claim, authorizedClaim)) ||
-          (event._tag === "TaskTrackerFactsObserved" &&
-            (event.observation._tag === "FocusedTaskClaimFacts" ||
-              event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
-            event.observation.coverage.taskId === taskId &&
-            taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(establishedRunTarget)))
-    )?.position
-  }
   const directionLineageByAttemptId = new Map(
     integrationResponsibilities.flatMap((responsibility) => {
       if (responsibility._tag !== "StartedIntegrationResponsibility") return []
@@ -4006,7 +4009,12 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           responsibility
         )
         const quarantineDirection = appliedQuarantineDirection
-        const claimObservedAt = latestClaimObservationPositionFor(responsibility.plannedAttempt)
+        const claimObservedAt = latestIntegrationClaimObservationPosition(
+          runState.workflowHistory.records,
+          responsibility.plannedAttempt,
+          establishedRunTarget,
+          freshnessBaselineForTask(responsibility.plannedAttempt.taskId)
+        )
         const taskGraphObservation = currentGraphObservationForTask(responsibility.plannedAttempt.taskId)
         const graphWasCheckedAfterClaim =
           claimObservedAt !== undefined &&
