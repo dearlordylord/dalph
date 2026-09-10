@@ -657,7 +657,7 @@ it.effect("reconstructs an append accepted before the process could publish it",
           intentRecordKey(operation.operationId),
           taskTrackerReadIntent(operation)
         )
-        expect(yield* storage.read(crashRunId)).not.toBe((yield* crashingJournal.state.get).records)
+        expect(yield* storage.read(crashRunId)).not.toBe((yield* crashingJournal.state.get).prefix.records)
         yield* Ref.set(failAfterDurableAppend, true)
         const interruptedPublication = yield* crashingJournal
           .append(
@@ -681,7 +681,7 @@ it.effect("reconstructs an append accepted before the process could publish it",
     const recoveredHistory = reduceWorkflowJournalHistory(crashRunId, yield* storage.read(crashRunId))
     if (recoveredHistory._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(recoveredHistory)
     const restarted = yield* makeJournal(crashRunId, target, recoveredHistory, storage)
-    expect((yield* restarted.state.get).records).toHaveLength(3)
+    expect(yield* restarted.read(crashRunId)).toHaveLength(3)
     expect((yield* restarted.state.get).reconstructed.graphKnowledge.taskTrackerFacts).toHaveLength(1)
     expect((yield* restarted.state.get).graph._tag).toBe("GraphNotEstablished")
   }).pipe(Effect.provide(memoryJournalStoreLayer))
@@ -762,12 +762,16 @@ it.effect("does not republish an idempotent append and rejects a different Run",
     )
     const append = journal.append(fixedRunId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
     yield* append
+    expect(yield* journal.readAccepted(fixedRunId)).toBe((yield* journal.state.get).prefix)
     yield* append
     yield* Effect.yieldNow
     expect(yield* Ref.get(publications)).toBe(2)
 
     const mismatch = yield* Effect.flip(journal.read(RunId.make("another-run")))
     expect(mismatch).toBeInstanceOf(InRunJournalRunMismatch)
+    expect(yield* journal.readAccepted(RunId.make("another-run")).pipe(Effect.flip)).toBeInstanceOf(
+      InRunJournalRunMismatch
+    )
     expect(
       yield* journal
         .append(RunId.make("another-run"), intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
