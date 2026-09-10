@@ -38,6 +38,7 @@ interface DeliveryStoryAcceptanceTest {
     | "packages/dalph/test/cassettes/scenario.test.ts"
     | "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
     | "packages/dalph/test/cassettes/issue-274-lifecycle-resume.test.ts"
+    | "packages/dalph/test/cassettes/issue-275-active-graph-refresh.test.ts"
     | "prototypes/reducer-lab/src/cassette-lab.smoke.ts"
 }
 
@@ -246,10 +247,11 @@ export const deliveryStoryManifest = {
         name: "reconciles C's lost Resume response after restart without another Begin or Resume"
       }
     ),
-    missing(
-      "DS-20",
-      "The maintained staggered graph adds X during process loss and delays it behind reconstructed B/C positions; it does not add F and G behind three running tasks."
-    ),
+    slice("DS-20", ["controlled:issue275ActiveGraphRefresh"], {
+      declaration: "it.effect",
+      sourceFile: "packages/dalph/test/cassettes/issue-275-active-graph-refresh.test.ts",
+      name: "observes F and G without admitting either while B C and D retain every exact position"
+    }),
     missing("DS-21", "No maintained authored run finalizes B, C, and D and admits E, F, and G in one chronology."),
     missing(
       "DS-22",

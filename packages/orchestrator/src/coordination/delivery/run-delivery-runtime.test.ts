@@ -5405,57 +5405,127 @@ it.effect("reuses a full-capacity position for its matching exact prepared attem
   )
 )
 
-it.effect("classifies a capacity-blocked fresh candidate as stalled without creating a proposal", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const base = yield* baseEvaluation
-      const taskId = TaskId.make("runtime-admission-stalled-fresh-task")
-      const task: Task = {
-        id: taskId,
-        lifecycle: TaskLifecycle.cases.Open.make({}),
-        parentTaskId: null,
-        prerequisiteIds: []
-      }
-      const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
-        taskId,
-        taskRevision: taskRevisionFor(task)
-      })
-      const frontier = yield* freshTaskCandidateFrontierOf({
-        decisions: [
-          {
-            step: FreshWorkflowStep.AcquireTaskClaim({
-              predecessorOperationId: OperationId.make("runtime-admission-stalled-fresh-graph"),
-              task
-            }),
-            transition
+for (const phase of [
+  DeliveryRuntimePhase.Ordinary,
+  DeliveryRuntimePhase.ActiveRefreshPreG2([]),
+  DeliveryRuntimePhase.ActiveRefreshPostG2([])
+]) {
+  it.effect(
+    `classifies a capacity-blocked fresh candidate as stalled without creating a proposal in ${phase._tag}`,
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const base = yield* baseEvaluation
+          const taskId = TaskId.make("runtime-admission-stalled-fresh-task")
+          const task: Task = {
+            id: taskId,
+            lifecycle: TaskLifecycle.cases.Open.make({}),
+            parentTaskId: null,
+            prerequisiteIds: []
           }
-        ],
-        runId
-      })
-      const candidate = frontier.candidates[0]
-      if (candidate === undefined) return yield* Effect.die("fresh claim must produce a candidate")
-      const held = preparedAttemptFixture("fresh-position-holder").attempt
-      const relation = yield* dynamicEvaluationSignal({
-        ...withProposals(base, [], 1, [candidate]),
-        taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [held] })
-      })
-      const result = yield* runDeliveryRuntimePhase(runId, relation).pipe(
-        Effect.provide(identityLayers),
-        Effect.provideService(
-          DeliveryActionExecutor,
-          DeliveryActionExecutor.of({ execute: () => Effect.die("fresh work must remain position-gated") })
-        )
-      )
+          const transition = RunnableFrontierTransition.CommitFreshTaskClaimIntent({
+            taskId,
+            taskRevision: taskRevisionFor(task)
+          })
+          const frontier = yield* freshTaskCandidateFrontierOf({
+            decisions: [
+              {
+                step: FreshWorkflowStep.AcquireTaskClaim({
+                  predecessorOperationId: OperationId.make("runtime-admission-stalled-fresh-graph"),
+                  task
+                }),
+                transition
+              }
+            ],
+            runId
+          })
+          const candidate = frontier.candidates[0]
+          if (candidate === undefined) return yield* Effect.die("fresh claim must produce a candidate")
+          const held = preparedAttemptFixture("fresh-position-holder").attempt
+          const blocked = {
+            ...withProposals(base, [], 1, [candidate], frontier),
+            taskWork: makeFreshTaskAdmissionTestBasis({ capacity: TaskWorkCapacity.make(1), held: [held] })
+          }
+          const relation = yield* dynamicEvaluationSignal(blocked)
+          const result = yield* runDeliveryRuntimePhase(runId, relation, phase).pipe(
+            Effect.provide(identityLayers),
+            Effect.provideService(
+              DeliveryActionExecutor,
+              DeliveryActionExecutor.of({ execute: () => Effect.die("fresh work must remain position-gated") })
+            )
+          )
 
-      expect(result._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
-      if (result._tag !== "TaskWorkAdmissionStalledRuntimeQuiescence") {
-        return yield* Effect.die("capacity-blocked fresh candidate must produce stalled quiescence")
-      }
-      expect(result.proposedActions.freshTaskCandidates).toEqual([candidate])
-      expect(result.proposedActions.proposals).toEqual([])
-    })
+          expect(result._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+          if (result._tag !== "TaskWorkAdmissionStalledRuntimeQuiescence") {
+            return yield* Effect.die("capacity-blocked fresh candidate must produce stalled quiescence")
+          }
+          expect(result.proposedActions.freshTaskCandidates).toEqual([candidate])
+          expect(result.proposedActions.proposals).toEqual([])
+
+          // An empty exact occupancy map is the contrasting admission case.
+          // The same candidate and same active phase must now execute once.
+          const available = yield* dynamicEvaluationSignal(withProposals(base, [], 1, [candidate], frontier))
+          const executed = yield* Ref.make(0)
+          const admitted = yield* runDeliveryRuntimePhase(runId, available, phase).pipe(
+            Effect.provide(identityLayers),
+            Effect.provideService(
+              DeliveryActionExecutor,
+              DeliveryActionExecutor.of({
+                execute: ({ proposal: action }) =>
+                  Ref.update(executed, (count) => count + 1).pipe(
+                    Effect.andThen(available.publish(withProposals(base, []))),
+                    Effect.as({ _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult)
+                  )
+              })
+            )
+          )
+          expect(admitted._tag).not.toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+          expect(yield* Ref.get(executed)).toBe(1)
+
+          // Full capacity does not make a tracker read or its live owner a capacity wait.
+          const graphRead = trackerGraphReadProposalOf({
+            acceptedAt: null,
+            purpose: "EstablishCurrentGraph",
+            runId,
+            target
+          })
+          const withRead = yield* dynamicEvaluationSignal({
+            ...blocked,
+            proposedActions: {
+              _tag: "DeliveryProposalsAvailable",
+              freshTaskCandidates: [candidate],
+              freshTaskCandidateFrontier: frontier,
+              isolatedIssues: [],
+              proposals: [graphRead]
+            }
+          })
+          const entered = yield* Deferred.make<void>()
+          const release = yield* Deferred.make<void>()
+          const reading = yield* runDeliveryRuntimePhase(runId, withRead, phase).pipe(
+            Effect.provide(identityLayers),
+            Effect.provideService(
+              DeliveryActionExecutor,
+              DeliveryActionExecutor.of({
+                execute: ({ proposal: action }) =>
+                  Effect.gen(function* () {
+                    expect(action.id).toBe(graphRead.id)
+                    yield* withRead.publish(blocked)
+                    yield* Deferred.succeed(entered, undefined)
+                    yield* Deferred.await(release)
+                    return { _tag: "ActionCompleted", proposalId: action.id } satisfies DeliveryActionResult
+                  })
+              })
+            ),
+            Effect.forkChild
+          )
+          yield* Deferred.await(entered)
+          expect(reading.pollUnsafe()).toBeUndefined()
+          yield* Deferred.succeed(release, undefined)
+          expect((yield* Fiber.join(reading))._tag).toBe("TaskWorkAdmissionStalledRuntimeQuiescence")
+        })
+      )
   )
-)
+}
 
 it.effect("retains fresh admission when the first claim-intent append outcome is unknown", () =>
   Effect.scoped(
