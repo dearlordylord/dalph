@@ -15,7 +15,6 @@ coverage/
 *.db-wal
 .references/
 _apalache-out/
-.codex/memory/.lock
 
 # Scratchpad for local tooling runs, not part of the repository.
 .scratch/

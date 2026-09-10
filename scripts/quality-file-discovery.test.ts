@@ -15,7 +15,7 @@ it.effect("quality file discovery includes authored TS, TSX, MJS, and root confi
 
     expect(files).toContain("packages/orchestrator/src/index.ts")
     expect(files).toContain("packages/orchestrator/src/coordination/application-exit/application-shell.test.ts")
-    expect(files).toContain("scripts/project-memory.mjs")
+    expect(files).toContain("scripts/run-quality-gate.mjs")
     expect(files).toContain("vitest.config.ts")
     expect(files).toEqual([...files].toSorted((left, right) => left.localeCompare(right)))
     expect(files.some((file) => file.includes("node_modules"))).toBe(false)
@@ -27,12 +27,12 @@ it.effect("quality file discovery can select an explicit staged subset", () =>
   Effect.gen(function* () {
     const files = yield* Effect.tryPromise(() =>
       discoverQualityFiles({
-        explicitFiles: ["vitest.config.ts", "scripts/project-memory.mjs"],
+        explicitFiles: ["vitest.config.ts", "scripts/run-quality-gate.mjs"],
         rootDirectory: process.cwd()
       })
     ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(Schema.String))))
 
-    expect(files).toEqual(["scripts/project-memory.mjs", "vitest.config.ts"])
+    expect(files).toEqual(["scripts/run-quality-gate.mjs", "vitest.config.ts"])
   })
 )
 

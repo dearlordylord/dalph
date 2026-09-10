@@ -143,7 +143,6 @@ is an operating recommendation, not a semantic timeout. A row that says
 | Dependency cycles | Reject runtime import cycles. | Every quality gate. | 60 s. | Remain below 60 s. |
 | Cyclomatic complexity | Enforce production complexity budget and baseline. | Every quality gate. | 60 s. | Remain below 60 s; no new suppression. |
 | Duplication | Enforce the configured production duplication budget. | Every quality gate. | 60 s. | Remain below 60 s; do not duplicate event/index invalidation rules. |
-| Project-memory scenarios | Run checked-in project-memory scenarios. | Every `check:all`/`check:ci`. | 60 s. | Remain below 60 s and retain collected scenario evidence. |
 | Reducer Lab maintained evaluation | Typecheck, smoke, and build the maintained Lab cassettes. | Every `check:all`/`check:ci`. | 180 s. | Remain below 180 s; browser smoke remains a separate explicit check. |
 | Reducer Lab browser smoke | Run maintained cassettes in hosted Chromium. | Explicit `pnpm check:lab:browser`, not the ordinary quality gate. | No quality-gate timeout; browser setup requires the documented pinned browser/system libraries. | Keep as an explicit environment-dependent check; do not fold it into semantic unit timing. |
 | Quint-connected executable MBT | Run executable conformance adapters for checked-in Quint scenarios. | `pnpm check:all`; omitted by hosted `check:ci`. | 300 s quality-gate stage. | Remain below 300 s and retain all collected scenarios/negative controls. |

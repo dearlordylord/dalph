@@ -1,5 +1,4 @@
 [features]
-hooks = true
 memories = false
 
 [memories]
