@@ -520,9 +520,11 @@ export const journaledRunBootstrapLayer = (
               const acceptedPublicationWatermark = yield* Ref.make(
                 initial.records.at(latestJournalRecordOffset)?.position ?? null
               )
+              const ambientPublicationObserver = yield* DeliveryRelationPublicationObserver
               const publicationObserver = DeliveryRelationPublicationObserver.of({
                 observe: (bundle) =>
                   Effect.gen(function* () {
+                    yield* ambientPublicationObserver.observe(bundle)
                     const acceptedAt = bundle.actionInputs.runtimeFacts.acceptedAt
                     if (acceptedAt === null) return
                     const advanced = yield* Ref.modify(acceptedPublicationWatermark, (current) =>
@@ -536,7 +538,8 @@ export const journaledRunBootstrapLayer = (
                   })
               })
               const downstream = runtimeLayer({ runId, opportunity }).pipe(
-                Layer.provide(Layer.succeed(DeliveryRelationPublicationObserver, publicationObserver)),
+                // Delivery creates reactive relations while running the program, after Layer.build returns.
+                Layer.provideMerge(Layer.succeed(DeliveryRelationPublicationObserver, publicationObserver)),
                 Layer.provideMerge(processRuntimeLayer),
                 Layer.provide(Layer.succeed(ApplicationExitAdmission, admission)),
                 Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))

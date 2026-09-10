@@ -2517,7 +2517,9 @@ it.effect(
         ds09.beforeLoss.executorObserveCalls + ds09.executorObservations.length
       )
       expect(ds10.idleHandoffCount).toBe(1)
-      expect(ds10.trailingActivationCount).toBe(0)
+      // Startup publication queued one obligation, upgraded by the notification;
+      // accepted G2 then queued one ordinary obligation behind the still-live refresh.
+      expect(ds10.trailingActivationCount).toBe(2)
       expect(ds09.ordinaryOwnerActivationCount).toBe(1)
       expect(requestSuffix).toEqual([controlledScenario.target, controlledScenario.target, controlledScenario.target])
       expect(commandSuffix).toEqual([{ attemptId: controlledScenario.attempts.C1, command: "Suspend" }])

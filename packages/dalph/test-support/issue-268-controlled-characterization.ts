@@ -1338,6 +1338,7 @@ const runIssue268StartupCharacterizationFor = (
           : Effect.gen(function* () {
               const activationResult = yield* Ref.make<RunFinalityDecision | undefined>(undefined)
               const activationSettled = yield* Deferred.make<void>()
+              const acceptedPublicationCount = yield* Ref.make(0)
               const ds10Controls = ds09Controls.ds10
               const activeRefresh = (source: "TrackerNotification" | "Timer") => {
                 if (ds10Controls === undefined) {
@@ -1384,7 +1385,10 @@ const runIssue268StartupCharacterizationFor = (
                 installAcceptedRunReactivationObservers: ({ acceptedFactPublication, control }) =>
                   sharedBootstrap
                     .registerAcceptedRunReactivationObservers({
-                      acceptedFactPublication: () => acceptedFactPublication,
+                      acceptedFactPublication: () =>
+                        Ref.update(acceptedPublicationCount, (count) => count + 1).pipe(
+                          Effect.andThen(acceptedFactPublication)
+                        ),
                       control
                     })
                     .pipe(Effect.orDie),
@@ -1401,6 +1405,15 @@ const runIssue268StartupCharacterizationFor = (
                       onActivationHandoffIdle: () =>
                         Effect.gen(function* () {
                           const count = yield* Ref.updateAndGet(ds10Controls.idleHandoffCount, (current) => current + 1)
+                          if (
+                            count === 1 &&
+                            ((yield* Ref.get(activationResult)) === undefined ||
+                              (yield* Ref.get(acceptedPublicationCount)) === 0)
+                          ) {
+                            return yield* Effect.die(
+                              "DS-10 handoff requires returned startup and its accepted publication"
+                            )
+                          }
                           yield* Queue.offer(ds10Controls.idleHandoffs, count)
                           const release = ds10Controls.idleHandoffReleases[count - 1]
                           if (release === undefined) {
@@ -1409,7 +1422,12 @@ const runIssue268StartupCharacterizationFor = (
                           yield* Deferred.await(release)
                         }),
                       onTrailingActivationRecorded: () =>
-                        Ref.update(ds10Controls.trailingActivationCount, (count) => count + 1)
+                        Effect.gen(function* () {
+                          if ((yield* Ref.get(acceptedPublicationCount)) === 0) {
+                            return yield* Effect.die("DS-10 trailing work preceded the startup accepted publication")
+                          }
+                          yield* Ref.update(ds10Controls.trailingActivationCount, (count) => count + 1)
+                        })
                     }),
                 onFailure: (failure) => Deferred.succeed(ds09Controls.ownerFailure, failure).pipe(Effect.asVoid),
                 readControl: sharedBootstrap.readRunReactivationControl(scenario.target, scenario.runId),
@@ -2361,7 +2379,7 @@ const runIssue268RestartCharacterization = (
         firstIdle !== 1 ||
         firstIdleOrdinaryCount !== 1 ||
         firstIdleActiveCount !== 0 ||
-        firstIdleTrailingCount !== 0
+        firstIdleTrailingCount !== 1
       ) {
         return yield* Effect.die(
           `DS-10 first idle state differed: idle=${firstIdle}, ordinary=${firstIdleOrdinaryCount}, active=${firstIdleActiveCount}, trailing=${firstIdleTrailingCount}`
@@ -2373,14 +2391,18 @@ const runIssue268RestartCharacterization = (
       yield* Ref.update(notificationCount, (count) => count + 1)
       yield* occurrenceRecorder.record({ detail: "C:G2", kind: "TrackerNotificationDelivered", source: "Control" })
       const notification = yield* startup.owner.hint(RunReactivationHint.TrackerNotification()).pipe(Effect.forkChild)
-      yield* Effect.yieldNow
+      yield* awaitLiveSecondProcess(Fiber.join(notification), "tracker notification delivery")
       if ((yield* Ref.get(activeRefreshCount)) !== 0) {
         return yield* Effect.die("DS-10 active refresh began before the guarded owner handoff was released")
+      }
+      if ((yield* Ref.get(trailingActivationCount)) !== 1 || (yield* Ref.get(ordinaryOwnerActivationCount)) !== 1) {
+        return yield* Effect.die(
+          "DS-10 notification must upgrade the one publication obligation without another activation"
+        )
       }
       const firstIdleRelease = idleHandoffReleases[0]
       if (firstIdleRelease === undefined) return yield* Effect.die("DS-10 lacks its first idle release")
       yield* Deferred.succeed(firstIdleRelease, undefined)
-      yield* awaitLiveSecondProcess(Fiber.join(notification), "tracker notification delivery")
       const checkpointPublication = yield* awaitLiveSecondProcess(
         Deferred.await(ds10Checkpoint),
         "live suspension checkpoint"
