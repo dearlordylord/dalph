@@ -6,16 +6,27 @@ and DS-20 of [the delivery story](../DELIVERY-STORY.md#the-beats).
 
 ## Governing behavior
 
-This composes [#266's notification/timer refresh](issue-266-active-work-authority-refresh.md#alice-changes-b-while-a1-b1-and-c1-execute-autonomously)
+When Alice adds F/G while B/C/D occupy all three positions, Dalph must decide
+whether to read the complete graph and whether that observation permits more
+executor work. Accepted [#275](https://github.com/dearlordylord/dalph/issues/275)
+composes [#266's notification/timer refresh](issue-266-active-work-authority-refresh.md#alice-changes-b-while-a1-b1-and-c1-execute-autonomously)
 with [#218's one trailing check](issue-218-reactivate-incomplete-runs.md#several-hints-produce-one-activation-and-one-optional-trailing-check),
-#53's complete graph traversal and #164's journal-first observation.
+[#53's complete graph traversal](issue-53-refresh-complete-task-pipelines.md#changed-membership-is-local-and-invalid-reads-authorize-nothing)
+and [#164's journal-first observation](issue-164-journal-first-tracker-observations.md#a-graph-read-cannot-authorize-work-before-the-journal-append).
 It preserves [D12/D13 capacity](../DELIVERY-INVARIANTS.md#admission-and-capacity),
 [D23 uncertainty](../DELIVERY-INVARIANTS.md#ambiguity-and-evidence), and
 [D29 authority separation](../DELIVERY-INVARIANTS.md#process-and-durability).
 The later [#194 finality read](issue-194-stabilize-each-run.md#g2-is-requested-only-after-g1-is-quiescent-and-reveals-b)
 has its own cause and cannot be supplied by this active refresh.
-No Quint law or transition changes: existing `activeRefreshUnreadableAuthorizesNoExecutorAction`
-in `taskFactReconciliation.qnt` and capacity admission laws continue to govern.
+This scenario preserves the existing laws and transitions:
+`activeRefreshUnreadableAuthorizesNoExecutorAction`,
+`healthyActiveRefreshAuthorizesNoExecutorAction`, and
+`activeRefreshSourceIsTrackerOrTimer` in
+[`taskFactReconciliation.qnt`](../../specs/taskFactReconciliation.qnt), and
+`everyEntryWasWithinItsObservedCapacity` in
+[`freshTaskAdmission.qnt`](../../specs/freshTaskAdmission.qnt).
+Its added evidence is the DS-20 composition of graph discovery with exact
+B/C/D occupancy; it does not introduce a new global refresh or admission rule.
 
 ## Starting facts and ordered events
 
@@ -98,7 +109,12 @@ rejected: that boundary must preserve its live observer and separate G2
 protocol. The final change leaves both behaviors intact and the retained-C
 and stabilization suites remain passing.
 
-Validation uses focused tests and `pnpm check:fast`, as requested for this
-slice. No Quint model or executable conformance adapter changes, so no Quint
-gate is run here. DS-21, DS-22, and #279's uninterrupted composition remain
+Validation uses focused tests and `pnpm check:fast` during development, plus
+`pnpm check:quint:changed` because the changed behavior is model-governed even
+though no Quint model or executable conformance adapter changes. The frozen
+candidate requires `pnpm check:all` before handoff and `pnpm check:quint` before
+integration, as required by
+[ADR 0010](../adr/0010-govern-subject-scoped-quint-models.md#consequences) and the
+[development workflow](../DEVELOPMENT.md#keeping-implementation-work-finite).
+DS-21, DS-22, and #279's uninterrupted composition remain
 explicitly deferred to their owning tickets; no blocker edge is removed.
