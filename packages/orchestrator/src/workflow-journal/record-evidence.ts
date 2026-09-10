@@ -1,5 +1,5 @@
 import { HashMap, Option } from "effect"
-import type { AttemptId } from "@dalph/contracts"
+import type { AttemptId, TaskId } from "@dalph/contracts"
 import type { OperationId } from "../workflow/identity.js"
 import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
@@ -30,6 +30,7 @@ interface EvidenceIndexes {
   readonly byKey: HashMap.HashMap<JournalRecordKey, JournalRecord>
   readonly byKind: HashMap.HashMap<JournalRecord["event"]["_tag"], JournalRecordSequence>
   readonly byAttempt: HashMap.HashMap<AttemptId, JournalRecordSequence>
+  readonly byTask: HashMap.HashMap<TaskId, JournalRecordSequence>
   readonly operations: HashMap.HashMap<OperationId, JournalRecordSequence>
 }
 
@@ -51,6 +52,7 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
     byKey: HashMap.empty(),
     byKind: HashMap.empty(),
     byAttempt: HashMap.empty(),
+    byTask: HashMap.empty(),
     operations: HashMap.empty()
   })
 
@@ -74,6 +76,39 @@ const attemptIdsOf = (record: JournalRecord): ReadonlySet<AttemptId> => {
   return ids
 }
 
+const taskIdsOf = (record: JournalRecord): ReadonlySet<TaskId> => {
+  const ids = new Set<TaskId>()
+  const descriptor = describeJournalEvent(record.event)
+  if (descriptor._tag === "PlannedAttemptExecutorEventDescriptor" && descriptor.plannedAttempt !== undefined) {
+    ids.add(descriptor.plannedAttempt.taskId)
+  }
+  if (descriptor._tag === "OperationEventDescriptor" && descriptor.plannedAttempt._tag === "PlannedAttempt") {
+    ids.add(descriptor.plannedAttempt.plannedAttempt.taskId)
+  }
+  const event = record.event
+  if ("plannedAttempt" in event) ids.add(event.plannedAttempt.taskId)
+  if ("subject" in event) {
+    if ("plannedAttempt" in event.subject) ids.add(event.subject.plannedAttempt.taskId)
+    if ("taskId" in event.subject) ids.add(event.subject.taskId)
+  }
+  if ("claim" in event) {
+    if ("taskId" in event.claim) ids.add(event.claim.taskId)
+    if ("plannedAttempt" in event.claim) ids.add(event.claim.plannedAttempt.taskId)
+  }
+  if ("operation" in event) {
+    const operation = event.operation
+    if ("plannedAttempt" in operation) ids.add(operation.plannedAttempt.taskId)
+    if ("taskId" in operation) ids.add(operation.taskId)
+    if ("acquisition" in operation) ids.add(operation.acquisition.taskId)
+    if ("release" in operation) ids.add(operation.release.claim.taskId)
+  }
+  if (event._tag === "PlannedAttemptReplaced") {
+    ids.add(event.subject.plannedAttempt.taskId)
+    ids.add(event.successorPlan.plannedAttempt.taskId)
+  }
+  return ids
+}
+
 /** Adds the candidate's indexes without modifying accepted predecessor evidence. */
 export const appendJournalEvidence = (prior: JournalRecordEvidence, record: JournalRecord): JournalRecordEvidence => {
   const indexes = indexesFor(prior)
@@ -83,11 +118,17 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     const priorAttempt = Option.getOrElse(HashMap.get(byAttempt, attemptId), emptyJournalRecords)
     byAttempt = HashMap.set(byAttempt, attemptId, appendJournalRecord(priorAttempt, record))
   }
+  let byTask = indexes.byTask
+  for (const taskId of taskIdsOf(record)) {
+    const priorTask = Option.getOrElse(HashMap.get(byTask, taskId), emptyJournalRecords)
+    byTask = HashMap.set(byTask, taskId, appendJournalRecord(priorTask, record))
+  }
   const operation = operationOf(record)
   return evidence(appendJournalRecord(prior.records, record), {
     byKey: HashMap.has(indexes.byKey, record.key) ? indexes.byKey : HashMap.set(indexes.byKey, record.key, record),
     byKind: HashMap.set(indexes.byKind, record.event._tag, appendJournalRecord(ofKind, record)),
     byAttempt,
+    byTask,
     operations: operation === undefined ? indexes.operations : HashMap.set(indexes.operations, workflowOperationId(operation), appendJournalRecord(Option.getOrElse(HashMap.get(indexes.operations, workflowOperationId(operation)), emptyJournalRecords), record))
   })
 }
@@ -97,7 +138,7 @@ export const journalEvidenceFrom = (records: ReadonlyArray<JournalRecord>): Jour
   records.reduce(appendJournalEvidence, emptyJournalEvidence())
 
 /** A historical evidence window, not a new semantic acceptance certificate. */
-export const journalEvidenceBefore = (source: JournalRecordEvidence, exclusivePosition: JournalPosition): JournalRecordEvidence =>
+export const journalEvidenceBefore = (source: JournalRecordEvidence, exclusivePosition: number): JournalRecordEvidence =>
   evidence(journalRecordsBefore(source.records, exclusivePosition - 1), indexesFor(source))
 
 /** Copies only the opaque evidence shell when the semantic validator certifies it. */
@@ -176,8 +217,13 @@ export const journalRecordsForAttempt = (source: JournalHistorySource, attemptId
     ? indexedRecords(source, Option.getOrElse(HashMap.get(indexesFor(source).byAttempt, attemptId), emptyJournalRecords))
     : source.filter((record) => attemptIdsOf(record).has(attemptId))
 
+export const journalRecordsForTask = (source: JournalHistorySource, taskId: TaskId): Iterable<JournalRecord> =>
+  isJournalRecordEvidence(source)
+    ? indexedRecords(source, Option.getOrElse(HashMap.get(indexesFor(source).byTask, taskId), emptyJournalRecords))
+    : source.filter((record) => taskIdsOf(record).has(taskId))
+
 /** Test-only retained storage roots; no array of records is constructed. */
 export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): ReadonlyArray<object> => {
   const indexes = indexesFor(source)
-  return [source, indexes, inspectJournalRecordStorage(source.records), ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage), ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage)]
+  return [source, indexes, inspectJournalRecordStorage(source.records), ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage), ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage), ...Array.from(HashMap.values(indexes.byTask), inspectJournalRecordStorage)]
 }
