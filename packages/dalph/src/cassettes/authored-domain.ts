@@ -1015,6 +1015,12 @@ const AuthoredCassetteStoryItemSchema = Schema.TaggedUnion({
   RunCoordinator: RunCoordinatorFields,
   /** The task tracker returns this activation's one post-quiescence complete target-closure read. */
   RunActivationFinalTrackerGraphReadReturned: { graph: AuthoredTrackerGraph },
+  /** The cassette waits until Dalph publishes one exact retained attempt's eligibility under the accepted graph. */
+  CassetteAwaitsSafeContinuationRevalidationPublication: {
+    graphRevision: TrackerRevision,
+    taskId: TaskId,
+    attemptId: AttemptId
+  },
   SetTaskExecutionCapacity: { capacity: TaskWorkCapacity },
   TaskWorkSpecificationReadReturned: AuthoredTaskWorkSpecification.fields,
   /** The controlled tracker rejects this exact fresh acquisition with a current foreign claim. */
@@ -1078,6 +1084,7 @@ export const authoredCassetteStoryItemOwners = defineStoryItemOwners({
   ],
   CassetteObservation: ["PauseProgressObserved", "PauseProgressObservedCancelledAndReconnected"],
   DeliverySynchronization: [
+    "CassetteAwaitsSafeContinuationRevalidationPublication",
     "DalphHoldsAdmittedContinuationBeforeExecutorIntent",
     "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
     "CassetteReleasesHeldPlannedAttemptContinuation",

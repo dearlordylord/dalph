@@ -2228,6 +2228,35 @@ const runAuthoredScenarioCassetteWith = (request: {
               /* v8 ignore stop -- @preserve */
             })
 
+            const driveSafeContinuationPublication = Effect.fn("AuthoredCassette.awaitSafeContinuationPublication")(
+              function* (prerequisite: typeof AuthoredCassetteStoryItem.cases.CassetteAwaitsSafeContinuationRevalidationPublication.Type) {
+                yield* cursor.consumeSafeContinuationRevalidationPublication
+                // Consuming a tracker response does not mean its facts have been
+                // published. Alice waits for the exact retained-attempt proposal
+                // before releasing a slot that a fresh task could otherwise take.
+                const activation = yield* Ref.get(activeDeliveryActivation)
+                const matches = ({ activationOrdinal, bundle }: AuthoredDeliveryPublication) =>
+                  activationOrdinal === activation &&
+                  bundle.actionInputs.runtimeFacts.taskWork.runId === runId &&
+                  bundle.publication.graph._tag === "GraphEstablished" &&
+                  bundle.publication.graph.observation.snapshot.revision === prerequisite.graphRevision &&
+                  bundle.actionInputs.runtimeFacts.taskWork.safeContinuationRevalidations.some(
+                    ({ plannedAttempt }) =>
+                      plannedAttempt.taskId === prerequisite.taskId &&
+                      plannedAttempt.attemptId === prerequisite.attemptId
+                  )
+                const latest = (yield* Ref.get(capturedDeliveryPublications)).at(latestArrayElementIndex)
+                let observed = latest !== undefined && matches(latest)
+                yield* Effect.whileLoop({
+                  while: () => !observed,
+                  body: () => Queue.take(deliveryPublicationSignals).pipe(Effect.andThen(Ref.get(capturedDeliveryPublications)), Effect.map((publications) => {
+                    const current = publications.at(latestArrayElementIndex)
+                    return current !== undefined && matches(current)
+                  })),
+                  step: (matching) => { observed = matching }
+                })
+              }
+            )
             const driveCapacityChange = Effect.gen(function* () {
               const change = yield* cursor.consumeCapacityChange
               /* v8 ignore start -- the tag-selected driver exclusively consumes this exact cursor item. */
@@ -2296,7 +2325,9 @@ const runAuthoredScenarioCassetteWith = (request: {
                 /* v8 ignore start -- @preserve AttemptChoiceControl's closed tagged failure union is classified exhaustively. */
                 if (reason === undefined) {
                   return yield* Effect.die(
-                    new Error(`authored attempt choice ${item.requestNonce} failed with unexpected failure`)
+                    new Error(`authored attempt choice ${item.requestNonce} failed with unexpected failure`, {
+                      cause: result.failure
+                    })
                   )
                 }
                 /* v8 ignore stop -- @preserve */
@@ -2716,6 +2747,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                   | "OperatorAppliesRunCancellation"
                   | "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary"
                   | "CassetteOffersRunReactivationHints"
+                  | "CassetteAwaitsSafeContinuationRevalidationPublication"
                   | "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary"
                   | "CassetteReleasesHeldPlannedAttemptSuspension"
                   | "CassetteReleasesHeldPlannedAttemptContinuation"
@@ -2747,6 +2779,7 @@ const runAuthoredScenarioCassetteWith = (request: {
               "OperatorAppliesRunCancellation",
               "CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary",
               "CassetteOffersRunReactivationHints",
+              "CassetteAwaitsSafeContinuationRevalidationPublication",
               "CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary",
               "CassetteReleasesHeldPlannedAttemptSuspension",
               "CassetteReleasesHeldPlannedAttemptContinuation",
@@ -2782,6 +2815,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                 CassetteHoldsPlannedAttemptSuspensionBeforeExecutorBoundary: () =>
                   drivePlannedSuspensionExecutorBoundaryHold,
                 CassetteOffersRunReactivationHints: () => driveRunReactivationHints,
+                CassetteAwaitsSafeContinuationRevalidationPublication: driveSafeContinuationPublication,
                 CassetteHoldsPlannedAttemptContinuationBeforeExecutorBoundary: () =>
                   drivePlannedContinuationExecutorBoundaryHold,
                 CassetteReleasesHeldPlannedAttemptSuspension: () => drivePlannedSuspensionExecutorBoundaryRelease,

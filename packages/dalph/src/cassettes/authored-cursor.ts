@@ -352,6 +352,10 @@ export interface StoryCursor {
   readonly consumeCapacityChange: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.SetTaskExecutionCapacity.Type>
   >
+  readonly consumeSafeContinuationRevalidationPublication: Effect.Effect<
+    typeof AuthoredCassetteStoryItem.cases.CassetteAwaitsSafeContinuationRevalidationPublication.Type,
+    CursorFailure
+  >
   readonly consumeRunReactivationHints: Effect.Effect<
     Option.Option<typeof AuthoredCassetteStoryItem.cases.CassetteOffersRunReactivationHints.Type>
   >
@@ -2380,6 +2384,10 @@ export const makeStoryCursor = Effect.fn("AuthoredCassette.makeStoryCursor")(fun
     consumeAttemptChoiceRace,
     consumeCapacityChange,
     consumeRunReactivationHints,
+    consumeSafeContinuationRevalidationPublication: consume("CassetteAwaitsSafeContinuationRevalidationPublication").pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(AuthoredCassetteStoryItem.cases.CassetteAwaitsSafeContinuationRevalidationPublication)),
+      Effect.orDie
+    ),
     consumeCurrentTrackerNotification,
     consumeControlDirection,
     consumeIntegrationQuarantineDirection,

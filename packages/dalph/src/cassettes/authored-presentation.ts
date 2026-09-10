@@ -53,6 +53,7 @@ export const renderAuthoredStoryItemLandmark: (item: AuthoredCassetteStoryItem) 
       CassetteReleasesHeldPromotedTaskCompletionClaimRead: noLandmark,
       CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions: noLandmark,
       CassetteOffersRunReactivationHints: noLandmark,
+      CassetteAwaitsSafeContinuationRevalidationPublication: noLandmark,
       CassettePublishesCurrentTrackerNotification: noLandmark,
       CassetteReleasesHeldTaskWorkSpecificationRead: noLandmark,
       ConcurrentTrackerReadBatch: noLandmark,
@@ -456,6 +457,8 @@ const remainingCoordinatorLyric = (item: RemainingCoordinatorStoryItem): string 
         `The cassette releases completion-claim reading for promoted task ${item.promotedTaskId} after task ${item.releasedByTaskId} attempt ${item.releasedByAttemptId} begins.`,
       CassetteHoldsFreshTaskClaimSelectionsUntilTerminalAssertions: (item) =>
         `The cassette parks fresh task-claim selections for ${item.taskIds.join(", ")} until terminal assertions.`,
+      CassetteAwaitsSafeContinuationRevalidationPublication: (item) =>
+        `Cassette awaits ${item.taskId} attempt ${item.attemptId} revalidation under graph ${item.graphRevision}.`,
       CassetteOffersRunReactivationHints: (item) =>
         `The cassette offers ${item.hints.length} tracker-notification or timer hints while active refresh is already running.`,
       CassettePublishesCurrentTrackerNotification: () =>
