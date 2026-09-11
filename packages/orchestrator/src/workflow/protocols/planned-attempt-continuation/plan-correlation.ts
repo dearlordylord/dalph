@@ -13,27 +13,42 @@ export const continuationReadNamesExactPlan = (
   namedPlans: ReadonlyArray<Plan>,
   plannedAttempt: PlannedTaskAttempt
 ): boolean => {
-  if (
-    operation._tag === "ReadTrackerGraph" &&
-    operation.cause._tag !== "AttemptContinuation" &&
-    operation.cause._tag !== "ExecutingWorkAuthorityCheck"
-  )
-    return false
-  if (operation._tag === "ReadTrackerGraph" && operation.cause._tag === "ExecutingWorkAuthorityCheck") {
-    const coveredTaskIds = [...operation.readShape.explicitlyCoveredTaskIds].toSorted()
-    const namedTaskIds = [...new Set(namedPlans.map(({ plannedAttempt }) => plannedAttempt.taskId))].toSorted()
-    return (
-      namedPlans.some(({ plannedAttempt: candidate }) => plannedTaskAttemptEquivalence(candidate, plannedAttempt)) &&
-      coveredTaskIds.length === namedTaskIds.length &&
-      coveredTaskIds.every((taskId, index) => taskId === namedTaskIds[index]) &&
-      namedPlans.every(({ plannedAttempt: candidate }) => candidate.runId === plannedAttempt.runId)
-    )
+  switch (operation._tag) {
+    case "ReadTrackerGraph": {
+      switch (operation.cause._tag) {
+        case "ExecutingWorkAuthorityCheck": {
+          const coveredTaskIds = [...operation.readShape.explicitlyCoveredTaskIds].toSorted()
+          const namedTaskIds = [...new Set(namedPlans.map(({ plannedAttempt }) => plannedAttempt.taskId))].toSorted()
+          return (
+            namedPlans.some(({ plannedAttempt: candidate }) =>
+              plannedTaskAttemptEquivalence(candidate, plannedAttempt)
+            ) &&
+            coveredTaskIds.length === namedTaskIds.length &&
+            coveredTaskIds.every((taskId, index) => taskId === namedTaskIds[index]) &&
+            namedPlans.every(({ plannedAttempt: candidate }) => candidate.runId === plannedAttempt.runId)
+          )
+        }
+        case "AttemptContinuation":
+          break
+        case "AttemptRestartAuthorityCheck":
+        case "PostQuiescenceReconfirmation":
+        case "TaskControlMembershipCheck":
+        case "WorkflowEstablishment":
+          return false
+      }
+      break
+    }
+    case "ReadTaskClaim":
+    case "ReadTaskWorkSpecification":
+      break
   }
-  const namedPlan = namedPlans.length === 1 ? namedPlans[0] : undefined
   return (
-    namedPlan !== undefined &&
-    namedPlan.plannedAttempt.runId === plannedAttempt.runId &&
-    namedPlan.plannedAttempt.attemptId === plannedAttempt.attemptId &&
-    plannedTaskAttemptEquivalence(namedPlan.plannedAttempt, plannedAttempt)
+    namedPlans.length === 1 &&
+    namedPlans.every(
+      ({ plannedAttempt: candidate }) =>
+        candidate.runId === plannedAttempt.runId &&
+        candidate.attemptId === plannedAttempt.attemptId &&
+        plannedTaskAttemptEquivalence(candidate, plannedAttempt)
+    )
   )
 }
