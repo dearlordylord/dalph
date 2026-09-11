@@ -1,5 +1,5 @@
 import { expect, it } from "vitest"
-import { RunId, TaskId } from "@dalph/contracts"
+import { RunId, TaskId, makeTaskWorkSpecification } from "@dalph/contracts"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { OperationId } from "../workflow/identity.js"
 import {
@@ -7,6 +7,11 @@ import {
   makeTrackerGraphObservationOperation
 } from "../workflow/registry/operation.js"
 import { taskTrackerReadIntent } from "../workflow/registry/event.js"
+import {
+  TaskTrackerFactsObservedEvent,
+  makeFocusedTaskWorkSpecificationFactsObserved
+} from "../workflow/task-tracker-facts/observation.js"
+import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 import { JournalPosition, JournalRecordKey } from "./identity.js"
 import {
   journalEvidenceBefore,
@@ -55,4 +60,28 @@ it("indexes an operation's exact task without visiting another task's records", 
 
   expect(Array.from(journalRecordsForTask(evidence, taskA))).toEqual([records[0]])
   expect(Array.from(journalRecordsForTask(evidence, taskB))).toEqual([records[1]])
+})
+
+it("indexes a focused observation by its covered task identity", () => {
+  const runId = RunId.make("focused-task-index-run")
+  const taskId = TaskId.make("focused-task-index")
+  const operation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("focused-task-index-operation"),
+    FixtureTarget.make("focused-task-index-target"),
+    taskId
+  )
+  const specification = makeTaskWorkSpecification({ body: "Indexed instructions.", taskId, title: "Indexed" })
+  const record = {
+    event: TaskTrackerFactsObservedEvent.make({
+      observation: makeFocusedTaskWorkSpecificationFactsObserved(operation, specification),
+      operationId: operation.operationId,
+      version: workflowJournalEventVersion
+    }),
+    key: JournalRecordKey.make("focused-task-index-record"),
+    position: JournalPosition.make(1),
+    runId
+  }
+
+  expect(Array.from(journalRecordsForTask(journalEvidenceFrom([record]), taskId))).toEqual([record])
+  expect(Array.from(journalRecordsForTask([record], taskId))).toEqual([record])
 })
