@@ -277,6 +277,26 @@ const attemptIdsOf = (record: JournalRecord): ReadonlySet<AttemptId> => {
   return ids
 }
 
+/** Raw diagnostic rows have no retained indexes; preserve their exact earlier-intent predicate. */
+const rawRecordBelongsToAttempt = (
+  records: ReadonlyArray<JournalRecord>,
+  record: JournalRecord,
+  attemptId: AttemptId
+): boolean => {
+  if (attemptIdsOf(record).has(attemptId)) return true
+  if (record.event._tag !== "PlannedAttemptWorktreeObserved") return false
+  const operationId = record.event.operationId
+  return records.some(
+    ({ event, position }) =>
+      position < record.position &&
+      event._tag === "GitReadIntentRecorded" &&
+      event.operation._tag === "ReadTaskWorktree" &&
+      event.operation.operationId === operationId &&
+      event.operation.plannedAttempt.runId === record.runId &&
+      event.operation.plannedAttempt.attemptId === attemptId
+  )
+}
+
 const integratorSessionIdsOf = (record: JournalRecord): ReadonlySet<IntegratorSessionId> => {
   const ids = new Set<IntegratorSessionId>()
   const event = record.event
@@ -388,7 +408,16 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
   let byAttempt = indexes.byAttempt
   let byAttemptKind = indexes.byAttemptKind
   let byAttemptCommandKind = indexes.byAttemptCommandKind
-  for (const attemptId of attemptIdsOf(record)) {
+  const indexedAttemptIds = new Set(attemptIdsOf(record))
+  // Git's worktree outcome names its read operation, not the planned attempt.
+  // Link only through an already recorded exact worktree read in this Run.
+  if (record.event._tag === "PlannedAttemptWorktreeObserved") {
+    const operation = journalOperationById(journalEvidenceBefore(prior, record.position), record.event.operationId)
+    if (operation?._tag === "ReadTaskWorktree" && operation.plannedAttempt.runId === record.runId) {
+      indexedAttemptIds.add(operation.plannedAttempt.attemptId)
+    }
+  }
+  for (const attemptId of indexedAttemptIds) {
     const priorAttempt = Option.getOrElse(HashMap.get(byAttempt, attemptId), emptyJournalRecords)
     byAttempt = HashMap.set(byAttempt, attemptId, appendJournalRecord(priorAttempt, record))
     const priorKinds = Option.getOrElse(HashMap.get(byAttemptKind, attemptId), HashMap.empty)
@@ -656,6 +685,8 @@ const lastVisibleRecord = (
   source: JournalRecordEvidence,
   records: JournalRecordSequence
 ): JournalRecord | undefined => {
+  const last = journalRecordAt(records, records.length - 1)
+  if (last === undefined || last.position <= (source.lastPosition ?? 0)) return last
   const length = visibleRecordCount(source, records)
   return length === 0 ? undefined : journalRecordAt(records, length - 1)
 }
@@ -794,7 +825,11 @@ export const journalTaskClaimObservationAt = (source: JournalRecordEvidence, tas
 export const journalCompletionReadCycle = (
   source: JournalRecordEvidence,
   query: Omit<Parameters<typeof completionReadCycleAt>[1], "throughPosition">
-) => completionReadCycleAt(indexesFor(source).completionReadCycles, { ...query, throughPosition: source.lastPosition ?? 0 })
+) =>
+  completionReadCycleAt(indexesFor(source).completionReadCycles, {
+    ...query,
+    throughPosition: source.lastPosition ?? 0
+  })
 
 /** Latest graph observation visible at this evidence cutoff, optionally scoped to target and named plan. */
 export const journalGraphObservationAt = (
@@ -907,7 +942,7 @@ export const journalRecordsForAttempt = (
         source,
         Option.getOrElse(HashMap.get(indexesFor(source).byAttempt, attemptId), emptyJournalRecords)
       )
-    : source.filter((record) => attemptIdsOf(record).has(attemptId))
+    : source.filter((record) => rawRecordBelongsToAttempt(source, record, attemptId))
 
 const attemptKindRecords = (
   source: JournalRecordEvidence,
@@ -925,7 +960,7 @@ export const journalRecordsForAttemptKind = (
 ): Iterable<JournalRecord> =>
   isJournalRecordEvidence(source)
     ? indexedRecords(source, attemptKindRecords(source, attemptId, kind))
-    : source.filter((record) => record.event._tag === kind && attemptIdsOf(record).has(attemptId))
+    : source.filter((record) => record.event._tag === kind && rawRecordBelongsToAttempt(source, record, attemptId))
 
 export const lastJournalRecordForAttemptKind = (
   source: JournalHistorySource,
@@ -934,7 +969,7 @@ export const lastJournalRecordForAttemptKind = (
 ): JournalRecord | undefined =>
   isJournalRecordEvidence(source)
     ? lastVisibleRecord(source, attemptKindRecords(source, attemptId, kind))
-    : source.findLast((record) => record.event._tag === kind && attemptIdsOf(record).has(attemptId))
+    : source.findLast((record) => record.event._tag === kind && rawRecordBelongsToAttempt(source, record, attemptId))
 
 export const journalRecordCountForAttemptKind = (
   source: JournalHistorySource,
@@ -943,7 +978,8 @@ export const journalRecordCountForAttemptKind = (
 ): number =>
   isJournalRecordEvidence(source)
     ? visibleRecordCount(source, attemptKindRecords(source, attemptId, kind))
-    : source.filter((record) => record.event._tag === kind && attemptIdsOf(record).has(attemptId)).length
+    : source.filter((record) => record.event._tag === kind && rawRecordBelongsToAttempt(source, record, attemptId))
+        .length
 
 export const journalRecordCountForAttemptCommandKind = (
   source: JournalHistorySource,
