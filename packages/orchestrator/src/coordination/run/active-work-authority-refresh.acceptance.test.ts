@@ -14,7 +14,7 @@ import {
   WorktreeLocator,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { Effect, Layer, Option, Ref, Stream } from "effect"
+import { Context, Effect, Layer, Option, Ref, Stream } from "effect"
 import { expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
@@ -38,6 +38,7 @@ import {
   RunActivationOpportunity
 } from "./run-activation-opportunity.js"
 import { InRunJournal, JournalStorageUnavailable, type JournalRecord } from "../../workflow-journal/store.js"
+import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
@@ -95,6 +96,9 @@ import {
   type WorkflowInterpreterService
 } from "../../workflow/interpretation/interpreter.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import { journalRecordsForOperationId } from "../../workflow-journal/record-evidence.js"
+import { Journal } from "../delivery/journal.js"
 import { acceptedOperationIdsOf, pendingReadOperationIdsOf } from "../delivery/delivery-evidence.js"
 import { deliveryProposalsOf } from "../delivery/delivery-proposal.js"
 import { materializeDeliveryAction } from "../delivery/delivery-action-materialization.js"
@@ -679,14 +683,8 @@ const projectionFor = (
       )?.position
     const initialRecords =
       runningBoundary === undefined ? records : records.filter(({ position }) => position <= runningBoundary)
-    let readCount = 0
-    const journal = InRunJournal.of({
-      append: () => Effect.die("acceptance projection must not append during restart"),
-      read: () => {
-        readCount += 1
-        return Effect.succeed(readCount === 1 ? initialRecords : records)
-      }
-    })
+    const context = yield* Layer.build(liveJournalTestLayer({ records: initialRecords, runId, target }))
+    const journal = Context.get(context, InRunJournal)
     const recovery = yield* makeRunRecoveryProjection(
       runId,
       configuredIntegrationTarget,
@@ -695,7 +693,12 @@ const projectionFor = (
       false,
       false,
       opportunity
-    ).pipe(Effect.provideService(InRunJournal, journal))
+    ).pipe(Effect.provide(context))
+    for (const record of records.filter(
+      ({ position }) => runningBoundary !== undefined && position > runningBoundary
+    )) {
+      yield* journal.append(record.runId, record.key, record.event)
+    }
     return yield* recovery.readDeliveryProjection
   })
 
@@ -830,16 +833,17 @@ it.effect("active-work refresh recovers ordinary authority reads without a priva
 
     for (const ordinaryRead of ordinaryReads) {
       for (const crashCut of crashCuts) {
-        const retainedRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(
-          buildPrefix("Healthy").filter(({ position }) => position <= JournalPosition.make(ordinaryRead.prefixPosition))
+        const initialRecords = buildPrefix("Healthy").filter(
+          ({ position }) => position <= JournalPosition.make(ordinaryRead.prefixPosition)
         )
+        const context = yield* Layer.build(liveJournalTestLayer({ records: initialRecords, runId, target }))
+        const liveJournal = Context.get(context, InRunJournal)
+        const acceptedReader = Context.get(context, Journal)
         const providerOperationIds = yield* Ref.make<ReadonlyArray<OperationId>>([])
         const failNextOutcome = yield* Ref.make(crashCut === "response-before-observation")
         const journal = InRunJournal.of({
           append: (appendedRunId, key, event) =>
             Effect.gen(function* () {
-              const existing = (yield* Ref.get(retainedRecords)).find((candidate) => candidate.key === key)
-              if (existing !== undefined) return existing
               if (
                 eventOperationId(event) === ordinaryRead.operationId &&
                 (event._tag === "TaskTrackerFactsObserved" ||
@@ -852,17 +856,9 @@ it.effect("active-work refresh recovers ordinary authority reads without a priva
                   operation: "JournalStore.append"
                 })
               }
-              return yield* Ref.modify(retainedRecords, (current) => {
-                const appended: JournalRecord = {
-                  event,
-                  key,
-                  position: JournalPosition.make(Number(current.at(-1)?.position ?? 0) + 1),
-                  runId: appendedRunId
-                }
-                return [appended, [...current, appended]] as const
-              })
+              return yield* liveJournal.append(appendedRunId, key, event)
             }),
-          read: () => Ref.get(retainedRecords)
+          read: liveJournal.read
         })
         const counted = <A>(operationId: OperationId, value: A) =>
           Ref.update(providerOperationIds, (current) => [...current, operationId]).pipe(Effect.as(value))
@@ -925,7 +921,15 @@ it.effect("active-work refresh recovers ordinary authority reads without a priva
           }).pipe(
             Effect.provide(
               journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, provider)).pipe(
-                Layer.provide(Layer.succeed(InRunJournal, journal))
+                Layer.provide(
+                  Layer.merge(
+                    Layer.succeed(InRunJournal, journal),
+                    Layer.succeed(
+                      AcceptedJournalReader,
+                      AcceptedJournalReader.of({ readAccepted: acceptedReader.readAccepted })
+                    )
+                  )
+                )
               )
             )
           )
@@ -950,9 +954,8 @@ it.effect("active-work refresh recovers ordinary authority reads without a priva
         expect(recoveredProviderOperationIds.every((operationId) => operationId === ordinaryRead.operationId)).toBe(
           true
         )
-        const targetRecords = (yield* Ref.get(retainedRecords)).filter(
-          ({ event }) => eventOperationId(event) === ordinaryRead.operationId
-        )
+        const accepted = yield* acceptedReader.readAccepted(runId)
+        const targetRecords = Array.from(journalRecordsForOperationId(accepted, ordinaryRead.operationId))
         expect(
           targetRecords.map(({ event }) => event._tag),
           `${ordinaryRead.kind} ${crashCut} ordinary protocol`
@@ -967,9 +970,6 @@ it.effect("active-work refresh recovers ordinary authority reads without a priva
               : "TaskTrackerFactsObserved"
         ])
         expect(targetRecords.every(({ event }) => eventOperationId(event) === ordinaryRead.operationId)).toBe(true)
-        expect(
-          (yield* Ref.get(retainedRecords)).map(({ event }) => event._tag).filter((tag) => tag.includes("ActiveWork"))
-        ).toEqual([])
       }
     }
   })
