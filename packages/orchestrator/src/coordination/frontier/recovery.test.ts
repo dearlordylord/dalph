@@ -48,6 +48,8 @@ import {
   TaskWorktreeReconciliationIntendedEvent
 } from "../../workflow/registry/event.js"
 import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { makeRunRecoveryProjection, RunRecoveryProjection } from "../run/recovery-activation.js"
 import {
   recoverTaskClaimOperation,
@@ -115,6 +117,8 @@ const unused = () => Effect.die("empty history must not invoke an interpreter")
 it.effect("replays only the exact recorded claim-release intent", () => {
   const runId = RunId.make("runnable-transition-routing")
   const taskId = TaskId.make("runnable-transition-task")
+  const target = FixtureTarget.make("runnable-transition-target")
+  const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
   return Effect.gen(function* () {
     const claim = ActiveTaskClaim.make({
       operationId: OperationId.make("runnable-transition-claim"),
@@ -127,7 +131,18 @@ it.effect("replays only the exact recorded claim-release intent", () => {
       predecessorOperationIds: [claim.operationId],
       release: { claim, operationId: OperationId.make("runnable-transition-release") }
     })
-    const journal = yield* JournalStore
+    const acquisition = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+    const journal = yield* InRunJournal
+    yield* journal.append(
+      runId,
+      intentRecordKey(claim.operationId),
+      TaskClaimAcquisitionIntendedEvent.make({ operation: acquisition, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(claim.operationId),
+      TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+    )
     yield* journal.append(
       runId,
       intentRecordKey(release.release.operationId),
@@ -157,13 +172,19 @@ it.effect("replays only the exact recorded claim-release intent", () => {
       controlledRecoveryLease
     ).pipe(Effect.provideService(WorkflowInterpreter, interpreter))
     expect(yield* Ref.get(released)).toEqual([release.release.operationId])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(
+      liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+    )
+  )
 })
 
-it.effect("settles a recovered generic claim through run recovery activation", () =>
-  Effect.gen(function* () {
-    const runId = RunId.make("recovered-generic-recovery")
-    const taskId = TaskId.make("recovered-generic-task")
+it.effect("settles a recovered generic claim through run recovery activation", () => {
+  const runId = RunId.make("recovered-generic-recovery")
+  const taskId = TaskId.make("recovered-generic-task")
+  const target = FixtureTarget.make("recovered-generic-target")
+  const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  return Effect.gen(function* () {
     const claim = makeTaskClaimAcquisitionOperation({
       acquisition: {
         operationId: OperationId.make("recovered-generic-claim"),
@@ -173,12 +194,7 @@ it.effect("settles a recovered generic claim through run recovery activation", (
       },
       predecessorOperationIds: []
     })
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("recovered-generic-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     yield* journal.append(
       runId,
       intentRecordKey(claim.acquisition.operationId),
@@ -222,8 +238,12 @@ it.effect("settles a recovered generic claim through run recovery activation", (
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
       Effect.provide(controlledFakePlannedAttemptExecutorLayer)
     )
-  }).pipe(Effect.provide(memoryJournalTestLayer))
-)
+  }).pipe(
+    Effect.provide(
+      liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+    )
+  )
+})
 
 it.effect("keeps recovered executor work stopped when no tracker target can authorize a fresh read", () =>
   Effect.gen(function* () {
@@ -458,12 +478,7 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
       OperationId.make("membership-removal-read"),
       FixtureTarget.make("membership-constraint-target")
     )
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      graphRead.target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     yield* journal.append(
       runId,
       intentRecordKey(claim.acquisition.operationId),
@@ -497,7 +512,19 @@ it.effect("a responsible task leaving complete membership becomes a task-local c
       transitions: []
     })
   }).pipe(
-    Effect.provide(memoryJournalTestLayer),
+    Effect.provide(
+      liveJournalTestLayer({
+        records: [
+          makeWorkflowRunBeganRecord(
+            RunId.make("membership-constraint-run"),
+            FixtureTarget.make("membership-constraint-target"),
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+          )
+        ],
+        runId: RunId.make("membership-constraint-run"),
+        target: FixtureTarget.make("membership-constraint-target")
+      })
+    ),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
@@ -535,14 +562,10 @@ it.effect("fresh-run journal facts expose membership constraints without recover
     OperationId.make("fresh-membership-removal-read"),
     target
   )
+  const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 
   return Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     yield* journal.append(
       runId,
       intentRecordKey(claim.acquisition.operationId),
@@ -581,7 +604,9 @@ it.effect("fresh-run journal facts expose membership constraints without recover
         Layer.provide(controlledFakePlannedAttemptExecutorLayer)
       )
     ),
-    Effect.provide(memoryJournalTestLayer),
+    Effect.provide(
+      liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+    ),
     Effect.provideService(
       WorkflowInterpreter,
       WorkflowInterpreter.of({
@@ -599,363 +624,374 @@ it.effect("fresh-run journal facts expose membership constraints without recover
   )
 })
 
-it.effect("rechecks the tracker claim after same-process suspension and blocks continuation when it was replaced", () =>
-  Effect.gen(function* () {
+it.effect(
+  "rechecks the tracker claim after same-process suspension and blocks continuation when it was replaced",
+  () => {
     const runId = RunId.make("same-process-replaced-claim-run")
-    const taskId = TaskId.make("same-process-replaced-claim-task")
     const target = FixtureTarget.make("same-process-replaced-claim-target")
-    const specification = makeTaskWorkSpecification({ body: "Body", taskId, title: "Title" })
-    const plannedAttempt = PlannedTaskAttempt.make({
-      attemptId: AttemptId.make("same-process-replaced-claim-attempt"),
-      baseSha: GitCommitSha.make("7".repeat(40)),
-      branch: TaskBranchRef.make("refs/heads/dalph/same-process-replaced-claim-attempt"),
-      executor: TaskExecutorLocator.make("executor:controlled-fake"),
-      runId,
-      taskId,
-      taskRevision: specification.fingerprint,
-      worktree: WorktreeLocator.make("/worktrees/same-process-replaced-claim-attempt")
-    })
-    const acquiredClaim = makeTaskClaimAcquisitionOperation({
-      acquisition: {
-        operationId: OperationId.make("same-process-acquired-claim"),
-        owner: ClaimOwner.make("dalph"),
+    const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    return Effect.gen(function* () {
+      const taskId = TaskId.make("same-process-replaced-claim-task")
+      const specification = makeTaskWorkSpecification({ body: "Body", taskId, title: "Title" })
+      const plannedAttempt = PlannedTaskAttempt.make({
+        attemptId: AttemptId.make("same-process-replaced-claim-attempt"),
+        baseSha: GitCommitSha.make("7".repeat(40)),
+        branch: TaskBranchRef.make("refs/heads/dalph/same-process-replaced-claim-attempt"),
+        executor: TaskExecutorLocator.make("executor:controlled-fake"),
+        runId,
         taskId,
-        token: ClaimToken.make("same-process-acquired-token")
-      },
-      predecessorOperationIds: []
-    })
-    const replacementClaim = ActiveTaskClaim.make({
-      operationId: OperationId.make("foreign-replacement-claim"),
-      owner: ClaimOwner.make("another-dalph"),
-      taskId,
-      token: ClaimToken.make("foreign-replacement-token")
-    })
-    const initialGraphRead = makeTrackerGraphObservationOperation(
-      { _tag: "WorkflowEstablishment" },
-      OperationId.make("same-process-replaced-claim-graph"),
-      target,
-      [acquiredClaim.acquisition.operationId],
-      [taskId]
-    )
-    const initialSpecificationRead = makeTaskWorkSpecificationObservationOperation(
-      OperationId.make("same-process-replaced-claim-specification"),
-      target,
-      taskId,
-      [initialGraphRead.operationId]
-    )
-    const plan = makeTaskAttemptPlanOperation({
-      operationId: OperationId.make("same-process-replaced-claim-plan"),
-      plannedAttempt,
-      predecessorOperationIds: [initialSpecificationRead.operationId]
-    })
-    const worktree = makeTaskWorktreeReconciliationOperation({
-      operationId: OperationId.make("same-process-replaced-claim-worktree"),
-      plannedAttempt,
-      predecessorOperationIds: [plan.operationId]
-    })
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* journal.append(
-      runId,
-      intentRecordKey(acquiredClaim.acquisition.operationId),
-      TaskClaimAcquisitionIntendedEvent.make({ operation: acquiredClaim, version: workflowJournalEventVersion })
-    )
-    yield* journal.append(
-      runId,
-      outcomeRecordKey(acquiredClaim.acquisition.operationId),
-      TaskClaimAcquiredEvent.make({
-        claim: { _tag: "ActiveTaskClaim", ...acquiredClaim.acquisition },
-        version: workflowJournalEventVersion
+        taskRevision: specification.fingerprint,
+        worktree: WorktreeLocator.make("/worktrees/same-process-replaced-claim-attempt")
       })
-    )
-    yield* journal.append(runId, intentRecordKey(initialGraphRead.operationId), taskTrackerReadIntent(initialGraphRead))
-    yield* journal.append(
-      runId,
-      outcomeRecordKey(initialGraphRead.operationId),
-      taskTrackerFactsObservedEvent(
-        initialGraphRead.operationId,
-        makeCompleteTaskTrackerFactsObserved(
-          initialGraphRead,
-          validSnapshot({
-            revision: "same-process-replaced-claim-graph-revision",
-            rootTaskId: taskId,
-            tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
-          })
-        )
+      const acquiredClaim = makeTaskClaimAcquisitionOperation({
+        acquisition: {
+          operationId: OperationId.make("same-process-acquired-claim"),
+          owner: ClaimOwner.make("dalph"),
+          taskId,
+          token: ClaimToken.make("same-process-acquired-token")
+        },
+        predecessorOperationIds: []
+      })
+      const replacementClaim = ActiveTaskClaim.make({
+        operationId: OperationId.make("foreign-replacement-claim"),
+        owner: ClaimOwner.make("another-dalph"),
+        taskId,
+        token: ClaimToken.make("foreign-replacement-token")
+      })
+      const initialGraphRead = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make("same-process-replaced-claim-graph"),
+        target,
+        [acquiredClaim.acquisition.operationId],
+        [taskId]
       )
-    )
-    yield* journal.append(
-      runId,
-      intentRecordKey(initialSpecificationRead.operationId),
-      taskTrackerReadIntent(initialSpecificationRead)
-    )
-    yield* journal.append(
-      runId,
-      outcomeRecordKey(initialSpecificationRead.operationId),
-      taskTrackerFactsObservedEvent(
-        initialSpecificationRead.operationId,
-        makeFocusedTaskWorkSpecificationFactsObserved(initialSpecificationRead, specification)
+      const initialSpecificationRead = makeTaskWorkSpecificationObservationOperation(
+        OperationId.make("same-process-replaced-claim-specification"),
+        target,
+        taskId,
+        [initialGraphRead.operationId]
       )
-    )
-    yield* journal.append(
-      runId,
-      attemptPlanRecordKey(plannedAttempt.attemptId),
-      TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
-    )
-    yield* journal.append(
-      runId,
-      intentRecordKey(worktree.operationId),
-      TaskWorktreeReconciliationIntendedEvent.make({ operation: worktree, version: workflowJournalEventVersion })
-    )
-    yield* journal.append(
-      runId,
-      outcomeRecordKey(worktree.operationId),
-      TaskWorktreeReadyEvent.make({
-        operationId: worktree.operationId,
-        proof: PlannedWorktreeReady.make({
-          baseSha: plannedAttempt.baseSha,
-          branch: plannedAttempt.branch,
-          headSha: plannedAttempt.baseSha,
-          worktree: plannedAttempt.worktree
-        }),
-        version: workflowJournalEventVersion
-      })
-    )
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
-      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
-    )
-    const startOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, startOrdinal),
-      PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "Begin",
-        initiatedBy: { _tag: "DalphCoordinator" },
-        occurrenceClassification: "InitiatedAction",
-        ordinal: startOrdinal,
+      const plan = makeTaskAttemptPlanOperation({
+        operationId: OperationId.make("same-process-replaced-claim-plan"),
         plannedAttempt,
-        version: workflowJournalEventVersion
+        predecessorOperationIds: [initialSpecificationRead.operationId]
       })
-    )
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, startOrdinal),
-      PlannedAttemptExecutorCommandResponseObservedEvent.make({
-        commandOrdinal: startOrdinal,
-        occurrenceClassification: "NonActionOccurrence",
+      const worktree = makeTaskWorktreeReconciliationOperation({
+        operationId: OperationId.make("same-process-replaced-claim-worktree"),
         plannedAttempt,
-        report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-          correlation: { attemptId: plannedAttempt.attemptId, runId }
-        }),
-        version: workflowJournalEventVersion
+        predecessorOperationIds: [plan.operationId]
       })
-    )
-    yield* journal.append(
-      runId,
-      plannedAttemptExecutorWorkReportedRecordKey(
-        plannedAttempt.attemptId,
-        PlannedAttemptExecutorReportOrdinal.make(1)
-      ),
-      PlannedAttemptExecutorWorkReportedEvent.make({
-        ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
-        report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-          correlation: { attemptId: plannedAttempt.attemptId, runId }
-        }),
-        version: workflowJournalEventVersion
-      })
-    )
-
-    const executorStarts = yield* Ref.make(0)
-    const claimReads = yield* Ref.make(0)
-    const continuationReadOperationIds = yield* Ref.make<ReadonlyArray<OperationId>>([])
-    const currentClaim = yield* Ref.make(ActiveTaskClaim.make(acquiredClaim.acquisition))
-    const reopenedGraph = projectTrackerSnapshot({
-      revision: "same-process-reopened-graph",
-      tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
-    })
-    if (reopenedGraph._tag !== "Valid") return yield* Effect.die("expected a valid reopened graph")
-    const executor = PlannedAttemptExecutor.of({
-      observe: () =>
-        Effect.succeed(
-          PlannedAttemptExecutorProjection.cases.NoReport.make({
-            correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
-          })
-        ),
-      requestSuspension: () =>
-        Effect.succeed(
-          PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
-            correlation: { attemptId: plannedAttempt.attemptId, runId }
-          })
-        ),
-      begin: () =>
-        Ref.updateAndGet(executorStarts, (count) => count + 1).pipe(
-          Effect.as(
-            PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
-              correlation: { attemptId: plannedAttempt.attemptId, runId }
+      const journal = yield* InRunJournal
+      yield* journal.append(
+        runId,
+        intentRecordKey(acquiredClaim.acquisition.operationId),
+        TaskClaimAcquisitionIntendedEvent.make({ operation: acquiredClaim, version: workflowJournalEventVersion })
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(acquiredClaim.acquisition.operationId),
+        TaskClaimAcquiredEvent.make({
+          claim: { _tag: "ActiveTaskClaim", ...acquiredClaim.acquisition },
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(initialGraphRead.operationId),
+        taskTrackerReadIntent(initialGraphRead)
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(initialGraphRead.operationId),
+        taskTrackerFactsObservedEvent(
+          initialGraphRead.operationId,
+          makeCompleteTaskTrackerFactsObserved(
+            initialGraphRead,
+            validSnapshot({
+              revision: "same-process-replaced-claim-graph-revision",
+              rootTaskId: taskId,
+              tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
             })
           )
+        )
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(initialSpecificationRead.operationId),
+        taskTrackerReadIntent(initialSpecificationRead)
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(initialSpecificationRead.operationId),
+        taskTrackerFactsObservedEvent(
+          initialSpecificationRead.operationId,
+          makeFocusedTaskWorkSpecificationFactsObserved(initialSpecificationRead, specification)
+        )
+      )
+      yield* journal.append(
+        runId,
+        attemptPlanRecordKey(plannedAttempt.attemptId),
+        TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
+      )
+      yield* journal.append(
+        runId,
+        intentRecordKey(worktree.operationId),
+        TaskWorktreeReconciliationIntendedEvent.make({ operation: worktree, version: workflowJournalEventVersion })
+      )
+      yield* journal.append(
+        runId,
+        outcomeRecordKey(worktree.operationId),
+        TaskWorktreeReadyEvent.make({
+          operationId: worktree.operationId,
+          proof: PlannedWorktreeReady.make({
+            baseSha: plannedAttempt.baseSha,
+            branch: plannedAttempt.branch,
+            headSha: plannedAttempt.baseSha,
+            worktree: plannedAttempt.worktree
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+        PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      const startOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, startOrdinal),
+        PlannedAttemptExecutorCommandIntendedEvent.make({
+          command: "Begin",
+          initiatedBy: { _tag: "DalphCoordinator" },
+          occurrenceClassification: "InitiatedAction",
+          ordinal: startOrdinal,
+          plannedAttempt,
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, startOrdinal),
+        PlannedAttemptExecutorCommandResponseObservedEvent.make({
+          commandOrdinal: startOrdinal,
+          occurrenceClassification: "NonActionOccurrence",
+          plannedAttempt,
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+            correlation: { attemptId: plannedAttempt.attemptId, runId }
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+      yield* journal.append(
+        runId,
+        plannedAttemptExecutorWorkReportedRecordKey(
+          plannedAttempt.attemptId,
+          PlannedAttemptExecutorReportOrdinal.make(1)
         ),
-      resume: () => Effect.die("recovery must not resume executor work")
-    })
-    const provider = Layer.succeed(
-      WorkflowInterpreter,
-      WorkflowInterpreter.of({
-        acquireTaskClaim: unused,
-        readTaskClaim: () =>
-          Ref.update(claimReads, (count) => count + 1).pipe(
-            Effect.andThen(Ref.get(currentClaim)),
-            Effect.map((observation) => AuthoritativeTaskClaimObserved.make({ observation }))
+        PlannedAttemptExecutorWorkReportedEvent.make({
+          ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+          report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+            correlation: { attemptId: plannedAttempt.attemptId, runId }
+          }),
+          version: workflowJournalEventVersion
+        })
+      )
+
+      const executorStarts = yield* Ref.make(0)
+      const claimReads = yield* Ref.make(0)
+      const continuationReadOperationIds = yield* Ref.make<ReadonlyArray<OperationId>>([])
+      const currentClaim = yield* Ref.make(ActiveTaskClaim.make(acquiredClaim.acquisition))
+      const reopenedGraph = projectTrackerSnapshot({
+        revision: "same-process-reopened-graph",
+        tasks: [{ id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+      })
+      if (reopenedGraph._tag !== "Valid") return yield* Effect.die("expected a valid reopened graph")
+      const executor = PlannedAttemptExecutor.of({
+        observe: () =>
+          Effect.succeed(
+            PlannedAttemptExecutorProjection.cases.NoReport.make({
+              correlation: plannedAttemptExecutorCorrelation(plannedAttempt)
+            })
           ),
-        readTaskWorktree: () => Effect.die("a replaced claim must block the worktree read"),
-        readTargetLineage: () => Effect.die("a replaced claim must block the target-lineage read"),
-        readTrackerGraph: () => Effect.succeed(reopenedGraph.snapshot),
-        readTaskWorkSpecification: () => Effect.succeed(specification),
-        reconcileTaskWorktree: unused,
-        recordTaskAttemptPlan: unused,
-        releaseTaskClaim: unused
+        requestSuspension: () =>
+          Effect.succeed(
+            PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+              correlation: { attemptId: plannedAttempt.attemptId, runId }
+            })
+          ),
+        begin: () =>
+          Ref.updateAndGet(executorStarts, (count) => count + 1).pipe(
+            Effect.as(
+              PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+                correlation: { attemptId: plannedAttempt.attemptId, runId }
+              })
+            )
+          ),
+        resume: () => Effect.die("recovery must not resume executor work")
       })
-    )
-    const interpreter = journaledWorkflowInterpreterLayer(runId, provider).pipe(
-      Layer.provide(Layer.succeed(InRunJournal, InRunJournal.of(journal)))
-    )
-    yield* Effect.gen(function* () {
-      const activation = yield* makeRunRecoveryProjection(runId)
-      const closedRead = makeTrackerGraphObservationOperation(
-        { _tag: "WorkflowEstablishment" },
-        OperationId.make("same-process-closed-read"),
-        target,
-        [plan.operationId],
-        [taskId]
+      const provider = Layer.succeed(
+        WorkflowInterpreter,
+        WorkflowInterpreter.of({
+          acquireTaskClaim: unused,
+          readTaskClaim: () =>
+            Ref.update(claimReads, (count) => count + 1).pipe(
+              Effect.andThen(Ref.get(currentClaim)),
+              Effect.map((observation) => AuthoritativeTaskClaimObserved.make({ observation }))
+            ),
+          readTaskWorktree: () => Effect.die("a replaced claim must block the worktree read"),
+          readTargetLineage: () => Effect.die("a replaced claim must block the target-lineage read"),
+          readTrackerGraph: () => Effect.succeed(reopenedGraph.snapshot),
+          readTaskWorkSpecification: () => Effect.succeed(specification),
+          reconcileTaskWorktree: unused,
+          recordTaskAttemptPlan: unused,
+          releaseTaskClaim: unused
+        })
       )
-      const closedGraph = projectTrackerSnapshot({
-        revision: "same-process-closed-graph",
-        tasks: [
-          {
-            id: taskId,
-            lifecycle: TaskLifecycle.cases.TerminalWithoutSuccess.make({}),
-            parentTaskId: null,
-            prerequisiteIds: []
-          }
-        ]
-      })
-      if (closedGraph._tag !== "Valid") return yield* Effect.die("expected a valid closed graph")
-      yield* journal.append(runId, intentRecordKey(closedRead.operationId), taskTrackerReadIntent(closedRead))
-      yield* journal.append(
-        runId,
-        outcomeRecordKey(closedRead.operationId),
-        taskTrackerFactsObservedEvent(
-          closedRead.operationId,
-          makeCompleteTaskTrackerFactsObserved(closedRead, closedGraph.snapshot)
+      const interpreter = journaledWorkflowInterpreterLayer(runId, provider).pipe(
+        Layer.provide(Layer.succeed(InRunJournal, InRunJournal.of(journal)))
+      )
+      yield* Effect.gen(function* () {
+        const activation = yield* makeRunRecoveryProjection(runId)
+        const closedRead = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          OperationId.make("same-process-closed-read"),
+          target,
+          [plan.operationId],
+          [taskId]
         )
-      )
-      const suspension = (yield* activation.readDeliveryProjection).frontier.transitions[0]
-      if (suspension?._tag !== "SuspendPlannedAttemptExecutorWork") {
-        return yield* Effect.die("the closed task must suspend before any continuation")
-      }
-      yield* requestPlannedAttemptExecutorSuspension(suspension.plannedAttempt)
-
-      yield* Ref.set(currentClaim, replacementClaim)
-      const reopenedRead = makeTrackerGraphObservationOperation(
-        { _tag: "WorkflowEstablishment" },
-        OperationId.make("same-process-reopened-read"),
-        target,
-        [plan.operationId],
-        [taskId]
-      )
-      yield* journal.append(runId, intentRecordKey(reopenedRead.operationId), taskTrackerReadIntent(reopenedRead))
-      yield* journal.append(
-        runId,
-        outcomeRecordKey(reopenedRead.operationId),
-        taskTrackerFactsObservedEvent(
-          reopenedRead.operationId,
-          makeCompleteTaskTrackerFactsObserved(reopenedRead, reopenedGraph.snapshot)
+        const closedGraph = projectTrackerSnapshot({
+          revision: "same-process-closed-graph",
+          tasks: [
+            {
+              id: taskId,
+              lifecycle: TaskLifecycle.cases.TerminalWithoutSuccess.make({}),
+              parentTaskId: null,
+              prerequisiteIds: []
+            }
+          ]
+        })
+        if (closedGraph._tag !== "Valid") return yield* Effect.die("expected a valid closed graph")
+        yield* journal.append(runId, intentRecordKey(closedRead.operationId), taskTrackerReadIntent(closedRead))
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(closedRead.operationId),
+          taskTrackerFactsObservedEvent(
+            closedRead.operationId,
+            makeCompleteTaskTrackerFactsObserved(closedRead, closedGraph.snapshot)
+          )
         )
+        const suspension = (yield* activation.readDeliveryProjection).frontier.transitions[0]
+        if (suspension?._tag !== "SuspendPlannedAttemptExecutorWork") {
+          return yield* Effect.die("the closed task must suspend before any continuation")
+        }
+        yield* requestPlannedAttemptExecutorSuspension(suspension.plannedAttempt)
+
+        yield* Ref.set(currentClaim, replacementClaim)
+        const reopenedRead = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          OperationId.make("same-process-reopened-read"),
+          target,
+          [plan.operationId],
+          [taskId]
+        )
+        yield* journal.append(runId, intentRecordKey(reopenedRead.operationId), taskTrackerReadIntent(reopenedRead))
+        yield* journal.append(
+          runId,
+          outcomeRecordKey(reopenedRead.operationId),
+          taskTrackerFactsObservedEvent(
+            reopenedRead.operationId,
+            makeCompleteTaskTrackerFactsObserved(reopenedRead, reopenedGraph.snapshot)
+          )
+        )
+
+        const graphRead = (yield* activation.readDeliveryProjection).frontier.transitions[0]
+        if (graphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
+          return yield* Effect.die("resume must first reread the complete task graph")
+        }
+        expect(graphRead.operation).toMatchObject({
+          cause: { _tag: "AttemptContinuation" },
+          predecessorOperationIds: [plan.operationId],
+          readShape: { explicitlyCoveredTaskIds: [taskId] },
+          target
+        })
+        const boundary = yield* WorkflowInterpreter
+        yield* boundary.readTrackerGraph(graphRead.operation)
+
+        const specificationRead = (yield* activation.readDeliveryProjection).frontier.transitions[0]
+        if (specificationRead?._tag !== "ObservePlannedAttemptContinuationSpecification") {
+          return yield* Effect.die("resume must reread the task specification")
+        }
+        expect(specificationRead.operation.predecessorOperationIds).toEqual([
+          graphRead.operation.operationId,
+          plan.operationId
+        ])
+        yield* boundary.readTaskWorkSpecification(specificationRead.operation)
+        const claimRead = (yield* activation.readDeliveryProjection).frontier.transitions[0]
+        if (claimRead?._tag !== "ObservePlannedAttemptContinuationClaim") {
+          return yield* Effect.die("resume must reread the tracker claim")
+        }
+        expect(claimRead.operation.predecessorOperationIds).toEqual([
+          graphRead.operation.operationId,
+          specificationRead.operation.operationId,
+          plan.operationId
+        ])
+        yield* Ref.set(continuationReadOperationIds, [
+          graphRead.operation.operationId,
+          specificationRead.operation.operationId,
+          claimRead.operation.operationId
+        ])
+        yield* boundary.readTaskClaim(claimRead.operation)
+
+        const constrained = (yield* activation.readDeliveryProjection).frontier
+        expect(constrained.explanations).toContainEqual({
+          _tag: "PlannedAttemptTaskClaimConstraint",
+          claimState: "Foreign",
+          correlation: { attemptId: plannedAttempt.attemptId, runId },
+          taskId,
+          wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
+        })
+        expect(constrained.transitions).toEqual([])
+      }).pipe(Effect.provideService(PlannedAttemptExecutor, executor), Effect.provide(interpreter))
+
+      expect(yield* Ref.get(claimReads)).toBe(1)
+      expect(yield* Ref.get(executorStarts)).toBe(0)
+      const events = (yield* journal.read(runId)).map(({ event }) => event)
+      const continuationOperationIds = yield* Ref.get(continuationReadOperationIds)
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          _tag: "TaskTrackerReadIntentRecorded",
+          operation: expect.objectContaining({ _tag: "ReadTaskClaim", taskId })
+        })
       )
-
-      const graphRead = (yield* activation.readDeliveryProjection).frontier.transitions[0]
-      if (graphRead?._tag !== "ObservePlannedAttemptContinuationGraph") {
-        return yield* Effect.die("resume must first reread the complete task graph")
-      }
-      expect(graphRead.operation).toMatchObject({
-        cause: { _tag: "AttemptContinuation" },
-        predecessorOperationIds: [plan.operationId],
-        readShape: { explicitlyCoveredTaskIds: [taskId] },
-        target
-      })
-      const boundary = yield* WorkflowInterpreter
-      yield* boundary.readTrackerGraph(graphRead.operation)
-
-      const specificationRead = (yield* activation.readDeliveryProjection).frontier.transitions[0]
-      if (specificationRead?._tag !== "ObservePlannedAttemptContinuationSpecification") {
-        return yield* Effect.die("resume must reread the task specification")
-      }
-      expect(specificationRead.operation.predecessorOperationIds).toEqual([
-        graphRead.operation.operationId,
-        plan.operationId
-      ])
-      yield* boundary.readTaskWorkSpecification(specificationRead.operation)
-      const claimRead = (yield* activation.readDeliveryProjection).frontier.transitions[0]
-      if (claimRead?._tag !== "ObservePlannedAttemptContinuationClaim") {
-        return yield* Effect.die("resume must reread the tracker claim")
-      }
-      expect(claimRead.operation.predecessorOperationIds).toEqual([
-        graphRead.operation.operationId,
-        specificationRead.operation.operationId,
-        plan.operationId
-      ])
-      yield* Ref.set(continuationReadOperationIds, [
-        graphRead.operation.operationId,
-        specificationRead.operation.operationId,
-        claimRead.operation.operationId
-      ])
-      yield* boundary.readTaskClaim(claimRead.operation)
-
-      const constrained = (yield* activation.readDeliveryProjection).frontier
-      expect(constrained.explanations).toContainEqual({
-        _tag: "PlannedAttemptTaskClaimConstraint",
-        claimState: "Foreign",
-        correlation: { attemptId: plannedAttempt.attemptId, runId },
-        taskId,
-        wakeCondition: "ExplicitAppliedTaskClaimReacquisitionDirection"
-      })
-      expect(constrained.transitions).toEqual([])
-    }).pipe(Effect.provideService(PlannedAttemptExecutor, executor), Effect.provide(interpreter))
-
-    expect(yield* Ref.get(claimReads)).toBe(1)
-    expect(yield* Ref.get(executorStarts)).toBe(0)
-    const events = (yield* journal.read(runId)).map(({ event }) => event)
-    const continuationOperationIds = yield* Ref.get(continuationReadOperationIds)
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        _tag: "TaskTrackerReadIntentRecorded",
-        operation: expect.objectContaining({ _tag: "ReadTaskClaim", taskId })
-      })
+      expect(
+        events.flatMap((event) =>
+          event._tag === "TaskTrackerReadIntentRecorded" &&
+          (event.operation._tag === "ReadTrackerGraph" ||
+            event.operation._tag === "ReadTaskWorkSpecification" ||
+            event.operation._tag === "ReadTaskClaim") &&
+          continuationOperationIds.includes(event.operation.operationId)
+            ? [event.operation._tag]
+            : []
+        )
+      ).toEqual(["ReadTrackerGraph", "ReadTaskWorkSpecification", "ReadTaskClaim"])
+      expect(
+        events.flatMap((event) =>
+          event._tag === "TaskTrackerFactsObserved" && continuationOperationIds.includes(event.operationId)
+            ? [event.operationId]
+            : []
+        )
+      ).toEqual(continuationOperationIds)
+    }).pipe(
+      Effect.provide(
+        liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+      ),
+      Effect.provide(plannedAttemptProtocolControllerLayer)
     )
-    expect(
-      events.flatMap((event) =>
-        event._tag === "TaskTrackerReadIntentRecorded" &&
-        (event.operation._tag === "ReadTrackerGraph" ||
-          event.operation._tag === "ReadTaskWorkSpecification" ||
-          event.operation._tag === "ReadTaskClaim") &&
-        continuationOperationIds.includes(event.operation.operationId)
-          ? [event.operation._tag]
-          : []
-      )
-    ).toEqual(["ReadTrackerGraph", "ReadTaskWorkSpecification", "ReadTaskClaim"])
-    expect(
-      events.flatMap((event) =>
-        event._tag === "TaskTrackerFactsObserved" && continuationOperationIds.includes(event.operationId)
-          ? [event.operationId]
-          : []
-      )
-    ).toEqual(continuationOperationIds)
-  }).pipe(Effect.provide(memoryJournalTestLayer), Effect.provide(plannedAttemptProtocolControllerLayer))
+  }
 )
 
 it.effect("a task leaving complete membership safely suspends its executor work before the local constraint", () =>
@@ -1029,12 +1065,7 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       [plan.operationId],
       [taskId]
     )
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      graphRead.target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     yield* journal.append(
       runId,
       intentRecordKey(claim.acquisition.operationId),
@@ -1525,7 +1556,19 @@ it.effect("a task leaving complete membership safely suspends its executor work 
       { _tag: "RunMayTerminate" }
     )
   }).pipe(
-    Effect.provide(memoryJournalTestLayer),
+    Effect.provide(
+      liveJournalTestLayer({
+        records: [
+          makeWorkflowRunBeganRecord(
+            RunId.make("executor-membership-constraint-run"),
+            FixtureTarget.make("executor-membership-constraint-target"),
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+          )
+        ],
+        runId: RunId.make("executor-membership-constraint-run"),
+        target: FixtureTarget.make("executor-membership-constraint-target")
+      })
+    ),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
@@ -1547,7 +1590,14 @@ it.effect("a task leaving complete membership safely suspends its executor work 
 
 it.effect("replays the exact durable claim and worktree intents", () => {
   const runId = RunId.make("runnable-transition-intents")
-  const taskId = TaskId.make("runnable-transition-task")
+  const target = FixtureTarget.make("runnable-transition-target")
+  const taskId = TaskId.make("runnable-transition-claim-task")
+  const worktreeTaskId = TaskId.make("runnable-transition-worktree-task")
+  const worktreeSpecification = makeTaskWorkSpecification({
+    body: "Recover the durable worktree intent",
+    taskId: worktreeTaskId,
+    title: "Recovered worktree"
+  })
   const claim = makeTaskClaimAcquisitionOperation({
     acquisition: {
       operationId: OperationId.make("recovered-claim"),
@@ -1563,22 +1613,93 @@ it.effect("replays the exact durable claim and worktree intents", () => {
     branch: TaskBranchRef.make("refs/heads/dalph/recovered-attempt"),
     executor: TaskExecutorLocator.make("executor:fake"),
     runId,
-    taskId,
-    taskRevision: TaskRevision.make("recovered-revision"),
+    taskId: worktreeTaskId,
+    taskRevision: worktreeSpecification.fingerprint,
     worktree: WorktreeLocator.make("/worktrees/recovered-attempt")
   })
   const worktree = makeTaskWorktreeReconciliationOperation({
     operationId: OperationId.make("recovered-worktree"),
     plannedAttempt,
+    predecessorOperationIds: [OperationId.make("recovered-plan")]
+  })
+  const worktreeClaim = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      operationId: OperationId.make("recovered-worktree-claim"),
+      owner: ClaimOwner.make("dalph"),
+      taskId: worktreeTaskId,
+      token: ClaimToken.make("recovered-worktree-token")
+    },
     predecessorOperationIds: []
   })
+  const graph = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("recovered-worktree-graph"),
+    target,
+    [worktreeClaim.acquisition.operationId],
+    [worktreeTaskId]
+  )
+  const specification = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("recovered-worktree-specification"),
+    target,
+    worktreeTaskId,
+    [graph.operationId]
+  )
+  const plan = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make("recovered-plan"),
+    plannedAttempt,
+    predecessorOperationIds: [specification.operationId]
+  })
+  const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 
   return Effect.gen(function* () {
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     yield* journal.append(
       runId,
       intentRecordKey(claim.acquisition.operationId),
       TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      intentRecordKey(worktreeClaim.acquisition.operationId),
+      TaskClaimAcquisitionIntendedEvent.make({ operation: worktreeClaim, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(worktreeClaim.acquisition.operationId),
+      TaskClaimAcquiredEvent.make({
+        claim: ActiveTaskClaim.make(worktreeClaim.acquisition),
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(runId, intentRecordKey(graph.operationId), taskTrackerReadIntent(graph))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(graph.operationId),
+      taskTrackerFactsObservedEvent(
+        graph.operationId,
+        makeCompleteTaskTrackerFactsObserved(
+          graph,
+          validSnapshot({
+            revision: "recovered-worktree-graph-revision",
+            rootTaskId: worktreeTaskId,
+            tasks: [{ id: worktreeTaskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+          })
+        )
+      )
+    )
+    yield* journal.append(runId, intentRecordKey(specification.operationId), taskTrackerReadIntent(specification))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(specification.operationId),
+      taskTrackerFactsObservedEvent(
+        specification.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(specification, worktreeSpecification)
+      )
+    )
+    yield* journal.append(
+      runId,
+      attemptPlanRecordKey(plannedAttempt.attemptId),
+      TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
     )
     yield* journal.append(
       runId,
@@ -1635,71 +1756,30 @@ it.effect("replays the exact durable claim and worktree intents", () => {
       "claim:recovered-claim",
       "worktree:recovered-worktree"
     ])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(
+      liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+    )
+  )
 })
 
-it.effect("fails closed when initial or reread workflow-journal history is invalid", () =>
-  Effect.gen(function* () {
-    const runId = RunId.make("invalid-workflow-journal-history-recovery")
-    const operation = makeTaskClaimAcquisitionOperation({
-      acquisition: {
-        operationId: OperationId.make("invalid-workflow-journal-history-claim"),
-        owner: ClaimOwner.make("dalph"),
-        taskId: TaskId.make("invalid-workflow-journal-history-task"),
-        token: ClaimToken.make("invalid-workflow-journal-history-token")
-      },
-      predecessorOperationIds: []
-    })
-    const invalidRecord = {
-      event: TaskClaimAcquisitionIntendedEvent.make({ operation, version: workflowJournalEventVersion }),
-      key: intentRecordKey(operation.acquisition.operationId),
-      position: JournalPosition.make(2),
-      runId
-    }
-    const reads = yield* Ref.make(0)
-    const changingJournal = JournalStore.of({
-      append: () => Effect.die("unused"),
-      beginRun: () => Effect.die("unused"),
-      read: () =>
-        Ref.getAndUpdate(reads, (count) => count + 1).pipe(Effect.map((count) => (count === 0 ? [] : [invalidRecord]))),
-      readRunForRecovery: () => Effect.die("unused"),
-      scanHot: () => Effect.succeed({ issues: [], runs: [] }),
-      auditAll: () => Effect.succeed({ issues: [], runs: [] }),
-      retireTerminalRun: () => Effect.die("unused"),
-      terminateRun: () => Effect.die("unused")
-    })
-    const recovery = yield* makeRunRecoveryProjection(runId).pipe(
-      Effect.provideService(
-        InRunJournal,
-        InRunJournal.of({ append: changingJournal.append, read: changingJournal.read })
-      )
-    )
-    expect((yield* recovery.readDeliveryProjection.pipe(Effect.flip))._tag).toBe("InvalidWorkflowJournalHistory")
+it("fails closed when cold persisted workflow-journal history is invalid", () => {
+  const runId = RunId.make("invalid-workflow-journal-history-recovery")
+  const operation = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      operationId: OperationId.make("invalid-workflow-journal-history-claim"),
+      owner: ClaimOwner.make("dalph"),
+      taskId: TaskId.make("invalid-workflow-journal-history-task"),
+      token: ClaimToken.make("invalid-workflow-journal-history-token")
+    },
+    predecessorOperationIds: []
+  })
+  const invalidRecord = {
+    event: TaskClaimAcquisitionIntendedEvent.make({ operation, version: workflowJournalEventVersion }),
+    key: intentRecordKey(operation.acquisition.operationId),
+    position: JournalPosition.make(2),
+    runId
+  }
 
-    const initiallyInvalid = yield* makeRunRecoveryProjection(runId).pipe(
-      Effect.provideService(
-        InRunJournal,
-        InRunJournal.of({ append: changingJournal.append, read: () => Effect.succeed([invalidRecord]) })
-      ),
-      Effect.flip
-    )
-    expect(initiallyInvalid._tag).toBe("InvalidWorkflowJournalHistory")
-  }).pipe(
-    Effect.provide(controlledFakePlannedAttemptExecutorLayer),
-    Effect.provideService(
-      WorkflowInterpreter,
-      WorkflowInterpreter.of({
-        acquireTaskClaim: unused,
-        readTaskClaim: () => Effect.die("unexpected task claim read"),
-        readTaskWorktree: () => Effect.die("unused worktree observation"),
-        readTargetLineage: () => Effect.die("unused target-lineage observation"),
-        readTrackerGraph: unused,
-        readTaskWorkSpecification: unused,
-        reconcileTaskWorktree: unused,
-        recordTaskAttemptPlan: unused,
-        releaseTaskClaim: unused
-      })
-    ),
-    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
-  )
-)
+  expect(reduceWorkflowJournalHistory(runId, [invalidRecord])._tag).toBe("InvalidWorkflowJournalHistory")
+})

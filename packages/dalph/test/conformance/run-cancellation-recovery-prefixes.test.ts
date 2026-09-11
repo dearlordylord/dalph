@@ -15,6 +15,7 @@ import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-sup
 import { AllocatedWorkflowRunId } from "../../../orchestrator/src/coordination/run/fresh-run-identity.js"
 import { JournaledRunBootstrap } from "../../../orchestrator/src/coordination/run/run.js"
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
+import { RunActivationGraphBaseline } from "../../../orchestrator/src/coordination/run/activation-graph-baseline.js"
 import { validatedRunActivationLayer } from "../../../orchestrator/src/coordination/run/startup-recovery.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
 import { noopJournalMaintenanceObservation } from "../../../orchestrator/src/workflow-journal/maintenance.js"
@@ -168,7 +169,8 @@ const runProductionRecovery = (prefix: RecoveryPrefix, lane: "memory" | "sqlite"
           target,
           journal,
           recovery,
-          resources.integrationTargets
+          resources.integrationTargets,
+          yield* RunActivationGraphBaseline
         )
         const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
         const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))

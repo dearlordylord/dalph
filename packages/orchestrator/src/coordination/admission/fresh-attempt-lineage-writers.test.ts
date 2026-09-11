@@ -17,16 +17,14 @@ import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy } from "../../control/policy.js"
-import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import {
-  journalEvidenceFrom,
-  journalGraphSnapshotForObservation
-} from "../../workflow-journal/record-evidence.js"
+import { journalEvidenceFrom, journalGraphSnapshotForObservation } from "../../workflow-journal/record-evidence.js"
 import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
-import { JournalStore, type JournalRecord } from "../../workflow-journal/store.js"
+import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { OperationId } from "../../workflow/identity.js"
 import { WorkflowInterpreter, type WorkflowInterpreterService } from "../../workflow/interpretation/interpreter.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
@@ -85,17 +83,12 @@ const provider = Layer.succeed(
     releaseTaskClaim: unused
   } satisfies WorkflowInterpreterService)
 )
-const journaled = journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provide(memoryJournalTestLayer))
-
-const beginRun = Effect.fn("FreshAttemptLineageWritersTest.beginRun")(function* () {
-  const journal = yield* JournalStore
-  yield* journal.beginRun(
-    runId,
-    FixtureTarget.make("fresh-attempt-lineage-writers-target"),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-  )
-  return journal
-})
+const trackerTarget = FixtureTarget.make("fresh-attempt-lineage-writers-target")
+const initialControlPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+const runtimeFor = (records: ReadonlyArray<JournalRecord>) => {
+  const live = liveJournalTestLayer({ records, runId, target: trackerTarget })
+  return journaledWorkflowInterpreterLayer(runId, provider).pipe(Layer.provideMerge(live))
+}
 
 const repeatedUnchangedLineage = (count: number) => {
   const taskId = TaskId.make(`fresh-attempt-lineage-repeated-${count}`)
@@ -143,10 +136,7 @@ const repeatedUnchangedLineage = (count: number) => {
   )
   append(taskTrackerReadIntent(fullRead), intentRecordKey(fullRead.operationId))
   append(
-    taskTrackerFactsObservedEvent(
-      fullRead.operationId,
-      makeCompleteTaskTrackerFactsObserved(fullRead, snapshot)
-    ),
+    taskTrackerFactsObservedEvent(fullRead.operationId, makeCompleteTaskTrackerFactsObserved(fullRead, snapshot)),
     outcomeRecordKey(fullRead.operationId)
   )
   let latestRead = fullRead
@@ -159,7 +149,10 @@ const repeatedUnchangedLineage = (count: number) => {
       [taskId]
     )
     append(taskTrackerReadIntent(latestRead), intentRecordKey(latestRead.operationId))
-    append(makeTaskTrackerFactsObservedFromRead(records, latestRead, snapshot), outcomeRecordKey(latestRead.operationId))
+    append(
+      makeTaskTrackerFactsObservedFromRead(records, latestRead, snapshot),
+      outcomeRecordKey(latestRead.operationId)
+    )
   }
   const graphPosition = JournalPosition.make(records.length)
   const specificationRead = makeTaskWorkSpecificationObservationOperation(
@@ -181,12 +174,12 @@ const repeatedUnchangedLineage = (count: number) => {
     plannedAttempt: attempt,
     predecessorOperationIds: [claimOperation.acquisition.operationId, specificationRead.operationId]
   })
-  return { evidence: journalEvidenceFrom(records), graphPosition, operation }
+  return { evidence: journalEvidenceFrom(records), graphPosition, operation, records }
 }
 
 it.effect("rejects a fresh attempt plan before append when its exact predecessor lineage is absent", () =>
   Effect.gen(function* () {
-    const journal = yield* beginRun()
+    const journal = yield* InRunJournal
     const interpreter = yield* WorkflowInterpreter
 
     const failure = yield* Effect.flip(interpreter.recordTaskAttemptPlan(planOperation))
@@ -198,7 +191,7 @@ it.effect("rejects a fresh attempt plan before append when its exact predecessor
       reason: "CausalPredecessorMissing"
     })
     expect((yield* journal.read(runId)).some(({ event }) => event._tag === "TaskAttemptPlanned")).toBe(false)
-  }).pipe(Effect.provide(journaled), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(runtimeFor([makeWorkflowRunBeganRecord(runId, trackerTarget, initialControlPolicy)])))
 )
 
 it("checks one task without traversing the full graph after 64 and 256 unchanged observations", () => {
@@ -298,23 +291,33 @@ it.effect("refuses a focused specification outcome without its exact read intent
   })
 )
 
-it.effect("rejects executor responsibility before append when an ordinary plan lacks worktree-ready lineage", () =>
-  Effect.gen(function* () {
-    const journal = yield* beginRun()
-    yield* journal.append(
-      runId,
-      attemptPlanRecordKey(plannedAttempt.attemptId),
-      TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
-    )
+it.effect("rejects executor responsibility before append when an ordinary plan lacks worktree-ready lineage", () => {
+  const fixture = repeatedUnchangedLineage(1)
+  const priorRecords = fixture.records.map((record) => ({
+    ...record,
+    position: JournalPosition.make(record.position + 1)
+  }))
+  const plan = {
+    event: TaskAttemptPlannedEvent.make({ operation: fixture.operation, version: workflowJournalEventVersion }),
+    key: attemptPlanRecordKey(fixture.operation.plannedAttempt.attemptId),
+    position: JournalPosition.make(priorRecords.length + 2),
+    runId
+  }
+  return Effect.gen(function* () {
+    const journal = yield* InRunJournal
 
-    const failure = yield* Effect.flip(beginPlannedAttemptExecutorResponsibility(plannedAttempt))
+    const failure = yield* Effect.flip(beginPlannedAttemptExecutorResponsibility(fixture.operation.plannedAttempt))
 
     expect(failure).toMatchObject({
       _tag: "PlannedAttemptExecutorResponsibilityLineageMissing",
-      correlation: { attemptId: plannedAttempt.attemptId, runId }
+      correlation: { attemptId: fixture.operation.plannedAttempt.attemptId, runId }
     })
     expect(
       (yield* journal.read(runId)).some(({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan")
     ).toBe(false)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
-)
+  }).pipe(
+    Effect.provide(
+      runtimeFor([makeWorkflowRunBeganRecord(runId, trackerTarget, initialControlPolicy), ...priorRecords, plan])
+    )
+  )
+})

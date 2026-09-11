@@ -496,7 +496,16 @@ const makeReactiveDeliveryRelationsLayer = (
 ) =>
   Effect.gen(function* () {
     const integrationTargets = yield* makeIntegrationTargetResourceController()
-    return yield* makeProductionReactiveDeliveryRelationsLayer(runId, target, journal, recovery, integrationTargets)
+    // These subscription-level fixtures all enter their single activation at
+    // WorkflowRunBegan (p1), including subscriptions acquired after a graph.
+    return yield* makeProductionReactiveDeliveryRelationsLayer(
+      runId,
+      target,
+      journal,
+      recovery,
+      integrationTargets,
+      JournalPosition.make(1)
+    )
   })
 
 const testDeliveryRuntimeResourcesLayer = Layer.unwrap(
@@ -563,6 +572,56 @@ it.effect("records the initial and later exact production bundles without changi
         Effect.flatMap((signal) => signal.get)
       )
       expect(current.graph._tag).toBe("GraphEstablished")
+    }).pipe(Effect.provide(memoryJournalStoreLayer))
+  )
+)
+
+it.effect("requires a new activation graph without discarding the shared accepted prefix", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const journal = yield* makeJournalService
+      const appendGraph = Effect.fn("ReactiveDeliveryTest.appendActivationGraph")(function* (id: string) {
+        const operation = makeTrackerGraphObservationOperation(
+          { _tag: "WorkflowEstablishment" },
+          OperationId.make(id),
+          target
+        )
+        const projected = projectTrackerSnapshot({
+          revision: id,
+          tasks: [
+            { id: TaskId.make("A"), lifecycle: { _tag: "Open" as const }, parentTaskId: null, prerequisiteIds: [] }
+          ]
+        })
+        if (projected._tag === "Invalid") return yield* Effect.die(projected)
+        yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
+        return yield* journal.append(
+          runId,
+          outcomeRecordKey(operation.operationId),
+          taskTrackerFactsObservedEvent(
+            operation.operationId,
+            makeCompleteTaskTrackerFactsObserved(operation, projected.snapshot)
+          )
+        )
+      })
+      yield* appendGraph("prior-activation-graph")
+      const before = yield* journal.readAccepted(runId)
+      const integrationTargets = yield* makeIntegrationTargetResourceController()
+      const layer = yield* makeProductionReactiveDeliveryRelationsLayer(
+        runId,
+        target,
+        journal,
+        currentProjection(journal.state.get.pipe(Effect.orDie)),
+        integrationTargets,
+        (yield* journal.state.get).position
+      )
+      const relation = yield* delivery.pipe(Effect.provide(layer))
+      expect((yield* relation.get).graph._tag).toBe("GraphNotEstablished")
+      expect(yield* journal.readAccepted(runId)).toBe(before)
+      expect((yield* journal.state.get).graph._tag).toBe("GraphEstablished")
+      yield* appendGraph("current-activation-graph")
+      const publication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(layer))
+      yield* publication.awaitCurrent
+      expect((yield* relation.get).graph._tag).toBe("GraphEstablished")
     }).pipe(Effect.provide(memoryJournalStoreLayer))
   )
 )
@@ -1065,7 +1124,8 @@ it.effect("constructs the scoped reactive relations layer from shared runtime re
         runId,
         target,
         journal,
-        currentProjection(journal.state.get.pipe(Effect.orDie))
+        currentProjection(journal.state.get.pipe(Effect.orDie)),
+        JournalPosition.make(1)
       ).pipe(Layer.provide(testDeliveryRuntimeResourcesLayer))
       const relation = yield* deliveryRuntime.pipe(Effect.provide(layer))
       expect((yield* relation.get).current.trackerGraph._tag).toBe("GraphNotEstablished")

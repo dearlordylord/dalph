@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- Run bootstrap keeps activation and its serialized operator controls in one ownership boundary. */
 import { plannedAttemptExecutorCorrelation, RunId } from "@dalph/contracts"
+import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
 import {
   Context,
   Deferred,
@@ -177,7 +178,10 @@ export interface JournaledRuntimeLayerInput {
 }
 
 export type JournaledRuntimeLayer = Layer.Layer<
-  Exclude<JournaledRunServices, AcceptedJournalReader | Journal | JournaledRunProcessServices>,
+  Exclude<
+    JournaledRunServices,
+    AcceptedJournalReader | Journal | JournaledRunProcessServices | RunActivationGraphBaseline
+  >,
   | InvalidWorkflowJournalHistory
   | JournalAppendError
   | JournalReadError
@@ -400,7 +404,12 @@ export const journaledRunBootstrapLayer = (
           }
           const built = yield* Layer.build(
             journalLayer(expectedRunId, target, initial, exitAwareStorage, (record) =>
-              publishAcceptedHistory(record.runId, record.position)
+              // Journal acceptance precedes presentation. The terminal cursor
+              // must wait for finish to close status and announce termination,
+              // so a current-first history consumer can stop at that cursor.
+              record.event._tag === "WorkflowRunTerminated"
+                ? Effect.void
+                : publishAcceptedHistory(record.runId, record.position)
             )
           ).pipe(Scope.provide(bootstrapScope), Effect.exit)
           if (built._tag === "Failure") {
@@ -667,7 +676,10 @@ export const journaledRunBootstrapLayer = (
                 Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
               )
               const runtimeJournalLayer = Layer.succeedContext(processJournal.context)
-              const runtime = downstream.pipe(Layer.provideMerge(runtimeJournalLayer))
+              const runtime = downstream.pipe(
+                Layer.provideMerge(runtimeJournalLayer),
+                Layer.provideMerge(Layer.succeed(RunActivationGraphBaseline, initialState.position))
+              )
               const context = yield* Layer.build(runtime)
               const journal = processJournal.journal
               yield* applicationExit.registerExecutorDrain({
@@ -767,6 +779,7 @@ export const journaledRunBootstrapLayer = (
             terminatedAt: TraceCursor.make({ position: termination.position, runId: termination.runId })
           })
         )
+        yield* publishAcceptedHistory(termination.runId, termination.position)
         const shouldAttemptRetirement = yield* Ref.modify(startupRetirementAttempts, (attempted) => {
           /* v8 ignore next -- @preserve lifecycle.terminateRun accepts one terminal append per Run; a second finish for the same Run is rejected before this guard. */
           if (attempted.has(runId)) return [false, attempted] as const

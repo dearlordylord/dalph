@@ -1,3 +1,4 @@
+/* eslint-disable max-lines -- Delivery relations keep the activation-scoped graph boundary with the reactive publication interpreter it constrains. */
 import { type PlannedTaskAttempt, type RunId, type TaskId } from "@dalph/contracts"
 import { Deferred, Effect, Layer, Option, Ref, Schema, Semaphore, Stream, SubscriptionRef } from "effect"
 import * as Cause from "effect/Cause"
@@ -191,9 +192,13 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
   journal: JournalService,
   recovery: RunRecoveryProjectionSource,
   integrationTargets: IntegrationTargetResourceController,
+  activationGraphBaseline: JournalPosition,
   opportunity: RunActivationOpportunityValue = RunActivationOpportunity.OrdinaryRunEntry()
 ) {
   const publicationObserver = yield* DeliveryRelationPublicationObserver
+  // Each delivery activation must establish its own tracker view before its
+  // one post-quiescence reconfirmation. The process-lifetime Journal retains
+  // the older observation as evidence, but it is not this activation's G1.
   const recoveredAttemptIds = new Set(recovery.reconstructedPlannedAttemptPositions.map(({ attemptId }) => attemptId))
   const readCoherentJournalProjection = Effect.fn("DeliveryRelations.readCoherentJournalProjection")(function* () {
     for (;;) {
@@ -205,7 +210,14 @@ export const makeReactiveDeliveryRelationsLayer = Effect.fn("DeliveryRelations.m
           ? projection.evidence.acceptedAt
           : journalAfter.position
       if (journalBefore.position === journalAfter.position && projectionAcceptedAt === journalAfter.position) {
-        return { journal: journalAfter, projection }
+        const currentGraph = journalAfter.graph
+        return {
+          journal:
+            currentGraph._tag === "GraphEstablished" && currentGraph.observation.recordedAt <= activationGraphBaseline
+              ? { ...journalAfter, graph: { _tag: "GraphNotEstablished" as const } }
+              : journalAfter,
+          projection
+        }
       }
     }
   })
@@ -444,11 +456,19 @@ export const reactiveDeliveryRelationsLayer = (
   runId: RunId,
   target: TrackerTarget,
   journal: JournalService,
-  recovery: RunRecoveryProjectionSource
+  recovery: RunRecoveryProjectionSource,
+  activationGraphBaseline: JournalPosition
 ) =>
   Layer.unwrap(
     Effect.gen(function* () {
       const resources = yield* DeliveryRuntimeResources
-      return yield* makeReactiveDeliveryRelationsLayer(runId, target, journal, recovery, resources.integrationTargets)
+      return yield* makeReactiveDeliveryRelationsLayer(
+        runId,
+        target,
+        journal,
+        recovery,
+        resources.integrationTargets,
+        activationGraphBaseline
+      )
     })
   )

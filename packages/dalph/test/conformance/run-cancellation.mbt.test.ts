@@ -65,6 +65,7 @@ import {
 } from "../../../orchestrator/src/coordination/application-exit/application-shell.js"
 import { journaledCurrentDeliveryFrameOf } from "../../../orchestrator/src/coordination/run/current-delivery-frame.js"
 import { RunRecoveryProjection } from "../../../orchestrator/src/coordination/run/recovery-activation.js"
+import { RunActivationGraphBaseline } from "../../../orchestrator/src/coordination/run/activation-graph-baseline.js"
 import { journaledRunBootstrapLayer } from "../../../orchestrator/src/coordination/run/journaled-run-bootstrap.js"
 import { controlledSynchronousPlannedAttemptExecutorLayer } from "../../test-support/controlled-synchronous-planned-attempt-executor.js"
 import { noopJournalMaintenanceObservation } from "../../../orchestrator/src/workflow-journal/maintenance.js"
@@ -901,6 +902,7 @@ const makeCancellationDriverImplementation = () => {
     (next) => (records = next)
   )
   let bootstrap: JournaledRunBootstrap["Service"] | undefined
+  let bootstrapScope: Scope.Closeable | undefined
   let applicationExit: ApplicationExitShell["Service"] | undefined
   let runtimeFiber: Fiber.Fiber<unknown, unknown> | undefined
   let applicationExitFiber: Fiber.Fiber<unknown, unknown> | undefined
@@ -1055,8 +1057,10 @@ const makeCancellationDriverImplementation = () => {
   })
 
   const productionBootstrap = Effect.gen(function* () {
-    const scope = yield* Scope.make()
-    yield* Scope.addFinalizer(scope, Scope.close(scope, Exit.void))
+    const ownerScope = runCancellationMbtScope
+    if (ownerScope === undefined) return yield* Effect.die("cancellation driver has no owning test scope")
+    const scope = yield* Scope.fork(ownerScope)
+    bootstrapScope = scope
     const journalContext = yield* Layer.build(journalStoreCapabilities(Layer.succeed(JournalStore, storage))).pipe(
       Effect.provideService(Scope.Scope, scope)
     )
@@ -1115,7 +1119,8 @@ const makeCancellationDriverImplementation = () => {
         target,
         journal,
         recovery,
-        runtimeResources.integrationTargets
+        runtimeResources.integrationTargets,
+        yield* RunActivationGraphBaseline
       )
       const relation = yield* deliveryRuntime.pipe(Effect.provide(relations))
       const acceptedFactPublication = yield* DeliveryAcceptedFactPublication.pipe(Effect.provide(relations))
@@ -2109,7 +2114,9 @@ const makeCancellationDriverImplementation = () => {
     init: () =>
       Effect.gen(function* () {
         yield* stopRuntime
-        if (bootstrap === undefined) bootstrap = yield* productionBootstrap
+        if (bootstrapScope !== undefined) yield* Scope.close(bootstrapScope, Exit.void)
+        bootstrapScope = undefined
+        bootstrap = undefined
         records = []
         durable = makeInitialDurable()
         process = makeInitialProcess()
@@ -2125,6 +2132,7 @@ const makeCancellationDriverImplementation = () => {
         integratorOutcomeMode = "Prepared"
         integrationFixture = undefined
         integrationQuarantineFixture = undefined
+        bootstrap = yield* productionBootstrap
         yield* startRuntime
       }),
     selectIdleRun: () =>
@@ -2843,6 +2851,22 @@ it.effect("keeps an unreadable integration read pending through the production G
       expect(evidence.eventTags).toContain("TargetPromotionIntended")
       expect(evidence.eventTags).not.toContain("TargetPromotionObservedSuccess")
       expect(evidence.eventTags).not.toContain("WorkflowRunTerminated")
+    })
+  )
+)
+
+it.effect("recreates the live bootstrap when a second init resets the cancellation journal", () =>
+  withCancellationDriver((driver) =>
+    Effect.gen(function* () {
+      yield* driver.init()
+      yield* driver.selectExecutingExecutor()
+      const first = yield* driver.getProductionEvidence()
+      expect(first.eventTags.filter((tag) => tag === "WorkflowRunBegan")).toHaveLength(1)
+      yield* driver.init()
+      yield* driver.selectExecutingExecutor()
+      const second = yield* driver.getProductionEvidence()
+      expect(second.eventTags).toEqual(first.eventTags)
+      expect(second.cancellation).toBe(first.cancellation)
     })
   )
 )

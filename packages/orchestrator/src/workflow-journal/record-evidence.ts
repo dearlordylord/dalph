@@ -236,6 +236,8 @@ const operationIdsOf = (record: JournalRecord): ReadonlySet<OperationId> => {
     ids.add(completionTaskRequestLookupOperationIdFor(record.event.request, record.event.attemptOrdinal))
   }
   if ("operationId" in record.event) ids.add(record.event.operationId)
+  // Claim acquisition outcomes carry their causal operation inside the authoritative claim.
+  if (record.event._tag === "TaskClaimAcquired") ids.add(record.event.claim.operationId)
   if ("request" in record.event && "operationId" in record.event.request) ids.add(record.event.request.operationId)
   if ("authorization" in record.event && "operationId" in record.event.authorization) {
     ids.add(record.event.authorization.operationId)
