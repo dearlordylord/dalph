@@ -59,6 +59,13 @@ import {
   settledCompletionClaimReplacementAt,
   type SettledCompletionClaimReplacementEvidence
 } from "./settled-completion-claim-replacement.js"
+import {
+  appendWorkflowFinalityPremiseChanges,
+  emptyWorkflowFinalityPremiseChanges,
+  inspectWorkflowFinalityPremiseChangesStorage,
+  lastWorkflowFinalityPremiseChangeAt,
+  type WorkflowFinalityPremiseChanges
+} from "./workflow-finality-premise-changes.js"
 import type { CompletionTaskClaim } from "../workflow/protocols/integration-finality/events.js"
 import type { AttemptChoiceRequestId } from "../workflow/protocols/attempt-choice/events.js"
 import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
@@ -119,6 +126,7 @@ interface EvidenceIndexes {
   readonly stopRequestDisposition: StopRequestDispositionEvidence
   readonly retainedExecutorResponsibilitySubjects: RetainedExecutorResponsibilitySubjects
   readonly settledCompletionClaimReplacements: SettledCompletionClaimReplacementEvidence
+  readonly workflowFinalityPremiseChanges: WorkflowFinalityPremiseChanges
 }
 
 const indexesByEvidence = new WeakMap<JournalRecordEvidence, EvidenceIndexes>()
@@ -162,7 +170,8 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
       readFreshnessEvidence: emptyReadFreshnessEvidence(),
       stopRequestDisposition: emptyStopRequestDisposition(),
       retainedExecutorResponsibilitySubjects: emptyRetainedExecutorResponsibilitySubjects(),
-      settledCompletionClaimReplacements: emptySettledCompletionClaimReplacements()
+      settledCompletionClaimReplacements: emptySettledCompletionClaimReplacements(),
+      workflowFinalityPremiseChanges: emptyWorkflowFinalityPremiseChanges()
     },
     null
   )
@@ -462,6 +471,10 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
       ),
       settledCompletionClaimReplacements: appendSettledCompletionClaimReplacementEvidence(
         indexes.settledCompletionClaimReplacements,
+        record
+      ),
+      workflowFinalityPremiseChanges: appendWorkflowFinalityPremiseChanges(
+        indexes.workflowFinalityPremiseChanges,
         record
       )
     },
@@ -779,6 +792,16 @@ export const journalSettledCompletionClaimReplacement = (
     throughPosition: source.lastPosition ?? 0
   })
 
+/** Latest record that may invalidate a Run finality proof at this immutable evidence cutoff. */
+export const journalWorkflowFinalityPremiseChangeAt = (
+  source: JournalRecordEvidence,
+  runId: RunId
+): JournalPosition | undefined =>
+  lastWorkflowFinalityPremiseChangeAt(indexesFor(source).workflowFinalityPremiseChanges, {
+    runId,
+    throughPosition: source.lastPosition ?? 0
+  })
+
 /** Full accepted prefixes can reuse the exact indexed kind sequence. */
 export const journalEvidenceKindSequence = (
   source: JournalRecordEvidence,
@@ -935,6 +958,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     indexes.stopRequestDisposition,
     indexes.retainedExecutorResponsibilitySubjects,
     indexes.settledCompletionClaimReplacements,
+    indexes.workflowFinalityPremiseChanges,
     inspectJournalRecordStorage(source.records),
     ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage),
@@ -960,6 +984,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     ...inspectReadFreshnessEvidenceStorage(indexes.readFreshnessEvidence),
     ...inspectStopRequestDispositionStorage(indexes.stopRequestDisposition),
     ...inspectRetainedExecutorResponsibilityStorage(indexes.retainedExecutorResponsibilitySubjects),
-    ...inspectSettledCompletionClaimReplacementStorage(indexes.settledCompletionClaimReplacements)
+    ...inspectSettledCompletionClaimReplacementStorage(indexes.settledCompletionClaimReplacements),
+    ...inspectWorkflowFinalityPremiseChangesStorage(indexes.workflowFinalityPremiseChanges)
   ]
 }

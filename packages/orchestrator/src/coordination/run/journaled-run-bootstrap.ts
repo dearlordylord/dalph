@@ -94,7 +94,7 @@ import { intentRecordKey, runCancellationAppliedRecordKey } from "../../workflow
 import {
   firstJournalRecordOfKind,
   journalRecordByKey,
-  journalRecordsAfter,
+  journalWorkflowFinalityPremiseChangeAt,
   lastJournalRecordOfKind
 } from "../../workflow-journal/record-evidence.js"
 import { journalRecordAt } from "../../workflow-journal/record-sequence.js"
@@ -266,9 +266,7 @@ const terminalProofMatchesGraphRead = (
 
 /** Alice's accepted cancellation makes an older terminal graph non-current even when later bookkeeping advanced the activation. */
 const cancellationSupersedesTerminalEvidence = (proof: TerminalRunFinalityProof, state: JournalState): boolean =>
-  Array.from(journalRecordsAfter(state.prefix, proof.evidence.observedAt)).some(
-    ({ event, position }) => event._tag === "RunCancellationApplied" && proof.evidence.observedAt <= position
-  )
+  (lastJournalRecordOfKind(state.prefix, "RunCancellationApplied")?.position ?? 0) > proof.evidence.observedAt
 
 const validateRun = Effect.fn("JournaledRunBootstrap.validateRun")(function* (
   runId: RunId,
@@ -602,11 +600,10 @@ export const journaledRunBootstrapLayer = (
                     ? Effect.succeed({ proof })
                     : journal.state.get.pipe(
                         Effect.map((state) => {
-                          const changed = Array.from(journalRecordsAfter(state.prefix, proof.acceptedAt)).some(
-                            ({ event, position }) =>
-                              (proof.acceptedAt === null || position > proof.acceptedAt) &&
-                              event._tag !== "TaskWorkCapacityChanged"
-                          )
+                          const latestPremiseChange = journalWorkflowFinalityPremiseChangeAt(state.prefix, runId)
+                          const changed =
+                            latestPremiseChange !== undefined &&
+                            (proof.acceptedAt === null || latestPremiseChange > proof.acceptedAt)
                           const finalProof = changed
                             ? {
                                 acceptedAt: proof.acceptedAt,

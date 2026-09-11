@@ -35,7 +35,6 @@ import {
   type RunnableFrontier
 } from "../frontier/frontier.js"
 import {
-  reconstructedTaskGraphFor,
   reconstructedTaskGraphFromEvents,
   reconstructedTaskWorkSpecificationFor
 } from "../reconstruction/graph-knowledge.js"
@@ -112,8 +111,7 @@ import {
   makeTaskWorktreeObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation,
-  TaskClaimReleaseAuthority,
-  workflowOperationId
+  TaskClaimReleaseAuthority
 } from "../../workflow/registry/operation.js"
 import { currentTaskClaimAuthority } from "../frontier/task-claim-authority.js"
 import { decideTargetLineage } from "../../workflow/protocols/git-reconciliation/decision.js"
@@ -1349,17 +1347,18 @@ const taskPauseCoverageBoundaries = (
 ): ReadonlyArray<JournalPosition> => {
   if (pause.subject.taskId === plannedAttempt.taskId) return [pausePosition]
   const unpausePosition = taskUnpausePositionFor(source, pause, pausePosition)
-  const graphObservations = Array.from(
-    journalRecordsForTaskKind(source, plannedAttempt.taskId, "TaskTrackerFactsObserved")
-  )
-    .filter(isGraphObservationRecord)
-    .filter(
-      ({ event, position }) =>
-        (immutableRunTarget === undefined ||
-          taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)) &&
-        (position < pausePosition ||
-          (position > pausePosition && (unpausePosition === undefined || position < unpausePosition)))
-    )
+  const graphObservations: Array<GraphObservationRecord> = []
+  for (const record of journalRecordsForTaskKind(source, plannedAttempt.taskId, "TaskTrackerFactsObserved")) {
+    if (
+      isGraphObservationRecord(record) &&
+      (immutableRunTarget === undefined ||
+        taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)) &&
+      (record.position < pausePosition ||
+        (record.position > pausePosition && (unpausePosition === undefined || record.position < unpausePosition)))
+    ) {
+      graphObservations.push(record)
+    }
+  }
   const graphBeforePause = graphObservations.findLast(({ position }) => position < pausePosition)
   const graphsWhilePaused = graphObservations.filter(({ position }) => position > pausePosition)
   const observedGraphs = [
@@ -1448,10 +1447,12 @@ export const deriveJournalResponsibilityFacts = (
   opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
 ): ReadonlyArray<ResponsibilityFreshFacts> => {
   const source = journalHistoryOf(runState)
+  const historicalGraphObservation =
+    immutableRunTarget === undefined ? undefined : journalGraphObservationAt(source, { target: immutableRunTarget })
   const historicalTaskGraph =
-    immutableRunTarget === undefined
+    historicalGraphObservation === undefined
       ? Option.none<TaskDagSnapshot>()
-      : reconstructedTaskGraphFor(runState.graphKnowledge, immutableRunTarget)
+      : journalGraphSnapshotForObservation(source, historicalGraphObservation.position)
   const activeRefreshGraphObservation =
     opportunity._tag === "ActiveWorkAuthorityRefresh" && Option.isSome(activationBaselinePosition)
       ? currentCompleteGraphObservationAfter(source, activationBaselinePosition, immutableRunTarget)
