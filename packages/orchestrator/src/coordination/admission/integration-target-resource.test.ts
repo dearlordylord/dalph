@@ -116,13 +116,31 @@ it.effect("does not release accepted ownership through the right identity and wr
     const controller = yield* makeIntegrationTargetResourceController()
     const acquired = resourceResponsibility("/release-bound.git", 9, "release-bound-run")
     const wrongTarget = { ...acquired, integrationTarget: target("/wrong-release.git") }
+    const enteredPermit = yield* Deferred.make<void>()
+    const releasePermit = yield* Deferred.make<void>()
 
     yield* controller.acquire(acquired)
     yield* controller.publishAcceptedOwnership(acquired)
+    const permitFiber = yield* controller
+      .withPermit(
+        acquired,
+        Deferred.succeed(enteredPermit, undefined).pipe(Effect.andThen(Deferred.await(releasePermit)))
+      )
+      .pipe(Effect.forkChild)
+    yield* Deferred.await(enteredPermit)
+    expect(yield* controller.isActive(acquired)).toBe(true)
+
     yield* controller.release(wrongTarget)
 
     expect(yield* controller.isHeld(acquired)).toBe(true)
+    expect(yield* controller.isActive(acquired)).toBe(true)
     expect((yield* controller.snapshot).heldResponsibilities).toEqual([integrationResponsibilityIdentity(acquired)])
+    expect((yield* controller.snapshot).activeResponsibilities).toEqual([integrationResponsibilityIdentity(acquired)])
+
+    yield* Deferred.succeed(releasePermit, undefined)
+    yield* Fiber.join(permitFiber)
+    expect(yield* controller.isActive(acquired)).toBe(false)
+    expect(yield* controller.isHeld(acquired)).toBe(true)
   })
 )
 

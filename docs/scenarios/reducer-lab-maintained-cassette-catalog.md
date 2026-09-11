@@ -741,13 +741,15 @@ plan. It does not reread B or C's specifications as executor authorization.
 
 X's worktree becomes ready after B's Integrator candidate is observed. X's
 executor starts only after B's successful promotion compare-and-set, while B's
-completion finality is still unfinished. X then reports its own accepted result.
-C crosses integration and completion finality next. Only a later complete tracker
-read proves B and C successful and exposes D. D begins while X remains held, and
-the next wave exposes E and F while X is still held. The accepted held-position
-chronology is B+C, C, X, D+X, E+X, F+X, H+I, I, and G; settlement is A, B, C, D,
-E, F, X, H, I, and G. The maintainer accepted this controlled legal execution on
-2026-09-11 in [the #350 acceptance record](https://github.com/dearlordylord/dalph/issues/350#issuecomment-5640171481);
+completion finality is still unfinished. X remains executing and held; it does
+not report or settle its accepted result yet. C crosses integration and
+completion finality next. Only a later complete tracker read proves B and C
+successful and exposes D. D begins while X remains held, and the next wave
+exposes E and F while X is still held. Only after F settles does X report and
+settle its accepted result. The accepted held-position chronology is B+C, C, X,
+D+X, E+X, F+X, H+I, I, and G; settlement is A, B, C, D, E, F, X, H, I, and G.
+The maintainer accepted this controlled legal execution on 2026-09-11 in [the
+#350 acceptance record](https://github.com/dearlordylord/dalph/issues/350#issuecomment-5640171481);
 it is not a universal production ordering. No terminal executor report is used
 as a substitute for tracker success or delivery settlement.
 
