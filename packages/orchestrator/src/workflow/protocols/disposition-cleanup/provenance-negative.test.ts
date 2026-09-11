@@ -15,7 +15,7 @@ import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 import { attempt, authorization, baseSha, disposition, runId, successor } from "./fixtures.js"
 import {
@@ -49,15 +49,11 @@ const begin = (target: string) =>
     return journal
   })
 
-const without = (
-  records: ReadonlyArray<Parameters<typeof validateWorktreeCleanupProvenance>[0][number]>,
-  predicate: (record: Parameters<typeof validateWorktreeCleanupProvenance>[0][number]) => boolean
-) => records.filter((record) => !predicate(record))
+const without = (records: ReadonlyArray<JournalRecord>, predicate: (record: JournalRecord) => boolean) =>
+  records.filter((record) => !predicate(record))
 
-const withForeignKey = (
-  records: ReadonlyArray<Parameters<typeof validateWorktreeCleanupProvenance>[0][number]>,
-  predicate: (record: Parameters<typeof validateWorktreeCleanupProvenance>[0][number]) => boolean
-) => records.map((record) => (predicate(record) ? { ...record, key: JournalRecordKey.make("foreign-key") } : record))
+const withForeignKey = (records: ReadonlyArray<JournalRecord>, predicate: (record: JournalRecord) => boolean) =>
+  records.map((record) => (predicate(record) ? { ...record, key: JournalRecordKey.make("foreign-key") } : record))
 
 const candidateAcceptedResult = AcceptedResult.make({
   commit: baseSha,

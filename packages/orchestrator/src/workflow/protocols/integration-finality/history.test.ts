@@ -3,7 +3,7 @@ import { Schema } from "effect"
 import { RunId } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
-import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
+import { journalEvidenceFrom, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
@@ -284,14 +284,17 @@ const validationErrors = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<
   })
 }
 
-const completeValidationErrors = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<string> => {
+const completeValidationErrorsFrom = (
+  records: ReadonlyArray<JournalRecord>,
+  source: JournalHistorySource
+): ReadonlyArray<string> => {
   let indexes = makeIntegrationFinalityHistoryIndexes()
   const errors: Array<string> = []
   for (const current of records) {
     indexes = validateIntegrationFinalityHistoryRecord(
       current,
       fixture.runId,
-      records,
+      source,
       indexes,
       (detail) => errors.push(detail),
       (detail) => errors.push(detail)
@@ -299,6 +302,9 @@ const completeValidationErrors = (records: ReadonlyArray<JournalRecord>): Readon
   }
   return errors
 }
+
+const completeValidationErrors = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<string> =>
+  completeValidationErrorsFrom(records, records)
 
 const insertBeforeDeletionAttempt = (event: JournalRecord["event"]): ReadonlyArray<JournalRecord> => {
   const records = validFinalityRecords()
@@ -390,6 +396,27 @@ it("accepts one complete promotion, replacement, fresh-success deletion, and set
   const records = validFinalityRecords()
   expect(validationErrors(records)).toEqual([])
   expect(journaledIntegrationEvidenceOf(records).at(-1)?._tag).toBe("IntegrationFinalitySettlement")
+})
+
+it("reports identical ordered finality diagnostics from cold records and indexed live evidence", () => {
+  const records = validFinalityRecords()
+  const settled = records.at(-1)
+  if (settled?.event._tag !== "IntegrationFinalitySettled") return expect.fail("fixture must end in settlement")
+  const malformed = [
+    ...records.slice(0, -1),
+    {
+      ...settled,
+      event: IntegrationFinalitySettledEvent.make({
+        ...settled.event,
+        deletionOperationId: OperationId.make("history-foreign-deletion-operation")
+      })
+    }
+  ]
+
+  expect(completeValidationErrorsFrom(records, journalEvidenceFrom(records))).toEqual(completeValidationErrors(records))
+  expect(completeValidationErrorsFrom(malformed, journalEvidenceFrom(malformed))).toEqual(
+    completeValidationErrors(malformed)
+  )
 })
 
 it("rejects cleanup release or marker deletion when either exact cleanup read is absent", () => {

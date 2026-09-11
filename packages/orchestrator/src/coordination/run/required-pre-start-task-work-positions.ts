@@ -8,6 +8,14 @@ import type { ReconstructedRunState } from "../reconstruction/state.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { RequiredPreStartTaskWorkPosition } from "../delivery/task-work-position.js"
+import {
+  journalRecordByKey,
+  journalRecordsForAttemptKind,
+  journalRecordsForTask,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
+import { outcomeRecordKey } from "../../workflow-journal/record-key.js"
 
 type ClaimIntentRecord = Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquisitionIntended" }> & {
   readonly _recordPosition: JournalRecord["position"]
@@ -23,11 +31,11 @@ type ClaimNoReleaseObservation = Extract<
 >
 
 const latestClaimIntentByTask = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId
 ): ReadonlyMap<TaskId, ClaimIntentRecord> => {
   const intents = new Map<TaskId, ClaimIntentRecord>()
-  for (const record of records) {
+  for (const record of journalRecordsOfKind(records, "TaskClaimAcquisitionIntended")) {
     if (record.runId !== runId || record.event._tag !== "TaskClaimAcquisitionIntended") continue
     intents.set(record.event.operation.acquisition.taskId, { ...record.event, _recordPosition: record.position })
   }
@@ -65,16 +73,27 @@ const taskClaimReleaseEventMatches = (
 }
 
 const taskClaimReleasedAfter = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   taskId: TaskId,
   claim: Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquired" }>["claim"],
   after: JournalRecord["position"]
-): boolean =>
-  records.some(({ event, position, runId: recordRunId }) => {
-    if (recordRunId !== runId || position <= after) return false
-    return taskClaimReleaseEventMatches(event, taskId, claim)
-  })
+): boolean => {
+  const settlementKinds = [
+    "TaskClaimReleased",
+    "StoppedAttemptClaimNoReleaseObserved",
+    "CancelledAttemptClaimNoReleaseObserved",
+    "AttemptImplementationAbandoned",
+    "CompletionClaimReplaced",
+    "IntegrationFinalitySettled"
+  ] as const
+  return settlementKinds.some((kind) =>
+    Array.from(journalRecordsOfKind(records, kind)).some(
+      ({ event, position, runId: recordRunId }) =>
+        recordRunId === runId && position > after && taskClaimReleaseEventMatches(event, taskId, claim)
+    )
+  )
+}
 
 const plannedAttemptOperationFor = (
   event: WorkflowJournalEvent
@@ -86,14 +105,15 @@ const plannedAttemptOperationFor = (
       : undefined
 
 const planAfterClaim = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   taskId: TaskId,
   claimOperationId: OperationId,
   after: JournalRecord["position"]
 ): { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalRecord["position"] } | undefined => {
-  const runRecords = records.filter(({ runId: recordRunId }) => recordRunId === runId)
-  const plans = records.flatMap((record) => {
+  const taskRecords = Array.from(journalRecordsForTask(records, taskId))
+  const runRecords = taskRecords.filter(({ runId: recordRunId }) => recordRunId === runId)
+  const plans = taskRecords.flatMap((record) => {
     if (record.runId !== runId || record.position <= after) return []
     const operation = plannedAttemptOperationFor(record.event)
     if (
@@ -110,26 +130,34 @@ const planAfterClaim = (
 }
 
 const claimOutcomeFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   intent: ClaimIntentRecord
-): ClaimOutcomeRecord | undefined =>
-  records.findLast(
-    (record): record is ClaimOutcomeRecord =>
-      record.runId === runId &&
-      record.position > intent._recordPosition &&
-      ((record.event._tag === "TaskClaimAcquired" &&
-        record.event.claim.operationId === intent.operation.acquisition.operationId) ||
-        (record.event._tag === "TaskClaimAcquisitionRejected" &&
-          record.event.operationId === intent.operation.acquisition.operationId))
-  )
+): ClaimOutcomeRecord | undefined => {
+  const operationId = intent.operation.acquisition.operationId
+  const record = journalRecordByKey(records, outcomeRecordKey(operationId))
+  if (record === undefined || record.runId !== runId || record.position <= intent._recordPosition) return undefined
+  if (record.event._tag === "TaskClaimAcquired" && record.event.claim.operationId === operationId) {
+    return { ...record, event: record.event }
+  }
+  if (record.event._tag === "TaskClaimAcquisitionRejected" && record.event.operationId === operationId) {
+    return { ...record, event: record.event }
+  }
+  return undefined
+}
 
 const executorBeganFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   plannedAttempt: PlannedTaskAttempt
 ): boolean =>
-  records.some(
+  Array.from(
+    journalRecordsForAttemptKind(
+      records,
+      plannedAttempt.attemptId,
+      "PlannedAttemptExecutorWorkResponsibilityBegan"
+    )
+  ).some(
     ({ event, runId: recordRunId }) =>
       recordRunId === runId &&
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
@@ -137,7 +165,7 @@ const executorBeganFor = (
   )
 
 const requiredPositionForClaimIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   intent: ClaimIntentRecord
 ): RequiredPreStartTaskWorkPosition | undefined => {
@@ -172,7 +200,7 @@ const requiredPositionForClaimIntent = (
 export const requiredPreStartTaskWorkPositionsOf = (
   runState: Pick<ReconstructedRunState, "runId" | "responsibility" | "workflowHistory">
 ): ReadonlyArray<RequiredPreStartTaskWorkPosition> => {
-  const records = runState.workflowHistory.records
+  const records = runState.workflowHistory.prefix ?? runState.workflowHistory.records
   const positions: Array<RequiredPreStartTaskWorkPosition> = []
   for (const intent of latestClaimIntentByTask(records, runState.runId).values()) {
     const position = requiredPositionForClaimIntent(records, runState.runId, intent)

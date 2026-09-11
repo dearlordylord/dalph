@@ -17,8 +17,14 @@ import {
 } from "@dalph/contracts"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
-import { rememberValidatedJournalPrefixSuccessor } from "../../../workflow-journal/prefix-lineage.js"
-import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
+import { observeJournalRecordSequenceOperations } from "../../../workflow-journal/record-sequence.js"
+import { InRunJournal, JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
+import { InitialControlPolicy } from "../../../control/policy.js"
+import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegratorCandidateResourceLocator,
@@ -44,20 +50,26 @@ import {
 import {
   deriveTargetPromotionState,
   deriveTargetPromotionStateFor,
-  reconcileTargetPromotionAttempt,
-  runTargetPromotion,
+  runTargetPromotion as runAcceptedTargetPromotion,
   TargetPromotionCorrelationContradiction,
   TargetPromotionResultContradiction
 } from "./protocol.js"
 import { targetPromotionContract } from "../../../../test/contracts/target-promotion-contract.js"
-import {
+import { makeTargetPromotionEngine } from "./protocol-engine.js"
+const {
   authorizeTargetPromotionProgress,
   observeTargetPromotionRead,
   recordTargetPromotionAttemptIntent,
   recordTargetPromotionIntent,
   sendTargetPromotionAttempt,
-  settleTargetPromotionAttempt
-} from "./transitions.js"
+  settleTargetPromotionAttempt,
+  reconcileTargetPromotionAttempt,
+  runTargetPromotion
+} = makeTargetPromotionEngine(
+  Effect.fn("PromotionTest.currentEvidence")(function* (runId: RunId) {
+    return journalEvidenceFrom(yield* (yield* InRunJournal).read(runId))
+  })
+)
 
 const runId = RunId.make("outer-promotion-test-run")
 const target = IntegrationTarget.make({
@@ -150,6 +162,60 @@ const runFor = (
     Effect.provide(Layer.mergeAll(journalLayer(records), gitLayer(service.compareAndSet, service.read)))
   )
 
+it.effect("rereads accepted history after intent before contacting Git and rejects a missing qualification", () =>
+  Effect.gen(function* () {
+    const journal = yield* JournalStore
+    const accepted = yield* AcceptedJournalReader
+    const calls = yield* Ref.make<ReadonlyArray<string>>([])
+    let materializations = 0
+    yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        observeJournalRecordSequenceOperations((operation) => {
+          if (operation._tag === "HistoricalMaterialization") materializations += 1
+        })
+      ),
+      (stop) => Effect.sync(stop)
+    )
+    yield* journal.beginRun(
+      runId,
+      FixtureTarget.make("promotion-wrapper"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    const failure = yield* runAcceptedTargetPromotion(qualifiedCandidate).pipe(
+      Effect.provideService(
+        InRunJournal,
+        InRunJournal.of({
+          append: (currentRunId, key, event) =>
+            Ref.update(calls, (current) => [...current, `append:${event._tag}`]).pipe(
+              Effect.andThen(journal.append(currentRunId, key, event))
+            ),
+          read: () => Effect.die("production promotion must not export journal history")
+        })
+      ),
+      Effect.provideService(
+        AcceptedJournalReader,
+        AcceptedJournalReader.of({
+          readAccepted: (currentRunId) =>
+            Ref.update(calls, (current) => [...current, "read:accepted"]).pipe(
+              Effect.andThen(accepted.readAccepted(currentRunId))
+            )
+        })
+      ),
+      Effect.provideService(
+        TargetPromotionGit,
+        TargetPromotionGit.of({
+          compareAndSet: () => Effect.die("invalid qualification cannot contact Git"),
+          read: () => Effect.die("invalid qualification cannot contact Git")
+        })
+      ),
+      Effect.flip
+    )
+    expect(failure).toMatchObject({ _tag: "JournalHistoryInvalid" })
+    expect(yield* Ref.get(calls)).toEqual(["read:accepted", "append:TargetPromotionIntended", "read:accepted"])
+    expect(materializations).toBe(0)
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
 it.effect("promotes exact M once and records its Integrator correlation and ancestry", () =>
   Effect.gen(function* () {
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
@@ -212,7 +278,7 @@ it.effect("reconciles an already-current or ancestor candidate without compare-a
   })
 )
 
-it.effect("reuses a validated non-promotion prefix and its exact-request cache", () =>
+it.effect("reads the exact promotion request from indexed history without exporting unrelated records", () =>
   Effect.gen(function* () {
     const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([])
     const state = yield* run(
@@ -236,14 +302,20 @@ it.effect("reuses a validated non-promotion prefix and its exact-request cache",
       runId
     }
     const successorRecords = [...priorRecords, appended]
-    rememberValidatedJournalPrefixSuccessor(
-      { records: priorRecords, runId },
-      { records: successorRecords, runId },
-      appended
-    )
-
-    expect(deriveTargetPromotionStateFor(successorRecords, qualifiedCandidate)?._tag).toBe("PromotionSucceeded")
-    expect(deriveTargetPromotionStateFor(successorRecords, qualifiedCandidate)?._tag).toBe("PromotionSucceeded")
+    const evidence = journalEvidenceFrom(successorRecords)
+    let materializations = 0
+    const stop = observeJournalRecordSequenceOperations((operation) => {
+      if (operation._tag === "HistoricalMaterialization") materializations += 1
+    })
+    try {
+      const indexed = deriveTargetPromotionStateFor(evidence, qualifiedCandidate)
+      expect(indexed?._tag).toBe("PromotionSucceeded")
+      expect(indexed).toEqual(deriveTargetPromotionStateFor(successorRecords, qualifiedCandidate))
+      expect(deriveTargetPromotionStateFor(evidence, qualifiedCandidate)).toBe(indexed)
+      expect(materializations).toBe(0)
+    } finally {
+      stop()
+    }
   })
 )
 

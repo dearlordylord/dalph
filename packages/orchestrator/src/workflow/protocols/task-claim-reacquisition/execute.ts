@@ -8,7 +8,9 @@ import type {
 } from "../../interpretation/interpreter.js"
 import { type OperationId } from "../../identity.js"
 import { makeTaskClaimAcquisitionOperation } from "../../registry/operation.js"
-import type { InRunJournal } from "../../../workflow-journal/store.js"
+import type { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { journalRecordsForTask } from "../../../workflow-journal/record-evidence.js"
 import type { TaskClaimAcquisitionPlanner } from "../task-claim-acquisition/plan.js"
 import type { TaskClaimReacquisitionRequestId } from "./events.js"
 import { taskClaimReacquisitionOperationId } from "./plan.js"
@@ -50,17 +52,19 @@ export const runTaskClaimReacquisition = Effect.fn("TaskClaimReacquisition.run")
     onNone: () => Effect.fail(new TaskClaimReacquisitionPlannerUnavailable({ taskId: input.taskId })),
     onSome: Effect.succeed
   })
-  const records = yield* input.journal.read(input.runId)
-  const priorClaim = records.findLast(
-    ({ event }) => event._tag === "TaskClaimAcquired" && event.claim.taskId === input.taskId
-  )?.event
-  const observation = records.findLast(
-    ({ event }) =>
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(input.runId)
+  let priorClaim: JournalRecord["event"] | undefined
+  let observation: JournalRecord["event"] | undefined
+  for (const { event } of journalRecordsForTask(records, input.taskId)) {
+    if (event._tag === "TaskClaimAcquired" && event.claim.taskId === input.taskId) priorClaim = event
+    if (
       event._tag === "TaskTrackerFactsObserved" &&
       (event.observation._tag === "FocusedTaskClaimFacts" ||
         event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
       event.observation.coverage.taskId === input.taskId
-  )?.event
+    )
+      observation = event
+  }
   const operationId = taskClaimReacquisitionOperationId(input.requestId)
   const operation = makeTaskClaimAcquisitionOperation({
     acquisition: yield* planner.plan(operationId, input.taskId).pipe(

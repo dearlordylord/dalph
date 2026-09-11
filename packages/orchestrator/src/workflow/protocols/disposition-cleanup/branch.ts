@@ -3,6 +3,12 @@
 import { Effect, Context, Layer, Ref, Schema } from "effect"
 import { TaskBranchRef } from "@dalph/contracts"
 import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordByKey,
+  journalRecordsForOperationId,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import type { AppendableWorkflowJournalEvent, JournalRecord } from "../../../workflow-journal/store.js"
 import {
   branchCleanupAuthorizedRecordKey,
@@ -240,12 +246,8 @@ export const branchCleanupTestLayer = (input: {
     })
   )
 
-const recordsWith = (
-  records: ReadonlyArray<JournalRecord>,
-  tag: BranchCleanupJournalEvent["_tag"],
-  operationId: OperationId
-) =>
-  records.filter(
+const recordsWith = (records: JournalHistorySource, tag: BranchCleanupJournalEvent["_tag"], operationId: OperationId) =>
+  Array.from(journalRecordsForOperationId(records, operationId)).filter(
     (record) =>
       Schema.is(BranchCleanupJournalEvent)(record.event) &&
       record.event._tag === tag &&
@@ -284,14 +286,11 @@ export const branchCleanupMutationResultMatchesAuthorization = (
   authorization: BranchCleanupAuthorization
 ): boolean => result.branch === authorization.locator
 
-const nextObservationOrdinal = (
-  records: ReadonlyArray<JournalRecord>,
-  operationId: OperationId
-): CleanupObservationOrdinal =>
+const nextObservationOrdinal = (records: JournalHistorySource, operationId: OperationId): CleanupObservationOrdinal =>
   CleanupObservationOrdinal.make(recordsWith(records, "BranchCleanupObservationIntended", operationId).length + 1)
 
-const unmatchedObservationIntent = (records: ReadonlyArray<JournalRecord>, authorization: BranchCleanupAuthorization) =>
-  records.find((record) => {
+const unmatchedObservationIntent = (records: JournalHistorySource, authorization: BranchCleanupAuthorization) =>
+  Array.from(journalRecordsForOperationId(records, authorization.operationId)).find((record) => {
     if (
       record.event._tag !== "BranchCleanupObservationIntended" ||
       !branchCleanupAuthorizationEquals(record.event.authorization, authorization)
@@ -299,7 +298,7 @@ const unmatchedObservationIntent = (records: ReadonlyArray<JournalRecord>, autho
       return false
     }
     const intended = record.event
-    return !records.some((observed) => {
+    return !Array.from(journalRecordsForOperationId(records, intended.operationId)).some((observed) => {
       if (observed.event._tag !== "BranchCleanupObserved") return false
       return (
         observed.event.authorization.operationId === authorization.operationId &&
@@ -309,22 +308,22 @@ const unmatchedObservationIntent = (records: ReadonlyArray<JournalRecord>, autho
     })
   })
 
-const existingAuthorization = (records: ReadonlyArray<JournalRecord>, operationId: OperationId) =>
-  records.find(
+const existingAuthorization = (records: JournalHistorySource, operationId: OperationId) =>
+  Array.from(journalRecordsForOperationId(records, operationId)).find(
     (record): record is JournalRecord & { readonly event: BranchCleanupAuthorizedEvent } =>
       record.event._tag === "BranchCleanupAuthorized" && record.event.authorization.operationId === operationId
   )?.event
 
-const existingSettled = (records: ReadonlyArray<JournalRecord>, authorization: BranchCleanupAuthorization) =>
-  records.find(
+const existingSettled = (records: JournalHistorySource, authorization: BranchCleanupAuthorization) =>
+  Array.from(journalRecordsForOperationId(records, authorization.operationId)).find(
     (record): record is JournalRecord & { readonly event: BranchCleanupSettledEvent } =>
       record.event._tag === "BranchCleanupSettled" &&
       record.event.authorization.operationId === authorization.operationId &&
       branchCleanupAuthorizationEquals(record.event.authorization, authorization)
   )?.event
 
-const existingContradiction = (records: ReadonlyArray<JournalRecord>, authorization: BranchCleanupAuthorization) =>
-  records.find(
+const existingContradiction = (records: JournalHistorySource, authorization: BranchCleanupAuthorization) =>
+  Array.from(journalRecordsForOperationId(records, authorization.operationId)).find(
     (record): record is JournalRecord & { readonly event: BranchCleanupContradictedEvent } =>
       record.event._tag === "BranchCleanupContradicted" &&
       record.event.authorization.operationId === authorization.operationId &&
@@ -333,7 +332,7 @@ const existingContradiction = (records: ReadonlyArray<JournalRecord>, authorizat
 
 const observeFresh = Effect.fn("BranchCleanup.observeFresh")(function* (
   authorization: BranchCleanupAuthorization,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const boundary = yield* BranchCleanupBoundary
   const runId = authorization.disposition.plannedAttempt.runId
@@ -347,7 +346,7 @@ const observeFresh = Effect.fn("BranchCleanup.observeFresh")(function* (
       ? unmatched.event.operationId
       : OperationId.make(`${authorization.operationId}:observe:${ordinal}`)
   const key = branchCleanupObservationIntendedRecordKey(authorization.operationId, ordinal)
-  if (!records.some((record) => record.key === key)) {
+  if (journalRecordByKey(records, key) === undefined) {
     yield* appendEvent(
       runId,
       key,
@@ -374,7 +373,7 @@ const observeFresh = Effect.fn("BranchCleanup.observeFresh")(function* (
       version: workflowJournalEventVersion
     })
   )
-  return { observed, operationId, ordinal, records: yield* (yield* InRunJournal).read(runId) }
+  return { observed, operationId, ordinal, records: yield* (yield* AcceptedJournalReader).readAccepted(runId) }
 })
 
 const appendContradiction = Effect.fn("BranchCleanup.appendContradiction")(function* (
@@ -382,11 +381,11 @@ const appendContradiction = Effect.fn("BranchCleanup.appendContradiction")(funct
   observation: BranchCleanupObservation,
   operationId: OperationId,
   detail: string,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const runId = authorization.disposition.plannedAttempt.runId
   const key = branchCleanupContradictedRecordKey(authorization.operationId)
-  if (!records.some((record) => record.key === key)) {
+  if (journalRecordByKey(records, key) === undefined) {
     yield* appendEvent(
       runId,
       key,
@@ -408,7 +407,7 @@ const settleFromAbsence = Effect.fn("BranchCleanup.settleFromAbsence")(function*
   operationId: OperationId,
   ordinal: CleanupObservationOrdinal,
   result: Extract<BranchCleanupMutationResult, { readonly _tag: "AlreadyAbsent" | "Removed" }>,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   if (result.revision !== observation.revision) {
     yield* appendContradiction(
@@ -424,14 +423,14 @@ const settleFromAbsence = Effect.fn("BranchCleanup.settleFromAbsence")(function*
     })
   }
   const runId = authorization.disposition.plannedAttempt.runId
-  const mutationExists = records.some(
+  const mutationExists = Array.from(journalRecordsForOperationId(records, authorization.operationId)).some(
     (record) =>
       record.event._tag === "BranchCleanupMutationIntended" &&
       branchCleanupAuthorizationEquals(record.event.authorization, authorization)
   )
   const derivedCause = mutationExists ? "MutationResponseReconciliation" : "InitialAbsence"
   const absenceKey = branchCleanupAbsenceConfirmedRecordKey(authorization.operationId, ordinal)
-  if (!records.some((record) => record.key === absenceKey)) {
+  if (journalRecordByKey(records, absenceKey) === undefined) {
     yield* appendEvent(
       runId,
       absenceKey,
@@ -465,9 +464,9 @@ const settleFromAbsence = Effect.fn("BranchCleanup.settleFromAbsence")(function*
 /** Reconciles one branch cleanup, requiring the exact worktree settlement first. */
 export const runBranchCleanup = Effect.fn("BranchCleanup.run")(function* (authorization: BranchCleanupAuthorization) {
   const boundary = yield* BranchCleanupBoundary
-  const journal = yield* InRunJournal
+  const reader = yield* AcceptedJournalReader
   const runId = authorization.disposition.plannedAttempt.runId
-  let records = yield* journal.read(runId)
+  let records = yield* reader.readAccepted(runId)
   const provenance = validateWorktreeCleanupProvenance(records, authorization)
   if (provenance._tag === "Invalid") {
     return BranchCleanupOutcome.cases.Preserved.make({ authorization, reason: provenance.detail })
@@ -511,7 +510,7 @@ export const runBranchCleanup = Effect.fn("BranchCleanup.run")(function* (author
         version: workflowJournalEventVersion
       })
     )
-    records = yield* journal.read(runId)
+    records = yield* reader.readAccepted(runId)
   }
   const firstObservation = yield* observeFresh(authorization, records)
   records = firstObservation.records
@@ -577,7 +576,7 @@ export const runBranchCleanup = Effect.fn("BranchCleanup.run")(function* (author
       version: workflowJournalEventVersion
     })
   )
-  records = yield* journal.read(runId)
+  records = yield* reader.readAccepted(runId)
   if (!branchCleanupMutationResultMatchesAuthorization(result, authorization)) {
     yield* appendContradiction(
       authorization,

@@ -18,6 +18,7 @@ import {
   type WorkflowRunIdentityAlreadyUsed,
   WorkflowRunNotBegan
 } from "../store.js"
+import { unpublishedAcceptedJournalReaderTestLayer } from "../test-accepted-reader.js"
 import { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import {
@@ -29,8 +30,6 @@ import type { InitialControlPolicy } from "../../control/policy.js"
 import type { RunFinalityEvidence, RunTerminationDisposition } from "../../coordination/frontier/run-finality.js"
 import { decideJournalPartitionHistory } from "../partition-history.js"
 import type { JournalScan } from "../recovery-model.js"
-import { AcceptedJournalReader } from "../accepted-reader.js"
-import { acceptedJournalPrefixFromValidatedHistory } from "../accepted-prefix.js"
 
 interface MemoryJournalState {
   readonly hotRecordsByRun: ReadonlyMap<RunId, ReadonlyArray<JournalRecord>>
@@ -363,39 +362,17 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
 export const memoryJournalStoreLayer = journalStoreCapabilities(memoryRawJournalStoreLayer())
 
 /** Complete test-only composition whose appends are not published through Journal. */
-/**
- * Focused protocol-test adapter. These tests intentionally bypass the
- * chronological validator, so the accepted capability reflects their exact
- * fixture rows without making this adapter available to production layers.
- */
-const fixtureAcceptedJournalReaderTestLayer = Layer.effect(
-  AcceptedJournalReader,
-  JournalStore.pipe(
-    Effect.map((journal) =>
-      AcceptedJournalReader.of({
-        readAccepted: (runId) =>
-          journal.read(runId).pipe(
-            Effect.map((records) => acceptedJournalPrefixFromValidatedHistory(runId, records)),
-            Effect.orDie
-          )
-      })
-    )
-  )
-)
-
-const memoryJournalProtocolTestLayer = Layer.merge(
+export const memoryJournalTestLayer = Layer.merge(
   unpublishedInRunJournalTestLayer,
-  fixtureAcceptedJournalReaderTestLayer
-)
-
-export const memoryJournalTestLayer = memoryJournalProtocolTestLayer.pipe(Layer.provideMerge(memoryJournalStoreLayer))
+  unpublishedAcceptedJournalReaderTestLayer
+).pipe(Layer.provideMerge(memoryJournalStoreLayer))
 
 /** Test-only storage seam for injecting exact typed rows into either partition. */
 export const memoryJournalTestLayerFromPartitionRecords = (input: {
   readonly cold?: ReadonlyArray<JournalRecord>
   readonly hot?: ReadonlyArray<JournalRecord>
 }) =>
-  memoryJournalProtocolTestLayer.pipe(
+  Layer.merge(unpublishedInRunJournalTestLayer, unpublishedAcceptedJournalReaderTestLayer).pipe(
     Layer.provideMerge(
       journalStoreCapabilities(
         memoryRawJournalStoreLayer({

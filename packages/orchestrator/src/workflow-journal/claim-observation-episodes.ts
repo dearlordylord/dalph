@@ -12,6 +12,8 @@ import {
 } from "./record-sequence.js"
 
 const ClaimObservationEpisodeIndexTypeId: unique symbol = Symbol("ClaimObservationEpisodeIndex")
+const lastSequenceEntryOffset = -1
+const binarySearchPartitionCount = 2
 
 /** Decoded consecutive equal focused claim observations; this index grants no reacquisition authority. */
 export interface ClaimObservationEpisodeIndex {
@@ -61,7 +63,7 @@ export const appendClaimObservationEpisode = (
   const roots = rootsOf(index)
   const taskId = observation.coverage.taskId
   const prior = Option.getOrElse(HashMap.get(roots.byTask, taskId), emptyJournalRecords)
-  const latest = journalRecordAt(prior, -1)
+  const latest = journalRecordAt(prior, lastSequenceEntryOffset)
   const startedAt =
     latest !== undefined && sameObservation(latest, record)
       ? Option.getOrElse(HashMap.get(roots.startedAt, latest.position), () => record.position)
@@ -83,7 +85,7 @@ export const claimObservationEpisodeAt = (
   let low = 0
   let high = records.length
   while (low < high) {
-    const middle = Math.floor((low + high) / 2)
+    const middle = Math.floor((low + high) / binarySearchPartitionCount)
     const record = journalRecordAt(records, middle)
     if (record !== undefined && record.position <= throughPosition) low = middle + 1
     else high = middle

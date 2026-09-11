@@ -2,7 +2,15 @@ import type { RunId } from "@dalph/contracts"
 import type { JournalRecordKey } from "./identity.js"
 import type { JournalRecord } from "./store.js"
 import { type JournalRecordSequence } from "./record-sequence.js"
-import { appendJournalEvidence, emptyJournalEvidence, retainJournalEvidence, journalRecordByKey, journalEvidenceKindSequence, inspectJournalEvidenceStorage, type JournalRecordEvidence } from "./record-evidence.js"
+import {
+  appendJournalEvidence,
+  journalEvidenceFrom,
+  retainJournalEvidence,
+  journalRecordByKey,
+  journalEvidenceKindSequence,
+  inspectJournalEvidenceStorage,
+  type JournalRecordEvidence
+} from "./record-evidence.js"
 
 const AcceptedJournalPrefixTypeId: unique symbol = Symbol("AcceptedJournalPrefix")
 const JournalSuccessorProvenanceTypeId: unique symbol = Symbol("JournalSuccessorProvenance")
@@ -47,10 +55,14 @@ export const acceptedJournalPrefixFromValidatedHistory = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
 ): AcceptedJournalPrefix => {
-  const source = emptyJournalEvidence()
-  const empty: AcceptedJournalPrefix = retainJournalEvidence(source, { ...source, [AcceptedJournalPrefixTypeId]: true, runId })
-  return records.reduce(appendValidatedJournalRecord, empty)
+  return acceptedJournalPrefixFromValidatedEvidence(runId, journalEvidenceFrom(records))
 }
+
+/** The chronological kernel certifies these already-built roots only after every semantic check succeeds. */
+export const acceptedJournalPrefixFromValidatedEvidence = (
+  runId: RunId,
+  source: JournalRecordEvidence
+): AcceptedJournalPrefix => retainJournalEvidence(source, { ...source, [AcceptedJournalPrefixTypeId]: true, runId })
 
 /** Used only after the successor kernel accepts this record against this exact predecessor. */
 export const appendValidatedJournalRecord = (

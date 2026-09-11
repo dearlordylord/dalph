@@ -16,6 +16,13 @@ import {
   plannedAttemptReplacedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  isJournalRecordEvidence,
+  journalRecordsForTask,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
+import { journalRecordAt } from "../../../workflow-journal/record-sequence.js"
 import { WorkflowInterpreter } from "../../interpretation/interpreter.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -38,7 +45,6 @@ import {
   PlannedTaskAttemptPlanner,
   PlannedTaskAttemptPlanRequest
 } from "../task-attempt-planning/plan.js"
-import { recordedTaskAttemptPlans } from "../task-attempt-planning/journal-evidence.js"
 import {
   type AttemptChoiceRequestId,
   type AttemptChoiceSubject,
@@ -74,7 +80,11 @@ export {
 } from "./restart-authority.js"
 export type { AttemptRestartPendingReason, AttemptRestartRejectedReason } from "./restart-reasons.js"
 
-const lastRecordOffset = -1
+const lastRecordPosition = (
+  records: JournalHistorySource,
+  fallback: JournalRecord["position"]
+): JournalRecord["position"] =>
+  (isJournalRecordEvidence(records) ? journalRecordAt(records.records, -1) : records.at(-1))?.position ?? fallback
 
 type RecordedReplacementLookup = Data.TaggedEnum<{
   Absent: Record<never, never>
@@ -85,7 +95,7 @@ type RecordedReplacementLookup = Data.TaggedEnum<{
 const RecordedReplacementLookup = Data.taggedEnum<RecordedReplacementLookup>()
 
 const exactRecordedReplacement = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject
 ): RecordedReplacementLookup => {
@@ -219,8 +229,7 @@ const prepareAttemptRestart = Effect.fn("AttemptRestart.prepare")(function* (
   subject: AttemptChoiceSubject,
   _permit: PlannedAttemptProtocolPermit
 ) {
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(subject.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(subject.plannedAttempt.runId)
   const immutableRunTarget = exactWorkflowRunTargetFor(records)
   if (immutableRunTarget === undefined) {
     return yield* new AttemptRestartAuthorityContradiction({
@@ -248,9 +257,8 @@ const prepareAttemptRestart = Effect.fn("AttemptRestart.prepare")(function* (
 
 const readRestartGraph = Effect.fn("AttemptRestart.readGraph")(function* (prepared: RestartPrepared) {
   const { requestId, subject } = restartRequestFor(prepared)
-  const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
-  const records = yield* journal.read(subject.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(subject.plannedAttempt.runId)
   const graphOperation = makeTrackerGraphObservationOperation(
     { _tag: "AttemptRestartAuthorityCheck" },
     nextRestartReadOperationId(
@@ -258,7 +266,7 @@ const readRestartGraph = Effect.fn("AttemptRestart.readGraph")(function* (prepar
       requestId,
       "graph",
       /* v8 ignore next -- @preserve The applied Restart record is already present in this non-empty journal. */
-      records.at(lastRecordOffset)?.position ?? prepared.application.position
+      lastRecordPosition(records, prepared.application.position)
     ),
     prepared.immutableRunTarget,
     [],
@@ -304,16 +312,15 @@ const readRestartGraph = Effect.fn("AttemptRestart.readGraph")(function* (prepar
 
 const readRestartTaskFacts = Effect.fn("AttemptRestart.readTaskFacts")(function* (facts: RestartGraphFacts) {
   const { requestId, subject } = restartRequestFor(facts)
-  const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
-  const records = yield* journal.read(subject.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(subject.plannedAttempt.runId)
   const specificationOperation = makeTaskWorkSpecificationObservationOperation(
     nextRestartReadOperationId(
       records,
       requestId,
       "specification",
       /* v8 ignore next -- @preserve The applied Restart and graph-read records make this journal non-empty. */
-      records.at(lastRecordOffset)?.position ?? facts.application.position
+      lastRecordPosition(records, facts.application.position)
     ),
     facts.graphOperation.target,
     subject.plannedAttempt.taskId,
@@ -369,16 +376,16 @@ const readRestartTaskFacts = Effect.fn("AttemptRestart.readTaskFacts")(function*
 
 const readRestartClaim = Effect.fn("AttemptRestart.readClaim")(function* (facts: RestartTaskFacts) {
   const { requestId, subject } = restartRequestFor(facts)
-  const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
-  const records = yield* journal.read(subject.plannedAttempt.runId)
+  const acceptedJournal = yield* AcceptedJournalReader
+  const records = yield* acceptedJournal.readAccepted(subject.plannedAttempt.runId)
   const claimOperation = makeTaskClaimObservationOperation(
     nextRestartReadOperationId(
       records,
       requestId,
       "claim",
       /* v8 ignore next -- @preserve The prior Restart authority reads make this journal non-empty. */
-      records.at(lastRecordOffset)?.position ?? facts.application.position
+      lastRecordPosition(records, facts.application.position)
     ),
     facts.graphOperation.target,
     subject.plannedAttempt.taskId,
@@ -389,7 +396,7 @@ const readRestartClaim = Effect.fn("AttemptRestart.readClaim")(function* (facts:
     return { _tag: "AttemptRestartPending" as const, reason: "ClaimUnreadable" as const }
   }
   const expectedClaim = restartClaimAuthorityAtApplication(
-    yield* journal.read(subject.plannedAttempt.runId),
+    yield* acceptedJournal.readAccepted(subject.plannedAttempt.runId),
     facts.application
   )?.claim
   /* v8 ignore next -- @preserve An accepted Restart application is validated against its exact P1 claim authority. */
@@ -411,16 +418,15 @@ const readRestartClaim = Effect.fn("AttemptRestart.readClaim")(function* (facts:
 
 const readRestartWorktree = Effect.fn("AttemptRestart.readWorktree")(function* (facts: RestartClaimFacts) {
   const { requestId, subject } = restartRequestFor(facts)
-  const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
-  const records = yield* journal.read(subject.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(subject.plannedAttempt.runId)
   const worktreeOperation = makeTaskWorktreeObservationOperation({
     operationId: nextRestartReadOperationId(
       records,
       requestId,
       "worktree",
       /* v8 ignore next -- @preserve The prior Restart authority reads make this journal non-empty. */
-      records.at(lastRecordOffset)?.position ?? facts.application.position
+      lastRecordPosition(records, facts.application.position)
     ),
     plannedAttempt: subject.plannedAttempt,
     predecessorOperationIds: [
@@ -465,7 +471,7 @@ const successorIsExact = (
 }
 
 const replacementDispositionBeforeAllocation = Effect.fn("AttemptRestart.dispositionBeforeAllocation")(function* (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   facts: RestartAuthorityFacts
 ) {
   const { requestId, subject } = restartRequestFor(facts)
@@ -495,7 +501,8 @@ const recordAttemptReplacement = Effect.fn("AttemptRestart.recordReplacement")(f
   const { requestId, subject } = restartRequestFor(facts)
   const journal = yield* InRunJournal
   const interpreter = yield* WorkflowInterpreter
-  let records = yield* journal.read(subject.plannedAttempt.runId)
+  const acceptedJournal = yield* AcceptedJournalReader
+  let records = yield* acceptedJournal.readAccepted(subject.plannedAttempt.runId)
   const targetOperation = makeTargetLineageObservationOperation({
     integrationTarget,
     operationId: nextRestartReadOperationId(
@@ -503,7 +510,7 @@ const recordAttemptReplacement = Effect.fn("AttemptRestart.recordReplacement")(f
       requestId,
       "target-lineage",
       /* v8 ignore next -- @preserve The prior Restart authority reads make this journal non-empty. */
-      records.at(lastRecordOffset)?.position ?? facts.application.position
+      lastRecordPosition(records, facts.application.position)
     ),
     plannedAttempt: subject.plannedAttempt,
     predecessorOperationIds: [facts.worktreeOperation.operationId]
@@ -521,14 +528,21 @@ const recordAttemptReplacement = Effect.fn("AttemptRestart.recordReplacement")(f
   }
   const target = targetRead.target
 
-  records = yield* journal.read(subject.plannedAttempt.runId)
+  records = yield* acceptedJournal.readAccepted(subject.plannedAttempt.runId)
   const disposition = yield* replacementDispositionBeforeAllocation(records, facts)
   if (disposition !== undefined) return disposition
   const planner = yield* PlannedTaskAttemptPlanner
   const allocator = yield* OperationIdAllocator
-  const priorRecordedAttemptCount = recordedTaskAttemptPlans(records).filter(
-    ({ plannedAttempt }) => plannedAttempt.taskId === subject.plannedAttempt.taskId
-  ).length
+  let priorRecordedAttemptCount = 0
+  for (const { event } of journalRecordsForTask(records, subject.plannedAttempt.taskId)) {
+    if (
+      (event._tag === "TaskAttemptPlanned" &&
+        event.operation.plannedAttempt.taskId === subject.plannedAttempt.taskId) ||
+      (event._tag === "PlannedAttemptReplaced" &&
+        event.successorPlan.plannedAttempt.taskId === subject.plannedAttempt.taskId)
+    )
+      priorRecordedAttemptCount += 1
+  }
   const successor = yield* planner.plan(
     PlannedTaskAttemptPlanRequest.ExactReplacement({
       baseSha: target.observation.targetHeadSha,

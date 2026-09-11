@@ -22,6 +22,7 @@ import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../../coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { encodeJournalEvent, decodeJournalEvent } from "../../workflow-journal/event-codec.js"
+import { journalEvidenceFrom, type JournalHistorySource } from "../../workflow-journal/record-evidence.js"
 import {
   cancelledAttemptClaimNoReleaseRecordKey,
   stoppedAttemptClaimNoReleaseRecordKey,
@@ -456,6 +457,18 @@ const historyDetailsFor = (records: ReadonlyArray<JournalRecord>): ReadonlyArray
     ? reduction.issues.flatMap((issue) => ("detail" in issue ? [issue.detail] : []))
     : []
 }
+
+const cancellationDetailsFor = (source: JournalHistorySource): ReadonlyArray<string> => {
+  const details: Array<string> = []
+  for (const record of baseRecords) {
+    validateCancelledAttemptHistory(record, runId, source, (detail) => details.push(detail))
+  }
+  return details
+}
+
+it("keeps cancellation diagnostics identical for cold arrays and indexed evidence", () => {
+  expect(cancellationDetailsFor(journalEvidenceFrom(baseRecords))).toEqual(cancellationDetailsFor(baseRecords))
+})
 
 it("accepts the complete cancellation settlement prefix through history reduction", () => {
   expect(historyDetailsFor(baseRecords)).toEqual([])

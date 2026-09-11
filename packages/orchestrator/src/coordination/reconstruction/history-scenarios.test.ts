@@ -72,7 +72,10 @@ import {
 import { PlannedAttemptContinuationAuthorizedEvent } from "../../workflow/protocols/planned-attempt-continuation/events.js"
 import { CompletionClaimReplacedEvent } from "../../workflow/protocols/integration-finality/events.js"
 import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
-import { reduceWorkflowJournalHistory } from "./history.js"
+import {
+  reduceWorkflowJournalHistory as reduceHistory,
+  inspectWorkflowJournalHistoryValidationPath
+} from "./history.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -129,6 +132,14 @@ import {
   makeFocusedTaskWorkSpecificationFactsObserved,
   taskTrackerFactsObservedEvent
 } from "../../workflow/task-tracker-facts/observation.js"
+const reduceWorkflowJournalHistory: typeof reduceHistory = (runId, records) => {
+  const result = reduceHistory(runId, records)
+  if (result._tag === "ValidWorkflowJournalHistory") {
+    expect(inspectWorkflowJournalHistoryValidationPath(result)).toBe("IndexedCold")
+  }
+  return result
+}
+
 const runId = RunId.make("workflow-journal-history")
 const taskId = TaskId.make("task-A")
 const target = FixtureTarget.make("fixture-A")

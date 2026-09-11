@@ -1,5 +1,5 @@
 import { it as effectIt } from "@effect/vitest"
-import { Effect, Option } from "effect"
+import { Context, Effect, Layer, Option, Ref } from "effect"
 import { expect, it } from "vitest"
 import {
   activeWorkAuthorityRefreshForOwner,
@@ -141,7 +141,11 @@ import {
 } from "../../workflow/registry/event.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
+import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
+import { Journal, journalLayer } from "../delivery/journal.js"
+import { currentSignalOf, TrackerGraphState } from "../delivery/relations.js"
+import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import {
   integrationQuarantineDirectionAppliedRecordKey,
   integrationQuarantinedRecordKey,
@@ -762,14 +766,53 @@ const pausedIntegrationScenario = (suffix: string, startedAt: number): PausedInt
 const currentProjectionJournal = (
   runId: RunId,
   target: typeof coverageTarget,
-  reconstructed: ReconstructedRunState
+  reconstructed: ReconstructedRunState,
+  initialRecords: ReadonlyArray<JournalRecord> = [makeWorkflowRunBeganRecord(runId, target, coveragePolicy)],
+  retainAcceptedPrefix = true
 ) => {
   const began = makeWorkflowRunBeganRecord(runId, target, coveragePolicy)
-  const journal = InRunJournal.of({
-    append: () => Effect.die("projection coverage does not append"),
-    read: () => Effect.succeed([began])
-  })
-  return Object.assign(journal, { state: { get: Effect.succeed({ reconstructed }) } })
+  const initialReduction = reduceWorkflowJournalHistory(runId, initialRecords)
+  if (initialReduction._tag !== "ValidWorkflowJournalHistory") throw new Error("projection fixture beginning is valid")
+  const prefix =
+    reconstructed.workflowHistory.prefix ??
+    acceptedJournalPrefixFromValidatedHistory(reconstructed.runId, reconstructed.workflowHistory.records)
+  const liveState = {
+    _tag: "JournalState" as const,
+    position: reconstructed.appliedThrough ?? began.position,
+    graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
+    reconstructed: retainAcceptedPrefix
+      ? { ...reconstructed, workflowHistory: { ...reconstructed.workflowHistory, prefix } }
+      : reconstructed,
+    prefix
+  }
+  const initialState = {
+    _tag: "JournalState" as const,
+    position: began.position,
+    graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
+    reconstructed: initialReduction.runState,
+    prefix: initialReduction.prefix
+  }
+  return Layer.effectContext(
+    Ref.make(false).pipe(
+      Effect.map((initialWasRead) => {
+        const inRunJournal = InRunJournal.of({
+          append: () => Effect.die("projection coverage does not append"),
+          read: () => Effect.die("configured projection must not export journal records")
+        })
+        const state = {
+          ...currentSignalOf(liveState),
+          get: Ref.getAndSet(initialWasRead, true).pipe(Effect.map((wasRead) => (wasRead ? liveState : initialState)))
+        }
+        const journal = Journal.of({
+          append: inRunJournal.append,
+          read: () => Effect.die("configured projection must not export journal records"),
+          readAccepted: () => Effect.succeed(prefix),
+          state
+        })
+        return Context.empty().pipe(Context.add(InRunJournal, inRunJournal), Context.add(Journal, journal))
+      })
+    )
+  )
 }
 
 const directionProjectionFixture = (
@@ -1032,10 +1075,7 @@ effectIt.effect(
         const fixture = directionProjectionFixture(direction, graphAfterDirection)
         const resources = yield* makeIntegrationTargetResourceController()
         const recovery = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
-          Effect.provideService(
-            InRunJournal,
-            currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed)
-          )
+          Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed))
         )
         const firstProjection = yield* recovery.readDeliveryProjection
         const acquire = firstProjection.frontier.transitions.find(
@@ -1055,10 +1095,7 @@ effectIt.effect(
         yield* resources.publishAcceptedOwnership(acquire.responsibility)
 
         const heldRecovery = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
-          Effect.provideService(
-            InRunJournal,
-            currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed)
-          )
+          Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed))
         )
         const heldProjection = yield* heldRecovery.readDeliveryProjection
         const firstRead = heldProjection.frontier.transitions.find(
@@ -1100,7 +1137,7 @@ effectIt.effect(
           }
         }
         const restarted = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
-          Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, afterIntent))
+          Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, afterIntent))
         )
         const restartedProjection = yield* restarted.readDeliveryProjection
         const restartedRead = restartedProjection.frontier.transitions.find(
@@ -1139,7 +1176,7 @@ effectIt.effect(
           fixture.integrationTarget,
           restartedResources
         ).pipe(
-          Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, afterObservation))
+          Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, afterObservation))
         )
         const reacquire = (yield* afterObservationRecovery.readDeliveryProjection).frontier.transitions.find(
           ({ _tag }) => _tag === "AcquireStartedIntegrationTarget"
@@ -1157,7 +1194,7 @@ effectIt.effect(
           fixture.integrationTarget,
           restartedResources
         ).pipe(
-          Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, afterObservation))
+          Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, afterObservation))
         )
         const runTwo = (yield* heldAfterObservationRecovery.readDeliveryProjection).frontier.transitions.find(
           ({ _tag }) => _tag === "RunIntegrator"
@@ -1207,7 +1244,7 @@ effectIt.effect(
           fixture.integrationTarget,
           restartedResources
         ).pipe(
-          Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, afterLaterGraph))
+          Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, afterLaterGraph))
         )
         const refreshedRead = (yield* graphRefreshRecovery.readDeliveryProjection).frontier.transitions.find(
           ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
@@ -1234,7 +1271,7 @@ effectIt.effect(
         withoutDirection.integrationTarget,
         noDirectionResources
       ).pipe(
-        Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, noDirectionState))
+        Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, noDirectionState))
       )
       expect(
         (yield* noDirectionRecovery.readDeliveryProjection).frontier.transitions.some(
@@ -1257,7 +1294,7 @@ effectIt.effect(
         withoutDirection.integrationTarget,
         graphlessResources
       ).pipe(
-        Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, graphlessState))
+        Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, graphlessState))
       )
       const graphlessProjection = yield* graphlessRecovery.readDeliveryProjection
       expect(
@@ -1273,10 +1310,7 @@ effectIt.effect("requests a fresh direction-bound lineage read for FullRerun bef
     const fixture = directionProjectionFixture("FullRerun")
     const resources = yield* makeIntegrationTargetResourceController()
     const recovery = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
-      Effect.provideService(
-        InRunJournal,
-        currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed)
-      )
+      Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed))
     )
     const first = yield* recovery.readDeliveryProjection
     const acquire = first.frontier.transitions.find(({ _tag }) => _tag === "AcquireStartedIntegrationTarget")
@@ -1287,10 +1321,7 @@ effectIt.effect("requests a fresh direction-bound lineage read for FullRerun bef
     yield* resources.publishAcceptedOwnership(acquire.responsibility)
 
     const heldRecovery = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
-      Effect.provideService(
-        InRunJournal,
-        currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed)
-      )
+      Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, fixture.reconstructed))
     )
     const read = (yield* heldRecovery.readDeliveryProjection).frontier.transitions.find(
       ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
@@ -1352,7 +1383,7 @@ effectIt.effect(
       }
       const resources = yield* makeIntegrationTargetResourceController()
       const recovery = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
-        Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, reduced.runState))
+        Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, reduced.runState))
       )
 
       const projection = yield* recovery.readDeliveryProjection
@@ -1428,7 +1459,7 @@ effectIt.effect("fails closed when recovered quarantine-direction evidence is no
       const resources = yield* makeIntegrationTargetResourceController()
       const invalidState = { ...fixture.reconstructed, workflowHistory: { records: invalidRecords } }
       const recovery = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
-        Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, invalidState))
+        Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, invalidState))
       )
       const projection = yield* recovery.readDeliveryProjection
       expect(
@@ -2267,15 +2298,8 @@ it.each([
         controlPolicy: Option.some({ ...coveragePolicy, revision: initialRunPolicyRevision })
       }
       const resources = yield* makeIntegrationTargetResourceController()
-      const restartedJournal = Object.assign(
-        InRunJournal.of({
-          append: () => Effect.die("passive failure restart must not append during projection"),
-          read: () => Effect.succeed(records)
-        }),
-        { state: { get: Effect.succeed({ reconstructed }) } }
-      )
       const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
-        Effect.provideService(InRunJournal, restartedJournal)
+        Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, reconstructed, records))
       )
 
       const projection = yield* recovery.readDeliveryProjection
@@ -2343,15 +2367,8 @@ it("reconciles one unsettled command when its prior activation recorded a non-ex
         controlPolicy: Option.some({ ...coveragePolicy, revision: initialRunPolicyRevision })
       }
       const resources = yield* makeIntegrationTargetResourceController()
-      const restartedJournal = Object.assign(
-        InRunJournal.of({
-          append: () => Effect.die("command projection selection must not append"),
-          read: () => Effect.succeed(records)
-        }),
-        { state: { get: Effect.succeed({ reconstructed }) } }
-      )
       const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
-        Effect.provideService(InRunJournal, restartedJournal)
+        Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, reconstructed, records))
       )
 
       const projection = yield* recovery.readDeliveryProjection
@@ -2680,7 +2697,7 @@ effectIt.effect("uses durable Run cancellation as the existing settlement select
     }
     const resources = yield* makeIntegrationTargetResourceController()
     const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
-      Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, cancelledState))
+      Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, cancelledState))
     )
     const projection = yield* recovery.readDeliveryProjection
     expect(projection.frontier.transitions).toContainEqual(
@@ -3963,7 +3980,7 @@ it("does not seed a continuation graph read from a foreign immutable Run target"
     Effect.gen(function* () {
       const resources = yield* makeIntegrationTargetResourceController()
       const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
-        Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, reconstructed))
+        Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, reconstructed, undefined, false))
       )
       const projection = yield* recovery.readDeliveryProjection
       const graphRead = projection.frontier.transitions.find(
@@ -4224,17 +4241,11 @@ it("fails closed for a valid no-begin prefix with a paired pending Git read", ()
     responsibility: { entries: [coverageResponsibility] },
     graphKnowledge: { taskTrackerFacts: [acceptedCoverageGraphEvent.observation] }
   }
-  const journal = InRunJournal.of({
-    append: () => Effect.die("no-begin projection must not append"),
-    read: () => Effect.succeed(records)
-  })
-  const statefulJournal = Object.assign(journal, { state: { get: Effect.succeed({ reconstructed }) } })
-
   return Effect.runPromise(
     Effect.gen(function* () {
       const resources = yield* makeIntegrationTargetResourceController()
       const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
-        Effect.provideService(InRunJournal, statefulJournal)
+        Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, reconstructed, records))
       )
       const projection = yield* recovery.readDeliveryProjection
       expect(projection.frontier.transitions).toEqual([])
@@ -4324,19 +4335,12 @@ effectIt.effect(
             ...coverageRunState(records, [coverageResponsibilityAfterBeginning]),
             graphKnowledge: { taskTrackerFacts: [coverageGraphEvent.observation] }
           }
-          const journal = Object.assign(
-            InRunJournal.of({
-              append: () => Effect.die("restart projection must not append"),
-              read: () => Effect.succeed(readRecords)
-            }),
-            { state: { get: Effect.succeed({ reconstructed }) } }
-          )
           const resources = yield* makeIntegrationTargetResourceController()
           const recovery = yield* makeRunRecoveryProjection(
             coverageRunId,
             lineageOperation.integrationTarget,
             resources
-          ).pipe(Effect.provideService(InRunJournal, journal))
+          ).pipe(Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, reconstructed, readRecords)))
           return (yield* recovery.readDeliveryProjection).frontier.transitions
         })
 
@@ -4645,7 +4649,7 @@ it("scopes recovery responsibility to the immutable Run target", () => {
     Effect.gen(function* () {
       const resources = yield* makeIntegrationTargetResourceController()
       const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
-        Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, reduced.runState))
+        Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, reduced.runState))
       )
       return yield* recovery.readDeliveryProjection
     })
@@ -4790,7 +4794,7 @@ it("does not release a cancelled claim from a foreign-target observation", () =>
     Effect.gen(function* () {
       const resources = yield* makeIntegrationTargetResourceController()
       const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
-        Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, reduced.runState))
+        Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, reduced.runState))
       )
       return yield* recovery.readDeliveryProjection
     })
@@ -4951,7 +4955,7 @@ it("ignores same-target foreign-plan tracker facts and schedules an exact replac
       Effect.gen(function* () {
         const resources = yield* makeIntegrationTargetResourceController()
         const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
-          Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, reconstructed))
+          Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, reconstructed, undefined, false))
         )
         return yield* recovery.readDeliveryProjection
       })
@@ -5519,7 +5523,7 @@ effectIt.effect("projects a continuation configuration explanation into the publ
     }
     const resources = yield* makeIntegrationTargetResourceController()
     const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
-      Effect.provideService(InRunJournal, currentProjectionJournal(coverageRunId, coverageTarget, reconstructed))
+      Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, reconstructed, undefined, false))
     )
     const projection = yield* recovery.readDeliveryProjection
     expect(projection.frontier.explanations).toContainEqual(
@@ -5829,22 +5833,33 @@ it("hands a pre-cancellation integration responsibility to integration settlemen
   ).toBe(false)
 })
 
-effectIt.effect("uses the current reconstructed state for configured projection and rejects a mismatched run", () =>
+effectIt.effect("uses normal-layer current state without exporting records and rejects a mismatched run", () =>
   Effect.gen(function* () {
-    const matchingState = coverageRunState([])
-    const configuredJournal = currentProjectionJournal(coverageRunId, coverageTarget, matchingState)
+    const began = makeWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy)
+    const initial = reduceWorkflowJournalHistory(coverageRunId, [began])
+    if (initial._tag !== "ValidWorkflowJournalHistory") return expect.fail("expected valid begun Run history")
     const integrationTarget = IntegrationTarget.make({
       ref: IntegrationTargetRef.make("refs/heads/main"),
       repository: GitRepositoryLocator.make("/repositories/recovery-activation-coverage.git")
     })
-    const configuredRecovery = yield* makeRunRecoveryProjection(coverageRunId, integrationTarget).pipe(
-      Effect.provideService(InRunJournal, configuredJournal)
+    const operations: Array<string> = []
+    const stopObserving = observeJournalRecordSequenceOperations((operation) => operations.push(operation._tag))
+    const configuredProjection = yield* Effect.gen(function* () {
+      const configuredRecovery = yield* makeRunRecoveryProjection(coverageRunId, integrationTarget)
+      return yield* configuredRecovery.readDeliveryProjection
+    }).pipe(
+      Effect.provide(
+        journalLayer(coverageRunId, coverageTarget, initial, {
+          append: () => Effect.die("projection coverage does not append")
+        })
+      ),
+      Effect.ensuring(Effect.sync(stopObserving))
     )
-    const configuredProjection = yield* configuredRecovery.readDeliveryProjection
     if (configuredProjection.evidence._tag !== "AvailableDeliveryProjectionEvidence") {
       return expect.fail("expected configured delivery projection evidence")
     }
     expect(configuredProjection.evidence.facts).toEqual([])
+    expect(operations).not.toContain("HistoricalMaterialization")
 
     const otherRunId = RunId.make("recovery-activation-other-run")
     const mismatchedJournal = currentProjectionJournal(
@@ -5853,7 +5868,7 @@ effectIt.effect("uses the current reconstructed state for configured projection 
       coverageRunState([], [], otherRunId)
     )
     const mismatchedRecovery = yield* makeRunRecoveryProjection(coverageRunId).pipe(
-      Effect.provideService(InRunJournal, mismatchedJournal)
+      Effect.provide(mismatchedJournal)
     )
     const failure = yield* mismatchedRecovery.readDeliveryProjection.pipe(Effect.flip)
     expect(failure).toMatchObject({

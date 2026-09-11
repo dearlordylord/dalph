@@ -19,13 +19,25 @@ import {
   type CompletionSuccessObservation
 } from "./events.js"
 import { targetPromotionCorrelationEquals, targetPromotionRunIdOf } from "../target-promotion/events.js"
-import { causalPredecessorOperationIds } from "../../causal-history.js"
+import { causalPredecessorOperationIds, causalPredecessorOperationIdsFromEvidence } from "../../causal-history.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
 import { isExactTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
 import { invalidCompletionTaskHistory } from "./completion-task-history.js"
 import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/observation-match.js"
 import { recordedTaskAttemptPlans } from "../task-attempt-planning/journal-evidence.js"
+import {
+  isJournalRecordEvidence,
+  firstJournalRecordOfKind,
+  journalEvidenceBefore,
+  journalRecordByPosition,
+  journalRecordsForAttempt,
+  journalRecordsForAttemptKind,
+  journalRecordsForOperationId,
+  journalRecordsForTask,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 
 type ReplacementIntent = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimReplacementIntended" }>
 type ReplacementAttempt = Extract<WorkflowJournalEvent, { readonly _tag: "CompletionClaimReplacementAttemptIntended" }>
@@ -86,32 +98,69 @@ export interface IntegrationFinalityHistoryValidation {
   readonly detail: string | undefined
 }
 
-const prior = (records: ReadonlyArray<JournalRecord>, position: JournalPosition): ReadonlyArray<JournalRecord> =>
-  records.filter((record) => record.position < position)
+const prior = (records: JournalHistorySource, position: JournalPosition): JournalHistorySource =>
+  isJournalRecordEvidence(records)
+    ? journalEvidenceBefore(records, position)
+    : records.filter((record) => record.position < position)
+
+function findFirst<A, B extends A>(source: Iterable<A>, predicate: (value: A) => value is B): B | undefined
+function findFirst<A>(source: Iterable<A>, predicate: (value: A) => boolean): A | undefined
+function findFirst<A>(source: Iterable<A>, predicate: (value: A) => boolean): A | undefined {
+  for (const value of source) if (predicate(value)) return value
+  return undefined
+}
+
+function findLast<A, B extends A>(source: Iterable<A>, predicate: (value: A) => value is B): B | undefined
+function findLast<A>(source: Iterable<A>, predicate: (value: A) => boolean): A | undefined
+function findLast<A>(source: Iterable<A>, predicate: (value: A) => boolean): A | undefined {
+  let found: A | undefined
+  for (const value of source) if (predicate(value)) found = value
+  return found
+}
+
+const hasMatching = <A>(source: Iterable<A>, predicate: (value: A) => boolean): boolean =>
+  findFirst(source, predicate) !== undefined
+
+const countMatching = <A>(source: Iterable<A>, predicate: (value: A) => boolean): number => {
+  let count = 0
+  for (const value of source) if (predicate(value)) count += 1
+  return count
+}
+
+const causalPredecessors = (
+  records: JournalHistorySource,
+  operation: Parameters<typeof causalPredecessorOperationIds>[1]
+) =>
+  isJournalRecordEvidence(records)
+    ? causalPredecessorOperationIdsFromEvidence(records, operation)
+    : causalPredecessorOperationIds(records, operation)
 
 const exactPlanPrior = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   claim: CompletionTaskClaim,
   position: JournalPosition
 ): boolean =>
-  recordedTaskAttemptPlans(prior(records, position)).some((operation) => {
+  recordedTaskAttemptPlans(
+    Array.from(journalRecordsForAttempt(prior(records, position), claim.plannedAttempt.attemptId))
+  ).some((operation) => {
     if (
       operation.plannedAttempt.attemptId !== claim.plannedAttempt.attemptId ||
       !plannedTaskAttemptEquivalence(operation.plannedAttempt, claim.plannedAttempt)
     )
       return false
     const accepted = prior(records, position)
-    const originalIsCausal = causalPredecessorOperationIds(accepted, operation).has(claim.originalClaim.operationId)
+    const originalIsCausal = causalPredecessors(accepted, operation).has(claim.originalClaim.operationId)
     const authorized = authorizedClaimForAttempt(accepted, claim.plannedAttempt)
     return originalIsCausal || (authorized !== undefined && isExactTaskClaim(authorized.claim, claim.originalClaim))
   })
 
 const exactOriginalClaimPrior = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   claim: CompletionTaskClaim,
   position: JournalPosition
 ): boolean =>
-  prior(records, position).some(
+  hasMatching(
+    journalRecordsForTask(prior(records, position), claim.originalClaim.taskId),
     ({ event }) =>
       event._tag === "TaskClaimAcquired" &&
       event.claim.taskId === claim.originalClaim.taskId &&
@@ -121,11 +170,12 @@ const exactOriginalClaimPrior = (
   )
 
 const exactPromotionPrior = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   claim: CompletionTaskClaim,
   position: JournalPosition
 ): boolean =>
-  prior(records, position).some(
+  hasMatching(
+    journalRecordsOfKind(prior(records, position), "TargetPromotionObservedSuccess"),
     ({ event }) =>
       event._tag === "TargetPromotionObservedSuccess" &&
       targetPromotionCorrelationEquals(event.correlation, claim.promotionCorrelation)
@@ -160,20 +210,28 @@ const focusedFactsMatchSuccessObservation = (
 }
 
 const focusedTaskInObservation = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   observation: CompletionSuccessObservation,
   at: JournalPosition
 ): boolean => {
-  const source = records.find(({ position }) => position === observation.observedAt && position < at)
+  const accepted = prior(records, at)
+  const source = journalRecordByPosition(accepted, observation.observedAt)
   if (source === undefined || !focusedFactsMatchSuccessObservation(source.event, observation)) return false
   const sourceEvent = source.event
-  return records.some(
+  const intent = findFirst(
+    journalRecordsForOperationId(accepted, sourceEvent.operationId),
     ({ event, position }) =>
       position < source.position &&
       event._tag === "TaskTrackerReadIntentRecorded" &&
       event.operation._tag === "ReadCompletionTaskFacts" &&
-      event.operation.operationId === sourceEvent.operationId &&
-      taskTrackerObservationMatchesRead(sourceEvent.observation, event.operation)
+      event.operation.operationId === sourceEvent.operationId
+  )
+  return (
+    intent?.position !== undefined &&
+    intent.position < source.position &&
+    intent.event._tag === "TaskTrackerReadIntentRecorded" &&
+    intent.event.operation._tag === "ReadCompletionTaskFacts" &&
+    taskTrackerObservationMatchesRead(sourceEvent.observation, intent.event.operation)
   )
 }
 
@@ -181,7 +239,7 @@ const completeTaskInObservation = focusedTaskInObservation
 
 const invalidReplacementIntent = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   indexes: IntegrationFinalityHistoryIndexes,
   event: ReplacementIntent
 ): IntegrationFinalityHistoryValidation => {
@@ -254,7 +312,7 @@ const invalidReplacementOutcome = (
 
 const invalidDeletionIntent = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   indexes: IntegrationFinalityHistoryIndexes,
   event: DeletionIntent
 ): IntegrationFinalityHistoryValidation => {
@@ -262,7 +320,12 @@ const invalidDeletionIntent = (
   const replacement = [...HashMap.keys(indexes.replacementTerminals)]
     .map((operationId) => mapGet(indexes.replacementIntents, operationId))
     .find((intent) => intent !== undefined && completionTaskClaimEquals(intent.event.claim, event.claim))
-  const replacementRecord = prior(records, record.position).find(
+  const replacementRecord = findFirst(
+    journalRecordsForAttemptKind(
+      prior(records, record.position),
+      event.claim.plannedAttempt.attemptId,
+      "CompletionClaimReplaced"
+    ),
     (candidate) =>
       candidate.event._tag === "CompletionClaimReplaced" &&
       completionTaskClaimEquals(candidate.event.claim, event.claim)
@@ -295,11 +358,12 @@ const isActiveReadPurpose = (purpose: DeletionRead["purpose"]): purpose is Activ
   purpose._tag === "ConfirmOriginalClaimReleased" || purpose._tag === "ConfirmNoActiveClaimAfterMarkerAbsent"
 
 const latestMarkerCleanupRead = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   position: JournalPosition,
   operationId: OperationId
 ): MarkerReadRecord | undefined =>
-  prior(records, position).findLast(
+  findLast(
+    journalRecordsForOperationId(prior(records, position), operationId),
     (candidate): candidate is MarkerReadRecord =>
       candidate.event._tag === "CompletionClaimDeletionReadObserved" &&
       candidate.event.request.operationId === operationId &&
@@ -307,11 +371,12 @@ const latestMarkerCleanupRead = (
   )
 
 const latestActiveCleanupRead = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   position: JournalPosition,
   operationId: OperationId
 ): ActiveReadRecord | undefined =>
-  prior(records, position).findLast(
+  findLast(
+    journalRecordsForOperationId(prior(records, position), operationId),
     (candidate): candidate is ActiveReadRecord =>
       candidate.event._tag === "CompletionClaimDeletionReadObserved" &&
       candidate.event.request.operationId === operationId &&
@@ -357,9 +422,24 @@ const deletionAttemptMatchesIntent = (
   )
 }
 
+const exactOriginalReleaseRecord = (
+  records: JournalHistorySource,
+  position: JournalPosition,
+  originalRelease: ReturnType<typeof completionOriginalTaskClaimReleaseFor>
+): JournalRecord | undefined => {
+  const accepted = prior(records, position)
+  return findLast(
+    journalRecordsForTask(accepted, originalRelease.claim.taskId),
+    ({ event }) =>
+      event._tag === "TaskClaimReleased" &&
+      event.release.operationId === originalRelease.operationId &&
+      isExactTaskClaim(event.release.claim, originalRelease.claim)
+  )
+}
+
 const invalidDeletionAttempt = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   indexes: IntegrationFinalityHistoryIndexes,
   event: DeletionAttempt
 ): IntegrationFinalityHistoryValidation => {
@@ -367,12 +447,7 @@ const invalidDeletionAttempt = (
   const attempts = mapGet(indexes.deletionAttempts, event.operationId) ?? HashMap.empty<number, DeletionAttemptRecord>()
   const ordinal = Number(event.attemptOrdinal)
   const originalRelease = completionOriginalTaskClaimReleaseFor(event.claim)
-  const originalReleaseRecord = prior(records, record.position).findLast(
-    ({ event: priorEvent }) =>
-      priorEvent._tag === "TaskClaimReleased" &&
-      priorEvent.release.operationId === originalRelease.operationId &&
-      isExactTaskClaim(priorEvent.release.claim, originalRelease.claim)
-  )
+  const originalReleaseRecord = exactOriginalReleaseRecord(records, record.position, originalRelease)
   const latestMarkerRead = latestMarkerCleanupRead(records, record.position, event.operationId)
   const latestActiveRead = latestActiveCleanupRead(records, record.position, event.operationId)
   const originalClaimReleaseConfirmed = latestCleanupReadsAuthorizeDeletionAttempt(
@@ -426,20 +501,17 @@ const latestCleanupReadsProveDeletion = (
 
 const invalidDeletionOutcome = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   indexes: IntegrationFinalityHistoryIndexes,
   event: DeletionOutcome
 ): IntegrationFinalityHistoryValidation => {
   const intent = mapGet(indexes.deletionIntents, event.operationId)
   const duplicate = HashSet.has(indexes.deletionTerminals, event.operationId)
   const originalRelease = completionOriginalTaskClaimReleaseFor(event.claim)
-  const originalClaimReleased = prior(records, record.position).some(
-    ({ event: priorEvent }) =>
-      priorEvent._tag === "TaskClaimReleased" &&
-      priorEvent.release.operationId === originalRelease.operationId &&
-      isExactTaskClaim(priorEvent.release.claim, originalRelease.claim)
-  )
-  const deletionAttempt = prior(records, record.position).findLast(
+  const accepted = prior(records, record.position)
+  const originalClaimReleased = exactOriginalReleaseRecord(records, record.position, originalRelease) !== undefined
+  const deletionAttempt = findLast(
+    journalRecordsForOperationId(accepted, event.operationId),
     ({ event: priorEvent }) =>
       priorEvent._tag === "CompletionClaimDeletionAttemptIntended" && priorEvent.operationId === event.operationId
   )
@@ -464,13 +536,15 @@ const invalidDeletionOutcome = (
 
 const invalidSettlement = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   indexes: IntegrationFinalityHistoryIndexes,
   event: Settlement
 ): IntegrationFinalityHistoryValidation => {
   const key = event.claim.promotionCorrelation.requestId
   const duplicate = HashSet.has(indexes.settlements, key)
-  const deleted = prior(records, record.position).some(
+  const accepted = prior(records, record.position)
+  const deleted = hasMatching(
+    journalRecordsForOperationId(accepted, event.deletionOperationId),
     (candidate) =>
       candidate.event._tag === "CompletionClaimDeleted" &&
       candidate.event.operationId === event.deletionOperationId &&
@@ -478,7 +552,8 @@ const invalidSettlement = (
       completionSuccessObservationEquals(candidate.event.successObservation, event.successObservation) &&
       completeTaskInObservation(records, event.successObservation, record.position)
   )
-  const replaced = prior(records, record.position).some(
+  const replaced = hasMatching(
+    journalRecordsForOperationId(accepted, event.replacementOperationId),
     (candidate) =>
       candidate.event._tag === "CompletionClaimReplaced" &&
       candidate.event.operationId === event.replacementOperationId &&
@@ -518,7 +593,7 @@ const invalidDeletionRead = (
   indexes: IntegrationFinalityHistoryIndexes,
   event: DeletionRead,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): string | undefined => {
   const request = event.request
   if (request.claim.plannedAttempt.runId !== runId) {
@@ -571,7 +646,7 @@ const markerAbsencePrecedesActiveAbsenceConfirmation = (
   candidate.event.observation._tag === "CompletionClaimMarkerAbsent"
 
 const confirmationReadHasReleaseAndMarker = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   record: JournalRecord,
   event: DeletionRead
 ): boolean => {
@@ -583,18 +658,14 @@ const confirmationReadHasReleaseAndMarker = (
   }
   const attemptOrdinal = event.purpose.attemptOrdinal
   const expected = completionOriginalTaskClaimReleaseFor(event.request.claim)
-  const release = prior(records, record.position).findLast(
-    (candidate) =>
-      candidate.event._tag === "TaskClaimReleased" &&
-      candidate.event.release.operationId === expected.operationId &&
-      isExactTaskClaim(candidate.event.release.claim, expected.claim)
-  )
+  const accepted = prior(records, record.position)
+  const release = exactOriginalReleaseRecord(records, record.position, expected)
   const marker =
     event.purpose._tag === "ConfirmOriginalClaimReleased"
-      ? prior(records, record.position).findLast((candidate) =>
+      ? findLast(journalRecordsForOperationId(accepted, event.request.operationId), (candidate) =>
           exactMarkerPrecedesOriginalReleaseConfirmation(candidate, event, attemptOrdinal)
         )
-      : prior(records, record.position).findLast((candidate) =>
+      : findLast(journalRecordsForOperationId(accepted, event.request.operationId), (candidate) =>
           markerAbsencePrecedesActiveAbsenceConfirmation(candidate, event, attemptOrdinal)
         )
   return release !== undefined && marker !== undefined && release.position < marker.position
@@ -620,10 +691,13 @@ const replacementOutcomeMatches = (indexes: IntegrationFinalityHistoryIndexes, e
 }
 
 const countPriorDeletionReads = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   position: JournalPosition,
   event: DeletionRead
-): number => prior(records, position).filter((candidate) => matchesDeletionRead(candidate.event, event)).length
+): number =>
+  countMatching(journalRecordsForOperationId(prior(records, position), event.request.operationId), (candidate) =>
+    matchesDeletionRead(candidate.event, event)
+  )
 
 const matchesDeletionRead = (candidate: WorkflowJournalEvent, expected: DeletionRead): boolean =>
   candidate._tag === "CompletionClaimDeletionReadObserved" &&
@@ -638,11 +712,12 @@ const deletionIntentMatches = (intent: DeletionIntent, request: CompletionClaimD
   completionSuccessObservationEquals(intent.successObservation, request.successObservation)
 
 const completionCleanupForReleaseIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   position: JournalPosition,
   event: ClaimReleaseIntent
 ): (JournalRecord & { readonly event: DeletionIntent }) | undefined =>
-  prior(records, position).findLast(
+  findLast(
+    journalRecordsForTask(prior(records, position), event.operation.release.claim.taskId),
     (candidate): candidate is JournalRecord & { readonly event: DeletionIntent } =>
       candidate.event._tag === "CompletionClaimDeletionIntended" &&
       completionOriginalTaskClaimReleaseFor(candidate.event.claim).operationId === event.operation.release.operationId
@@ -665,11 +740,12 @@ const cleanupReleaseIntentHasPredecessors = (event: ClaimReleaseIntent, cleanup:
 }
 
 const originalClaimReleaseMarkerObservation = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   position: JournalPosition,
   cleanup: JournalRecord & { readonly event: DeletionIntent }
 ): DeletionRead["observation"] | undefined =>
-  prior(records, position).findLast(
+  findLast(
+    journalRecordsForOperationId(prior(records, position), cleanup.event.operationId),
     (candidate): candidate is JournalRecord & { readonly event: DeletionRead } =>
       candidate.position > cleanup.position &&
       candidate.event._tag === "CompletionClaimDeletionReadObserved" &&
@@ -679,7 +755,7 @@ const originalClaimReleaseMarkerObservation = (
 
 const invalidCompletionCleanupReleaseIntent = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   event: ClaimReleaseIntent
 ): string | undefined => {
   const cleanup = completionCleanupForReleaseIntent(records, record.position, event)
@@ -716,9 +792,43 @@ const recordCompletionTaskIssue = (
   if (issue?.kind === "Semantic") recordSemanticIssue(issue.detail)
 }
 
+const completionTaskHistoryTaskId = (
+  event: WorkflowJournalEvent
+): CompletionTaskClaim["plannedAttempt"]["taskId"] | undefined => {
+  if (
+    event._tag === "PostPromotionBlockerCandidateAncestryReadIntended" ||
+    event._tag === "PostPromotionBlockerCandidateAncestryObserved"
+  ) {
+    return event.authorization.claim.plannedAttempt.taskId
+  }
+  if (event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadCompletionTaskFacts") {
+    return event.operation.request.claim.plannedAttempt.taskId
+  }
+  if (event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskCompletionFacts") {
+    return event.observation.request.claim.plannedAttempt.taskId
+  }
+  if ("request" in event && "claim" in event.request) return event.request.claim.plannedAttempt.taskId
+  return undefined
+}
+
+const completionTaskHistoryRecords = (
+  records: JournalHistorySource,
+  event: WorkflowJournalEvent
+): ReadonlyArray<JournalRecord> => {
+  if (!isJournalRecordEvidence(records)) return records
+  const taskId = completionTaskHistoryTaskId(event)
+  if (taskId === undefined) return []
+  const taskRecords = Array.from(journalRecordsForTask(records, taskId))
+  const runBeginning = firstJournalRecordOfKind(records, "WorkflowRunBegan")
+  const promotions = journalRecordsOfKind(records, "TargetPromotionObservedSuccess")
+  return [...(runBeginning === undefined ? [] : [runBeginning]), ...taskRecords, ...promotions]
+    .filter((candidate, index, candidates) => candidates.findIndex(({ key }) => key === candidate.key) === index)
+    .sort((left, right) => left.position - right.position)
+}
+
 const invalidReplacementHistory = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   indexes: IntegrationFinalityHistoryIndexes
 ): IntegrationFinalityHistoryValidation | undefined => {
   const event = record.event
@@ -732,7 +842,7 @@ const invalidReplacementHistory = (
 
 const invalidDeletionHistory = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   indexes: IntegrationFinalityHistoryIndexes
 ): IntegrationFinalityHistoryValidation | undefined => {
   const event = record.event
@@ -746,7 +856,7 @@ const invalidDeletionHistory = (
 /** Validates one finality event against exact promotion, claim, and tracker chronology. */
 export const invalidIntegrationFinalityHistory = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   indexes: IntegrationFinalityHistoryIndexes
 ): IntegrationFinalityHistoryValidation => {
   const event = record.event
@@ -777,13 +887,13 @@ export const invalidIntegrationFinalityRunBinding = (event: WorkflowJournalEvent
 export const validateIntegrationFinalityHistoryRecord = (
   record: JournalRecord,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   indexes: IntegrationFinalityHistoryIndexes,
   recordIdentityIssue: (detail: string) => void,
   recordSemanticIssue: (detail: string) => void
 ): IntegrationFinalityHistoryIndexes => {
   recordCompletionTaskIssue(
-    invalidCompletionTaskHistory(record, records, runId),
+    invalidCompletionTaskHistory(record, completionTaskHistoryRecords(records, record.event), runId),
     recordIdentityIssue,
     recordSemanticIssue
   )

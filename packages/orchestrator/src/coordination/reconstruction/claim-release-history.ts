@@ -1,4 +1,10 @@
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import {
+  isJournalRecordEvidence,
+  journalEvidenceBefore,
+  journalRecordsForOperationId,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 
 const releaseIntentMatchesOutcome = (
   intent: Extract<JournalRecord["event"], { readonly _tag: "TaskClaimReleaseIntended" }>,
@@ -10,18 +16,21 @@ const releaseIntentMatchesOutcome = (
   intent.operation.release.claim.token === released.claim.token
 
 /** Returns why a release outcome does not match its earlier exact-claim intent. */
-export const invalidTaskClaimRelease = (
-  record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>
-): string | undefined => {
+export const invalidTaskClaimRelease = (record: JournalRecord, records: JournalHistorySource): string | undefined => {
   if (record.event._tag !== "TaskClaimReleased") return undefined
   const released = record.event.release
-  const intent = records.find(
-    ({ event, position }) =>
-      position < record.position &&
-      event._tag === "TaskClaimReleaseIntended" &&
-      event.operation.release.operationId === released.operationId
-  )?.event
+  const accepted = isJournalRecordEvidence(records) ? journalEvidenceBefore(records, record.position) : records
+  let intent: JournalRecord["event"] | undefined
+  for (const candidate of journalRecordsForOperationId(accepted, released.operationId)) {
+    if (
+      candidate.position < record.position &&
+      candidate.event._tag === "TaskClaimReleaseIntended" &&
+      candidate.event.operation.release.operationId === released.operationId
+    ) {
+      intent = candidate.event
+      break
+    }
+  }
   return intent?._tag !== "TaskClaimReleaseIntended" || !releaseIntentMatchesOutcome(intent, released)
     ? `released task claim contradicts operation ${released.operationId}`
     : undefined
@@ -29,7 +38,7 @@ export const invalidTaskClaimRelease = (
 
 export const validateTaskClaimRelease = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   onInvalid: (detail: string) => void
 ): void => {
   const detail = invalidTaskClaimRelease(record, records)

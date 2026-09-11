@@ -20,7 +20,12 @@ import {
   workflowRunBeganRecordKey,
   workflowRunTerminatedRecordKey
 } from "../../workflow-journal/record-key.js"
-import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory } from "./history.js"
+import {
+  advanceWorkflowJournalHistory,
+  reduceWorkflowJournalHistory,
+  inspectWorkflowJournalHistoryValidationPath,
+  reduceUnindexedWorkflowJournalHistoryForTesting
+} from "./history.js"
 import { reconstructedTaskGraphFor } from "./graph-knowledge.js"
 import {
   makeTaskClaimAcquisitionOperation,
@@ -174,7 +179,10 @@ it("advances every generated valid prefix to the same state and frontier as comp
     fc.property(fc.uniqueArray(safeSegment, { minLength: 1, maxLength: 8 }), fc.boolean(), (segments, terminated) => {
       const { records, runId } = generatedValidHistory(segments, terminated)
       const first = Option.getOrThrow(Option.fromUndefinedOr(records[0]))
-      let incremental = reduceWorkflowJournalHistory(runId, [first])
+      const empty = reduceWorkflowJournalHistory(runId, [])
+      expect(empty._tag).toBe("ValidWorkflowJournalHistory")
+      if (empty._tag !== "ValidWorkflowJournalHistory") return
+      let incremental = advanceWorkflowJournalHistory(empty, first)
       expect(incremental._tag).toBe("ValidWorkflowJournalHistory")
       if (incremental._tag !== "ValidWorkflowJournalHistory") return
       let accepted = [first]
@@ -184,7 +192,11 @@ it("advances every generated valid prefix to the same state and frontier as comp
         incremental = advanceWorkflowJournalHistory(incremental, record)
         expect(incremental._tag).toBe("ValidWorkflowJournalHistory")
         if (incremental._tag !== "ValidWorkflowJournalHistory") return
-        expect(incremental).toEqual(reduceWorkflowJournalHistory(runId, accepted))
+        const cold = reduceWorkflowJournalHistory(runId, accepted)
+        expect(inspectWorkflowJournalHistoryValidationPath(cold)).toBe("IndexedCold")
+        expect(inspectWorkflowJournalHistoryValidationPath(incremental)).toBe("IndexedSuccessor")
+        expect(incremental).toEqual(cold)
+        expect(cold).toEqual(reduceUnindexedWorkflowJournalHistoryForTesting(runId, accepted))
       }
     }),
     { numRuns: 100 }
@@ -219,10 +231,13 @@ it("keeps a prior prefix correct when a linear successor is rejected, then accep
   const rejected = advanceWorkflowJournalHistory(prior, malformedNext)
   expect(rejected).toEqual(reduceWorkflowJournalHistory(runId, [...records, malformedNext]))
   expect(rejected._tag).toBe("InvalidWorkflowJournalHistory")
+  expect(inspectWorkflowJournalHistoryValidationPath(rejected)).toBe("RawDiagnostic")
+  expect(rejected).toEqual(reduceUnindexedWorkflowJournalHistoryForTesting(runId, [...records, malformedNext]))
 
   const accepted = advanceWorkflowJournalHistory(prior, validNext)
   expect(accepted).toEqual(reduceWorkflowJournalHistory(runId, [...records, validNext]))
   expect(accepted._tag).toBe("ValidWorkflowJournalHistory")
+  expect(inspectWorkflowJournalHistoryValidationPath(accepted)).toBe("IndexedSuccessor")
 })
 
 it("preserves persistent immutable branching after one sibling successor advances", () => {

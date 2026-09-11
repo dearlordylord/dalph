@@ -70,6 +70,7 @@ import {
   type JournalAppendError,
   type JournalError,
   type JournalReadError,
+  type JournalRecord,
   JournalStore,
   RunLifecycleJournal,
   WorkflowRunTargetMismatch,

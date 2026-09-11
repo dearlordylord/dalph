@@ -22,6 +22,7 @@ import {
   journalRecordAt,
   journalRecordsBefore,
   inspectJournalRecordStorage,
+  observeJournalRecordSequenceOperations,
   materializeJournalRecords
 } from "./record-sequence.js"
 
@@ -32,6 +33,18 @@ const initial = makeWorkflowRunBeganRecord(
 )
 
 describe("Alice retains an earlier journal observation", () => {
+  it("counts explicit historical export and indexed lookup at the actual sequence boundary", () => {
+    const operations: Array<string> = []
+    const stop = observeJournalRecordSequenceOperations((operation) => operations.push(operation._tag))
+    try {
+      const records = appendJournalRecord(emptyJournalRecords(), initial)
+      journalRecordAt(records, 0)
+      materializeJournalRecords(records)
+    } finally {
+      stop()
+    }
+    expect(operations).toEqual(["IndexedRecordVisit", "HistoricalMaterialization"])
+  })
   const retainedSlotCount = (roots: ReadonlyArray<unknown>): number => {
     const retained = new Set<object>()
     let slots = 0
@@ -68,8 +81,9 @@ describe("Alice retains an earlier journal observation", () => {
     expect(large).toBeLessThan(small * 6)
   })
 
-  const acceptedPrefix = (count: number) => {
+  const acceptedPrefixes = (count: number) => {
     let latest = acceptedJournalPrefixFromValidatedHistory(initial.runId, [initial])
+    const prefixes = [latest]
     for (let position = 2; position <= count; position += 1) {
       const revision = RunPolicyRevision.make(position)
       latest = appendValidatedJournalRecord(latest, {
@@ -85,13 +99,14 @@ describe("Alice retains an earlier journal observation", () => {
         position: JournalPosition.make(position),
         runId: initial.runId
       })
+      prefixes.push(latest)
     }
-    return latest
+    return { latest, prefixes }
   }
 
   it("keeps only shared accepted storage and an opaque predecessor identity in provenance", () => {
-    const small = acceptedPrefix(256)
-    const large = acceptedPrefix(1024)
+    const small = acceptedPrefixes(256).latest
+    const large = acceptedPrefixes(1024).latest
     const smallSlots = retainedSlotCount([
       ...inspectAcceptedPrefixStorage(small),
       acceptedJournalSuccessorProvenance(small)
@@ -104,6 +119,16 @@ describe("Alice retains an earlier journal observation", () => {
     expect(acceptedJournalSuccessorProvenance(large)?.predecessor).not.toHaveProperty("records")
     expect(acceptedJournalRecordForKey(large, initial.key)).toBe(initial)
     expect(acceptedJournalRecordsForKind(large, "TaskWorkCapacityChanged").length).toBe(1023)
+  })
+
+  it("shares every accepted publication's evidence roots while an observer retains all prefixes", () => {
+    const rootsFor = (count: number) =>
+      acceptedPrefixes(count).prefixes.flatMap((prefix) => [
+        prefix,
+        ...inspectAcceptedPrefixStorage(prefix),
+        acceptedJournalSuccessorProvenance(prefix)
+      ])
+    expect(retainedSlotCount(rootsFor(1024))).toBeLessThan(retainedSlotCount(rootsFor(256)) * 6)
   })
 
   it("keeps each earlier sequence unchanged when a successor and sibling are appended", () => {

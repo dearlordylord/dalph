@@ -37,26 +37,57 @@ import {
   type WorkflowInterpreterService
 } from "../../interpretation/interpreter.js"
 import { intentRecordKey, outcomeRecordKey } from "../../../workflow-journal/record-key.js"
-import type { InRunJournalService } from "../../../workflow-journal/store.js"
+import type { InRunJournalService, JournalRecord } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalEvidenceBefore,
+  journalRecordByKey,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 
 const fullObservationFromEvent = (event: unknown): Option.Option<CompleteTaskTrackerFactsObserved> =>
   Option.flatMap(Schema.decodeUnknownOption(TaskTrackerFactsObservedEvent)(event), ({ observation }) =>
     observation._tag === "CompleteTaskTrackerFacts" ? Option.some(observation) : Option.none()
   )
 
+type TaskTrackerObservationHistory = ReadonlyArray<{ readonly event: unknown }> | JournalHistorySource
+
+const taskTrackerFactEvents = function* (records: TaskTrackerObservationHistory): Iterable<unknown> {
+  const candidates = Array.isArray(records)
+    ? records
+    : journalRecordsOfKind(records as JournalHistorySource, "TaskTrackerFactsObserved")
+  for (const { event } of candidates) yield event
+}
+
+const graphReconstructionEvents = (
+  records: JournalHistorySource,
+  event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>
+): ReadonlyArray<TaskTrackerFactsObservedEvent> => {
+  const observation = event.observation
+  if (observation._tag !== "UnchangedTaskTrackerFactsReconfirmed") return [event]
+  const prior = journalRecordByKey(records, outcomeRecordKey(observation.priorFullObservationOperationId))
+  return prior?.event._tag === "TaskTrackerFactsObserved" ? [prior.event, event] : [event]
+}
+
 const comparableFullObservation = (
-  records: ReadonlyArray<{ readonly event: unknown }>,
+  records: TaskTrackerObservationHistory,
   complete: CompleteTaskTrackerFactsObserved
-): CompleteTaskTrackerFactsObserved | undefined =>
-  records
-    .flatMap(({ event }) => Option.toArray(fullObservationFromEvent(event)))
-    .findLast(
-      (prior) =>
-        prior.operationId !== complete.operationId &&
-        taskTrackerTargetKey(prior.target) === taskTrackerTargetKey(complete.target) &&
-        prior.rootTaskId === complete.rootTaskId &&
-        exactTaskIdSetKey(prior.factFamilies[0].taskIds) === exactTaskIdSetKey(complete.factFamilies[0].taskIds)
+): CompleteTaskTrackerFactsObserved | undefined => {
+  let found: CompleteTaskTrackerFactsObserved | undefined
+  for (const event of taskTrackerFactEvents(records)) {
+    const prior = Option.getOrUndefined(fullObservationFromEvent(event))
+    if (
+      prior !== undefined &&
+      prior.operationId !== complete.operationId &&
+      taskTrackerTargetKey(prior.target) === taskTrackerTargetKey(complete.target) &&
+      prior.rootTaskId === complete.rootTaskId &&
+      exactTaskIdSetKey(prior.factFamilies[0].taskIds) === exactTaskIdSetKey(complete.factFamilies[0].taskIds)
     )
+      found = prior
+  }
+  return found
+}
 
 const makeUnchangedReconfirmation = (
   operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type,
@@ -91,7 +122,7 @@ const makeUnchangedReconfirmation = (
 
 /** Chooses a complete payload or compact unchanged reconfirmation for one read. */
 export const makeTaskTrackerFactsObservedFromRead = (
-  records: ReadonlyArray<{ readonly event: unknown }>,
+  records: TaskTrackerObservationHistory,
   operation: typeof WorkflowOperation.cases.ReadTrackerGraph.Type,
   snapshot: TaskDagSnapshot
 ): TaskTrackerFactsObservedEvent => {
@@ -151,22 +182,21 @@ export const journaledTrackerGraphRead = (
     onIntentRecorded: Effect.Effect<void> = Effect.void,
     interruptibleBoundary?: InterruptibleWorkflowBoundaryExecution
   ) {
+    const acceptedJournal = yield* AcceptedJournalReader
     const key = intentRecordKey(operation.operationId)
     yield* Effect.uninterruptible(
       journal.append(runId, key, taskTrackerReadIntent(operation)).pipe(Effect.andThen(onIntentRecorded))
     )
-    const records = yield* journal.read(runId)
-    const existingObservationIndex = records.findIndex(
-      ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operation.operationId
-    )
-    if (existingObservationIndex >= 0) {
-      const existing = records[existingObservationIndex]?.event
-      if (existing?._tag === "TaskTrackerFactsObserved" && existing.observation._tag === "TaskTrackerFactsReadFailed") {
+    const records = yield* acceptedJournal.readAccepted(runId)
+    const existingRecord = journalRecordByKey(records, outcomeRecordKey(operation.operationId))
+    if (existingRecord?.event._tag === "TaskTrackerFactsObserved") {
+      const existing = existingRecord.event
+      if (existing.observation._tag === "TaskTrackerFactsReadFailed") {
         return yield* new TaskTrackerFactsReadUnavailable({ observation: existing.observation })
       }
       return yield* requireTaskGraph(
         reconstructedTaskGraphFromEvents(
-          records.slice(0, existingObservationIndex + 1).map(({ event }) => event),
+          graphReconstructionEvents(journalEvidenceBefore(records, existingRecord.position + 1), existing),
           operation.target
         ),
         operation.operationId
@@ -191,17 +221,11 @@ export const journaledTrackerGraphRead = (
       interpreter.readTrackerGraph(operation),
       (snapshot) =>
         Effect.gen(function* () {
-          yield* journal.append(
-            runId,
-            outcomeRecordKey(operation.operationId),
-            makeTaskTrackerFactsObservedFromRead(records, operation, snapshot)
-          )
-          const recorded = yield* journal.read(runId)
+          const observed = makeTaskTrackerFactsObservedFromRead(records, operation, snapshot)
+          yield* journal.append(runId, outcomeRecordKey(operation.operationId), observed)
+          const recorded = yield* acceptedJournal.readAccepted(runId)
           return yield* requireTaskGraph(
-            reconstructedTaskGraphFromEvents(
-              recorded.map(({ event }) => event),
-              operation.target
-            ),
+            reconstructedTaskGraphFromEvents(graphReconstructionEvents(recorded, observed), operation.target),
             operation.operationId
           )
         })
