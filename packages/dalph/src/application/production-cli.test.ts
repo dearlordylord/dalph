@@ -98,6 +98,7 @@ import {
   makeDeliverySettlement,
   makeProductionHostApplicationExitShell,
   makeDeliveryReflection,
+  memoryJournalTestLayer,
   boundedParallelTicketsOf,
   deliverySettlementsOf,
   frontierOf,
@@ -2638,6 +2639,7 @@ const liveCliLayer = (
     ),
     Layer.mock(TrackerGraphReader, {}),
     Layer.mock(WorkflowTrace, {}),
+    memoryJournalTestLayer,
     deterministicOperationIdAllocatorLayer("production-cli-test")
   )
 
