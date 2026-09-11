@@ -40,6 +40,13 @@ export class IntegrationPromotionStaleQuarantineRejected extends Schema.TaggedEr
 type PromotionStaleRecord = JournalRecord & { readonly event: TargetPromotionStaleEvent }
 type QuarantineRecord = JournalRecord & { readonly event: IntegrationQuarantinedEvent }
 
+const isPromotionStaleRecordFor = (
+  record: JournalRecord,
+  correlation: TargetPromotionCorrelation
+): record is PromotionStaleRecord =>
+  record.event._tag === "TargetPromotionStale" &&
+  targetPromotionCorrelationEquals(record.event.correlation, correlation)
+
 const runIdFor = targetPromotionRunIdOf
 
 const reject = (
@@ -100,12 +107,7 @@ export const pendingPromotionStaleIntegrationQuarantineFor = (
 ): PromotionStaleIntegrationQuarantineInput | undefined => {
   let stale: PromotionStaleRecord | undefined
   for (const record of journalRecordsForPromotionRequest(records, correlation.requestId)) {
-    if (
-      record.event._tag === "TargetPromotionStale" &&
-      targetPromotionCorrelationEquals(record.event.correlation, correlation)
-    ) {
-      stale = record
-    }
+    if (isPromotionStaleRecordFor(record, correlation)) stale = record
   }
   if (stale === undefined || promotionStaleQuarantineEvidenceIssue(records, stale) !== undefined) return undefined
   const input = PromotionStaleIntegrationQuarantineInput.make({ correlation, targetPromotionStaleAt: stale.position })

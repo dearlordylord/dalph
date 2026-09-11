@@ -52,6 +52,14 @@ import {
   retainedExecutorResponsibilitySubjectsAt,
   type RetainedExecutorResponsibilitySubjects
 } from "./retained-executor-responsibility.js"
+import {
+  appendSettledCompletionClaimReplacementEvidence,
+  emptySettledCompletionClaimReplacements,
+  inspectSettledCompletionClaimReplacementStorage,
+  settledCompletionClaimReplacementAt,
+  type SettledCompletionClaimReplacementEvidence
+} from "./settled-completion-claim-replacement.js"
+import type { CompletionTaskClaim } from "../workflow/protocols/integration-finality/events.js"
 import type { AttemptChoiceRequestId } from "../workflow/protocols/attempt-choice/events.js"
 import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
@@ -110,6 +118,7 @@ interface EvidenceIndexes {
   readonly readFreshnessEvidence: ReadFreshnessEvidence
   readonly stopRequestDisposition: StopRequestDispositionEvidence
   readonly retainedExecutorResponsibilitySubjects: RetainedExecutorResponsibilitySubjects
+  readonly settledCompletionClaimReplacements: SettledCompletionClaimReplacementEvidence
 }
 
 const indexesByEvidence = new WeakMap<JournalRecordEvidence, EvidenceIndexes>()
@@ -152,7 +161,8 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
       specificationDivergence: emptySpecificationDivergence(),
       readFreshnessEvidence: emptyReadFreshnessEvidence(),
       stopRequestDisposition: emptyStopRequestDisposition(),
-      retainedExecutorResponsibilitySubjects: emptyRetainedExecutorResponsibilitySubjects()
+      retainedExecutorResponsibilitySubjects: emptyRetainedExecutorResponsibilitySubjects(),
+      settledCompletionClaimReplacements: emptySettledCompletionClaimReplacements()
     },
     null
   )
@@ -448,6 +458,10 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
       stopRequestDisposition: appendStopRequestDisposition(indexes.stopRequestDisposition, record),
       retainedExecutorResponsibilitySubjects: appendRetainedExecutorResponsibilitySubjects(
         indexes.retainedExecutorResponsibilitySubjects,
+        record
+      ),
+      settledCompletionClaimReplacements: appendSettledCompletionClaimReplacementEvidence(
+        indexes.settledCompletionClaimReplacements,
         record
       )
     },
@@ -755,6 +769,16 @@ export const journalRetainedExecutorResponsibilitySubjects = (source: JournalRec
     throughPosition: source.lastPosition ?? 0
   })
 
+/** The first exact replacement intent and outcome settled for one completion claim at this evidence cutoff. */
+export const journalSettledCompletionClaimReplacement = (
+  source: JournalRecordEvidence,
+  claim: CompletionTaskClaim
+) =>
+  settledCompletionClaimReplacementAt(indexesFor(source).settledCompletionClaimReplacements, {
+    claim,
+    throughPosition: source.lastPosition ?? 0
+  })
+
 /** Full accepted prefixes can reuse the exact indexed kind sequence. */
 export const journalEvidenceKindSequence = (
   source: JournalRecordEvidence,
@@ -910,6 +934,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     indexes.readFreshnessEvidence,
     indexes.stopRequestDisposition,
     indexes.retainedExecutorResponsibilitySubjects,
+    indexes.settledCompletionClaimReplacements,
     inspectJournalRecordStorage(source.records),
     ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage),
@@ -934,6 +959,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     ...inspectSpecificationDivergenceStorage(indexes.specificationDivergence),
     ...inspectReadFreshnessEvidenceStorage(indexes.readFreshnessEvidence),
     ...inspectStopRequestDispositionStorage(indexes.stopRequestDisposition),
-    ...inspectRetainedExecutorResponsibilityStorage(indexes.retainedExecutorResponsibilitySubjects)
+    ...inspectRetainedExecutorResponsibilityStorage(indexes.retainedExecutorResponsibilitySubjects),
+    ...inspectSettledCompletionClaimReplacementStorage(indexes.settledCompletionClaimReplacements)
   ]
 }
