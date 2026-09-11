@@ -1,10 +1,11 @@
 /* eslint-disable max-lines -- Journal evidence indexes are co-located so one append updates every immutable query root atomically. */
 import { HashMap, Option } from "effect"
-import type { AttemptId, PlannedTaskAttempt, TaskId } from "@dalph/contracts"
+import type { AttemptId, PlannedTaskAttempt, TaskId, TaskRevision } from "@dalph/contracts"
 import type { TrackerTarget } from "../authorities/task-tracker/target.js"
 import type { OperationId } from "../workflow/identity.js"
 import type { TargetPromotionRequestId } from "../workflow/protocols/target-promotion/events.js"
 import type { IntegratorSessionId } from "../workflow/protocols/integrator/events.js"
+import type { IntegrationQuarantineDirectionRequestId } from "../workflow/protocols/integration-quarantine/events.js"
 import {
   appendClaimObservationEpisode,
   claimObservationEpisodeAt,
@@ -20,6 +21,13 @@ import {
   lastGraphObservationAt,
   type GraphEvidence
 } from "./graph-evidence.js"
+import {
+  appendSpecificationDivergence,
+  emptySpecificationDivergence,
+  inspectSpecificationDivergenceStorage,
+  specificationDivergedAfter,
+  type SpecificationDivergence
+} from "./specification-divergence.js"
 import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import type { JournalPosition, JournalRecordKey } from "./identity.js"
@@ -36,6 +44,7 @@ import {
 
 const JournalRecordEvidenceTypeId: unique symbol = Symbol("JournalRecordEvidence")
 const binarySearchDivisor = 2
+const lastSequenceEntryOffset = -1
 
 /** Indexed immutable decoded records. This value makes no semantic acceptance claim. */
 export interface JournalRecordEvidence {
@@ -64,9 +73,11 @@ interface EvidenceIndexes {
   readonly recordsByOperation: HashMap.HashMap<OperationId, JournalRecordSequence>
   readonly byPromotionRequest: HashMap.HashMap<TargetPromotionRequestId, JournalRecordSequence>
   readonly byIntegratorSession: HashMap.HashMap<IntegratorSessionId, JournalRecordSequence>
+  readonly byQuarantineDirectionRequest: HashMap.HashMap<string, JournalRecordSequence>
   readonly byRestartRead: HashMap.HashMap<string, JournalRecordSequence>
   readonly claimObservationEpisodes: ClaimObservationEpisodeIndex
   readonly graphEvidence: GraphEvidence
+  readonly specificationDivergence: SpecificationDivergence
 }
 
 const indexesByEvidence = new WeakMap<JournalRecordEvidence, EvidenceIndexes>()
@@ -95,13 +106,18 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
     recordsByOperation: HashMap.empty(),
     byPromotionRequest: HashMap.empty(),
     byIntegratorSession: HashMap.empty(),
+    byQuarantineDirectionRequest: HashMap.empty(),
     byRestartRead: HashMap.empty(),
     claimObservationEpisodes: emptyClaimObservationEpisodes(),
-    graphEvidence: emptyGraphEvidence()
+    graphEvidence: emptyGraphEvidence(),
+    specificationDivergence: emptySpecificationDivergence()
   })
 
 const operationOf = ({ event }: JournalRecord): WorkflowOperation | undefined =>
   event._tag === "PlannedAttemptReplaced" ? event.successorPlan : "operation" in event ? event.operation : undefined
+
+const quarantineDirectionRequestKey = ({ nonce, runId }: IntegrationQuarantineDirectionRequestId): string =>
+  `${runId.length}:${runId}${nonce}`
 
 const operationIdsOf = (record: JournalRecord): ReadonlySet<OperationId> => {
   const ids = new Set<OperationId>()
@@ -116,8 +132,6 @@ const operationIdsOf = (record: JournalRecord): ReadonlySet<OperationId> => {
   if ("replacementOperationId" in record.event) ids.add(record.event.replacementOperationId)
   if (
     "observation" in record.event &&
-    typeof record.event.observation === "object" &&
-    record.event.observation !== null &&
     "request" in record.event.observation &&
     "operationId" in record.event.observation.request
   ) {
@@ -321,6 +335,19 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     const priorSession = Option.getOrElse(HashMap.get(byIntegratorSession, sessionId), emptyJournalRecords)
     byIntegratorSession = HashMap.set(byIntegratorSession, sessionId, appendJournalRecord(priorSession, record))
   }
+  const quarantineDirectionRequestId =
+    record.event._tag === "IntegrationQuarantineDirectionApplied" ? record.event.requestId : undefined
+  const byQuarantineDirectionRequest =
+    quarantineDirectionRequestId === undefined
+      ? indexes.byQuarantineDirectionRequest
+      : HashMap.modifyAt(
+          indexes.byQuarantineDirectionRequest,
+          quarantineDirectionRequestKey(quarantineDirectionRequestId),
+          Option.match({
+            onNone: () => Option.some(appendJournalRecord(emptyJournalRecords(), record)),
+            onSome: (records) => Option.some(appendJournalRecord(records, record))
+          })
+        )
   const restartReadKey = restartReadKeyOf(record)
   const byRestartRead = restartReadKey === undefined
     ? indexes.byRestartRead
@@ -334,7 +361,7 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
       )
   const graphEvidence = appendGraphEvidence(indexes.graphEvidence, record, (operationId) => {
     const records = Option.getOrElse(HashMap.get(indexes.operations, operationId), emptyJournalRecords)
-    const operationRecord = journalRecordAt(records, -1)
+    const operationRecord = journalRecordAt(records, lastSequenceEntryOffset)
     return operationRecord === undefined ? undefined : operationOf(operationRecord)
   })
   return evidence(appendJournalRecord(prior.records, record), {
@@ -359,9 +386,11 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     recordsByOperation,
     byPromotionRequest,
     byIntegratorSession,
+    byQuarantineDirectionRequest,
     byRestartRead,
     claimObservationEpisodes: appendClaimObservationEpisode(indexes.claimObservationEpisodes, record),
-    graphEvidence
+    graphEvidence,
+    specificationDivergence: appendSpecificationDivergence(indexes.specificationDivergence, record)
   })
 }
 
@@ -544,6 +573,26 @@ export const journalRecordsForIntegratorSession = (
       )
     : source.filter((record) => integratorSessionIdsOf(record).has(sessionId))
 
+/** Every applied direction carrying one exact redeliverable transport identity, in Journal order. */
+export const journalRecordsForQuarantineDirectionRequest = (
+  source: JournalHistorySource,
+  requestId: IntegrationQuarantineDirectionRequestId
+): Iterable<JournalRecord> =>
+  isJournalRecordEvidence(source)
+    ? indexedRecords(
+        source,
+        Option.getOrElse(
+          HashMap.get(indexesFor(source).byQuarantineDirectionRequest, quarantineDirectionRequestKey(requestId)),
+          emptyJournalRecords
+        )
+      )
+    : source.filter(
+        (record) =>
+          record.event._tag === "IntegrationQuarantineDirectionApplied" &&
+          record.event.requestId.runId === requestId.runId &&
+          record.event.requestId.nonce === requestId.nonce
+      )
+
 export const journalRestartReadIntents = (
   source: JournalHistorySource,
   nonce: string,
@@ -576,6 +625,21 @@ export const journalGraphSnapshotForObservation = (
   source: JournalRecordEvidence,
   position: JournalPosition
 ) => graphSnapshotForObservation(indexesFor(source).graphEvidence, position, source.records.length)
+
+/** Whether a distinct authored specification was observed after one exact earlier choice. */
+export const journalSpecificationDivergedAfter = (
+  source: JournalRecordEvidence,
+  query: {
+    readonly taskId: TaskId
+    readonly target?: TrackerTarget
+    readonly expected: TaskRevision
+    readonly afterPosition: number
+  }
+): boolean =>
+  specificationDivergedAfter(indexesFor(source).specificationDivergence, {
+    ...query,
+    throughPosition: source.records.length
+  })
 
 /** Full accepted prefixes can reuse the exact indexed kind sequence. */
 export const journalEvidenceKindSequence = (
@@ -725,9 +789,11 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     indexes.recordsByOperation,
     indexes.byPromotionRequest,
     indexes.byIntegratorSession,
+    indexes.byQuarantineDirectionRequest,
     indexes.byRestartRead,
     indexes.claimObservationEpisodes,
     indexes.graphEvidence,
+    indexes.specificationDivergence,
     inspectJournalRecordStorage(source.records),
     ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage),
@@ -745,8 +811,10 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     ...Array.from(HashMap.values(indexes.recordsByOperation), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byPromotionRequest), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byIntegratorSession), inspectJournalRecordStorage),
+    ...Array.from(HashMap.values(indexes.byQuarantineDirectionRequest), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byRestartRead), inspectJournalRecordStorage),
     ...inspectClaimObservationEpisodeStorage(indexes.claimObservationEpisodes),
-    ...inspectGraphEvidenceStorage(indexes.graphEvidence)
+    ...inspectGraphEvidenceStorage(indexes.graphEvidence),
+    ...inspectSpecificationDivergenceStorage(indexes.specificationDivergence)
   ]
 }

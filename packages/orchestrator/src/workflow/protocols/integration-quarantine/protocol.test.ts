@@ -24,6 +24,11 @@ import {
   type JournalRecord
 } from "../../../workflow-journal/store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import {
+  journalEvidenceFrom,
+  journalEvidenceBefore,
+  journalRecordsForQuarantineDirectionRequest
+} from "../../../workflow-journal/record-evidence.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
@@ -521,10 +526,27 @@ it.effect("authorizes Retry from exact provider-failure and run-bound conclusive
       quarantineEventFor("provider-retry-eligible", providerBasis)
     )
     const providerControl = yield* IntegrationQuarantineDirectionControl
-    const providerApplied = yield* providerControl.apply(
-      requestFor(fingerprintFor(provider.event, provider.record.position, "Retry"), "provider-retry-eligible-request")
+    const providerRequest = requestFor(
+      fingerprintFor(provider.event, provider.record.position, "Retry"),
+      "provider-retry-eligible-request"
     )
+    const providerApplied = yield* providerControl.apply(providerRequest)
     expect(providerApplied._tag).toBe("DirectionApplied")
+    const providerRecords = yield* (yield* JournalStore).read(runId)
+    const providerEvidence = journalEvidenceFrom(providerRecords)
+    expect(
+      Array.from(
+        journalRecordsForQuarantineDirectionRequest(providerEvidence, providerRequest.requestId)
+      )
+    ).toEqual([providerApplied.application])
+    expect(
+      Array.from(
+        journalRecordsForQuarantineDirectionRequest(
+          journalEvidenceBefore(providerEvidence, providerApplied.application.position),
+          providerRequest.requestId
+        )
+      )
+    ).toEqual([])
 
     const journal = yield* JournalStore
     const correlation = IntegratorSessionCorrelation.make({

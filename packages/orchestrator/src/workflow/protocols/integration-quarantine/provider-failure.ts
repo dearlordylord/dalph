@@ -5,7 +5,6 @@ import {
   integrationProviderRunActivityAbsentRecordKey,
   integrationQuarantinedRecordKey,
   intentRecordKey,
-  integratorRunStartedRecordKey,
   integratorSessionFixedRecordKey,
   integratorSuccessorSessionFixedRecordKey,
   outcomeRecordKey
@@ -19,7 +18,8 @@ import type { AcceptedJournalPrefix } from "../../../workflow-journal/accepted-p
 import {
   journalRecordByKey,
   journalRecordByPosition,
-  journalRecordsOfKind
+  journalRecordsOfKind,
+  type JournalHistorySource
 } from "../../../workflow-journal/record-evidence.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -46,7 +46,11 @@ import {
   evaluateIntegratorFullRerunAuthorization,
   evaluateIntegratorRetryAuthorization
 } from "../integrator/retry-authorization.js"
-import { validateProviderRunActivityAbsent, validateProviderRunPredecessors } from "./canonical-provenance.js"
+import {
+  providerRunStartBefore,
+  validateProviderRunActivityAbsent,
+  validateProviderRunPredecessors
+} from "./canonical-provenance.js"
 export { validateProviderRunActivityAbsent } from "./canonical-provenance.js"
 
 /** Input used by both the provider boundary and restart recovery. */
@@ -388,25 +392,9 @@ const fixedSessionForRun = (
 
 /** Returns the exact durable start for a run after its fixed session relation. */
 export const providerRunStartFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   run: IntegratorRunCorrelation
-): JournalRecord | undefined => {
-  const fixedSession = fixedSessionForRun(records, run)
-  if (fixedSession._tag === "Invalid") return undefined
-  const key = integratorRunStartedRecordKey(run)
-  const starts = records.filter(
-    (
-      record
-    ): record is JournalRecord & {
-      readonly event: Extract<JournalRecord["event"], { readonly _tag: "IntegratorRunStarted" }>
-    } => record.event._tag === "IntegratorRunStarted" && integratorRunCorrelationsEqual(record.event.run, run)
-  )
-  if (starts.length !== 1 || starts.some((record) => record.runId !== runIdFor(run) || record.key !== key)) {
-    return undefined
-  }
-  const start = starts[0]
-  return start !== undefined && start.position > fixedSession.session.position ? start : undefined
-}
+): JournalRecord | undefined => providerRunStartBefore(records, run, JournalPosition.make(Number.MAX_SAFE_INTEGER))
 
 const retryAuthorizationIssue = (
   history: ReadonlyArray<JournalRecord>,
