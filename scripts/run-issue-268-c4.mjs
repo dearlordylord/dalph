@@ -9,8 +9,8 @@ import { runBoundedCommand } from "./run-bounded-command.mjs"
 export const issue268C4TestPath = "packages/dalph/test/cassettes/delivery-story-capstone.execution.test.ts"
 export const issue268C4TestName = "emits the exact DS01 through DS13 delivery checkpoint table"
 export const issue268C4TestNamePattern = `^${issue268C4TestName}$`
-export const issue268C4ExpectedOccurrenceCount = 1_014
-export const issue268C4ExpectedAcceptedOrderDigest = "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d"
+export const issue268C4ExpectedOccurrenceCount = 1_010
+export const issue268C4ExpectedAcceptedOrderDigest = "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3"
 export const issue268C4DefaultIterations = 20
 export const issue268C4ChildTimeoutMilliseconds = 45_000
 export const issue268C4TerminationGraceMilliseconds = 5_000

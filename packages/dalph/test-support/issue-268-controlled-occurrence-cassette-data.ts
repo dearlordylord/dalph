@@ -1,12 +1,12 @@
-/* eslint-disable max-lines -- This checked-in cassette is the exact 1,014-item accepted observation order. */
+/* eslint-disable max-lines -- This checked-in cassette is the exact 1,010-item accepted observation order. */
 import type { Issue268AcceptedOccurrence } from "./issue-268-controlled-occurrence-cassette.js"
 
-export const issue268AcceptedOccurrenceOrderDigest = "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d"
+export const issue268AcceptedOccurrenceOrderDigest = "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3"
 
 /**
  * Exact semantic order accepted from the cassette-free DS-01 through DS-13 run.
- * Source: 7100fe3af2103bba753e089e8ec78279c5426eb5.
- * SHA-256 of JSON.stringify(this array): ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d.
+ * Source: b3c9d61100e2c7867625a13950b33375617b2500.
+ * SHA-256 of JSON.stringify(this array): 0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3.
  */
 export const issue268AcceptedOccurrenceOrder = [
   {
@@ -799,13 +799,12 @@ export const issue268AcceptedOccurrenceOrder = [
     source: "Publication"
   },
   {
-    detail:
-      "acceptedAt=24|held=attempt:A:1|live=A:FreshExecutorWorkflowRoute,B:FreshWorkflowRoute,C:FreshWorkflowRoute",
+    detail: "acceptedAt=24|held=attempt:A:1|live=B:FreshWorkflowRoute,C:FreshWorkflowRoute,A:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
   {
-    detail: "A:A:ReserveOrReuse:FreshExecutorWorkflowRoute",
+    detail: "A:A:ReserveOrReuse:ObservePlannedAttemptExecutorWork",
     kind: "TaskWorkPositionAdmissionBound",
     source: "Publication"
   },
@@ -816,32 +815,29 @@ export const issue268AcceptedOccurrenceOrder = [
     source: "Publication"
   },
   {
-    detail:
-      "acceptedAt=24|held=attempt:A:1|live=A:FreshExecutorWorkflowRoute,B:FreshWorkflowRoute,C:FreshWorkflowRoute",
+    detail: "acceptedAt=24|held=attempt:A:1|live=B:FreshWorkflowRoute,C:FreshWorkflowRoute,A:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
-  { detail: "ObservePlannedAttemptExecutorWork:A", kind: "DeliveryActionExecuting", source: "Action" },
-  { detail: "ObservePlannedAttemptExecutorWork:A", kind: "DeliveryActionReturned", source: "Action" },
+  { detail: "A:ObservePlannedAttemptExecutorWork", kind: "DeliveryActionExecuting", source: "Action" },
+  { detail: "A:ObservePlannedAttemptExecutorWork", kind: "DeliveryActionReturned", source: "Action" },
   {
-    detail:
-      "acceptedAt=25|held=attempt:A:1|live=A:FreshExecutorWorkflowRoute,B:FreshWorkflowRoute,C:FreshWorkflowRoute",
-    kind: "DeliveryRuntimeObservationPublished",
-    source: "Publication"
-  },
-  {
-    detail:
-      "acceptedAt=25|held=attempt:A:1|live=A:FreshExecutorWorkflowRoute,B:FreshWorkflowRoute,C:FreshWorkflowRoute",
+    detail: "acceptedAt=25|held=attempt:A:1|live=B:FreshWorkflowRoute,C:FreshWorkflowRoute,A:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
   {
-    detail: "acceptedAt=25|held=attempt:A:1|live=A:FreshExecutorWorkflowRoute,C:FreshWorkflowRoute",
+    detail: "acceptedAt=25|held=attempt:A:1|live=B:FreshWorkflowRoute,C:FreshWorkflowRoute,A:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
   {
-    detail: "acceptedAt=25|held=attempt:A:1|live=A:FreshExecutorWorkflowRoute,C:FreshWorkflowRoute",
+    detail: "acceptedAt=25|held=attempt:A:1|live=C:FreshWorkflowRoute,A:IdentityFreeWorkflowRoute",
+    kind: "DeliveryRuntimeObservationPublished",
+    source: "Publication"
+  },
+  {
+    detail: "acceptedAt=25|held=attempt:A:1|live=C:FreshWorkflowRoute,A:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
@@ -1186,12 +1182,12 @@ export const issue268AcceptedOccurrenceOrder = [
     source: "Publication"
   },
   {
-    detail: "acceptedAt=36|held=attempt:A:1,attempt:B:1|live=B:FreshExecutorWorkflowRoute,C:FreshWorkflowRoute",
+    detail: "acceptedAt=36|held=attempt:A:1,attempt:B:1|live=C:FreshWorkflowRoute,B:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
   {
-    detail: "B:B:ReserveOrReuse:FreshExecutorWorkflowRoute",
+    detail: "B:B:ReserveOrReuse:ObservePlannedAttemptExecutorWork",
     kind: "TaskWorkPositionAdmissionBound",
     source: "Publication"
   },
@@ -1202,29 +1198,29 @@ export const issue268AcceptedOccurrenceOrder = [
     source: "Publication"
   },
   {
-    detail: "acceptedAt=36|held=attempt:A:1,attempt:B:1|live=B:FreshExecutorWorkflowRoute,C:FreshWorkflowRoute",
+    detail: "acceptedAt=36|held=attempt:A:1,attempt:B:1|live=C:FreshWorkflowRoute,B:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
-  { detail: "ObservePlannedAttemptExecutorWork:B", kind: "DeliveryActionExecuting", source: "Action" },
-  { detail: "ObservePlannedAttemptExecutorWork:B", kind: "DeliveryActionReturned", source: "Action" },
+  { detail: "B:ObservePlannedAttemptExecutorWork", kind: "DeliveryActionExecuting", source: "Action" },
+  { detail: "B:ObservePlannedAttemptExecutorWork", kind: "DeliveryActionReturned", source: "Action" },
   {
-    detail: "acceptedAt=37|held=attempt:A:1,attempt:B:1|live=B:FreshExecutorWorkflowRoute,C:FreshWorkflowRoute",
-    kind: "DeliveryRuntimeObservationPublished",
-    source: "Publication"
-  },
-  {
-    detail: "acceptedAt=37|held=attempt:A:1,attempt:B:1|live=B:FreshExecutorWorkflowRoute,C:FreshWorkflowRoute",
+    detail: "acceptedAt=37|held=attempt:A:1,attempt:B:1|live=C:FreshWorkflowRoute,B:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
   {
-    detail: "acceptedAt=37|held=attempt:A:1,attempt:B:1|live=B:FreshExecutorWorkflowRoute",
+    detail: "acceptedAt=37|held=attempt:A:1,attempt:B:1|live=C:FreshWorkflowRoute,B:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
   {
-    detail: "acceptedAt=37|held=attempt:A:1,attempt:B:1|live=B:FreshExecutorWorkflowRoute",
+    detail: "acceptedAt=37|held=attempt:A:1,attempt:B:1|live=B:IdentityFreeWorkflowRoute",
+    kind: "DeliveryRuntimeObservationPublished",
+    source: "Publication"
+  },
+  {
+    detail: "acceptedAt=37|held=attempt:A:1,attempt:B:1|live=B:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
@@ -1552,24 +1548,24 @@ export const issue268AcceptedOccurrenceOrder = [
     source: "Publication"
   },
   {
-    detail: "acceptedAt=48|held=attempt:A:1,attempt:B:1,attempt:C:1|live=C:FreshExecutorWorkflowRoute",
+    detail: "acceptedAt=48|held=attempt:A:1,attempt:B:1,attempt:C:1|live=C:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
   {
-    detail: "C:C:ReserveOrReuse:FreshExecutorWorkflowRoute",
+    detail: "C:C:ReserveOrReuse:ObservePlannedAttemptExecutorWork",
     kind: "TaskWorkPositionAdmissionBound",
     source: "Publication"
   },
   {
-    detail: "acceptedAt=48|held=attempt:A:1,attempt:B:1,attempt:C:1|live=C:FreshExecutorWorkflowRoute",
+    detail: "acceptedAt=48|held=attempt:A:1,attempt:B:1,attempt:C:1|live=C:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
-  { detail: "ObservePlannedAttemptExecutorWork:C", kind: "DeliveryActionExecuting", source: "Action" },
-  { detail: "ObservePlannedAttemptExecutorWork:C", kind: "DeliveryActionReturned", source: "Action" },
+  { detail: "C:ObservePlannedAttemptExecutorWork", kind: "DeliveryActionExecuting", source: "Action" },
+  { detail: "C:ObservePlannedAttemptExecutorWork", kind: "DeliveryActionReturned", source: "Action" },
   {
-    detail: "acceptedAt=48|held=attempt:A:1,attempt:B:1,attempt:C:1|live=C:FreshExecutorWorkflowRoute",
+    detail: "acceptedAt=48|held=attempt:A:1,attempt:B:1,attempt:C:1|live=C:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
@@ -1594,12 +1590,6 @@ export const issue268AcceptedOccurrenceOrder = [
       "B:tr1.eyJib2R5IjoiSW1wbGVtZW50IGNvbnRyb2xsZWQgZGVsaXZlcnkgdGFzayBCLiIsInRpdGxlIjoiSW1wbGVtZW50IEIifQ->tr1.eyJib2R5IjoiQWxpY2UgY2hhbmdlZCBjb250cm9sbGVkIGRlbGl2ZXJ5IHRhc2sgQi4iLCJ0aXRsZSI6IkltcGxlbWVudCBjaGFuZ2VkIEIifQ",
     kind: "AliceTaskSpecificationEditAccepted",
     source: "Control"
-  },
-  { detail: 'run:issue-268-controlled:"fixture:issue-268"', kind: "JournalRecoveryReadCalled", source: "Journal" },
-  {
-    detail: "1|_tag=WorkflowRunBegan|initialControlPolicy.taskExecutionCapacity=3|initiatedBy._tag=DalphCoordinator",
-    kind: "JournalRecoveryReadReturned",
-    source: "Journal"
   },
   { detail: "graph._tag=GraphNotEstablished", kind: "DeliveryPublicationObserved", source: "Publication" },
   {
@@ -2845,22 +2835,22 @@ export const issue268AcceptedOccurrenceOrder = [
     source: "Publication"
   },
   {
-    detail: "acceptedAt=89|held=attempt:A:1,attempt:C:1,attempt:D:1|live=D:FreshExecutorWorkflowRoute",
+    detail: "acceptedAt=89|held=attempt:A:1,attempt:C:1,attempt:D:1|live=D:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
   {
-    detail: "D:D:ReserveOrReuse:FreshExecutorWorkflowRoute",
+    detail: "D:D:ReserveOrReuse:ObservePlannedAttemptExecutorWork",
     kind: "TaskWorkPositionAdmissionBound",
     source: "Publication"
   },
   {
-    detail: "acceptedAt=89|held=attempt:A:1,attempt:C:1,attempt:D:1|live=D:FreshExecutorWorkflowRoute",
+    detail: "acceptedAt=89|held=attempt:A:1,attempt:C:1,attempt:D:1|live=D:IdentityFreeWorkflowRoute",
     kind: "DeliveryRuntimeObservationPublished",
     source: "Publication"
   },
-  { detail: "ObservePlannedAttemptExecutorWork:D", kind: "DeliveryActionExecuting", source: "Action" },
-  { detail: "ObservePlannedAttemptExecutorWork:D", kind: "DeliveryActionReturned", source: "Action" },
+  { detail: "D:ObservePlannedAttemptExecutorWork", kind: "DeliveryActionExecuting", source: "Action" },
+  { detail: "D:ObservePlannedAttemptExecutorWork", kind: "DeliveryActionReturned", source: "Action" },
   {
     detail:
       "graph._tag=GraphEstablished|graph.observation.cause._tag=WorkflowEstablishment|graph.observation._tag=JournaledTrackerGraphObservation|graph.observation.snapshot.revision=G1|graph.observation.snapshot.nodeIndexByTaskId._root._tag=IndexedNode|graph.observation.snapshot.nodeIndexByTaskId._root.children.0._tag=LeafNode|graph.observation.snapshot.nodeIndexByTaskId._root.children.1._tag=LeafNode|graph.observation.snapshot.nodeIndexByTaskId._root.children.2._tag=LeafNode|graph.observation.snapshot.nodeIndexByTaskId._root.children.3._tag=LeafNode|graph.observation.snapshot.nodeIndexByTaskId._root.children.4._tag=LeafNode|graph.observation.operationId=issue-268:run:issue-268-controlled:startup:32|graph.observation.contentIdentity=G1|graph.observation.freshness._tag=ObservedDuringLogicalRead|graph.observation.freshness.operationId=issue-268:run:issue-268-controlled:startup:32",
@@ -3072,12 +3062,6 @@ export const issue268AcceptedOccurrenceOrder = [
   { detail: "C:G2", kind: "AliceTaskClosure", source: "Control" },
   { detail: "C:G2", kind: "TrackerNotificationDelivered", source: "Control" },
   { detail: "TrackerNotification", kind: "ActiveRefreshStarted", source: "Control" },
-  { detail: 'run:issue-268-controlled:"fixture:issue-268"', kind: "JournalRecoveryReadCalled", source: "Journal" },
-  {
-    detail: "1|_tag=WorkflowRunBegan|initialControlPolicy.taskExecutionCapacity=3|initiatedBy._tag=DalphCoordinator",
-    kind: "JournalRecoveryReadReturned",
-    source: "Journal"
-  },
   { detail: "graph._tag=GraphNotEstablished", kind: "DeliveryPublicationObserved", source: "Publication" },
   {
     detail: "acceptedAt=92|held=attempt:A:1,attempt:C:1,attempt:D:1|live=",

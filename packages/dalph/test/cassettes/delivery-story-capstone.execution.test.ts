@@ -3538,14 +3538,14 @@ it.effect(
         issue268ControlledDeliveryCassetteCatalog.issue268Ds01ThroughDs13
       )
       expect(run.cassette).toMatchObject({
-        acceptedOrderDigest: "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d",
-        acceptedSourceSha: "7100fe3af2103bba753e089e8ec78279c5426eb5",
-        occurrenceCount: 1_014,
+        acceptedOrderDigest: "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3",
+        acceptedSourceSha: "b3c9d61100e2c7867625a13950b33375617b2500",
+        occurrenceCount: 1_010,
         readinessProfile: "R0ThroughR11",
         schemaVersion: 1,
         stop: "DS13Checkpoint"
       })
-      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_014 })
+      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_010 })
       const { ds09, ds10, ds11, ds12, ds13 } = run.characterization
       const { ds01, ds02, ds03, ds04, ds05, ds06, ds07 } = ds09.beforeLoss
       const ds01Publication = ds01.snapshot.publications.find(
@@ -3819,19 +3819,19 @@ it.effect(
       )
       const actual = run.characterization.occurrenceEvidence.observedOccurrences
       expect(run.cassette).toMatchObject({
-        acceptedOrderDigest: "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d",
-        acceptedSourceSha: "7100fe3af2103bba753e089e8ec78279c5426eb5",
-        occurrenceCount: 1_014,
+        acceptedOrderDigest: "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3",
+        acceptedSourceSha: "b3c9d61100e2c7867625a13950b33375617b2500",
+        occurrenceCount: 1_010,
         readinessProfile: "R0ThroughR11",
         schemaVersion: 1,
         stop: "DS13Checkpoint"
       })
-      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_014 })
+      expect(run.consumption).toEqual({ _tag: "AcceptedOccurrenceOrderConsumed", occurrenceCount: 1_010 })
 
       const missing = consumeIssue268AcceptedOccurrenceOrder(run.cassette.occurrences, actual.slice(0, -1))
       expect(missing._tag).toBe("OccurrenceOrderMismatch")
       if (missing._tag === "OccurrenceOrderMismatch") {
-        expect(missing.mismatch).toMatchObject({ _tag: "UnconsumedExpectedOccurrence", position: 1_014 })
+        expect(missing.mismatch).toMatchObject({ _tag: "UnconsumedExpectedOccurrence", position: 1_010 })
       }
 
       const finalOccurrence = actual.at(-1)
@@ -3842,7 +3842,7 @@ it.effect(
       ])
       expect(unexpected._tag).toBe("OccurrenceOrderMismatch")
       if (unexpected._tag === "OccurrenceOrderMismatch") {
-        expect(unexpected.mismatch).toMatchObject({ _tag: "UnexpectedOccurrence", position: 1_015 })
+        expect(unexpected.mismatch).toMatchObject({ _tag: "UnexpectedOccurrence", position: 1_011 })
       }
 
       const substituted = actual.map((occurrence, index) =>
@@ -3885,14 +3885,14 @@ it.skipIf(c4AlreadyRunsOutsideCoverage)(
   async () => {
     const result = await runIssue268C4()
     expect(result).toMatchObject({
-      acceptedOrderDigest: "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d",
+      acceptedOrderDigest: "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3",
       iterations: Array.from({ length: 20 }, (_, index) => ({
-        acceptedOrderDigest: "ccae78199aa01062521d470c017524e665d0ea3a5bdbf3a9f29030c79440bd4d",
+        acceptedOrderDigest: "0e325a017a42fe58880a357beda49261ed5383ec6c822a4bc93f94976765f9c3",
         iteration: index + 1,
-        occurrenceCount: 1_014,
+        occurrenceCount: 1_010,
         status: "PASS"
       })),
-      occurrenceCount: 1_014
+      occurrenceCount: 1_010
     })
   },
   c4RepeatabilityTimeout

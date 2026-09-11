@@ -65,12 +65,14 @@ This creates two acceptance cuts:
    its owning scenario; a different order among independent operations changes
    only the cassette adjustment.
 
-The maintainer accepted the complete observed order at
-`7100fe3af2103bba753e089e8ec78279c5426eb5` on 2026-09-05. C3 serializes that
-order as exact `{ source, kind, detail }` tuples after confirming that the
-unchanged accepted runner produces the recorded 1,014-item inventory and
-digest. The strict comparator observes only the completed DS-13 snapshot; it
-cannot delay or authorize production work.
+The maintained order now follows the activation-baseline lifecycle at
+`b3c9d61100e2c7867625a13950b33375617b2500`. C3 serializes that order as exact
+`{ source, kind, detail }` tuples after confirming one initial Journal import,
+one replacement-process import after DS-08, and no raw import on ordinary
+activation return or the later active refresh. The accepted 1,010-item inventory
+retains the required fresh G1 tracker observation after restart. The strict
+comparator observes only the completed DS-13 snapshot; it cannot delay or
+authorize production work.
 
 The following work is deliberately outside #268:
 
