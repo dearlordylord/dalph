@@ -20,7 +20,7 @@ import {
   makeTrackerGraphObservationOperation,
   type WorkflowOperation
 } from "../workflow/registry/operation.js"
-import { taskTrackerReadIntent } from "../workflow/registry/event.js"
+import { taskTrackerReadIntent, TaskAttemptPlannedEvent } from "../workflow/registry/event.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   taskTrackerFactsObservedEvent
@@ -36,6 +36,13 @@ import {
   lastGraphObservationAt,
   inspectGraphEvidenceStorage
 } from "./graph-evidence.js"
+import {
+  inspectJournalEvidenceStorage,
+  journalEvidenceFrom,
+  journalGraphSnapshotForObservation,
+  journalGraphObservationAt
+} from "./record-evidence.js"
+import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
 
 const runId = RunId.make("graph-evidence")
 const taskId = TaskId.make("graph-A")
@@ -122,6 +129,22 @@ it("does not retroactively give an earlier graph a later plan correlation", () =
   const index = appendGraphEvidence(emptyGraphEvidence(), full, (id) => (id === first.operationId ? first : undefined))
   expect(lastGraphObservationAt(index, { throughPosition: 2, target })).toBe(full)
   expect(lastGraphObservationAt(index, { throughPosition: 2, target, plannedAttempt: attempt })).toBeUndefined()
+})
+
+it("exposes cutoff-safe graph evidence through the decoded journal index", () => {
+  const read = graphRead("graph-journal-index")
+  const full = record(
+    3,
+    taskTrackerFactsObservedEvent(read.operationId, makeCompleteTaskTrackerFactsObserved(read, snapshot))
+  )
+  const evidence = journalEvidenceFrom([
+    record(1, TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })),
+    record(2, taskTrackerReadIntent(read)),
+    full
+  ])
+  expect(journalGraphObservationAt(evidence, { target, plannedAttempt: attempt })).toBe(full)
+  expect(Option.getOrThrow(journalGraphSnapshotForObservation(evidence, full.position)).eligibleTasks()).toHaveLength(1)
+  expect(inspectJournalEvidenceStorage(evidence).length).toBeGreaterThan(inspectGraphEvidenceStorage(emptyGraphEvidence()).length)
 })
 
 const retainedSlots = (roots: ReadonlyArray<object>): number => {

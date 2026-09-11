@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- Journal evidence indexes are co-located so one append updates every immutable query root atomically. */
 import { HashMap, Option } from "effect"
-import type { AttemptId, TaskId } from "@dalph/contracts"
+import type { AttemptId, PlannedTaskAttempt, TaskId } from "@dalph/contracts"
+import type { TrackerTarget } from "../authorities/task-tracker/target.js"
 import type { OperationId } from "../workflow/identity.js"
 import type { TargetPromotionRequestId } from "../workflow/protocols/target-promotion/events.js"
 import type { IntegratorSessionId } from "../workflow/protocols/integrator/events.js"
@@ -11,6 +12,14 @@ import {
   inspectClaimObservationEpisodeStorage,
   type ClaimObservationEpisodeIndex
 } from "./claim-observation-episodes.js"
+import {
+  appendGraphEvidence,
+  emptyGraphEvidence,
+  graphSnapshotForObservation,
+  inspectGraphEvidenceStorage,
+  lastGraphObservationAt,
+  type GraphEvidence
+} from "./graph-evidence.js"
 import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import type { JournalPosition, JournalRecordKey } from "./identity.js"
@@ -57,6 +66,7 @@ interface EvidenceIndexes {
   readonly byIntegratorSession: HashMap.HashMap<IntegratorSessionId, JournalRecordSequence>
   readonly byRestartRead: HashMap.HashMap<string, JournalRecordSequence>
   readonly claimObservationEpisodes: ClaimObservationEpisodeIndex
+  readonly graphEvidence: GraphEvidence
 }
 
 const indexesByEvidence = new WeakMap<JournalRecordEvidence, EvidenceIndexes>()
@@ -86,7 +96,8 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
     byPromotionRequest: HashMap.empty(),
     byIntegratorSession: HashMap.empty(),
     byRestartRead: HashMap.empty(),
-    claimObservationEpisodes: emptyClaimObservationEpisodes()
+    claimObservationEpisodes: emptyClaimObservationEpisodes(),
+    graphEvidence: emptyGraphEvidence()
   })
 
 const operationOf = ({ event }: JournalRecord): WorkflowOperation | undefined =>
@@ -321,6 +332,11 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
           record
         )
       )
+  const graphEvidence = appendGraphEvidence(indexes.graphEvidence, record, (operationId) => {
+    const records = Option.getOrElse(HashMap.get(indexes.operations, operationId), emptyJournalRecords)
+    const operationRecord = journalRecordAt(records, -1)
+    return operationRecord === undefined ? undefined : operationOf(operationRecord)
+  })
   return evidence(appendJournalRecord(prior.records, record), {
     byKey: HashMap.has(indexes.byKey, record.key) ? indexes.byKey : HashMap.set(indexes.byKey, record.key, record),
     byKind: HashMap.set(indexes.byKind, record.event._tag, appendJournalRecord(ofKind, record)),
@@ -344,7 +360,8 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     byPromotionRequest,
     byIntegratorSession,
     byRestartRead,
-    claimObservationEpisodes: appendClaimObservationEpisode(indexes.claimObservationEpisodes, record)
+    claimObservationEpisodes: appendClaimObservationEpisode(indexes.claimObservationEpisodes, record),
+    graphEvidence
   })
 }
 
@@ -544,6 +561,22 @@ export const journalRestartReadIntents = (
 export const journalTaskClaimObservationAt = (source: JournalRecordEvidence, taskId: TaskId) =>
   claimObservationEpisodeAt(indexesFor(source).claimObservationEpisodes, taskId, source.records.length)
 
+/** Latest graph observation visible at this evidence cutoff, optionally scoped to target and named plan. */
+export const journalGraphObservationAt = (
+  source: JournalRecordEvidence,
+  query: { readonly target?: TrackerTarget; readonly plannedAttempt?: PlannedTaskAttempt }
+): JournalRecord | undefined =>
+  lastGraphObservationAt(indexesFor(source).graphEvidence, {
+    ...query,
+    throughPosition: source.records.length
+  })
+
+/** Immutable graph snapshot derived at one exact observation and bounded by this evidence cutoff. */
+export const journalGraphSnapshotForObservation = (
+  source: JournalRecordEvidence,
+  position: JournalPosition
+) => graphSnapshotForObservation(indexesFor(source).graphEvidence, position, source.records.length)
+
 /** Full accepted prefixes can reuse the exact indexed kind sequence. */
 export const journalEvidenceKindSequence = (
   source: JournalRecordEvidence,
@@ -694,6 +727,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     indexes.byIntegratorSession,
     indexes.byRestartRead,
     indexes.claimObservationEpisodes,
+    indexes.graphEvidence,
     inspectJournalRecordStorage(source.records),
     ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage),
@@ -712,6 +746,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     ...Array.from(HashMap.values(indexes.byPromotionRequest), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byIntegratorSession), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byRestartRead), inspectJournalRecordStorage),
-    ...inspectClaimObservationEpisodeStorage(indexes.claimObservationEpisodes)
+    ...inspectClaimObservationEpisodeStorage(indexes.claimObservationEpisodes),
+    ...inspectGraphEvidenceStorage(indexes.graphEvidence)
   ]
 }
