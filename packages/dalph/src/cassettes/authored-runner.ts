@@ -151,6 +151,10 @@ import {
 } from "./authored-cursor.js"
 import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
+import {
+  makeAuthoredRunReactivationHintFifo,
+  type AuthoredRunReactivationHint
+} from "./authored-reactivation-hint-fifo.js"
 import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
 
 export interface AuthoredScenarioCassetteRun {
@@ -1433,8 +1437,8 @@ const runAuthoredScenarioCassetteWith = (request: {
             AuthoredStoryPosition.make(storyPosition)
           ).pipe(Effect.asVoid)
       })
-      const offerRunReactivationHint = yield* Ref.make<(hint: "TrackerNotification" | "Timer") => Effect.Effect<void>>(
-        () => Effect.die("the authored Run reactivation owner is not active")
+      const offerRunReactivationHint = yield* Ref.make<(hint: AuthoredRunReactivationHint) => Effect.Effect<void>>(() =>
+        Effect.die("the authored Run reactivation owner is not active")
       )
       const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<AuthoredDeliveryPublication>>([])
       const deliveryPublicationSignals = yield* Queue.unbounded<AuthoredDeliveryPublication>()
@@ -3035,16 +3039,8 @@ const runAuthoredScenarioCassetteWith = (request: {
       const runAcrossActivations = Effect.gen(function* () {
         const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
         let applicationProcess = yield* openApplicationProcess
-        const pendingRunReactivationHints = yield* Ref.make({
-          hints: Chunk.empty<"TrackerNotification" | "Timer">(),
-          nextIndex: 0
-        })
-        yield* Ref.set(offerRunReactivationHint, (hint) =>
-          Ref.update(pendingRunReactivationHints, ({ hints, nextIndex }) => ({
-            hints: Chunk.append(hints, hint),
-            nextIndex
-          }))
-        )
+        const pendingRunReactivationHints = yield* makeAuthoredRunReactivationHintFifo()
+        yield* Ref.set(offerRunReactivationHint, pendingRunReactivationHints.offer)
         let coordinator = yield* activateRun(firstActivationOrdinal).pipe(
           Effect.provide(applicationProcess.context),
           Effect.forkIn(applicationProcess.scope)
@@ -3069,10 +3065,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           }
           if (yield* cursor.atTerminalAssertions) break
           activationOrdinal = AuthoredRunActivationOrdinal.make(activationOrdinal + 1)
-          const reactivationHint = yield* Ref.modify(pendingRunReactivationHints, ({ hints, nextIndex }) => {
-            const hint = Chunk.get(hints, nextIndex)
-            return [Option.getOrUndefined(hint), { hints, nextIndex: Option.isSome(hint) ? nextIndex + 1 : nextIndex }]
-          })
+          const reactivationHint = yield* pendingRunReactivationHints.take
           coordinator = yield* (
             reactivationHint === undefined
               ? activateRun(activationOrdinal)
