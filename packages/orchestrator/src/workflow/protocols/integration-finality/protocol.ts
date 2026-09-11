@@ -703,7 +703,7 @@ const confirmNoActiveClaimAfterMarkerAbsent = Effect.fn("IntegrationFinality.con
     attemptOrdinal: CompletionClaimRequestOrdinal,
     execution?: InterruptibleWorkflowBoundaryExecution
   ) {
-    const records = yield* (yield* InRunJournal).read(request.claim.plannedAttempt.runId)
+    const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
     const readOrdinal = nextCleanupReadOrdinal(
       records,
       request.operationId,
@@ -906,7 +906,7 @@ const reconcileExhaustedDeletion = Effect.fn("IntegrationFinality.reconcileExhau
   execution?: InterruptibleWorkflowBoundaryExecution
 ) {
   const attemptOrdinal = ordinalFor(completionClaimRequestLimit)
-  const records = yield* (yield* InRunJournal).read(request.claim.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
   const readOrdinal = nextCleanupReadOrdinal(
     records,
     request.operationId,

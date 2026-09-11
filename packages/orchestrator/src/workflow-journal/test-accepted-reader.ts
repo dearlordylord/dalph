@@ -4,7 +4,10 @@ import { AcceptedJournalReader } from "./accepted-reader.js"
 import { JournalPosition } from "./identity.js"
 import { JournalHistoryInvalid, JournalStore } from "./store.js"
 
-/** Test-only accepted-prefix reader layered over raw storage protocol fixtures. */
+/**
+ * Test-only cold reader for absent, sparse, or malformed raw storage seams.
+ * Valid runtime histories must instead share one live Journal lifecycle.
+ */
 export const unpublishedAcceptedJournalReaderTestLayer = Layer.effect(
   AcceptedJournalReader,
   JournalStore.pipe(

@@ -94,6 +94,7 @@ import { Journal } from "../../../coordination/delivery/journal.js"
 import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { reduceWorkflowJournalHistory } from "../../../coordination/reconstruction/history.js"
 import { exportWorkflowHistoryRecords } from "../../../coordination/reconstruction/reduce.js"
+import { observeJournalRecordSequenceOperations } from "../../../workflow-journal/record-sequence.js"
 import {
   makeFocusedTaskCompletionFactsObserved,
   taskTrackerFactsObservedEvent
@@ -2232,6 +2233,8 @@ it.effect("does not reopen success when deletion response is unknown but already
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
+    const sequenceOperations: Array<string> = []
+    const stopObserving = observeJournalRecordSequenceOperations(({ _tag }) => sequenceOperations.push(_tag))
     const result = yield* runWith(
       runCompletionClaimDeletionProtocol(
         makeBoundary({
@@ -2249,11 +2252,14 @@ it.effect("does not reopen success when deletion response is unknown but already
         replacementOperationFor(fixture.claim)
       ),
       records
-    )
+    ).pipe(Effect.ensuring(Effect.sync(stopObserving)))
     expect(result.successObservation).toEqual(focusedSuccessObservation)
     expect(yield* Ref.get(deletionCalls)).toBe(1)
     expect(tags(yield* Ref.get(records))).toContain("IntegrationFinalitySettled")
     expect(tags(yield* Ref.get(records))).toContain("CompletionClaimDeletionAttemptIntended")
+    expect(sequenceOperations.filter((operation) => operation === "HistoricalMaterialization")).toEqual([
+      "HistoricalMaterialization"
+    ])
   })
 )
 
@@ -2317,6 +2323,8 @@ it.effect("bounds deletion retries at three and preserves the successful observa
     const replacementCalls = yield* Ref.make(0)
     const deletionCalls = yield* Ref.make(0)
     const readCalls = yield* Ref.make(0)
+    const sequenceOperations: Array<string> = []
+    const stopObserving = observeJournalRecordSequenceOperations(({ _tag }) => sequenceOperations.push(_tag))
     const failure = yield* runWith(
       runCompletionClaimDeletionProtocol(
         makeBoundary({
@@ -2334,7 +2342,7 @@ it.effect("bounds deletion retries at three and preserves the successful observa
         replacementOperationFor(fixture.claim)
       ).pipe(Effect.flip),
       records
-    )
+    ).pipe(Effect.ensuring(Effect.sync(stopObserving)))
     expect(failure).toBeInstanceOf(CompletionClaimDidNotConverge)
     expect(yield* Ref.get(deletionCalls)).toBe(3)
     const finalTags = tags(yield* Ref.get(records))
@@ -2342,6 +2350,9 @@ it.effect("bounds deletion retries at three and preserves the successful observa
     expect(finalTags).toContain("TaskTrackerFactsObserved")
     expect(finalTags).not.toContain("CompletionClaimDeleted")
     expect(finalTags).not.toContain("IntegrationFinalitySettled")
+    expect(sequenceOperations.filter((operation) => operation === "HistoricalMaterialization")).toEqual([
+      "HistoricalMaterialization"
+    ])
   })
 )
 
