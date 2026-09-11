@@ -12,7 +12,14 @@ import type { Task } from "../../authorities/task-tracker/task.js"
 import { ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
-import type { JournalRecord } from "../../workflow-journal/store.js"
+import {
+  journalRecordByKey,
+  journalRecordsForTask,
+  journalRecordsOfKind,
+  isJournalRecordEvidence,
+  lastJournalRecordForAttemptKind,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 import type { OperationId } from "../../workflow/identity.js"
 import { RunnableFrontierTransition, type RunnableFrontierTransition as Transition } from "../frontier/frontier.js"
 import type { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
@@ -25,8 +32,10 @@ import {
   latestPlannedAttemptExecutorProjectionIssue
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
-import { journalPrefixPredecessorOf } from "../../workflow-journal/prefix-lineage.js"
-import { causalPredecessorOperationIds } from "../../workflow/causal-history.js"
+import {
+  causalPredecessorOperationIds,
+  causalPredecessorOperationIdsFromEvidence
+} from "../../workflow/causal-history.js"
 import { rejectedFreshTaskClaimDisposition as rejectedClaim } from "./rejected-fresh-task-claim.js"
 import { projectFreshTaskCommitments } from "../admission/fresh-task-admission-projection.js"
 import { acceptedFreshAttemptLineage } from "../admission/fresh-attempt-lineage.js"
@@ -38,6 +47,15 @@ import {
 
 const postClaimGraphRank = 0
 const claimRank = 1
+
+/** Live accepted evidence stays indexed; only explicit cold diagnostic history enters through decoded arrays. */
+const causalPredecessorsFromHistory = (
+  records: JournalHistorySource,
+  operation: Parameters<typeof causalPredecessorOperationIds>[1]
+) =>
+  isJournalRecordEvidence(records)
+    ? causalPredecessorOperationIdsFromEvidence(records, operation)
+    : causalPredecessorOperationIds(records, operation)
 const specificationRank = 2
 const otherWorkflowOperationRank = 3
 const executorWorkRank = 4
@@ -74,63 +92,48 @@ const decisionFor = (step: FreshWorkflowStepType): FreshWorkflowDecision => ({
         : continued(step.task.id, step.predecessorOperationId)
 })
 
-const observedOperationIdsByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, ReadonlySet<OperationId>>()
-const completeGraphObservationIdsByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, ReadonlySet<OperationId>>()
+const observedOperationIdsByPrefix = new WeakMap<object, ReadonlySet<OperationId>>()
+const completeGraphObservationIdsByPrefix = new WeakMap<object, ReadonlySet<OperationId>>()
 
-const observedOperationIds = (records: ReadonlyArray<JournalRecord>): ReadonlySet<OperationId> => {
+const observedOperationIds = (records: JournalHistorySource): ReadonlySet<OperationId> => {
   const cached = observedOperationIdsByPrefix.get(records)
   if (cached !== undefined) return cached
-  const predecessor = journalPrefixPredecessorOf(records)
-  const observed = (() => {
-    if (predecessor === undefined)
-      return new Set(
-        records.flatMap(({ event }) =>
-          event._tag === "TaskTrackerFactsObserved" || event._tag === "TaskWorktreeReady" ? [event.operationId] : []
-        )
-      )
-    const event = predecessor.appended.event
-    return event._tag === "TaskTrackerFactsObserved" || event._tag === "TaskWorktreeReady"
-      ? new Set(observedOperationIds(predecessor.prior)).add(event.operationId)
-      : observedOperationIds(predecessor.prior)
-  })()
+  const observed = new Set<OperationId>()
+  for (const { event } of journalRecordsOfKind(records, "TaskTrackerFactsObserved")) {
+    if (event._tag === "TaskTrackerFactsObserved") observed.add(event.operationId)
+  }
+  for (const { event } of journalRecordsOfKind(records, "TaskWorktreeReady")) {
+    if (event._tag === "TaskWorktreeReady") observed.add(event.operationId)
+  }
   observedOperationIdsByPrefix.set(records, observed)
   return observed
 }
 
 /** Only a complete current graph outcome can authorize a claim; a typed read failure merely settles its read. */
-const completeGraphObservationIds = (records: ReadonlyArray<JournalRecord>): ReadonlySet<OperationId> => {
+const completeGraphObservationIds = (records: JournalHistorySource): ReadonlySet<OperationId> => {
   const cached = completeGraphObservationIdsByPrefix.get(records)
   if (cached !== undefined) return cached
-  const predecessor = journalPrefixPredecessorOf(records)
-  const observed = (() => {
-    if (predecessor === undefined)
-      return new Set(
-        records.flatMap(({ event }) =>
-          event._tag === "TaskTrackerFactsObserved" &&
-          (event.observation._tag === "CompleteTaskTrackerFacts" ||
-            event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
-            ? [event.operationId]
-            : []
-        )
-      )
-    const event = predecessor.appended.event
-    return event._tag === "TaskTrackerFactsObserved" &&
+  const observed = new Set<OperationId>()
+  for (const { event } of journalRecordsOfKind(records, "TaskTrackerFactsObserved")) {
+    if (
+      event._tag === "TaskTrackerFactsObserved" &&
       (event.observation._tag === "CompleteTaskTrackerFacts" ||
         event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
-      ? new Set(completeGraphObservationIds(predecessor.prior)).add(event.operationId)
-      : completeGraphObservationIds(predecessor.prior)
-  })()
+    ) {
+      observed.add(event.operationId)
+    }
+  }
   completeGraphObservationIdsByPrefix.set(records, observed)
   return observed
 }
 
 const plannedSpecificationFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   immutableRunTargetKey: string,
   operationId?: OperationId
 ) => {
-  const specification = records.findLast(
+  const specification = Array.from(journalRecordsForTask(records, plannedAttempt.taskId)).findLast(
     ({ event }) =>
       event._tag === "TaskTrackerFactsObserved" &&
       event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
@@ -154,16 +157,17 @@ const plannedSpecificationFor = (
 const journaledStepFor = (
   task: Task,
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   recoveredAttemptIds: ReadonlySet<AttemptId>,
   observed: ReadonlySet<OperationId>,
   completeGraphObserved: ReadonlySet<OperationId>,
   immutableRunTargetKey: string
 ): FreshWorkflowStepType | undefined => {
+  const taskRecords = Array.from(journalRecordsForTask(records, task.id))
   const commitment = projectFreshTaskCommitments(runId, records).find(
     (candidate) => candidate.commitment.operation.acquisition.taskId === task.id
   )?.commitment
-  const executorResponsibility = records.findLast(
+  const executorResponsibility = taskRecords.findLast(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" && event.plannedAttempt.taskId === task.id
   )?.event
@@ -171,7 +175,7 @@ const journaledStepFor = (
     executorResponsibility?._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
     !recoveredAttemptIds.has(executorResponsibility.plannedAttempt.attemptId)
   ) {
-    const report = records.findLast(
+    const report = taskRecords.findLast(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorWorkReported" &&
         event.report.correlation.attemptId === executorResponsibility.plannedAttempt.attemptId
@@ -196,7 +200,7 @@ const journaledStepFor = (
     .filter(({ plannedAttempt }) => plannedAttempt.taskId === task.id)
     .at(lastElementOffset)
   if (plan !== undefined) {
-    const ordinaryPlanWasRecorded = records.some(
+    const ordinaryPlanWasRecorded = taskRecords.some(
       ({ event }) =>
         event._tag === "TaskAttemptPlanned" &&
         event.operation.operationId === plan.operationId &&
@@ -218,11 +222,11 @@ const journaledStepFor = (
         lineage.specificationOperationId
       )
       if (specification === undefined) return undefined
-      const worktree = records.findLast(
+      const worktree = taskRecords.findLast(
         ({ event }) =>
           event._tag === "TaskWorktreeReconciliationIntended" &&
           plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plan.plannedAttempt) &&
-          causalPredecessorOperationIds(records, event.operation).has(lineage.planOperationId)
+          causalPredecessorsFromHistory(records, event.operation).has(lineage.planOperationId)
       )?.event
       const readyLineage = acceptedFreshAttemptLineage(records, plan.plannedAttempt, "WorktreeReady")
       if (readyLineage !== undefined) {
@@ -258,11 +262,11 @@ const journaledStepFor = (
     }
     const replacementStep = <Step extends ReplacementContinuationStep>(step: Step): Step | undefined =>
       authorizeReplacementContinuationStep(replacementAuthority, step)
-    const worktree = records.findLast(
+    const worktree = taskRecords.findLast(
       ({ event }) =>
         event._tag === "TaskWorktreeReconciliationIntended" &&
         plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plan.plannedAttempt) &&
-        causalPredecessorOperationIds(records, event.operation).has(plan.operationId)
+        causalPredecessorsFromHistory(records, event.operation).has(plan.operationId)
     )?.event
     if (worktree?._tag === "TaskWorktreeReconciliationIntended" && observed.has(worktree.operation.operationId)) {
       return replacementStep(
@@ -284,7 +288,7 @@ const journaledStepFor = (
     )
   }
 
-  const specification = records.findLast(
+  const specification = taskRecords.findLast(
     ({ event }) =>
       event._tag === "TaskTrackerFactsObserved" &&
       event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
@@ -296,7 +300,7 @@ const journaledStepFor = (
     specification.observation._tag === "FocusedTaskWorkSpecificationFacts"
   ) {
     if (commitment === undefined) return undefined
-    const specificationIntent = records.find(
+    const specificationIntent = taskRecords.find(
       ({ event }) =>
         event._tag === "TaskTrackerReadIntentRecorded" &&
         event.operation._tag === "ReadTaskWorkSpecification" &&
@@ -304,7 +308,7 @@ const journaledStepFor = (
     )?.event
     if (
       specificationIntent?._tag !== "TaskTrackerReadIntentRecorded" ||
-      !causalPredecessorOperationIds(records, specificationIntent.operation).has(
+      !causalPredecessorsFromHistory(records, specificationIntent.operation).has(
         commitment.operation.acquisition.operationId
       )
     ) {
@@ -323,7 +327,7 @@ const journaledStepFor = (
     })
   }
 
-  const claimIntentRecord = records.findLast(
+  const claimIntentRecord = taskRecords.findLast(
     ({ event, key }) =>
       event._tag === "TaskClaimAcquisitionIntended" &&
       event.operation.authority._tag === "TaskSelectionAuthority" &&
@@ -334,7 +338,7 @@ const journaledStepFor = (
     const acquisition = claimIntentRecord.event.operation.acquisition
     const claimOperationId = acquisition.operationId
     const expectedClaim = ActiveTaskClaim.make(acquisition)
-    const acquired = records.some(
+    const acquired = taskRecords.some(
       ({ event, key, position, runId }) =>
         runId === claimIntentRecord.runId &&
         position > claimIntentRecord.position &&
@@ -344,7 +348,7 @@ const journaledStepFor = (
     )
     /* v8 ignore start -- Maintained fresh stories acquire here; rejection is retried from a new current-task read. */
     if (acquired) {
-      const postClaimGraph = records.findLast(
+      const postClaimGraph = taskRecords.findLast(
         ({ event }) =>
           event._tag === "TaskTrackerReadIntentRecorded" &&
           event.operation._tag === "ReadTrackerGraph" &&
@@ -372,7 +376,7 @@ const journaledStepFor = (
     if (rejection._tag === "ConstraintRetained") return undefined
   }
 
-  const currentTaskGraph = records.findLast(
+  const currentTaskGraph = taskRecords.findLast(
     ({ event }) =>
       event._tag === "TaskTrackerReadIntentRecorded" &&
       event.operation._tag === "ReadTrackerGraph" &&
@@ -388,7 +392,7 @@ const journaledStepFor = (
   // explicitlyCoveredTaskIds names causal subjects, not an exhaustive result set.
   const latestGraphCoveringTask = Option.getOrThrow(
     Option.fromUndefinedOr(
-      records
+      Array.from(journalRecordsOfKind(records, "TaskTrackerReadIntentRecorded"))
         .flatMap(({ event }) =>
           event._tag === "TaskTrackerReadIntentRecorded" &&
           event.operation._tag === "ReadTrackerGraph" &&
@@ -405,14 +409,14 @@ const journaledStepFor = (
 
 const executorResponsibilityStillOwnsTask = (
   responsibility: Extract<WorkflowResponsibilityEntry, { readonly _tag: "PlannedAttemptExecutorWorkResponsibility" }>,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   recoveredAttemptIds: ReadonlySet<AttemptId>
 ): boolean => {
   if (recoveredAttemptIds.has(responsibility.plannedAttempt.attemptId)) return true
-  const latestReport = records.findLast(
-    ({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkReported" &&
-      event.report.correlation.attemptId === responsibility.plannedAttempt.attemptId
+  const latestReport = lastJournalRecordForAttemptKind(
+    records,
+    responsibility.plannedAttempt.attemptId,
+    "PlannedAttemptExecutorWorkReported"
   )
   const exactEvidence = latestPlannedAttemptExecutorEvidence(records, responsibility.plannedAttempt)
   const projectionIssue = latestPlannedAttemptExecutorProjectionIssue(records, responsibility.plannedAttempt)
@@ -431,7 +435,7 @@ const executorResponsibilityStillOwnsTask = (
 
 export const responsibilityStillOwnsTask = (
   responsibility: WorkflowResponsibilityEntry,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   recoveredAttemptIds: ReadonlySet<AttemptId>
 ): boolean => {
   if (responsibility._tag === "PlannedAttemptExecutorWorkResponsibility") {
@@ -439,19 +443,21 @@ export const responsibilityStillOwnsTask = (
   }
   if (responsibility._tag === "TaskClaimReleaseResponsibility") return true
   if (responsibility._tag === "TaskClaimResponsibility") {
-    return !records.some(
-      ({ event, position }) =>
-        position > responsibility.beganAt &&
-        ((event._tag === "TaskClaimAcquired" && event.claim.taskId === responsibility.taskId) ||
-          (event._tag === "TaskClaimAcquisitionRejected" &&
-            event.operationId === responsibility.acquisition.operationId))
+    const outcome = journalRecordByKey(records, outcomeRecordKey(responsibility.acquisition.operationId))
+    return !(
+      outcome !== undefined &&
+      outcome.position > responsibility.beganAt &&
+      ((outcome.event._tag === "TaskClaimAcquired" && outcome.event.claim.taskId === responsibility.taskId) ||
+        (outcome.event._tag === "TaskClaimAcquisitionRejected" &&
+          outcome.event.operationId === responsibility.acquisition.operationId))
     )
   }
-  return !records.some(
-    ({ event, position }) =>
-      position > responsibility.beganAt &&
-      event._tag === "TaskWorktreeReady" &&
-      event.operationId === responsibility.operation.operationId
+  const outcome = journalRecordByKey(records, outcomeRecordKey(responsibility.operation.operationId))
+  return !(
+    outcome !== undefined &&
+    outcome.position > responsibility.beganAt &&
+    outcome.event._tag === "TaskWorktreeReady" &&
+    outcome.event.operationId === responsibility.operation.operationId
   )
 }
 
@@ -476,7 +482,7 @@ export const deriveFreshWorkflowEntryCapableTaskIds = (
       .filter((task) => {
         const taskId = task.id
         if (responsibleTaskIds.has(taskId) || pauseCoveredTaskIds.has(taskId)) return false
-        const latestClaimIntent = records.findLast(
+        const latestClaimIntent = Array.from(journalRecordsForTask(records, taskId)).findLast(
           ({ event }) =>
             event._tag === "TaskClaimAcquisitionIntended" &&
             event.operation.authority._tag === "TaskSelectionAuthority" &&
@@ -495,7 +501,7 @@ const freshWorkflowEligibilityContext = (
   recoveredAttemptIds: ReadonlySet<AttemptId>,
   immutableRunTarget: TrackerTarget
 ) => {
-  const records = frame.workflowHistory.records
+  const records: JournalHistorySource = frame.workflowHistory.prefix ?? frame.workflowHistory.records
   return {
     completeGraphObserved: completeGraphObservationIds(records),
     immutableRunTargetKey: taskTrackerTargetKey(immutableRunTarget),
@@ -523,7 +529,7 @@ export const deriveFreshWorkflowDecisions = (
   const { completeGraphObserved, immutableRunTargetKey, pauseCoveredTaskIds, records, responsibleTaskIds } =
     freshWorkflowEligibilityContext(frame, recoveredAttemptIds, immutableRunTarget)
   const observed = observedOperationIds(records)
-  const latestGlobalGraphRead = records.findLast(
+  const latestGlobalGraphRead = Array.from(journalRecordsOfKind(records, "TaskTrackerReadIntentRecorded")).findLast(
     ({ event }) =>
       event._tag === "TaskTrackerReadIntentRecorded" &&
       event.operation._tag === "ReadTrackerGraph" &&
@@ -539,16 +545,13 @@ export const deriveFreshWorkflowDecisions = (
   const latestGlobalGraphObservationPosition =
     latestGlobalGraphOperation === undefined
       ? undefined
-      : records.find(
-          ({ event }) =>
-            event._tag === "TaskTrackerFactsObserved" && event.operationId === latestGlobalGraphOperation.operationId
-        )?.position
+      : journalRecordByKey(records, outcomeRecordKey(latestGlobalGraphOperation.operationId))?.position
   /* v8 ignore start -- Accepted global observations always retain an outcome position and reconstruct under validated history. */
   const candidateGraph =
     latestGlobalGraphOperation !== undefined
       ? Option.getOrElse(
           reconstructedTaskGraphFromEvents(
-            records
+            Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved"))
               .filter(
                 ({ position }) =>
                   position <= (latestGlobalGraphObservationPosition ?? latestGlobalGraphRead?.position ?? 0)

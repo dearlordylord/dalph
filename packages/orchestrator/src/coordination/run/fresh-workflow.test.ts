@@ -36,7 +36,9 @@ import { makeIntegrationTargetResourceController } from "../admission/integratio
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import type { CurrentDeliveryFrame } from "./current-delivery-frame.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
+import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
 import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
+import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
@@ -886,7 +888,7 @@ it("authorizes no plan-stage boundary when the plan lacks its exact causal claim
   }
 })
 
-it("does not begin executor work from a worktree-ready outcome whose proof does not match the exact plan", () => {
+it("does not materialize accepted history when a worktree-ready proof does not match the exact plan", () => {
   const claim = selectionOperation("mismatched-ready-proof")
   const postClaimGraph = makeTrackerGraphObservationOperation(
     { _tag: "WorkflowEstablishment" },
@@ -977,7 +979,24 @@ it("does not begin executor work from a worktree-ready outcome whose proof does 
     }
   ]
 
-  expect(deriveFreshWorkflowDecisions(selectionFrameWith(records), new Set(), selectionTarget)).toEqual([])
+  const frame = selectionFrameWith(records)
+  const indexedFrame: CurrentDeliveryFrame = {
+    ...frame,
+    workflowHistory: {
+      ...frame.workflowHistory,
+      prefix: acceptedJournalPrefixFromValidatedHistory(selectionRunId, frame.workflowHistory.records)
+    }
+  }
+  let materializations = 0
+  const stop = observeJournalRecordSequenceOperations((operation) => {
+    if (operation._tag === "HistoricalMaterialization") materializations += 1
+  })
+  try {
+    expect(deriveFreshWorkflowDecisions(indexedFrame, new Set(), selectionTarget)).toEqual([])
+    expect(materializations).toBe(0)
+  } finally {
+    stop()
+  }
 })
 
 it("does not advance on an older same-task acquisition after the latest intent", () => {
