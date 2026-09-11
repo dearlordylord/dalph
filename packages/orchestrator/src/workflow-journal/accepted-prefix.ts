@@ -23,7 +23,7 @@ export interface JournalPrefixIdentity {
 
 const identityByPrefix = new WeakMap<AcceptedJournalPrefix, JournalPrefixIdentity>()
 
-export const acceptedJournalPrefixIdentity = (prefix: AcceptedJournalPrefix): JournalPrefixIdentity => {
+const acceptedJournalPrefixIdentity = (prefix: AcceptedJournalPrefix): JournalPrefixIdentity => {
   const existing = identityByPrefix.get(prefix)
   if (existing !== undefined) return existing
   const identity = { [JournalPrefixIdentityTypeId]: Symbol() }
@@ -83,21 +83,20 @@ export const appendValidatedJournalRecord = (
   return next
 }
 
-export const acceptedJournalRecordForKey = (
+export const acceptedJournalRecordForKey: (
   prefix: AcceptedJournalPrefix,
   key: JournalRecordKey
-): JournalRecord | undefined => journalRecordByKey(prefix, key)
+) => JournalRecord | undefined = journalRecordByKey
 
-export const acceptedJournalRecordsForKind = (
+export const acceptedJournalRecordsForKind: (
   prefix: AcceptedJournalPrefix,
   kind: JournalRecord["event"]["_tag"]
-): JournalRecordSequence => journalEvidenceKindSequence(prefix, kind)
+) => JournalRecordSequence = journalEvidenceKindSequence
 
 export const acceptedJournalSuccessorProvenance = (
   prefix: AcceptedJournalPrefix
 ): JournalSuccessorProvenance | undefined => provenanceByPrefix.get(prefix)
 
 /** Test-only retained roots, including private per-kind and ordered record storage. */
-export const inspectAcceptedPrefixStorage = (prefix: AcceptedJournalPrefix): ReadonlyArray<object> => {
-  return inspectJournalEvidenceStorage(prefix)
-}
+export const inspectAcceptedPrefixStorage: (prefix: AcceptedJournalPrefix) => ReadonlyArray<object> =
+  inspectJournalEvidenceStorage

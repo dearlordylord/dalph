@@ -30,7 +30,7 @@ export const IntegrationResponsibilityIdentity = Schema.Struct({ queuedAt: Journ
 )
 export type IntegrationResponsibilityIdentity = typeof IntegrationResponsibilityIdentity.Type
 
-export interface IntegrationResponsibilityIdentityFacts {
+interface IntegrationResponsibilityIdentityFacts {
   readonly plannedAttempt: { readonly runId: RunId }
   readonly queuedAt: JournalPosition
 }
@@ -47,7 +47,7 @@ export const integrationResponsibilityIdentityKey = (identity: IntegrationRespon
   JSON.stringify([identity.runId, identity.queuedAt])
 
 /** The exact immutable facts that identify one accepted-result integration responsibility. */
-export interface IntegrationResponsibilityFacts {
+interface IntegrationResponsibilityFacts {
   readonly acceptedResult: AcceptedResult
   readonly integrationTarget: IntegrationTarget
   readonly plannedAttempt: PlannedTaskAttempt

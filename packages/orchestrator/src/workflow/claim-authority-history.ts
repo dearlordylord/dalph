@@ -161,9 +161,4 @@ const deriveAuthorizedClaimForAttempt = (
     : causalClaimForAttempt(records, plannedAttempt.attemptId)
 }
 
-export const authorizedClaimForAttempt = (
-  records: JournalHistorySource,
-  plannedAttempt: PlannedTaskAttempt
-): AcquiredClaimEvent | undefined => {
-  return deriveAuthorizedClaimForAttempt(records, plannedAttempt)
-}
+export const authorizedClaimForAttempt = deriveAuthorizedClaimForAttempt

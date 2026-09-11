@@ -3,7 +3,7 @@ import type { JournalRecord } from "./store.js"
 
 const JournalRecordSequenceTypeId: unique symbol = Symbol("JournalRecordSequence")
 
-export type JournalRecordSequenceOperation =
+type JournalRecordSequenceOperation =
   | { readonly _tag: "IndexedRecordVisit" }
   | { readonly _tag: "HistoricalMaterialization"; readonly length: number }
 
@@ -67,9 +67,5 @@ export const materializeJournalRecords = (records: JournalRecordSequence): Reado
   )
 }
 
-/** Imports decoded storage history once at establishment, without certifying its semantics. */
-export const journalRecordsFrom = (records: ReadonlyArray<JournalRecord>): JournalRecordSequence =>
-  records.reduce(appendJournalRecord, emptyJournalRecords())
-
 /** Test-only structural inspection; never materializes records or copies HAMT nodes. */
-export const inspectJournalRecordStorage = (records: JournalRecordSequence): object => storageFor(records)
+export const inspectJournalRecordStorage: (records: JournalRecordSequence) => object = storageFor

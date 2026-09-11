@@ -101,8 +101,7 @@ const valid = (detail: string): CleanupProvenanceValidation => ({ _tag: "Valid",
 const invalid = (detail: string): CleanupProvenanceValidation => ({ _tag: "Invalid", detail })
 const activeTaskClaimEquivalence = Schema.toEquivalence(ActiveTaskClaim)
 
-const recordAt = (records: JournalHistorySource, position: JournalPosition): JournalRecord | undefined =>
-  journalRecordByPosition(records, position)
+const recordAt = journalRecordByPosition
 
 const recordsOfKind = <Kind extends JournalRecord["event"]["_tag"]>(
   records: JournalHistorySource,

@@ -20,7 +20,7 @@ export interface SqliteHotStorageCheckpoint extends SqliteStorageCheckpointField
   readonly terminalPosition: JournalPosition | undefined
 }
 
-export interface SqliteColdStorageCheckpoint extends SqliteStorageCheckpointFields {
+interface SqliteColdStorageCheckpoint extends SqliteStorageCheckpointFields {
   readonly decodedThrough: JournalPosition
   readonly partition: "Cold"
   readonly terminalPosition: JournalPosition
