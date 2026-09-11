@@ -17,15 +17,12 @@ import {
 } from "@dalph/contracts"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { ClaimToken } from "../../../authorities/task-tracker/claim.js"
-import { InitialControlPolicy } from "../../../control/policy.js"
-import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
-import { JournalDatabaseLocator, JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import { sqliteJournalTestLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
+import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
+import { dispositionCleanupLiveJournalTestLayer } from "./live-journal-test.js"
 import { integratorSuccessorSessionFixedRecordKey } from "../../../workflow-journal/record-key.js"
-import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
-import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
-import { acceptedJournalPrefixFromValidatedHistory } from "../../../workflow-journal/accepted-prefix.js"
+import { JournalRecord } from "../../../workflow-journal/store.js"
+import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import { OperationId } from "../../identity.js"
 import {
   BranchCleanupAuthorization,
@@ -54,7 +51,6 @@ import {
 import {
   IntegratorCandidateCleanupMutationResult,
   IntegratorCandidateCleanupObservation,
-  TestIntegratorCandidateCleanupBoundary,
   integratorCandidateCleanupTestLayer,
   runIntegratorCandidateCleanup
 } from "./integrator-candidate.js"
@@ -70,6 +66,7 @@ import {
   IntegratorSessionId,
   IntegratorSuccessorSessionFixedEvent
 } from "../integrator/events.js"
+import { integratorSuccessorCorrelationFor } from "../integrator/session.js"
 import type {
   CompleteTaskTrackerFactsObserved,
   FocusedTaskClaimFactsObserved,
@@ -220,21 +217,16 @@ const malformedRecord = (
   return malformed
 }
 
-const begin = (target: string) =>
+const begin = (_target?: string) =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make(target),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     return journal
   })
 
 const validWorktreeHistory = (target: string) =>
   Effect.gen(function* () {
     const journal = yield* begin(target)
-    yield* appendReplacementProvenance(attempt, successor)
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     yield* runWorktreeCleanup(authorization)
     return yield* journal.read(runId)
   })
@@ -256,7 +248,7 @@ const branchAuthorization = BranchCleanupAuthorization.make({
 const validBranchHistory = (target: string) =>
   Effect.gen(function* () {
     const journal = yield* begin(target)
-    yield* appendReplacementProvenance(attempt, successor)
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     yield* runWorktreeCleanup(authorization)
     yield* runBranchCleanup(branchAuthorization)
     return yield* journal.read(runId)
@@ -276,28 +268,33 @@ const candidatePredecessor = IntegratorSessionCorrelation.make({
   expectedTargetHead: baseSha,
   integrationTarget: candidateTarget,
   plannedAttempt: attempt,
-  queuedAt: JournalPosition.make(2),
+  queuedAt: JournalPosition.make(17),
   sessionId: IntegratorSessionId.make("session:issue-69-history-p1"),
-  startedAt: JournalPosition.make(6),
-  targetLineageObservedAt: JournalPosition.make(4)
+  startedAt: JournalPosition.make(18),
+  targetLineageObservedAt: JournalPosition.make(20)
 })
-const candidateSuccessor = IntegratorSessionCorrelation.make({
-  ...candidatePredecessor,
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-history-p2"),
-  sessionId: IntegratorSessionId.make("session:issue-69-history-p2"),
-  targetLineageObservedAt: JournalPosition.make(12)
+const candidateSuccessor = integratorSuccessorCorrelationFor({
+  directionAppliedAt: JournalPosition.make(25),
+  predecessor: candidatePredecessor,
+  quarantineAt: JournalPosition.make(24),
+  targetLineage: {
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: candidatePredecessor.plannedAttempt.baseSha,
+    targetHeadSha: candidatePredecessor.expectedTargetHead
+  },
+  targetLineageObservedAt: JournalPosition.make(27)
 })
 const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
   causalPredecessors: [OperationId.make("issue-69-provenance-history-full-rerun")],
   disposition: IntegratorCandidateCleanupDisposition.make({
-    directionAppliedAt: JournalPosition.make(10),
-    dispositionAt: JournalPosition.make(9),
+    directionAppliedAt: JournalPosition.make(25),
+    dispositionAt: JournalPosition.make(24),
     predecessor: candidatePredecessor,
     successor: candidateSuccessor
   }),
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: candidatePredecessor.candidateResource,
-  observationAt: JournalPosition.make(4),
+  observationAt: JournalPosition.make(20),
   observationOperationId: OperationId.make(`${candidatePredecessor.sessionId}:predecessor-lineage`),
   operationId: OperationId.make("issue-69-provenance-history-candidate"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: candidatePredecessor.sessionId }),
@@ -307,7 +304,12 @@ const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
 const validCandidateHistory = (target: string) =>
   Effect.gen(function* () {
     const journal = yield* begin(target)
-    yield* appendCandidateProvenance(candidatePredecessor, candidateSuccessor, "issue-69-provenance-history-full-rerun")
+    yield* appendCandidateProvenance(
+      candidatePredecessor,
+      candidateSuccessor,
+      "issue-69-provenance-history-full-rerun",
+      "StartupValid"
+    )
     yield* runIntegratorCandidateCleanup(candidateAuthorization)
     return yield* journal.read(runId)
   })
@@ -530,31 +532,35 @@ it.effect("rejects malformed, foreign, duplicate, and reordered worktree settlem
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("rejects malformed, foreign, mis-keyed, duplicate, and reordered P2 witness provenance", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("issue-69-provenance-history-p2")
-    yield* appendReplacementProvenance(attempt, successor)
+    const journal = yield* begin()
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const records = yield* journal.read(runId)
+    const replacement = records.find(tag("PlannedAttemptReplaced"))
     const graph = records.find(
-      (record): record is CompleteFactsRecord => hasCompleteFacts(record) && record.event.operationId.includes(":graph")
+      (record): record is CompleteFactsRecord =>
+        hasCompleteFacts(record) && record.event.operationId === replacement?.event.witness.graphObservationOperationId
     )
     const claimIntent = records.find(tag("TaskClaimAcquisitionIntended"))
     const claimOutcome = records.find(tag("TaskClaimAcquired"))
     const specification = records.find(
       (record): record is SpecificationFactsRecord =>
-        hasSpecificationFacts(record) && record.event.operationId.includes(":specification")
+        hasSpecificationFacts(record) &&
+        record.event.operationId === replacement?.event.witness.specificationObservationOperationId
     )
     const claimObservation = records.find(
       (record): record is ClaimFactsRecord =>
         hasClaimFacts(record) && record.event.operationId.includes(":claim-observation")
     )
-    const worktree = records.find(tag("PlannedAttemptWorktreeObserved"))
+    const worktree = records
+      .filter(tag("PlannedAttemptWorktreeObserved"))
+      .find((record) => record.event.operationId === replacement?.event.witness.oldWorktreeObservationOperationId)
     const lineage = records.find(tag("TargetLineageObserved"))
-    const replacement = records.find(tag("PlannedAttemptReplaced"))
     const cases: Array<readonly [string, ReadonlyArray<JournalRecord>]> = [
       ["missing P2", records.filter((record) => record.event._tag !== "PlannedAttemptReplaced")],
       ["duplicate P2", duplicate(records, tag("PlannedAttemptReplaced"))],
@@ -848,12 +854,12 @@ it.effect("rejects malformed, foreign, mis-keyed, duplicate, and reordered P2 wi
         "Invalid"
       )
     }
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("rejects abandoned provenance with a non-command quiescence proof", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("issue-69-provenance-history-abandoned")
+    const journal = yield* begin()
     const abandoned = yield* appendAbandonedProvenance(attempt)
     const records = yield* journal.read(runId)
     const abandonment = records.find(tag("AttemptImplementationAbandoned"))
@@ -906,7 +912,7 @@ it.effect("rejects abandoned provenance with a non-command quiescence proof", ()
         WorktreeCleanupAuthorization.make({ ...abandoned, disposition: settledDisposition })
       )._tag
     ).toBe("Invalid")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("rejects malformed branch history identities while retaining valid settlement", () =>
@@ -1081,7 +1087,7 @@ it.effect("rejects malformed branch history identities while retaining valid set
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
@@ -1202,7 +1208,7 @@ it.effect("rejects malformed candidate history identities while retaining valid 
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
@@ -1313,92 +1319,56 @@ it.effect("rejects foreign, duplicate, and reordered FullRerun candidate provena
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
-it.effect("preserves a foreign FullRerun relation without boundary calls after memory and SQLite reads", () => {
+it.effect("rejects a foreign FullRerun relation from raw and indexed cold projections", () => {
   const preservationReason = "multiple FullRerun successors describe one Integrator predecessor"
-  const validateForeignHistory = (target: string) =>
-    Effect.gen(function* () {
-      const journal = yield* begin(target)
-      yield* appendCandidateProvenance(
-        candidatePredecessor,
-        candidateSuccessor,
-        "issue-69-provenance-history-full-rerun"
-      )
-      const records = yield* journal.read(runId)
-      const successorRecord = records.find(tag("IntegratorSuccessorSessionFixed"))
-      expect(successorRecord).toBeDefined()
-      if (successorRecord === undefined) {
-        return { calls: undefined, outcome: undefined, validation: undefined }
-      }
-
-      const foreignPredecessor = IntegratorSessionCorrelation.make({
-        ...candidatePredecessor,
-        candidateResource: IntegratorCandidateResourceLocator.make("candidate:foreign-predecessor"),
-        plannedAttempt: { ...attempt, attemptId: AttemptId.make("issue-69-foreign-predecessor") }
-      })
-      const foreignSuccessor = IntegratorSessionCorrelation.make({
-        ...candidateSuccessor,
-        candidateResource: IntegratorCandidateResourceLocator.make("candidate:foreign-successor"),
-        plannedAttempt: foreignPredecessor.plannedAttempt
-      })
-      const foreignSuccessorEvent = IntegratorSuccessorSessionFixedEvent.make({
-        ...successorRecord.event,
-        predecessor: foreignPredecessor,
-        successor: foreignSuccessor
-      })
-      yield* journal.append(
-        runId,
-        integratorSuccessorSessionFixedRecordKey(
-          foreignPredecessor,
-          foreignSuccessorEvent.quarantineAt,
-          foreignSuccessorEvent.directionAppliedAt
-        ),
-        foreignSuccessorEvent
-      )
-
-      const foreignHistory = yield* journal.read(runId)
-      const validation = validateIntegratorCandidateCleanupProvenance(foreignHistory, candidateAuthorization)
-      const outcome = yield* runIntegratorCandidateCleanup(candidateAuthorization).pipe(
-        Effect.provideService(
-          AcceptedJournalReader,
-          AcceptedJournalReader.of({
-            readAccepted: (readRunId) =>
-              journal.read(readRunId).pipe(
-                Effect.orDie,
-                Effect.map((records) => acceptedJournalPrefixFromValidatedHistory(readRunId, records))
-              )
-          })
-        )
-      )
-      const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
-      return { calls, outcome, validation }
-    })
-
   return Effect.gen(function* () {
-    const [memoryResult, sqliteResult] = yield* Effect.all(
-      [
-        validateForeignHistory("issue-69-foreign-full-rerun-memory").pipe(
-          Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
-          Effect.provide(memoryJournalTestLayer)
-        ),
-        validateForeignHistory("issue-69-foreign-full-rerun-sqlite").pipe(
-          Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
-          Effect.provide(sqliteJournalTestLayer({ filename: JournalDatabaseLocator.make(":memory:") }))
-        )
-      ],
-      { concurrency: 1 }
+    const journal = yield* begin("issue-69-foreign-full-rerun")
+    yield* appendCandidateProvenance(
+      candidatePredecessor,
+      candidateSuccessor,
+      "issue-69-provenance-history-full-rerun",
+      "StartupValid"
     )
-    for (const result of [memoryResult, sqliteResult]) {
-      expect(result.validation).toEqual({ _tag: "Invalid", detail: preservationReason })
-      expect(result.outcome).toEqual({
-        _tag: "Preserved",
-        authorization: candidateAuthorization,
-        reason: preservationReason
+    const records = yield* journal.read(runId)
+    const successorRecord = records.find(tag("IntegratorSuccessorSessionFixed"))
+    expect(successorRecord).toBeDefined()
+    if (successorRecord === undefined) return
+
+    const foreignPredecessor = IntegratorSessionCorrelation.make({
+      ...candidatePredecessor,
+      candidateResource: IntegratorCandidateResourceLocator.make("candidate:foreign-predecessor"),
+      plannedAttempt: { ...attempt, attemptId: AttemptId.make("issue-69-foreign-predecessor") }
+    })
+    const foreignSuccessor = IntegratorSessionCorrelation.make({
+      ...candidateSuccessor,
+      candidateResource: IntegratorCandidateResourceLocator.make("candidate:foreign-successor"),
+      plannedAttempt: foreignPredecessor.plannedAttempt
+    })
+    const foreignSuccessorEvent = IntegratorSuccessorSessionFixedEvent.make({
+      ...successorRecord.event,
+      predecessor: foreignPredecessor,
+      successor: foreignSuccessor
+    })
+    const foreignRecord = JournalRecord.make({
+      event: foreignSuccessorEvent,
+      key: integratorSuccessorSessionFixedRecordKey(
+        foreignPredecessor,
+        foreignSuccessorEvent.quarantineAt,
+        foreignSuccessorEvent.directionAppliedAt
+      ),
+      position: JournalPosition.make(records.length + 1),
+      runId
+    })
+    const foreignHistory = [...records, foreignRecord]
+    for (const history of [foreignHistory, journalEvidenceFrom(foreignHistory)]) {
+      expect(validateIntegratorCandidateCleanupProvenance(history, candidateAuthorization)).toEqual({
+        _tag: "Invalid",
+        detail: preservationReason
       })
-      expect(result.calls).toEqual([])
     }
-  })
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 })

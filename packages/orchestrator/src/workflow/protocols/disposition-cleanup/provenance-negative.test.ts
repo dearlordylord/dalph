@@ -10,12 +10,10 @@ import {
   IntegrationTargetRef,
   TaskId
 } from "@dalph/contracts"
-import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { InitialControlPolicy } from "../../../control/policy.js"
-import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
+import { dispositionCleanupLiveJournalTestLayer } from "./live-journal-test.js"
+import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import { OperationId } from "../../identity.js"
 import { attempt, authorization, baseSha, disposition, runId, successor } from "./fixtures.js"
 import {
@@ -35,17 +33,13 @@ import {
   IntegratorSessionCorrelation,
   IntegratorSessionId
 } from "../integrator/events.js"
+import { integratorSuccessorCorrelationFor } from "../integrator/session.js"
 import { validateIntegratorCandidateCleanupProvenance, validateWorktreeCleanupProvenance } from "./provenance.js"
 import { deriveCleanupAuthorizations } from "./activation.js"
 
-const begin = (target: string) =>
+const begin = (_target?: string) =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make(target),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     return journal
   })
 
@@ -69,28 +63,33 @@ const candidatePredecessor = IntegratorSessionCorrelation.make({
   expectedTargetHead: baseSha,
   integrationTarget: candidateTarget,
   plannedAttempt: attempt,
-  queuedAt: JournalPosition.make(2),
+  queuedAt: JournalPosition.make(17),
   sessionId: IntegratorSessionId.make("session:issue-69-provenance-negative-p1"),
-  startedAt: JournalPosition.make(6),
-  targetLineageObservedAt: JournalPosition.make(4)
+  startedAt: JournalPosition.make(18),
+  targetLineageObservedAt: JournalPosition.make(20)
 })
-const candidateSuccessor = IntegratorSessionCorrelation.make({
-  ...candidatePredecessor,
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-provenance-negative-p2"),
-  sessionId: IntegratorSessionId.make("session:issue-69-provenance-negative-p2"),
-  targetLineageObservedAt: JournalPosition.make(12)
+const candidateSuccessor = integratorSuccessorCorrelationFor({
+  directionAppliedAt: JournalPosition.make(25),
+  predecessor: candidatePredecessor,
+  quarantineAt: JournalPosition.make(24),
+  targetLineage: {
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: candidatePredecessor.plannedAttempt.baseSha,
+    targetHeadSha: candidatePredecessor.expectedTargetHead
+  },
+  targetLineageObservedAt: JournalPosition.make(27)
 })
 const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
   causalPredecessors: [OperationId.make("candidate-negative")],
   disposition: IntegratorCandidateCleanupDisposition.make({
-    directionAppliedAt: JournalPosition.make(10),
-    dispositionAt: JournalPosition.make(9),
+    directionAppliedAt: JournalPosition.make(25),
+    dispositionAt: JournalPosition.make(24),
     predecessor: candidatePredecessor,
     successor: candidateSuccessor
   }),
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: candidatePredecessor.candidateResource,
-  observationAt: JournalPosition.make(4),
+  observationAt: JournalPosition.make(20),
   observationOperationId: OperationId.make(`${candidatePredecessor.sessionId}:predecessor-lineage`),
   operationId: OperationId.make("candidate-cleanup"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: candidatePredecessor.sessionId }),
@@ -99,8 +98,8 @@ const candidateAuthorization = IntegratorCandidateCleanupAuthorization.make({
 
 it.effect("preserves worktree cleanup when replacement provenance loses one upstream witness", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("issue-69-replacement-negative-matrix")
-    yield* appendReplacementProvenance(attempt, successor)
+    const journal = yield* begin()
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const records = yield* journal.read(runId)
     const eventCases: ReadonlyArray<readonly [string, (record: (typeof records)[number]) => boolean]> = [
       ["replacement", (record) => record.event._tag === "PlannedAttemptReplaced"],
@@ -156,12 +155,12 @@ it.effect("preserves worktree cleanup when replacement provenance loses one upst
         WorktreeCleanupAuthorization.make({ ...authorization, causalPredecessors: [OperationId.make("foreign")] })
       )._tag
     ).toBe("Invalid")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("preserves abandoned cleanup when the stopped claim or quiescence witness changes", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("issue-69-abandoned-negative-matrix")
+    const journal = yield* begin()
     const abandoned = yield* appendAbandonedProvenance(attempt)
     const records = yield* journal.read(runId)
     expect(deriveCleanupAuthorizations(records).worktree).toHaveLength(1)
@@ -192,13 +191,13 @@ it.effect("preserves abandoned cleanup when the stopped claim or quiescence witn
         )._tag
       ).toBe("Invalid")
     }
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("preserves candidate cleanup when FullRerun chronology loses an exact provider or successor witness", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("issue-69-candidate-negative-matrix")
-    yield* appendCandidateProvenance(candidatePredecessor, candidateSuccessor, "candidate-negative")
+    const journal = yield* begin()
+    yield* appendCandidateProvenance(candidatePredecessor, candidateSuccessor, "candidate-negative", "StartupValid")
     const records = yield* journal.read(runId)
     const candidate = candidateAuthorization
     const eventCases: ReadonlyArray<readonly [string, (record: (typeof records)[number]) => boolean]> = [
@@ -223,5 +222,5 @@ it.effect("preserves candidate cleanup when FullRerun chronology loses an exact 
         )._tag
       ).toBe("Invalid")
     }
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )

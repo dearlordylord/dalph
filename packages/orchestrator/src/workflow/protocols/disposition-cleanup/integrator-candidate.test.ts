@@ -3,19 +3,21 @@ import { Effect, Layer } from "effect"
 import { expect } from "vitest"
 import {
   AcceptedResult,
+  AttemptId,
   EvidenceDigest,
   EvidenceReference,
   GitCommitSha,
   IntegrationTarget,
   IntegrationTargetRef,
-  GitRepositoryLocator
+  GitRepositoryLocator,
+  PlannedTaskAttempt,
+  TaskBranchRef,
+  TaskId,
+  WorktreeLocator
 } from "@dalph/contracts"
-import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { InitialControlPolicy } from "../../../control/policy.js"
-import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { dispositionCleanupLiveJournalTestLayer } from "./live-journal-test.js"
+import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -23,6 +25,7 @@ import {
   IntegratorSessionCorrelation,
   IntegratorSessionId
 } from "../integrator/events.js"
+import { integratorSuccessorCorrelationFor } from "../integrator/session.js"
 import {
   BranchCleanupAuthorization,
   BranchCleanupEvidenceRevision,
@@ -82,26 +85,38 @@ const target = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("repo:issue-69"),
   ref: IntegrationTargetRef.make("refs/heads/main")
 })
+const candidateAttempt = PlannedTaskAttempt.make({
+  ...attempt,
+  attemptId: AttemptId.make("issue-69-candidate-attempt"),
+  branch: TaskBranchRef.make("refs/heads/task/issue-69-candidate"),
+  taskId: TaskId.make("issue-69-candidate-task"),
+  worktree: WorktreeLocator.make("/tmp/issue-69-candidate")
+})
 const predecessor = IntegratorSessionCorrelation.make({
   acceptedResult,
   candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-p1"),
   expectedTargetHead: baseSha,
   integrationTarget: target,
-  plannedAttempt: attempt,
-  queuedAt: JournalPosition.make(2),
+  plannedAttempt: candidateAttempt,
+  queuedAt: JournalPosition.make(17),
   sessionId: IntegratorSessionId.make("session:issue-69-p1"),
-  startedAt: JournalPosition.make(6),
-  targetLineageObservedAt: JournalPosition.make(4)
+  startedAt: JournalPosition.make(18),
+  targetLineageObservedAt: JournalPosition.make(20)
 })
-const successor = IntegratorSessionCorrelation.make({
-  ...predecessor,
-  candidateResource: IntegratorCandidateResourceLocator.make("candidate:issue-69-p2"),
-  sessionId: IntegratorSessionId.make("session:issue-69-p2"),
-  targetLineageObservedAt: JournalPosition.make(12)
+const successor = integratorSuccessorCorrelationFor({
+  directionAppliedAt: JournalPosition.make(25),
+  predecessor,
+  quarantineAt: JournalPosition.make(24),
+  targetLineage: {
+    plannedBaseIsAncestorOfTargetHead: true,
+    plannedBaseSha: predecessor.plannedAttempt.baseSha,
+    targetHeadSha: predecessor.expectedTargetHead
+  },
+  targetLineageObservedAt: JournalPosition.make(27)
 })
 const disposition = IntegratorCandidateCleanupDisposition.make({
-  directionAppliedAt: JournalPosition.make(10),
-  dispositionAt: JournalPosition.make(9),
+  directionAppliedAt: JournalPosition.make(25),
+  dispositionAt: JournalPosition.make(24),
   predecessor,
   successor
 })
@@ -110,7 +125,7 @@ const authorization = IntegratorCandidateCleanupAuthorization.make({
   disposition,
   evidenceRevision: IntegratorCandidateCleanupEvidenceRevision.make(1),
   locator: predecessor.candidateResource,
-  observationAt: JournalPosition.make(4),
+  observationAt: JournalPosition.make(20),
   observationOperationId: OperationId.make("session:issue-69-p1:predecessor-lineage"),
   operationId: OperationId.make("issue-69-candidate-cleanup"),
   owner: IntegratorCandidateCleanupOwner.make({ sessionId: predecessor.sessionId }),
@@ -171,7 +186,7 @@ it.effect("reports an unavailable private revision from the controlled boundary"
     expect(result._tag).toBe("Failure")
   }).pipe(
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [present] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
@@ -189,12 +204,6 @@ it.effect("keeps provider-neutral candidate authority unavailable and scopes loo
     const removed = yield* authority.remove(authorization, CleanupMutationOrdinal.make(1))
     expect(removed._tag).toBe("Unknown")
 
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-unavailable-provider-authority"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
     const loop = yield* runDispositionCleanupLoop(runId, {
       branch: [branchAuthorization],
       candidate: [authorization],
@@ -206,7 +215,7 @@ it.effect("keeps provider-neutral candidate authority unavailable and scopes loo
     Effect.provide(worktreeCleanupTestLayer({ observations: [], mutations: [] })),
     Effect.provide(branchCleanupTestLayer({ observations: [], mutations: [] })),
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
@@ -233,20 +242,15 @@ it.effect("table-reconciles changed candidate owner, locator, and revision witho
     ]
     for (const observation of cases) {
       const result = yield* Effect.gen(function* () {
-        const journal = yield* JournalStore
-        yield* journal.beginRun(
-          runId,
-          FixtureTarget.make("issue-69-candidate-property-protocol"),
-          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-        )
-        yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+        const journal = yield* InRunJournal
+        yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
         const outcome = yield* runIntegratorCandidateCleanup(authorization)
         const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
         const records = yield* journal.read(runId)
         return { calls, outcome, records }
       }).pipe(
         Effect.provide(integratorCandidateCleanupTestLayer({ observations: [observation] })),
-        Effect.provide(memoryJournalTestLayer)
+        Effect.provide(dispositionCleanupLiveJournalTestLayer())
       )
       expect(result.outcome._tag).toBe(observation._tag === "Unreadable" ? "Pending" : "Preserved")
       expect(result.calls.map(({ _tag }) => _tag)).toEqual(["Observe"])
@@ -259,13 +263,7 @@ it.effect("table-reconciles changed candidate owner, locator, and revision witho
 
 it.effect("removes only a quarantined predecessor candidate", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const boundary = yield* TestIntegratorCandidateCleanupBoundary
     expect(result._tag).toBe("Settled")
@@ -289,19 +287,14 @@ it.effect("removes only a quarantined predecessor candidate", () =>
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("does not settle a candidate removal with a stale revision", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-stale-revision"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const records = yield* journal.read(runId)
     expect(result._tag).toBe("Preserved")
@@ -326,19 +319,14 @@ it.effect("does not settle a candidate removal with a stale revision", () =>
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("settles an already-absent candidate without issuing a mutation", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-initial-absence"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const records = yield* journal.read(runId)
     expect(result._tag).toBe("Settled")
@@ -357,19 +345,13 @@ it.effect("settles an already-absent candidate without issuing a mutation", () =
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("preserves a post-mutation candidate observation that is not absent", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-post-mutation-contradiction"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
     expect(result._tag).toBe("Preserved")
@@ -395,19 +377,13 @@ it.effect("preserves a post-mutation candidate observation that is not absent", 
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("keeps an exact present candidate pending after a removal response", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-post-mutation-still-present"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     expect(result._tag).toBe("Pending")
     expect(result._tag === "Pending" ? result.reason : "").toContain("remains unresolved")
@@ -429,38 +405,27 @@ it.effect("keeps an exact present candidate pending after a removal response", (
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("uses the explicit unreadable fallback when the candidate mutation script is exhausted", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-exhausted-mutation"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
     expect(result).toMatchObject({ _tag: "Pending", reason: "script exhausted" })
     expect(calls.map((call) => call._tag)).toEqual(["Observe", "Remove"])
   }).pipe(
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [present] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("keeps an unreadable candidate pending without a terminal contradiction", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-exhausted-observation"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
     const records = yield* journal.read(runId)
@@ -469,19 +434,14 @@ it.effect("keeps an unreadable candidate pending without a terminal contradictio
     expect(calls.map((call) => call._tag)).toEqual(["Observe"])
   }).pipe(
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("keeps an unreadable post-removal observation retryable", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-post-mutation-unreadable"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const records = yield* journal.read(runId)
     expect(result._tag).toBe("Pending")
@@ -510,19 +470,13 @@ it.effect("keeps an unreadable post-removal observation retryable", () =>
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("replays a contradicted candidate without rereading or appending", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-contradiction-replay"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const first = yield* runIntegratorCandidateCleanup(authorization)
     const second = yield* runIntegratorCandidateCleanup(authorization)
     const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
@@ -542,19 +496,14 @@ it.effect("replays a contradicted candidate without rereading or appending", () 
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("replays a settled predecessor candidate twice without a boundary call or journal write", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-settled-replay"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const first = yield* runIntegratorCandidateCleanup(authorization)
     const afterFirst = yield* journal.read(runId)
     const second = yield* runIntegratorCandidateCleanup(authorization)
@@ -585,19 +534,13 @@ it.effect("replays a settled predecessor candidate twice without a boundary call
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("preserves a live predecessor candidate writer", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-live"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const boundary = yield* TestIntegratorCandidateCleanupBoundary
     expect(result._tag).toBe("Preserved")
@@ -615,37 +558,25 @@ it.effect("preserves a live predecessor candidate writer", () =>
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("preserves a candidate authorization with missing FullRerun provenance without reading", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-missing-provenance"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
     const result = yield* runIntegratorCandidateCleanup(authorization)
     const boundary = yield* TestIntegratorCandidateCleanupBoundary
     expect(result._tag).toBe("Preserved")
     expect(yield* boundary.calls()).toEqual([])
   }).pipe(
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [present] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("reconciles a lost predecessor-candidate response after restart without duplicate removal", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-restart"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const first = yield* runIntegratorCandidateCleanup(authorization)
     const second = yield* runIntegratorCandidateCleanup(authorization)
     const boundary = yield* TestIntegratorCandidateCleanupBoundary
@@ -671,7 +602,7 @@ it.effect("reconciles a lost predecessor-candidate response after restart withou
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
@@ -691,19 +622,14 @@ it.effect("preserves a candidate when the mutation response names a foreign loca
     ]
     for (const mutation of cases) {
       const result = yield* Effect.gen(function* () {
-        const journal = yield* JournalStore
-        yield* journal.beginRun(
-          runId,
-          FixtureTarget.make("issue-69-candidate-foreign-response"),
-          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-        )
-        yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+        const journal = yield* InRunJournal
+        yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
         const outcome = yield* runIntegratorCandidateCleanup(authorization)
         const boundary = yield* TestIntegratorCandidateCleanupBoundary
         return { calls: yield* boundary.calls(), outcome, records: yield* journal.read(runId) }
       }).pipe(
         Effect.provide(integratorCandidateCleanupTestLayer({ observations: [present], mutations: [mutation] })),
-        Effect.provide(memoryJournalTestLayer)
+        Effect.provide(dispositionCleanupLiveJournalTestLayer())
       )
       expect(result.outcome._tag).toBe("Preserved")
       expect(result.calls.map((call) => call._tag)).toEqual(["Observe", "Remove"])
@@ -714,13 +640,7 @@ it.effect("preserves a candidate when the mutation response names a foreign loca
 
 it.effect("stops candidate mutation retries at the exact three-request bound", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-retry-bound"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const results = [
       yield* runIntegratorCandidateCleanup(authorization),
       yield* runIntegratorCandidateCleanup(authorization),
@@ -762,19 +682,14 @@ it.effect("stops candidate mutation retries at the exact three-request bound", (
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("preserves a candidate when its cleanup history has no authorization prefix", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-candidate-missing-authorization"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const ordinal = CleanupObservationOrdinal.make(1)
     yield* journal.append(
       runId,
@@ -793,7 +708,7 @@ it.effect("preserves a candidate when its cleanup history has no authorization p
     expect(yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()).toEqual([])
   }).pipe(
     Effect.provide(integratorCandidateCleanupTestLayer({ observations: [present] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
@@ -813,13 +728,8 @@ it("rejects a FullRerun successor that changes responsibility facts", () => {
 
 it.effect("rejects a FullRerun quarantine under a foreign key", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-foreign-quarantine-key"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const records = yield* journal.read(runId)
     const foreign = records.map((record) =>
       record.event._tag === "IntegrationQuarantined"
@@ -827,18 +737,13 @@ it.effect("rejects a FullRerun quarantine under a foreign key", () =>
         : record
     )
     expect(validateIntegratorCandidateCleanupProvenance(foreign, authorization)._tag).toBe("Invalid")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("rejects a FullRerun direction or target-lineage intent under a foreign key", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-foreign-full-rerun-key"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const records = yield* journal.read(runId)
     const foreignDirection = records.map((record) =>
       record.event._tag === "IntegrationQuarantineDirectionApplied"
@@ -855,82 +760,57 @@ it.effect("rejects a FullRerun direction or target-lineage intent under a foreig
         : record
     )
     expect(validateIntegratorCandidateCleanupProvenance(foreignLineageIntent, authorization)._tag).toBe("Invalid")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("rejects a provider-failure quarantine without its activity-absence witness", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-incomplete-quarantine"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const records = yield* journal.read(runId)
     const incomplete = records.filter(({ event }) => event._tag !== "IntegrationProviderRunActivityAbsent")
     expect(validateIntegratorCandidateCleanupProvenance(incomplete, authorization)._tag).toBe("Invalid")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("excludes a FullRerun successor when its successor target-lineage witness is absent", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-missing-successor-lineage"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const records = (yield* journal.read(runId)).filter(
       ({ event }) =>
         event._tag !== "TargetLineageObserved" || event.plannedAttempt.attemptId !== successor.plannedAttempt.attemptId
     )
     expect(deriveCleanupAuthorizations(records).candidate).toEqual([])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("excludes a FullRerun successor when its provider-absence authority is incomplete", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-missing-provider-absence"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const records = (yield* journal.read(runId)).filter(
       ({ event }) => event._tag !== "IntegrationProviderRunActivityAbsent"
     )
     expect(deriveCleanupAuthorizations(records).candidate).toEqual([])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("excludes a FullRerun successor when its direction application is absent", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-missing-full-rerun-direction"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const records = (yield* journal.read(runId)).filter(
       ({ event }) => event._tag !== "IntegrationQuarantineDirectionApplied"
     )
     expect(deriveCleanupAuthorizations(records).candidate).toEqual([])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("rejects duplicate successor settlement evidence before candidate authorization", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-duplicate-successor-settlement"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const records = yield* journal.read(runId)
     const successorFixed = records.find(({ event }) => event._tag === "IntegratorSuccessorSessionFixed")
     expect(successorFixed).toBeDefined()
@@ -941,18 +821,13 @@ it.effect("rejects duplicate successor settlement evidence before candidate auth
       position: JournalPosition.make(Number(successorFixed.position) + 1)
     }
     expect(deriveCleanupAuthorizations([...records, duplicate]).candidate).toEqual([])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("keeps candidate responsibility selection independent of a worktree terminal event", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-independent-candidate-selection"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const activation = yield* activateDispositionCleanup(runId, () =>
       Effect.succeed(IntegratorCandidateCleanupEvidenceRevision.make(1))
     )
@@ -976,51 +851,34 @@ it.effect("keeps candidate responsibility selection independent of a worktree te
     expect(selectCleanupResponsibilitySet(yield* journal.read(runId)).candidate[0]?.operationId).toBe(
       candidate.operationId
     )
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("carries the exact provider-private revision into candidate cleanup authorization", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-provider-revision-boundary"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-provider-revision")
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-provider-revision", "StartupValid")
     const expected = IntegratorCandidateCleanupEvidenceRevision.make(9)
     const activation = yield* activateDispositionCleanup(runId, () => Effect.succeed(expected))
     expect(activation.candidate[0]?.evidenceRevision).toBe(expected)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("does not append a duplicate candidate authorization on repeated activation", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-repeated-candidate-activation"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const revisionReader = () => Effect.succeed(IntegratorCandidateCleanupEvidenceRevision.make(1))
     yield* appendDerivedCleanupAuthorizations(runId, ["candidate"], revisionReader)
     yield* appendDerivedCleanupAuthorizations(runId, ["candidate"], revisionReader)
     expect(
       (yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")
     ).toHaveLength(1)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("fails closed when ordinary activation has no private revision reader", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-activation-without-revision-reader"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const activation = yield* Effect.exit(makeDispositionCleanupActivation(runId))
     expect(activation._tag).toBe("Failure")
   }).pipe(
@@ -1048,19 +906,14 @@ it.effect("fails closed when ordinary activation has no private revision reader"
     ),
     Effect.provide(worktreeCleanupTestLayer({ observations: [], mutations: [] })),
     Effect.provide(branchCleanupTestLayer({ observations: [], mutations: [] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("does not silently omit candidate authorization when evidence reread fails", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-provider-revision-reader-failure"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const activation = yield* Effect.exit(
       activateDispositionCleanup(runId, () => Effect.fail("provider private revision is unreadable"))
     )
@@ -1068,19 +921,14 @@ it.effect("does not silently omit candidate authorization when evidence reread f
     expect(
       (yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")
     ).toHaveLength(0)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("does not let a candidate terminal fact suppress a worktree responsibility", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-independent-worktree-selection"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendReplacementProvenance(attempt, replacementSuccessor)
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
+    yield* appendReplacementProvenance(attempt, replacementSuccessor, "StartupValid")
     const activation = yield* activateDispositionCleanup(runId, () =>
       Effect.succeed(IntegratorCandidateCleanupEvidenceRevision.make(1))
     )
@@ -1102,18 +950,13 @@ it.effect("does not let a candidate terminal fact suppress a worktree responsibi
     expect(selectCleanupResponsibilitySet(yield* journal.read(runId)).worktree[0]?.operationId).toBe(
       worktree.operationId
     )
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("does not let a self-consistent forged candidate authorization suppress canonical derivation", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("issue-69-forged-candidate-authorization"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
-    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun")
+    const journal = yield* InRunJournal
+    yield* appendCandidateProvenance(predecessor, successor, "issue-69-full-rerun", "StartupValid")
     const forged = IntegratorCandidateCleanupAuthorization.make({
       ...authorization,
       causalPredecessors: [OperationId.make("issue-69-foreign-candidate-causal")],
@@ -1138,5 +981,5 @@ it.effect("does not let a self-consistent forged candidate authorization suppres
     expect(
       (yield* journal.read(runId)).filter(({ event }) => event._tag === "IntegratorCandidateCleanupAuthorized")
     ).toHaveLength(2)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )

@@ -15,7 +15,7 @@ import { projectTrackerSnapshot } from "../../../authorities/task-tracker/graph.
 import { TaskLifecycle, TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
-import { JournalStore } from "../../../workflow-journal/store.js"
+import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import {
   integrationProviderRunActivityAbsentRecordKey,
@@ -35,6 +35,7 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
   plannedAttemptExecutorCommandResponseObservedRecordKey,
+  plannedAttemptExecutorStateObservedRecordKey,
   plannedAttemptExecutorWorkReportedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import {
@@ -102,6 +103,9 @@ import {
   PlannedAttemptExecutorCommandOrdinal,
   PlannedAttemptExecutorCommandResponseObservedEvent,
   PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
   PlannedAttemptExecutorWorkReportedEvent,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../planned-attempt-executor-work/events.js"
@@ -118,6 +122,7 @@ const quarantinePositionOffset = 5
 const activityAbsencePositionOffset = 4
 const suspensionCommandOrdinal = 2
 const safelySuspendedReportOrdinal = 2
+const acceptedTerminalReportOrdinal = 2
 
 const appendStartupChronology = <E, R>(
   chronology: "Cassette" | "StartupValid",
@@ -177,7 +182,7 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
   successorAttempt: PlannedTaskAttempt,
   chronology: "Cassette" | "StartupValid" = "Cassette"
 ) {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const quiescenceReportOrdinal = PlannedAttemptExecutorReportOrdinal.make(safelySuspendedReportOrdinal)
   const event = replacementProvenanceFor(plannedAttempt, successorAttempt, quiescenceReportOrdinal)
   const ids = replacementFixtureIdsFor(plannedAttempt)
@@ -315,7 +320,10 @@ export const appendReplacementProvenance = Effect.fn("DispositionCleanupTest.app
         outcomeRecordKey(initialSpecificationOperation.operationId),
         taskTrackerFactsObservedEvent(
           initialSpecificationOperation.operationId,
-          makeFocusedTaskWorkSpecificationFactsObserved(initialSpecificationOperation, initialSpecification)
+          makeFocusedTaskWorkSpecificationFactsObserved(initialSpecificationOperation, {
+            ...initialSpecification,
+            fingerprint: plannedAttempt.taskRevision
+          })
         )
       )
     })
@@ -580,7 +588,7 @@ export const appendAbandonedProvenance = Effect.fn("DispositionCleanupTest.appen
   plannedAttempt: PlannedTaskAttempt,
   cleanupOperationId = OperationId.make(`abandoned:${plannedAttempt.attemptId}:cleanup`)
 ) {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const began = (yield* journal.read(plannedAttempt.runId)).find(
     ({ event: candidate }) => candidate._tag === "WorkflowRunBegan"
   )
@@ -596,13 +604,15 @@ export const appendAbandonedProvenance = Effect.fn("DispositionCleanupTest.appen
   const planOperation = makeTaskAttemptPlanOperation({
     operationId: OperationId.make(`abandoned:${suffix}:plan`),
     plannedAttempt,
-    predecessorOperationIds: [claim.operationId]
+    predecessorOperationIds: [
+      claim.operationId,
+      OperationId.make(`abandoned:${suffix}:graph`),
+      OperationId.make(`abandoned:${suffix}:specification`)
+    ]
   })
+  const observedTaskRevision = TaskRevision.make(`abandoned:${suffix}:observed-revision`)
   const requestId = AttemptChoiceRequestId.make({ nonce: `abandoned:${suffix}:stop`, runId: plannedAttempt.runId })
-  const subject = AttemptChoiceSubject.make({
-    observedTaskRevision: TaskRevision.make(`abandoned:${suffix}:observed`),
-    plannedAttempt
-  })
+  const subject = AttemptChoiceSubject.make({ observedTaskRevision, plannedAttempt })
   yield* journal.append(
     plannedAttempt.runId,
     intentRecordKey(claim.operationId),
@@ -613,10 +623,104 @@ export const appendAbandonedProvenance = Effect.fn("DispositionCleanupTest.appen
     outcomeRecordKey(claim.operationId),
     TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
   )
+  const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make(`abandoned:${suffix}:graph`),
+    began.event.target,
+    [claim.operationId],
+    [plannedAttempt.taskId]
+  )
+  const graphProjection = projectTrackerSnapshot({
+    revision: TrackerRevision.make(`abandoned:${suffix}:graph`),
+    tasks: [
+      {
+        id: plannedAttempt.taskId,
+        lifecycle: TaskLifecycle.cases.Open.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      }
+    ]
+  })
+  const graphSnapshot = Option.getOrThrow(
+    graphProjection._tag === "Valid" ? Option.some(graphProjection.snapshot) : Option.none()
+  )
+  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make(`abandoned:${suffix}:specification`),
+    began.event.target,
+    plannedAttempt.taskId,
+    [graphOperation.operationId]
+  )
+  const specification = makeTaskWorkSpecification({
+    body: `abandoned ${suffix}`,
+    taskId: plannedAttempt.taskId,
+    title: `abandoned ${suffix}`
+  })
+  const changedSpecificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make(`abandoned:${suffix}:changed-specification`),
+    began.event.target,
+    plannedAttempt.taskId,
+    [specificationOperation.operationId]
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(graphOperation.operationId),
+    taskTrackerReadIntent(graphOperation)
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(graphOperation.operationId),
+    taskTrackerFactsObservedEvent(
+      graphOperation.operationId,
+      makeCompleteTaskTrackerFactsObserved(graphOperation, graphSnapshot)
+    )
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(specificationOperation.operationId),
+    taskTrackerReadIntent(specificationOperation)
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(specificationOperation.operationId),
+    taskTrackerFactsObservedEvent(
+      specificationOperation.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, {
+        ...specification,
+        fingerprint: plannedAttempt.taskRevision
+      })
+    )
+  )
   yield* journal.append(
     plannedAttempt.runId,
     attemptPlanRecordKey(plannedAttempt.attemptId),
     TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
+  )
+  const initialWorktreeOperation = makeTaskWorktreeReconciliationOperation({
+    operationId: OperationId.make(`abandoned:${suffix}:initial-worktree`),
+    plannedAttempt,
+    predecessorOperationIds: [planOperation.operationId]
+  })
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(initialWorktreeOperation.operationId),
+    TaskWorktreeReconciliationIntendedEvent.make({
+      operation: initialWorktreeOperation,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(initialWorktreeOperation.operationId),
+    TaskWorktreeReadyEvent.make({
+      operationId: initialWorktreeOperation.operationId,
+      proof: PlannedWorktreeReady.make({
+        baseSha: plannedAttempt.baseSha,
+        branch: plannedAttempt.branch,
+        headSha: plannedAttempt.baseSha,
+        worktree: plannedAttempt.worktree
+      }),
+      version: workflowJournalEventVersion
+    })
   )
   yield* journal.append(
     plannedAttempt.runId,
@@ -693,6 +797,22 @@ export const appendAbandonedProvenance = Effect.fn("DispositionCleanupTest.appen
       report: safelySuspended,
       version: workflowJournalEventVersion
     })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(changedSpecificationOperation.operationId),
+    taskTrackerReadIntent(changedSpecificationOperation)
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(changedSpecificationOperation.operationId),
+    taskTrackerFactsObservedEvent(
+      changedSpecificationOperation.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(changedSpecificationOperation, {
+        ...specification,
+        fingerprint: observedTaskRevision
+      })
+    )
   )
   yield* journal.append(
     plannedAttempt.runId,
@@ -775,6 +895,201 @@ interface CandidateAuthorityPrefix {
   readonly directionAppliedAt: JournalPosition
 }
 
+/** Appends the accepted executor result that makes an integration responsibility recoverable at startup. */
+const appendAcceptedAttemptPrefix = Effect.fn("DispositionCleanupTest.appendAcceptedAttemptPrefix")(function* (
+  predecessor: IntegratorSessionCorrelation
+) {
+  const journal = yield* InRunJournal
+  const { plannedAttempt } = predecessor
+  const began = (yield* journal.read(plannedAttempt.runId)).find(({ event }) => event._tag === "WorkflowRunBegan")
+  if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("candidate fixture requires a begun Run")
+  const suffix = predecessor.sessionId
+  const claim = ActiveTaskClaim.make({
+    operationId: OperationId.make(`${suffix}:claim`),
+    owner: ClaimOwner.make("candidate-fixture"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make(`${suffix}:claim-token`)
+  })
+  const graphOperation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make(`${suffix}:graph`),
+    began.event.target,
+    [claim.operationId],
+    [plannedAttempt.taskId]
+  )
+  const graphProjection = projectTrackerSnapshot({
+    revision: TrackerRevision.make(`${suffix}:graph-revision`),
+    tasks: [
+      {
+        id: plannedAttempt.taskId,
+        lifecycle: TaskLifecycle.cases.Open.make({}),
+        parentTaskId: null,
+        prerequisiteIds: []
+      }
+    ]
+  })
+  const graphSnapshot = Option.getOrThrow(
+    graphProjection._tag === "Valid" ? Option.some(graphProjection.snapshot) : Option.none()
+  )
+  const specificationOperation = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make(`${suffix}:specification`),
+    began.event.target,
+    plannedAttempt.taskId,
+    [graphOperation.operationId]
+  )
+  const planOperation = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make(`${suffix}:plan`),
+    plannedAttempt,
+    predecessorOperationIds: [claim.operationId, graphOperation.operationId, specificationOperation.operationId]
+  })
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(claim.operationId),
+    TaskClaimAcquisitionIntendedEvent.make({
+      operation: makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] }),
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(claim.operationId),
+    TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(graphOperation.operationId),
+    taskTrackerReadIntent(graphOperation)
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(graphOperation.operationId),
+    taskTrackerFactsObservedEvent(
+      graphOperation.operationId,
+      makeCompleteTaskTrackerFactsObserved(graphOperation, graphSnapshot)
+    )
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(specificationOperation.operationId),
+    taskTrackerReadIntent(specificationOperation)
+  )
+  const specification = makeTaskWorkSpecification({
+    body: `candidate ${suffix}`,
+    taskId: plannedAttempt.taskId,
+    title: `candidate ${suffix}`
+  })
+  yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(specificationOperation.operationId),
+    taskTrackerFactsObservedEvent(
+      specificationOperation.operationId,
+      makeFocusedTaskWorkSpecificationFactsObserved(specificationOperation, {
+        ...specification,
+        fingerprint: plannedAttempt.taskRevision
+      })
+    )
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    attemptPlanRecordKey(plannedAttempt.attemptId),
+    TaskAttemptPlannedEvent.make({ operation: planOperation, version: workflowJournalEventVersion })
+  )
+  const worktreeOperation = makeTaskWorktreeReconciliationOperation({
+    operationId: OperationId.make(`${suffix}:worktree`),
+    plannedAttempt,
+    predecessorOperationIds: [planOperation.operationId]
+  })
+  yield* journal.append(
+    plannedAttempt.runId,
+    intentRecordKey(worktreeOperation.operationId),
+    TaskWorktreeReconciliationIntendedEvent.make({ operation: worktreeOperation, version: workflowJournalEventVersion })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    outcomeRecordKey(worktreeOperation.operationId),
+    TaskWorktreeReadyEvent.make({
+      operationId: worktreeOperation.operationId,
+      proof: PlannedWorktreeReady.make({
+        baseSha: plannedAttempt.baseSha,
+        branch: plannedAttempt.branch,
+        headSha: plannedAttempt.baseSha,
+        worktree: plannedAttempt.worktree
+      }),
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(plannedAttempt.attemptId),
+    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({ plannedAttempt, version: workflowJournalEventVersion })
+  )
+  const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+    PlannedAttemptExecutorCommandIntendedEvent.make({
+      command: "Begin",
+      initiatedBy: { _tag: "DalphCoordinator" },
+      occurrenceClassification: "InitiatedAction",
+      ordinal: commandOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  const terminal = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+    correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId },
+    result: { _tag: "Accepted", acceptedResult: predecessor.acceptedResult }
+  })
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorCommandResponseObservedRecordKey(plannedAttempt.attemptId, commandOrdinal),
+    PlannedAttemptExecutorCommandResponseObservedEvent.make({
+      commandOrdinal,
+      occurrenceClassification: "NonActionOccurrence",
+      plannedAttempt,
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+      }),
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, PlannedAttemptExecutorReportOrdinal.make(1)),
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+      }),
+      version: workflowJournalEventVersion
+    })
+  )
+  const stateOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, stateOrdinal),
+    PlannedAttemptExecutorStateObservedEvent.make({
+      observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report: terminal }),
+      occurrenceClassification: "NonActionOccurrence",
+      ordinal: stateOrdinal,
+      plannedAttempt,
+      version: workflowJournalEventVersion
+    })
+  )
+  yield* journal.append(
+    plannedAttempt.runId,
+    plannedAttemptExecutorWorkReportedRecordKey(
+      plannedAttempt.attemptId,
+      PlannedAttemptExecutorReportOrdinal.make(acceptedTerminalReportOrdinal)
+    ),
+    PlannedAttemptExecutorWorkReportedEvent.make({
+      ordinal: PlannedAttemptExecutorReportOrdinal.make(acceptedTerminalReportOrdinal),
+      report: terminal,
+      version: workflowJournalEventVersion
+    })
+  )
+})
+
 /**
  * Appends the canonical S1 -> run -> provider-absence -> quarantine prefix.
  * Current quarantine selection deliberately uses this same causal prefix but
@@ -786,8 +1101,9 @@ const appendCandidateAuthorityPrefix = (
   chronology: "Cassette" | "StartupValid" = "Cassette"
 ) =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     const runId = predecessor.plannedAttempt.runId
+    if (chronology === "StartupValid") yield* appendAcceptedAttemptPrefix(predecessor)
     const predecessorRun = IntegratorRunCorrelation.make({
       ordinal: IntegratorRunOrdinal.make(1),
       session: predecessor
@@ -931,7 +1247,7 @@ export const appendCandidateProvenance = Effect.fn("DispositionCleanupTest.appen
   directionNonce: string,
   chronology: "Cassette" | "StartupValid" = "Cassette"
 ) {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   const runId = predecessor.plannedAttempt.runId
   const prefix = yield* appendCandidateAuthorityPrefix(predecessor, chronology)
   const successorLineageOperation = WorkflowOperation.cases.ReadTargetLineage.make({

@@ -20,8 +20,8 @@ import {
 } from "./disposition.js"
 import { replacementPredecessorsFor, replacementWorktreeObservationOperationIdFor } from "./provenance-identities.js"
 
-const dispositionPosition = 23
-const authorizationObservationPosition = 20
+const dispositionPosition = 33
+const authorizationObservationPosition = 30
 
 export const runId = RunId.make("issue-69-worktree-run")
 export const baseSha = GitCommitSha.make("1111111111111111111111111111111111111111")

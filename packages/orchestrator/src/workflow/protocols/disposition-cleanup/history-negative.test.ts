@@ -1,12 +1,10 @@
 import { it } from "@effect/vitest"
 import { Effect } from "effect"
 import { expect } from "vitest"
-import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
-import { InitialControlPolicy } from "../../../control/policy.js"
-import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
-import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
+import { dispositionCleanupLiveJournalTestLayer } from "./live-journal-test.js"
+import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { InRunJournal } from "../../../workflow-journal/in-run-journal.js"
 import { WorktreeLocator } from "@dalph/contracts"
 import { OperationId } from "../../identity.js"
 import {
@@ -41,13 +39,8 @@ const removed = WorktreeCleanupMutationResult.cases.Removed.make({
   revision: WorktreeCleanupEvidenceRevision.make(2)
 })
 
-const begin = Effect.fn("Issue69HistoryNegative.begin")(function* (target: string) {
-  const journal = yield* JournalStore
-  yield* journal.beginRun(
-    runId,
-    FixtureTarget.make(target),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-  )
+const begin = Effect.fn("Issue69HistoryNegative.begin")(function* (_target?: string) {
+  const journal = yield* InRunJournal
   return journal
 })
 
@@ -60,12 +53,12 @@ const without = (records: ReadonlyArray<JournalRecord>, predicate: (record: Jour
 const validHistory = (target: string) =>
   Effect.gen(function* () {
     const journal = yield* begin(target)
-    yield* appendReplacementProvenance(attempt, successor)
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     yield* runWorktreeCleanup(authorization)
     return yield* journal.read(runId)
   }).pipe(
     Effect.provide(worktreeCleanupTestLayer({ observations: [present, absent], mutations: [removed] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 
 const authRecord = (records: ReadonlyArray<JournalRecord>) =>
@@ -184,7 +177,7 @@ it.effect("rejects malformed worktree cleanup prefixes before retrying Git", () 
     for (const [name, candidate] of cases) {
       expect(validateWorktreeCleanupHistory(candidate, authorization)._tag, name).toBe("Invalid")
     }
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("rejects a settled worktree prefix whose absence or result no longer matches", () =>
@@ -217,13 +210,13 @@ it.effect("rejects a settled worktree prefix whose absence or result no longer m
         authorization
       )._tag
     ).toBe("Invalid")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("rejects events after a terminal contradiction and mismatched contradiction identity", () =>
   Effect.gen(function* () {
-    const journal = yield* begin("issue-69-history-negative-contradiction")
-    yield* appendReplacementProvenance(attempt, successor)
+    const journal = yield* begin()
+    yield* appendReplacementProvenance(attempt, successor, "StartupValid")
     const contradiction = yield* runWorktreeCleanup(authorization).pipe(
       Effect.provide(
         worktreeCleanupTestLayer({
@@ -258,5 +251,5 @@ it.effect("rejects events after a terminal contradiction and mismatched contradi
       })
     })
     expect(validateWorktreeCleanupHistory(afterContradiction, authorization)._tag).toBe("Invalid")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
