@@ -3788,7 +3788,16 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
       responsibilityFacts
     }
   }
-  const historicalCurrentTaskGraph = reconstructedTaskGraphFor(settlementRunState.graphKnowledge, establishedRunTarget)
+  const historicalGraphObservation = journalGraphObservationAt(settlementRunState.workflowHistory.evidence, {
+    target: establishedRunTarget
+  })
+  const historicalCurrentTaskGraph =
+    historicalGraphObservation === undefined
+      ? Option.none<TaskDagSnapshot>()
+      : journalGraphSnapshotForObservation(
+          settlementRunState.workflowHistory.evidence,
+          historicalGraphObservation.position
+        )
   const activeRefreshGraphObservation =
     opportunity._tag === "ActiveWorkAuthorityRefresh" && Option.isSome(activationBaselinePosition)
       ? currentCompleteGraphObservationAfter(
@@ -4088,19 +4097,11 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   )
   /*
    * Integration dependency explanations also project the reconstructed graph.
-   * Give that composition the same immutable-target slice used above so a
-   * later observation from another tracker target cannot block or authorize a
-   * responsibility for this Run.
+   * The frontier derives that graph from the same exact target-bound journal
+   * evidence, so a later observation from another tracker target cannot block
+   * or authorize a responsibility for this Run.
    */
-  const integrationRunState: ReconstructedRunState = {
-    ...runState,
-    graphKnowledge: {
-      taskTrackerFacts: runState.graphKnowledge.taskTrackerFacts.filter(
-        ({ target }) => taskTrackerTargetKey(target) === taskTrackerTargetKey(establishedRunTarget)
-      )
-    }
-  }
-  const integration = deriveIntegrationFrontier(integrationRunState, {
+  const integration = deriveIntegrationFrontier(runState, {
     ...integrationResourceSnapshot,
     currentTrackerTaskIds,
     integrationTarget,
