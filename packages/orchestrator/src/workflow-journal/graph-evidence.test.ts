@@ -33,6 +33,7 @@ import {
   appendGraphEvidence,
   emptyGraphEvidence,
   graphSnapshotForObservation,
+  graphBlockerClearEpisodeAt,
   lastGraphObservationAt,
   inspectGraphEvidenceStorage
 } from "./graph-evidence.js"
@@ -43,6 +44,7 @@ import {
   journalGraphObservationAt
 } from "./record-evidence.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
+import { observeBlockerClearProjection } from "./blocker-clear-evidence.js"
 
 const runId = RunId.make("graph-evidence")
 const taskId = TaskId.make("graph-A")
@@ -131,6 +133,55 @@ it("does not retroactively give an earlier graph a later plan correlation", () =
   expect(lastGraphObservationAt(index, { throughPosition: 2, target, plannedAttempt: attempt })).toBeUndefined()
 })
 
+it("reconfirms an older full graph without restoring stale blocker boundaries", () => {
+  const prerequisite = TaskId.make("graph-blocker")
+  const blockedSnapshot = validSnapshot({
+    revision: "blocked",
+    tasks: [
+      { id: taskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [prerequisite] },
+      { id: prerequisite, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
+    ]
+  })
+  const fullRead = graphRead("blocker-full")
+  const clearRead = graphRead("blocker-clear")
+  const oldRead = graphRead("blocker-old-full-reconfirmed")
+  const full = record(
+    1,
+    taskTrackerFactsObservedEvent(fullRead.operationId, makeCompleteTaskTrackerFactsObserved(fullRead, blockedSnapshot))
+  )
+  const cleared = record(
+    2,
+    taskTrackerFactsObservedEvent(clearRead.operationId, makeCompleteTaskTrackerFactsObserved(clearRead, snapshot))
+  )
+  const old = record(3, makeTaskTrackerFactsObservedFromRead([full], oldRead, blockedSnapshot))
+  expect(old.event._tag === "TaskTrackerFactsObserved" && old.event.observation._tag).toBe(
+    "UnchangedTaskTrackerFactsReconfirmed"
+  )
+  const lookup = (id: OperationId) => (id === plan.operationId ? plan : undefined)
+  let index = [full, cleared, old].reduce(
+    (prior, next) => appendGraphEvidence(prior, next, lookup),
+    emptyGraphEvidence()
+  )
+  expect(graphBlockerClearEpisodeAt(index, { target, taskId, afterPosition: 0, throughPosition: 2 })).toEqual({
+    blockerObservedAt: 1,
+    blockerClearedAt: 2
+  })
+  expect(graphBlockerClearEpisodeAt(index, { target, taskId, afterPosition: 0, throughPosition: 3 })).toBeUndefined()
+  let taskVisits = 0
+  const stop = observeBlockerClearProjection(() => {
+    taskVisits += 1
+  })
+  try {
+    index = appendGraphEvidence(index, { ...old, position: JournalPosition.make(4) }, lookup)
+  } finally {
+    stop()
+  }
+  expect(taskVisits).toBe(0)
+  expect(Option.getOrThrow(graphSnapshotForObservation(index, old.position, 4))).toBe(
+    Option.getOrThrow(graphSnapshotForObservation(index, full.position, 4))
+  )
+})
+
 it("exposes cutoff-safe graph evidence through the decoded journal index", () => {
   const read = graphRead("graph-journal-index")
   const full = record(
@@ -144,7 +195,9 @@ it("exposes cutoff-safe graph evidence through the decoded journal index", () =>
   ])
   expect(journalGraphObservationAt(evidence, { target, plannedAttempt: attempt })).toBe(full)
   expect(Option.getOrThrow(journalGraphSnapshotForObservation(evidence, full.position)).eligibleTasks()).toHaveLength(1)
-  expect(inspectJournalEvidenceStorage(evidence).length).toBeGreaterThan(inspectGraphEvidenceStorage(emptyGraphEvidence()).length)
+  expect(inspectJournalEvidenceStorage(evidence).length).toBeGreaterThan(
+    inspectGraphEvidenceStorage(emptyGraphEvidence()).length
+  )
 })
 
 const retainedSlots = (roots: ReadonlyArray<object>): number => {

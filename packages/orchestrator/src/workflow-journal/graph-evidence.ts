@@ -1,5 +1,12 @@
 import { HashMap, Option } from "effect"
-import type { PlannedTaskAttempt } from "@dalph/contracts"
+import type { PlannedTaskAttempt, TaskId } from "@dalph/contracts"
+import {
+  appendBlockerClearEvidence,
+  blockerClearEpisodeAt,
+  emptyBlockerClearEvidence,
+  inspectBlockerClearEvidenceStorage,
+  type BlockerClearEvidence
+} from "./blocker-clear-evidence.js"
 import type { TaskDagSnapshot } from "../authorities/task-tracker/graph.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../authorities/task-tracker/target.js"
 import type { OperationId } from "../workflow/identity.js"
@@ -33,6 +40,7 @@ interface CompleteGraphEvidence {
   readonly snapshot: Option.Option<TaskDagSnapshot>
 }
 interface GraphEvidenceRoots {
+  readonly blockerClear: BlockerClearEvidence
   readonly observations: JournalRecordSequence
   readonly byTarget: HashMap.HashMap<string, JournalRecordSequence>
   readonly byPlan: HashMap.HashMap<string, JournalRecordSequence>
@@ -50,6 +58,7 @@ const retain = (roots: GraphEvidenceRoots): GraphEvidence => {
 }
 export const emptyGraphEvidence = (): GraphEvidence =>
   retain({
+    blockerClear: emptyBlockerClearEvidence(),
     observations: emptyJournalRecords(),
     byTarget: HashMap.empty(),
     byPlan: HashMap.empty(),
@@ -133,6 +142,7 @@ export const appendGraphEvidence = (
     byTargetPlan = appendBucket(byTargetPlan, targetPlanKey(observation.target, plan), record)
   }
   return retain({
+    blockerClear: appendBlockerClearEvidence(roots.blockerClear, observation.target, record.position, snapshot),
     observations: appendJournalRecord(roots.observations, record),
     byTarget: appendBucket(roots.byTarget, taskTrackerTargetKey(observation.target), record),
     byPlan,
@@ -188,11 +198,23 @@ export const graphSnapshotForObservation = (
     ? Option.none()
     : Option.getOrElse(HashMap.get(rootsOf(evidence).snapshots, position), () => Option.none())
 
+/** Blocker/clear chronology is derived from the selected graph snapshots, not from tracker authority outside the journal. */
+export const graphBlockerClearEpisodeAt = (
+  evidence: GraphEvidence,
+  query: {
+    readonly target: TrackerTarget
+    readonly taskId: TaskId
+    readonly afterPosition: number
+    readonly throughPosition: number
+  }
+) => blockerClearEpisodeAt(rootsOf(evidence).blockerClear, query)
+
 /** Test-only complete retained roots, including every ordered sequence and shared projected snapshot. */
 export const inspectGraphEvidenceStorage = (evidence: GraphEvidence): ReadonlyArray<object> => {
   const roots = rootsOf(evidence)
   return [
     roots,
+    ...inspectBlockerClearEvidenceStorage(roots.blockerClear),
     inspectJournalRecordStorage(roots.observations),
     ...[roots.byTarget, roots.byPlan, roots.byTargetPlan].flatMap((map) =>
       Array.from(map, ([, records]) => inspectJournalRecordStorage(records))
