@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Exact history reconstruction spans every delivery authority boundary. */
-import { Context, Effect, Match, Option, Schema } from "effect"
+import { Context, Effect, HashSet, Iterable, Match, Option, Schema } from "effect"
 import {
   TaskWorkSpecification,
   type IntegrationTarget,
@@ -1321,7 +1321,7 @@ const isMatchingTaskUnpause = (event: JournalRecord["event"], pause: TaskPauseEv
   event.subject.runId === pause.subject.runId &&
   event.subject.taskId === pause.subject.taskId
 
-type GraphObservationRecord = Pick<JournalRecord, "position"> & {
+type GraphObservationRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>
 }
 
@@ -1359,18 +1359,17 @@ const taskPauseCoverageBoundaries = (
 ): ReadonlyArray<JournalPosition> => {
   if (pause.subject.taskId === plannedAttempt.taskId) return [pausePosition]
   const unpausePosition = taskUnpausePositionFor(source, pause, pausePosition)
-  const graphObservations: Array<GraphObservationRecord> = []
-  for (const record of journalRecordsForTaskKind(source, plannedAttempt.taskId, "TaskTrackerFactsObserved")) {
-    if (
-      isGraphObservationRecord(record) &&
-      (immutableRunTarget === undefined ||
-        taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)) &&
-      (record.position < pausePosition ||
-        (record.position > pausePosition && (unpausePosition === undefined || record.position < unpausePosition)))
-    ) {
-      graphObservations.push(record)
-    }
-  }
+  const graphObservations = Array.from(
+    Iterable.filter(
+      journalRecordsForTaskKind(source, plannedAttempt.taskId, "TaskTrackerFactsObserved"),
+      (record): record is GraphObservationRecord =>
+        isGraphObservationRecord(record) &&
+        (immutableRunTarget === undefined ||
+          taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)) &&
+        (record.position < pausePosition ||
+          (record.position > pausePosition && (unpausePosition === undefined || record.position < unpausePosition)))
+    )
+  )
   const graphBeforePause = graphObservations.findLast(({ position }) => position < pausePosition)
   const graphsWhilePaused = graphObservations.filter(({ position }) => position > pausePosition)
   const observedGraphs = [
@@ -2833,7 +2832,7 @@ export const pendingActiveRefreshG2OperationFor = (
   currentGraph: { readonly operationId: OperationId; readonly recordedAt: JournalPosition }
 ): TrackerGraphObservationOperation | undefined => {
   const targetKey = taskTrackerTargetKey(target)
-  const graphOperationIdsBeforeIntent = new Set<OperationId>()
+  let graphOperationIdsBeforeIntent = HashSet.empty<OperationId>()
   let pending: TrackerGraphObservationOperation | undefined
   for (const record of journalRecordsOfKind(records, "TaskTrackerReadIntentRecorded")) {
     const { event } = record
@@ -2845,8 +2844,10 @@ export const pendingActiveRefreshG2OperationFor = (
     ) {
       continue
     }
-    const expectedPredecessors = [...new Set([...graphOperationIdsBeforeIntent, currentGraph.operationId])].toSorted()
-    graphOperationIdsBeforeIntent.add(event.operation.operationId)
+    const expectedPredecessors = Array.from(
+      HashSet.add(graphOperationIdsBeforeIntent, currentGraph.operationId)
+    ).toSorted()
+    graphOperationIdsBeforeIntent = HashSet.add(graphOperationIdsBeforeIntent, event.operation.operationId)
     if (
       event.operation.cause._tag !== "PostQuiescenceReconfirmation" ||
       event.operation.cause.quiescentGraphOperationId !== currentGraph.operationId ||

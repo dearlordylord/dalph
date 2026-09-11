@@ -7,7 +7,7 @@ import {
   type PlannedAttemptExecutorCorrelation,
   type PlannedTaskAttempt
 } from "@dalph/contracts"
-import { Data, Effect, Schema } from "effect"
+import { Data, Effect, Iterable, Result, Schema } from "effect"
 import type { ActiveTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
 import { workflowJournalHistoryIssueDetail } from "../reconstruction/history-result.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
@@ -246,27 +246,27 @@ const exactAttemptHandoffs = (
   records: JournalHistorySource
 ): ReadonlyMap<string, Extract<FreshTaskAdmissionReleaseEvidence, { readonly _tag: "ExactAttemptHandoffAccepted" }>> =>
   new Map(
-    Array.from(journalRecordsOfKind(records, "PlannedAttemptExecutorWorkResponsibilityBegan")).flatMap((record) => {
-      if (record.event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return []
+    Iterable.filterMap(journalRecordsOfKind(records, "PlannedAttemptExecutorWorkResponsibilityBegan"), (record) => {
+      if (record.event._tag !== "PlannedAttemptExecutorWorkResponsibilityBegan") return Result.failVoid
       if (
         record.runId !== runId ||
         record.runId !== record.event.plannedAttempt.runId ||
         record.key !== plannedAttemptExecutorWorkResponsibilityBeganRecordKey(record.event.plannedAttempt.attemptId)
       ) {
-        return []
+        return Result.failVoid
       }
       const acceptedPrefix = isJournalRecordEvidence(records)
         ? journalEvidenceBefore(records, record.position + 1)
         : records.filter((candidate) => candidate.position <= record.position)
       const lineage = acceptedFreshAttemptLineage(acceptedPrefix, record.event.plannedAttempt, "WorktreeReady")
-      if (lineage === undefined) return []
+      if (lineage === undefined) return Result.failVoid
       const evidence = exactAttemptHandoffAccepted({
         claimOperationId: lineage.claimOperationId,
         plannedAttempt: record.event.plannedAttempt,
         runId,
         taskId: record.event.plannedAttempt.taskId
       })
-      return [[releaseEvidenceKey(evidence), evidence] as const]
+      return Result.succeed([releaseEvidenceKey(evidence), evidence] as const)
     })
   )
 
@@ -317,8 +317,8 @@ export const projectFreshTaskAdmissionFromAccepted = (
     return required ? [immutableSnapshot(entry.plannedAttempt)] : []
   })
   const handoffs = exactAttemptHandoffs(runId, acceptedRecords)
-  const intents = Array.from(journalRecordsOfKind(acceptedRecords, "TaskClaimAcquisitionIntended")).filter(
-    isSelectionClaimIntentRecord
+  const intents = Array.from(
+    Iterable.filter(journalRecordsOfKind(acceptedRecords, "TaskClaimAcquisitionIntended"), isSelectionClaimIntentRecord)
   )
   const releaseEvidence = intents.flatMap((intent): ReadonlyArray<FreshTaskAdmissionReleaseEvidence> => {
     const acquisition = intent.event.operation.acquisition
@@ -383,23 +383,23 @@ export const projectFreshTaskCommitments = (
     return projection._tag === "FreshTaskAdmissionProjection" ? projection.commitments : []
   }
   const handoffs = exactAttemptHandoffs(runId, records)
-  const commitments: Array<Extract<TaskAdmissionOccupancy, { readonly _tag: "FreshTaskCommitted" }>> = []
-  for (const record of journalRecordsOfKind(records, "TaskClaimAcquisitionIntended")) {
-    if (!isSelectionClaimIntentRecord(record)) continue
-    const acquisition = record.event.operation.acquisition
-    const released =
-      exactPreOwnershipRejectionWasAccepted(records, record) ||
-      handoffs.has(freshTaskAdmissionReleaseKey(acquisition.taskId, acquisition.operationId))
-    if (!released && isTaskSelectionAcquireTaskClaimOperation(record.event.operation)) {
-      commitments.push(
+  const commitments = Array.from(
+    Iterable.filterMap(journalRecordsOfKind(records, "TaskClaimAcquisitionIntended"), (record) => {
+      if (!isSelectionClaimIntentRecord(record)) return Result.failVoid
+      const acquisition = record.event.operation.acquisition
+      const released =
+        exactPreOwnershipRejectionWasAccepted(records, record) ||
+        handoffs.has(freshTaskAdmissionReleaseKey(acquisition.taskId, acquisition.operationId))
+      if (released || !isTaskSelectionAcquireTaskClaimOperation(record.event.operation)) return Result.failVoid
+      return Result.succeed(
         Object.freeze(
           TaskAdmissionOccupancy.FreshTaskCommitted({
             commitment: brandFreshTaskCommitment(record.position, runId, record.event.operation)
           })
         )
       )
-    }
-  }
+    })
+  )
   return Object.freeze(commitments)
 }
 
