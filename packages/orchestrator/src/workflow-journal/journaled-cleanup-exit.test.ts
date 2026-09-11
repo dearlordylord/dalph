@@ -7,6 +7,8 @@ import { ActiveTaskClaim, TaskClaimRelease } from "../authorities/task-tracker/c
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { makeApplicationExitLifecycle } from "../coordination/application-exit/lifecycle.js"
+import { Journal } from "../coordination/delivery/journal.js"
+import { liveJournalTestLayer } from "../coordination/delivery/live-journal-test-layer.js"
 import { reconstructRunState } from "../coordination/reconstruction/reduce.js"
 import { InitialControlPolicy } from "../control/policy.js"
 import { OperationId } from "../workflow/identity.js"
@@ -24,10 +26,10 @@ import {
   makeTaskClaimReleaseOperation,
   TaskClaimReleaseAuthority
 } from "../workflow/registry/operation.js"
-import { memoryJournalTestLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
 import { intentRecordKey, outcomeRecordKey } from "./record-key.js"
-import { InRunJournal, JournalStore } from "./store.js"
+import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { JournalStore } from "./store.js"
 
 const runId = RunId.make("claim-cleanup-application-exit-run")
 const target = FixtureTarget.make("claim-cleanup-application-exit-target")
@@ -38,6 +40,12 @@ const claim = ActiveTaskClaim.make({
   token: ClaimToken.make("claim-cleanup-token")
 })
 const release = TaskClaimRelease.make({ claim, operationId: OperationId.make("claim-cleanup-release") })
+const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+const journalLayer = liveJournalTestLayer({
+  records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)],
+  runId,
+  target
+})
 
 const workflowCleanup = makeTaskClaimReleaseOperation({
   authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
@@ -70,8 +78,7 @@ const interpreterWithRelease = (
   })
 
 const beginClaimHistory = Effect.fn("ClaimCleanupExitTest.beginHistory")(function* () {
-  const journal = yield* JournalStore
-  yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }))
+  const journal = yield* Journal
   const acquisition = makeTaskClaimAcquisitionOperation({
     acquisition: { operationId: claim.operationId, owner: claim.owner, taskId: claim.taskId, token: claim.token },
     predecessorOperationIds: []
@@ -89,13 +96,10 @@ const beginClaimHistory = Effect.fn("ClaimCleanupExitTest.beginHistory")(functio
 })
 
 const buildJournaledInterpreter = Effect.fn("ClaimCleanupExitTest.buildInterpreter")(function* (
-  inRunJournal: InRunJournal["Service"],
   provider: WorkflowInterpreterService,
   scope: Scope.Scope
 ) {
-  const layer = journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, provider)).pipe(
-    Layer.provide(Layer.succeed(InRunJournal, inRunJournal))
-  )
+  const layer = journaledWorkflowInterpreterLayer(runId, Layer.succeed(WorkflowInterpreter, provider))
   return Context.get(yield* Layer.build(layer).pipe(Scope.provide(scope)), WorkflowInterpreter)
 })
 
@@ -136,8 +140,8 @@ it.effect("records an available exact claim-release result under Exit without ch
 it.effect("preserves and reopens interrupted exact claim cleanup in authored and Run-journal cassettes", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const journal = yield* JournalStore
-      const inRunJournal = yield* InRunJournal
+      const journal = yield* Journal
+      const journalStore = yield* JournalStore
       yield* beginClaimHistory()
       const firstScope = yield* Scope.make()
       const firstLifecycle = yield* makeApplicationExitLifecycle()
@@ -147,7 +151,6 @@ it.effect("preserves and reopens interrupted exact claim cleanup in authored and
       const authored = yield* Ref.make<ReadonlyArray<string>>([])
       const record = (entry: string) => Ref.update(authored, (entries) => [...entries, entry])
       const firstInterpreter = yield* buildJournaledInterpreter(
-        inRunJournal,
         interpreterWithRelease(() =>
           record("ClaimReleaseSent").pipe(
             Effect.andThen(Deferred.succeed(callStarted, undefined)),
@@ -185,14 +188,13 @@ it.effect("preserves and reopens interrupted exact claim cleanup in authored and
       yield* Scope.close(firstScope, Exit.void)
 
       yield* record("ApplicationProcessDied")
-      yield* journal.readRunForRecovery(runId, target)
+      yield* journalStore.readRunForRecovery(runId, target)
       yield* record("OrdinaryRunEntry")
       const restartedScope = yield* Scope.make()
       const restartedLifecycle = yield* makeApplicationExitLifecycle()
       const restartedOwner = yield* restartedLifecycle.admission.acquireForwardOwner("InterruptibleBoundary")
       if (restartedOwner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong restarted owner kind")
       const restartedInterpreter = yield* buildJournaledInterpreter(
-        inRunJournal,
         interpreterWithRelease((operation) =>
           record("TrackerCheckedBeforeRetry").pipe(
             Effect.as(AuthoritativeTaskClaimReleased.make({ release: operation.release }))
@@ -222,7 +224,7 @@ it.effect("preserves and reopens interrupted exact claim cleanup in authored and
           .filter((tag) => tag === "TaskClaimReleaseIntended" || tag === "TaskClaimReleased")
       ).toEqual(["TaskClaimReleaseIntended", "TaskClaimReleased"])
     })
-  ).pipe(Effect.provide(memoryJournalTestLayer))
+  ).pipe(Effect.provide(journalLayer))
 )
 
 it.effect("sends no task-claim cleanup call through a pre-cutoff owner after the Exit cutoff", () =>
