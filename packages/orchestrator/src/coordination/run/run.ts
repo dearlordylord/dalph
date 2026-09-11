@@ -200,7 +200,9 @@ export interface JournaledRunBootstrapService {
       Effect.Success<ReturnType<IntegrationQuarantineDirectionControl["Service"]["apply"]>>,
       | Effect.Error<ReturnType<IntegrationQuarantineDirectionControl["Service"]["apply"]>>
       | ApplicationExiting
+      | JournaledRunBootstrapError
       | JournaledRunIdentityMismatch
+      | JournaledRunNotActive
     >
     readonly applyAttemptChoice: (
       input: unknown
@@ -215,6 +217,7 @@ export interface JournaledRunBootstrapService {
       | Effect.Error<ReturnType<ControlDirectionApplication["Service"]["apply"]>>
       | Effect.Error<ReturnType<WorkflowInterpreter["Service"]["readTrackerGraph"]>>
       | Effect.Error<ReturnType<WorkflowTrace["Service"]["emit"]>>
+      | JournaledRunBootstrapError
       | JournaledRunNotActive
       | JournaledRunIdentityMismatch
       | ApplicationExiting
@@ -240,6 +243,7 @@ export interface JournaledRunBootstrapService {
       Effect.Success<ReturnType<IntegrationQuarantineDirectionControl["Service"]["read"]>>,
       | Effect.Error<ReturnType<IntegrationQuarantineDirectionControl["Service"]["read"]>>
       | ApplicationExiting
+      | JournaledRunBootstrapError
       | JournaledRunIdentityMismatch
     >
     readonly readTaskWorkCapacity: (
