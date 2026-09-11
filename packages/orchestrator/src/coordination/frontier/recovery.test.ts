@@ -1578,7 +1578,14 @@ it.effect("a task leaving complete membership safely suspends its executor work 
 
 it.effect("replays the exact durable claim and worktree intents", () => {
   const runId = RunId.make("runnable-transition-intents")
-  const taskId = TaskId.make("runnable-transition-task")
+  const target = FixtureTarget.make("runnable-transition-target")
+  const taskId = TaskId.make("runnable-transition-claim-task")
+  const worktreeTaskId = TaskId.make("runnable-transition-worktree-task")
+  const worktreeSpecification = makeTaskWorkSpecification({
+    body: "Recover the durable worktree intent",
+    taskId: worktreeTaskId,
+    title: "Recovered worktree"
+  })
   const claim = makeTaskClaimAcquisitionOperation({
     acquisition: {
       operationId: OperationId.make("recovered-claim"),
@@ -1594,22 +1601,93 @@ it.effect("replays the exact durable claim and worktree intents", () => {
     branch: TaskBranchRef.make("refs/heads/dalph/recovered-attempt"),
     executor: TaskExecutorLocator.make("executor:fake"),
     runId,
-    taskId,
-    taskRevision: TaskRevision.make("recovered-revision"),
+    taskId: worktreeTaskId,
+    taskRevision: worktreeSpecification.fingerprint,
     worktree: WorktreeLocator.make("/worktrees/recovered-attempt")
   })
   const worktree = makeTaskWorktreeReconciliationOperation({
     operationId: OperationId.make("recovered-worktree"),
     plannedAttempt,
+    predecessorOperationIds: [OperationId.make("recovered-plan")]
+  })
+  const worktreeClaim = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      operationId: OperationId.make("recovered-worktree-claim"),
+      owner: ClaimOwner.make("dalph"),
+      taskId: worktreeTaskId,
+      token: ClaimToken.make("recovered-worktree-token")
+    },
     predecessorOperationIds: []
   })
+  const graph = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("recovered-worktree-graph"),
+    target,
+    [worktreeClaim.acquisition.operationId],
+    [worktreeTaskId]
+  )
+  const specification = makeTaskWorkSpecificationObservationOperation(
+    OperationId.make("recovered-worktree-specification"),
+    target,
+    worktreeTaskId,
+    [graph.operationId]
+  )
+  const plan = makeTaskAttemptPlanOperation({
+    operationId: OperationId.make("recovered-plan"),
+    plannedAttempt,
+    predecessorOperationIds: [specification.operationId]
+  })
+  const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 
   return Effect.gen(function* () {
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     yield* journal.append(
       runId,
       intentRecordKey(claim.acquisition.operationId),
       TaskClaimAcquisitionIntendedEvent.make({ operation: claim, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      intentRecordKey(worktreeClaim.acquisition.operationId),
+      TaskClaimAcquisitionIntendedEvent.make({ operation: worktreeClaim, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(worktreeClaim.acquisition.operationId),
+      TaskClaimAcquiredEvent.make({
+        claim: ActiveTaskClaim.make(worktreeClaim.acquisition),
+        version: workflowJournalEventVersion
+      })
+    )
+    yield* journal.append(runId, intentRecordKey(graph.operationId), taskTrackerReadIntent(graph))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(graph.operationId),
+      taskTrackerFactsObservedEvent(
+        graph.operationId,
+        makeCompleteTaskTrackerFactsObserved(
+          graph,
+          validSnapshot({
+            revision: "recovered-worktree-graph-revision",
+            rootTaskId: worktreeTaskId,
+            tasks: [{ id: worktreeTaskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }]
+          })
+        )
+      )
+    )
+    yield* journal.append(runId, intentRecordKey(specification.operationId), taskTrackerReadIntent(specification))
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(specification.operationId),
+      taskTrackerFactsObservedEvent(
+        specification.operationId,
+        makeFocusedTaskWorkSpecificationFactsObserved(specification, worktreeSpecification)
+      )
+    )
+    yield* journal.append(
+      runId,
+      attemptPlanRecordKey(plannedAttempt.attemptId),
+      TaskAttemptPlannedEvent.make({ operation: plan, version: workflowJournalEventVersion })
     )
     yield* journal.append(
       runId,
@@ -1666,7 +1744,11 @@ it.effect("replays the exact durable claim and worktree intents", () => {
       "claim:recovered-claim",
       "worktree:recovered-worktree"
     ])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(
+      liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+    )
+  )
 })
 
 it.effect("fails closed when initial or reread workflow-journal history is invalid", () =>
