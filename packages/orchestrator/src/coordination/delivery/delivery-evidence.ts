@@ -17,6 +17,7 @@ import type { ResponsibilityFreshFacts } from "../frontier/fresh-facts.js"
 import type { CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import type { ExactTicketDeliveryEvidence, TicketDeliveryEvidence } from "./relations.js"
 import {
+  isJournalRecordEvidence,
   journalRecordsForOperationId,
   journalRecordsOfKind,
   type JournalHistorySource
@@ -152,7 +153,7 @@ const journaledIntegrationEvidenceByPrefix = new WeakMap<object, ReadonlyArray<E
 export const journaledIntegrationEvidenceOf = (
   records: JournalHistorySource
 ): ReadonlyArray<ExactTicketDeliveryEvidence> => {
-  const cached = journaledIntegrationEvidenceByPrefix.get(records)
+  const cached = isJournalRecordEvidence(records) ? journaledIntegrationEvidenceByPrefix.get(records) : undefined
   if (cached !== undefined) return cached
   const focusedCompletionSuccesses = Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved")).flatMap(
     (record) => focusedTaskCompletionSuccessOf(record, records)
@@ -176,7 +177,7 @@ export const journaledIntegrationEvidenceOf = (
     ...focusedCompletionSuccesses,
     ...finalitySettlements
   ]
-  journaledIntegrationEvidenceByPrefix.set(records, evidence)
+  if (isJournalRecordEvidence(records)) journaledIntegrationEvidenceByPrefix.set(records, evidence)
   return evidence
 }
 
