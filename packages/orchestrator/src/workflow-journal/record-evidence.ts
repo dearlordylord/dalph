@@ -7,6 +7,13 @@ import type { TargetPromotionRequestId } from "../workflow/protocols/target-prom
 import type { IntegratorSessionId } from "../workflow/protocols/integrator/events.js"
 import type { IntegrationQuarantineDirectionRequestId } from "../workflow/protocols/integration-quarantine/events.js"
 import {
+  appendCompletionReadCycleEvidence,
+  completionReadCycleAt,
+  emptyCompletionReadCycles,
+  inspectCompletionReadCycleStorage,
+  type CompletionReadCycles
+} from "./completion-read-cycles.js"
+import {
   appendClaimObservationEpisode,
   claimObservationEpisodeAt,
   emptyClaimObservationEpisodes,
@@ -128,6 +135,7 @@ interface EvidenceIndexes {
   readonly byQuarantineDirectionRequest: HashMap.HashMap<string, JournalRecordSequence>
   readonly byRestartRead: HashMap.HashMap<string, JournalRecordSequence>
   readonly claimObservationEpisodes: ClaimObservationEpisodeIndex
+  readonly completionReadCycles: CompletionReadCycles
   readonly graphEvidence: GraphEvidence
   readonly specificationDivergence: SpecificationDivergence
   readonly readFreshnessEvidence: ReadFreshnessEvidence
@@ -174,6 +182,7 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
       byQuarantineDirectionRequest: HashMap.empty(),
       byRestartRead: HashMap.empty(),
       claimObservationEpisodes: emptyClaimObservationEpisodes(),
+      completionReadCycles: emptyCompletionReadCycles(),
       graphEvidence: emptyGraphEvidence(),
       specificationDivergence: emptySpecificationDivergence(),
       readFreshnessEvidence: emptyReadFreshnessEvidence(),
@@ -513,6 +522,7 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
       byQuarantineDirectionRequest,
       byRestartRead,
       claimObservationEpisodes: appendClaimObservationEpisode(indexes.claimObservationEpisodes, record),
+      completionReadCycles: appendCompletionReadCycleEvidence(indexes.completionReadCycles, record),
       graphEvidence,
       specificationDivergence: appendSpecificationDivergence(indexes.specificationDivergence, record),
       readFreshnessEvidence: appendReadFreshnessEvidence(indexes.readFreshnessEvidence, record),
@@ -778,6 +788,11 @@ export const journalRestartReadIntents = (
 export const journalTaskClaimObservationAt = (source: JournalRecordEvidence, taskId: TaskId) =>
   claimObservationEpisodeAt(indexesFor(source).claimObservationEpisodes, taskId, source.lastPosition ?? 0)
 
+export const journalCompletionReadCycle = (
+  source: JournalRecordEvidence,
+  query: Omit<Parameters<typeof completionReadCycleAt>[1], "throughPosition">
+) => completionReadCycleAt(indexesFor(source).completionReadCycles, { ...query, throughPosition: source.lastPosition ?? 0 })
+
 /** Latest graph observation visible at this evidence cutoff, optionally scoped to target and named plan. */
 export const journalGraphObservationAt = (
   source: JournalRecordEvidence,
@@ -1014,6 +1029,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     indexes.byQuarantineDirectionRequest,
     indexes.byRestartRead,
     indexes.claimObservationEpisodes,
+    indexes.completionReadCycles,
     indexes.graphEvidence,
     indexes.specificationDivergence,
     indexes.readFreshnessEvidence,
@@ -1044,6 +1060,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     ...Array.from(HashMap.values(indexes.byQuarantineDirectionRequest), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byRestartRead), inspectJournalRecordStorage),
     ...inspectClaimObservationEpisodeStorage(indexes.claimObservationEpisodes),
+    ...inspectCompletionReadCycleStorage(indexes.completionReadCycles),
     ...inspectGraphEvidenceStorage(indexes.graphEvidence),
     ...inspectSpecificationDivergenceStorage(indexes.specificationDivergence),
     ...inspectReadFreshnessEvidenceStorage(indexes.readFreshnessEvidence),
