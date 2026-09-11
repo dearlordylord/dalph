@@ -7,17 +7,29 @@ import { TaskDagSnapshot } from "../authorities/task-tracker/graph.js"
 import { TrackerRevision, TrackerSnapshot } from "../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { makeApplicationExitLifecycle } from "../coordination/application-exit/lifecycle.js"
+import { Journal } from "../coordination/delivery/journal.js"
+import { liveJournalTestLayer } from "../coordination/delivery/live-journal-test-layer.js"
 import { InitialControlPolicy } from "../control/policy.js"
 import { OperationId } from "../workflow/identity.js"
 import { InterruptibleWorkflowBoundaryIntent, WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
 import { makeTrackerGraphObservationOperation } from "../workflow/registry/operation.js"
-import { memoryJournalTestLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
-import { JournalStore } from "./store.js"
+import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
 
 const unused = () => Effect.die("unused")
 const runId = RunId.make("journaled-tracker-exit-run")
 const target = FixtureTarget.make("journaled-tracker-exit-target")
+const journalLayer = liveJournalTestLayer({
+  records: [
+    makeWorkflowRunBeganRecord(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+  ],
+  runId,
+  target
+})
 const projected = TaskDagSnapshot.project(
   TrackerSnapshot.make({ revision: TrackerRevision.make("journaled-tracker-exit-revision"), tasks: [] })
 )
@@ -69,12 +81,7 @@ it.effect("records the authored tracker interruption and ordinary replay cassett
     const journaled = journaledWorkflowInterpreterLayer(runId, provider)
 
     yield* Effect.gen(function* () {
-      const journal = yield* JournalStore
-      yield* journal.beginRun(
-        runId,
-        target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-      )
+      const journal = yield* Journal
       const interpreter = yield* WorkflowInterpreter
       const operation = makeTrackerGraphObservationOperation(
         { _tag: "WorkflowEstablishment" },
@@ -124,5 +131,5 @@ it.effect("records the authored tracker interruption and ordinary replay cassett
           .filter((tag) => tag === "TaskTrackerReadIntentRecorded" || tag === "TaskTrackerFactsObserved")
       ).toEqual(["TaskTrackerReadIntentRecorded", "TaskTrackerFactsObserved"])
     }).pipe(Effect.provide(journaled))
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(journalLayer))
 )
