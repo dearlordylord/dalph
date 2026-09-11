@@ -54,6 +54,8 @@ import {
 } from "../../../workflow-journal/record-key.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { InRunJournal, type JournalRecord, JournalStore } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { lastJournalRecordForTaskKind } from "../../../workflow-journal/record-evidence.js"
 import { journaledWorkflowInterpreterLayer } from "../../../workflow-journal/journaled-interpreter.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
@@ -1375,7 +1377,11 @@ it.effect("rejects a no-release after a later same-target unreadable claim obser
     const initialReduction = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initialReduction._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initialReduction)
     const published = yield* makeJournal(runId, target, initialReduction, storage)
-    const publishedControlLayer = attemptChoiceControlLayer.pipe(Layer.provide(Layer.succeed(InRunJournal, published)))
+    const publishedCapabilities = Layer.merge(
+      Layer.succeed(InRunJournal, published),
+      Layer.succeed(AcceptedJournalReader, published)
+    )
+    const publishedControlLayer = attemptChoiceControlLayer.pipe(Layer.provide(publishedCapabilities))
     yield* Effect.gen(function* () {
       const journal = yield* Journal
       const stop = yield* (yield* AttemptChoiceControl).apply({ choice: "StopTaskImplementation", requestId, subject })
@@ -1457,7 +1463,12 @@ it.effect("rejects a no-release after a later same-target unreadable claim obser
       ).not.toEqual([])
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(Layer.succeed(Journal, published), Layer.succeed(InRunJournal, published), publishedControlLayer)
+        Layer.mergeAll(
+          Layer.succeed(Journal, published),
+          Layer.succeed(InRunJournal, published),
+          Layer.succeed(AcceptedJournalReader, published),
+          publishedControlLayer
+        )
       )
     )
   }).pipe(Effect.provide(memoryJournalStoreLayer))
@@ -1470,7 +1481,11 @@ it.effect("keeps a published target-A Stop valid through advancement, reduction,
     const initialReduction = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (initialReduction._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(initialReduction)
     const published = yield* makeJournal(runId, target, initialReduction, storage)
-    const publishedControlLayer = attemptChoiceControlLayer.pipe(Layer.provide(Layer.succeed(InRunJournal, published)))
+    const publishedCapabilities = Layer.merge(
+      Layer.succeed(InRunJournal, published),
+      Layer.succeed(AcceptedJournalReader, published)
+    )
+    const publishedControlLayer = attemptChoiceControlLayer.pipe(Layer.provide(publishedCapabilities))
     yield* Effect.gen(function* () {
       const journal = yield* Journal
       const attached = yield* Deferred.make<void>()
@@ -1508,10 +1523,7 @@ it.effect("keeps a published target-A Stop valid through advancement, reduction,
       )
       const afterForeign = yield* journal.state.get
       expect(afterForeign.position).toBe(beforeForeign.position + 2)
-      const taskOnlyLatest = afterForeign.records.findLast(
-        ({ event }) =>
-          event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskWorkSpecificationFacts"
-      )
+      const taskOnlyLatest = lastJournalRecordForTaskKind(afterForeign.prefix, taskId, "TaskTrackerFactsObserved")
       if (taskOnlyLatest?.event._tag !== "TaskTrackerFactsObserved")
         return yield* Effect.die("missing latest specification")
       expect(taskOnlyLatest.event.observation._tag).toBe("FocusedTaskWorkSpecificationFacts")
@@ -1555,7 +1567,12 @@ it.effect("keeps a published target-A Stop valid through advancement, reduction,
       expect(reduceWorkflowJournalHistory(runId, advancedRecords)._tag).toBe("ValidWorkflowJournalHistory")
     }).pipe(
       Effect.provide(
-        Layer.mergeAll(Layer.succeed(Journal, published), Layer.succeed(InRunJournal, published), publishedControlLayer)
+        Layer.mergeAll(
+          Layer.succeed(Journal, published),
+          Layer.succeed(InRunJournal, published),
+          Layer.succeed(AcceptedJournalReader, published),
+          publishedControlLayer
+        )
       )
     )
 
@@ -1564,7 +1581,12 @@ it.effect("keeps a published target-A Stop valid through advancement, reduction,
     if (finalReduction._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(finalReduction)
     const restartedJournal = yield* makeJournal(runId, target, finalReduction, storage)
     const restartedControlLayer = attemptChoiceControlLayer.pipe(
-      Layer.provide(Layer.succeed(InRunJournal, restartedJournal))
+      Layer.provide(
+        Layer.merge(
+          Layer.succeed(InRunJournal, restartedJournal),
+          Layer.succeed(AcceptedJournalReader, restartedJournal)
+        )
+      )
     )
     yield* Effect.gen(function* () {
       const restartedChoice = yield* (yield* AttemptChoiceControl).read(requestId)
@@ -1580,6 +1602,7 @@ it.effect("keeps a published target-A Stop valid through advancement, reduction,
         Layer.mergeAll(
           Layer.succeed(Journal, restartedJournal),
           Layer.succeed(InRunJournal, restartedJournal),
+          Layer.succeed(AcceptedJournalReader, restartedJournal),
           restartedControlLayer
         )
       )

@@ -5,10 +5,19 @@ import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
+  attemptChoiceAppliedRecordKey,
   attemptImplementationAbandonedRecordKey,
   stoppedAttemptClaimNoReleaseRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordByKey,
+  journalRecordsForAttempt,
+  journalRecordsForOperationId,
+  journalRecordsForTask,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { claimReadMatchesTarget, exactWorkflowRunTargetFor } from "../../../workflow-journal/run-target.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import {
@@ -67,39 +76,41 @@ export type AttemptStoppageAdvanceResult =
   | { readonly _tag: "AttemptStoppageSupersededByTerminal" }
 
 const exactAppliedStop = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject
-) =>
-  records.find(
-    ({ event }) =>
-      event._tag === "AttemptChoiceApplied" &&
-      event.choice === "StopTaskImplementation" &&
-      sameAttemptChoiceRequestId(event.requestId, requestId) &&
-      sameAttemptChoiceSubject(event.subject, subject)
-  )
+) => {
+  const record = journalRecordByKey(records, attemptChoiceAppliedRecordKey(requestId))
+  return record?.event._tag === "AttemptChoiceApplied" &&
+    record.event.choice === "StopTaskImplementation" &&
+    sameAttemptChoiceRequestId(record.event.requestId, requestId) &&
+    sameAttemptChoiceSubject(record.event.subject, subject)
+    ? record
+    : undefined
+}
 
 type AttemptAbandonmentRecord = Omit<JournalRecord, "event"> & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>
 }
 
 const exactAbandonment = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject
-) =>
-  records.find(
-    (record): record is AttemptAbandonmentRecord =>
-      record.event._tag === "AttemptImplementationAbandoned" &&
-      sameAttemptChoiceRequestId(record.event.requestId, requestId) &&
-      sameAttemptChoiceSubject(record.event.subject, subject)
-  )
+) => {
+  const record = journalRecordByKey(records, attemptImplementationAbandonedRecordKey(requestId))
+  return record?.event._tag === "AttemptImplementationAbandoned" &&
+    sameAttemptChoiceRequestId(record.event.requestId, requestId) &&
+    sameAttemptChoiceSubject(record.event.subject, subject)
+    ? (record as AttemptAbandonmentRecord)
+    : undefined
+}
 
 const evidenceProof = (evidence: AcceptedPlannedAttemptExecutorEvidence): AttemptQuiescenceProof =>
   AttemptQuiescenceProof.cases.AcceptedReport.make({ reportOrdinal: evidence.source.ordinal })
 
 const unbrokenQuiescenceEvidence = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): AcceptedPlannedAttemptExecutorEvidence | undefined => {
   const evidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
@@ -110,13 +121,16 @@ const unbrokenQuiescenceEvidence = (
   ) {
     return undefined
   }
-  const laterCommandExists = records.some(
-    ({ event, position }) =>
+  let laterCommandExists = false
+  for (const { event, position } of journalRecordsForAttempt(records, plannedAttempt.attemptId)) {
+    if (
       position > evidence.observedAt &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
       event.plannedAttempt.runId === plannedAttempt.runId &&
       event.plannedAttempt.attemptId === plannedAttempt.attemptId
-  )
+    )
+      laterCommandExists = true
+  }
   return laterCommandExists ? undefined : evidence
 }
 
@@ -126,7 +140,7 @@ const recordAbandonment = Effect.fn("AttemptStop.recordAbandonment")(function* (
   evidence: AcceptedPlannedAttemptExecutorEvidence
 ) {
   const journal = yield* InRunJournal
-  const records = yield* journal.read(subject.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(subject.plannedAttempt.runId)
   if (exactAbandonment(records, requestId, subject) !== undefined) return
   const expectedClaim = authorizedClaimForAttempt(records, subject.plannedAttempt)?.claim
   if (expectedClaim === undefined) return yield* new AttemptStopClaimAuthorityMissing({ requestId, subject })
@@ -153,7 +167,7 @@ type AttemptStoppageEvidenceDisposition =
   | { readonly _tag: "LaterCommandRecorded" }
 
 const attemptStoppageEvidenceDisposition = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): AttemptStoppageEvidenceDisposition => {
   const latestEvidence = latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
@@ -172,8 +186,7 @@ const advanceAttemptStoppageUnserialized = Effect.fn("AttemptStop.advanceStoppag
   subject: AttemptChoiceSubject,
   _permit: PlannedAttemptProtocolPermit
 ) {
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(subject.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(subject.plannedAttempt.runId)
   if (exactAppliedStop(records, requestId, subject) === undefined) {
     return yield* new AttemptStopChoiceContradiction({ requestId, subject })
   }
@@ -258,26 +271,34 @@ type FocusedClaimObservationRecord = Omit<JournalRecord, "event"> & {
 }
 
 const latestStoppedReleaseIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   abandonmentPosition: JournalRecord["position"],
-  requestId: AttemptChoiceRequestId
-) =>
-  records.findLast(
-    ({ event, position }) =>
+  requestId: AttemptChoiceRequestId,
+  subject: AttemptChoiceSubject
+) => {
+  let found: JournalRecord | undefined
+  for (const record of journalRecordsForTask(records, subject.plannedAttempt.taskId)) {
+    const { event, position } = record
+    if (
       position > abandonmentPosition &&
       event._tag === "TaskClaimReleaseIntended" &&
       event.operation.authority._tag === "StoppedAttemptClaimReleaseAuthority" &&
       sameAttemptChoiceRequestId(event.operation.authority.requestId, requestId)
-  )
+    )
+      found = record
+  }
+  return found
+}
 
 const latestFocusedClaimObservation = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   observationBaseline: JournalRecord["position"],
   subject: AttemptChoiceSubject,
   immutableRunTarget: TrackerTarget | undefined
-) =>
-  records.findLast(
-    (record): record is FocusedClaimObservationRecord =>
+) => {
+  let found: FocusedClaimObservationRecord | undefined
+  for (const record of journalRecordsForTask(records, subject.plannedAttempt.taskId)) {
+    if (
       record.position > observationBaseline &&
       immutableRunTarget !== undefined &&
       record.event._tag === "TaskTrackerFactsObserved" &&
@@ -285,17 +306,22 @@ const latestFocusedClaimObservation = (
         record.event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
       record.event.observation.coverage.taskId === subject.plannedAttempt.taskId &&
       taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
-  )
+    )
+      found = record as FocusedClaimObservationRecord
+  }
+  return found
+}
 
 const focusedClaimReadIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   observationBaseline: JournalRecord["position"],
   observationRecord: FocusedClaimObservationRecord,
   subject: AttemptChoiceSubject,
   immutableRunTarget: TrackerTarget | undefined
-) =>
-  records.find(
-    ({ event, position }) =>
+) => {
+  for (const record of journalRecordsForOperationId(records, observationRecord.event.operationId)) {
+    const { event, position } = record
+    if (
       position > observationBaseline &&
       position < observationRecord.position &&
       event._tag === "TaskTrackerReadIntentRecorded" &&
@@ -304,7 +330,11 @@ const focusedClaimReadIntent = (
       event.operation.taskId === subject.plannedAttempt.taskId &&
       immutableRunTarget !== undefined &&
       taskTrackerTargetKey(event.operation.target) === taskTrackerTargetKey(immutableRunTarget)
-  )
+    )
+      return record
+  }
+  return undefined
+}
 
 const noReleaseObservationContradicts = (
   observationRecord: FocusedClaimObservationRecord,
@@ -332,7 +362,7 @@ export const recordStoppedAttemptClaimNoRelease = Effect.fn("AttemptStop.recordC
   observationOperationId: OperationId
 ) {
   const journal = yield* InRunJournal
-  const records = yield* journal.read(subject.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(subject.plannedAttempt.runId)
   const abandonmentRecord = exactAbandonment(records, requestId, subject)
   if (abandonmentRecord === undefined) {
     return yield* new AttemptStopChoiceContradiction({ requestId, subject })
@@ -340,7 +370,7 @@ export const recordStoppedAttemptClaimNoRelease = Effect.fn("AttemptStop.recordC
   const abandonment = abandonmentRecord.event
   const abandonmentPosition = abandonmentRecord.position
   const immutableRunTarget = exactWorkflowRunTargetFor(records)
-  const latestReleaseIntent = latestStoppedReleaseIntent(records, abandonmentPosition, requestId)
+  const latestReleaseIntent = latestStoppedReleaseIntent(records, abandonmentPosition, requestId, subject)
   const observationBaseline = latestReleaseIntent?.position ?? abandonmentPosition
   const observationRecord = latestFocusedClaimObservation(records, observationBaseline, subject, immutableRunTarget)
   if (observationRecord === undefined) {

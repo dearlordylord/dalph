@@ -1014,7 +1014,7 @@ it("classifies every resource event that would invalidate a planned-attempt repl
 })
 
 it("recognizes only the exact attempt's integration-start cutoff", () => {
-  type HistoryRecord = Parameters<typeof replacementFollowsIntegrationCutoff>[0][number]
+  type HistoryRecord = JournalRecord
   const record = (event: unknown) => ({ event }) as HistoryRecord
   expect(replacementFollowsIntegrationCutoff([record({ _tag: "WorkflowRunBegan" })], plannedAttempt)).toBe(false)
   expect(

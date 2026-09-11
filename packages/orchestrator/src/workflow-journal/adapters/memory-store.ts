@@ -18,6 +18,7 @@ import {
   type WorkflowRunIdentityAlreadyUsed,
   WorkflowRunNotBegan
 } from "../store.js"
+import { unpublishedAcceptedJournalReaderTestLayer } from "../test-accepted-reader.js"
 import { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import {
@@ -361,14 +362,17 @@ const memoryRawJournalStoreLayer = (initial = emptyMemoryJournalState()) =>
 export const memoryJournalStoreLayer = journalStoreCapabilities(memoryRawJournalStoreLayer())
 
 /** Complete test-only composition whose appends are not published through Journal. */
-export const memoryJournalTestLayer = unpublishedInRunJournalTestLayer.pipe(Layer.provideMerge(memoryJournalStoreLayer))
+export const memoryJournalTestLayer = Layer.merge(
+  unpublishedInRunJournalTestLayer,
+  unpublishedAcceptedJournalReaderTestLayer
+).pipe(Layer.provideMerge(memoryJournalStoreLayer))
 
 /** Test-only storage seam for injecting exact typed rows into either partition. */
 export const memoryJournalTestLayerFromPartitionRecords = (input: {
   readonly cold?: ReadonlyArray<JournalRecord>
   readonly hot?: ReadonlyArray<JournalRecord>
 }) =>
-  unpublishedInRunJournalTestLayer.pipe(
+  Layer.merge(unpublishedInRunJournalTestLayer, unpublishedAcceptedJournalReaderTestLayer).pipe(
     Layer.provideMerge(
       journalStoreCapabilities(
         memoryRawJournalStoreLayer({

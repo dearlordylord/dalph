@@ -1,7 +1,13 @@
 import { Effect, Schema } from "effect"
 import { type JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
-import { journalRecordsForAttempt, journalRecordsOfKind, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
+import {
+  journalRecordsForAttemptKind,
+  journalRecordsForOperationId,
+  journalRecordsForTask,
+  journalRestartReadIntents,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { OperationId } from "../../identity.js"
 import {
   latestPlannedAttemptExecutorEvidence,
@@ -43,9 +49,9 @@ export const restartChoiceWasInvalidatedByLaterSpecification = (
   applicationPosition: JournalRecord["position"],
   subject: AttemptChoiceSubject,
   immutableRunTarget?: TrackerTarget
-): boolean =>
-  Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved")).some(
-    ({ event, position }) =>
+): boolean => {
+  for (const { event, position } of journalRecordsForTask(records, subject.plannedAttempt.taskId)) {
+    if (
       position > applicationPosition &&
       event._tag === "TaskTrackerFactsObserved" &&
       event.observation._tag === "FocusedTaskWorkSpecificationFacts" &&
@@ -53,7 +59,11 @@ export const restartChoiceWasInvalidatedByLaterSpecification = (
       (immutableRunTarget === undefined ||
         taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget)) &&
       event.observation.factFamily.fingerprint !== subject.observedTaskRevision
-  )
+    )
+      return true
+  }
+  return false
+}
 
 const currentQuiescence = (records: JournalHistorySource, subject: AttemptChoiceSubject): RestartQuiescence => {
   const evidence = latestPlannedAttemptExecutorEvidence(records, subject.plannedAttempt)
@@ -67,38 +77,48 @@ const currentQuiescence = (records: JournalHistorySource, subject: AttemptChoice
   if (evidence.report._tag !== "ExecutorWorkSafelySuspended") {
     return { _tag: "Rejected", reason: "ExecutingDoesNotAuthorizeReplacement" }
   }
-  const laterCommand = Array.from(journalRecordsForAttempt(records, subject.plannedAttempt.attemptId)).some(
-    ({ event, position }) =>
+  let laterCommand = false
+  for (const { event, position } of journalRecordsForAttemptKind(
+    records,
+    subject.plannedAttempt.attemptId,
+    "PlannedAttemptExecutorCommandIntended"
+  )) {
+    if (
       position > evidence.observedAt &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
       event.plannedAttempt.runId === subject.plannedAttempt.runId &&
       event.plannedAttempt.attemptId === subject.plannedAttempt.attemptId
-  )
+    )
+      laterCommand = true
+  }
   return laterCommand
     ? { _tag: "Rejected", reason: "LaterExecutorCommandInvalidatedChoice" }
     : { _tag: "Proof", evidence }
 }
 
 export const nextRestartReadOperationId = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   requestId: AttemptChoiceRequestId,
   phase: "claim" | "graph" | "specification" | "target-lineage" | "worktree",
   after: JournalPosition
 ): OperationId => {
   const prefix = `attempt-restart:${encodeURIComponent(requestId.nonce)}:${phase}:after:`
-  const pending = records.findLast(
-    ({ event }) =>
-      ((event._tag === "TaskTrackerReadIntentRecorded" && event.operation.operationId.startsWith(prefix)) ||
-        (event._tag === "GitReadIntentRecorded" && event.operation.operationId.startsWith(prefix))) &&
-      !records.some(
-        ({ event: candidate }) =>
-          (candidate._tag === "TaskTrackerFactsObserved" ||
-            candidate._tag === "PlannedAttemptWorktreeObserved" ||
-            candidate._tag === "TargetLineageObserved" ||
-            candidate._tag === "AttemptRestartAuthorityReadFailed") &&
-          candidate.operationId === event.operation.operationId
+  let pending: JournalRecord["event"] | undefined
+  for (const { event } of journalRestartReadIntents(records, requestId.nonce, phase)) {
+    let hasOutcome = false
+    if (event._tag !== "TaskTrackerReadIntentRecorded" && event._tag !== "GitReadIntentRecorded") continue
+    for (const { event: candidate } of journalRecordsForOperationId(records, event.operation.operationId)) {
+      if (
+        (candidate._tag === "TaskTrackerFactsObserved" ||
+          candidate._tag === "PlannedAttemptWorktreeObserved" ||
+          candidate._tag === "TargetLineageObserved" ||
+          candidate._tag === "AttemptRestartAuthorityReadFailed") &&
+        candidate.operationId === event.operation.operationId
       )
-  )?.event
+        hasOutcome = true
+    }
+    if (event.operation.operationId.startsWith(prefix) && !hasOutcome) pending = event
+  }
   return pending !== undefined &&
     (pending._tag === "TaskTrackerReadIntentRecorded" || pending._tag === "GitReadIntentRecorded")
     ? pending.operation.operationId
@@ -106,6 +126,5 @@ export const nextRestartReadOperationId = (
 }
 
 export const currentRestartQuiescence = Effect.fn("AttemptRestart.establishQuiescence")(
-  (records: JournalHistorySource, subject: AttemptChoiceSubject) =>
-    Effect.succeed(currentQuiescence(records, subject))
+  (records: JournalHistorySource, subject: AttemptChoiceSubject) => Effect.succeed(currentQuiescence(records, subject))
 )

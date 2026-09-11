@@ -14,6 +14,7 @@ import {
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { journalEvidenceFrom, journalRecordsForTask } from "../../../workflow-journal/record-evidence.js"
 import { intentRecordKey, outcomeRecordKey } from "../../../workflow-journal/record-key.js"
 import { OperationId } from "../../identity.js"
 import {
@@ -59,13 +60,15 @@ it("reuses one unresolved Restart read identity and allocates the next identity 
     [],
     [taskId]
   )
-  const pending = record(3, taskTrackerReadIntent(pendingOperation), intentRecordKey(pendingOperationId).toString())
-  expect(nextRestartReadOperationId([pending], requestId, "graph", JournalPosition.make(2))).toBe(pendingOperationId)
+  const pending = record(1, taskTrackerReadIntent(pendingOperation), intentRecordKey(pendingOperationId).toString())
+  for (const source of [[pending], journalEvidenceFrom([pending])]) {
+    expect(nextRestartReadOperationId(source, requestId, "graph", JournalPosition.make(2))).toBe(pendingOperationId)
+  }
   expect(nextRestartReadOperationId([], requestId, "graph", JournalPosition.make(2))).toBe(
     `attempt-restart:${encodeURIComponent(requestId.nonce)}:graph:after:2`
   )
   const resolved = record(
-    4,
+    2,
     taskTrackerFactsObservedEvent(
       pendingOperationId,
       makeFocusedTaskWorkSpecificationFactsObserved(
@@ -85,18 +88,22 @@ it("invalidates an applied Restart after a later exact task specification read",
   const operation = makeTaskWorkSpecificationObservationOperation(operationId, target, taskId)
   const changed = makeTaskWorkSpecification({ body: "F2", taskId, title: "F2" })
   const later = record(
-    3,
+    2,
     taskTrackerFactsObservedEvent(operationId, makeFocusedTaskWorkSpecificationFactsObserved(operation, changed)),
     outcomeRecordKey(operationId).toString()
   )
+  const earlier = { ...later, position: JournalPosition.make(1) }
+  expect(Array.from(journalRecordsForTask([later], taskId))).toEqual([later])
+  for (const source of [[earlier, later], journalEvidenceFrom([earlier, later])]) {
+    expect(
+      restartChoiceWasInvalidatedByLaterSpecification(source, JournalPosition.make(1), {
+        observedTaskRevision: plannedAttempt.taskRevision,
+        plannedAttempt
+      })
+    ).toBe(true)
+  }
   expect(
     restartChoiceWasInvalidatedByLaterSpecification([later], JournalPosition.make(2), {
-      observedTaskRevision: plannedAttempt.taskRevision,
-      plannedAttempt
-    })
-  ).toBe(true)
-  expect(
-    restartChoiceWasInvalidatedByLaterSpecification([later], JournalPosition.make(3), {
       observedTaskRevision: plannedAttempt.taskRevision,
       plannedAttempt
     })
