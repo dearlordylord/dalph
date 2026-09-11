@@ -310,6 +310,10 @@ responsibility for one exact planned attempt before asking the executor to work.
 It does not prove that the executor accepted or started work.
 _Avoid_: Executor work started, executor accepted work
 
+**Retained executor-responsibility subject**:
+An exact planned attempt for which Dalph still retains executor-work responsibility, including safely suspended work or work whose current state is ambiguous. An accepted terminal report, replacement, or implementation abandonment ends that retention; retention alone does not authorize an active-work tracker refresh.
+_Avoid_: Active executor, executing attempt, historical responsibility entry
+
 **Planned work undertaken for a task**:
 The task-level phenomenon established when Dalph assumes executor-work
 responsibility for at least one planned attempt belonging to that task. It does

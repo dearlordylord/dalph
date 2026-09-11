@@ -5,6 +5,7 @@ import {
   deterministicOperationIdAllocatorLayer,
   deterministicPlannedTaskAttemptLayer,
   deterministicTaskClaimAcquisitionPlannerLayer,
+  memoryJournalTestLayer,
   workflowInterpreterLayer
 } from "@dalph/orchestrator"
 import { Layer } from "effect"
@@ -14,7 +15,8 @@ export { workflowInterpreterLayer }
 
 export const dryRunWorkflowInterpreterLayer = Layer.mergeAll(
   controlledWorkflowInterpreterLayer,
-  dryRunPlannedAttemptExecutorLayer
+  dryRunPlannedAttemptExecutorLayer,
+  memoryJournalTestLayer
 )
 
 export const dryRunOperationIdAllocatorLayer = deterministicOperationIdAllocatorLayer("dry-run-operation")

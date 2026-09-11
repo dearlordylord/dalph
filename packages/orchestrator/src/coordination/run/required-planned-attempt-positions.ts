@@ -23,7 +23,7 @@ export interface RequiredPlannedAttemptPosition {
 export const requiredPlannedAttemptPositionsOf = (
   runState: Pick<ReconstructedRunState, "responsibility" | "workflowHistory">
 ): ReadonlyArray<RequiredPlannedAttemptPosition> => {
-  const records = runState.workflowHistory.prefix ?? runState.workflowHistory.records
+  const records = runState.workflowHistory.evidence
   return runState.responsibility.entries.flatMap((responsibility) => {
     if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
     const plannedAttempt = responsibility.plannedAttempt

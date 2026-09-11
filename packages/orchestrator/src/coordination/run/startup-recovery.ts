@@ -58,6 +58,8 @@ import {
 import type { DispositionCleanupBoundaryServices } from "../../workflow/protocols/disposition-cleanup/boundaries.js"
 import { preservingDispositionCleanupBoundaryLayer } from "../../workflow/protocols/disposition-cleanup/boundaries.js"
 import { RunActivationOpportunity } from "./run-activation-opportunity.js"
+import { firstJournalRecordOfKind } from "../../workflow-journal/record-evidence.js"
+import { journalRecordAt } from "../../workflow-journal/record-sequence.js"
 
 export const StartupRecoveryIssue = Schema.Union([
   DuplicateUnfinishedTaskAttemptIssue,
@@ -78,9 +80,13 @@ export class StartupRecoveryBlocked extends Schema.TaggedError<StartupRecoveryBl
 
 const runBeganWithoutTermination = (
   reduction: Extract<ReturnType<typeof reduceWorkflowJournalHistory>, { readonly _tag: "ValidWorkflowJournalHistory" }>
-): boolean =>
-  reduction.records.some(({ event }) => event._tag === "WorkflowRunBegan") &&
-  !reduction.records.some(({ event }) => event._tag === "WorkflowRunTerminated")
+): boolean => {
+  const evidence = reduction.runState.workflowHistory.evidence
+  return (
+    firstJournalRecordOfKind(evidence, "WorkflowRunBegan") !== undefined &&
+    firstJournalRecordOfKind(evidence, "WorkflowRunTerminated") === undefined
+  )
+}
 
 type StartupReduction = ReturnType<typeof reduceWorkflowJournalHistory>
 
@@ -113,7 +119,7 @@ const retireStartupTerminals = Effect.fn("StartupRecovery.retireTerminals")(func
   for (const reduction of reductions) {
     /* v8 ignore next -- @preserve inspectStartupRecovery blocks before this loop whenever a reduction is invalid, so only ValidWorkflowJournalHistory reaches retirement. */
     if (reduction._tag !== "ValidWorkflowJournalHistory") continue
-    if (reduction.records.at(lastRecordIndex)?.event._tag !== "WorkflowRunTerminated") continue
+    if (journalRecordAt(reduction.runState.workflowHistory.evidence.records, lastRecordIndex)?.event._tag !== "WorkflowRunTerminated") continue
     const shouldAttempt =
       retirementAttempts === undefined
         ? true

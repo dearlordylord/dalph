@@ -59,6 +59,7 @@ import {
   WorkflowJournalEvent,
   WorkflowActor,
   workflowJournalEventVersion,
+  exportWorkflowHistoryRecords,
   reduceWorkflowJournalHistory,
   StoppedAttemptClaimNoReleaseObservedEvent,
   TaskClaimReacquisitionDirectedEvent,
@@ -1531,7 +1532,7 @@ export const foldRecordedCassette = (cassette: RecordedCassetteType) =>
 const semanticWorkflowHistory = (history: ReturnType<typeof reduceWorkflowJournalHistory>): unknown =>
   history._tag === "InvalidWorkflowJournalHistory"
     ? { _tag: history._tag, issueKinds: history.issues.map(({ _tag }) => _tag) }
-    : history.runState.workflowHistory.records.map(({ event }) => recordedEntryFor(event))
+    : exportWorkflowHistoryRecords(history.runState.workflowHistory).map(({ event }) => recordedEntryFor(event))
 
 export interface RecordedCassetteCheckpoint {
   readonly appliedOccurrencePositionEquivalent: boolean

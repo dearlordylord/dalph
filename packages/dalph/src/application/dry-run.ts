@@ -7,6 +7,7 @@ import {
   TrackerAdapterReadError,
   TrackerAdapterReadFailureReason,
   TrackerGraphReader,
+  memoryJournalTestLayer,
   trackerGraphReaderLayer
 } from "@dalph/orchestrator"
 import { type Config, Effect, FileSystem, Layer, Path, PlatformError, Sink } from "effect"
@@ -109,6 +110,7 @@ export const makeDryRunCliApplication = (
         dryRunTrackerGraphReaderLayer,
         dryRunTraceLayer,
         dryRunOperationIdAllocatorLayer,
+        memoryJournalTestLayer,
         dryCliEnvironmentLayer
       )
     )

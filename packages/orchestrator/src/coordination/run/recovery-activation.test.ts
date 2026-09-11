@@ -172,6 +172,7 @@ import {
 import { authorizedClaimForAttempt } from "./recovery-authority.js"
 import { ReconstructedPauseState, type ReconstructedRunState } from "../reconstruction/state.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
+import { exportWorkflowHistoryRecords } from "../reconstruction/reduce.js"
 import { workflowJournalHistoryIssueDetail } from "../reconstruction/history-result.js"
 import {
   deriveRunnableFrontier,
@@ -226,7 +227,7 @@ const coverageRunState = (
   cancellation: { _tag: "RunCancellationNotApplied" },
   responsibility: { entries: responsibility },
   runId,
-  workflowHistory: { records }
+  workflowHistory: { evidence: journalEvidenceFrom(records) }
 })
 
 const coverageRecordsWithBeginning = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<JournalRecord> => [
@@ -773,15 +774,16 @@ const currentProjectionJournal = (
   const began = makeWorkflowRunBeganRecord(runId, target, coveragePolicy)
   const initialReduction = reduceWorkflowJournalHistory(runId, initialRecords)
   if (initialReduction._tag !== "ValidWorkflowJournalHistory") throw new Error("projection fixture beginning is valid")
-  const prefix =
-    reconstructed.workflowHistory.prefix ??
-    acceptedJournalPrefixFromValidatedHistory(reconstructed.runId, reconstructed.workflowHistory.records)
+  const prefix = acceptedJournalPrefixFromValidatedHistory(
+    reconstructed.runId,
+    exportWorkflowHistoryRecords(reconstructed.workflowHistory)
+  )
   const liveState = {
     _tag: "JournalState" as const,
     position: reconstructed.appliedThrough ?? began.position,
     graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
     reconstructed: retainAcceptedPrefix
-      ? { ...reconstructed, workflowHistory: { ...reconstructed.workflowHistory, prefix } }
+      ? { ...reconstructed, workflowHistory: { evidence: prefix } }
       : reconstructed,
     prefix
   }
@@ -1102,13 +1104,14 @@ effectIt.effect(
           ({ _tag }) => _tag === "ObservePlannedAttemptContinuationTargetLineage"
         )
         if (firstRead?._tag !== "ObservePlannedAttemptContinuationTargetLineage") {
-          const sessionRecord = fixture.reconstructed.workflowHistory.records.find(
+          const fixtureRecords = exportWorkflowHistoryRecords(fixture.reconstructed.workflowHistory)
+          const sessionRecord = fixtureRecords.find(
             ({ event }) => event._tag === "IntegratorSessionFixed"
           )
           const authorization =
             sessionRecord?.event._tag === "IntegratorSessionFixed"
               ? evaluateIntegratorRetryAuthorization(
-                  fixture.reconstructed.workflowHistory.records,
+                  fixture.reconstructed.workflowHistory.evidence,
                   IntegratorRunCorrelation.make({
                     ordinal: IntegratorRunOrdinal.make(2),
                     session: sessionRecord.event.correlation
@@ -1133,7 +1136,10 @@ effectIt.effect(
           ...fixture.reconstructed,
           appliedThrough: intentPosition,
           workflowHistory: {
-            records: [...fixture.reconstructed.workflowHistory.records, coverageRecord(intentPosition, intent)]
+            evidence: journalEvidenceFrom([
+              ...exportWorkflowHistoryRecords(fixture.reconstructed.workflowHistory),
+              coverageRecord(intentPosition, intent)
+            ])
           }
         }
         const restarted = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
@@ -1145,7 +1151,7 @@ effectIt.effect(
         )
         expect(restartedRead).toEqual(firstRead)
 
-        const fixedSession = fixture.reconstructed.workflowHistory.records.find(
+        const fixedSession = exportWorkflowHistoryRecords(fixture.reconstructed.workflowHistory).find(
           ({ event }) => event._tag === "IntegratorSessionFixed"
         )
         if (fixedSession?.event._tag !== "IntegratorSessionFixed") {
@@ -1167,7 +1173,10 @@ effectIt.effect(
           ...afterIntent,
           appliedThrough: observationPosition,
           workflowHistory: {
-            records: [...afterIntent.workflowHistory.records, coverageRecord(observationPosition, observation)]
+            evidence: journalEvidenceFrom([
+              ...exportWorkflowHistoryRecords(afterIntent.workflowHistory),
+              coverageRecord(observationPosition, observation)
+            ])
           }
         }
         const restartedResources = yield* makeIntegrationTargetResourceController()
@@ -1220,8 +1229,8 @@ effectIt.effect(
           ...afterObservation,
           appliedThrough: laterGraphPosition,
           workflowHistory: {
-            records: [
-              ...afterObservation.workflowHistory.records,
+            evidence: journalEvidenceFrom([
+              ...exportWorkflowHistoryRecords(afterObservation.workflowHistory),
               coverageRecord(
                 laterClaimPosition,
                 taskTrackerFactsObservedEvent(
@@ -1236,7 +1245,7 @@ effectIt.effect(
                   makeCompleteTaskTrackerFactsObserved(laterGraphOperation, coverageGraph)
                 )
               )
-            ]
+            ])
           }
         }
         const graphRefreshRecovery = yield* makeRunRecoveryProjection(
@@ -1258,12 +1267,12 @@ effectIt.effect(
       }
 
       const withoutDirection = directionProjectionFixture("Retry")
-      const recordsWithoutDirection = withoutDirection.reconstructed.workflowHistory.records.filter(
+      const recordsWithoutDirection = exportWorkflowHistoryRecords(withoutDirection.reconstructed.workflowHistory).filter(
         ({ position }) => position !== withoutDirection.directionRecord.position
       )
       const noDirectionState = {
         ...withoutDirection.reconstructed,
-        workflowHistory: { records: recordsWithoutDirection }
+        workflowHistory: { evidence: journalEvidenceFrom(recordsWithoutDirection) }
       }
       const noDirectionResources = yield* makeIntegrationTargetResourceController()
       const noDirectionRecovery = yield* makeRunRecoveryProjection(
@@ -1279,7 +1288,7 @@ effectIt.effect(
         )
       ).toBe(false)
 
-      const graphlessRecords = withoutDirection.reconstructed.workflowHistory.records.filter(({ event }) => {
+      const graphlessRecords = exportWorkflowHistoryRecords(withoutDirection.reconstructed.workflowHistory).filter(({ event }) => {
         if (event._tag === "TaskTrackerReadIntentRecorded") return event.operation._tag !== "ReadTrackerGraph"
         if (event._tag !== "TaskTrackerFactsObserved") return true
         return (
@@ -1287,7 +1296,7 @@ effectIt.effect(
           event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
         )
       })
-      const graphlessState = { ...withoutDirection.reconstructed, workflowHistory: { records: graphlessRecords } }
+      const graphlessState = { ...withoutDirection.reconstructed, workflowHistory: { evidence: journalEvidenceFrom(graphlessRecords) } }
       const graphlessResources = yield* makeIntegrationTargetResourceController()
       const graphlessRecovery = yield* makeRunRecoveryProjection(
         coverageRunId,
@@ -1359,7 +1368,8 @@ effectIt.effect(
           { id: prerequisiteTaskId, lifecycle: { _tag: "Open" }, parentTaskId: null, prerequisiteIds: [] }
         ]
       })
-      const blockedGraphStartPosition = Number(fixture.reconstructed.workflowHistory.records.at(-1)?.position ?? 0) + 1
+      const fixtureRecords = exportWorkflowHistoryRecords(fixture.reconstructed.workflowHistory)
+      const blockedGraphStartPosition = Number(fixtureRecords.at(-1)?.position ?? 0) + 1
       const blockedGraphRecords = [
         coverageRecord(blockedGraphStartPosition, taskTrackerReadIntent(blockedGraphOperation)),
         coverageRecord(
@@ -1371,7 +1381,7 @@ effectIt.effect(
         )
       ]
       const reduced = reduceWorkflowJournalHistory(coverageRunId, [
-        ...fixture.reconstructed.workflowHistory.records,
+        ...fixtureRecords,
         ...blockedGraphRecords
       ])
       if (reduced._tag === "InvalidWorkflowJournalHistory") {
@@ -1406,7 +1416,7 @@ effectIt.effect(
 effectIt.effect("fails closed when recovered quarantine-direction evidence is not exact", () =>
   Effect.gen(function* () {
     const fixture = directionProjectionFixture("Retry")
-    const records = fixture.reconstructed.workflowHistory.records
+    const records = exportWorkflowHistoryRecords(fixture.reconstructed.workflowHistory)
     const session = records.find(({ event }) => event._tag === "IntegratorSessionFixed")
     const runStart = records.find(({ event }) => event._tag === "IntegratorRunStarted")
     const directionEvent = fixture.directionRecord.event
@@ -1457,7 +1467,7 @@ effectIt.effect("fails closed when recovered quarantine-direction evidence is no
 
     for (const [label, invalidRecords] of invalidHistories) {
       const resources = yield* makeIntegrationTargetResourceController()
-      const invalidState = { ...fixture.reconstructed, workflowHistory: { records: invalidRecords } }
+      const invalidState = { ...fixture.reconstructed, workflowHistory: { evidence: journalEvidenceFrom(invalidRecords) } }
       const recovery = yield* makeRunRecoveryProjection(coverageRunId, fixture.integrationTarget, resources).pipe(
         Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, invalidState))
       )

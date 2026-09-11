@@ -10,6 +10,7 @@ import {
   GithubIssueTarget,
   GithubRepositoryName,
   GithubRepositoryOwner,
+  memoryJournalTestLayer,
   projectTrackerSnapshot,
   TraceOutput,
   TraceOutputError,
@@ -151,6 +152,7 @@ it.effect("decodes a GitHub issue target once and reads it without tracker write
         )
       ),
       Effect.provide(readerLayer),
+      Effect.provide(memoryJournalTestLayer),
       Effect.provide(deterministicOperationIdAllocatorLayer("github-cli-test")),
       Effect.provide(NodeServices.layer)
     )

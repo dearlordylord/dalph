@@ -71,6 +71,7 @@ import {
   WorkflowRunAlreadyTerminated,
   defaultJournalMaintenanceObservation
 } from "@dalph/orchestrator"
+import type { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
 import type { FileSystem } from "effect"
 import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect"
 
@@ -343,12 +344,20 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
  * implementation through the ordinary Effect Layer environment.
  */
 type ProductionWorkflowLayer<TrackerError, TrackerRequirements> = Layer.Layer<
-  ApplicationExitRequestBoundary | ApplicationExitShell | JournaledRunBootstrap | JournaledRunObservationSource,
+  ApplicationExitRequestBoundary
+  | ApplicationExitShell
+  | JournaledRunBootstrap
+  | JournaledRunObservationSource,
   | TrackerError
   | JournalStoreError
   | Layer.Error<typeof productionJournalStoreLayer>
   | Layer.Error<ReturnType<typeof productionCoordinatorOwnershipLayer>>,
-  Crypto.Crypto | FileSystem.FileSystem | TrackerGraphReader | TrackerRequirements | WorkflowTrace
+  | AcceptedJournalReader
+  | Crypto.Crypto
+  | FileSystem.FileSystem
+  | TrackerGraphReader
+  | TrackerRequirements
+  | WorkflowTrace
 >
 
 export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirements>(
