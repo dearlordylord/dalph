@@ -4,6 +4,7 @@ import { JournalSemanticIssue } from "./recovery-model.js"
 import type { JournalRecord } from "./store.js"
 import { workflowJournalHistoryIssueDetail } from "../coordination/reconstruction/history-result.js"
 import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
+import { exportWorkflowHistoryRecords } from "../coordination/reconstruction/reduce.js"
 
 const lastRecordIndex = -1
 const coldHistoryNotTerminal = "Cold history is not terminal"
@@ -36,12 +37,13 @@ export const decideJournalPartitionHistory = (
       })
     }
   }
-  const isTerminal = reduction.records.at(lastRecordIndex)?.event._tag === "WorkflowRunTerminated"
+  const exported = exportWorkflowHistoryRecords(reduction.runState.workflowHistory)
+  const isTerminal = exported.at(lastRecordIndex)?.event._tag === "WorkflowRunTerminated"
   if (partition === "Cold" && !isTerminal) {
     return {
       _tag: "InvalidPartitionHistory",
       issue: new JournalSemanticIssue({ detail: coldHistoryNotTerminal, partition, runId })
     }
   }
-  return { _tag: "ValidPartitionHistory", isTerminal, records: reduction.records }
+  return { _tag: "ValidPartitionHistory", isTerminal, records: exported }
 }

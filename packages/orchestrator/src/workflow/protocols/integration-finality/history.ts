@@ -32,7 +32,7 @@ import {
   journalEvidenceBefore,
   journalRecordByKey,
   journalRecordByPosition,
-  journalRecordsForAttemptKind,
+  journalSettledCompletionClaimReplacement,
   journalRecordsForOperationId,
   journalRecordsForTask,
   journalRecordsOfKind,
@@ -311,23 +311,28 @@ const invalidDeletionIntent = (
   event: DeletionIntent
 ): IntegrationFinalityHistoryValidation => {
   const duplicate = HashMap.has(indexes.deletionIntents, event.operationId)
-  const replacement = [...HashMap.keys(indexes.replacementTerminals)]
-    .map((operationId) => mapGet(indexes.replacementIntents, operationId))
-    .find((intent) => intent !== undefined && completionTaskClaimEquals(intent.event.claim, event.claim))
-  const replacementRecord = findFirst(
-    journalRecordsForAttemptKind(
-      prior(records, record.position),
-      event.claim.plannedAttempt.attemptId,
-      "CompletionClaimReplaced"
-    ),
-    (candidate) =>
-      candidate.event._tag === "CompletionClaimReplaced" &&
-      completionTaskClaimEquals(candidate.event.claim, event.claim)
-  )
+  const accepted = prior(records, record.position)
+  const replacement = isJournalRecordEvidence(accepted)
+    ? journalSettledCompletionClaimReplacement(accepted, event.claim)
+    : undefined
+  /** Raw diagnostic replay retains earlier malformed outcomes in the fold. It must not invent extra later issues by substituting accepted-only matching semantics. */
+  const replacementWasRecorded = isJournalRecordEvidence(accepted)
+    ? replacement !== undefined
+    : [...HashMap.keys(indexes.replacementTerminals)].some((operationId) => {
+        const intent = mapGet(indexes.replacementIntents, operationId)
+        return intent !== undefined && completionTaskClaimEquals(intent.event.claim, event.claim)
+      })
+  const replacementRecord = isJournalRecordEvidence(accepted)
+    ? replacement?.outcome
+    : accepted.find(
+        (candidate) =>
+          candidate.event._tag === "CompletionClaimReplaced" &&
+          completionTaskClaimEquals(candidate.event.claim, event.claim)
+      )
   const valid = [
     !duplicate,
     completionTaskClaimEquals(event.claim, event.successObservation.claim),
-    replacement !== undefined,
+    replacementWasRecorded,
     replacementRecord !== undefined,
     replacementRecord !== undefined && replacementRecord.position < event.successObservation.observedAt,
     completeTaskInObservation(records, event.successObservation, record.position)
