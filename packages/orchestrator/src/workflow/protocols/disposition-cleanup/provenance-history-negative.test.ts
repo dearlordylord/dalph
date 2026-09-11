@@ -24,6 +24,8 @@ import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memor
 import { sqliteJournalTestLayer } from "../../../workflow-journal/adapters/sqlite-store.js"
 import { integratorSuccessorSessionFixedRecordKey } from "../../../workflow-journal/record-key.js"
 import { JournalStore, type JournalRecord } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { acceptedJournalPrefixFromValidatedHistory } from "../../../workflow-journal/accepted-prefix.js"
 import { OperationId } from "../../identity.js"
 import {
   BranchCleanupAuthorization,
@@ -1359,7 +1361,18 @@ it.effect("preserves a foreign FullRerun relation without boundary calls after m
 
       const foreignHistory = yield* journal.read(runId)
       const validation = validateIntegratorCandidateCleanupProvenance(foreignHistory, candidateAuthorization)
-      const outcome = yield* runIntegratorCandidateCleanup(candidateAuthorization)
+      const outcome = yield* runIntegratorCandidateCleanup(candidateAuthorization).pipe(
+        Effect.provideService(
+          AcceptedJournalReader,
+          AcceptedJournalReader.of({
+            readAccepted: (readRunId) =>
+              journal.read(readRunId).pipe(
+                Effect.orDie,
+                Effect.map((records) => acceptedJournalPrefixFromValidatedHistory(readRunId, records))
+              )
+          })
+        )
+      )
       const calls = yield* (yield* TestIntegratorCandidateCleanupBoundary).calls()
       return { calls, outcome, validation }
     })

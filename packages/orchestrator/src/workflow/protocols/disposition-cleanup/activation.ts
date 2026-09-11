@@ -2,6 +2,14 @@ import { Schema } from "effect"
 import { OperationId } from "../../identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import {
+  isJournalRecordEvidence,
+  journalRecordByPosition,
+  journalRecordByKey,
+  journalRecordsForOperationId,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
+import {
   branchCleanupAuthorizedRecordKey,
   integratorCandidateCleanupAuthorizedRecordKey,
   outcomeRecordKey,
@@ -69,19 +77,21 @@ type AuthorizationValidationStrategy<Authorization> = AuthorizationEventTag & {
   readonly equals: (candidate: Authorization, expected: Authorization) => boolean
   readonly runIdOf: (authorization: Authorization) => JournalRecord["runId"]
   readonly keyOf: (authorization: Authorization) => JournalRecord["key"]
-  readonly provenance: (
-    records: ReadonlyArray<JournalRecord>,
-    authorization: Authorization
-  ) => { readonly _tag: string }
-  readonly history: (records: ReadonlyArray<JournalRecord>, authorization: Authorization) => { readonly _tag: string }
+  readonly provenance: (records: JournalHistorySource, authorization: Authorization) => { readonly _tag: string }
+  readonly history: (records: JournalHistorySource, authorization: Authorization) => { readonly _tag: string }
 }
 
 const hasValidatedAuthorization = <Authorization>(
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: Authorization,
   strategy: AuthorizationValidationStrategy<Authorization>
 ): boolean =>
-  records.some((candidate) => {
+  (isJournalRecordEvidence(records)
+    ? [journalRecordByKey(records, strategy.keyOf(authorization))].filter(
+        (record): record is JournalRecord => record !== undefined
+      )
+    : records
+  ).some((candidate) => {
     if (candidate.event._tag !== strategy.eventTag) return false
     const candidateAuthorization = strategy.authorizationOf(candidate.event)
     return (
@@ -142,9 +152,10 @@ const candidateAuthorizationValidation: AuthorizationValidationStrategy<Integrat
 }
 
 const recordsWithoutAuthorizationTag = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorizationTag: "WorktreeCleanupAuthorized" | "BranchCleanupAuthorized" | "IntegratorCandidateCleanupAuthorized"
-): ReadonlyArray<JournalRecord> => records.filter(({ event }) => event._tag !== authorizationTag)
+): JournalHistorySource =>
+  isJournalRecordEvidence(records) ? records : records.filter(({ event }) => event._tag !== authorizationTag)
 
 const isPlannedAttemptReplacedRecord = (
   record: JournalRecord
@@ -157,14 +168,16 @@ const isAttemptImplementationAbandonedRecord = (
   Schema.is(AttemptImplementationAbandonedEvent)(record.event)
 
 const exactWorktreeAuthorityRecord = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: Extract<
     JournalRecord["event"],
     { readonly _tag: "PlannedAttemptReplaced" }
   >["subject"]["plannedAttempt"],
   operationId: OperationId
 ): (JournalRecord & { readonly event: PlannedWorktreeReadyObservedEvent }) | undefined => {
-  const candidates = records.filter(
+  const candidates = (
+    isJournalRecordEvidence(records) ? Array.from(journalRecordsForOperationId(records, operationId)) : records
+  ).filter(
     (record): record is JournalRecord & { readonly event: PlannedWorktreeReadyObservedEvent } =>
       record.event._tag === "PlannedAttemptWorktreeObserved" &&
       record.runId === plannedAttempt.runId &&
@@ -192,7 +205,7 @@ const decodeCandidateAuthorization = (value: unknown): IntegratorCandidateCleanu
     : /* v8 ignore next -- @preserve derivation assembles this value only from an exact authorized FullRerun relation. */ undefined
 
 const worktreeAuthorizationFromReplacement = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   record: JournalRecord & {
     readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptReplaced" }>
   }
@@ -226,14 +239,18 @@ const worktreeAuthorizationFromReplacement = (
 }
 
 const worktreeAuthorizationFromAbandonment = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   record: JournalRecord & {
     readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>
   }
 ): WorktreeCleanupAuthorization | undefined => {
   const event = record.event
   const plannedAttempt = event.subject.plannedAttempt
-  const observations = records
+  const observations = (
+    isJournalRecordEvidence(records)
+      ? Array.from(journalRecordsOfKind(records, "PlannedAttemptWorktreeObserved"))
+      : records
+  )
     .filter(
       (candidate): candidate is JournalRecord & { readonly event: PlannedWorktreeReadyObservedEvent } =>
         candidate.event._tag === "PlannedAttemptWorktreeObserved" &&
@@ -266,9 +283,15 @@ const worktreeAuthorizationFromAbandonment = (
 }
 
 const worktreeAuthorizationsFromTerminalFacts = (
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): ReadonlyArray<WorktreeCleanupAuthorization> =>
-  records.flatMap((record) => {
+  (isJournalRecordEvidence(records)
+    ? [
+        ...journalRecordsOfKind(records, "PlannedAttemptReplaced"),
+        ...journalRecordsOfKind(records, "AttemptImplementationAbandoned")
+      ].toSorted((left, right) => Number(left.position) - Number(right.position))
+    : records
+  ).flatMap((record) => {
     const authorization = isPlannedAttemptReplacedRecord(record)
       ? worktreeAuthorizationFromReplacement(records, record)
       : isAttemptImplementationAbandonedRecord(record)
@@ -284,9 +307,9 @@ const worktreeAuthorizationsFromTerminalFacts = (
   })
 
 const branchAuthorizationsFromSettledWorktrees = (
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): ReadonlyArray<BranchCleanupAuthorization> =>
-  records.flatMap((record) => {
+  Array.from(journalRecordsOfKind(records, "WorktreeCleanupSettled")).flatMap((record) => {
     if (record.event._tag !== "WorktreeCleanupSettled") return []
     const worktree = record.event.authorization
     const operationId = operationFor("branch", worktree.disposition.plannedAttempt.attemptId)
@@ -328,8 +351,12 @@ type CandidateSuccessorEvidence = {
   readonly subject: IntegratorCandidateCleanupEvidenceSubject
 }
 
+const isCandidateDirectionRecord = (
+  record: JournalRecord | undefined
+): record is CandidateSuccessorEvidence["direction"] => record?.event._tag === "IntegrationQuarantineDirectionApplied"
+
 const candidateSuccessorEvidence = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   record: JournalRecord
 ): CandidateSuccessorEvidence | undefined => {
   if (record.event._tag !== "IntegratorSuccessorSessionFixed") return undefined
@@ -355,13 +382,9 @@ const candidateSuccessorEvidence = (
     predecessor: event.predecessor,
     successor: event.successor
   })
-  const direction = records.find(
-    (candidate): candidate is CandidateSuccessorEvidence["direction"] =>
-      candidate.event._tag === "IntegrationQuarantineDirectionApplied" &&
-      candidate.position === event.directionAppliedAt
-  )
+  const direction = journalRecordByPosition(records, event.directionAppliedAt)
   /* v8 ignore next -- @preserve Authorized FullRerun evaluation above includes this exact typed direction record. */
-  if (direction === undefined) return undefined
+  if (!isCandidateDirectionRecord(direction)) return undefined
   return {
     disposition,
     direction,
@@ -372,10 +395,10 @@ const candidateSuccessorEvidence = (
 }
 
 const candidateAuthorizationsFromSuccessors = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   evidenceRevisionFor?: CandidateCleanupEvidenceRevisionFor
 ): ReadonlyArray<IntegratorCandidateCleanupAuthorization> =>
-  records.flatMap((record) => {
+  Array.from(journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")).flatMap((record) => {
     const evidence = candidateSuccessorEvidence(records, record)
     if (evidence === undefined) return []
     const { direction, disposition, event, lineage, subject } = evidence
@@ -405,9 +428,9 @@ const candidateAuthorizationsFromSuccessors = (
   })
 
 export const candidateCleanupEvidenceSubjects = (
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): ReadonlyArray<IntegratorCandidateCleanupEvidenceSubject> =>
-  records.flatMap((record) => {
+  Array.from(journalRecordsOfKind(records, "IntegratorSuccessorSessionFixed")).flatMap((record) => {
     const evidence = candidateSuccessorEvidence(records, record)
     return evidence === undefined ? [] : [evidence.subject]
   })
@@ -422,7 +445,7 @@ const uniqueByOperation = <Authorization extends { readonly operationId: Operati
   )
 
 export const deriveCleanupAuthorizations = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   evidenceRevisionFor?: CandidateCleanupEvidenceRevisionFor
 ) => ({
   branch: uniqueByOperation(branchAuthorizationsFromSettledWorktrees(records)),
