@@ -1,7 +1,11 @@
 /* eslint-disable functional/immutable-data, max-lines -- Attempt and replacement chronology validation preserves exact ordered issue reporting. */
 import { plannedTaskAttemptEquivalence, type PlannedTaskAttempt, type RunId, type TaskId } from "@dalph/contracts"
 import { HashMap, HashSet, Option } from "effect"
-import type { JournalPosition } from "../../workflow-journal/identity.js"
+import type { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
+import {
+  attemptChoiceAppliedRecordKey,
+  attemptImplementationAbandonedRecordKey
+} from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { OperationId } from "../../workflow/identity.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
@@ -44,6 +48,8 @@ import {
   journalRecordsForOperationId,
   journalRecordsForTask,
   journalRecordsOfKind,
+  journalRecordByKey,
+  type JournalRecordEvidence,
   type JournalHistorySource
 } from "../../workflow-journal/record-evidence.js"
 
@@ -69,6 +75,11 @@ function findLast<A>(source: Iterable<A>, predicate: (value: A) => boolean): A |
 
 const hasMatching = <A>(source: Iterable<A>, predicate: (value: A) => boolean): boolean =>
   findFirst(source, predicate) !== undefined
+
+const indexedRecordCandidate = (source: JournalRecordEvidence, key: JournalRecordKey): ReadonlyArray<JournalRecord> => {
+  const record = journalRecordByKey(source, key)
+  return record === undefined ? [] : [record]
+}
 
 type AttemptChoiceRecord = Omit<JournalRecord, "event"> & {
   readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptChoiceApplied" }>
@@ -229,7 +240,9 @@ const matchingAppliedStop = (
   >
 ) =>
   findFirst(
-    journalRecordsForAttempt(prior, event.subject.plannedAttempt.attemptId),
+    isJournalRecordEvidence(prior)
+      ? indexedRecordCandidate(prior, attemptChoiceAppliedRecordKey(event.requestId))
+      : journalRecordsForAttempt(prior, event.subject.plannedAttempt.attemptId),
     (candidate) =>
       candidate.event._tag === "AttemptChoiceApplied" &&
       candidate.event.choice === "StopTaskImplementation" &&
@@ -242,7 +255,9 @@ const matchingAbandonment = (
   event: Extract<WorkflowJournalEvent, { readonly _tag: "StoppedAttemptClaimNoReleaseObserved" }>
 ) =>
   findLast(
-    journalRecordsForAttempt(prior, event.subject.plannedAttempt.attemptId),
+    isJournalRecordEvidence(prior)
+      ? indexedRecordCandidate(prior, attemptImplementationAbandonedRecordKey(event.requestId))
+      : journalRecordsForAttempt(prior, event.subject.plannedAttempt.attemptId),
     (candidate): candidate is AbandonmentJournalRecord =>
       candidate.event._tag === "AttemptImplementationAbandoned" &&
       sameAttemptChoiceRequestId(candidate.event.requestId, event.requestId) &&
@@ -254,7 +269,9 @@ const matchingAppliedStopByRequest = (
   requestId: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptChoiceApplied" }>["requestId"]
 ) =>
   findFirst(
-    journalRecordsOfKind(prior, "AttemptChoiceApplied"),
+    isJournalRecordEvidence(prior)
+      ? indexedRecordCandidate(prior, attemptChoiceAppliedRecordKey(requestId))
+      : journalRecordsOfKind(prior, "AttemptChoiceApplied"),
     (record): record is AttemptChoiceRecord =>
       record.event._tag === "AttemptChoiceApplied" &&
       record.event.choice === "StopTaskImplementation" &&
@@ -270,7 +287,9 @@ const matchingAbandonmentForAppliedStop = (
   appliedStop: Extract<WorkflowJournalEvent, { readonly _tag: "AttemptChoiceApplied" }>
 ) =>
   findLast(
-    journalRecordsForAttempt(prior, appliedStop.subject.plannedAttempt.attemptId),
+    isJournalRecordEvidence(prior)
+      ? indexedRecordCandidate(prior, attemptImplementationAbandonedRecordKey(appliedStop.requestId))
+      : journalRecordsForAttempt(prior, appliedStop.subject.plannedAttempt.attemptId),
     (record): record is AbandonmentJournalRecord =>
       record.event._tag === "AttemptImplementationAbandoned" &&
       sameAttemptChoiceRequestId(record.event.requestId, appliedStop.requestId) &&
@@ -303,7 +322,9 @@ const matchingFocusedClaimReadIntentAfter = (
   taskId: TaskId
 ) =>
   findFirst(
-    journalRecordsForTask(prior, taskId),
+    isJournalRecordEvidence(prior)
+      ? journalRecordsForOperationId(prior, observationOperationId)
+      : journalRecordsForTask(prior, taskId),
     ({ event, position }) =>
       position > baselinePosition &&
       position < observationPosition &&
@@ -318,7 +339,9 @@ const releaseIntentForOutcome = (
   released: Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimReleased" }>
 ) =>
   findLast(
-    journalRecordsForTask(prior, released.release.claim.taskId),
+    isJournalRecordEvidence(prior)
+      ? journalRecordsForOperationId(prior, released.release.operationId)
+      : journalRecordsForTask(prior, released.release.claim.taskId),
     ({ event }) =>
       event._tag === "TaskClaimReleaseIntended" && event.operation.release.operationId === released.release.operationId
   )
