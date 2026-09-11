@@ -38,6 +38,14 @@ import {
   latestTaskReadAt,
   type ReadFreshnessEvidence
 } from "./read-freshness-evidence.js"
+import {
+  appendStopRequestDisposition,
+  emptyStopRequestDisposition,
+  inspectStopRequestDispositionStorage,
+  stopRequestDispositionAt,
+  type StopRequestDispositionEvidence
+} from "./stop-request-disposition.js"
+import type { AttemptChoiceRequestId } from "../workflow/protocols/attempt-choice/events.js"
 import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import type { JournalPosition, JournalRecordKey } from "./identity.js"
@@ -89,6 +97,7 @@ interface EvidenceIndexes {
   readonly graphEvidence: GraphEvidence
   readonly specificationDivergence: SpecificationDivergence
   readonly readFreshnessEvidence: ReadFreshnessEvidence
+  readonly stopRequestDisposition: StopRequestDispositionEvidence
 }
 
 const indexesByEvidence = new WeakMap<JournalRecordEvidence, EvidenceIndexes>()
@@ -122,7 +131,8 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
     claimObservationEpisodes: emptyClaimObservationEpisodes(),
     graphEvidence: emptyGraphEvidence(),
     specificationDivergence: emptySpecificationDivergence(),
-    readFreshnessEvidence: emptyReadFreshnessEvidence()
+    readFreshnessEvidence: emptyReadFreshnessEvidence(),
+    stopRequestDisposition: emptyStopRequestDisposition()
   })
 
 const operationOf = ({ event }: JournalRecord): WorkflowOperation | undefined =>
@@ -142,6 +152,8 @@ const operationIdsOf = (record: JournalRecord): ReadonlySet<OperationId> => {
   }
   if ("deletionOperationId" in record.event) ids.add(record.event.deletionOperationId)
   if ("replacementOperationId" in record.event) ids.add(record.event.replacementOperationId)
+  if ("expectedClaim" in record.event) ids.add(record.event.expectedClaim.operationId)
+  if ("release" in record.event) ids.add(record.event.release.claim.operationId)
   if (
     "observation" in record.event &&
     "request" in record.event.observation &&
@@ -403,7 +415,8 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     claimObservationEpisodes: appendClaimObservationEpisode(indexes.claimObservationEpisodes, record),
     graphEvidence,
     specificationDivergence: appendSpecificationDivergence(indexes.specificationDivergence, record),
-    readFreshnessEvidence: appendReadFreshnessEvidence(indexes.readFreshnessEvidence, record)
+    readFreshnessEvidence: appendReadFreshnessEvidence(indexes.readFreshnessEvidence, record),
+    stopRequestDisposition: appendStopRequestDisposition(indexes.stopRequestDisposition, record)
   })
 }
 
@@ -695,6 +708,13 @@ export const journalLatestAttemptRead = (
     throughPosition: source.records.length
   })
 
+/** One Stop request's latest distinct claim-disposition facts visible at this immutable evidence cutoff. */
+export const journalStopRequestDispositionAt = (
+  source: JournalRecordEvidence,
+  request: AttemptChoiceRequestId
+): ReturnType<typeof stopRequestDispositionAt> =>
+  stopRequestDispositionAt(indexesFor(source).stopRequestDisposition, request, source.records.length)
+
 /** Full accepted prefixes can reuse the exact indexed kind sequence. */
 export const journalEvidenceKindSequence = (
   source: JournalRecordEvidence,
@@ -838,6 +858,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     indexes.graphEvidence,
     indexes.specificationDivergence,
     indexes.readFreshnessEvidence,
+    indexes.stopRequestDisposition,
     inspectJournalRecordStorage(source.records),
     ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage),
@@ -860,6 +881,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     ...inspectClaimObservationEpisodeStorage(indexes.claimObservationEpisodes),
     ...inspectGraphEvidenceStorage(indexes.graphEvidence),
     ...inspectSpecificationDivergenceStorage(indexes.specificationDivergence),
-    ...inspectReadFreshnessEvidenceStorage(indexes.readFreshnessEvidence)
+    ...inspectReadFreshnessEvidenceStorage(indexes.readFreshnessEvidence),
+    ...inspectStopRequestDispositionStorage(indexes.stopRequestDisposition)
   ]
 }
