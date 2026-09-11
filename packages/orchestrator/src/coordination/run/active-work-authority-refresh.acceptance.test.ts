@@ -1009,8 +1009,7 @@ it.effect("production delivery composition settles the exact pending specificati
           )
         )
       }
-      const retainedRecords = yield* Ref.make<ReadonlyArray<JournalRecord>>(initialRecords)
-      const beforeCrash = yield* projectionFor(yield* Ref.get(retainedRecords), opportunity)
+      const beforeCrash = yield* projectionFor(initialRecords, opportunity)
       const selectedTransition =
         ordinaryRead.kind === "specification"
           ? beforeCrash.frontier.transitions.find(
@@ -1040,21 +1039,9 @@ it.effect("production delivery composition settles the exact pending specificati
         )
       }
       const operation = selectedTransition.operation
-      const journal = InRunJournal.of({
-        append: (appendedRunId, key, event) =>
-          Ref.modify(retainedRecords, (current) => {
-            const existing = current.find((candidate) => candidate.key === key)
-            if (existing !== undefined) return [existing, current] as const
-            const appended: JournalRecord = {
-              event,
-              key,
-              position: JournalPosition.make(Number(current.at(-1)?.position ?? 0) + 1),
-              runId: appendedRunId
-            }
-            return [appended, [...current, appended]] as const
-          }),
-        read: () => Ref.get(retainedRecords)
-      })
+      const context = yield* Layer.build(liveJournalTestLayer({ records: initialRecords, runId, target }))
+      const journal = Context.get(context, InRunJournal)
+      const acceptedReader = Context.get(context, Journal)
       const unused = () => Effect.die("focused read recovery used an unrelated interpreter method")
       const provider = WorkflowInterpreter.of({
         acquireTaskClaim: unused,
@@ -1070,7 +1057,17 @@ it.effect("production delivery composition settles the exact pending specificati
       const interpreterLayer = journaledWorkflowInterpreterLayer(
         runId,
         Layer.succeed(WorkflowInterpreter, provider)
-      ).pipe(Layer.provide(Layer.succeed(InRunJournal, journal)))
+      ).pipe(
+        Layer.provide(
+          Layer.merge(
+            Layer.succeed(InRunJournal, journal),
+            Layer.succeed(
+              AcceptedJournalReader,
+              AcceptedJournalReader.of({ readAccepted: acceptedReader.readAccepted })
+            )
+          )
+        )
+      )
       const crashAfterIntent = Effect.gen(function* () {
         const interpreter = yield* WorkflowInterpreter
         if (ordinaryRead.kind === "specification") {
@@ -1089,8 +1086,20 @@ it.effect("production delivery composition settles the exact pending specificati
       }).pipe(Effect.provide(interpreterLayer))
       expect((yield* Effect.exit(crashAfterIntent))._tag).toBe("Failure")
 
-      const recordsAfterCrash = yield* Ref.get(retainedRecords)
-      const projection = yield* projectionFor(recordsAfterCrash, opportunity)
+      const acceptedAfterCrash = yield* acceptedReader.readAccepted(runId)
+      expect(Array.from(journalRecordsForOperationId(acceptedAfterCrash, operation.operationId))).toEqual([
+        expect.objectContaining({ event: expect.objectContaining({ _tag: "TaskTrackerReadIntentRecorded" }) })
+      ])
+      const recovery = yield* makeRunRecoveryProjection(
+        runId,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        false,
+        opportunity
+      ).pipe(Effect.provide(context))
+      const projection = yield* recovery.readDeliveryProjection
       const recoveredTransition =
         ordinaryRead.kind === "specification"
           ? projection.frontier.transitions.find(
@@ -1117,9 +1126,9 @@ it.effect("production delivery composition settles the exact pending specificati
         )
       }
       const [proposal] = deliveryProposalsOf({
-        acceptedOperationIds: acceptedOperationIdsOf(recordsAfterCrash),
+        acceptedOperationIds: acceptedOperationIdsOf(acceptedAfterCrash),
         fresh: [],
-        pendingReadOperationIds: pendingReadOperationIdsOf(recordsAfterCrash),
+        pendingReadOperationIds: pendingReadOperationIdsOf(acceptedAfterCrash),
         runId,
         transitions: [recoveredTransition]
       }).ticketDelivery
