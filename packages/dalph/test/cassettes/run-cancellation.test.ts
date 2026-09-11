@@ -260,7 +260,7 @@ it.effect("cancels a running exact attempt without releasing a foreign claim", (
   }).pipe(Effect.provide(NodeCrypto.layer))
 )
 
-/** Scenario mapping: a committed terminal append loses its acknowledgement; a fresh production bootstrap must observe the terminal fact and never append a second one. */
+/** Scenario mapping: a committed terminal append loses its acknowledgement; the live Journal reconciles it before returning, and a fresh bootstrap must never append a second one. */
 it.effect("re-enters once after an unacknowledged cancellation termination append", () =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -305,7 +305,7 @@ it.effect("re-enters once after an unacknowledged cancellation termination appen
       })
       yield* Deferred.succeed(continueFinality, undefined)
       const firstExit = yield* Fiber.await(firstActivation)
-      expect(Exit.isFailure(firstExit)).toBe(true)
+      expect(firstExit).toEqual(Exit.succeed({ _tag: "RunMayTerminate" }))
 
       const firstRecords = yield* delegate.read(runId)
       expect(firstRecords.map(({ event }) => event._tag)).toEqual([
