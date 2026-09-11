@@ -1160,14 +1160,17 @@ it.effect("production delivery composition settles the exact pending specificati
         Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
         Effect.provideService(InRunJournal, journal),
         Effect.provideService(
+          AcceptedJournalReader,
+          AcceptedJournalReader.of({ readAccepted: acceptedReader.readAccepted })
+        ),
+        Effect.provideService(
           TaskClaimAcquisitionPlanner,
           TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("ordinary read recovery must not plan a claim") })
         )
       )
 
-      const targetRecords = (yield* Ref.get(retainedRecords)).filter(
-        ({ event }) => eventOperationId(event) === operation.operationId
-      )
+      const acceptedAfterExecution = yield* acceptedReader.readAccepted(runId)
+      const targetRecords = Array.from(journalRecordsForOperationId(acceptedAfterExecution, operation.operationId))
       expect(targetRecords.map(({ event }) => event._tag)).toEqual([
         "TaskTrackerReadIntentRecorded",
         "TaskTrackerFactsObserved"

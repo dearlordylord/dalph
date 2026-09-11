@@ -422,6 +422,7 @@ it.effect("returns admission-stalled finality through production bootstrap teard
           )
         )
         const journal = yield* InRunJournal
+        const acceptedReader = yield* AcceptedJournalReader
         const actionExecutor = DeliveryActionExecutor.of({
           execute: (action, lease) => {
             if (
@@ -436,6 +437,7 @@ it.effect("returns admission-stalled finality through production bootstrap teard
             })
             return executeFreshPlannedAttempt(action, action.proposal.route, lease).pipe(
               Effect.provideService(InRunJournal, journal),
+              Effect.provideService(AcceptedJournalReader, acceptedReader),
               Effect.provideService(PlannedAttemptExecutor, plannedAttemptExecutor),
               Effect.provideService(
                 PassivePlannedAttemptObserver,
