@@ -101,6 +101,17 @@ const operationIdsOf = (record: JournalRecord): ReadonlySet<OperationId> => {
   if ("authorization" in record.event && "operationId" in record.event.authorization) {
     ids.add(record.event.authorization.operationId)
   }
+  if ("deletionOperationId" in record.event) ids.add(record.event.deletionOperationId)
+  if ("replacementOperationId" in record.event) ids.add(record.event.replacementOperationId)
+  if (
+    "observation" in record.event &&
+    typeof record.event.observation === "object" &&
+    record.event.observation !== null &&
+    "request" in record.event.observation &&
+    "operationId" in record.event.observation.request
+  ) {
+    ids.add(record.event.observation.request.operationId)
+  }
   return ids
 }
 
@@ -269,10 +280,20 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     const priorOperation = Option.getOrElse(HashMap.get(recordsByOperation, operationId), emptyJournalRecords)
     recordsByOperation = HashMap.set(recordsByOperation, operationId, appendJournalRecord(priorOperation, record))
   }
-  const promotionRequestId =
-    "correlation" in record.event && "requestId" in record.event.correlation
-      ? record.event.correlation.requestId
-      : undefined
+  const promotionRequestId = (() => {
+    const event = record.event
+    if ("correlation" in event && "requestId" in event.correlation) return event.correlation.requestId
+    if ("claim" in event && "promotionCorrelation" in event.claim) {
+      return event.claim.promotionCorrelation.requestId
+    }
+    if ("request" in event && "claim" in event.request) {
+      return event.request.claim.promotionCorrelation.requestId
+    }
+    if ("authorization" in event && "claim" in event.authorization) {
+      return event.authorization.claim.promotionCorrelation.requestId
+    }
+    return undefined
+  })()
   const byPromotionRequest =
     promotionRequestId === undefined
       ? indexes.byPromotionRequest

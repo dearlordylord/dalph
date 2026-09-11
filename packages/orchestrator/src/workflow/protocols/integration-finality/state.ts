@@ -2,6 +2,12 @@
 import type { TaskId } from "@dalph/contracts"
 import { Schema } from "effect"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
+import {
+  isJournalRecordEvidence,
+  journalRecordsForOperationId,
+  journalRecordsForPromotionRequest,
+  type JournalRecordEvidence
+} from "../../../workflow-journal/record-evidence.js"
 import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
 import {
   CompletionClaimDeletionAttemptIntendedEvent,
@@ -25,6 +31,7 @@ import { TaskTrackerFactsObservedEvent } from "../../task-tracker-facts/observat
 import { taskTrackerObservationMatchesRead } from "../../task-tracker-facts/observation-match.js"
 import { TaskTrackerReadIntentRecordedEvent } from "../../registry/event.js"
 import { journalPrefixPredecessorOf } from "../../../workflow-journal/prefix-lineage.js"
+import { completionTaskRequestFor } from "./completion-task-request.js"
 
 /** The exact durable evidence currently owned by one completion-finality protocol. */
 export const IntegrationFinalityState = Schema.TaggedUnion({
@@ -59,14 +66,79 @@ export type IntegrationFinalityState = typeof IntegrationFinalityState.Type
 
 /** Minimal journal occurrence accepted by the pure finality-state projector. */
 export type IntegrationFinalityJournalOccurrence = { readonly event: unknown; readonly position: JournalPosition }
+type IntegrationFinalityHistorySource =
+  | ReadonlyArray<IntegrationFinalityJournalOccurrence>
+  | JournalRecordEvidence
 
-/** Returns the latest exact focused success after one replacement occurrence. */
-export const latestFocusedCompletedTaskObservationFor = (
-  records: ReadonlyArray<IntegrationFinalityJournalOccurrence>,
+const latestFocusedCompletedTaskObservationFromEvidence = (
+  records: JournalRecordEvidence,
   taskId: TaskId,
   afterPosition: JournalPosition,
   claim: CompletionTaskClaim
 ): FocusedCompletedTaskObservation | undefined => {
+  let latestObservation: FocusedCompletedTaskObservation | undefined
+  const operationId = completionTaskRequestFor(claim).operationId
+  let matchingRequestIntentSeen = false
+  for (const record of journalRecordsForOperationId(records, operationId)) {
+    if (record.event._tag === "CompletionTaskIntended") {
+      if (completionTaskRequestEquals(record.event.request, completionTaskRequestFor(claim))) {
+        matchingRequestIntentSeen = true
+      }
+      continue
+    }
+    if (record.position <= afterPosition || record.event._tag !== "TaskTrackerFactsObserved") continue
+    const focused = record.event.observation
+    if (focused._tag !== "FocusedTaskCompletionFacts") continue
+    let matchingReadIntent = false
+    for (const intent of journalRecordsForOperationId(records, record.event.operationId)) {
+      if (intent.position >= record.position) break
+      if (
+        intent.event._tag === "TaskTrackerReadIntentRecorded" &&
+        intent.event.operation._tag === "ReadCompletionTaskFacts" &&
+        taskTrackerObservationMatchesRead(focused, intent.event.operation)
+      ) {
+        matchingReadIntent = true
+      }
+    }
+    if (!matchingReadIntent || !matchingRequestIntentSeen) continue
+    const { facts, request, target } = focused
+    if (
+      [
+        facts.lifecycle === "CompletedSuccessfully",
+        facts.targetMembership === "Member",
+        facts.operationId === record.event.operationId,
+        facts.taskId === taskId,
+        request.taskId === taskId,
+        facts.taskRevision === request.taskRevision,
+        taskTrackerTargetKey(facts.target) === taskTrackerTargetKey(target),
+        completionTaskClaimEquals(request.claim, claim)
+      ].every(Boolean)
+    ) {
+      latestObservation = FocusedCompletedTaskObservation.make({
+        claim: request.claim,
+        lifecycle: "CompletedSuccessfully",
+        observedAt: record.position,
+        operationId: record.event.operationId,
+        taskId,
+        taskRevision: facts.taskRevision,
+        target: facts.target,
+        trackerRevision: facts.trackerRevision
+      })
+    }
+  }
+  return latestObservation
+}
+
+/** Returns the latest exact focused success after one replacement occurrence. */
+export const latestFocusedCompletedTaskObservationFor = (
+  records: IntegrationFinalityHistorySource,
+  taskId: TaskId,
+  afterPosition: JournalPosition,
+  claim: CompletionTaskClaim
+): FocusedCompletedTaskObservation | undefined => {
+  if (isJournalRecordEvidence(records)) {
+    return latestFocusedCompletedTaskObservationFromEvidence(records, taskId, afterPosition, claim)
+  }
   let latestObservation: FocusedCompletedTaskObservation | undefined
   const chronological = records.toSorted((left, right) => left.position - right.position)
   for (const record of chronological) {
@@ -286,10 +358,20 @@ const deriveIntegrationFinalityState = (
   return state
 }
 
+const deriveIntegrationFinalityStateFromEvidence = (
+  records: JournalRecordEvidence,
+  claim: CompletionTaskClaim
+): IntegrationFinalityState | undefined =>
+  deriveIntegrationFinalityState(
+    Array.from(journalRecordsForPromotionRequest(records, claim.promotionCorrelation.requestId)),
+    claim
+  )
+
 export const deriveIntegrationFinalityStateFor = (
-  records: ReadonlyArray<IntegrationFinalityJournalOccurrence>,
+  records: IntegrationFinalityHistorySource,
   claim: CompletionTaskClaim
 ): IntegrationFinalityState | undefined => {
+  if (isJournalRecordEvidence(records)) return deriveIntegrationFinalityStateFromEvidence(records, claim)
   const claimKey = finalityClaimKey(claim)
   const cachedByClaim = finalityStateByPrefix.get(records)
   if (cachedByClaim?.has(claimKey) === true) return cachedByClaim.get(claimKey)
