@@ -15,6 +15,15 @@ import {
   integrationStartedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordsForAttemptKind,
+  journalRecordsForTaskKind,
+  journalRecordsOfKind,
+  isJournalRecordEvidence,
+  type JournalHistorySource,
+  type JournalRecordEvidence
+} from "../../../workflow-journal/record-evidence.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationResponsibilityBeganEvent, IntegrationStartedEvent } from "./events.js"
 import {
@@ -368,31 +377,42 @@ const integrationAdmissionPrefixIndexesFor = (
   return indexes
 }
 
-const acceptedTerminalFor = (
-  indexes: IntegrationAdmissionPrefixIndexes,
-  plannedAttempt: PlannedTaskAttempt,
-  acceptedResult: AcceptedResult
-): IndexedAcceptedTerminal | undefined =>
-  Option.getOrUndefined(
-    Chunk.findFirst(
-      hashMapValue(indexes.acceptedTerminalsByAttempt, plannedAttempt.attemptId) ??
-        Chunk.empty<IndexedAcceptedTerminal>(),
-      (terminal) =>
-        terminal.runId === plannedAttempt.runId && acceptedResultEquivalence(terminal.acceptedResult, acceptedResult)
-    )
-  )
-
-const hasDurableAcceptedResult = (
-  indexes: IntegrationAdmissionPrefixIndexes,
+const acceptedResultIsDurableIn = (
+  records: JournalRecordEvidence,
   plannedAttempt: PlannedTaskAttempt,
   acceptedResult: AcceptedResult
 ): boolean => {
-  const responsibility = hashMapValue(indexes.executorResponsibilitiesFirst, plannedAttempt.attemptId)
-  return (
-    responsibility !== undefined &&
-    plannedTaskAttemptEquivalence(responsibility, plannedAttempt) &&
-    acceptedTerminalFor(indexes, plannedAttempt, acceptedResult) !== undefined
-  )
+  let exactResponsibility = false
+  for (const record of journalRecordsForAttemptKind(
+    records,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorWorkResponsibilityBegan"
+  )) {
+    if (
+      record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
+      plannedTaskAttemptEquivalence(record.event.plannedAttempt, plannedAttempt)
+    ) {
+      exactResponsibility = true
+    }
+  }
+  if (!exactResponsibility) return false
+  for (const record of journalRecordsForAttemptKind(
+    records,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorWorkReported"
+  )) {
+    if (record.event._tag !== "PlannedAttemptExecutorWorkReported") continue
+    const report = record.event.report
+    if (
+      report._tag === "ExecutorWorkTerminal" &&
+      report.result._tag === "Accepted" &&
+      report.correlation.runId === plannedAttempt.runId &&
+      acceptedResultEquivalence(report.result.acceptedResult, acceptedResult)
+    ) {
+      return true
+    }
+  }
+  return false
 }
 
 const acceptanceEvidenceConflict = (
@@ -471,6 +491,45 @@ const startedFor = (
       integrationResponsibilityEquivalence(record.event, queued.event)
   )
 
+const startedForEvidence = (
+  records: JournalRecordEvidence,
+  queued: JournalRecord & { readonly event: typeof IntegrationResponsibilityBeganEvent.Type }
+) => {
+  for (const record of journalRecordsForAttemptKind(
+    records,
+    queued.event.plannedAttempt.attemptId,
+    "IntegrationStarted"
+  )) {
+    if (
+      record.event._tag === "IntegrationStarted" &&
+      record.event.responsibilityBeganAt === queued.position &&
+      integrationResponsibilityEquivalence(record.event, queued.event)
+    ) {
+      return record
+    }
+  }
+  return undefined
+}
+
+const settledForEvidence = (
+  records: JournalRecordEvidence,
+  queued: JournalRecord & { readonly event: typeof IntegrationResponsibilityBeganEvent.Type }
+): boolean => {
+  for (const record of journalRecordsForTaskKind(
+    records,
+    queued.event.plannedAttempt.taskId,
+    "IntegrationFinalitySettled"
+  )) {
+    if (
+      record.event._tag === "IntegrationFinalitySettled" &&
+      plannedTaskAttemptEquivalence(record.event.claim.plannedAttempt, queued.event.plannedAttempt)
+    ) {
+      return true
+    }
+  }
+  return false
+}
+
 /**
  * A completion settlement names the same immutable planned attempt that
  * began this integration responsibility. It releases only this logical FIFO
@@ -525,8 +584,43 @@ const incrementalUnqueuedAcceptedResultsFor = (
 }
 
 export const deriveUnqueuedAcceptedResults = (
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): ReadonlyArray<UnqueuedAcceptedResult> => {
+  if (isJournalRecordEvidence(records)) {
+    const queuedAttemptIds = new Set(
+      Array.from(journalRecordsOfKind(records, "IntegrationResponsibilityBegan"), (record) =>
+        record.event._tag === "IntegrationResponsibilityBegan" ? record.event.plannedAttempt.attemptId : undefined
+      ).filter((attemptId) => attemptId !== undefined)
+    )
+    const results: Array<UnqueuedAcceptedResult> = []
+    for (const record of journalRecordsOfKind(records, "PlannedAttemptExecutorWorkReported")) {
+      if (record.event._tag !== "PlannedAttemptExecutorWorkReported") continue
+      const report = record.event.report
+      if (
+        report._tag !== "ExecutorWorkTerminal" ||
+        report.result._tag !== "Accepted" ||
+        queuedAttemptIds.has(report.correlation.attemptId)
+      ) {
+        continue
+      }
+      let plannedAttempt: PlannedTaskAttempt | undefined
+      for (const responsibility of journalRecordsForAttemptKind(
+        records,
+        report.correlation.attemptId,
+        "PlannedAttemptExecutorWorkResponsibilityBegan"
+      )) {
+        if (responsibility.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+          plannedAttempt = responsibility.event.plannedAttempt
+        }
+      }
+      if (plannedAttempt !== undefined) {
+        results.push(
+          UnqueuedAcceptedResult.make({ acceptedResult: report.result.acceptedResult, plannedAttempt, terminalAt: record.position })
+        )
+      }
+    }
+    return results
+  }
   const cached = unqueuedAcceptedResultsByPrefix.get(records)
   if (cached !== undefined) return cached
 
@@ -569,7 +663,38 @@ export const deriveUnqueuedAcceptedResults = (
 /** Reconstructs FIFO and cutoff state solely from immutable journal records. */
 const integrationAdmissionByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, IntegrationAdmission>()
 
-export const deriveIntegrationAdmission = (records: ReadonlyArray<JournalRecord>): IntegrationAdmission => {
+export const deriveIntegrationAdmission = (records: JournalHistorySource): IntegrationAdmission => {
+  if (isJournalRecordEvidence(records)) {
+    const responsibilities: Array<IntegrationResponsibility> = []
+    for (const record of journalRecordsOfKind(records, "IntegrationResponsibilityBegan")) {
+      if (record.event._tag !== "IntegrationResponsibilityBegan") continue
+      const queued = { ...record, event: record.event }
+      if (settledForEvidence(records, queued)) continue
+      const started = startedForEvidence(records, queued)
+      responsibilities.push(
+        started === undefined
+          ? QueuedIntegrationResponsibility.make({
+              acceptedResult: queued.event.acceptedResult,
+              integrationTarget: queued.event.integrationTarget,
+              plannedAttempt: queued.event.plannedAttempt,
+              preIntegrationCancellation: PreIntegrationCancellationCapability.make({
+                attemptId: queued.event.plannedAttempt.attemptId,
+                queuedAt: queued.position,
+                runId: queued.runId
+              }),
+              queuedAt: queued.position
+            })
+          : StartedIntegrationResponsibility.make({
+              acceptedResult: queued.event.acceptedResult,
+              integrationTarget: queued.event.integrationTarget,
+              plannedAttempt: queued.event.plannedAttempt,
+              queuedAt: queued.position,
+              startedAt: started.position
+            })
+      )
+    }
+    return { responsibilities }
+  }
   const cached = integrationAdmissionByPrefix.get(records)
   if (cached !== undefined) return cached
 
@@ -702,9 +827,9 @@ export const queueAcceptedResultIntegrationResponsibility = Effect.fn(
   "IntegrationAdmission.queueAcceptedResultResponsibility"
 )(function* (plannedAttempt: PlannedTaskAttempt, acceptedResult: AcceptedResult, integrationTarget: IntegrationTarget) {
   const journal = yield* InRunJournal
-  const records = yield* journal.read(plannedAttempt.runId)
-  const indexes = integrationAdmissionPrefixIndexesFor(records)
-  if (!hasDurableAcceptedResult(indexes, plannedAttempt, acceptedResult)) {
+  const accepted = yield* AcceptedJournalReader
+  const prefix = yield* accepted.readAccepted(plannedAttempt.runId)
+  if (!acceptedResultIsDurableIn(prefix, plannedAttempt, acceptedResult)) {
     return yield* new AcceptedResultNotDurable({ attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId })
   }
   yield* qualifyAcceptedResultEvidence(plannedAttempt, acceptedResult)
