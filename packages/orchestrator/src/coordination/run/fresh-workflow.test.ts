@@ -36,7 +36,9 @@ import { makeIntegrationTargetResourceController } from "../admission/integratio
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import type { CurrentDeliveryFrame } from "./current-delivery-frame.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
+import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
 import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
+import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { WorkflowResponsibilityEntry } from "../reconstruction/state.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
@@ -74,14 +76,11 @@ import { OperationId } from "../../workflow/identity.js"
 import { deriveFreshWorkflowDecisions, responsibilityStillOwnsTask } from "./fresh-workflow.js"
 import { JournalStore } from "../../workflow-journal/store.js"
 import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
-import {
-  appendReplacementProvenance,
-  replacementWorktreeObservationOperationIdFor
-} from "../../workflow/protocols/disposition-cleanup/provenance-fixtures.js"
+import { appendReplacementProvenance } from "../../workflow/protocols/disposition-cleanup/provenance-fixtures.js"
 import {
   attempt as replacementPriorAttempt,
   runId as replacementRunId,
-  successor as replacementSuccessorAttempt
+  successor as replacementFixtureSuccessorAttempt
 } from "../../workflow/protocols/disposition-cleanup/fixtures.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { reconstructedTaskGraphFor } from "../reconstruction/graph-knowledge.js"
@@ -110,16 +109,6 @@ const plannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/fresh-workflow-no-successor")
 })
 
-const withoutWorktreeObservation = (
-  records: ReadonlyArray<JournalRecord>,
-  operationId: OperationId
-): ReadonlyArray<JournalRecord> =>
-  records.filter(({ event }) => {
-    if (event._tag === "TaskWorktreeReconciliationIntended") return event.operation.operationId !== operationId
-    if (event._tag === "TaskWorktreeReady") return event.operationId !== operationId
-    return true
-  })
-
 it.effect("continues a valid restarted replacement successor without resurrecting its original fresh commitment", () =>
   Effect.gen(function* () {
     const target = FixtureTarget.make("fresh-workflow-replacement-successor")
@@ -129,114 +118,26 @@ it.effect("continues a valid restarted replacement successor without resurrectin
       target,
       RunControlPolicy.make({ revision: initialRunPolicyRevision, taskExecutionCapacity: TaskWorkCapacity.make(1) })
     )
-    const originalSpecification = makeTaskWorkSpecification({
-      body: "original replacement implementation",
+    const priorSpecification = makeTaskWorkSpecification({
+      body: "cleanup provenance predecessor",
       taskId: replacementPriorAttempt.taskId,
-      title: "original replacement implementation"
+      title: "cleanup provenance predecessor"
     })
     const priorAttempt = PlannedTaskAttempt.make({
       ...replacementPriorAttempt,
-      taskRevision: originalSpecification.fingerprint
+      taskRevision: priorSpecification.fingerprint
+    })
+    const replacementSpecification = makeTaskWorkSpecification({
+      body: "cleanup provenance witness",
+      taskId: replacementPriorAttempt.taskId,
+      title: "cleanup provenance witness"
+    })
+    const replacementSuccessorAttempt = PlannedTaskAttempt.make({
+      ...replacementFixtureSuccessorAttempt,
+      taskRevision: replacementSpecification.fingerprint
     })
     yield* appendReplacementProvenance(priorAttempt, replacementSuccessorAttempt, "StartupValid")
-    // This test supplies a differently identified but exact original worktree
-    // observation below. Remove the fixture's self-contained equivalent so
-    // reconstruction sees one accepted worktree authority for the attempt.
-    const fixtureWorktreeOperationId = OperationId.make(
-      `${replacementWorktreeObservationOperationIdFor(priorAttempt)}:initial-authority`
-    )
-    const fixtureRecords = withoutWorktreeObservation(yield* journal.read(replacementRunId), fixtureWorktreeOperationId)
-    const originalPlanIndex = fixtureRecords.findIndex(({ event }) => event._tag === "TaskAttemptPlanned")
-    const originalPlanRecord = fixtureRecords[originalPlanIndex]
-    if (originalPlanRecord?.event._tag !== "TaskAttemptPlanned") {
-      return yield* Effect.die("replacement fixture did not record its original attempt plan")
-    }
-    const originalGraphProjection = projectTrackerSnapshot({
-      revision: "fresh-workflow-replacement-original-graph",
-      tasks: [
-        { id: priorAttempt.taskId, lifecycle: { _tag: "Open" as const }, parentTaskId: null, prerequisiteIds: [] }
-      ]
-    })
-    if (originalGraphProjection._tag === "Invalid") return yield* Effect.die(originalGraphProjection.issues)
-    const originalGraph = originalGraphProjection.snapshot
-    const originalGraphOperation = makeTrackerGraphObservationOperation(
-      { _tag: "WorkflowEstablishment" },
-      OperationId.make("fresh-workflow-replacement-original-graph"),
-      target,
-      [originalPlanRecord.event.operation.predecessorOperationIds[0] ?? OperationId.make("missing-claim")],
-      [priorAttempt.taskId]
-    )
-    const originalSpecificationOperation = makeTaskWorkSpecificationObservationOperation(
-      OperationId.make("fresh-workflow-replacement-original-specification"),
-      target,
-      priorAttempt.taskId,
-      [originalGraphOperation.operationId]
-    )
-    const correctedOriginalPlan = {
-      ...originalPlanRecord,
-      event: TaskAttemptPlannedEvent.make({
-        operation: {
-          ...originalPlanRecord.event.operation,
-          predecessorOperationIds: [originalSpecificationOperation.operationId]
-        },
-        version: workflowJournalEventVersion
-      })
-    }
-    const originalWorktreeOperation = makeTaskWorktreeReconciliationOperation({
-      operationId: OperationId.make("fresh-workflow-replacement-original-worktree"),
-      plannedAttempt: priorAttempt,
-      predecessorOperationIds: [originalPlanRecord.event.operation.operationId]
-    })
-    const inserted = [
-      {
-        event: taskTrackerReadIntent(originalGraphOperation),
-        key: intentRecordKey(originalGraphOperation.operationId)
-      },
-      {
-        event: taskTrackerFactsObservedEvent(
-          originalGraphOperation.operationId,
-          makeCompleteTaskTrackerFactsObserved(originalGraphOperation, originalGraph)
-        ),
-        key: outcomeRecordKey(originalGraphOperation.operationId)
-      },
-      {
-        event: taskTrackerReadIntent(originalSpecificationOperation),
-        key: intentRecordKey(originalSpecificationOperation.operationId)
-      },
-      {
-        event: taskTrackerFactsObservedEvent(
-          originalSpecificationOperation.operationId,
-          makeFocusedTaskWorkSpecificationFactsObserved(originalSpecificationOperation, originalSpecification)
-        ),
-        key: outcomeRecordKey(originalSpecificationOperation.operationId)
-      },
-      correctedOriginalPlan,
-      {
-        event: TaskWorktreeReconciliationIntendedEvent.make({
-          operation: originalWorktreeOperation,
-          version: workflowJournalEventVersion
-        }),
-        key: intentRecordKey(originalWorktreeOperation.operationId)
-      },
-      {
-        event: TaskWorktreeReadyEvent.make({
-          operationId: originalWorktreeOperation.operationId,
-          proof: PlannedWorktreeReady.make({
-            baseSha: priorAttempt.baseSha,
-            branch: priorAttempt.branch,
-            headSha: priorAttempt.baseSha,
-            worktree: priorAttempt.worktree
-          }),
-          version: workflowJournalEventVersion
-        }),
-        key: outcomeRecordKey(originalWorktreeOperation.operationId)
-      }
-    ]
-    const records = [
-      ...fixtureRecords.slice(0, originalPlanIndex),
-      ...inserted,
-      ...fixtureRecords.slice(originalPlanIndex + 1)
-    ].map((record, index) => ({ ...record, position: JournalPosition.make(index + 1), runId: replacementRunId }))
+    const records = yield* journal.read(replacementRunId)
     const reduction = reduceWorkflowJournalHistory(replacementRunId, records)
     if (reduction._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(reduction)
     if (reduction.runState.appliedThrough === null) return yield* Effect.die("replacement history was empty")
@@ -902,7 +803,7 @@ it("authorizes no plan-stage boundary when the plan lacks its exact causal claim
   }
 })
 
-it("does not begin executor work from a worktree-ready outcome whose proof does not match the exact plan", () => {
+it("does not materialize accepted history when a worktree-ready proof does not match the exact plan", () => {
   const claim = selectionOperation("mismatched-ready-proof")
   const postClaimGraph = makeTrackerGraphObservationOperation(
     { _tag: "WorkflowEstablishment" },
@@ -993,7 +894,24 @@ it("does not begin executor work from a worktree-ready outcome whose proof does 
     }
   ]
 
-  expect(deriveFreshWorkflowDecisions(selectionFrameWith(records), new Set(), selectionTarget)).toEqual([])
+  const frame = selectionFrameWith(records)
+  const indexedFrame: CurrentDeliveryFrame = {
+    ...frame,
+    workflowHistory: {
+      ...frame.workflowHistory,
+      prefix: acceptedJournalPrefixFromValidatedHistory(selectionRunId, frame.workflowHistory.records)
+    }
+  }
+  let materializations = 0
+  const stop = observeJournalRecordSequenceOperations((operation) => {
+    if (operation._tag === "HistoricalMaterialization") materializations += 1
+  })
+  try {
+    expect(deriveFreshWorkflowDecisions(indexedFrame, new Set(), selectionTarget)).toEqual([])
+    expect(materializations).toBe(0)
+  } finally {
+    stop()
+  }
 })
 
 it("does not advance on an older same-task acquisition after the latest intent", () => {

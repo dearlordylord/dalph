@@ -4,6 +4,8 @@ import { expect } from "vitest"
 import { TaskRevision } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { StartedIntegrationResponsibility } from "../../workflow/protocols/integration-admission/protocol.js"
 import {
@@ -60,6 +62,12 @@ const appendableJournal = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
     read: () => Ref.get(records)
   })
 
+const acceptedJournal = (records: Ref.Ref<ReadonlyArray<JournalRecord>>) =>
+  AcceptedJournalReader.of({
+    readAccepted: (runId) =>
+      Ref.get(records).pipe(Effect.map((current) => acceptedJournalPrefixFromValidatedHistory(runId, current)))
+  })
+
 const inertLease: DeliveryActionExecutionLease = {
   acceptIntegrationTargetOwnership: Effect.void,
   bindPlannedAttemptPosition: () => Effect.void,
@@ -110,6 +118,7 @@ it.effect("defers blocker-clear ancestry without runtime and completes after the
 
     expect(
       yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+        Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
         Effect.provideService(InRunJournal, journal)
       )
     ).toMatchObject({ _tag: "ActionDeferred", proposalId: proposal.id, reason: "CompletionTaskUnavailable" })
@@ -117,6 +126,7 @@ it.effect("defers blocker-clear ancestry without runtime and completes after the
 
     expect(
       yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+        Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
         Effect.provideService(TargetPromotionRuntime, promotionRuntime),
         Effect.provideService(InRunJournal, journal)
       )
@@ -160,6 +170,7 @@ it.effect("translates a changed focused revision into a deferred completion acti
     })
 
     const result = yield* executeIntegrationAction(action, transition, inertLease, target).pipe(
+      Effect.provideService(AcceptedJournalReader, acceptedJournal(records)),
       Effect.provideService(CompletionTaskBoundary, boundary),
       Effect.provideService(TargetPromotionRuntime, promotionRuntime),
       Effect.provideService(EvidenceStore, evidenceStore),
