@@ -47,6 +47,7 @@ import {
   CompletionClaimReplacementIntendedEvent,
   CompletionClaimReplacementFailure,
   CompletionTaskClaim,
+  CompletionTaskRequestOrdinal,
   FocusedTaskCompletionFacts,
   CompletionTaskIntendedEvent,
   CompletionClaimRequestOrdinal,
@@ -176,7 +177,7 @@ const journalRecordsRef = (records: ReadonlyArray<JournalRecord>) =>
   Ref.make<ReadonlyArray<JournalRecord>>([...records])
 
 const focusedSuccessPurpose = CompletionTaskFocusedReadPurpose.cases.Confirmation.make({
-  attemptOrdinal: CompletionClaimRequestOrdinal.make(1),
+  attemptOrdinal: CompletionTaskRequestOrdinal.make(1),
   confirmationOrdinal: CompletionTaskConfirmationReadOrdinal.make(1)
 })
 const focusedSuccessOperation = makeCompletionTaskFactsObservationOperation(
@@ -706,7 +707,7 @@ const runWith = <A, E>(
       Effect.ensuring(
         Effect.gen(function* () {
           const journal = yield* Journal
-          const state = yield* journal.state.get
+          const state = yield* journal.state.get.pipe(Effect.orDie)
           yield* Ref.set(records, exportWorkflowHistoryRecords(state.reconstructed.workflowHistory))
         })
       ),
