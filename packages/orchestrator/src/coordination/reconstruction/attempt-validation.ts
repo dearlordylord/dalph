@@ -1142,8 +1142,11 @@ const replacementGraphIsExact = (
   operationId: OperationId,
   applicationPosition: JournalPosition
 ): boolean => {
-  const record = findLast(journalRecordsForTask(prior, plannedAttempt.taskId), (candidate) =>
-    isReplacementGraphRecord(candidate, operationId)
+  const record = findLast(
+    isJournalRecordEvidence(prior)
+      ? journalRecordsForOperationId(prior, operationId)
+      : journalRecordsForTask(prior, plannedAttempt.taskId),
+    (candidate) => isReplacementGraphRecord(candidate, operationId)
   )
   if (record === undefined) return false
   if (record.position <= applicationPosition) return false
@@ -1177,8 +1180,11 @@ const replacementSpecificationIsExact = (
   operationId: OperationId,
   applicationPosition: JournalPosition
 ): boolean => {
-  const record = findLast(journalRecordsForTask(prior, subject.plannedAttempt.taskId), (candidate) =>
-    isReplacementSpecificationRecord(candidate, operationId)
+  const record = findLast(
+    isJournalRecordEvidence(prior)
+      ? journalRecordsForOperationId(prior, operationId)
+      : journalRecordsForTask(prior, subject.plannedAttempt.taskId),
+    (candidate) => isReplacementSpecificationRecord(candidate, operationId)
   )
   if (record === undefined) return false
   if (record.position <= applicationPosition) return false
@@ -1209,8 +1215,11 @@ const replacementClaimIsExact = (
   witness: PlannedAttemptReplacementRecord["event"]["witness"],
   application: RestartApplicationRecord
 ): boolean => {
-  const record = findLast(journalRecordsForTask(prior, plannedAttempt.taskId), (candidate) =>
-    isReplacementClaimRecord(candidate, witness.claimObservationOperationId)
+  const record = findLast(
+    isJournalRecordEvidence(prior)
+      ? journalRecordsForOperationId(prior, witness.claimObservationOperationId)
+      : journalRecordsForTask(prior, plannedAttempt.taskId),
+    (candidate) => isReplacementClaimRecord(candidate, witness.claimObservationOperationId)
   )
   if (record === undefined) return false
   if (record.position <= application.position) return false
@@ -1334,8 +1343,11 @@ const replacementTargetIsExact = (
   witness: PlannedAttemptReplacementRecord["event"]["witness"],
   applicationPosition: JournalPosition
 ): boolean => {
-  const record = findLast(journalRecordsForAttempt(prior, plannedAttempt.attemptId), (candidate) =>
-    isReplacementTargetRecord(candidate, witness.targetLineageObservationOperationId)
+  const record = findLast(
+    isJournalRecordEvidence(prior)
+      ? journalRecordsForOperationId(prior, witness.targetLineageObservationOperationId)
+      : journalRecordsForAttempt(prior, plannedAttempt.attemptId),
+    (candidate) => isReplacementTargetRecord(candidate, witness.targetLineageObservationOperationId)
   )
   if (record === undefined) return false
   if (record.position <= applicationPosition) return false
