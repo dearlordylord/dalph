@@ -342,7 +342,7 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
           boundaryIntent: InterruptibleWorkflowBoundaryIntent.TaskClaimCleanup({ family: "TaskTracker", operation }),
           execution: interruptibleBoundary,
           onIntentRecorded
-        }).pipe(Effect.provideService(InRunJournal, journal))
+        }).pipe(Effect.provideService(InRunJournal, journal), Effect.provideService(AcceptedJournalReader, accepted))
       })
 
       const recordTaskAttemptPlan = Effect.fn("WorkflowInterpreter.Journaled.recordTaskAttemptPlan")(function* (
@@ -423,7 +423,8 @@ export const journaledWorkflowInterpreterLayer = <E, R>(
         readTaskClaim,
         readTaskWorktree,
         readTargetLineage,
-        readTrackerGraph,
+        readTrackerGraph: (...args) =>
+          readTrackerGraph(...args).pipe(Effect.provideService(AcceptedJournalReader, accepted)),
         readTaskWorkSpecification,
         releaseTaskClaim,
         reconcileTaskWorktree,
