@@ -10,14 +10,26 @@ import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { OperationId } from "../workflow/identity.js"
 import { AuthoritativeTaskClaimObserved, WorkflowInterpreter } from "../workflow/interpretation/interpreter.js"
 import { makeTaskClaimObservationOperation } from "../workflow/registry/operation.js"
-import { memoryJournalTestLayer } from "./adapters/memory-store.js"
+import { Journal } from "../coordination/delivery/journal.js"
+import { liveJournalTestLayer } from "../coordination/delivery/live-journal-test-layer.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
-import { JournalStore } from "./store.js"
+import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
 
 const unused = () => Effect.die("unused")
 const runId = RunId.make("journaled-claim-observation-run")
 const taskId = TaskId.make("journaled-claim-observation-task")
 const target = FixtureTarget.make("journaled-claim-observation-target")
+const journalLayer = liveJournalTestLayer({
+  records: [
+    makeWorkflowRunBeganRecord(
+      runId,
+      target,
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+  ],
+  runId,
+  target
+})
 const claim = ActiveTaskClaim.make({
   operationId: OperationId.make("journaled-claim-observation-acquisition"),
   owner: ClaimOwner.make("dalph"),
@@ -27,12 +39,7 @@ const claim = ActiveTaskClaim.make({
 
 it.effect("records one exact claim observation and replays it without another provider read", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* Journal
     const interpreter = yield* WorkflowInterpreter
     const operation = makeTaskClaimObservationOperation(
       OperationId.make("journaled-claim-observation-read"),
@@ -76,8 +83,7 @@ it.effect("records one exact claim observation and replays it without another pr
             )
           )
         )
-      ).pipe(Layer.provide(memoryJournalTestLayer))
-    ),
-    Effect.provide(memoryJournalTestLayer)
+      ).pipe(Layer.provideMerge(journalLayer))
+    )
   )
 )

@@ -18,6 +18,8 @@ import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { PlannedWorktreeReady } from "../authorities/git/worktree.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { makeApplicationExitLifecycle } from "../coordination/application-exit/lifecycle.js"
+import { Journal } from "../coordination/delivery/journal.js"
+import { liveJournalTestLayer } from "../coordination/delivery/live-journal-test-layer.js"
 import { makeRunRecoveryProjection } from "../coordination/run/recovery-activation.js"
 import { InitialControlPolicy } from "../control/policy.js"
 import { OperationId } from "../workflow/identity.js"
@@ -49,9 +51,9 @@ import {
 } from "../workflow/task-tracker-facts/observation.js"
 import { validSnapshot } from "../../test/task-dag.js"
 import { attemptPlanRecordKey, intentRecordKey, outcomeRecordKey } from "./record-key.js"
-import { memoryJournalTestLayer } from "./adapters/memory-store.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
-import { InRunJournal, JournalStore } from "./store.js"
+import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
+import { JournalStore } from "./store.js"
 
 const unused = () => Effect.die("unused")
 
@@ -71,13 +73,10 @@ const interpreterWith = (overrides: Partial<WorkflowInterpreterService>) =>
 
 const buildApplicationInterpreter = Effect.fn("InterruptibleRecoveryTest.buildApplicationInterpreter")(function* (
   runId: RunId,
-  inRunJournal: InRunJournal["Service"],
   provider: Layer.Layer<WorkflowInterpreter>,
   applicationScope: Scope.Scope
 ) {
-  const application = journaledWorkflowInterpreterLayer(runId, provider).pipe(
-    Layer.provide(Layer.succeed(InRunJournal, inRunJournal))
-  )
+  const application = journaledWorkflowInterpreterLayer(runId, provider)
   const context = yield* Layer.build(application).pipe(Scope.provide(applicationScope))
   return Context.get(context, WorkflowInterpreter)
 })
@@ -98,13 +97,8 @@ it.effect("rebuilds the tracker application from its recovery projection and rec
         predecessorOperationIds: []
       })
       const claim = ActiveTaskClaim.make(operation.acquisition)
-      const journal = yield* JournalStore
-      const inRunJournal = yield* InRunJournal
-      yield* journal.beginRun(
-        runId,
-        target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-      )
+      const journal = yield* Journal
+      const journalStore = yield* JournalStore
 
       const firstScope = yield* Scope.make()
       const firstLifecycle = yield* makeApplicationExitLifecycle()
@@ -112,7 +106,6 @@ it.effect("rebuilds the tracker application from its recovery projection and rec
       if (firstOwner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong first owner kind")
       const firstInterpreter = yield* buildApplicationInterpreter(
         runId,
-        inRunJournal,
         Layer.succeed(WorkflowInterpreter, interpreterWith({ acquireTaskClaim: () => Effect.never })),
         firstScope
       )
@@ -124,7 +117,7 @@ it.effect("rebuilds the tracker application from its recovery projection and rec
       expect((yield* Fiber.await(firstCall))._tag).toBe("Failure")
       yield* Scope.close(firstScope, Exit.void)
 
-      yield* journal.readRunForRecovery(runId, target)
+      yield* journalStore.readRunForRecovery(runId, target)
       const recovery = yield* makeRunRecoveryProjection(runId)
       expect((yield* recovery.readDeliveryProjection).frontier.transitions).toContainEqual(
         expect.objectContaining({ _tag: "CheckTaskClaim", operationId: operation.acquisition.operationId })
@@ -136,7 +129,6 @@ it.effect("rebuilds the tracker application from its recovery projection and rec
       if (restartedOwner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong restarted owner kind")
       const restartedInterpreter = yield* buildApplicationInterpreter(
         runId,
-        inRunJournal,
         Layer.succeed(
           WorkflowInterpreter,
           interpreterWith({ acquireTaskClaim: () => Effect.succeed(AuthoritativeTaskClaimAcquired.make({ claim })) })
@@ -156,7 +148,21 @@ it.effect("rebuilds the tracker application from its recovery projection and rec
       yield* Scope.close(restartedScope, Exit.void)
       expect((yield* journal.read(runId)).map(({ event }) => event._tag)).toContain("TaskClaimAcquired")
     })
-  ).pipe(Effect.provide(memoryJournalTestLayer))
+  ).pipe(
+    Effect.provide(
+      liveJournalTestLayer({
+        records: [
+          makeWorkflowRunBeganRecord(
+            RunId.make("interruptible-tracker-recovery-run"),
+            FixtureTarget.make("interruptible-tracker-recovery-target"),
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+          )
+        ],
+        runId: RunId.make("interruptible-tracker-recovery-run"),
+        target: FixtureTarget.make("interruptible-tracker-recovery-target")
+      })
+    )
+  )
 )
 
 it.effect("rebuilds the Git application from its recovery projection and records the available response", () =>
@@ -216,13 +222,8 @@ it.effect("rebuilds the Git application from its recovery projection and records
         headSha: plannedAttempt.baseSha,
         worktree: plannedAttempt.worktree
       })
-      const journal = yield* JournalStore
-      const inRunJournal = yield* InRunJournal
-      yield* journal.beginRun(
-        runId,
-        target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-      )
+      const journal = yield* Journal
+      const journalStore = yield* JournalStore
       yield* journal.append(
         runId,
         intentRecordKey(acquisition.operationId),
@@ -278,7 +279,6 @@ it.effect("rebuilds the Git application from its recovery projection and records
       if (firstOwner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong first owner kind")
       const firstInterpreter = yield* buildApplicationInterpreter(
         runId,
-        inRunJournal,
         Layer.succeed(WorkflowInterpreter, interpreterWith({ reconcileTaskWorktree: () => Effect.never })),
         firstScope
       )
@@ -290,7 +290,7 @@ it.effect("rebuilds the Git application from its recovery projection and records
       expect((yield* Fiber.await(firstCall))._tag).toBe("Failure")
       yield* Scope.close(firstScope, Exit.void)
 
-      yield* journal.readRunForRecovery(runId, target)
+      yield* journalStore.readRunForRecovery(runId, target)
 
       const restartedScope = yield* Scope.make()
       const restartedLifecycle = yield* makeApplicationExitLifecycle()
@@ -298,7 +298,6 @@ it.effect("rebuilds the Git application from its recovery projection and records
       if (restartedOwner.kind !== "InterruptibleBoundary") return yield* Effect.die("wrong restarted owner kind")
       const restartedInterpreter = yield* buildApplicationInterpreter(
         runId,
-        inRunJournal,
         Layer.succeed(
           WorkflowInterpreter,
           interpreterWith({
@@ -321,5 +320,19 @@ it.effect("rebuilds the Git application from its recovery projection and records
       yield* Scope.close(restartedScope, Exit.void)
       expect((yield* journal.read(runId)).map(({ event }) => event._tag)).toContain("TaskWorktreeReady")
     })
-  ).pipe(Effect.provide(memoryJournalTestLayer))
+  ).pipe(
+    Effect.provide(
+      liveJournalTestLayer({
+        records: [
+          makeWorkflowRunBeganRecord(
+            RunId.make("interruptible-git-recovery-run"),
+            FixtureTarget.make("interruptible-git-recovery-target"),
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+          )
+        ],
+        runId: RunId.make("interruptible-git-recovery-run"),
+        target: FixtureTarget.make("interruptible-git-recovery-target")
+      })
+    )
+  )
 )

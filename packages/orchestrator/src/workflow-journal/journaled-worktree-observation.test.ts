@@ -35,13 +35,14 @@ import {
   makeTaskWorktreeObservationOperation
 } from "../workflow/registry/operation.js"
 import { makeApplicationExitLifecycle } from "../coordination/application-exit/lifecycle.js"
-import { memoryJournalTestLayer } from "./adapters/memory-store.js"
+import { Journal, journalLayer } from "../coordination/delivery/journal.js"
+import { liveJournalTestLayer } from "../coordination/delivery/live-journal-test-layer.js"
+import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/history.js"
 import { sqliteJournalStoreLayer } from "./adapters/sqlite-store.js"
-import { JournalDatabaseLocator } from "./identity.js"
+import { JournalDatabaseLocator, JournalPosition } from "./identity.js"
 import { journaledWorkflowInterpreterLayer } from "./journaled-interpreter.js"
-import { InRunJournal, JournalStore } from "./store.js"
-import { AcceptedJournalReader } from "./accepted-reader.js"
-import { acceptedJournalPrefixFromValidatedHistory } from "./accepted-prefix.js"
+import { JournalHistoryInvalid, JournalStore } from "./store.js"
+import { makeWorkflowRunBeganRecord } from "./run-lifecycle.js"
 
 const unused = () => Effect.die("unused")
 const testInterpreter = (
@@ -82,6 +83,7 @@ const integrationTarget = IntegrationTarget.make({
   ref: IntegrationTargetRef.make("refs/heads/master")
 })
 const nodePathAndFileSystemLayer = Layer.merge(NodeFileSystem.layer, NodePath.layer)
+const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
 
 const journaledTestLayer = (
   readTaskWorktree: WorkflowInterpreterService["readTaskWorktree"],
@@ -90,18 +92,30 @@ const journaledTestLayer = (
   journaledWorkflowInterpreterLayer(
     runId,
     Layer.succeed(WorkflowInterpreter, testInterpreter(readTaskWorktree, readTargetLineage))
-  ).pipe(Layer.provide(memoryJournalTestLayer))
-
-const runWithJournal = <A, E>(effect: Effect.Effect<A, E, WorkflowInterpreter | JournalStore>) =>
-  Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  ).pipe(
+    Layer.provideMerge(
+      liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, initialPolicy)], runId, target })
     )
-    return yield* effect
-  })
+  )
+
+const runWithJournal = <A, E>(effect: Effect.Effect<A, E, WorkflowInterpreter | Journal>) => effect
+
+const persistedJournalLayer = (journal: JournalStore["Service"]) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const records = yield* journal.read(runId)
+      const initial = reduceWorkflowJournalHistory(runId, records)
+      if (initial._tag === "InvalidWorkflowJournalHistory") {
+        const issue = initial.issues[0]
+        return yield* new JournalHistoryInvalid({
+          detail: JSON.stringify(initial.issues),
+          position: issue !== undefined && "position" in issue ? issue.position : JournalPosition.make(1),
+          runId
+        })
+      }
+      return journalLayer(runId, target, initial, journal)
+    })
+  )
 
 it.effect("records exact worktree loss and replays it without another Git read", () =>
   Effect.gen(function* () {
@@ -125,14 +139,14 @@ it.effect("records exact worktree loss and replays it without another Git read",
         yield* interpreter.readTaskWorktree(operation)
         yield* interpreter.readTaskWorktree(operation)
         expect(yield* Ref.get(reads)).toBe(1)
-        const journal = yield* JournalStore
+        const journal = yield* Journal
         expect(
           (yield* journal.read(runId))
             .map(({ event }) => event._tag)
             .filter((tag) => tag === "GitReadIntentRecorded" || tag === "PlannedAttemptWorktreeObserved")
         ).toEqual(["GitReadIntentRecorded", "PlannedAttemptWorktreeObserved"])
       })
-    ).pipe(Effect.provide(layer), Effect.provide(memoryJournalTestLayer))
+    ).pipe(Effect.provide(layer))
   })
 )
 
@@ -149,11 +163,7 @@ it.effect("reopens persisted Git read intent in a fresh application and records 
       yield* Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* JournalStore
-          yield* journal.beginRun(
-            runId,
-            target,
-            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-          )
+          yield* journal.beginRun(runId, target, initialPolicy)
           const provider = Layer.succeed(
             WorkflowInterpreter,
             testInterpreter(() =>
@@ -164,21 +174,7 @@ it.effect("reopens persisted Git read intent in a fresh application and records 
             )
           )
           const application = journaledWorkflowInterpreterLayer(runId, provider).pipe(
-            Layer.provide(
-              Layer.mergeAll(
-                Layer.succeed(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read })),
-                Layer.succeed(
-                  AcceptedJournalReader,
-                  AcceptedJournalReader.of({
-                    readAccepted: (readRunId) =>
-                      journal.read(readRunId).pipe(
-                        Effect.orDie,
-                        Effect.map((records) => acceptedJournalPrefixFromValidatedHistory(readRunId, records))
-                      )
-                  })
-                )
-              )
-            )
+            Layer.provideMerge(persistedJournalLayer(journal))
           )
           const interpreter = Context.get(yield* Layer.build(application), WorkflowInterpreter)
           const lifecycle = yield* makeApplicationExitLifecycle()
@@ -221,21 +217,7 @@ it.effect("reopens persisted Git read intent in a fresh application and records 
             )
           )
           const application = journaledWorkflowInterpreterLayer(runId, provider).pipe(
-            Layer.provide(
-              Layer.mergeAll(
-                Layer.succeed(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read })),
-                Layer.succeed(
-                  AcceptedJournalReader,
-                  AcceptedJournalReader.of({
-                    readAccepted: (readRunId) =>
-                      journal.read(readRunId).pipe(
-                        Effect.orDie,
-                        Effect.map((records) => acceptedJournalPrefixFromValidatedHistory(readRunId, records))
-                      )
-                  })
-                )
-              )
-            )
+            Layer.provideMerge(persistedJournalLayer(journal))
           )
           const interpreter = Context.get(yield* Layer.build(application), WorkflowInterpreter)
           const lifecycle = yield* makeApplicationExitLifecycle()
@@ -332,7 +314,7 @@ it.effect("retains the ready worktree while retrying a failed target-lineage rea
         )
         expect((yield* interpreter.readTargetLineage(lineageOperation))._tag).toBe("AuthoritativeTargetLineageObserved")
         expect(yield* Ref.get(lineageReads)).toBe(2)
-        const journal = yield* JournalStore
+        const journal = yield* Journal
         expect(
           (yield* journal.read(runId))
             .filter(
@@ -341,7 +323,7 @@ it.effect("retains the ready worktree while retrying a failed target-lineage rea
             .map(({ event }) => (event._tag === "GitReadIntentRecorded" ? event.operation.operationId : undefined))
         ).toEqual([lineageOperation.operationId])
       })
-    ).pipe(Effect.provide(layer), Effect.provide(memoryJournalTestLayer))
+    ).pipe(Effect.provide(layer))
   })
 )
 
@@ -369,7 +351,7 @@ it.effect("ordinary typed Git failure leaves its intent unsettled and rereads wi
     yield* runWithJournal(
       Effect.gen(function* () {
         const interpreter = yield* WorkflowInterpreter
-        const journal = yield* JournalStore
+        const journal = yield* Journal
         expect((yield* interpreter.readTaskWorktree(operation).pipe(Effect.flip))._tag).toBe("GitWorktreeReadFailure")
         expect((yield* journal.read(runId)).filter(({ event }) => event._tag === "GitReadIntentRecorded")).toHaveLength(
           1
@@ -392,6 +374,6 @@ it.effect("ordinary typed Git failure leaves its intent unsettled and rereads wi
           operation.operationId
         ])
       })
-    ).pipe(Effect.provide(layer), Effect.provide(memoryJournalTestLayer))
+    ).pipe(Effect.provide(layer))
   })
 )
