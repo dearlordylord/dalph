@@ -3,6 +3,7 @@ import { Effect, Match, Ref } from "effect"
 import type { PlannedTaskAttempt, RunId, TaskId } from "@dalph/contracts"
 import {
   type JournalRecord,
+  type JournalReadError,
   ActiveTaskClaim,
   authorizedClaimForAttempt,
   CompletionClaimBoundary,
@@ -121,7 +122,7 @@ const preparedFinalityFromPromotedRecords = Effect.fn(
 
 interface FinalityJournal {
   readonly baselineLength: number
-  readonly read: ReturnType<InRunJournal["Service"]["read"]>
+  readonly read: Effect.Effect<ReadonlyArray<JournalRecord>, JournalReadError>
   readonly service: InRunJournal["Service"]
 }
 
