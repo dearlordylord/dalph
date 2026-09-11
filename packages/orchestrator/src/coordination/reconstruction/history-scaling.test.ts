@@ -8,7 +8,7 @@ import { taskWorkCapacityPolicyRecordKey } from "../../workflow-journal/record-k
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { TaskWorkCapacityChangedEvent } from "../../workflow/registry/event.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
-import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory } from "./history.js"
+import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory, inspectWorkflowJournalHistoryValidationPath } from "./history.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 
 it.each([64, 256])("Alice changes capacity after %i accepted records without materializing or traversing the prefix", (size) => {
@@ -21,14 +21,19 @@ it.each([64, 256])("Alice changes capacity after %i accepted records without mat
     runId
   })
   let historicalReads = 0
+  let coldSlices = 0
   const records = new Proxy([began, ...Array.from({ length: size - 1 }, (_, offset) => capacityRecord(offset + 2))], {
     get(target, property, receiver) {
       if (typeof property === "string" && /^\d+$/.test(property)) historicalReads += 1
+      if (property === "slice") coldSlices += 1
       return Reflect.get(target, property, receiver)
     }
   })
   const prior = reduceWorkflowJournalHistory(runId, records)
   expect(prior._tag).toBe("ValidWorkflowJournalHistory")
+  expect(inspectWorkflowJournalHistoryValidationPath(prior)).toBe("IndexedCold")
+  expect(coldSlices).toBe(0)
+  expect(historicalReads).toBeLessThanOrEqual(size * 20)
   if (prior._tag !== "ValidWorkflowJournalHistory") return
   historicalReads = 0
   let indexedVisits = 0

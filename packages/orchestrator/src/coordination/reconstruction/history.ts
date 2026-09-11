@@ -9,6 +9,7 @@ import {
 import { type JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
 import {
   acceptedJournalPrefixFromValidatedHistory,
+  acceptedJournalPrefixFromValidatedEvidence,
   appendValidatedJournalRecord,
   type AcceptedJournalPrefix
 } from "../../workflow-journal/accepted-prefix.js"
@@ -18,7 +19,7 @@ import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import { HashMap, HashSet, Iterable, Option } from "effect"
-import { firstJournalRecordOfKind, lastJournalRecordOfKind, journalRecordByPosition, journalRecordByKey, journalRecordsOfKind, journalRecordsForTask, journalEvidenceBefore, appendJournalEvidence, isJournalRecordEvidence, type JournalHistorySource } from "../../workflow-journal/record-evidence.js"
+import { firstJournalRecordOfKind, lastJournalRecordOfKind, journalRecordByPosition, journalRecordByKey, journalRecordsOfKind, journalRecordsForTask, journalEvidenceBefore, appendJournalEvidence, emptyJournalEvidence, isJournalRecordEvidence, type JournalHistorySource, type JournalRecordEvidence } from "../../workflow-journal/record-evidence.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import { journalRecordAt, materializeJournalRecords } from "../../workflow-journal/record-sequence.js"
 import {
@@ -82,6 +83,10 @@ const keyedCandidates = (records: JournalHistorySource, key: JournalRecordKey): 
 }
 
 const foldIndexesByHistory = new WeakMap<ValidWorkflowJournalHistory, FoldIndexes>()
+const validationPathByHistory = new WeakMap<object, "IndexedCold" | "RawDiagnostic" | "IndexedSuccessor">()
+
+/** Test-only path evidence: valid canonical histories must not take raw diagnostic replay. */
+export const inspectWorkflowJournalHistoryValidationPath = (history: object) => validationPathByHistory.get(history)
 type UnfinishedAttempt = { readonly plannedAttempt: PlannedTaskAttempt; readonly position: JournalPosition }
 const unfinishedByHistory = new WeakMap<ValidWorkflowJournalHistory, HashMap.HashMap<TaskId, UnfinishedAttempt>>()
 
@@ -2309,15 +2314,18 @@ const finishValidation = (
   records: ReadonlyArray<JournalRecord>,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>,
-  reconstructRunState: () => ReconstructedRunState = () => reconstructValidatedRunState(runId, records)
+  evidence?: JournalRecordEvidence
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
   validateOneUnfinishedAttemptPerTask(runId, indexes, issues)
-  validateRunLifecycle(runId, records, issues)
+  validateRunLifecycle(runId, evidence ?? records, issues)
   if (issues.length > 0) {
-    return rememberReduction({ _tag: "InvalidWorkflowJournalHistory", issues, records, runId })
+    if (evidence !== undefined) return reduceRawDiagnosticHistory(runId, records)
+    const invalid: InvalidWorkflowJournalHistory = { _tag: "InvalidWorkflowJournalHistory", issues, records, runId }
+    validationPathByHistory.set(invalid, "RawDiagnostic")
+    return rememberReduction(invalid)
   }
-  const prefix = acceptedJournalPrefixFromValidatedHistory(runId, records)
-  const state = reconstructRunState()
+  const prefix = evidence === undefined ? acceptedJournalPrefixFromValidatedHistory(runId, records) : acceptedJournalPrefixFromValidatedEvidence(runId, evidence)
+  const state = reconstructValidatedRunState(runId, records)
   const valid: ValidWorkflowJournalHistory = {
     _tag: "ValidWorkflowJournalHistory",
     runState: { ...state, workflowHistory: { ...state.workflowHistory, prefix } },
@@ -2326,22 +2334,44 @@ const finishValidation = (
     prefix
   }
   foldIndexesByHistory.set(valid, indexes)
+  validationPathByHistory.set(valid, evidence === undefined ? "RawDiagnostic" : "IndexedCold")
   unfinishedByHistory.set(valid, unfinishedTasksFrom(indexes))
   return rememberReduction(valid)
 }
 
-export const reduceWorkflowJournalHistory = (
+/** Diagnostic replay preserves the original complete-array ordering for malformed histories. */
+const reduceRawDiagnosticHistory = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
-  const cached = cachedReductionFor(runId, records)
-  if (cached !== undefined) return cached
   const issues = new Array<WorkflowJournalHistoryIssue>()
   let indexes = emptyIndexes()
   records.forEach((record, index) => {
     indexes = validateRecord(record, index, runId, records, indexes, issues)
   })
   return finishValidation(runId, records, indexes, issues)
+}
+
+/** Test-only reference query mode for comparing indexed acceptance and exact ordered issues. */
+export const reduceUnindexedWorkflowJournalHistoryForTesting = (runId: RunId, records: ReadonlyArray<JournalRecord>) =>
+  reduceRawDiagnosticHistory(runId, [...records])
+
+/** Cold recovery and live append execute the same indexed chronological record kernel. */
+export const reduceWorkflowJournalHistory = (runId: RunId, records: ReadonlyArray<JournalRecord>): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
+  const cached = cachedReductionFor(runId, records)
+  if (cached !== undefined) return cached
+  let indexes = emptyIndexes()
+  let evidence = emptyJournalEvidence()
+  const issues = new Array<WorkflowJournalHistoryIssue>()
+  for (const [index, record] of records.entries()) {
+    // Decoded evidence is indexed only after its envelope is canonical. Raw
+    // fallback retains duplicate positions/keys and contradictory Run identity.
+    if (record.position !== index + 1 || record.runId !== runId || record.key !== describeJournalEvent(record.event).expectedKey || HashSet.has(indexes.seenKeys, record.key)) return reduceRawDiagnosticHistory(runId, records)
+    evidence = appendJournalEvidence(evidence, record)
+    indexes = validateRecord(record, index, runId, evidence, indexes, issues)
+    if (issues.length > 0) return reduceRawDiagnosticHistory(runId, records)
+  }
+  return finishValidation(runId, records, indexes, issues, evidence)
 }
 
 /**
@@ -2375,6 +2405,7 @@ export const advanceWorkflowJournalHistory = (
   const history = acceptedWorkflowHistory(prefix)
   const advanced = acceptedHistoryResult(prefix, advanceReconstructedRunState(prior.runState, record, history))
   foldIndexesByHistory.set(advanced, advancedIndexes)
+  validationPathByHistory.set(advanced, "IndexedSuccessor")
   unfinishedByHistory.set(advanced, advancedUnfinished)
   return advanced
 }

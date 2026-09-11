@@ -20,7 +20,7 @@ import {
   workflowRunBeganRecordKey,
   workflowRunTerminatedRecordKey
 } from "../../workflow-journal/record-key.js"
-import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory } from "./history.js"
+import { advanceWorkflowJournalHistory, reduceWorkflowJournalHistory, inspectWorkflowJournalHistoryValidationPath, reduceUnindexedWorkflowJournalHistoryForTesting } from "./history.js"
 import { reconstructedTaskGraphFor } from "./graph-knowledge.js"
 import {
   makeTaskClaimAcquisitionOperation,
@@ -184,7 +184,11 @@ it("advances every generated valid prefix to the same state and frontier as comp
         incremental = advanceWorkflowJournalHistory(incremental, record)
         expect(incremental._tag).toBe("ValidWorkflowJournalHistory")
         if (incremental._tag !== "ValidWorkflowJournalHistory") return
-        expect(incremental).toEqual(reduceWorkflowJournalHistory(runId, accepted))
+        const cold = reduceWorkflowJournalHistory(runId, accepted)
+        expect(inspectWorkflowJournalHistoryValidationPath(cold)).toBe("IndexedCold")
+        expect(inspectWorkflowJournalHistoryValidationPath(incremental)).toBe("IndexedSuccessor")
+        expect(incremental).toEqual(cold)
+        expect(cold).toEqual(reduceUnindexedWorkflowJournalHistoryForTesting(runId, accepted))
       }
     }),
     { numRuns: 100 }
