@@ -87,18 +87,20 @@ export const activeWorkAuthorityRefreshSubjectsFor = makeActiveWorkAuthorityRefr
  */
 export const activeWorkAuthorityRefreshSubjectsForRunState = (
   runState: Pick<ReconstructedRunState, "runId" | "responsibility" | "workflowHistory">
-): ActiveWorkAuthorityRefreshSubjects =>
-  activeWorkAuthorityRefreshSubjectsFor(
+): ActiveWorkAuthorityRefreshSubjects => {
+  const acceptedHistory = runState.workflowHistory.prefix ?? runState.workflowHistory.records
+  return activeWorkAuthorityRefreshSubjectsFor(
     runState.responsibility.entries.flatMap((entry) => {
       if (entry._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
       const { plannedAttempt } = entry
       if (plannedAttempt.runId !== runState.runId) return []
-      return currentAcceptedPlannedAttemptExecutorLifecycleFor(runState.workflowHistory.records, plannedAttempt)
+      return currentAcceptedPlannedAttemptExecutorLifecycleFor(acceptedHistory, plannedAttempt)
         ._tag === "Executing"
         ? [{ runId: plannedAttempt.runId, attemptId: plannedAttempt.attemptId }]
         : []
     })
   )
+}
 
 /** Checks one planned attempt against the immutable activation subject set. */
 export const activeWorkAuthorityRefreshSubjectsContain = (

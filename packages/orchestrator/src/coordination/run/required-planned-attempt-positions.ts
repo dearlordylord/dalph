@@ -5,6 +5,7 @@ import {
   latestUnsettledPlannedAttemptExecutorCommand
 } from "../../workflow/protocols/planned-attempt-executor-work/evidence.js"
 import type { ReconstructedRunState } from "../reconstruction/state.js"
+import { journalRecordsForAttemptKind } from "../../workflow-journal/record-evidence.js"
 export { requiredPreStartTaskWorkPositionsOf } from "./required-pre-start-task-work-positions.js"
 
 /** One exact planned attempt whose unfinished work still requires a process-local task-work position. */
@@ -22,11 +23,13 @@ export interface RequiredPlannedAttemptPosition {
 export const requiredPlannedAttemptPositionsOf = (
   runState: Pick<ReconstructedRunState, "responsibility" | "workflowHistory">
 ): ReadonlyArray<RequiredPlannedAttemptPosition> => {
-  const records = runState.workflowHistory.records
+  const records = runState.workflowHistory.prefix ?? runState.workflowHistory.records
   return runState.responsibility.entries.flatMap((responsibility) => {
     if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") return []
     const plannedAttempt = responsibility.plannedAttempt
-    const abandoned = records.some(
+    const abandoned = Array.from(
+      journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "AttemptImplementationAbandoned")
+    ).some(
       ({ event }) =>
         event._tag === "AttemptImplementationAbandoned" &&
         plannedTaskAttemptEquivalence(event.subject.plannedAttempt, plannedAttempt)

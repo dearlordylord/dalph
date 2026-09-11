@@ -20,6 +20,8 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
+import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import { OperationId } from "../../workflow/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
@@ -181,6 +183,35 @@ const cancelledNoRelease = (
 
 const reconstructed = (records: ReadonlyArray<JournalRecord>, entries = []) =>
   requiredPreStartTaskWorkPositionsOf({ runId, responsibility: { entries }, workflowHistory: { records } })
+
+it("reads pre-start positions from accepted indexed evidence without exporting journal records", () => {
+  const prefix = acceptedJournalPrefixFromValidatedHistory(runId, [claimIntent, claimAcquired, plan])
+  const operations: Array<string> = []
+  const restore = observeJournalRecordSequenceOperations((operation) => operations.push(operation._tag))
+  try {
+    const positions = requiredPreStartTaskWorkPositionsOf({
+      runId,
+      responsibility: { entries: [] },
+      workflowHistory: {
+        prefix,
+        get records(): ReadonlyArray<JournalRecord> {
+          throw new Error("accepted position reconstruction must not export the journal prefix")
+        }
+      }
+    })
+    expect(positions).toEqual([
+      {
+        _tag: "PlannedPreStartTaskWorkPosition",
+        claimOperationId,
+        correlation: { attemptId: plannedAttempt.attemptId, runId },
+        taskId
+      }
+    ])
+    expect(operations).not.toContain("HistoricalMaterialization")
+  } finally {
+    restore()
+  }
+})
 
 it("retains the exact claim operation through every pre-start restart prefix", () => {
   expect(reconstructed([claimIntent])).toEqual([
