@@ -412,10 +412,7 @@ export const validateAttemptStop = (
           `attempt abandonment for ${event.subject.plannedAttempt.attemptId} follows a later executor command`
         )
       }
-      const authorizedClaim = authorizedClaimForAttempt(
-        prior,
-        event.subject.plannedAttempt
-      )?.claim
+      const authorizedClaim = authorizedClaimForAttempt(prior, event.subject.plannedAttempt)?.claim
       const claimMatches = () => authorizedClaim !== undefined && isExactTaskClaim(authorizedClaim, event.expectedClaim)
       if (!claimMatches()) {
         semanticIssue(
@@ -732,11 +729,7 @@ export const validateContinuationAuthorization = (
     identityIssue(issues, runId, record.position, "continuation authorization binds another Run")
   }
   const prior = historyBefore(records, record.position)
-  const evaluation = evaluatePlannedAttemptContinuationAuthorization(
-    Array.from(journalRecordsForTask(prior, event.plannedAttempt.taskId)),
-    event.plannedAttempt,
-    event.witness
-  )
+  const evaluation = evaluatePlannedAttemptContinuationAuthorization(prior, event.plannedAttempt, event.witness)
   if (evaluation._tag === "Rejected") {
     semanticIssue(issues, runId, record.position, evaluation.detail)
   }
@@ -1523,9 +1516,7 @@ export const validatePlan = (
       ? record.event.operation.plannedAttempt
       : record.event.successorPlan.plannedAttempt
   if (record.event._tag === "TaskAttemptPlanned") {
-    if (
-      acceptedFreshAttemptLineage(recordsThroughPlan, plannedAttempt, "Plan") === undefined
-    ) {
+    if (acceptedFreshAttemptLineage(recordsThroughPlan, plannedAttempt, "Plan") === undefined) {
       semanticIssue(
         issues,
         runId,
