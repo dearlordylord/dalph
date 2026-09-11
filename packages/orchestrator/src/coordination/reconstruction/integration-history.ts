@@ -7,6 +7,11 @@ import {
 import { HashMap, Option } from "effect"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import {
+  isJournalRecordEvidence,
+  journalEvidenceBefore,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import {
   acceptedResultEquivalence,
@@ -96,7 +101,7 @@ const invalidIntegrationStart = (
 }
 
 const invalidProviderAbsenceHistory = (
-  prefix: ReadonlyArray<JournalRecord>,
+  prefix: JournalHistorySource,
   record: JournalRecord
 ): string | undefined => {
   const validation = validateProviderRunActivityAbsent(prefix, record)
@@ -106,7 +111,7 @@ const invalidProviderAbsenceHistory = (
 }
 
 const invalidQuarantineHistory = (
-  prefix: ReadonlyArray<JournalRecord>,
+  prefix: JournalHistorySource,
   record: JournalRecord & { readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationQuarantined" }> }
 ): string | undefined => {
   const state = deriveIntegrationQuarantineState(prefix, record.event.correlation.sessionId)
@@ -116,7 +121,7 @@ const invalidQuarantineHistory = (
 }
 
 const invalidQuarantineDirectionHistory = (
-  prefix: ReadonlyArray<JournalRecord>,
+  prefix: JournalHistorySource,
   record: JournalRecord & {
     readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationQuarantineDirectionApplied" }>
   }
@@ -143,7 +148,7 @@ const isQuarantineDirectionRecord = (
 
 const invalidIntegrationQuarantineHistory = (
   record: JournalRecord,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): string | undefined => {
   if (
     record.event._tag !== "IntegrationProviderRunActivityAbsent" &&
@@ -152,7 +157,9 @@ const invalidIntegrationQuarantineHistory = (
   ) {
     return undefined
   }
-  const prefix = records.filter(({ position }) => position <= record.position)
+  const prefix = isJournalRecordEvidence(records)
+    ? journalEvidenceBefore(records, record.position + 1)
+    : records.filter(({ position }) => position <= record.position)
   if (record.event._tag === "IntegrationProviderRunActivityAbsent") {
     return invalidProviderAbsenceHistory(prefix, record)
   }
@@ -187,7 +194,7 @@ const isTargetPromotionEvent = (event: WorkflowJournalEvent): event is TargetPro
 export const invalidIntegrationHistoryEvent = <Indexes extends IntegrationHistoryIndexes>(
   record: JournalRecord,
   indexes: Indexes,
-  records: ReadonlyArray<JournalRecord> = [record]
+  records: JournalHistorySource = [record]
 ): IntegrationHistoryValidation<Indexes> => {
   const integrator = validateIntegratorHistoryEvent(record, indexes, records)
   if (integrator.handled) return { detail: integrator.issue, indexes: integrator.indexes }
