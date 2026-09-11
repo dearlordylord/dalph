@@ -11,6 +11,7 @@ import {
 } from "../../../workflow-journal/record-key.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import {
   isJournalRecordEvidence,
   journalRecordByKey,
@@ -468,7 +469,7 @@ export const appendIntegratorSuccessorSessionIfNeeded = Effect.fn("IntegratorPro
     const appended = yield* journal.append(runIdFor(input.predecessor), key, event).pipe(
       Effect.catchTag("JournalStoreContradiction", ({ existingPosition }) =>
         Effect.gen(function* () {
-          const refreshed = yield* journal.read(runIdFor(input.predecessor))
+          const refreshed = yield* (yield* AcceptedJournalReader).readAccepted(runIdFor(input.predecessor))
           const winner = journalRecordByPosition(refreshed, existingPosition)
           if (winner !== undefined && successorRecordMatches(winner, key, event)) return winner
           return yield* reject(input.predecessor, "FullRerun successor append contradicted existing Journal history")

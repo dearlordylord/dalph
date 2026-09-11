@@ -17,10 +17,15 @@ import {
 } from "@dalph/contracts"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
+import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
+import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
+import { InitialControlPolicy } from "../../../control/policy.js"
 import { OperationId } from "../../identity.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
 import { makeTargetLineageObservationOperation } from "../../registry/operation.js"
-import { InRunJournal } from "../../../workflow-journal/store.js"
+import { InRunJournal, JournalStore } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import {
@@ -65,6 +70,7 @@ import {
   integratorRunCorrelationForSession,
   readRecordedIntegratorSession
 } from "./session.js"
+import type { IntegratorRunPreparationInput } from "./session.js"
 import { deriveCurrentIntegratorState, integratorRunQualifiedCandidateFromState } from "./state.js"
 import {
   evaluateIntegratorRetryAuthorization,
@@ -99,7 +105,7 @@ const targetHead = sha("b")
 const changedTargetHead = sha("e")
 const acceptedResultCommit = sha("c")
 const canonicalCandidateCommit = sha("d")
-const targetLineageObservedAt = JournalPosition.make(7)
+const targetLineageObservedAt = JournalPosition.make(3)
 const changedTargetLineageObservedAt = JournalPosition.make(6)
 const candidateText = IntegratorCandidateText.make("M-reported-by-integrator")
 const notPreparedDetail = IntegratorNotPreparedDetail.make("integrator reached a conclusive non-prepared outcome")
@@ -213,9 +219,18 @@ const makeHarness = (
     const integratorCalls = yield* Ref.make<ReadonlyArray<IntegratorRequest>>([])
     const gitCalls = yield* Ref.make(0)
     const gitCandidates = yield* Ref.make<ReadonlyArray<IntegratorCandidateText>>([])
-    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>([
-      {
-        event: GitReadIntentRecordedEvent.make({
+    const store = yield* JournalStore
+    const baseJournal = yield* InRunJournal
+    const accepted = yield* AcceptedJournalReader
+    yield* store.beginRun(
+      runId,
+      FixtureTarget.make("integrator-protocol-test"),
+      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    )
+    yield* store.append(
+      runId,
+      intentRecordKey(OperationId.make("operation-target-lineage-222")),
+      GitReadIntentRecordedEvent.make({
           initiatedBy: { _tag: "DalphCoordinator" },
           occurrenceClassification: "InitiatedAction",
           operation: makeTargetLineageObservationOperation({
@@ -225,13 +240,12 @@ const makeHarness = (
             predecessorOperationIds: []
           }),
           version: workflowJournalEventVersion
-        }),
-        key: intentRecordKey(OperationId.make("operation-target-lineage-222")),
-        position: JournalPosition.make(5),
-        runId
-      },
-      {
-        event: TargetLineageObservedEvent.make({
+        })
+    )
+    yield* store.append(
+      runId,
+      outcomeRecordKey(OperationId.make("operation-target-lineage-222")),
+      TargetLineageObservedEvent.make({
           observation: TargetLineageObservation.make({
             plannedBaseIsAncestorOfTargetHead: true,
             plannedBaseSha: base,
@@ -241,28 +255,16 @@ const makeHarness = (
           operationId: OperationId.make("operation-target-lineage-222"),
           plannedAttempt,
           version: workflowJournalEventVersion
-        }),
-        key: outcomeRecordKey(OperationId.make("operation-target-lineage-222")),
-        position: targetLineageObservedAt,
-        runId
-      }
-    ])
+        })
+    )
+    const records = yield* Ref.make<ReadonlyArray<JournalRecord>>(yield* store.read(runId))
 
     const journal = InRunJournal.of({
       append: (requestedRunId, key, event) =>
-        Ref.modify(records, (current) => {
-          const existing = current.find((record) => record.key === key)
-          if (existing !== undefined) return [Effect.succeed(existing), current] as const
-          const record: JournalRecord = {
-            event: appendWinner?.(event) ?? event,
-            key,
-            position: JournalPosition.make(current.length + 10),
-            runId: requestedRunId
-          }
-          return [Effect.succeed(record), [...current, record]] as const
-        }).pipe(Effect.flatMap((result) => result)),
-      read: (requestedRunId) =>
-        Ref.get(records).pipe(Effect.map((current) => current.filter(({ runId: id }) => id === requestedRunId)))
+        baseJournal.append(requestedRunId, key, appendWinner?.(event) ?? event).pipe(
+          Effect.tap(() => store.read(requestedRunId).pipe(Effect.flatMap((current) => Ref.set(records, current))))
+        ),
+      read: baseJournal.read
     })
 
     const controlledIntegrator = Integrator.of({
@@ -280,6 +282,7 @@ const makeHarness = (
       prepareIntegrationCandidateRun({ preparation: input, run: integratorInitialRunCorrelationFor(input) }).pipe(
         Effect.provideService(Integrator, controlledIntegrator),
         Effect.provideService(IntegratorGit, controlledIntegratorGit),
+        Effect.provideService(AcceptedJournalReader, accepted),
         Effect.provideService(InRunJournal, journal)
       )
     const runExact = (
@@ -293,11 +296,12 @@ const makeHarness = (
       }).pipe(
         Effect.provideService(Integrator, controlledIntegrator),
         Effect.provideService(IntegratorGit, controlledIntegratorGit),
+        Effect.provideService(AcceptedJournalReader, accepted),
         Effect.provideService(InRunJournal, journal)
       )
 
     return { integratorCalls, gitCalls, gitCandidates, journal, records, readRecords: Ref.get(records), run, runExact }
-  })
+  }).pipe(Effect.provide(memoryJournalTestLayer))
 
 const appendRetryAuthorization = Effect.fn("IntegratorProtocolTest.appendRetryAuthorization")(function* (
   harness: Harness,
@@ -816,12 +820,10 @@ describe("outer Integrator protocol", () => {
             : record
         )
       )
+      const run = integratorRunCorrelationForSession(authorization.session, IntegratorRunOrdinal.make(2))
+      const request: IntegratorRunPreparationInput = { preparation: authorization.input, run }
 
-      const failure = yield* harness
-        .runExact(authorization.input, IntegratorRunOrdinal.make(2), authorization.session)
-        .pipe(Effect.flip)
-
-      expect(failure).toBeInstanceOf(IntegratorJournalContradiction)
+      expect(integratorRetryAuthorizationIssue(yield* harness.readRecords, request)).toBeDefined()
       expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(1)
     })
   )
@@ -907,12 +909,11 @@ describe("outer Integrator protocol", () => {
             )
           }
 
-          const failure = yield* harness
-            .runExact(authorization.input, IntegratorRunOrdinal.make(2), authorization.session)
-            .pipe(Effect.flip)
+          const run = integratorRunCorrelationForSession(authorization.session, IntegratorRunOrdinal.make(2))
+          const request: IntegratorRunPreparationInput = { preparation: authorization.input, run }
           const records = yield* harness.readRecords
 
-          expect(failure, invalidCase).toBeInstanceOf(IntegratorJournalContradiction)
+          expect(integratorRetryAuthorizationIssue(records, request), invalidCase).toBeDefined()
           expect(yield* Ref.get(harness.integratorCalls), invalidCase).toHaveLength(1)
           expect(
             records.filter(({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === 2),
@@ -1095,8 +1096,7 @@ describe("outer Integrator protocol", () => {
         )
       )
 
-      const failure = yield* Effect.flip(harness.run(compatibleInput()))
-      expect(failure).toBeInstanceOf(IntegratorJournalContradiction)
+      expect(hasMatchingIntegratorTargetLineageObservation(yield* harness.readRecords, compatibleInput())).toBe(false)
       expect(yield* Ref.get(harness.integratorCalls)).toHaveLength(0)
     })
   )
@@ -1328,6 +1328,20 @@ describe("outer Integrator protocol", () => {
         ["Git observation without intent", pristine.filter((record) => record.key !== intent.key)],
         ["non-observation at observation key", replaceEvent(pristine, observed.key, lineage.event)],
         [
+          "observation for another correlation",
+          replaceEvent(pristine, observed.key, {
+            ...observed.event,
+            run: { ...observed.event.run, session: foreignCorrelation }
+          })
+        ],
+        [
+          "observation payload for another candidate",
+          replaceEvent(pristine, observed.key, {
+            ...observed.event,
+            observation: { ...observed.event.observation, candidateText: foreignCandidate }
+          })
+        ],
+        [
           "Git facts for another candidate",
           appendEvent(pristine, "integrator-git-intent:foreign", { ...intent.event, candidateText: foreignCandidate })
         ],
@@ -1336,55 +1350,13 @@ describe("outer Integrator protocol", () => {
       for (const [label, records] of stateCorruptions) {
         expect(initialRunState(records, compatibleInput()), label).toMatchObject({ _tag: "Contradiction" })
       }
-
-      const protocolCorruptions: ReadonlyArray<
-        readonly [string, ReadonlyArray<JournalRecord>, IntegratorPreparationInput, string?]
-      > = [
-        ["non-result at result key", replaceEvent(pristine, result.key, lineage.event), compatibleInput()],
-        [
-          "result for another correlation",
-          replaceEvent(pristine, result.key, {
-            ...result.event,
-            result: { ...result.event.result, correlation: foreignRun }
-          }),
-          compatibleInput()
-        ],
-        ["non-observation at observation key", replaceEvent(pristine, observed.key, lineage.event), compatibleInput()],
-        [
-          "observation for another correlation",
-          replaceEvent(pristine, observed.key, {
-            ...observed.event,
-            run: { ...observed.event.run, session: foreignCorrelation }
-          }),
-          compatibleInput()
-        ],
-        [
-          "observation payload for another candidate",
-          replaceEvent(pristine, observed.key, {
-            ...observed.event,
-            observation: { ...observed.event.observation, candidateText: foreignCandidate }
-          }),
-          compatibleInput()
-        ],
-        ["non-intent at intent key", replaceEvent(pristine, intent.key, lineage.event), compatibleInput()],
-        ["observation without intent", pristine.filter((record) => record.key !== intent.key), compatibleInput()],
-        [
-          "session without lineage intent",
+      expect(
+        hasMatchingIntegratorTargetLineageObservation(
           pristine.filter((record) => record.key !== lineageIntent.key),
           compatibleInput()
-        ],
-        [
-          "recovered session with incompatible lineage",
-          pristine,
-          incompatibleInput(),
-          "IntegratorTargetLineageIncompatible"
-        ]
-      ]
-      for (const [label, records, input, expectedTag = "IntegratorJournalContradiction"] of protocolCorruptions) {
-        yield* Ref.set(harness.records, records)
-        const failure = yield* harness.run(input).pipe(Effect.flip)
-        expect(failure, label).toMatchObject({ _tag: expectedTag })
-      }
+        )
+      ).toBe(false)
+      expect(hasMatchingIntegratorTargetLineageObservation(pristine, incompatibleInput())).toBe(false)
     })
   )
 

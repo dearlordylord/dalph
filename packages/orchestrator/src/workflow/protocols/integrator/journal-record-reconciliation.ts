@@ -1,6 +1,7 @@
 import { Effect, Option, Schema } from "effect"
 import type { RunId } from "@dalph/contracts"
 import type { InRunJournal, JournalRecord } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import type { JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   integratorRunCandidateGitObservedRecordKey,
@@ -230,7 +231,7 @@ export const reconcileRunResult = Effect.fn("IntegratorProtocol.reconcileRunResu
     }
     yield* appendIntegratorRunStartedIfNeeded(journal, run, records)
   }
-  const recordsAfterRunStart = yield* journal.read(runIdForCorrelation(run.session))
+  const recordsAfterRunStart = yield* (yield* AcceptedJournalReader).readAccepted(runIdForCorrelation(run.session))
   return yield* readRecordedRunResult(recordsAfterRunStart, run)
 })
 
