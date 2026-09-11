@@ -50,13 +50,6 @@ import {
   integrationQuarantineDirectionSubject
 } from "../integration-quarantine/events.js"
 import { IntegratorJournalContradiction } from "./errors.js"
-import { Integrator, IntegratorGit, prepareIntegrationCandidateRun } from "./protocol.js"
-import { appendInitialConclusiveIntegrationQuarantine } from "../integration-quarantine/initial-conclusive.js"
-import {
-  IntegrationQuarantineDirectionNotAvailable,
-  makeIntegrationQuarantineDirectionControl
-} from "../integration-quarantine/control.js"
-import { deriveIntegrationQuarantineState } from "../integration-quarantine/state.js"
 import {
   IntegratorNotPreparedDetail,
   IntegratorResult,
@@ -788,13 +781,15 @@ describe("Integrator FullRerun successor session", () => {
       )
       const winningJournal: InRunJournal["Service"] = {
         append: (requestedRunId, key, event) =>
-          baseJournal.append(requestedRunId, key, event).pipe(
-            Effect.flatMap((winner) =>
-              Effect.fail(
-                new JournalStoreContradiction({ existingPosition: winner.position, key, runId: requestedRunId })
+          baseJournal
+            .append(requestedRunId, key, event)
+            .pipe(
+              Effect.flatMap((winner) =>
+                Effect.fail(
+                  new JournalStoreContradiction({ existingPosition: winner.position, key, runId: requestedRunId })
+                )
               )
-            )
-          ),
+            ),
         read: baseJournal.read
       }
       const recovered = yield* appendIntegratorSuccessorSessionIfNeeded(winningJournal, input, initial).pipe(
