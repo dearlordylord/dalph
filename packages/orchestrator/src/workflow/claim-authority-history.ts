@@ -2,9 +2,14 @@
 import { type AttemptId, type PlannedTaskAttempt } from "@dalph/contracts"
 import type { JournalRecord } from "../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "./registry/event.js"
-import { causalPredecessorOperationIds } from "./causal-history.js"
+import { causalPredecessorOperationIds, causalPredecessorOperationIdsFromEvidence } from "./causal-history.js"
 import { taskClaimReacquisitionOperationId } from "./protocols/task-claim-reacquisition/plan.js"
-import { journalPrefixPredecessorOf } from "../workflow-journal/prefix-lineage.js"
+import {
+  isJournalRecordEvidence,
+  journalRecordsForAttempt,
+  journalRecordsForTask,
+  type JournalHistorySource
+} from "../workflow-journal/record-evidence.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
@@ -15,10 +20,10 @@ import {
 
 /** Finds the exact acquired claim in one planned attempt's causal history. */
 export const causalClaimForAttempt = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   attemptId: AttemptId
 ): Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquired" }> | undefined => {
-  const plans = records.flatMap((record) => {
+  const plans = Array.from(journalRecordsForAttempt(records, attemptId)).flatMap((record) => {
     if (
       record.event._tag === "TaskAttemptPlanned" &&
       record.event.operation.plannedAttempt.attemptId === attemptId &&
@@ -40,7 +45,12 @@ export const causalClaimForAttempt = (
   const plan = plans.length === 1 ? plans[0] : undefined
   if (plan === undefined) return undefined
 
-  const claimOutcomes = records.filter(
+  const taskRecords = Array.from(journalRecordsForTask(records, plan.operation.plannedAttempt.taskId))
+  const predecessors = isJournalRecordEvidence(records)
+    ? causalPredecessorOperationIdsFromEvidence(records, plan.operation)
+    : causalPredecessorOperationIds(records, plan.operation)
+
+  const claimOutcomes = taskRecords.filter(
     (
       record
     ): record is JournalRecord & {
@@ -48,14 +58,14 @@ export const causalClaimForAttempt = (
     } =>
       record.event._tag === "TaskClaimAcquired" &&
       record.runId === plan.record.runId &&
-      causalPredecessorOperationIds(records, plan.operation).has(record.event.claim.operationId) &&
+      predecessors.has(record.event.claim.operationId) &&
       record.key === outcomeRecordKey(record.event.claim.operationId)
   )
   if (claimOutcomes.length !== 1) return undefined
   const claimOutcome = claimOutcomes[0]
   if (claimOutcome === undefined || claimOutcome.position >= plan.record.position) return undefined
   const claim = claimOutcome.event.claim
-  const claimIntents = records.filter(
+  const claimIntents = taskRecords.filter(
     (record) =>
       record.event._tag === "TaskClaimAcquisitionIntended" &&
       record.runId === plan.record.runId &&
@@ -74,23 +84,15 @@ export const causalClaimForAttempt = (
 /** Finds the original planned claim or the latest claim authorized by an exact accepted reacquisition direction. */
 type AcquiredClaimEvent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquired" }>
 const authorizedClaimsByPrefix = new WeakMap<
-  ReadonlyArray<JournalRecord>,
+  JournalHistorySource,
   Map<AttemptId, AcquiredClaimEvent | undefined>
 >()
 
-/** Journal facts that can change the exact claim authorized for a planned attempt. */
-const isClaimAuthorityJournalEvent = (event: WorkflowJournalEvent): boolean =>
-  event._tag === "TaskAttemptPlanned" ||
-  event._tag === "PlannedAttemptReplaced" ||
-  event._tag === "TaskClaimAcquisitionIntended" ||
-  event._tag === "TaskClaimAcquired" ||
-  event._tag === "TaskClaimReacquisitionDirected"
-
 const deriveAuthorizedClaimForAttempt = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): AcquiredClaimEvent | undefined => {
-  const plannedRecords = records.filter((record) => {
+  const plannedRecords = Array.from(journalRecordsForAttempt(records, plannedAttempt.attemptId)).filter((record) => {
     if (record.event._tag === "TaskAttemptPlanned") {
       return (
         record.event.operation.plannedAttempt.attemptId === plannedAttempt.attemptId &&
@@ -110,7 +112,8 @@ const deriveAuthorizedClaimForAttempt = (
   if (plannedRecords.length !== 1) return undefined
   const plannedRecord = plannedRecords[0]
   if (plannedRecord === undefined) return undefined
-  const replacement = records.toReversed().flatMap((claimRecord) => {
+  const taskRecords = Array.from(journalRecordsForTask(records, plannedAttempt.taskId))
+  const replacement = taskRecords.toReversed().flatMap((claimRecord) => {
     const event = claimRecord.event
     if (
       event._tag !== "TaskClaimAcquired" ||
@@ -120,7 +123,7 @@ const deriveAuthorizedClaimForAttempt = (
     ) {
       return []
     }
-    const intents = records.filter(
+    const intents = taskRecords.filter(
       (intentRecord) =>
         intentRecord.position < claimRecord.position &&
         intentRecord.runId === plannedAttempt.runId &&
@@ -137,7 +140,7 @@ const deriveAuthorizedClaimForAttempt = (
     if (intent === undefined || intent.event._tag !== "TaskClaimAcquisitionIntended") return []
     const authority = intent.event.operation.authority
     if (authority._tag !== "ExplicitTaskClaimReacquisitionAuthority") return []
-    const directions = records.filter(
+    const directions = taskRecords.filter(
       (directionRecord) =>
         directionRecord.position < intent.position &&
         directionRecord.position > plannedRecord.position &&
@@ -157,16 +160,12 @@ const deriveAuthorizedClaimForAttempt = (
 }
 
 export const authorizedClaimForAttempt = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): AcquiredClaimEvent | undefined => {
   const cachedByAttempt = authorizedClaimsByPrefix.get(records)
   if (cachedByAttempt?.has(plannedAttempt.attemptId) === true) return cachedByAttempt.get(plannedAttempt.attemptId)
-  const predecessor = journalPrefixPredecessorOf(records)
-  const authorized =
-    predecessor !== undefined && !isClaimAuthorityJournalEvent(predecessor.appended.event)
-      ? authorizedClaimForAttempt(predecessor.prior, plannedAttempt)
-      : deriveAuthorizedClaimForAttempt(records, plannedAttempt)
+  const authorized = deriveAuthorizedClaimForAttempt(records, plannedAttempt)
   const cache = cachedByAttempt ?? new Map<AttemptId, AcquiredClaimEvent | undefined>()
   cache.set(plannedAttempt.attemptId, authorized)
   authorizedClaimsByPrefix.set(records, cache)
