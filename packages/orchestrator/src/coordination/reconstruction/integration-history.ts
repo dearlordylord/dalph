@@ -100,10 +100,7 @@ const invalidIntegrationStart = (
     : undefined
 }
 
-const invalidProviderAbsenceHistory = (
-  prefix: JournalHistorySource,
-  record: JournalRecord
-): string | undefined => {
+const invalidProviderAbsenceHistory = (prefix: JournalHistorySource, record: JournalRecord): string | undefined => {
   const validation = validateProviderRunActivityAbsent(prefix, record)
   return validation._tag === "Valid"
     ? undefined

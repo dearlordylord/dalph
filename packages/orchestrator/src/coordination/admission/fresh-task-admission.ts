@@ -215,24 +215,25 @@ const isExactClaim = (
 
 const exactOwnedClaimWasAccepted = (records: JournalHistorySource, intent: ClaimIntentRecord): boolean => {
   const record = journalRecordByKey(records, outcomeRecordKey(intent.event.operation.acquisition.operationId))
-  return record !== undefined &&
+  return (
+    record !== undefined &&
     record.position > intent.position &&
     record.runId === intent.runId &&
     record.event._tag === "TaskClaimAcquired" &&
     isExactClaim(record.event.claim, intent.event.operation.acquisition)
+  )
 }
 
-const exactPreOwnershipRejectionWasAccepted = (
-  records: JournalHistorySource,
-  intent: ClaimIntentRecord
-): boolean => {
+const exactPreOwnershipRejectionWasAccepted = (records: JournalHistorySource, intent: ClaimIntentRecord): boolean => {
   if (exactOwnedClaimWasAccepted(records, intent)) return false
   const record = journalRecordByKey(records, outcomeRecordKey(intent.event.operation.acquisition.operationId))
-  return record !== undefined &&
+  return (
+    record !== undefined &&
     record.position > intent.position &&
     record.runId === intent.runId &&
     record.event._tag === "TaskClaimAcquisitionRejected" &&
     record.event.operationId === intent.event.operation.acquisition.operationId
+  )
 }
 
 const exactAttemptHandoffs = (

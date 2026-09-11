@@ -198,11 +198,15 @@ const providerRunFailureQuarantineFor = (
   }
   const { run } = integratorState
   const records = workflowHistorySource(runState)
-  const validAbsences = Array.from(journalRecordsOfKind(records, "IntegrationProviderRunActivityAbsent")).flatMap((record) => {
-    if (record.event._tag !== "IntegrationProviderRunActivityAbsent") return []
-    const validation = validateProviderRunActivityAbsent(records, record)
-    return validation._tag === "Valid" && integratorRunCorrelationsEqual(validation.run, run) ? [validation.record] : []
-  })
+  const validAbsences = Array.from(journalRecordsOfKind(records, "IntegrationProviderRunActivityAbsent")).flatMap(
+    (record) => {
+      if (record.event._tag !== "IntegrationProviderRunActivityAbsent") return []
+      const validation = validateProviderRunActivityAbsent(records, record)
+      return validation._tag === "Valid" && integratorRunCorrelationsEqual(validation.run, run)
+        ? [validation.record]
+        : []
+    }
+  )
   if (validAbsences.length !== 1) return undefined
   const absence = validAbsences[0]
   /* v8 ignore next -- @preserve A one-element array cannot lack its first element; this keeps indexed access fail-closed. */
