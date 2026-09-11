@@ -148,7 +148,8 @@ import {
 } from "../../workflow-journal/record-evidence.js"
 import { acceptedJournalPrefixFromValidatedHistory } from "../../workflow-journal/accepted-prefix.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
-import { Journal, journalLayer } from "../delivery/journal.js"
+import { Journal } from "../delivery/journal.js"
+import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
 import { currentSignalOf, TrackerGraphState } from "../delivery/relations.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import {
@@ -6024,8 +6025,6 @@ it("hands a pre-cancellation integration responsibility to integration settlemen
 effectIt.effect("uses normal-layer current state without exporting records and rejects a mismatched run", () =>
   Effect.gen(function* () {
     const began = makeWorkflowRunBeganRecord(coverageRunId, coverageTarget, coveragePolicy)
-    const initial = reduceWorkflowJournalHistory(coverageRunId, [began])
-    if (initial._tag !== "ValidWorkflowJournalHistory") return expect.fail("expected valid begun Run history")
     const integrationTarget = IntegrationTarget.make({
       ref: IntegrationTargetRef.make("refs/heads/main"),
       repository: GitRepositoryLocator.make("/repositories/recovery-activation-coverage.git")
@@ -6036,11 +6035,7 @@ effectIt.effect("uses normal-layer current state without exporting records and r
       const configuredRecovery = yield* makeRunRecoveryProjection(coverageRunId, integrationTarget)
       return yield* configuredRecovery.readDeliveryProjection
     }).pipe(
-      Effect.provide(
-        journalLayer(coverageRunId, coverageTarget, initial, {
-          append: () => Effect.die("projection coverage does not append")
-        })
-      ),
+      Effect.provide(liveJournalTestLayer({ records: [began], runId: coverageRunId, target: coverageTarget })),
       Effect.ensuring(Effect.sync(stopObserving))
     )
     if (configuredProjection.evidence._tag !== "AvailableDeliveryProjectionEvidence") {
