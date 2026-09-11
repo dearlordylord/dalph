@@ -308,6 +308,36 @@ const completeValidationErrorsFrom = (
 const completeValidationErrors = (records: ReadonlyArray<JournalRecord>): ReadonlyArray<string> =>
   completeValidationErrorsFrom(records, records)
 
+it("preserves raw outcome-before-intent issue ordering without inventing a later deletion defect", () => {
+  const records = validFinalityRecords()
+    .filter(({ position }) => position <= 10)
+    .map((current) =>
+      current.event._tag === "CompletionClaimReplaced"
+        ? { ...current, position: JournalPosition.make(4) }
+        : current.event._tag === "CompletionClaimReplacementIntended"
+          ? { ...current, position: JournalPosition.make(6) }
+          : current
+    )
+    .sort((left, right) => left.position - right.position)
+  let indexes = makeIntegrationFinalityHistoryIndexes()
+  const issues: Array<{ readonly position: JournalPosition; readonly detail: string }> = []
+  for (const current of records) {
+    const validation = invalidIntegrationFinalityHistory(current, records, indexes)
+    indexes = validation.indexes
+    if (validation.detail !== undefined) issues.push({ position: current.position, detail: validation.detail })
+  }
+  expect(issues).toEqual([
+    {
+      position: 4,
+      detail: `completion-claim replacement outcome ${replacementOperationId} has no unique matching intent`
+    },
+    {
+      position: 5,
+      detail: `completion-claim replacement attempt ${replacementOperationId} is not the next exact request`
+    }
+  ])
+})
+
 const insertBeforeDeletionAttempt = (event: JournalRecord["event"]): ReadonlyArray<JournalRecord> => {
   const records = validFinalityRecords()
   const attemptIndex = records.findIndex(
