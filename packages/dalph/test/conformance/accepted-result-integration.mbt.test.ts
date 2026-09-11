@@ -2,7 +2,7 @@
 import { expect, it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, ITFMap, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
-import { Deferred, Effect, Fiber, Schema } from "effect"
+import { Context, Deferred, Effect, Fiber, ManagedRuntime, Schema } from "effect"
 import type { AcceptedResult } from "@dalph/contracts"
 import {
   AttemptId,
@@ -11,20 +11,23 @@ import {
   IntegrationTarget,
   IntegrationTargetRef,
   PlannedTaskAttempt,
+  PlannedAttemptExecutorReport,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
+import { ActiveTaskClaim } from "../../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../../orchestrator/src/authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../../orchestrator/src/authorities/task-tracker/fixture/target.js"
 import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { acceptedResultFixture } from "../../../orchestrator/test/support/evidence.js"
+import { makeExecutingAttemptHistory } from "../../../orchestrator/test/support/executing-attempt-history.js"
 import { TargetLineageObservation } from "../../../orchestrator/src/authorities/git/target-lineage.js"
 import { OperationId } from "../../../orchestrator/src/workflow/identity.js"
-import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 import {
   integrationResponsibilityBeganRecordKey,
   integrationStartedRecordKey,
@@ -32,7 +35,9 @@ import {
   integratorRunCandidateGitReadIntendedRecordKey,
   integratorRunResultRecordedRecordKey,
   integratorRunStartedRecordKey,
-  integratorSessionFixedRecordKey
+  integratorSessionFixedRecordKey,
+  plannedAttemptExecutorStateObservedRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey
 } from "../../../orchestrator/src/workflow-journal/record-key.js"
 import {
   GitReadIntentRecordedEvent,
@@ -47,11 +52,21 @@ import {
   type AppendableWorkflowJournalEvent,
   type JournalRecord
 } from "../../../orchestrator/src/workflow-journal/store.js"
+import type { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
+import type { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
+import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
 import { workflowJournalEventVersion } from "../../../orchestrator/src/workflow/kernel/event.js"
 import {
   IntegrationResponsibilityBeganEvent,
   IntegrationStartedEvent
 } from "../../../orchestrator/src/workflow/protocols/integration-admission/events.js"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorStateObservedEvent,
+  PlannedAttemptExecutorStateObservation,
+  PlannedAttemptExecutorStateObservationOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent
+} from "../../../orchestrator/src/workflow/protocols/planned-attempt-executor-work/events.js"
 import { StartedIntegrationResponsibility } from "../../../orchestrator/src/workflow/protocols/integration-admission/protocol.js"
 import {
   ApplyIntegrationQuarantineDirectionRequest,
@@ -127,6 +142,7 @@ const target = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/accepted-result-integration.git"),
   ref: IntegrationTargetRef.make("refs/heads/master")
 })
+const trackerTarget = FixtureTarget.make("accepted-result-integration-model-target")
 const independentTarget = IntegrationTarget.make({
   repository: GitRepositoryLocator.make("/repositories/accepted-result-integration-independent.git"),
   ref: IntegrationTargetRef.make("refs/heads/master")
@@ -136,6 +152,23 @@ const commitOf = (value: bigint | number): GitCommitSha =>
   GitCommitSha.make(BigInt(value).toString(16).padStart(40, "0"))
 
 const numericCommit = (value: GitCommitSha): bigint => BigInt(`0x${value}`)
+
+const specifications = new Map(
+  [1n, 2n].map((id) => [
+    id,
+    makeTaskWorkSpecification({
+      body: `Integrate accepted result ${id}`,
+      taskId: TaskId.make(`accepted-result-integration-task-${id}`),
+      title: `Accepted result integration ${id}`
+    })
+  ])
+)
+
+const specificationFor = (id: bigint) => {
+  const specification = specifications.get(id)
+  if (specification === undefined) return Effect.runSync(Effect.die(`unknown model specification ${id}`))
+  return specification
+}
 
 const attempts = new Map(
   [1n, 2n].map((id) => [
@@ -147,11 +180,29 @@ const attempts = new Map(
       executor: TaskExecutorLocator.make("executor:model"),
       runId,
       taskId: TaskId.make(`accepted-result-integration-task-${id}`),
-      taskRevision: TaskRevision.make(`accepted-result-integration-revision-${id}`),
+      taskRevision: specificationFor(id).fingerprint,
       worktree: WorktreeLocator.make(`/worktrees/accepted-result-integration-${id}`)
     })
   ])
 )
+
+const claims = new Map(
+  [1n, 2n].map((id) => [
+    id,
+    ActiveTaskClaim.make({
+      operationId: OperationId.make(`accepted-result-integration-claim-${id}`),
+      owner: ClaimOwner.make("dalph:accepted-result-integration"),
+      taskId: TaskId.make(`accepted-result-integration-task-${id}`),
+      token: ClaimToken.make(`accepted-result-integration-token-${id}`)
+    })
+  ])
+)
+
+const claimFor = (id: bigint) => {
+  const claim = claims.get(id)
+  if (claim === undefined) return Effect.runSync(Effect.die(`unknown model claim ${id}`))
+  return claim
+}
 
 const acceptedResultOf = (id: bigint): AcceptedResult => acceptedResultFixture(commitOf(id + 20n))
 
@@ -506,6 +557,9 @@ type GitMode = "Exact" | "Missing" | "NonCommit" | "WrongParents"
 
 type RuntimeState = {
   readonly journal: InRunJournal["Service"]
+  readonly provideJournal: <A, E, R>(
+    effect: Effect.Effect<A, E, R>
+  ) => Effect.Effect<A, E, Exclude<R, AcceptedJournalReader | InRunJournal | Journal>>
   readonly readRecords: () => ReadonlyArray<JournalRecord>
   readonly runProtocol: (id: bigint) => Effect.Effect<IntegratorRunProtocolResult, unknown>
   readonly runProtocolFor: (
@@ -534,45 +588,45 @@ type RuntimeState = {
   ) => Effect.Effect<void, unknown>
   readonly recoverPromotion: () => Effect.Effect<void, unknown>
   readonly assertPromotionAlignment: (model: ModelResult) => void
-  readonly reset: () => void
-  readonly updateTargetLineageTarget: (id: bigint, integrationTarget: IntegrationTarget) => void
+  readonly reset: () => Effect.Effect<void>
+  readonly updateTargetLineageTarget: (id: bigint, integrationTarget: IntegrationTarget) => Effect.Effect<void>
   readonly integratorCallCount: () => number
 }
 
 interface PromotionJournalLane {
   readonly calls: Array<string>
+  readonly context: Context.Context<AcceptedJournalReader | InRunJournal | Journal>
   readonly journal: InRunJournal["Service"]
+  readonly managed: ReturnType<typeof acquireJournalRuntime>["managed"]
   readonly readRecords: () => ReadonlyArray<JournalRecord>
 }
 
+const acquireJournalRuntime = (initialRecords: ReadonlyArray<JournalRecord>) => {
+  const managed = ManagedRuntime.make(liveJournalTestLayer({ records: initialRecords, runId, target: trackerTarget }))
+  const context = managed.runSync(Effect.context<AcceptedJournalReader | InRunJournal | Journal>())
+  return { context, journal: Context.get(context, InRunJournal), managed }
+}
+
 const makePromotionJournalLane = (initialRecords: ReadonlyArray<JournalRecord>): PromotionJournalLane => {
-  let laneRecords = initialRecords
+  const runtime = acquireJournalRuntime(initialRecords)
   return {
     calls: [],
-    journal: InRunJournal.of({
-      append: (requestedRunId, key, event) =>
-        Effect.sync(() => {
-          const existing = laneRecords.find((record) => record.key === key)
-          if (existing !== undefined) return existing
-          const lastPosition = laneRecords.reduce((maximum, record) => Math.max(maximum, record.position), 0)
-          const record: JournalRecord = {
-            event,
-            key,
-            position: JournalPosition.make(lastPosition + 1),
-            runId: requestedRunId
-          }
-          laneRecords = [...laneRecords, record]
-          return record
-        }),
-      read: (requestedRunId) => Effect.succeed(laneRecords.filter((record) => record.runId === requestedRunId))
-    }),
-    readRecords: () => laneRecords
+    context: runtime.context,
+    journal: runtime.journal,
+    managed: runtime.managed,
+    readRecords: () => runtime.managed.runSync(runtime.journal.read(runId).pipe(Effect.orDie))
   }
 }
 
 const rejectImpossibleTransition = (detail: string): never => Effect.runSync(Effect.die(new Error(detail)))
 
-const targetLineagePositionFor = (id: bigint): JournalPosition => JournalPosition.make(id === 1n ? 3 : 5)
+const targetLineagePositionFor = (id: bigint): JournalPosition => {
+  const operationId = OperationId.make(`accepted-result-integration-target-lineage-${id}`)
+  const record = makeTargetRecords().find(
+    ({ event }) => event._tag === "TargetLineageObserved" && event.operationId === operationId
+  )
+  return record?.position ?? rejectImpossibleTransition(`target-lineage fixture is absent for result ${id}`)
+}
 
 const queuedAtFor = (id: bigint): JournalPosition => JournalPosition.make(id === 1n ? 6 : 7)
 
@@ -587,20 +641,32 @@ const attemptFor = (id: bigint): PlannedTaskAttempt => {
 const targetFor = (id: bigint, modelResults: ReadonlyMap<bigint, ModelResult>): IntegrationTarget =>
   modelResults.get(id)?.integrationTarget === 2n ? independentTarget : target
 
-const makeTargetRecords = (): ReadonlyArray<JournalRecord> => [
-  makeWorkflowRunBeganRecord(
+const makeTargetRecords = (): ReadonlyArray<JournalRecord> => {
+  const first = makeExecutingAttemptHistory({
+    activeClaim: claimFor(1n),
+    initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) }),
+    plannedAttempt: attemptFor(1n),
     runId,
-    FixtureTarget.make("accepted-result-integration-model-target"),
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(2) })
-  ),
-  ...[1n, 2n].flatMap((id) => {
+    taskSpecification: specificationFor(1n),
+    trackerTarget
+  })
+  const second = makeExecutingAttemptHistory({
+    activeClaim: claimFor(2n),
+    plannedAttempt: attemptFor(2n),
+    priorRecords: first.records,
+    runId,
+    taskSpecification: specificationFor(2n),
+    trackerTarget
+  })
+  let records = second.records
+  for (const id of [1n, 2n]) {
     const attempt = attemptFor(id)
     const operationId = OperationId.make(`accepted-result-integration-target-lineage-${id}`)
     const operation = makeTargetLineageObservationOperation({
       integrationTarget: target,
       operationId,
       plannedAttempt: attempt,
-      predecessorOperationIds: []
+      predecessorOperationIds: [id === 1n ? first.worktreeOperation.operationId : second.worktreeOperation.operationId]
     })
     const intent = GitReadIntentRecordedEvent.make({
       initiatedBy: { _tag: "DalphCoordinator" },
@@ -619,22 +685,27 @@ const makeTargetRecords = (): ReadonlyArray<JournalRecord> => [
       plannedAttempt: attempt,
       version: workflowJournalEventVersion
     })
-    return [
+    records = [
+      ...records,
       {
         event: intent,
         key: describeJournalEvent(intent).expectedKey,
-        position: JournalPosition.make(id === 1n ? 2 : 4),
-        runId
-      },
-      {
-        event: observation,
-        key: describeJournalEvent(observation).expectedKey,
-        position: targetLineagePositionFor(id),
+        position: JournalPosition.make(records.length + 1),
         runId
       }
     ]
-  })
-]
+    records = [
+      ...records,
+      {
+        event: observation,
+        key: describeJournalEvent(observation).expectedKey,
+        position: JournalPosition.make(records.length + 1),
+        runId
+      }
+    ]
+  }
+  return records
+}
 
 const makeResponsibility = (
   id: bigint,
@@ -822,6 +893,7 @@ const makeRuntime = (
   modelResultFor: (id: bigint) => ModelResult
 ): RuntimeState => {
   let records: ReadonlyArray<JournalRecord> = makeTargetRecords()
+  let journalRuntime = acquireJournalRuntime(records)
   let gitMode: GitMode = "Exact"
   let failNextGit = false
   let integratorCalls = 0
@@ -842,8 +914,8 @@ const makeRuntime = (
   const requirePromotionLane = (): PromotionJournalLane =>
     promotionLane ?? rejectImpossibleTransition("promotion transition has no production journal lane")
 
-  const providePromotionJournal = <A, E>(effect: Effect.Effect<A, E, InRunJournal>) =>
-    effect.pipe(Effect.provideService(InRunJournal, requirePromotionLane().journal))
+  const providePromotionJournal = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(Effect.provide(requirePromotionLane().context))
 
   const recordPromotionIntent = Effect.fn("AcceptedResultIntegration.recordPromotionIntent")(function* (
     candidate: IntegratorRunQualifiedCandidate
@@ -920,7 +992,7 @@ const makeRuntime = (
         )
     })
     const outcome = yield* observeTargetPromotionRead(authorization).pipe(
-      Effect.provideService(InRunJournal, lane.journal),
+      Effect.provide(lane.context),
       Effect.provideService(TargetPromotionGit, git),
       Effect.result
     )
@@ -972,7 +1044,7 @@ const makeRuntime = (
       read: () => Effect.die("promotion compare-and-set transition reread Git")
     })
     pendingPromotionAttempt = yield* sendTargetPromotionAttempt(attempt).pipe(
-      Effect.provideService(InRunJournal, lane.journal),
+      Effect.provide(lane.context),
       Effect.provideService(TargetPromotionGit, git),
       Effect.forkDetach({ startImmediately: true })
     )
@@ -1137,25 +1209,26 @@ const makeRuntime = (
     }
   }
 
-  const appendRecord = (requestedRunId: RunId, key: JournalRecordKey, event: AppendableWorkflowJournalEvent) =>
-    Effect.sync(() => {
-      const existing = records.find((record) => record.key === key)
-      if (existing !== undefined) return existing
-      const lastPosition = records.reduce((maximum, record) => Math.max(maximum, record.position), 0)
-      const record: JournalRecord = {
-        event,
-        key,
-        position: JournalPosition.make(lastPosition + 1),
-        runId: requestedRunId
-      }
-      records = [...records, record]
-      return record
-    })
-
   const journal = InRunJournal.of({
-    append: appendRecord,
-    read: (requestedRunId) => Effect.succeed(records.filter((record) => record.runId === requestedRunId))
+    append: (requestedRunId, key, event) =>
+      journalRuntime.journal
+        .append(requestedRunId, key, event)
+        .pipe(
+          Effect.tap(() =>
+            journalRuntime.journal.read(runId).pipe(Effect.tap((current) => Effect.sync(() => (records = current))))
+          )
+        ),
+    read: (requestedRunId) =>
+      journalRuntime.journal.read(requestedRunId).pipe(Effect.tap((current) => Effect.sync(() => (records = current))))
   })
+
+  const provideJournal = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(Effect.provide(journalRuntime.context))
+
+  const readRecords = (): ReadonlyArray<JournalRecord> => {
+    records = journalRuntime.managed.runSync(journalRuntime.journal.read(runId).pipe(Effect.orDie))
+    return records
+  }
 
   const integrator = Integrator.of({
     prepare: (request) => {
@@ -1204,9 +1277,9 @@ const makeRuntime = (
   })
 
   const runProtocol = (id: bigint) => {
-    const input = makeInput(id, modelResultsRef(), records)
+    const input = makeInput(id, modelResultsRef(), readRecords())
     return prepareIntegrationCandidateRun({ preparation: input, run: initialRunFor(input) }).pipe(
-      Effect.provideService(InRunJournal, journal),
+      provideJournal,
       Effect.provideService(Integrator, integrator),
       Effect.provideService(IntegratorGit, git)
     )
@@ -1214,12 +1287,15 @@ const makeRuntime = (
 
   const runProtocolFor = (input: IntegratorPreparationInput, run: IntegratorRunCorrelation) =>
     prepareIntegrationCandidateRun({ preparation: input, run }).pipe(
-      Effect.provideService(InRunJournal, journal),
+      provideJournal,
       Effect.provideService(Integrator, integrator),
       Effect.provideService(IntegratorGit, git)
     )
 
-  const updateTargetLineageTarget = (id: bigint, integrationTarget: IntegrationTarget): void => {
+  const updateTargetLineageTarget = Effect.fn("AcceptedResultIntegration.updateTargetLineageTarget")(function* (
+    id: bigint,
+    integrationTarget: IntegrationTarget
+  ) {
     const operationId = OperationId.make(`accepted-result-integration-target-lineage-${id}`)
     const operation = makeTargetLineageObservationOperation({
       integrationTarget,
@@ -1227,7 +1303,7 @@ const makeRuntime = (
       plannedAttempt: attemptFor(id),
       predecessorOperationIds: []
     })
-    records = records.map((record) => {
+    const updatedRecords = readRecords().map((record) => {
       if (
         record.event._tag !== "GitReadIntentRecorded" ||
         record.event.operation._tag !== "ReadTargetLineage" ||
@@ -1243,10 +1319,16 @@ const makeRuntime = (
       })
       return { ...record, event, key: describeJournalEvent(event).expectedKey }
     })
-  }
+    yield* journalRuntime.managed.disposeEffect
+    records = updatedRecords
+    journalRuntime = acquireJournalRuntime(updatedRecords)
+  })
 
-  const reset = (): void => {
+  const reset = Effect.fn("AcceptedResultIntegration.reset")(function* () {
+    yield* journalRuntime.managed.disposeEffect
+    if (promotionLane !== undefined) yield* promotionLane.managed.disposeEffect
     records = makeTargetRecords()
+    journalRuntime = acquireJournalRuntime(records)
     gitMode = "Exact"
     failNextGit = false
     integratorCalls = 0
@@ -1259,11 +1341,12 @@ const makeRuntime = (
     pendingPromotionAttempt = undefined
     promotionReadPending = false
     promotionResponseLost = false
-  }
+  })
 
   return {
     journal,
-    readRecords: () => records,
+    provideJournal,
+    readRecords,
     runProtocol,
     runProtocolFor,
     integrator,
@@ -1484,6 +1567,36 @@ const acceptedResultIntegrationDriver = defineDriver(
         })
       )
 
+    const appendAcceptedResult = (id: bigint) => {
+      const attempt = attemptFor(id)
+      const report = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
+        correlation: { attemptId: attempt.attemptId, runId },
+        result: { _tag: "Accepted", acceptedResult: acceptedResultOf(id) }
+      })
+      const stateOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
+      const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(2)
+      return Effect.gen(function* () {
+        yield* appendEvent(
+          plannedAttemptExecutorStateObservedRecordKey(attempt.attemptId, stateOrdinal),
+          PlannedAttemptExecutorStateObservedEvent.make({
+            observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({ report }),
+            occurrenceClassification: "NonActionOccurrence",
+            ordinal: stateOrdinal,
+            plannedAttempt: attempt,
+            version: workflowJournalEventVersion
+          })
+        )
+        yield* appendEvent(
+          plannedAttemptExecutorWorkReportedRecordKey(attempt.attemptId, reportOrdinal),
+          PlannedAttemptExecutorWorkReportedEvent.make({
+            ordinal: reportOrdinal,
+            report,
+            version: workflowJournalEventVersion
+          })
+        )
+      })
+    }
+
     const appendIntegrationStart = (id: bigint) => {
       const responsibility = responsibilityFor(id)
       return appendEvent(
@@ -1542,7 +1655,7 @@ const acceptedResultIntegrationDriver = defineDriver(
       return Effect.gen(function* () {
         const control = yield* makeIntegrationQuarantineDirectionControl(runtime.journal)
         return yield* control.apply(request)
-      })
+      }).pipe(runtime.provideJournal)
     }
 
     const redeliverDirection = (id: bigint, direction: "Retry" | "FullRerun") => {
@@ -1557,7 +1670,7 @@ const acceptedResultIntegrationDriver = defineDriver(
       return Effect.gen(function* () {
         const control = yield* makeIntegrationQuarantineDirectionControl(runtime.journal)
         return yield* control.apply(request)
-      })
+      }).pipe(runtime.provideJournal)
     }
 
     const appendFreshTargetLineage = (
@@ -1689,7 +1802,7 @@ const acceptedResultIntegrationDriver = defineDriver(
       }))
     }
 
-    const modelReset = (): void => {
+    const modelReset = Effect.fn("AcceptedResultIntegration.modelReset")(function* () {
       modelResults = new Map([1n, 2n].map((id) => [id, initialResult(id)]))
       modelNextJournalPosition = 1n
       modelRestartCount = 0n
@@ -1698,8 +1811,8 @@ const acceptedResultIntegrationDriver = defineDriver(
       targetFactsCurrent = true
       targetHeadProof = 0n
       targetReacquisitionRequired = false
-      runtime.reset()
-    }
+      yield* runtime.reset()
+    })
 
     const modelAccept = (id: bigint): void =>
       updateModelResult(id, (result) => ({ ...result, phase: "AcceptedResult", acceptedEvidencePreserved: true }))
@@ -2475,13 +2588,21 @@ const acceptedResultIntegrationDriver = defineDriver(
       })
 
     return {
-      init: () => Effect.sync(modelReset),
-      acceptResultOne: () => Effect.sync(() => modelAccept(1n)),
-      acceptResultTwo: () => Effect.sync(() => modelAccept(2n)),
+      init: modelReset,
+      acceptResultOne: () =>
+        Effect.gen(function* () {
+          yield* appendAcceptedResult(1n)
+          modelAccept(1n)
+        }),
+      acceptResultTwo: () =>
+        Effect.gen(function* () {
+          yield* appendAcceptedResult(2n)
+          modelAccept(2n)
+        }),
       assignResultTwoIndependentTargetOne: () =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           updateModelResult(2n, (result) => ({ ...result, integrationTarget: 2n }))
-          runtime.updateTargetLineageTarget(2n, independentTarget)
+          yield* runtime.updateTargetLineageTarget(2n, independentTarget)
         }),
       chooseRetryOne: () =>
         Effect.gen(function* () {
@@ -2524,7 +2645,7 @@ const acceptedResultIntegrationDriver = defineDriver(
             return rejectImpossibleTransition("conflicting FullRerun direction unexpectedly won")
           }
           modelRejectConflictingDirection(1n)
-        }),
+        }).pipe(runtime.provideJournal),
       fixIntegratorSessionOne: () =>
         Effect.gen(function* () {
           yield* appendSession(1n)
@@ -2679,13 +2800,9 @@ const acceptedResultIntegrationDriver = defineDriver(
             return rejectImpossibleTransition(`cannot quarantine non-conclusive Integrator state ${result._tag}`)
           }
           if (run.ordinal === IntegratorRunOrdinal.make(1)) {
-            yield* appendInitialConclusiveIntegrationQuarantine(result).pipe(
-              Effect.provideService(InRunJournal, runtime.journal)
-            )
+            yield* appendInitialConclusiveIntegrationQuarantine(result).pipe(runtime.provideJournal)
           } else {
-            yield* appendRetryConclusiveIntegrationQuarantine(result).pipe(
-              Effect.provideService(InRunJournal, runtime.journal)
-            )
+            yield* appendRetryConclusiveIntegrationQuarantine(result).pipe(runtime.provideJournal)
           }
           modelRecordQuarantine(1n)
         }),
@@ -2753,7 +2870,7 @@ const acceptedResultIntegrationDriver = defineDriver(
             session: correlationFor(1n),
             targetLineage: lineage.event.observation,
             targetLineageObservedAt: lineage.position
-          }).pipe(Effect.provideService(InRunJournal, runtime.journal))
+          }).pipe(runtime.provideJournal)
           modelRetryNotApplicable(1n)
         }),
       observeSuccessorTargetHeadOne: () =>
@@ -2769,7 +2886,7 @@ const acceptedResultIntegrationDriver = defineDriver(
           const input = successorPreparationFor(1n)
           yield* appendIntegratorSuccessorSessionIfNeeded(runtime.journal, input, runtime.readRecords())
           modelStartFullRerun(1n)
-        }),
+        }).pipe(runtime.provideJournal),
       startSuccessorIntegratorOne: () =>
         Effect.gen(function* () {
           const successorRecord = runtime
