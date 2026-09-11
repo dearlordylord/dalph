@@ -371,10 +371,37 @@ export const projectFreshTaskAdmissionFromAccepted = (
 /** Invalid supplied history grants no commitment and, critically, no release authority. */
 export const projectFreshTaskCommitments = (
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): FreshTaskAdmissionProjection["commitments"] => {
-  const projection = projectFreshTaskAdmission(runId, records)
-  return projection._tag === "FreshTaskAdmissionProjection" ? projection.commitments : []
+  if (!isJournalRecordEvidence(records)) {
+    const projection = projectFreshTaskAdmission(runId, records)
+    return projection._tag === "FreshTaskAdmissionProjection" ? projection.commitments : []
+  }
+  const handoffs = exactAttemptHandoffs(runId, records)
+  const commitments: Array<Extract<TaskAdmissionOccupancy, { readonly _tag: "FreshTaskCommitted" }>> = []
+  for (const record of journalRecordsOfKind(records, "TaskClaimAcquisitionIntended")) {
+    if (
+      record.event._tag !== "TaskClaimAcquisitionIntended" ||
+      record.event.operation.authority._tag !== "TaskSelectionAuthority" ||
+      record.key !== intentRecordKey(record.event.operation.acquisition.operationId)
+    ) {
+      continue
+    }
+    const acquisition = record.event.operation.acquisition
+    const released =
+      exactPreOwnershipRejectionWasAccepted(records, record) ||
+      handoffs.has(freshTaskAdmissionReleaseKey(acquisition.taskId, acquisition.operationId))
+    if (!released && isTaskSelectionAcquireTaskClaimOperation(record.event.operation)) {
+      commitments.push(
+        Object.freeze(
+          TaskAdmissionOccupancy.FreshTaskCommitted({
+            commitment: brandFreshTaskCommitment(record.position, runId, record.event.operation)
+          })
+        )
+      )
+    }
+  }
+  return Object.freeze(commitments)
 }
 
 const immutableReadonlyMap = <Key, Value>(entries: Iterable<readonly [Key, Value]>): ReadonlyMap<Key, Value> => {
