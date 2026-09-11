@@ -8,6 +8,8 @@ import {
   type AppendableWorkflowJournalEvent,
   type JournalRecord
 } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { journalRecordsForOperationId, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   completionTaskAcknowledgedRecordKey,
   completionTaskAttemptIntentRecordKey,
@@ -175,17 +177,20 @@ type CompletionTaskFactsReadOperation = Extract<
   { readonly _tag: "TaskTrackerReadIntentRecorded" }
 >["operation"] & { readonly _tag: "ReadCompletionTaskFacts" }
 
+const completionRequestRecords = (records: JournalHistorySource, operationId: string): ReadonlyArray<JournalRecord> =>
+  Array.from(journalRecordsForOperationId(records, OperationId.make(operationId)))
+
 const focusedCompletionObservation = (event: WorkflowJournalEvent): FocusedTaskCompletionFactsObserved | undefined =>
   event._tag === "TaskTrackerFactsObserved" && event.observation._tag === "FocusedTaskCompletionFacts"
     ? event.observation
     : undefined
 
 const latestRequestEvent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   tag: CompletionTaskJournalEvent["_tag"],
   operationId: string
 ): CompletionTaskJournalEvent | undefined => {
-  for (const record of records.toReversed()) {
+  for (const record of completionRequestRecords(records, operationId).toReversed()) {
     const decoded = Schema.decodeUnknownOption(CompletionTaskJournalEvent)(record.event)
     if (Option.isSome(decoded) && decoded.value._tag === tag && decoded.value.request.operationId === operationId) {
       return decoded.value
@@ -257,7 +262,7 @@ export const completionTaskAuthorizationIssue = (
 
 const appendIntentIfNeeded = Effect.fn("IntegrationFinality.appendCompletionTaskIntentIfNeeded")(function* (
   request: CompletionTaskRequest,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const existing = latestRequestEvent(records, "CompletionTaskIntended", request.operationId)
   if (existing?._tag === "CompletionTaskIntended") {
@@ -278,8 +283,8 @@ const appendIntentIfNeeded = Effect.fn("IntegrationFinality.appendCompletionTask
   )
 })
 
-const latestAttempt = (records: ReadonlyArray<JournalRecord>, request: CompletionTaskRequest): number =>
-  records.reduce(
+const latestAttempt = (records: JournalHistorySource, request: CompletionTaskRequest): number =>
+  completionRequestRecords(records, request.operationId).reduce(
     (latest, record) =>
       record.event._tag === "CompletionTaskAttemptIntended" && record.event.request.operationId === request.operationId
         ? Math.max(latest, Number(record.event.attemptOrdinal))
@@ -315,9 +320,8 @@ export const readCompletionFocusedFacts = Effect.fn("IntegrationFinality.readCom
   const operation = makeCompletionTaskFactsObservationOperation(request, target, purpose)
   const operationId = operation.operationId
   yield* append(request, intentRecordKey(operationId), taskTrackerReadIntent(operation))
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(request.claim.plannedAttempt.runId)
-  const existing = records.findLast(
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
+  const existing = completionRequestRecords(records, operationId).findLast(
     ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operationId
   )
   const existingObservation = existing === undefined ? undefined : focusedCompletionObservation(existing.event)
@@ -369,9 +373,8 @@ export const readCompletionCandidateAncestry = Effect.fn("IntegrationFinality.re
         version: workflowJournalEventVersion
       })
     )
-    const journal = yield* InRunJournal
-    const records = yield* journal.read(request.claim.plannedAttempt.runId)
-    const existing = records.findLast(
+    const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
+    const existing = completionRequestRecords(records, operationId).findLast(
       ({ event }) => event._tag === "CompletionTaskCandidateAncestryObserved" && event.operationId === operationId
     )
     if (existing?.event._tag === "CompletionTaskCandidateAncestryObserved") {
@@ -409,11 +412,10 @@ export const readCompletionCandidateAncestry = Effect.fn("IntegrationFinality.re
 /** Selects one restart-safe current-authorization cycle for a numbered completion call. */
 export const nextCompletionAuthorizationPurpose = Effect.fn("IntegrationFinality.nextCompletionAuthorizationPurpose")(
   function* (request: CompletionTaskRequest, attemptOrdinal: CompletionTaskRequestOrdinal) {
-    const journal = yield* InRunJournal
-    const records = yield* journal.read(request.claim.plannedAttempt.runId)
+    const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
     const priorIntents: ReadonlyArray<
       CompletionTaskFactsReadOperation & { readonly purpose: CompletionTaskAuthorizationPurpose }
-    > = records.flatMap(({ event }) => {
+    > = completionRequestRecords(records, request.operationId).flatMap(({ event }) => {
       if (
         event._tag !== "TaskTrackerReadIntentRecorded" ||
         event.operation._tag !== "ReadCompletionTaskFacts" ||
@@ -434,7 +436,7 @@ export const nextCompletionAuthorizationPurpose = Effect.fn("IntegrationFinality
       undefined
     )
     if (latest?.purpose._tag === "Authorization") {
-      const focusedWasObserved = records.some(
+      const focusedWasObserved = completionRequestRecords(records, latest.operationId).some(
         ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === latest.operationId
       )
       if (!focusedWasObserved) return latest.purpose
@@ -674,9 +676,9 @@ export const completionTaskConfirmationDisposition = (
 
 export const nextCompletionConfirmationPurpose = Effect.fn("IntegrationFinality.nextCompletionConfirmationPurpose")(
   function* (request: CompletionTaskRequest, attemptOrdinal: CompletionTaskRequestOrdinal) {
-    const journal = yield* InRunJournal
-    const records = yield* journal.read(request.claim.plannedAttempt.runId)
-    const priorIntents = records.flatMap(({ event }) =>
+    const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
+    const requestRecords = completionRequestRecords(records, request.operationId)
+    const priorIntents = requestRecords.flatMap(({ event }) =>
       event._tag === "TaskTrackerReadIntentRecorded" &&
       event.operation._tag === "ReadCompletionTaskFacts" &&
       event.operation.request.operationId === request.operationId &&
@@ -687,7 +689,7 @@ export const nextCompletionConfirmationPurpose = Effect.fn("IntegrationFinality.
     )
     const unresolved = priorIntents.findLast(
       (intent) =>
-        !records.some(
+        !requestRecords.some(
           ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === intent.operationId
         )
     )
@@ -768,9 +770,8 @@ export const readCompletionConfirmation = Effect.fn("IntegrationFinality.readCom
   ordinal: CompletionTaskRequestOrdinal,
   target: TrackerTarget
 ) {
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(request.claim.plannedAttempt.runId)
-  const existing = records.findLast(
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
+  const existing = completionRequestRecords(records, request.operationId).findLast(
     ({ event }) =>
       event._tag === "TaskTrackerFactsObserved" &&
       event.observation._tag === "FocusedTaskCompletionFacts" &&
@@ -792,11 +793,11 @@ export const readCompletionConfirmation = Effect.fn("IntegrationFinality.readCom
 })
 
 const lookupForAttempt = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   request: CompletionTaskRequest,
   ordinal: CompletionTaskRequestOrdinal
 ): CompletionTaskRequestLookup | undefined => {
-  const record = records.findLast(
+  const record = completionRequestRecords(records, request.operationId).findLast(
     ({ event }) =>
       event._tag === "CompletionTaskRequestLookupObserved" &&
       event.request.operationId === request.operationId &&
@@ -876,7 +877,7 @@ const resumeRecordedCompletionOutcome = Effect.fn("IntegrationFinality.resumeRec
   boundary: CompletionTaskBoundaryService,
   request: CompletionTaskRequest,
   target: TrackerTarget,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const acknowledgement = latestRequestEvent(records, "CompletionTaskAcknowledged", request.operationId)
   if (acknowledgement?._tag === "CompletionTaskAcknowledged") return Option.some(acknowledgement.acknowledgement)
@@ -916,7 +917,7 @@ const resumeLatestCompletionAttempt = Effect.fn("IntegrationFinality.resumeLates
   boundary: CompletionTaskBoundaryService,
   request: CompletionTaskRequest,
   target: TrackerTarget,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const attemptedOrdinal = latestAttempt(records, request)
   if (attemptedOrdinal === 0) {
@@ -932,11 +933,10 @@ const resumeLatestCompletionAttempt = Effect.fn("IntegrationFinality.resumeLates
     } as const
   }
   const confirmed = yield* reconcileAmbiguousCompletionAttempt(boundary, request, ordinal, target)
-  const journal = yield* InRunJournal
   return {
     completed: Option.fromNullishOr(confirmed),
     nextOrdinal: attemptedOrdinal + 1,
-    records: yield* journal.read(request.claim.plannedAttempt.runId)
+    records: yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
   } as const
 })
 
@@ -1001,7 +1001,7 @@ const runCompletionAttempt = Effect.fn("IntegrationFinality.runCompletionAttempt
   request: CompletionTaskRequest,
   ordinal: CompletionTaskRequestOrdinal,
   target: TrackerTarget,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   authorization: (
     ordinal: CompletionTaskRequestOrdinal
   ) => Effect.Effect<
@@ -1051,8 +1051,7 @@ export const runCompletionTaskProtocol = Effect.fn("IntegrationFinality.runCompl
     R
   >
 ) {
-  const journal = yield* InRunJournal
-  const initialRecords = yield* journal.read(request.claim.plannedAttempt.runId)
+  const initialRecords = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
   const recorded = yield* resumeRecordedCompletionOutcome(boundary, request, target, initialRecords)
   if (Option.isSome(recorded)) return recorded.value
   const resumed = yield* resumeLatestCompletionAttempt(boundary, request, target, initialRecords)
@@ -1062,7 +1061,7 @@ export const runCompletionTaskProtocol = Effect.fn("IntegrationFinality.runCompl
     const ordinal = ordinalFor(nextOrdinal)
     const attempt = yield* runCompletionAttempt(boundary, request, ordinal, target, records, authorization)
     if (attempt._tag === "Completed") return attempt.result
-    records = yield* journal.read(request.claim.plannedAttempt.runId)
+    records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
   }
   return yield* new CompletionTaskDidNotConverge({ attempts: completionTaskRequestLimit, request })
 })
