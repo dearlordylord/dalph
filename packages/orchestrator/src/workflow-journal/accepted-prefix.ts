@@ -1,4 +1,5 @@
 import type { RunId } from "@dalph/contracts"
+import type { JournalRecordKey } from "./identity.js"
 import type { JournalRecord } from "./store.js"
 import { type JournalRecordSequence } from "./record-sequence.js"
 import {
@@ -82,13 +83,20 @@ export const appendValidatedJournalRecord = (
   return next
 }
 
-export const acceptedJournalRecordForKey = journalRecordByKey
+export const acceptedJournalRecordForKey: (
+  prefix: AcceptedJournalPrefix,
+  key: JournalRecordKey
+) => JournalRecord | undefined = journalRecordByKey
 
-export const acceptedJournalRecordsForKind = journalEvidenceKindSequence
+export const acceptedJournalRecordsForKind: (
+  prefix: AcceptedJournalPrefix,
+  kind: JournalRecord["event"]["_tag"]
+) => JournalRecordSequence = journalEvidenceKindSequence
 
 export const acceptedJournalSuccessorProvenance = (
   prefix: AcceptedJournalPrefix
 ): JournalSuccessorProvenance | undefined => provenanceByPrefix.get(prefix)
 
 /** Test-only retained roots, including private per-kind and ordered record storage. */
-export const inspectAcceptedPrefixStorage = inspectJournalEvidenceStorage
+export const inspectAcceptedPrefixStorage: (prefix: AcceptedJournalPrefix) => ReadonlyArray<object> =
+  inspectJournalEvidenceStorage
