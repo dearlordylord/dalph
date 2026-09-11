@@ -61,7 +61,7 @@ import {
   makeTrackerGraphObservationOperation
 } from "../../workflow/registry/operation.js"
 import { PlannedAttemptExecutorReportOrdinal } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
-import { appendAcceptedSafeExecutorHistory } from "../../../test/support/planned-attempt-executor-history.js"
+import { appendAcceptedSafeExecutorHistory } from "../../workflow/protocols/attempt-choice/live-executor-history.js"
 import {
   makeCompleteTaskTrackerFactsObserved,
   makeFocusedTaskClaimFactsObserved,
