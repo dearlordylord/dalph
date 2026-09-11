@@ -373,16 +373,17 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
           })
         )
   const restartReadKey = restartReadKeyOf(record)
-  const byRestartRead = restartReadKey === undefined
-    ? indexes.byRestartRead
-    : HashMap.set(
-        indexes.byRestartRead,
-        restartReadKey,
-        appendJournalRecord(
-          Option.getOrElse(HashMap.get(indexes.byRestartRead, restartReadKey), emptyJournalRecords),
-          record
+  const byRestartRead =
+    restartReadKey === undefined
+      ? indexes.byRestartRead
+      : HashMap.set(
+          indexes.byRestartRead,
+          restartReadKey,
+          appendJournalRecord(
+            Option.getOrElse(HashMap.get(indexes.byRestartRead, restartReadKey), emptyJournalRecords),
+            record
+          )
         )
-      )
   const graphEvidence = appendGraphEvidence(indexes.graphEvidence, record, (operationId) => {
     const records = Option.getOrElse(HashMap.get(indexes.operations, operationId), emptyJournalRecords)
     const operationRecord = journalRecordAt(records, lastSequenceEntryOffset)
@@ -626,10 +627,7 @@ export const journalRestartReadIntents = (
 ): Iterable<JournalRecord> => {
   const key = `${encodeURIComponent(nonce)}:${phase}`
   return isJournalRecordEvidence(source)
-    ? indexedRecords(
-        source,
-        Option.getOrElse(HashMap.get(indexesFor(source).byRestartRead, key), emptyJournalRecords)
-      )
+    ? indexedRecords(source, Option.getOrElse(HashMap.get(indexesFor(source).byRestartRead, key), emptyJournalRecords))
     : source.filter((record) => restartReadKeyOf(record) === key)
 }
 
@@ -641,30 +639,17 @@ export const journalGraphObservationAt = (
   source: JournalRecordEvidence,
   query: { readonly target?: TrackerTarget; readonly plannedAttempt?: PlannedTaskAttempt }
 ): JournalRecord | undefined =>
-  lastGraphObservationAt(indexesFor(source).graphEvidence, {
-    ...query,
-    throughPosition: source.records.length
-  })
+  lastGraphObservationAt(indexesFor(source).graphEvidence, { ...query, throughPosition: source.records.length })
 
 /** Immutable graph snapshot derived at one exact observation and bounded by this evidence cutoff. */
-export const journalGraphSnapshotForObservation = (
-  source: JournalRecordEvidence,
-  position: JournalPosition
-) => graphSnapshotForObservation(indexesFor(source).graphEvidence, position, source.records.length)
+export const journalGraphSnapshotForObservation = (source: JournalRecordEvidence, position: JournalPosition) =>
+  graphSnapshotForObservation(indexesFor(source).graphEvidence, position, source.records.length)
 
 /** Exact blocked-then-clear graph episode visible at this immutable evidence cutoff. */
 export const journalGraphBlockerClearEpisodeAt = (
   source: JournalRecordEvidence,
-  query: {
-    readonly target: TrackerTarget
-    readonly taskId: TaskId
-    readonly afterPosition: number
-  }
-) =>
-  graphBlockerClearEpisodeAt(indexesFor(source).graphEvidence, {
-    ...query,
-    throughPosition: source.records.length
-  })
+  query: { readonly target: TrackerTarget; readonly taskId: TaskId; readonly afterPosition: number }
+) => graphBlockerClearEpisodeAt(indexesFor(source).graphEvidence, { ...query, throughPosition: source.records.length })
 
 /** Whether a distinct authored specification was observed after one exact earlier choice. */
 export const journalSpecificationDivergedAfter = (
@@ -694,19 +679,13 @@ export const journalLatestTaskRead = (
   source: JournalRecordEvidence,
   query: Omit<Parameters<typeof latestTaskReadAt>[1], "throughPosition">
 ): JournalRecord | undefined =>
-  latestTaskReadAt(indexesFor(source).readFreshnessEvidence, {
-    ...query,
-    throughPosition: source.records.length
-  })
+  latestTaskReadAt(indexesFor(source).readFreshnessEvidence, { ...query, throughPosition: source.records.length })
 
 export const journalLatestAttemptRead = (
   source: JournalRecordEvidence,
   query: Omit<Parameters<typeof latestAttemptReadAt>[1], "throughPosition">
 ): JournalRecord | undefined =>
-  latestAttemptReadAt(indexesFor(source).readFreshnessEvidence, {
-    ...query,
-    throughPosition: source.records.length
-  })
+  latestAttemptReadAt(indexesFor(source).readFreshnessEvidence, { ...query, throughPosition: source.records.length })
 
 /** One Stop request's latest distinct claim-disposition facts visible at this immutable evidence cutoff. */
 export const journalStopRequestDispositionAt = (
@@ -812,9 +791,8 @@ export const journalRecordsForTask = (source: JournalHistorySource, taskId: Task
           record.event.observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
         )
           return false
-        const prior = source.find(
-          ({ key }) => key === outcomeRecordKey(record.event.observation.priorFullObservationOperationId)
-        )
+        const priorOperationId = record.event.observation.priorFullObservationOperationId
+        const prior = source.find(({ key }) => key === outcomeRecordKey(priorOperationId))
         return prior !== undefined && taskIdsOf(prior).has(taskId)
       })
 

@@ -8,6 +8,14 @@ import {
   InRunJournal,
   WorkflowRunNotBegan
 } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordByPosition,
+  journalRecordsForIntegratorSession,
+  journalRecordsForQuarantineDirectionRequest,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import {
   integrationProviderRunActivityAbsentRecordKey,
   integrationQuarantineDirectionAppliedRecordKey,
@@ -109,8 +117,8 @@ export class IntegrationQuarantineDirectionControl extends Context.Service<
   IntegrationQuarantineDirectionControlService
 >()("@dalph/IntegrationQuarantineDirectionControl") {}
 
-const runHasBegan = (records: ReadonlyArray<JournalRecord>): boolean =>
-  records.some(({ event }) => event._tag === "WorkflowRunBegan")
+const runHasBegan = (records: JournalHistorySource): boolean =>
+  journalRecordsOfKind(records, "WorkflowRunBegan")[Symbol.iterator]().next().done !== true
 
 const resultFor = (record: AppliedRecord): IntegrationQuarantineDirectionApplicationResult => ({
   _tag: "DirectionApplied",
@@ -118,21 +126,21 @@ const resultFor = (record: AppliedRecord): IntegrationQuarantineDirectionApplica
 })
 
 const appliedRecordsForRequest = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   requestId: IntegrationQuarantineDirectionRequestId
 ): ReadonlyArray<AppliedRecord> =>
-  records.filter(
+  Array.from(journalRecordsForQuarantineDirectionRequest(records, requestId)).filter(
     (record): record is AppliedRecord =>
       record.event._tag === "IntegrationQuarantineDirectionApplied" &&
       sameIntegrationQuarantineDirectionRequestId(record.event.requestId, requestId)
   )
 
 const appliedRecordsForSubject = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   fingerprint: ApplyIntegrationQuarantineDirectionRequest["fingerprint"]
 ): ReadonlyArray<AppliedRecord> => {
   const subject = integrationQuarantineDirectionSubject(fingerprint)
-  return records.filter(
+  return Array.from(journalRecordsOfKind(records, "IntegrationQuarantineDirectionApplied")).filter(
     (record): record is AppliedRecord =>
       record.event._tag === "IntegrationQuarantineDirectionApplied" &&
       sameIntegrationQuarantineDirectionSubject(
@@ -148,11 +156,11 @@ const runOneFor = (quarantine: QuarantineRecord): IntegratorRunCorrelation =>
   IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: quarantine.event.correlation })
 
 const runStartFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   run: IntegratorRunCorrelation,
   before: JournalPosition
 ): JournalRecord | undefined => {
-  const starts = records.filter(
+  const starts = Array.from(journalRecordsForIntegratorSession(records, run.session.sessionId)).filter(
     (record) =>
       record.event._tag === "IntegratorRunStarted" &&
       record.position < before &&
@@ -169,11 +177,11 @@ const runStartFor = (
 }
 
 const conclusiveResultIsFromRunOne = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   quarantine: QuarantineRecord,
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "ConclusiveResult" }>
 ): boolean => {
-  const record = records.find(({ position }) => position === basis.evidence.resultRecordedAt)
+  const record = journalRecordByPosition(records, basis.evidence.resultRecordedAt)
   /* v8 ignore next -- @preserve quarantineRecordForFingerprint admits only evidence records before Q; an absent or post-Q result is rejected before this eligibility helper. */
   if (record === undefined || record.position >= quarantine.position) return false
 
@@ -189,12 +197,12 @@ const conclusiveResultIsFromRunOne = (
 }
 
 const providerFailureIsFromRunOne = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   quarantine: QuarantineRecord,
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "ProviderRunFailure" }>
 ): boolean => {
   const run = runOneFor(quarantine)
-  const absence = records.find(({ position }) => position === basis.ownedActivityProvenAbsentAt)
+  const absence = journalRecordByPosition(records, basis.ownedActivityProvenAbsentAt)
   if (absence === undefined || absence.position >= quarantine.position) return false
   return providerAbsenceMatchesRunOne(absence, run, basis) && runStartFor(records, run, absence.position) !== undefined
 }
@@ -212,7 +220,7 @@ const providerAbsenceMatchesRunOne = (
   integratorRunCorrelationsEqual(absence.event.run, run)
 
 /** Retry is allowed only from the first quarantine's exact run-one evidence. */
-const retryIsEligible = (records: ReadonlyArray<JournalRecord>, quarantine: QuarantineRecord): boolean => {
+const retryIsEligible = (records: JournalHistorySource, quarantine: QuarantineRecord): boolean => {
   const { basis } = quarantine.event
   if (basis._tag === "ConclusiveResult") return conclusiveResultIsFromRunOne(records, quarantine, basis)
   if (basis._tag === "ProviderRunFailure") return providerFailureIsFromRunOne(records, quarantine, basis)
@@ -220,8 +228,8 @@ const retryIsEligible = (records: ReadonlyArray<JournalRecord>, quarantine: Quar
 }
 
 /** Issue #68 permits one FullRerun successor generation; S2 cannot create S3. */
-const quarantineBelongsToSuccessor = (records: ReadonlyArray<JournalRecord>, quarantine: QuarantineRecord): boolean =>
-  records.some(
+const quarantineBelongsToSuccessor = (records: JournalHistorySource, quarantine: QuarantineRecord): boolean =>
+  Array.from(journalRecordsForIntegratorSession(records, quarantine.event.correlation.sessionId)).some(
     ({ event, position, runId }) =>
       event._tag === "IntegratorSuccessorSessionFixed" &&
       runId === quarantine.runId &&
@@ -230,7 +238,7 @@ const quarantineBelongsToSuccessor = (records: ReadonlyArray<JournalRecord>, qua
   )
 
 const reconcileExistingRequest = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   request: ApplyIntegrationQuarantineDirectionRequest
 ): Effect.Effect<
   IntegrationQuarantineDirectionApplicationResult | void,
@@ -250,12 +258,12 @@ const reconcileExistingRequest = (
 }
 
 const requireQuarantine = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   request: ApplyIntegrationQuarantineDirectionRequest
 ): Effect.Effect<QuarantineRecord, IntegrationQuarantineDirectionNotAvailable> => {
   const quarantine = quarantineRecordForFingerprint(records, request.fingerprint)
   if (quarantine !== undefined) return Effect.succeed(quarantine)
-  const samePosition = records.some(({ position }) => position === request.fingerprint.quarantineAt)
+  const samePosition = journalRecordByPosition(records, request.fingerprint.quarantineAt) !== undefined
   return Effect.fail(
     new IntegrationQuarantineDirectionNotAvailable({
       fingerprint: request.fingerprint,
@@ -266,7 +274,7 @@ const requireQuarantine = (
 }
 
 const ensureDirectionAvailable = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   request: ApplyIntegrationQuarantineDirectionRequest,
   quarantine: QuarantineRecord
 ): Effect.Effect<
@@ -321,13 +329,14 @@ const ensureDirectionAvailable = (
 /** Builds the narrow Journal-backed control for use both during and between Run activations. */
 export const makeIntegrationQuarantineDirectionControl = Effect.fn("IntegrationQuarantineDirectionControl.make")(
   function* (journal: InRunJournal["Service"]) {
+    const accepted = yield* AcceptedJournalReader
     const applications = yield* Semaphore.make(1)
     const applyUnserialized = Effect.fn("IntegrationQuarantineDirectionControl.apply")(function* (input: unknown) {
       const request = yield* Schema.decodeUnknownEffect(ApplyIntegrationQuarantineDirectionRequest, {
         onExcessProperty: "error"
       })(input)
       const runId = request.requestId.runId
-      const records = yield* journal.read(runId)
+      const records = yield* accepted.readAccepted(runId)
       if (!runHasBegan(records)) return yield* new WorkflowRunNotBegan({ runId })
 
       const existingRequest = yield* reconcileExistingRequest(records, request)
@@ -362,7 +371,7 @@ export const makeIntegrationQuarantineDirectionControl = Effect.fn("IntegrationQ
           ),
           Effect.catchTag("JournalStoreContradiction", ({ existingPosition }) =>
             Effect.gen(function* () {
-              const refreshed = yield* journal.read(runId)
+              const refreshed = yield* accepted.readAccepted(runId)
               const redelivered = appliedRecordsForRequest(refreshed, request.requestId)[0]
               if (redelivered !== undefined) {
                 if (sameIntegrationQuarantineDirectionFingerprint(redelivered.event.fingerprint, request.fingerprint)) {
@@ -397,7 +406,7 @@ export const makeIntegrationQuarantineDirectionControl = Effect.fn("IntegrationQ
       const request = yield* Schema.decodeUnknownEffect(ReadIntegrationQuarantineDirectionRequest, {
         onExcessProperty: "error"
       })(input)
-      const records = yield* journal.read(request.requestId.runId)
+      const records = yield* accepted.readAccepted(request.requestId.runId)
       const application = appliedRecordsForRequest(records, request.requestId)[0]
       if (application === undefined) {
         return yield* new IntegrationQuarantineDirectionResultNotFound({ requestId: request.requestId })
