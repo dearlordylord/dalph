@@ -132,6 +132,7 @@ import {
   isJournalRecordEvidence,
   journalGraphObservationAt,
   journalGraphSnapshotForObservation,
+  journalRetainedExecutorResponsibilitySubjects,
   journalRecordsForAttempt,
   journalRecordsForIntegratorSession,
   journalRecordsForOperationId,
@@ -3387,24 +3388,20 @@ const activeRefreshRuntimeBoundaryFor = (
   opportunity: RunActivationOpportunity
 ): ActiveRefreshRuntimeBoundary | undefined => {
   if (opportunity._tag !== "ActiveWorkAuthorityRefresh") return undefined
-  const source = journalHistoryOf(runState)
+  const source = runState.workflowHistory.evidence
   /**
-   * The immutable opportunity can retain an exact subject after Safe or
-   * Terminal changes its current executor disposition. Reconstruct only
-   * attempts with durable responsibility history; unrelated historical plans
-   * never become boundary subjects.
+   * The immutable opportunity can outlive a lifecycle change. Intersect it
+   * with responsibility retained at this prefix and current accepted
+   * Executing lifecycle; Safe, Terminal, replacement, and abandonment cannot
+   * grant an active-refresh boundary.
    */
-  const activeAttempts = Array.from(journalRecordsOfKind(source, "PlannedAttemptExecutorWorkResponsibilityBegan"))
-    .flatMap(({ event }) =>
-      event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
-      isActiveRefreshSubject(runState.runId, event.plannedAttempt, opportunity)
-        ? [event.plannedAttempt]
+  const activeAttempts = journalRetainedExecutorResponsibilitySubjects(source, runState.runId).flatMap(
+    ({ plannedAttempt }) =>
+      isActiveRefreshSubject(runState.runId, plannedAttempt, opportunity) &&
+      currentAcceptedPlannedAttemptExecutorLifecycleFor(source, plannedAttempt)._tag === "Executing"
+        ? [plannedAttempt]
         : []
-    )
-    .filter(
-      (plannedAttempt, index, all) =>
-        all.findIndex((candidate) => plannedTaskAttemptEquivalence(candidate, plannedAttempt)) === index
-    )
+  )
   const currentGraph = currentCompleteGraphObservationAfter(source, Option.none())
   const pendingG2Operation =
     currentGraph === undefined

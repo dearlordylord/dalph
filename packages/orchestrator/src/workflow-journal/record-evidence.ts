@@ -1,6 +1,6 @@
 /* eslint-disable max-lines -- Journal evidence indexes are co-located so one append updates every immutable query root atomically. */
 import { HashMap, Option } from "effect"
-import type { AttemptId, PlannedTaskAttempt, TaskId, TaskRevision } from "@dalph/contracts"
+import type { AttemptId, PlannedTaskAttempt, RunId, TaskId, TaskRevision } from "@dalph/contracts"
 import type { TrackerTarget } from "../authorities/task-tracker/target.js"
 import type { OperationId } from "../workflow/identity.js"
 import type { TargetPromotionRequestId } from "../workflow/protocols/target-promotion/events.js"
@@ -45,6 +45,13 @@ import {
   stopRequestDispositionAt,
   type StopRequestDispositionEvidence
 } from "./stop-request-disposition.js"
+import {
+  appendRetainedExecutorResponsibilitySubjects,
+  emptyRetainedExecutorResponsibilitySubjects,
+  inspectRetainedExecutorResponsibilityStorage,
+  retainedExecutorResponsibilitySubjectsAt,
+  type RetainedExecutorResponsibilitySubjects
+} from "./retained-executor-responsibility.js"
 import type { AttemptChoiceRequestId } from "../workflow/protocols/attempt-choice/events.js"
 import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
@@ -98,6 +105,7 @@ interface EvidenceIndexes {
   readonly specificationDivergence: SpecificationDivergence
   readonly readFreshnessEvidence: ReadFreshnessEvidence
   readonly stopRequestDisposition: StopRequestDispositionEvidence
+  readonly retainedExecutorResponsibilitySubjects: RetainedExecutorResponsibilitySubjects
 }
 
 const indexesByEvidence = new WeakMap<JournalRecordEvidence, EvidenceIndexes>()
@@ -132,7 +140,8 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
     graphEvidence: emptyGraphEvidence(),
     specificationDivergence: emptySpecificationDivergence(),
     readFreshnessEvidence: emptyReadFreshnessEvidence(),
-    stopRequestDisposition: emptyStopRequestDisposition()
+    stopRequestDisposition: emptyStopRequestDisposition(),
+    retainedExecutorResponsibilitySubjects: emptyRetainedExecutorResponsibilitySubjects()
   })
 
 const operationOf = ({ event }: JournalRecord): WorkflowOperation | undefined =>
@@ -420,7 +429,11 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     graphEvidence,
     specificationDivergence: appendSpecificationDivergence(indexes.specificationDivergence, record),
     readFreshnessEvidence: appendReadFreshnessEvidence(indexes.readFreshnessEvidence, record),
-    stopRequestDisposition: appendStopRequestDisposition(indexes.stopRequestDisposition, record)
+    stopRequestDisposition: appendStopRequestDisposition(indexes.stopRequestDisposition, record),
+    retainedExecutorResponsibilitySubjects: appendRetainedExecutorResponsibilitySubjects(
+      indexes.retainedExecutorResponsibilitySubjects,
+      record
+    )
   })
 }
 
@@ -697,6 +710,13 @@ export const journalStopRequestDispositionAt = (
 ): ReturnType<typeof stopRequestDispositionAt> =>
   stopRequestDispositionAt(indexesFor(source).stopRequestDisposition, request, source.records.length)
 
+/** Retained executor responsibilities visible at this immutable evidence cutoff; current execution is a separate fact. */
+export const journalRetainedExecutorResponsibilitySubjects = (source: JournalRecordEvidence, runId: RunId) =>
+  retainedExecutorResponsibilitySubjectsAt(indexesFor(source).retainedExecutorResponsibilitySubjects, {
+    runId,
+    throughPosition: source.records.length
+  })
+
 /** Full accepted prefixes can reuse the exact indexed kind sequence. */
 export const journalEvidenceKindSequence = (
   source: JournalRecordEvidence,
@@ -851,6 +871,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     indexes.specificationDivergence,
     indexes.readFreshnessEvidence,
     indexes.stopRequestDisposition,
+    indexes.retainedExecutorResponsibilitySubjects,
     inspectJournalRecordStorage(source.records),
     ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage),
@@ -874,6 +895,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     ...inspectGraphEvidenceStorage(indexes.graphEvidence),
     ...inspectSpecificationDivergenceStorage(indexes.specificationDivergence),
     ...inspectReadFreshnessEvidenceStorage(indexes.readFreshnessEvidence),
-    ...inspectStopRequestDispositionStorage(indexes.stopRequestDisposition)
+    ...inspectStopRequestDispositionStorage(indexes.stopRequestDisposition),
+    ...inspectRetainedExecutorResponsibilityStorage(indexes.retainedExecutorResponsibilitySubjects)
   ]
 }

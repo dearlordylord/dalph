@@ -1,5 +1,17 @@
 import { expect, it } from "vitest"
-import { RunId, TaskId, makeTaskWorkSpecification } from "@dalph/contracts"
+import {
+  AttemptId,
+  GitCommitSha,
+  PlannedTaskAttempt,
+  RunId,
+  TaskBranchRef,
+  TaskExecutorLocator,
+  TaskId,
+  TaskRevision,
+  WorktreeLocator,
+  makeTaskWorkSpecification,
+  plannedAttemptExecutorCorrelation
+} from "@dalph/contracts"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { OperationId } from "../workflow/identity.js"
 import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
@@ -16,17 +28,26 @@ import {
   makeFocusedTaskWorkSpecificationFactsObserved
 } from "../workflow/task-tracker-facts/observation.js"
 import { workflowJournalEventVersion } from "../workflow/kernel/event.js"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../workflow/protocols/planned-attempt-executor-work/events.js"
+import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import { JournalPosition, JournalRecordKey } from "./identity.js"
+import type { JournalRecord } from "./store.js"
 import {
   journalEvidenceBefore,
   journalEvidenceFrom,
   journalOperationById,
+  journalRetainedExecutorResponsibilitySubjects,
   journalRecordByPosition,
   journalRestartReadIntents,
   journalRecordsForOperationId,
   journalRecordsForTask,
   journalRecordsOfKind
 } from "./record-evidence.js"
+import { observeRetainedExecutorResponsibilityProjection } from "./retained-executor-responsibility.js"
 
 it("indexes a release intent by its nested claim operation at every safe cutoff", () => {
   const runId = RunId.make("nested-release-correlation-run")
@@ -139,4 +160,75 @@ it("indexes a focused observation by its covered task identity", () => {
 
   expect(Array.from(journalRecordsForTask(journalEvidenceFrom([record]), taskId))).toEqual([record])
   expect(Array.from(journalRecordsForTask([record], taskId))).toEqual([record])
+})
+
+it("keeps the aggregate retained-subject query bounded after 64 and 256 retired executor responsibilities", () => {
+  const runId = RunId.make("retained-aggregate-run")
+  const plan = (id: number) =>
+    PlannedTaskAttempt.make({
+      attemptId: AttemptId.make(`retained-aggregate-${id}`),
+      baseSha: GitCommitSha.make("1".repeat(40)),
+      branch: TaskBranchRef.make(`refs/heads/retained-aggregate-${id}`),
+      executor: TaskExecutorLocator.make("executor:retained-aggregate"),
+      runId,
+      taskId: TaskId.make(`retained-aggregate-task-${id}`),
+      taskRevision: TaskRevision.make("retained-aggregate-revision"),
+      worktree: WorktreeLocator.make(`/worktrees/retained-aggregate-${id}`)
+    })
+  const record = (event: JournalRecord["event"], position: number): JournalRecord => ({
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(position),
+    runId
+  })
+  const visits = [64, 256].map((size) => {
+    const retained = plan(0)
+    const records: Array<JournalRecord> = [
+      record(
+        PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+          plannedAttempt: retained,
+          version: workflowJournalEventVersion
+        }),
+        1
+      )
+    ]
+    for (let id = 1; id <= size; id += 1) {
+      const retired = plan(id)
+      records.push(
+        record(
+          PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+            plannedAttempt: retired,
+            version: workflowJournalEventVersion
+          }),
+          records.length + 1
+        ),
+        record(
+          PlannedAttemptExecutorWorkReportedEvent.make({
+            ordinal: PlannedAttemptExecutorReportOrdinal.make(1),
+            report: {
+              _tag: "ExecutorWorkTerminal",
+              correlation: plannedAttemptExecutorCorrelation(retired),
+              result: { _tag: "Completed" }
+            },
+            version: workflowJournalEventVersion
+          }),
+          records.length + 2
+        )
+      )
+    }
+    const evidence = journalEvidenceFrom(records)
+    let count = 0
+    const stop = observeRetainedExecutorResponsibilityProjection(() => {
+      count += 1
+    })
+    try {
+      expect(journalRetainedExecutorResponsibilitySubjects(evidence, runId)).toEqual([
+        { beganAt: JournalPosition.make(1), plannedAttempt: retained }
+      ])
+    } finally {
+      stop()
+    }
+    return count
+  })
+  expect(visits).toEqual([2, 2])
 })

@@ -808,26 +808,44 @@ it.effect("selects an active subject only from a current accepted Executing life
         {
           expectedSelected: false,
           kind: "ResponseAwaitingAcceptance",
+          lifecycle: "Running",
           name: "command response awaiting lifecycle acceptance",
           suffix: "response-only"
         },
         {
           expectedSelected: true,
           kind: "AcceptedReport",
+          lifecycle: "Running",
           name: "accepted Executing lifecycle report",
           suffix: "accepted"
         },
         {
           expectedSelected: false,
           kind: "ExactProjectionAwaitingAcceptance",
+          lifecycle: "Running",
           name: "distinct exact state projection awaiting lifecycle acceptance",
           suffix: "unaccepted-state-projection"
         },
         {
           expectedSelected: false,
           kind: "LaterNonExactProjection",
+          lifecycle: "Running",
           name: "later non-exact state projection",
           suffix: "later-non-exact"
+        },
+        {
+          expectedSelected: false,
+          kind: "AcceptedReport",
+          lifecycle: "SafelySuspended",
+          name: "retained accepted Safe lifecycle",
+          suffix: "accepted-safe"
+        },
+        {
+          expectedSelected: false,
+          kind: "AcceptedReport",
+          lifecycle: "Terminal",
+          name: "accepted Terminal lifecycle",
+          suffix: "accepted-terminal"
         }
       ] as const
 
@@ -843,7 +861,7 @@ it.effect("selects an active subject only from a current accepted Executing life
           storage,
           runId,
           plannedAttempt,
-          "Running",
+          lifecycleCase.lifecycle,
           lifecycleCase.kind !== "ResponseAwaitingAcceptance"
         )
         const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
