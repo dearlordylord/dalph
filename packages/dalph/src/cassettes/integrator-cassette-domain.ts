@@ -6,12 +6,12 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
+  makeTaskWorkSpecification,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
-  TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
 import {
@@ -344,10 +344,21 @@ export const maintainedIntegratorFixture = {
   runId: RunId.make("integrator-maintained-run"),
   targetHead: GitCommitSha.make("b".repeat(gitCommitHexLength)),
   taskId: TaskId.make("integrator-maintained-task"),
-  taskRevision: TaskRevision.make("integrator-maintained-revision"),
+  taskRevision: makeTaskWorkSpecification({
+    body: "Prepare the maintained integration candidate.",
+    taskId: TaskId.make("integrator-maintained-task"),
+    title: "Prepare maintained integration candidate"
+  }).fingerprint,
   attemptId: AttemptId.make("integrator-maintained-attempt"),
   worktree: WorktreeLocator.make("/worktrees/integrator-maintained")
 } as const
+
+/** Exact tracker-authored work used by the maintained cassette's accepted attempt chronology. */
+export const maintainedIntegratorTaskSpecification = makeTaskWorkSpecification({
+  body: "Prepare the maintained integration candidate.",
+  taskId: maintainedIntegratorFixture.taskId,
+  title: "Prepare maintained integration candidate"
+})
 
 export type IntegratorCassetteInput = ReturnType<typeof integratorPreparationInputFor>
 export type IntegratorCassettePublicResult = IntegratorRunProtocolResult

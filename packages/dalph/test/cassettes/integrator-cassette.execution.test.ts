@@ -20,6 +20,7 @@ import {
   AuthoredIntegratorStoryItem,
   maintainedIntegratorCassetteCatalog,
   maintainedIntegratorFixture,
+  maintainedIntegratorTaskSpecification,
   recordedIntegratorCassetteFor,
   rejectsAnInvalidReportedGitObject,
   retainsConclusiveNotPreparedWithoutInferringAResourceHead,
@@ -60,6 +61,12 @@ describe("maintained outer Integrator cassettes", () => {
             expect(fixed.event.correlation.acceptedResult.commit).toBe(maintainedIntegratorFixture.acceptedCommit)
             expect(fixed.event.correlation.integrationTarget).toEqual(maintainedIntegratorFixture.integrationTarget)
           }
+          expect(result.records[0]?.position).toBe(17)
+          expect(result.records.at(-1)?.position).toBe(25)
+          expect(fixed?.position).toBe(21)
+          expect(result.cassette.startingFacts.responsibility.plannedAttempt.taskRevision).toBe(
+            maintainedIntegratorTaskSpecification.fingerprint
+          )
           expect(result.integratorCalls).toBe(1)
           expect(result.gitCalls).toBe(1)
           expect(result.records.map(({ event }) => event._tag)).toEqual([

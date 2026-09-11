@@ -19,8 +19,9 @@ import {
   ClaimOwner,
   ClaimToken,
   FixtureTarget,
+  InitialControlPolicy,
   JournalPosition,
-  Journal,
+  JournalStore,
   journaledWorkflowInterpreterLayer,
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
@@ -32,14 +33,13 @@ import {
   projectTrackerSnapshot,
   requireAcknowledgedPlan,
   TaskAttemptPlannedEvent,
+  TaskWorkCapacity,
   workflowJournalEventVersion,
   WorkflowInterpreter
 } from "@dalph/orchestrator"
 import { Effect, Layer, Option } from "effect"
 import { expect } from "vitest"
 import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
-import { TaskWorkCapacity } from "../../../orchestrator/src/coordination/admission/capacity.js"
-import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
 import { makeWorkflowRunBeganRecord } from "../../../orchestrator/src/workflow-journal/run-lifecycle.js"
 
 const runId = RunId.make("generic-workflow-run")
@@ -63,6 +63,11 @@ const plannedAttempt = PlannedTaskAttempt.make({
   taskRevision: TaskRevision.make(taskSpecification.fingerprint),
   worktree: WorktreeLocator.make("/worktrees/attempt-A")
 })
+const runBegan = makeWorkflowRunBeganRecord(
+  runId,
+  target,
+  InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+)
 
 it.effect("journals claim, plan, and Git worktree boundaries without executor internals", () => {
   const claimOperation = makeTaskClaimAcquisitionOperation({
@@ -122,18 +127,9 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
       releaseTaskClaim: () => Effect.die("unused")
     })
   )
-  const journalLayer = liveJournalTestLayer({
-    records: [
-      makeWorkflowRunBeganRecord(
-        runId,
-        target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-      )
-    ],
-    runId,
-    target
-  })
-  const layer = journaledWorkflowInterpreterLayer(runId, base).pipe(Layer.provide(journalLayer))
+  const layer = journaledWorkflowInterpreterLayer(runId, base).pipe(
+    Layer.provideMerge(liveJournalTestLayer({ records: [runBegan], runId, target }))
+  )
 
   return Effect.gen(function* () {
     const interpreter = yield* WorkflowInterpreter
@@ -155,8 +151,9 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
     yield* interpreter.readTaskWorkSpecification(specificationOperation)
     yield* interpreter.recordTaskAttemptPlan(planOperation)
     yield* interpreter.reconcileTaskWorktree(worktreeOperation)
-    const records = yield* (yield* Journal).read(runId)
-    expect(records.slice(1).map(({ event }) => event._tag)).toEqual([
+    const records = yield* (yield* JournalStore).read(runId)
+    expect(records.map(({ event }) => event._tag)).toEqual([
+      "WorkflowRunBegan",
       "TaskClaimAcquisitionIntended",
       "TaskClaimAcquired",
       "TaskTrackerReadIntentRecorded",
@@ -167,7 +164,7 @@ it.effect("journals claim, plan, and Git worktree boundaries without executor in
       "TaskWorktreeReconciliationIntended",
       "TaskWorktreeReady"
     ])
-  }).pipe(Effect.provide(Layer.merge(layer, journalLayer)))
+  }).pipe(Effect.provide(layer))
 })
 
 it.effect("requires one exact causal planned-attempt acknowledgement", () =>

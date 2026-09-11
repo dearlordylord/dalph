@@ -2731,6 +2731,9 @@ for (const storage of ["memory", "sqlite-and-private-files"] as const) {
               }
               yield* journal.beginRun(attempt.runId, trackerTarget, beginning.event.initialControlPolicy)
               for (const record of seedRecords.slice(1)) {
+                if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
+                  return yield* Effect.die("restart fixture must contain no later workflow lifecycle event")
+                }
                 yield* journal.append(attempt.runId, record.key, record.event)
               }
             }

@@ -13,6 +13,8 @@ import {
   GitCommand,
   GitCommonDirectoryTarget,
   InitialControlPolicy,
+  InRunJournal,
+  journalLayer,
   JournaledRunBootstrap,
   JournalDatabaseLocator,
   JournalPosition,
@@ -31,6 +33,7 @@ import {
   PlannedAttemptExecutorReportOrdinal,
   PlannedAttemptExecutorWorkResponsibilityBeganEvent,
   PlannedWorktreeReady,
+  reduceWorkflowJournalHistory,
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
   TaskClaimAcquisitionIntendedEvent,
@@ -820,7 +823,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
         ])
       }
       const journalFilename = JournalDatabaseLocator.make(`${directory}/journal.sqlite`)
-      const seedJournalLayer = sqliteJournalTestLayer({ filename: journalFilename })
+      const seedJournalLayer = sqliteJournalStoreLayer({ filename: journalFilename })
       const acquisition = {
         operationId: OperationId.make("production-refresh-healthy-claim"),
         owner: ClaimOwner.make("dalph"),
@@ -866,8 +869,16 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
       }
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const journal = yield* JournalStore
-          yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: seedCapacity }))
+          const storageContext = yield* Layer.build(seedJournalLayer)
+          const storage = Context.get(storageContext, JournalStore)
+          const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: seedCapacity })
+          yield* storage.beginRun(runId, target, initialPolicy)
+          const initial = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
+          if (initial._tag === "InvalidWorkflowJournalHistory") {
+            return yield* Effect.die(`production refresh seed is invalid: ${JSON.stringify(initial.issues)}`)
+          }
+          const journalContext = yield* Layer.build(journalLayer(runId, target, initial, storage))
+          const journal = Context.get(journalContext, InRunJournal)
           yield* journal.append(
             runId,
             intentRecordKey(acquisition.operationId),
@@ -1123,7 +1134,10 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
             yield* seedExecutingPeer(thirdAttempt, thirdAcquisition, thirdSpecification)
           }
           if (options.capacityTwo === true) {
-            const capacityControl = yield* TaskWorkCapacityControl
+            const capacityControlContext = yield* Layer.build(taskWorkCapacityControlLayer).pipe(
+              Effect.provide(journalContext)
+            )
+            const capacityControl = Context.get(capacityControlContext, TaskWorkCapacityControl)
             const current = yield* capacityControl.read(runId)
             yield* capacityControl.apply({ capacity: configuredCapacity, expectedRevision: current.revision, runId })
           }
@@ -1172,11 +1186,7 @@ const runProductionRefreshHarness = (options: ProductionRefreshHarnessOptions = 
               })
             )
           }
-        }).pipe(
-          Effect.provide(
-            Layer.merge(seedJournalLayer, taskWorkCapacityControlLayer.pipe(Layer.provide(seedJournalLayer)))
-          )
-        )
+        })
       )
       type ProductionExecutorCall = {
         readonly command: "observe" | "Begin" | "Resume" | "Suspend"

@@ -263,6 +263,7 @@ export {
   JournalTerminalHistoryRetirement,
   type JournalAppendError,
   type JournalError,
+  type JournalReadError,
   JournalSchemaIncompatible,
   JournalStorageAccessDenied,
   JournalStorageCapacityExhausted,
