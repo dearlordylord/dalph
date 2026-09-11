@@ -889,7 +889,9 @@ export const validateAttemptRestartAuthorityReadFailure = (
   const event = record.event
   const prior = historyBefore(records, record.position)
   const applied = findLast(
-    journalRecordsForAttempt(prior, event.subject.plannedAttempt.attemptId),
+    isJournalRecordEvidence(prior)
+      ? indexedRecordCandidate(prior, attemptChoiceAppliedRecordKey(event.requestId))
+      : journalRecordsForAttempt(prior, event.subject.plannedAttempt.attemptId),
     ({ event: candidate }) =>
       candidate._tag === "AttemptChoiceApplied" &&
       candidate.choice === "RestartTaskImplementation" &&
@@ -905,7 +907,9 @@ export const validateAttemptRestartAuthorityReadFailure = (
     )
   }
   const intent = findLast(
-    journalRecordsForTask(prior, event.subject.plannedAttempt.taskId),
+    isJournalRecordEvidence(prior)
+      ? journalRecordsForOperationId(prior, event.operationId)
+      : journalRecordsForTask(prior, event.subject.plannedAttempt.taskId),
     ({ event: candidate }) =>
       (candidate._tag === "TaskTrackerReadIntentRecorded" || candidate._tag === "GitReadIntentRecorded") &&
       candidate.operation.operationId === event.operationId
@@ -1505,7 +1509,9 @@ const appliedRestartForReplacement = (
   event: PlannedAttemptReplacementRecord["event"]
 ): AppliedRestartRecord | undefined =>
   findLast(
-    journalRecordsForAttempt(prior, event.subject.plannedAttempt.attemptId),
+    isJournalRecordEvidence(prior)
+      ? indexedRecordCandidate(prior, attemptChoiceAppliedRecordKey(event.requestId))
+      : journalRecordsForAttempt(prior, event.subject.plannedAttempt.attemptId),
     (record): record is AppliedRestartRecord => {
       if (record.event._tag !== "AttemptChoiceApplied") return false
       return [
@@ -1523,7 +1529,7 @@ export const replacementFollowsIntegrationCutoff = (
   prior: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): boolean =>
-  hasMatching(journalRecordsForAttempt(prior, plannedAttempt.attemptId), ({ event }) => {
+  hasMatching(journalRecordsForAttemptKind(prior, plannedAttempt.attemptId, "IntegrationStarted"), ({ event }) => {
     if (event._tag !== "IntegrationStarted") return false
     return [
       event.plannedAttempt.runId === plannedAttempt.runId,
