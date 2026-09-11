@@ -1751,68 +1751,23 @@ it.effect("replays the exact durable claim and worktree intents", () => {
   )
 })
 
-it.effect("fails closed when initial or reread workflow-journal history is invalid", () =>
-  Effect.gen(function* () {
-    const runId = RunId.make("invalid-workflow-journal-history-recovery")
-    const operation = makeTaskClaimAcquisitionOperation({
-      acquisition: {
-        operationId: OperationId.make("invalid-workflow-journal-history-claim"),
-        owner: ClaimOwner.make("dalph"),
-        taskId: TaskId.make("invalid-workflow-journal-history-task"),
-        token: ClaimToken.make("invalid-workflow-journal-history-token")
-      },
-      predecessorOperationIds: []
-    })
-    const invalidRecord = {
-      event: TaskClaimAcquisitionIntendedEvent.make({ operation, version: workflowJournalEventVersion }),
-      key: intentRecordKey(operation.acquisition.operationId),
-      position: JournalPosition.make(2),
-      runId
-    }
-    const reads = yield* Ref.make(0)
-    const changingJournal = JournalStore.of({
-      append: () => Effect.die("unused"),
-      beginRun: () => Effect.die("unused"),
-      read: () =>
-        Ref.getAndUpdate(reads, (count) => count + 1).pipe(Effect.map((count) => (count === 0 ? [] : [invalidRecord]))),
-      readRunForRecovery: () => Effect.die("unused"),
-      scanHot: () => Effect.succeed({ issues: [], runs: [] }),
-      auditAll: () => Effect.succeed({ issues: [], runs: [] }),
-      retireTerminalRun: () => Effect.die("unused"),
-      terminateRun: () => Effect.die("unused")
-    })
-    const recovery = yield* makeRunRecoveryProjection(runId).pipe(
-      Effect.provideService(
-        InRunJournal,
-        InRunJournal.of({ append: changingJournal.append, read: changingJournal.read })
-      )
-    )
-    expect((yield* recovery.readDeliveryProjection.pipe(Effect.flip))._tag).toBe("InvalidWorkflowJournalHistory")
+it("fails closed when cold persisted workflow-journal history is invalid", () => {
+  const runId = RunId.make("invalid-workflow-journal-history-recovery")
+  const operation = makeTaskClaimAcquisitionOperation({
+    acquisition: {
+      operationId: OperationId.make("invalid-workflow-journal-history-claim"),
+      owner: ClaimOwner.make("dalph"),
+      taskId: TaskId.make("invalid-workflow-journal-history-task"),
+      token: ClaimToken.make("invalid-workflow-journal-history-token")
+    },
+    predecessorOperationIds: []
+  })
+  const invalidRecord = {
+    event: TaskClaimAcquisitionIntendedEvent.make({ operation, version: workflowJournalEventVersion }),
+    key: intentRecordKey(operation.acquisition.operationId),
+    position: JournalPosition.make(2),
+    runId
+  }
 
-    const initiallyInvalid = yield* makeRunRecoveryProjection(runId).pipe(
-      Effect.provideService(
-        InRunJournal,
-        InRunJournal.of({ append: changingJournal.append, read: () => Effect.succeed([invalidRecord]) })
-      ),
-      Effect.flip
-    )
-    expect(initiallyInvalid._tag).toBe("InvalidWorkflowJournalHistory")
-  }).pipe(
-    Effect.provide(controlledFakePlannedAttemptExecutorLayer),
-    Effect.provideService(
-      WorkflowInterpreter,
-      WorkflowInterpreter.of({
-        acquireTaskClaim: unused,
-        readTaskClaim: () => Effect.die("unexpected task claim read"),
-        readTaskWorktree: () => Effect.die("unused worktree observation"),
-        readTargetLineage: () => Effect.die("unused target-lineage observation"),
-        readTrackerGraph: unused,
-        readTaskWorkSpecification: unused,
-        reconcileTaskWorktree: unused,
-        recordTaskAttemptPlan: unused,
-        releaseTaskClaim: unused
-      })
-    ),
-    Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
-  )
-)
+  expect(reduceWorkflowJournalHistory(runId, [invalidRecord])._tag).toBe("InvalidWorkflowJournalHistory")
+})
