@@ -31,43 +31,71 @@ const intent = (operationId: string) =>
   )
 
 describe("SQLite warm append storage checkpoint", () => {
-  it.effect("decodes a long active Run once and appends successors without loading its accepted prefix again", () =>
+  it.effect("keeps warm append work constant when an active Run grows from N to 2N records", () =>
     Effect.gen(function* () {
-      const partitionRowQueries = yield* Ref.make<ReadonlyArray<number>>([])
+      const partitionRowQueries = yield* Ref.make<ReadonlyArray<{ readonly rowCount: number; readonly runId: RunId }>>(
+        []
+      )
       const inserted = yield* Ref.make(0)
       const keyLookups = yield* Ref.make(0)
       const layer = sqliteJournalTestLayer({
         filename: JournalDatabaseLocator.make(":memory:"),
         onAppendInserted: () => Ref.update(inserted, (count) => count + 1),
         onAppendKeyLookup: () => Ref.update(keyLookups, (count) => count + 1),
-        onPartitionRowsQueried: (_partition, _runId, rowCount) =>
-          Ref.update(partitionRowQueries, (counts) => [...counts, rowCount])
+        onPartitionRowsQueried: (_partition, runId, rowCount) =>
+          Ref.update(partitionRowQueries, (queries) => [...queries, { rowCount, runId }])
       })
       yield* Effect.gen(function* () {
         const journal = yield* JournalStore
-        const runId = RunId.make("warm-long-run")
-        yield* journal.beginRun(
-          runId,
-          FixtureTarget.make("warm-long-run-target"),
-          InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-        )
-        for (let index = 1; index <= 64; index++) {
-          yield* journal.append(runId, JournalRecordKey.make(`record-${index}`), intent(`seed-${index}`))
-        }
-        yield* journal.read(runId)
-        const beforeWarmAppends = yield* Ref.get(partitionRowQueries)
-        for (let index = 65; index <= 80; index++) {
-          yield* journal.append(runId, JournalRecordKey.make(`record-${index}`), intent(`successor-${index}`))
-        }
+        const measureWarmSuccessors = Effect.fn("SqliteWarmAppendTest.measureWarmSuccessors")(function* (
+          prefixSize: number
+        ) {
+          const runId = RunId.make(`warm-prefix-${prefixSize}`)
+          yield* journal.beginRun(
+            runId,
+            FixtureTarget.make(`warm-prefix-${prefixSize}-target`),
+            InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+          )
+          for (let index = 1; index <= prefixSize; index++) {
+            yield* journal.append(
+              runId,
+              JournalRecordKey.make(`record-${prefixSize}-${index}`),
+              intent(`seed-${prefixSize}-${index}`)
+            )
+          }
+          yield* journal.read(runId)
+          const queriesBefore = yield* Ref.get(partitionRowQueries)
+          const insertsBefore = yield* Ref.get(inserted)
+          const lookupsBefore = yield* Ref.get(keyLookups)
+          for (let index = 1; index <= 16; index++) {
+            yield* journal.append(
+              runId,
+              JournalRecordKey.make(`successor-${prefixSize}-${index}`),
+              intent(`successor-${prefixSize}-${index}`)
+            )
+          }
+          const queriesAfter = yield* Ref.get(partitionRowQueries)
+          expect(queriesAfter).toEqual(queriesBefore)
+          expect(queriesBefore.filter((query) => query.runId === runId).map(({ rowCount }) => rowCount)).toEqual([
+            0,
+            1,
+            prefixSize + 1
+          ])
+          expect((yield* journal.read(runId)).map(({ position }) => position)).toEqual(
+            Array.from({ length: prefixSize + 17 }, (_, index) => index + 1)
+          )
+          return {
+            inserted: (yield* Ref.get(inserted)) - insertsBefore,
+            keyLookups: (yield* Ref.get(keyLookups)) - lookupsBefore,
+            partitionLoads: queriesAfter.length - queriesBefore.length
+          }
+        })
 
-        expect(yield* Ref.get(partitionRowQueries)).toHaveLength(3)
-        expect(yield* Ref.get(partitionRowQueries)).toEqual(beforeWarmAppends)
-        expect(beforeWarmAppends).toEqual([0, 1, 65])
-        expect(yield* Ref.get(inserted)).toBe(80)
-        expect(yield* Ref.get(keyLookups)).toBe(80)
-        expect((yield* journal.read(runId)).map(({ position }) => position)).toEqual(
-          Array.from({ length: 81 }, (_, index) => index + 1)
-        )
+        const n = yield* measureWarmSuccessors(64)
+        const twiceN = yield* measureWarmSuccessors(128)
+
+        expect(n).toEqual({ inserted: 16, keyLookups: 16, partitionLoads: 0 })
+        expect(twiceN).toEqual(n)
       }).pipe(Effect.provide(layer))
     })
   )
