@@ -1,11 +1,11 @@
 import { type PlannedTaskAttempt, plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import type { WorkflowOperation } from "../../registry/operation.js"
 
-type TrackerRead = Extract<
-  WorkflowOperation,
-  { readonly _tag: "ReadTrackerGraph" | "ReadTaskWorkSpecification" | "ReadTaskClaim" }
->
-type Plan = Extract<WorkflowOperation, { readonly _tag: "RecordTaskAttemptPlan" }>
+type TrackerRead =
+  | typeof WorkflowOperation.cases.ReadTrackerGraph.Type
+  | typeof WorkflowOperation.cases.ReadTaskWorkSpecification.Type
+  | typeof WorkflowOperation.cases.ReadTaskClaim.Type
+type Plan = typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
 
 /** Exact plans named by one current-fact read; this relation does not grant continuation authority. */
 export const continuationReadNamesExactPlan = (
