@@ -86,7 +86,7 @@ it("matches the raw blocked-then-clear existential oracle at generated cutoffs",
         const clearedAt =
           blockedAt === undefined
             ? undefined
-            : positions.findLast(({ value, position }) => value === 1 && position > blockedAt)?.position
+            : positions.findLast(({ position, value }) => value === 1 && position > blockedAt)?.position
         expect(
           blockerClearEpisodeAt(index, { target, taskId, afterPosition: baseline, throughPosition: cutoff })
         ).toEqual(
