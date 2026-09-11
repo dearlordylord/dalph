@@ -98,7 +98,6 @@ import {
 import { journaledWorkflowInterpreterLayer } from "../../workflow-journal/journaled-interpreter.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { journalRecordsForOperationId } from "../../workflow-journal/record-evidence.js"
-import { Journal } from "../delivery/journal.js"
 import { acceptedOperationIdsOf, pendingReadOperationIdsOf } from "../delivery/delivery-evidence.js"
 import { deliveryProposalsOf } from "../delivery/delivery-proposal.js"
 import { materializeDeliveryAction } from "../delivery/delivery-action-materialization.js"
@@ -841,7 +840,7 @@ it.effect("active-work refresh recovers ordinary authority reads without a priva
         )
         const context = yield* Layer.build(liveJournalTestLayer({ records: initialRecords, runId, target }))
         const liveJournal = Context.get(context, InRunJournal)
-        const acceptedReader = Context.get(context, Journal)
+        const acceptedReader = Context.get(context, AcceptedJournalReader)
         const providerOperationIds = yield* Ref.make<ReadonlyArray<OperationId>>([])
         const failNextOutcome = yield* Ref.make(crashCut === "response-before-observation")
         const journal = InRunJournal.of({
@@ -927,10 +926,7 @@ it.effect("active-work refresh recovers ordinary authority reads without a priva
                 Layer.provide(
                   Layer.merge(
                     Layer.succeed(InRunJournal, journal),
-                    Layer.succeed(
-                      AcceptedJournalReader,
-                      AcceptedJournalReader.of({ readAccepted: acceptedReader.readAccepted })
-                    )
+                    Layer.succeed(AcceptedJournalReader, acceptedReader)
                   )
                 )
               )
@@ -1041,7 +1037,7 @@ it.effect("production delivery composition settles the exact pending specificati
       const operation = selectedTransition.operation
       const context = yield* Layer.build(liveJournalTestLayer({ records: initialRecords, runId, target }))
       const journal = Context.get(context, InRunJournal)
-      const acceptedReader = Context.get(context, Journal)
+      const acceptedReader = Context.get(context, AcceptedJournalReader)
       const unused = () => Effect.die("focused read recovery used an unrelated interpreter method")
       const provider = WorkflowInterpreter.of({
         acquireTaskClaim: unused,
@@ -1059,13 +1055,7 @@ it.effect("production delivery composition settles the exact pending specificati
         Layer.succeed(WorkflowInterpreter, provider)
       ).pipe(
         Layer.provide(
-          Layer.merge(
-            Layer.succeed(InRunJournal, journal),
-            Layer.succeed(
-              AcceptedJournalReader,
-              AcceptedJournalReader.of({ readAccepted: acceptedReader.readAccepted })
-            )
-          )
+          Layer.merge(Layer.succeed(InRunJournal, journal), Layer.succeed(AcceptedJournalReader, acceptedReader))
         )
       )
       const crashAfterIntent = Effect.gen(function* () {
@@ -1159,10 +1149,7 @@ it.effect("production delivery composition settles the exact pending specificati
         Effect.provide(interpreterLayer),
         Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
         Effect.provideService(InRunJournal, journal),
-        Effect.provideService(
-          AcceptedJournalReader,
-          AcceptedJournalReader.of({ readAccepted: acceptedReader.readAccepted })
-        ),
+        Effect.provideService(AcceptedJournalReader, acceptedReader),
         Effect.provideService(
           TaskClaimAcquisitionPlanner,
           TaskClaimAcquisitionPlanner.of({ plan: () => Effect.die("ordinary read recovery must not plan a claim") })
