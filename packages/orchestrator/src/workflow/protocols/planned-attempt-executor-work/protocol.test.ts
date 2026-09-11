@@ -43,6 +43,7 @@ import {
   outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord, JournalStore } from "../../../workflow-journal/store.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import {
   TaskAttemptPlannedEvent,
   TaskClaimAcquiredEvent,
@@ -80,7 +81,10 @@ import {
   requestPlannedAttemptExecutorSuspension,
   resumePlannedAttemptExecutorWork
 } from "./guarded-protocol.js"
-import { hasValidAcceptedPlannedAttemptExecutorLifecycleHistory } from "./lifecycle-history.js"
+import {
+  hasValidAcceptedPlannedAttemptExecutorLifecycleHistory,
+  plannedAttemptExecutorLifecycleTransitionError
+} from "./lifecycle-history.js"
 import { reconstructRunState } from "../../../coordination/reconstruction/reduce.js"
 import { deriveRunnableFrontier, RunnableFrontierTransition } from "../../../coordination/frontier/frontier.js"
 import { makeSelectedTransitionIdentity } from "../../../coordination/activation/selected-transition.js"
@@ -2443,6 +2447,9 @@ it.effect("accepts safe-to-executing work only from the exact Resume command", (
     ).toEqual(executing)
 
     const records = yield* (yield* JournalStore).read(plannedAttempt.runId)
+    expect(
+      plannedAttemptExecutorLifecycleTransitionError(journalEvidenceFrom(records), plannedAttempt, executing)
+    ).toBeUndefined()
     expect(hasValidAcceptedPlannedAttemptExecutorLifecycleHistory(records, plannedAttempt)).toBe(true)
     const forgedResumeKey = records.map((record) =>
       record.event._tag === "PlannedAttemptExecutorCommandIntended" && record.event.command === "Resume"

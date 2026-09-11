@@ -14,7 +14,12 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
-import { journalRecordsForAttempt, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
+import {
+  journalRecordsForAttempt,
+  journalRecordsForAttemptKind,
+  lastJournalRecordForAttemptKind,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import {
   PlannedAttemptExecutorBeginReportContradiction,
   PlannedAttemptExecutorInitialReportCausalityContradiction,
@@ -22,8 +27,6 @@ import {
   PlannedAttemptExecutorTerminalReportContradiction
 } from "./errors.js"
 import type { PlannedAttemptExecutorCommandOrdinal } from "./events.js"
-
-const lastElementOffset = -1
 
 type PlannedAttemptExecutorWorkReportedRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorWorkReported" }>
@@ -102,42 +105,71 @@ const exactCommandSettlement = (
   exactCommandResponseSettlement(record, plannedAttempt) ?? exactCommandProjectionSettlement(record, plannedAttempt)
 
 const exactCommandSettledWith = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   after: JournalPosition | undefined,
   command: "Begin" | "Resume",
   observed: PlannedAttemptExecutorReport
 ): boolean => {
-  const settlement = records.findLast((record) => {
-    if (after !== undefined && record.position <= after) return false
-    const exact = exactCommandSettlement(record, plannedAttempt)
-    return exact !== undefined && samePlannedAttemptExecutorReport(exact.report, observed)
-  })
+  let settlement: JournalRecord | undefined
+  for (const kind of [
+    "PlannedAttemptExecutorCommandResponseObserved",
+    "PlannedAttemptExecutorCommandProjectionObserved"
+  ] as const) {
+    for (const record of journalRecordsForAttemptKind(records, plannedAttempt.attemptId, kind)) {
+      if (after !== undefined && record.position <= after) continue
+      const exact = exactCommandSettlement(record, plannedAttempt)
+      if (
+        exact !== undefined &&
+        samePlannedAttemptExecutorReport(exact.report, observed) &&
+        (settlement === undefined || record.position > settlement.position)
+      ) {
+        settlement = record
+      }
+    }
+  }
   if (settlement === undefined) return false
   const commandOrdinal = exactCommandSettlement(settlement, plannedAttempt)?.commandOrdinal
   if (commandOrdinal === undefined) return false
-  return records.some(
-    (record) =>
+  for (const record of journalRecordsForAttemptKind(
+    records,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorCommandIntended"
+  )) {
+    if (
       (after === undefined || record.position > after) &&
       record.position < settlement.position &&
       exactAttemptCommand(record, plannedAttempt, commandOrdinal, command)
-  )
+    ) {
+      return true
+    }
+  }
+  return false
 }
 
 const exactSuspendIntendedAfter = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   acceptedExecutingAt: JournalPosition
-): boolean =>
-  records.some(
-    (record) =>
+): boolean => {
+  for (const record of journalRecordsForAttemptKind(
+    records,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorCommandIntended"
+  )) {
+    if (
       record.position > acceptedExecutingAt &&
       record.runId === plannedAttempt.runId &&
       record.event._tag === "PlannedAttemptExecutorCommandIntended" &&
       record.key === plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, record.event.ordinal) &&
       record.event.command === "Suspend" &&
       plannedTaskAttemptEquivalence(record.event.plannedAttempt, plannedAttempt)
-  )
+    ) {
+      return true
+    }
+  }
+  return false
+}
 
 type PlannedAttemptExecutorLifecycleTransitionError =
   | PlannedAttemptExecutorBeginReportContradiction
@@ -146,7 +178,7 @@ type PlannedAttemptExecutorLifecycleTransitionError =
   | PlannedAttemptExecutorTerminalReportContradiction
 
 const initialLifecycleReportError = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   observed: PlannedAttemptExecutorReport
 ):
@@ -162,7 +194,7 @@ const initialLifecycleReportError = (
 }
 
 const distinctAcceptedLifecycleReportError = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   latest: PlannedAttemptExecutorWorkReportedRecord,
   observed: PlannedAttemptExecutorReport
@@ -191,13 +223,23 @@ export const plannedAttemptExecutorLifecycleTransitionError = (
   plannedAttempt: PlannedTaskAttempt,
   observed: PlannedAttemptExecutorReport
 ): PlannedAttemptExecutorLifecycleTransitionError | undefined => {
-  const attemptRecords = Array.from(journalRecordsForAttempt(records, plannedAttempt.attemptId))
-  const latest = acceptedPlannedAttemptExecutorReportRecords(records, plannedAttempt).at(lastElementOffset)
+  const latest = lastJournalRecordForAttemptKind(
+    records,
+    plannedAttempt.attemptId,
+    "PlannedAttemptExecutorWorkReported"
+  )
   if (latest?.event._tag !== "PlannedAttemptExecutorWorkReported") {
-    return initialLifecycleReportError(attemptRecords, plannedAttempt, observed)
+    return initialLifecycleReportError(records, plannedAttempt, observed)
+  }
+  if (
+    latest.runId !== plannedAttempt.runId ||
+    latest.event.report.correlation.runId !== plannedAttempt.runId ||
+    latest.event.report.correlation.attemptId !== plannedAttempt.attemptId
+  ) {
+    return initialLifecycleReportError(records, plannedAttempt, observed)
   }
   if (samePlannedAttemptExecutorReport(latest.event.report, observed)) return undefined
-  return distinctAcceptedLifecycleReportError(attemptRecords, plannedAttempt, latest, observed)
+  return distinctAcceptedLifecycleReportError(records, plannedAttempt, latest, observed)
 }
 
 const exactReportFromUnacceptedEvidence = (
