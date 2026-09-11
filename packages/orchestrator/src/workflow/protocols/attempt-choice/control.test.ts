@@ -13,6 +13,7 @@ import {
   IntegrationTargetRef,
   PlannedTaskAttempt,
   PlannedAttemptExecutorReport,
+  type PlannedAttemptExecutorResult,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
@@ -237,11 +238,13 @@ const request = (
   subject: { observedTaskRevision: observedRevision, plannedAttempt }
 })
 
-const appendAcceptedTerminal = Effect.fn("AttemptChoiceTest.appendAcceptedTerminal")(function* () {
+const appendAcceptedTerminal = Effect.fn("AttemptChoiceTest.appendAcceptedTerminal")(function* (
+  result: PlannedAttemptExecutorResult = { _tag: "Failed" }
+) {
   const journal = yield* JournalStore
   const report = PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
     correlation: { attemptId: plannedAttempt.attemptId, runId },
-    result: { _tag: "Failed" }
+    result
   })
   const observationOrdinal = PlannedAttemptExecutorStateObservationOrdinal.make(1)
   yield* journal.append(
@@ -274,6 +277,7 @@ const appendIntegrationCutoff = Effect.fn("AttemptChoiceTest.appendIntegrationCu
     ref: IntegrationTargetRef.make("refs/heads/master")
   })
   const acceptedResult = acceptedResultFixture(GitCommitSha.make("2".repeat(40)))
+  yield* appendAcceptedTerminal({ _tag: "Accepted", acceptedResult })
   const began = yield* journal.append(
     runId,
     integrationResponsibilityBeganRecordKey(plannedAttempt.attemptId),
