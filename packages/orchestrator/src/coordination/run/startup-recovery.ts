@@ -119,7 +119,11 @@ const retireStartupTerminals = Effect.fn("StartupRecovery.retireTerminals")(func
   for (const reduction of reductions) {
     /* v8 ignore next -- @preserve inspectStartupRecovery blocks before this loop whenever a reduction is invalid, so only ValidWorkflowJournalHistory reaches retirement. */
     if (reduction._tag !== "ValidWorkflowJournalHistory") continue
-    if (journalRecordAt(reduction.runState.workflowHistory.evidence.records, lastRecordIndex)?.event._tag !== "WorkflowRunTerminated") continue
+    if (
+      journalRecordAt(reduction.runState.workflowHistory.evidence.records, lastRecordIndex)?.event._tag !==
+      "WorkflowRunTerminated"
+    )
+      continue
     const shouldAttempt =
       retirementAttempts === undefined
         ? true

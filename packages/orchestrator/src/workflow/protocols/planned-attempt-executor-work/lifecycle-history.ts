@@ -34,8 +34,7 @@ type PlannedAttemptExecutorWorkReportedRecord = JournalRecord & {
 
 const isPlannedAttemptExecutorWorkReportedRecord = (
   record: JournalRecord | undefined
-): record is PlannedAttemptExecutorWorkReportedRecord =>
-  record?.event._tag === "PlannedAttemptExecutorWorkReported"
+): record is PlannedAttemptExecutorWorkReportedRecord => record?.event._tag === "PlannedAttemptExecutorWorkReported"
 
 export const acceptedPlannedAttemptExecutorReportRecords = (
   records: JournalHistorySource,

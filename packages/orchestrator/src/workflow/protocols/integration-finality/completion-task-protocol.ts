@@ -291,8 +291,15 @@ const appendIntentIfNeeded = Effect.fn("IntegrationFinality.appendCompletionTask
 
 const latestAttempt = (records: JournalHistorySource, request: CompletionTaskRequest): number => {
   let latest = 0
-  for (const record of journalRecordsForOperationIdKind(records, request.operationId, "CompletionTaskAttemptIntended")) {
-    if (record.event._tag === "CompletionTaskAttemptIntended" && record.event.request.operationId === request.operationId) {
+  for (const record of journalRecordsForOperationIdKind(
+    records,
+    request.operationId,
+    "CompletionTaskAttemptIntended"
+  )) {
+    if (
+      record.event._tag === "CompletionTaskAttemptIntended" &&
+      record.event.request.operationId === request.operationId
+    ) {
       latest = Math.max(latest, Number(record.event.attemptOrdinal))
     }
   }
@@ -422,11 +429,7 @@ export const readCompletionCandidateAncestry = Effect.fn("IntegrationFinality.re
 export const nextCompletionAuthorizationPurpose = Effect.fn("IntegrationFinality.nextCompletionAuthorizationPurpose")(
   function* (request: CompletionTaskRequest, attemptOrdinal: CompletionTaskRequestOrdinal) {
     const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
-    const cycle = journalCompletionReadCycle(records, {
-      attemptOrdinal,
-      purpose: "Authorization",
-      request
-    })
+    const cycle = journalCompletionReadCycle(records, { attemptOrdinal, purpose: "Authorization", request })
     const unresolved = cycle.latestUnresolvedIntent?.event
     if (
       unresolved?._tag === "TaskTrackerReadIntentRecorded" &&

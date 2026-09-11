@@ -43,17 +43,17 @@ export const exactTargetLineageRecord = (
   const runId: RunId = request.plannedAttempt.runId
   const observationMatches = (record: JournalRecord | undefined): record is TargetLineageObservationRecord =>
     record !== undefined &&
-      record.event._tag === "TargetLineageObserved" &&
-      record.position === request.targetLineageObservedAt &&
-      record.runId === runId &&
-      record.key === outcomeRecordKey(record.event.operationId) &&
-      (bounds.afterPosition === undefined || record.position > bounds.afterPosition) &&
-      (bounds.beforePosition === undefined || record.position < bounds.beforePosition) &&
-      record.event.plannedAttempt.runId === runId &&
-      record.event.plannedAttempt.attemptId === request.plannedAttempt.attemptId &&
-      record.event.observation.plannedBaseSha === request.plannedAttempt.baseSha &&
-      record.event.observation.targetHeadSha === request.expectedTargetHead &&
-      record.event.observation.plannedBaseIsAncestorOfTargetHead
+    record.event._tag === "TargetLineageObserved" &&
+    record.position === request.targetLineageObservedAt &&
+    record.runId === runId &&
+    record.key === outcomeRecordKey(record.event.operationId) &&
+    (bounds.afterPosition === undefined || record.position > bounds.afterPosition) &&
+    (bounds.beforePosition === undefined || record.position < bounds.beforePosition) &&
+    record.event.plannedAttempt.runId === runId &&
+    record.event.plannedAttempt.attemptId === request.plannedAttempt.attemptId &&
+    record.event.observation.plannedBaseSha === request.plannedAttempt.baseSha &&
+    record.event.observation.targetHeadSha === request.expectedTargetHead &&
+    record.event.observation.plannedBaseIsAncestorOfTargetHead
   const observations = isJournalRecordEvidence(records)
     ? [journalRecordByPosition(records, request.targetLineageObservedAt)].filter(observationMatches)
     : records.filter(observationMatches)
@@ -69,7 +69,9 @@ export const exactTargetLineageRecord = (
     }
   }
   if (sameOperationObservationCount !== 1) return undefined
-  const indexedIntent = isJournalRecordEvidence(records) ? journalRecordByKey(records, intentRecordKey(operationId)) : undefined
+  const indexedIntent = isJournalRecordEvidence(records)
+    ? journalRecordByKey(records, intentRecordKey(operationId))
+    : undefined
   const intents = isJournalRecordEvidence(records)
     ? (indexedIntent === undefined ? [] : [indexedIntent]).filter(
         (record): record is TargetLineageIntentRecord =>
@@ -86,19 +88,19 @@ export const exactTargetLineageRecord = (
           record.event.operation.integrationTarget.ref === request.integrationTarget.ref
       )
     : records.filter(
-    (record): record is TargetLineageIntentRecord =>
-      record.event._tag === "GitReadIntentRecorded" &&
-      record.runId === runId &&
-      record.key === intentRecordKey(operationId) &&
-      record.position < observation.position &&
-      (bounds.afterPosition === undefined || record.position > bounds.afterPosition) &&
-      record.event.operation._tag === "ReadTargetLineage" &&
-      record.event.operation.operationId === operationId &&
-      record.event.operation.plannedAttempt.runId === runId &&
-      record.event.operation.plannedAttempt.attemptId === request.plannedAttempt.attemptId &&
-      record.event.operation.integrationTarget.repository === request.integrationTarget.repository &&
-      record.event.operation.integrationTarget.ref === request.integrationTarget.ref
-  )
+        (record): record is TargetLineageIntentRecord =>
+          record.event._tag === "GitReadIntentRecorded" &&
+          record.runId === runId &&
+          record.key === intentRecordKey(operationId) &&
+          record.position < observation.position &&
+          (bounds.afterPosition === undefined || record.position > bounds.afterPosition) &&
+          record.event.operation._tag === "ReadTargetLineage" &&
+          record.event.operation.operationId === operationId &&
+          record.event.operation.plannedAttempt.runId === runId &&
+          record.event.operation.plannedAttempt.attemptId === request.plannedAttempt.attemptId &&
+          record.event.operation.integrationTarget.repository === request.integrationTarget.repository &&
+          record.event.operation.integrationTarget.ref === request.integrationTarget.ref
+      )
   if (intents.length !== 1) return undefined
   const intent = intents[0]
   if (intent === undefined) return undefined

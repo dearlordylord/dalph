@@ -1,6 +1,13 @@
 import { NodeServices } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { AcceptedResult, AcceptedResultEvidenceManifest, GitCommitSha, makeTaskWorkSpecification, TaskId, TaskRevision } from "@dalph/contracts"
+import {
+  AcceptedResult,
+  AcceptedResultEvidenceManifest,
+  GitCommitSha,
+  makeTaskWorkSpecification,
+  TaskId,
+  TaskRevision
+} from "@dalph/contracts"
 import { Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
@@ -13,10 +20,7 @@ import {
   JournalStorageUnavailable
 } from "../../../workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
-import {
-  completionTaskIntentRecordKey,
-  intentRecordKey
-} from "../../../workflow-journal/record-key.js"
+import { completionTaskIntentRecordKey, intentRecordKey } from "../../../workflow-journal/record-key.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
 import {
@@ -237,10 +241,7 @@ const completionEvidenceRequest = (
     return { history, request: history.promoted.completionRequest }
   })
 
-const journalLayer = (
-  records: Ref.Ref<ReadonlyArray<JournalRecord>>,
-  chronology: Ref.Ref<ReadonlyArray<string>>
-) =>
+const journalLayer = (records: Ref.Ref<ReadonlyArray<JournalRecord>>, chronology: Ref.Ref<ReadonlyArray<string>>) =>
   Layer.merge(
     Layer.succeed(
       InRunJournal,
@@ -251,12 +252,7 @@ const journalLayer = (
             return yield* Ref.modify(records, (current) => {
               const existing = current.find((record) => record.key === key)
               if (existing !== undefined) return [Effect.succeed(existing), current] as const
-              const appended: JournalRecord = {
-                event,
-                key,
-                position: JournalPosition.make(current.length + 1),
-                runId
-              }
+              const appended: JournalRecord = { event, key, position: JournalPosition.make(current.length + 1), runId }
               return [Effect.succeed(appended), [...current, appended]] as const
             }).pipe(Effect.flatten)
           }),
@@ -346,9 +342,7 @@ const readyAuthorizationFixture = (
     ordinal,
     result.focusedFacts.currentClaim,
     result.focusedFacts.lifecycle
-  ).pipe(
-    Effect.map(() => CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization: result }))
-  )
+  ).pipe(Effect.map(() => CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization: result })))
 
 const nonExactCurrentClaimExamples: ReadonlyArray<{
   readonly claim: CompletionClaimObservation
@@ -773,9 +767,7 @@ const protocolHarness = (
             currentRequest.claim,
             "Open"
           )
-          return CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({
-            authorization: currentAuthorization
-          })
+          return CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization: currentAuthorization })
         })
       ).pipe(Effect.provide(journalLayer(records, chronology)), Effect.result)
     const firstOutcome = yield* run(request)
@@ -1675,16 +1667,8 @@ it.effect("restart honors the unresolved call intent before sending the next com
     const run = runCompletionTaskProtocol(boundary, request, fixture.target, (ordinal) =>
       Effect.gen(function* () {
         yield* Ref.update(chronology, (current) => [...current, "Authorization.read"])
-        const currentAuthorization = yield* appendAuthorizationFixture(
-          records,
-          request,
-          ordinal,
-          request.claim,
-          "Open"
-        )
-        return CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({
-          authorization: currentAuthorization
-        })
+        const currentAuthorization = yield* appendAuthorizationFixture(records, request, ordinal, request.claim, "Open")
+        return CompletionTaskAttemptAuthorization.cases.ReadyToComplete.make({ authorization: currentAuthorization })
       })
     ).pipe(Effect.provide(journalLayer(records, chronology)), Effect.result)
     expect((yield* run)._tag).toBe("Failure")

@@ -92,8 +92,7 @@ export const activeWorkAuthorityRefreshSubjectsForRunState = (
   const acceptedHistory = runState.workflowHistory.evidence
   return activeWorkAuthorityRefreshSubjectsFor(
     journalRetainedExecutorResponsibilitySubjects(acceptedHistory, runState.runId).flatMap(({ plannedAttempt }) => {
-      return currentAcceptedPlannedAttemptExecutorLifecycleFor(acceptedHistory, plannedAttempt)
-        ._tag === "Executing"
+      return currentAcceptedPlannedAttemptExecutorLifecycleFor(acceptedHistory, plannedAttempt)._tag === "Executing"
         ? [{ runId: plannedAttempt.runId, attemptId: plannedAttempt.attemptId }]
         : []
     })

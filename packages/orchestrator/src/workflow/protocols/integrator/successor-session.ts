@@ -92,9 +92,7 @@ const targetLineageReadIntentFor = (
 ): JournalRecord | undefined => {
   if (isJournalRecordEvidence(records)) {
     const record = journalRecordByKey(records, intentRecordKey(operationId))
-    return record !== undefined &&
-      record.position > input.directionAppliedAt &&
-      record.position < observationPosition
+    return record !== undefined && record.position > input.directionAppliedAt && record.position < observationPosition
       ? record
       : undefined
   }
@@ -265,7 +263,10 @@ const existingSuccessorFor = (
 ): Iterable<IntegratorSuccessorSessionFixedRecord> => ({
   *[Symbol.iterator]() {
     for (const record of journalRecordsForIntegratorSession(records, predecessor.sessionId)) {
-      if (isIntegratorSuccessorSessionFixedRecord(record) && record.event.predecessor.sessionId === predecessor.sessionId) {
+      if (
+        isIntegratorSuccessorSessionFixedRecord(record) &&
+        record.event.predecessor.sessionId === predecessor.sessionId
+      ) {
         yield record
       }
     }
@@ -350,9 +351,7 @@ const validateSuccessorUniqueness = (
     return { _tag: "Invalid", detail: "Journal history contains multiple FullRerun successors for one predecessor" }
   }
   if (existing !== undefined) return validateExistingSuccessor(existing, input, successor, expectedKey)
-  const identityCollision = isJournalRecordEvidence(records)
-    ? false
-    : successorIdentityCollision(records, successor)
+  const identityCollision = isJournalRecordEvidence(records) ? false : successorIdentityCollision(records, successor)
   return identityCollision
     ? { _tag: "Invalid", detail: "FullRerun successor reuses an existing session or resource identity" }
     : { _tag: "Available" }

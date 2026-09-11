@@ -97,10 +97,7 @@ const retryRelationFor = (
   return authorization
 }
 
-const validateHistory = (
-  records: JournalHistorySource,
-  input: ChangedHeadRetryQuarantineInput
-): string | undefined => {
+const validateHistory = (records: JournalHistorySource, input: ChangedHeadRetryQuarantineInput): string | undefined => {
   const relation = retryRelationFor(records, input)
   if (typeof relation === "string") return relation
   return relation.lineage.observation.event.observation.targetHeadSha === relation.session.expectedTargetHead

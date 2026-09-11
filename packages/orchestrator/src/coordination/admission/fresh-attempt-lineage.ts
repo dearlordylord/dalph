@@ -176,10 +176,7 @@ const taskWasEligibleAt = (
 ): boolean => {
   if (outcome.event._tag !== "TaskTrackerFactsObserved") return false
   const observation = outcome.event.observation
-  if (
-    observation._tag !== "CompleteTaskTrackerFacts" &&
-    observation._tag !== "UnchangedTaskTrackerFactsReconfirmed"
-  ) {
+  if (observation._tag !== "CompleteTaskTrackerFacts" && observation._tag !== "UnchangedTaskTrackerFactsReconfirmed") {
     return false
   }
   if (isJournalRecordEvidence(records)) {
@@ -206,10 +203,7 @@ const taskWasEligibleAt = (
       : []),
     observation
   ]
-  const reconstructed = reconstructedTaskGraphFor(
-    { taskTrackerFacts },
-    observation.target
-  )
+  const reconstructed = reconstructedTaskGraphFor({ taskTrackerFacts }, observation.target)
   return Option.isSome(reconstructed) && reconstructed.value.eligibleTasks().some(({ id }) => id === taskId)
 }
 
@@ -335,26 +329,26 @@ export const acceptedFreshAttemptLineage = (
     plannedAttempt.attemptId,
     "TaskWorktreeReconciliationIntended"
   )) {
-      if (
-        intent.event._tag !== "TaskWorktreeReconciliationIntended" ||
-        !plannedTaskAttemptEquivalence(intent.event.operation.plannedAttempt, plannedAttempt)
-      ) {
-        continue
-      }
-      const operationId = intent.event.operation.operationId
-      const outcome = journalRecordByKey(runRecords, outcomeRecordKey(operationId))
-      if (
-        outcome?.event._tag !== "TaskWorktreeReady" ||
-        outcome.runId !== plannedAttempt.runId ||
-        intent.position >= outcome.position ||
-        outcome.event.operationId !== operationId ||
-        !plannedAttemptWorktreeObservationMatchesPlan(outcome.event.proof, plannedAttempt) ||
-        !causalPredecessors(runRecords, intent.event.operation).has(plan.planOperationId)
-      ) {
-        continue
-      }
-      worktreeCount += 1
-      worktree ??= { intent, operation: intent.event.operation, outcome }
+    if (
+      intent.event._tag !== "TaskWorktreeReconciliationIntended" ||
+      !plannedTaskAttemptEquivalence(intent.event.operation.plannedAttempt, plannedAttempt)
+    ) {
+      continue
+    }
+    const operationId = intent.event.operation.operationId
+    const outcome = journalRecordByKey(runRecords, outcomeRecordKey(operationId))
+    if (
+      outcome?.event._tag !== "TaskWorktreeReady" ||
+      outcome.runId !== plannedAttempt.runId ||
+      intent.position >= outcome.position ||
+      outcome.event.operationId !== operationId ||
+      !plannedAttemptWorktreeObservationMatchesPlan(outcome.event.proof, plannedAttempt) ||
+      !causalPredecessors(runRecords, intent.event.operation).has(plan.planOperationId)
+    ) {
+      continue
+    }
+    worktreeCount += 1
+    worktree ??= { intent, operation: intent.event.operation, outcome }
   }
   return worktreeCount !== 1 || worktree === undefined
     ? undefined

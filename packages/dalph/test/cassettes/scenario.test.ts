@@ -2475,10 +2475,7 @@ it.effect("delegates changed H after a cleared blocker without reusing M or crea
       deriveIntegrationFrontier(blockedHistory.runState, {
         currentTrackerTaskIds: new Set([TaskId.make("A"), TaskId.make("B"), TaskId.make("C")]),
         heldResponsibilities: [
-          IntegrationResponsibilityIdentity.make({
-            queuedAt: started.queuedAt,
-            runId: started.plannedAttempt.runId
-          })
+          IntegrationResponsibilityIdentity.make({ queuedAt: started.queuedAt, runId: started.plannedAttempt.runId })
         ],
         integrationTarget: Option.some(
           IntegrationTarget.make({

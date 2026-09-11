@@ -83,23 +83,25 @@ const exactPredecessorSession = (
     startedAt: predecessor.startedAt
   })
   const indexed = isJournalRecordEvidence(records) ? journalRecordByKey(records, key) : undefined
-  const matches = isJournalRecordEvidence(records) ? (indexed === undefined ? [] : [indexed]).filter(
-    (record): record is PredecessorSessionRecord =>
-      record.event._tag === "IntegratorSessionFixed" &&
-      record.key === key &&
-      record.runId === runIdFor(predecessor) &&
-      correlationEquivalence(record.event.correlation, predecessor) &&
-      record.position > predecessor.targetLineageObservedAt &&
-      record.position < beforePosition
-  ) : records.filter(
-    (record): record is PredecessorSessionRecord =>
-      record.event._tag === "IntegratorSessionFixed" &&
-      record.key === key &&
-      record.runId === runIdFor(predecessor) &&
-      correlationEquivalence(record.event.correlation, predecessor) &&
-      record.position > predecessor.targetLineageObservedAt &&
-      record.position < beforePosition
-  )
+  const matches = isJournalRecordEvidence(records)
+    ? (indexed === undefined ? [] : [indexed]).filter(
+        (record): record is PredecessorSessionRecord =>
+          record.event._tag === "IntegratorSessionFixed" &&
+          record.key === key &&
+          record.runId === runIdFor(predecessor) &&
+          correlationEquivalence(record.event.correlation, predecessor) &&
+          record.position > predecessor.targetLineageObservedAt &&
+          record.position < beforePosition
+      )
+    : records.filter(
+        (record): record is PredecessorSessionRecord =>
+          record.event._tag === "IntegratorSessionFixed" &&
+          record.key === key &&
+          record.runId === runIdFor(predecessor) &&
+          correlationEquivalence(record.event.correlation, predecessor) &&
+          record.position > predecessor.targetLineageObservedAt &&
+          record.position < beforePosition
+      )
   return matches.length === 1 ? matches[0] : undefined
 }
 
