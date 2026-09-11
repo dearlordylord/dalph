@@ -2,7 +2,6 @@
 import { Option, Schema } from "effect"
 import { type TaskId } from "@dalph/contracts"
 import { OperationId } from "../../workflow/identity.js"
-import { type TrackerTask } from "../../authorities/task-tracker/task.js"
 import { type TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type {
   CompleteTaskTrackerFactsObserved,
@@ -12,22 +11,8 @@ import { TaskTrackerFactsObservedEvent } from "../../workflow/task-tracker-facts
 import { TaskWorkSpecification } from "@dalph/contracts"
 import { reconfirmationMatchesPriorFullObservation } from "../../workflow/task-tracker-facts/reconfirmation.js"
 import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
-import { projectTrackerSnapshot, type TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
-
-const graphTasksFrom = (observation: CompleteTaskTrackerFactsObserved): ReadonlyArray<TrackerTask> => {
-  const [, lifecycles, prerequisites, groupings] = observation.factFamilies
-  const lifecycleByTaskId = new Map(lifecycles.lifecycles.map(({ lifecycle, taskId }) => [taskId, lifecycle]))
-  const prerequisitesByTaskId = new Map(
-    prerequisites.prerequisites.map(({ prerequisiteTaskIds, taskId }) => [taskId, prerequisiteTaskIds])
-  )
-  const parentByTaskId = new Map(groupings.groupings.map(({ parentTaskId, taskId }) => [taskId, parentTaskId]))
-  return observation.factFamilies[0].taskIds.map((id) => ({
-    id,
-    lifecycle: Option.getOrThrow(Option.fromUndefinedOr(lifecycleByTaskId.get(id))),
-    parentTaskId: Option.getOrThrow(Option.fromUndefinedOr(parentByTaskId.get(id))),
-    prerequisiteIds: Option.getOrThrow(Option.fromUndefinedOr(prerequisitesByTaskId.get(id)))
-  }))
-}
+import { type TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
+import { projectCompleteTaskGraph } from "../../workflow/task-tracker-facts/graph-projection.js"
 
 type GraphFactsObservation = Extract<
   TaskTrackerFactsObservation,
@@ -89,12 +74,7 @@ export const reconstructedTaskGraphFor = (
       : fullObservationForReconfirmation(knowledge.taskTrackerFacts, latest)
   const result = (() => {
     if (observation?._tag !== "CompleteTaskTrackerFacts") return Option.none<TaskDagSnapshot>()
-    const projected = projectTrackerSnapshot({
-      revision: observation.factFamilies[0].contentIdentity,
-      ...(observation.rootTaskId === undefined ? {} : { rootTaskId: observation.rootTaskId }),
-      tasks: graphTasksFrom(observation)
-    })
-    return projected._tag === "Valid" ? Option.some(projected.snapshot) : Option.none<TaskDagSnapshot>()
+    return projectCompleteTaskGraph(observation)
   })()
   const cache = cachedByTarget ?? new Map<string, Option.Option<TaskDagSnapshot>>()
   cache.set(targetKey, result)

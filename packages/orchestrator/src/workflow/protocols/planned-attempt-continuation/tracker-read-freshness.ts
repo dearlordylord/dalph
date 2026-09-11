@@ -14,6 +14,7 @@ import {
 import type { WorkflowOperation } from "../../registry/operation.js"
 import { recordedTaskAttemptPlans } from "../task-attempt-planning/journal-evidence.js"
 import { currentAcceptedPlannedAttemptExecutorLifecycleFor } from "../planned-attempt-executor-work/evidence.js"
+import { continuationReadNamesExactPlan } from "./plan-correlation.js"
 
 /** Tracker reads whose facts can authorize a resumed planned attempt. */
 export type ContinuationTrackerReadOperation =
@@ -170,33 +171,9 @@ export const continuationTrackerReadHasExactPlanPredecessor = (
   operation: ContinuationTrackerReadOperation,
   plannedAttempt: PlannedTaskAttempt
 ): boolean => {
-  if (
-    operation._tag === "ReadTrackerGraph" &&
-    operation.cause._tag !== "AttemptContinuation" &&
-    operation.cause._tag !== "ExecutingWorkAuthorityCheck"
-  ) {
-    return false
-  }
   const plans = recordedTaskAttemptPlans(records)
   const namedPlans = plans.filter(({ operationId }) => operation.predecessorOperationIds.includes(operationId))
-  if (operation._tag === "ReadTrackerGraph" && operation.cause._tag === "ExecutingWorkAuthorityCheck") {
-    const coveredTaskIds = [...operation.readShape.explicitlyCoveredTaskIds].toSorted()
-    const namedTaskIds = [...new Set(namedPlans.map(({ plannedAttempt }) => plannedAttempt.taskId))].toSorted()
-    return (
-      namedPlans.some(({ plannedAttempt: candidate }) => plannedTaskAttemptEquivalence(candidate, plannedAttempt)) &&
-      coveredTaskIds.length === namedTaskIds.length &&
-      coveredTaskIds.every((taskId, index) => taskId === namedTaskIds[index]) &&
-      namedPlans.every(({ plannedAttempt: candidate }) => candidate.runId === plannedAttempt.runId)
-    )
-  }
-  if (namedPlans.length !== 1) return false
-  const namedPlan = namedPlans[0]
-  return (
-    namedPlan !== undefined &&
-    namedPlan.plannedAttempt.runId === plannedAttempt.runId &&
-    namedPlan.plannedAttempt.attemptId === plannedAttempt.attemptId &&
-    plannedTaskAttemptEquivalence(namedPlan.plannedAttempt, plannedAttempt)
-  )
+  return continuationReadNamesExactPlan(operation, namedPlans, plannedAttempt)
 }
 
 /** Exact durable outcome key for one tracker read operation. */
