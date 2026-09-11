@@ -1,4 +1,5 @@
 import type { JournalPosition } from "../../workflow-journal/identity.js"
+import type { JournalHistorySource } from "../../workflow-journal/record-evidence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import { HashMap, Option } from "effect"
@@ -121,7 +122,7 @@ const previousRunIsConclusive = (
 
 const integratorRunAuthorizationIssue = (
   event: IntegratorRunStarted,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   record: JournalRecord
 ): string | undefined =>
   event.run.ordinal === 1
@@ -155,7 +156,7 @@ const invalidIntegratorRunStarted = (
   record: JournalRecord,
   event: IntegratorRunStarted,
   indexes: IntegratorRunHistoryValidationIndexes,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): IntegratorRunHistoryValidation<IntegratorRunHistoryValidationIndexes> => {
   const key = integratorRunKey(event.run)
   const existing = mapGet(indexes.integratorRunStarted, key)
@@ -318,7 +319,7 @@ const invalidIntegratorRunCandidateGitObservation = (
 export const validateIntegratorRunHistoryEvent = <Indexes extends IntegratorRunHistoryValidationIndexes>(
   record: JournalRecord,
   indexes: Indexes,
-  records: ReadonlyArray<JournalRecord> = [record]
+  records: JournalHistorySource = [record]
 ):
   | { readonly handled: true; readonly issue: string | undefined; readonly indexes: Indexes }
   | { readonly handled: false; readonly indexes: Indexes } => {

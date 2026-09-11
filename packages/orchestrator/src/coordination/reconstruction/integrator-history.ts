@@ -2,6 +2,10 @@
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { HashMap, Option } from "effect"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
+import {
+  journalRecordByPosition,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { OperationId } from "../../workflow/identity.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
@@ -383,7 +387,7 @@ const invalidIntegratorSuccessorSession = (
   record: JournalRecord,
   event: IntegratorSuccessorSessionFixed,
   indexes: IntegratorHistoryIndexes,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ): IntegratorHistoryValidation => {
   const predecessorPosition = mapGet(indexes.integratorSessionsBySessionId, event.predecessor.sessionId)
   const predecessor =
@@ -395,8 +399,8 @@ const invalidIntegratorSuccessorSession = (
   const existingSessionIdentity =
     mapGet(indexes.integratorSessionsBySessionId, event.successor.sessionId) ??
     mapGet(indexes.integratorSessionsByCandidateResource, event.successor.candidateResource)
-  const quarantine = records.find((candidate) => candidate.position === event.quarantineAt)
-  const direction = records.find((candidate) => candidate.position === event.directionAppliedAt)
+  const quarantine = journalRecordByPosition(records, event.quarantineAt)
+  const direction = journalRecordByPosition(records, event.directionAppliedAt)
   const expectedKey = integratorSuccessorSessionFixedRecordKey(
     event.predecessor,
     event.quarantineAt,
@@ -452,7 +456,7 @@ type IntegratorHistoryValidationResult<Indexes extends IntegratorHistoryIndexes>
 const validateNonRunIntegratorHistoryEvent = <Indexes extends IntegratorHistoryIndexes>(
   record: JournalRecord,
   indexes: Indexes,
-  records: ReadonlyArray<JournalRecord> = [record]
+  records: JournalHistorySource = [record]
 ): IntegratorHistoryValidationResult<Indexes> => {
   const event = record.event
   if (event._tag === "GitReadIntentRecorded" && event.operation._tag === "ReadTargetLineage") {
@@ -493,7 +497,7 @@ const validateNonRunIntegratorHistoryEvent = <Indexes extends IntegratorHistoryI
 export const validateIntegratorHistoryEvent = <Indexes extends IntegratorHistoryIndexes>(
   record: JournalRecord,
   indexes: Indexes,
-  records: ReadonlyArray<JournalRecord> = [record]
+  records: JournalHistorySource = [record]
 ): IntegratorHistoryValidationResult<Indexes> => {
   const runHistory = validateIntegratorRunHistoryEvent(record, indexes, records)
   return runHistory.handled
