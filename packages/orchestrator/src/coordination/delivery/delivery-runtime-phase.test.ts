@@ -10,7 +10,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { Effect } from "effect"
+import { HashSet, Effect } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { initialRunPolicyRevision, RunControlPolicy } from "../../control/policy.js"
@@ -66,7 +66,7 @@ const independentAttempt = PlannedTaskAttempt.make({
 const proposalFor = (
   transition: RunnableFrontierTransition,
   attempt: PlannedTaskAttempt,
-  acceptedOperationIds: ReadonlySet<OperationId> = new Set()
+  acceptedOperationIds: HashSet.HashSet<OperationId> = HashSet.empty()
 ): DeliveryActionProposal => {
   const proposal = deliveryProposalsOf({
     acceptedOperationIds,
@@ -151,7 +151,7 @@ it.effect("before G2 admits a fresh active-attempt authority read and defers ind
       plannedAttempt: independentAttempt
     })
     const jointlyDerived = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: [],
       responsibilities: [
         { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(1), plannedAttempt },
@@ -189,7 +189,7 @@ it.effect("before G2 admits replay of an accepted active-attempt authority read"
     const acceptedActiveRead = proposalFor(
       activeWorktreeTransition,
       plannedAttempt,
-      new Set([worktreeOperation.operationId])
+      HashSet.make(worktreeOperation.operationId)
     )
 
     const phased = evaluationForPhase(
@@ -233,7 +233,7 @@ it.effect("after G2 suppresses captured A suspension and preserves independent B
       plannedAttempt: independentAttempt
     })
     const jointlyDerived = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: [],
       responsibilities: [
         { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(1), plannedAttempt },
@@ -335,7 +335,7 @@ it.effect("after G2 preserves an independent recovered tracker read with no plan
       taskId: independentTaskId
     })
     const [independentRead] = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: [],
       runId,
       transitions: [transition]

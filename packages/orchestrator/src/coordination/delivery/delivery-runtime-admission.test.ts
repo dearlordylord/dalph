@@ -16,7 +16,7 @@ import {
   makeTaskWorkSpecification,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Cause, Effect, Exit, Layer, Option, Result } from "effect"
+import { HashSet, Cause, Effect, Exit, Layer, Option, Result } from "effect"
 import { expect } from "vitest"
 import { validSnapshot } from "../../../test/task-dag.js"
 import { makeExecutingAttemptHistory } from "../../../test/support/executing-attempt-history.js"
@@ -1263,7 +1263,7 @@ it.effect("does not let uncorrelated replacement work reuse the exact retained a
         task: replacementTask
       })
       const replacement = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [taskACommitment])),
         runId,
         transitions: [transition]
@@ -1296,7 +1296,7 @@ it.effect("keeps proof-based Stop behind an already admitted continuation until 
         taskWorkPosition: "None"
       })
       const proposals = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: [],
         runId,
         transitions: [continuationTransition, stopTransition]
@@ -1723,7 +1723,7 @@ it.effect("reconstructs a commitment at capacity and lets only that task continu
         taskId
       })
       const continuation = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [taskACommitment])),
         runId,
         transitions: [transition]
@@ -1886,7 +1886,7 @@ it.effect("retains a locally accepted exact attempt through stale commitment syn
         task
       })
       const proposal = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [taskACommitment])),
         runId,
         transitions: [transition]
@@ -1933,7 +1933,7 @@ it.effect("releases a local handoff when a newer accepted basis no longer requir
         task
       })
       const proposal = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [taskACommitment])),
         runId,
         transitions: [transition]
@@ -1989,7 +1989,7 @@ it.effect("rejects a hand-authored continuation even when its task has a live co
         task
       })
       const authorized = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [taskACommitment])),
         runId,
         transitions: [transition]
@@ -2040,7 +2040,7 @@ it.effect("rejects the same task and claim OperationId when the commitment belon
         otherRunId
       )
       const proposal = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [otherRunCommitment])),
         runId: otherRunId,
         transitions: [transition]
@@ -2073,7 +2073,7 @@ it.effect("rejects a handoff from a different claim operation while retaining th
       })
       const differentCommitment = makeFreshTaskCommitmentForTest(taskId, step.claimOperationId, runId)
       const proposal = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [differentCommitment])),
         runId,
         transitions: [transition]
@@ -2143,7 +2143,7 @@ it.effect("rejects a same-Run foreign attempt without replacing the exact fresh 
         task
       })
       const proposal = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [taskACommitment])),
         runId,
         transitions: [transition]
@@ -2184,7 +2184,7 @@ it.effect("rejects a structurally copied responsibility acceptance before replac
         task
       })
       const proposal = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [taskACommitment])),
         runId,
         transitions: [transition]
@@ -2223,7 +2223,7 @@ it.effect("rejects a conflicting accepted exact attempt without discarding the l
         task
       })
       const proposal = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [taskACommitment])),
         runId,
         transitions: [transition]
@@ -3061,7 +3061,7 @@ it.effect("rejects a local fresh handoff when a different commitment is publishe
         task
       })
       const proposal = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [taskACommitment])),
         runId,
         transitions: [transition]
@@ -3110,7 +3110,7 @@ it.effect("rejects a local handoff when the accepted exact attempt differs", () 
         task
       })
       const proposal = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [taskACommitment])),
         runId,
         transitions: [transition]

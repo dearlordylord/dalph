@@ -16,7 +16,7 @@ import {
   plannedAttemptExecutorCorrelation,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { Cause, Deferred, Effect, Fiber, Layer, Option, Ref, Stream } from "effect"
+import { HashSet, Cause, Deferred, Effect, Fiber, Layer, Option, Ref, Stream } from "effect"
 import { expect } from "vitest"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { validSnapshot } from "../../../test/task-dag.js"
@@ -457,7 +457,7 @@ const nextAttemptProposal = () => {
     plannedAttempt: nextAttempt
   })
   const proposals = deliveryProposalsOf({
-    acceptedOperationIds: new Set(),
+    acceptedOperationIds: HashSet.empty(),
     fresh: [],
     runId,
     transitions: [transition]

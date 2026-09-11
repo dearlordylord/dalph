@@ -24,6 +24,7 @@ import type {
   PlannedAttemptExecutorStateObservationOrdinal
 } from "./events.js"
 import {
+  journalHasAttemptKindRecords,
   journalRecordsForAttempt,
   journalRecordsOfKind,
   lastJournalRecordForAttemptKind,
@@ -324,10 +325,19 @@ const deriveLatestIndexedExecutorEvidence = (
   after?: JournalPosition
 ): PlannedAttemptExecutorEvidence | undefined => {
   const accepted = indexedEvidenceCandidate(records, plannedAttempt, "PlannedAttemptExecutorWorkReported", after)
+  const observedKinds = [
+    "PlannedAttemptExecutorCommandResponseObserved",
+    "PlannedAttemptExecutorCommandProjectionObserved",
+    "PlannedAttemptExecutorStateObserved"
+  ] as const
+  if (
+    accepted === undefined &&
+    observedKinds.every((kind) => !journalHasAttemptKindRecords(records, plannedAttempt.attemptId, kind))
+  ) {
+    return undefined
+  }
   const observedCandidates = [
-    indexedEvidenceCandidate(records, plannedAttempt, "PlannedAttemptExecutorCommandResponseObserved", after),
-    indexedEvidenceCandidate(records, plannedAttempt, "PlannedAttemptExecutorCommandProjectionObserved", after),
-    indexedEvidenceCandidate(records, plannedAttempt, "PlannedAttemptExecutorStateObserved", after)
+    ...observedKinds.map((kind) => indexedEvidenceCandidate(records, plannedAttempt, kind, after))
   ].filter((candidate): candidate is PlannedAttemptExecutorEvidence => candidate !== undefined)
   const observed = observedCandidates.toSorted((left, right) => left.observedAt - right.observedAt).at(lastArrayElement)
   const latestExact = [accepted, ...observedCandidates]

@@ -22,7 +22,7 @@ import type {
   DeliveryStatusTrackerFactWait as PublicDeliveryStatusTrackerFactWait
 } from "@dalph/orchestrator"
 import { it } from "@effect/vitest"
-import { Context, Effect, Ref, Schema, Stream, SubscriptionRef } from "effect"
+import { HashSet, Context, Effect, Ref, Schema, Stream, SubscriptionRef } from "effect"
 import { expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import {
@@ -2554,10 +2554,10 @@ it("orders all public proposal route and admission families deterministically", 
   }
   const contributions = deliveryProposalsOf({
     acceptedAt: JournalPosition.make(5),
-    acceptedOperationIds: new Set([acceptedClaimOperationId, acceptedLineageOperation.operationId]),
+    acceptedOperationIds: HashSet.make(acceptedClaimOperationId, acceptedLineageOperation.operationId),
     fresh: [freshStartDecision, freshPlanDecision, freshAttemptPlanDecision],
     integrationResponsibilities: [started],
-    pendingReadOperationIds: new Set([recoveredLineageOperation.operationId]),
+    pendingReadOperationIds: HashSet.make(recoveredLineageOperation.operationId),
     runId: fixture.runId,
     transitions: [
       freshStart,

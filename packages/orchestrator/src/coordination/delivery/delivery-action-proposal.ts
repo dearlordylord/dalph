@@ -2,6 +2,7 @@
 import { plannedTaskAttemptEquivalence, TaskId } from "@dalph/contracts"
 import type { IntegrationTarget, PlannedAttemptExecutorCorrelation, PlannedTaskAttempt, RunId } from "@dalph/contracts"
 import { Match, Result, Schema } from "effect"
+import type { HashSet } from "effect"
 import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -742,10 +743,10 @@ export const freshContinuationDecisionsOf = (
 
 export interface DeliveryProposalsInput {
   readonly acceptedAt?: JournalPosition | null
-  readonly acceptedOperationIds: ReadonlySet<OperationId>
+  readonly acceptedOperationIds: HashSet.HashSet<OperationId>
   readonly fresh: ReadonlyArray<FreshContinuationDecision>
   readonly integrationResponsibilities?: ReadonlyArray<IntegrationResponsibility>
-  readonly pendingReadOperationIds?: ReadonlySet<OperationId>
+  readonly pendingReadOperationIds?: HashSet.HashSet<OperationId>
   readonly responsibilities?: ReadonlyArray<WorkflowResponsibilityEntry>
   readonly runId: RunId
   readonly safeContinuationRevalidations?: ReadonlyArray<SafeContinuationRevalidationEligibility>

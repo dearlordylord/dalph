@@ -1,5 +1,5 @@
 import type { RunId } from "@dalph/contracts"
-import { HashMap, Option } from "effect"
+import { HashMap, HashSet, Option } from "effect"
 import type { JournalPosition } from "./identity.js"
 import type { JournalRecord } from "./store.js"
 
@@ -50,12 +50,12 @@ export const appendWorkflowFinalityPremiseChanges = (
   )
 }
 
-const observers = new Set<(event: "PositionLookup") => void>()
+let observers = HashSet.empty<(event: "PositionLookup") => void>()
 /** Test-only deterministic operation observation, excluded from the production barrel. */
 export const observeWorkflowFinalityPremiseChangeLookup = (observer: (event: "PositionLookup") => void) => {
-  observers.add(observer)
+  observers = HashSet.add(observers, observer)
   return () => {
-    observers.delete(observer)
+    observers = HashSet.remove(observers, observer)
   }
 }
 const positionAt = (timeline: PositionTimeline, offset: number): JournalPosition | undefined => {

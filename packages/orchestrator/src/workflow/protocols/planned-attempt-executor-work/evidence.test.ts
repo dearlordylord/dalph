@@ -14,6 +14,9 @@ import {
 } from "@dalph/contracts"
 import { Effect, Exit } from "effect"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
+import { observeJournalRecordSequenceOperations } from "../../../workflow-journal/record-sequence.js"
+import { describeJournalEvent } from "../../registry/event-descriptor.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   PlannedAttemptExecutorCommandOrdinal,
@@ -142,6 +145,46 @@ it.each([
       plannedAttempt
     )?.observedAt
   ).toBe(3)
+})
+
+it("reads indexed observed evidence and preserves a newer malformed projection", () => {
+  const exact = PlannedAttemptExecutorStateObservedEvent.make({
+    observation: PlannedAttemptExecutorStateObservation.cases.ExactExecutorReport.make({
+      report: PlannedAttemptExecutorReport.cases.ExecutorWorkSafelySuspended.make({
+        correlation: { attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId }
+      })
+    }),
+    occurrenceClassification: "NonActionOccurrence",
+    ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(1),
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  const malformed = PlannedAttemptExecutorStateObservedEvent.make({
+    observation: PlannedAttemptExecutorStateObservation.cases.ExecutorStateUnreadable.make({}),
+    occurrenceClassification: "NonActionOccurrence",
+    ordinal: PlannedAttemptExecutorStateObservationOrdinal.make(2),
+    plannedAttempt,
+    version: workflowJournalEventVersion
+  })
+  const records = [exact, malformed].map((event, offset) => ({
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(offset + 1),
+    runId: plannedAttempt.runId
+  }))
+  const evidence = journalEvidenceFrom(records)
+  let indexedVisits = 0
+  const stop = observeJournalRecordSequenceOperations(() => {
+    indexedVisits += 1
+  })
+  try {
+    expect(latestPlannedAttemptExecutorEvidence(evidence, plannedAttempt)).toEqual(
+      latestPlannedAttemptExecutorEvidence(records, plannedAttempt)
+    )
+  } finally {
+    stop()
+  }
+  expect(indexedVisits).toBeGreaterThan(0)
 })
 
 it.each([

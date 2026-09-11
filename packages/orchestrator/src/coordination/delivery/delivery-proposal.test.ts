@@ -15,7 +15,7 @@ import {
   WorktreeLocator,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { Effect, Result } from "effect"
+import { HashSet, Effect, Result } from "effect"
 import { describe, expect } from "vitest"
 import { ClaimOwner, ClaimToken } from "../../authorities/task-tracker/claim.js"
 import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
@@ -73,7 +73,7 @@ describe("deliveryProposalsOf", () => {
         },
         plannedAttempt
       })
-      return deliveryProposalsOf({ acceptedOperationIds: new Set(), fresh: [], runId, transitions: [transition] })
+      return deliveryProposalsOf({ acceptedOperationIds: HashSet.empty(), fresh: [], runId, transitions: [transition] })
         .ticketDelivery[0]
     }
 
@@ -95,7 +95,7 @@ describe("deliveryProposalsOf", () => {
       taskRevision: TaskRevision.make("revision-A")
     })
     const input = {
-      acceptedOperationIds: new Set<OperationId>(),
+      acceptedOperationIds: HashSet.empty<OperationId>(),
       // Deliberately bypass the opaque continuation boundary to prove that
       // ordinary derivation remains fail-closed for a fresh entry.
       // oxlint-disable-next-line dalph/no-double-type-assertion -- Adversarial runtime input proves a cast cannot mint the private continuation capability.
@@ -129,7 +129,7 @@ describe("deliveryProposalsOf", () => {
     })
 
     const [proposal] = deliveryProposalsOf({
-      acceptedOperationIds: new Set([predecessorOperationId]),
+      acceptedOperationIds: HashSet.make(predecessorOperationId),
       fresh: Result.getOrThrow(
         freshContinuationDecisionsOf(
           [{ step, transition }],
@@ -212,7 +212,7 @@ describe("deliveryProposalsOf", () => {
       })
       if (decision === undefined) return expect.fail("the accepted claim cycle must authorize its continuation")
       const proposal = deliveryProposalsOf({
-        acceptedOperationIds: new Set([claimOperationId]),
+        acceptedOperationIds: HashSet.make(claimOperationId),
         fresh: [decision],
         runId,
         transitions: [pair.transition]
@@ -254,7 +254,7 @@ describe("deliveryProposalsOf", () => {
     })
 
     const issued = deliveryProposalsOf({
-      acceptedOperationIds: new Set([predecessorOperationId]),
+      acceptedOperationIds: HashSet.make(predecessorOperationId),
       fresh: [decision],
       runId,
       transitions: [pair.transition]
@@ -367,7 +367,7 @@ describe("deliveryProposalsOf", () => {
       taskId
     })
     const proposal = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: Result.getOrThrow(
         freshContinuationDecisionsOf(
           [{ step, transition }],
@@ -419,7 +419,7 @@ describe("deliveryProposalsOf", () => {
     const transition = RunnableFrontierTransition.ReconcileTaskClaim({ operationId, taskId })
 
     const [proposal] = deliveryProposalsOf({
-      acceptedOperationIds: new Set([operationId]),
+      acceptedOperationIds: HashSet.make(operationId),
       fresh: [],
       runId,
       transitions: [transition]
@@ -455,7 +455,7 @@ describe("deliveryProposalsOf", () => {
       })
 
       const [proposal] = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: [],
         responsibilities: [
           { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(2), plannedAttempt }
@@ -556,9 +556,9 @@ describe("deliveryProposalsOf", () => {
 
       for (const candidate of cases) {
         const [proposal] = deliveryProposalsOf({
-          acceptedOperationIds: new Set(),
+          acceptedOperationIds: HashSet.empty(),
           fresh: [],
-          pendingReadOperationIds: new Set([candidate.operation.operationId]),
+          pendingReadOperationIds: HashSet.make(candidate.operation.operationId),
           runId,
           transitions: [candidate.transition]
         }).ticketDelivery
@@ -588,7 +588,7 @@ describe("deliveryProposalsOf", () => {
     const transition = RunnableFrontierTransition.ReconcileTaskClaim({ operationId, taskId })
 
     const [proposal] = deliveryProposalsOf({
-      acceptedOperationIds: new Set([operationId]),
+      acceptedOperationIds: HashSet.make(operationId),
       fresh: [],
       responsibilities: [
         WorkflowResponsibilityEntry.cases.TaskClaimResponsibility.make({
@@ -615,7 +615,12 @@ describe("deliveryProposalsOf", () => {
       taskRevision: TaskRevision.make("revision-A")
     })
 
-    const result = deliveryProposalsOf({ acceptedOperationIds: new Set(), fresh: [], runId, transitions: [transition] })
+    const result = deliveryProposalsOf({
+      acceptedOperationIds: HashSet.empty(),
+      fresh: [],
+      runId,
+      transitions: [transition]
+    })
 
     expect(result.ticketDelivery).toEqual([])
     expect(result.deliverySettlement).toEqual([])
@@ -648,7 +653,7 @@ describe("deliveryProposalsOf", () => {
     })
 
     const [proposal] = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: [],
       integrationResponsibilities: [responsibility],
       runId,
@@ -693,7 +698,7 @@ describe("deliveryProposalsOf", () => {
       taskId: taskB
     })
     const contributions = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: Result.getOrThrow(
         freshContinuationDecisionsOf(
           [{ step: stepB, transition: readyB }],
@@ -735,7 +740,7 @@ describe("deliveryProposalsOf", () => {
       task: { id: taskC, lifecycle: TaskLifecycle.cases.Open.make({}), parentTaskId: null, prerequisiteIds: [] }
     })
     const contributions = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: Result.getOrThrow(
         freshContinuationDecisionsOf(
           [{ step: claimStepC, transition: claimC }],

@@ -250,7 +250,7 @@ const fixture = (unrelatedReads: number) => {
 
 const validate = (record: JournalRecord, source: JournalHistorySource) => {
   const issues = new Array<WorkflowJournalHistoryIssue>()
-  validateContinuationAuthorization(record, runId, source, issues)
+  validateContinuationAuthorization(record, runId, source, (issue) => issues.push(issue))
   return issues
 }
 

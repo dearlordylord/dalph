@@ -23,7 +23,7 @@ export interface CompletionReadCycles {
   readonly [CompletionReadCyclesTypeId]: true
 }
 
-export interface CompletionReadCycleState {
+interface CompletionReadCycleState {
   readonly intentCount: number
   readonly maximumOrdinal: number
   readonly latestIntent: JournalRecord | undefined
@@ -184,12 +184,12 @@ export const appendCompletionReadCycleEvidence = (
 }
 
 type CompletionReadCycleOperation = "SnapshotLookup" | "UnresolvedNodeRead"
-const observers = new Set<(operation: CompletionReadCycleOperation) => void>()
+let observers = HashSet.empty<(operation: CompletionReadCycleOperation) => void>()
 /** Test-only operation observer, intentionally not part of the production barrel. */
 export const observeCompletionReadCycleOperations = (observer: (operation: CompletionReadCycleOperation) => void) => {
-  observers.add(observer)
+  observers = HashSet.add(observers, observer)
   return () => {
-    observers.delete(observer)
+    observers = HashSet.remove(observers, observer)
   }
 }
 const entryAt = (history: CycleHistory, offset: number) => {

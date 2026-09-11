@@ -1,6 +1,6 @@
 import { it } from "@effect/vitest"
 import { GitCommitSha, RunId, makeTaskWorkSpecification } from "@dalph/contracts"
-import { Context, Effect, Layer, Ref, Schema, Stream } from "effect"
+import { HashSet, Context, Effect, Layer, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
@@ -334,7 +334,7 @@ it.effect("routes changed-head Retry through delivery once, releases ownership, 
       responsibility
     })
     const contributions = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: [],
       integrationResponsibilities: [responsibility],
       runId: scenario.runId,

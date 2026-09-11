@@ -52,7 +52,16 @@ import { validateIntegrationFinalityHistoryRecord } from "../../workflow/protoco
 import { hasLaterCompleteObservation } from "../../workflow-journal/run-termination-freshness.js"
 import { exactTaskIdSetKey, taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import { validateCancelledAttemptHistory } from "./cancelled-attempt-history.js"
-import { identityIssue, semanticIssue, mapGet, emptyIndexes, type FoldIndexes } from "./history-kernel-state.js"
+import {
+  emptyIndexes,
+  identityIssue,
+  makeWorkflowJournalHistoryIssueCollector,
+  mapGet,
+  semanticIssue,
+  type FoldIndexes,
+  type WorkflowJournalHistoryIssueCollector,
+  type WorkflowJournalHistoryIssueReporter
+} from "./history-kernel-state.js"
 import { validateExecutorEvent } from "./executor-history-validation.js"
 import {
   validateAttemptChoice,
@@ -184,7 +193,7 @@ const validateRecordEnvelope = (
   index: number,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): { readonly unique: boolean; readonly indexes: FoldIndexes } => {
   const expectedPosition = index + 1
   if (record.position !== expectedPosition) {
@@ -218,7 +227,7 @@ const validateControlDirection = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   const descriptor = describeJournalEvent(record.event)
   if (descriptor._tag !== "ControlDirectionEventDescriptor") return indexes
@@ -245,7 +254,7 @@ const validateControlDirection = (
 const validateTaskClaimReacquisitionDirection = (
   record: JournalRecord,
   runId: RunId,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   const descriptor = describeJournalEvent(record.event)
   if (descriptor._tag === "TaskClaimReacquisitionDirectionEventDescriptor" && descriptor.runId !== runId) {
@@ -274,7 +283,7 @@ const validateClaim = (
   record: JournalRecord,
   runId: RunId,
   records: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (record.event._tag !== "TaskClaimAcquired") return
   const acquired = record.event.claim
@@ -296,7 +305,7 @@ const validateClaimRejection = (
   record: JournalRecord,
   runId: RunId,
   records: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (record.event._tag !== "TaskClaimAcquisitionRejected") return
   const rejected = record.event
@@ -349,7 +358,7 @@ const validateClaimReacquisitionIntent = (
   record: JournalRecord,
   runId: RunId,
   records: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (record.event._tag !== "TaskClaimAcquisitionIntended") return
   const { acquisition, authority } = record.event.operation
@@ -387,7 +396,7 @@ const validateReconfirmationReference = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   const validation = invalidTaskTrackerReconfirmationReference(record, runId, indexes.trackerReconfirmations)
   if (validation.detail !== undefined) semanticIssue(issues, runId, record.position, validation.detail)
@@ -398,7 +407,7 @@ const validateTrackerObservation = (
   record: JournalRecord,
   runId: RunId,
   records: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (record.event._tag !== "TaskTrackerFactsObserved") return
   const observedEvent = record.event
@@ -419,7 +428,7 @@ const validateTrackerObservation = (
 const validateOneUnfinishedAttemptPerTask = (
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   const unfinishedByTask = new Map<
     TaskId,
@@ -441,7 +450,7 @@ const validateOneUnfinishedAttemptPerTask = (
       unfinishedByTask.set(taskId, { plannedAttempt: responsibility.plannedAttempt, position: responsibility.position })
       continue
     }
-    issues.push(
+    issues(
       duplicateUnfinishedTaskAttemptIssue(
         runId,
         prior.plannedAttempt,
@@ -458,7 +467,7 @@ const validateLifecycleBoundaries = (
   records: JournalHistorySource,
   began: JournalRecord | undefined,
   terminated: JournalRecord | undefined,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (began !== undefined && began.position !== 1) {
     semanticIssue(issues, runId, began.position, "WorkflowRunBegan must be the first record")
@@ -477,7 +486,7 @@ const validateLifecycleBoundaries = (
 const validateCancellationMultiplicity = (
   runId: RunId,
   cancellations: ReadonlyArray<JournalRecord>,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter<WorkflowJournalHistorySemanticIssue>
 ): void => {
   if (cancellations.length > 1) {
     for (const duplicate of cancellations.slice(1)) {
@@ -491,16 +500,20 @@ export const validateCancellationMultiplicityHistory = (
   runId: RunId,
   records: JournalHistorySource
 ): ReadonlyArray<WorkflowJournalHistorySemanticIssue> => {
-  const issues = new Array<WorkflowJournalHistorySemanticIssue>()
-  validateCancellationMultiplicity(runId, Array.from(journalRecordsOfKind(records, "RunCancellationApplied")), issues)
-  return issues
+  const collector = makeWorkflowJournalHistoryIssueCollector<WorkflowJournalHistorySemanticIssue>()
+  validateCancellationMultiplicity(
+    runId,
+    Array.from(journalRecordsOfKind(records, "RunCancellationApplied")),
+    collector.report
+  )
+  return collector.toReadonlyArray()
 }
 
 const validateCancellationBeginning = (
   runId: RunId,
   began: JournalRecord | undefined,
   cancellations: ReadonlyArray<JournalRecord>,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   const firstInvalid = cancellations.find(({ position }) => began === undefined || position <= began.position)
   if (firstInvalid !== undefined) {
@@ -511,7 +524,7 @@ const validateCancellationBeginning = (
 const validateRunLifecycle = (
   runId: RunId,
   records: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   const began = firstJournalRecordOfKind(records, "WorkflowRunBegan")
   const terminated = firstJournalRecordOfKind(records, "WorkflowRunTerminated")
@@ -831,7 +844,7 @@ const validateTerminationEvidence = (
   terminatedAt: JournalPosition,
   termination: Extract<WorkflowJournalEvent, { readonly _tag: "WorkflowRunTerminated" }>,
   cancellationApplied: boolean,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   const evidence = termination.evidence
   const reject = (detail: string) => semanticIssue(issues, runId, terminatedAt, detail)
@@ -864,7 +877,7 @@ const validateRecord = (
   runId: RunId,
   records: JournalHistorySource,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   validationStepObserver?.()
   const envelope = validateRecordEnvelope(record, index, runId, indexes, issues)
@@ -937,14 +950,19 @@ const finishValidation = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>,
+  collector: WorkflowJournalHistoryIssueCollector,
   evidence?: JournalRecordEvidence
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
-  validateOneUnfinishedAttemptPerTask(runId, indexes, issues)
-  validateRunLifecycle(runId, evidence ?? records, issues)
-  if (issues.length > 0) {
+  validateOneUnfinishedAttemptPerTask(runId, indexes, collector.report)
+  validateRunLifecycle(runId, evidence ?? records, collector.report)
+  if (!collector.isEmpty()) {
     if (evidence !== undefined) return reduceRawDiagnosticHistory(runId, records)
-    const invalid: InvalidWorkflowJournalHistory = { _tag: "InvalidWorkflowJournalHistory", issues, records, runId }
+    const invalid: InvalidWorkflowJournalHistory = {
+      _tag: "InvalidWorkflowJournalHistory",
+      issues: collector.toReadonlyArray(),
+      records,
+      runId
+    }
     validationPathByHistory.set(invalid, "RawDiagnostic")
     return invalid
   }
@@ -969,12 +987,12 @@ const reduceRawDiagnosticHistory = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
-  const issues = new Array<WorkflowJournalHistoryIssue>()
+  const collector = makeWorkflowJournalHistoryIssueCollector<WorkflowJournalHistoryIssue>()
   let indexes = emptyIndexes()
   records.forEach((record, index) => {
-    indexes = validateRecord(record, index, runId, records, indexes, issues)
+    indexes = validateRecord(record, index, runId, records, indexes, collector.report)
   })
-  return finishValidation(runId, records, indexes, issues)
+  return finishValidation(runId, records, indexes, collector)
 }
 
 /** Test-only reference query mode for comparing indexed acceptance and exact ordered issues. */
@@ -988,7 +1006,7 @@ export const reduceWorkflowJournalHistory = (
 ): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
   let indexes = emptyIndexes()
   let evidence = emptyJournalEvidence()
-  const issues = new Array<WorkflowJournalHistoryIssue>()
+  const collector = makeWorkflowJournalHistoryIssueCollector<WorkflowJournalHistoryIssue>()
   for (const [index, record] of records.entries()) {
     // Decoded evidence is indexed only after its envelope is canonical. Raw
     // fallback retains duplicate positions/keys and contradictory Run identity.
@@ -1000,10 +1018,10 @@ export const reduceWorkflowJournalHistory = (
     )
       return reduceRawDiagnosticHistory(runId, records)
     evidence = appendJournalEvidence(evidence, record)
-    indexes = validateRecord(record, index, runId, evidence, indexes, issues)
-    if (issues.length > 0) return reduceRawDiagnosticHistory(runId, records)
+    indexes = validateRecord(record, index, runId, evidence, indexes, collector.report)
+    if (!collector.isEmpty()) return reduceRawDiagnosticHistory(runId, records)
   }
-  return finishValidation(runId, records, indexes, issues, evidence)
+  return finishValidation(runId, records, indexes, collector, evidence)
 }
 
 /**
@@ -1039,14 +1057,15 @@ export const advanceWorkflowJournalHistory = (
    * HashSet updates share unchanged HAMT nodes, while the accepted prefix
    * keeps its exact roots for later branches or retries.
    */
-  const issues = new Array<WorkflowJournalHistoryIssue>()
+  const collector = makeWorkflowJournalHistoryIssueCollector<WorkflowJournalHistoryIssue>()
+  const issues = collector.report
   const candidate = appendJournalEvidence(prior.prefix, record)
   const advancedIndexes = validateRecord(record, prior.prefix.records.length, prior.runId, candidate, indexes, issues)
   const advancedUnfinished = advanceUnfinishedTasks(unfinished, advancedIndexes, record)
   if (advancedUnfinished === undefined && record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
     const existing = mapGet(unfinished, record.event.plannedAttempt.taskId)
     if (existing !== undefined) {
-      issues.push(
+      issues(
         duplicateUnfinishedTaskAttemptIssue(
           prior.runId,
           existing.plannedAttempt,
@@ -1058,10 +1077,10 @@ export const advanceWorkflowJournalHistory = (
     }
   }
   validateRunLifecycle(prior.runId, candidate, issues)
-  if (issues.length > 0) {
+  if (!collector.isEmpty()) {
     const rejected: InvalidWorkflowJournalSuccessor = {
       _tag: "InvalidWorkflowJournalHistory",
-      issues,
+      issues: collector.toReadonlyArray(),
       prior: prior.prefix,
       record,
       runId: prior.runId

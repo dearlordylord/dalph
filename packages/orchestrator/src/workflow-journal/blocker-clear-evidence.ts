@@ -1,4 +1,4 @@
-import { HashMap, Option } from "effect"
+import { HashMap, HashSet, Option } from "effect"
 import type { TaskId } from "@dalph/contracts"
 import type { TaskDagSnapshot } from "../authorities/task-tracker/graph.js"
 import { taskTrackerTargetKey, type TrackerTarget } from "../authorities/task-tracker/target.js"
@@ -36,12 +36,12 @@ const retain = (roots: HashMap.HashMap<string, TargetHistory>): BlockerClearEvid
 const rootsOf = (index: BlockerClearEvidence) => Option.getOrThrow(Option.fromUndefinedOr(rootsByEvidence.get(index)))
 export const emptyBlockerClearEvidence = (): BlockerClearEvidence => retain(HashMap.empty())
 
-const observers = new Set<() => void>()
+let observers = HashSet.empty<() => void>()
 /** Test-only semantic task visits; never an authority input. */
 export const observeBlockerClearProjection = (observer: () => void): (() => void) => {
-  observers.add(observer)
+  observers = HashSet.add(observers, observer)
   return () => {
-    observers.delete(observer)
+    observers = HashSet.remove(observers, observer)
   }
 }
 const visitTask = (): void => {

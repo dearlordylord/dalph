@@ -1,5 +1,5 @@
 import type { AttemptId, PlannedTaskAttempt, RunId } from "@dalph/contracts"
-import { HashMap, Option } from "effect"
+import { HashMap, HashSet, Option } from "effect"
 import type { JournalPosition } from "./identity.js"
 import type { JournalRecord } from "./store.js"
 
@@ -11,7 +11,7 @@ export interface RetainedExecutorResponsibilitySubjects {
 }
 
 /** One exact retained attempt and the journal position where Dalph assumed its executor responsibility. */
-export interface RetainedExecutorResponsibilitySubject {
+interface RetainedExecutorResponsibilitySubject {
   readonly plannedAttempt: PlannedTaskAttempt
   readonly beganAt: JournalPosition
 }
@@ -84,7 +84,7 @@ export const appendRetainedExecutorResponsibilitySubjects = (
   )
 }
 
-const observers = new Set<(operation: "TimelineVisit" | "SubjectVisit") => void>()
+let observers = HashSet.empty<(operation: "TimelineVisit" | "SubjectVisit") => void>()
 const visit = (operation: "TimelineVisit" | "SubjectVisit"): void => {
   for (const observer of observers) observer(operation)
 }
@@ -127,8 +127,8 @@ export const inspectRetainedExecutorResponsibilityStorage = (
 export const observeRetainedExecutorResponsibilityProjection = (
   observer: (operation: "TimelineVisit" | "SubjectVisit") => void
 ): (() => void) => {
-  observers.add(observer)
+  observers = HashSet.add(observers, observer)
   return () => {
-    observers.delete(observer)
+    observers = HashSet.remove(observers, observer)
   }
 }

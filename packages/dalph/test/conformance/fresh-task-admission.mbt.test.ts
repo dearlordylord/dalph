@@ -18,7 +18,7 @@ import {
   makeTaskWorkSpecification,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Context, Effect, ManagedRuntime, Option, Result, Schema } from "effect"
+import { HashSet, Context, Effect, ManagedRuntime, Option, Result, Schema } from "effect"
 import { expect } from "vitest"
 import { exportWorkflowHistoryRecords } from "@dalph/orchestrator"
 import { projectTrackerSnapshot } from "../../../orchestrator/src/authorities/task-tracker/graph.js"
@@ -639,7 +639,7 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
     })
     const transition = RunnableFrontierTransition.BeginPlannedAttemptExecutorWork({ plannedAttempt })
     const proposal = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: Result.getOrThrow(
         freshContinuationDecisionsOf(
           [{ step, transition }],
@@ -854,7 +854,7 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
     if (eligibility === undefined) return Effect.runSync(Effect.die(`missing safe continuation eligibility for ${tag}`))
     const proposal = deliveryProposalsOf({
       acceptedAt: currentReduction().runState.appliedThrough,
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: [],
       responsibilities: currentReduction().runState.responsibility.entries,
       runId,

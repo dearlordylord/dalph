@@ -103,6 +103,7 @@ import {
 import { validateCancelledAttemptHistoryPrefix } from "../coordination/reconstruction/cancelled-attempt-history.js"
 import {
   workflowJournalHistoryIssueDetail,
+  type WorkflowJournalHistoryIdentityIssue,
   type WorkflowJournalHistorySemanticIssue
 } from "../coordination/reconstruction/history-result.js"
 import { makeIntegrationHistoryIndexes } from "../coordination/reconstruction/integration-history.js"
@@ -1960,7 +1961,9 @@ const cleanupHistoryIssue = (records: ReadonlyArray<JournalRecord>): string | un
   return undefined
 }
 
-const canonicalHistoryIssue = (issues: ReadonlyArray<WorkflowJournalHistorySemanticIssue>): string | undefined => {
+const canonicalHistoryIssue = (
+  issues: ReadonlyArray<WorkflowJournalHistoryIdentityIssue | WorkflowJournalHistorySemanticIssue>
+): string | undefined => {
   const issue = issues[0]
   if (issue === undefined) return undefined
   return `${workflowJournalHistoryIssueDetail(issue)} at journal position ${issue.position}`

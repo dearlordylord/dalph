@@ -7,7 +7,7 @@ import {
   WorktreeLocator,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { Result } from "effect"
+import { HashSet, Result } from "effect"
 import { TaskLifecycle, type Task } from "../../src/authorities/task-tracker/task.js"
 import { FreshWorkflowStep } from "../../src/coordination/delivery/fresh-workflow-step.js"
 import { deliveryProposalsOf, freshContinuationDecisionsOf } from "../../src/coordination/delivery/delivery-proposal.js"
@@ -56,7 +56,7 @@ export const preparedBeginProposalsOf = (
   fixtures: ReadonlyArray<ReturnType<typeof makePreparedBeginFixture>>
 ) =>
   deliveryProposalsOf({
-    acceptedOperationIds: new Set(),
+    acceptedOperationIds: HashSet.empty(),
     fresh: Result.getOrThrow(
       freshContinuationDecisionsOf(
         fixtures.map(({ fresh }) => fresh),

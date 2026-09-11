@@ -3,10 +3,11 @@ import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { RunId } from "@dalph/contracts"
 import { expect, it } from "vitest"
+import { HashSet } from "effect"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
 import { JournalPosition } from "../../workflow-journal/identity.js"
-import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
+import { journalEvidenceBefore, journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import { intentRecordKey, outcomeRecordKey } from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
@@ -32,6 +33,45 @@ it("queries accepted live history without calling the array-returning in-Run rea
     expect(contents).not.toMatch(/\.read\(/)
     expect(contents).not.toContain("materializeJournalRecords")
   }
+})
+
+it("keeps a completed read settled when a malformed suffix repeats its intent", () => {
+  const runId = RunId.make("delivery-repeated-intent-run")
+  const operation = makeTrackerGraphObservationOperation(
+    { _tag: "WorkflowEstablishment" },
+    OperationId.make("delivery-repeated-intent-operation"),
+    FixtureTarget.make("delivery-repeated-intent"),
+    []
+  )
+  const projection = projectTrackerSnapshot({ revision: "delivery-repeated-intent-revision", tasks: [] })
+  if (projection._tag === "Invalid") {
+    expect.fail("expected a valid empty tracker graph")
+    return
+  }
+  const intent: JournalRecord = {
+    event: taskTrackerReadIntent(operation),
+    key: intentRecordKey(operation.operationId),
+    position: JournalPosition.make(1),
+    runId
+  }
+  const outcome: JournalRecord = {
+    event: taskTrackerFactsObservedEvent(
+      operation.operationId,
+      makeCompleteTaskTrackerFactsObserved(operation, projection.snapshot)
+    ),
+    key: outcomeRecordKey(operation.operationId),
+    position: JournalPosition.make(2),
+    runId
+  }
+  const repeatedIntent: JournalRecord = { ...intent, position: JournalPosition.make(3) }
+  const records = [intent, outcome, repeatedIntent]
+  const evidence = journalEvidenceFrom(records)
+
+  expect(
+    HashSet.has(pendingReadOperationIdsOf(journalEvidenceBefore(evidence, outcome.position)), operation.operationId)
+  ).toBe(true)
+  expect(HashSet.size(pendingReadOperationIdsOf(records))).toBe(0)
+  expect(HashSet.size(pendingReadOperationIdsOf(evidence))).toBe(0)
 })
 
 it("derives delivery operation evidence from indexed kinds without materializing the accepted sequence", () => {
@@ -67,8 +107,9 @@ it("derives delivery operation evidence from indexed kinds without materializing
     if (observed._tag === "HistoricalMaterialization") materializations += 1
   })
   try {
-    expect(acceptedOperationIdsOf(evidence)).toEqual(new Set([operation.operationId]))
-    expect(pendingReadOperationIdsOf(evidence)).toEqual(new Set())
+    expect(HashSet.has(acceptedOperationIdsOf(evidence), operation.operationId)).toBe(true)
+    expect(HashSet.size(acceptedOperationIdsOf(evidence))).toBe(1)
+    expect(HashSet.size(pendingReadOperationIdsOf(evidence))).toBe(0)
     expect(materializations).toBe(0)
   } finally {
     stop()

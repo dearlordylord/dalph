@@ -5,7 +5,7 @@ import {
   PlannedTaskAttempt,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { Context, Effect, Layer, Ref } from "effect"
+import { HashSet, Context, Effect, Layer, Ref } from "effect"
 import { expect } from "vitest"
 import {
   InRunJournal,
@@ -589,7 +589,7 @@ const identityFreeActionFor = (
   if (acceptedAt === undefined) return expect.fail(transition._tag + " has no accepted journal position")
   const proposals = deliveryProposalsOf({
     acceptedAt,
-    acceptedOperationIds: new Set(),
+    acceptedOperationIds: HashSet.empty(),
     fresh: [],
     integrationResponsibilities: deriveIntegrationAdmission(records).responsibilities,
     responsibilities: [],

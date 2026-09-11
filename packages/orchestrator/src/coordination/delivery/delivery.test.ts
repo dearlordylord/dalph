@@ -14,7 +14,7 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { Deferred, Effect, Exit, Fiber, Option, Result, Schema, Stream, SubscriptionRef } from "effect"
+import { HashSet, Deferred, Effect, Exit, Fiber, Option, Result, Schema, Stream, SubscriptionRef } from "effect"
 import { expect } from "vitest"
 import { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -667,7 +667,7 @@ it.effect("derives one stable proposal from a persistent delivery consequence wi
       taskId: task.id
     })
     const lowerProposal = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: Result.getOrThrow(
         freshContinuationDecisionsOf(
           [{ step, transition }],
@@ -755,7 +755,7 @@ it.effect("keeps B out of actual proposals after settlement until focused A succ
       taskId: taskB
     })
     const proposal = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: Result.getOrThrow(
         freshContinuationDecisionsOf(
           [{ step, transition }],
@@ -920,7 +920,7 @@ it.effect("changes the proposal frontier when its accepted fact signal changes",
         taskId: task.id
       })
       const proposal = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: Result.getOrThrow(
           freshContinuationDecisionsOf(
             [{ step, transition }],
