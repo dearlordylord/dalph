@@ -11,11 +11,15 @@ import {
   TaskExecutorLocator,
   TaskId,
   TaskRevision,
-  WorktreeLocator
+  WorktreeLocator,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { Effect, Schema } from "effect"
+import { Context, Effect, Layer, Schema } from "effect"
 import { expect } from "vitest"
 import { acceptedResultFixture } from "../../../../test/support/evidence.js"
+import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
+import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
+import { ClaimOwner, ClaimToken } from "../../../authorities/task-tracker/claim.js"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { TargetLineageObservation } from "../../../authorities/git/target-lineage.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -38,13 +42,12 @@ import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/ide
 import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import {
   InRunJournal,
-  JournalStore,
   JournalStoreContradiction,
   type AppendableWorkflowJournalEvent,
-  type JournalRecord,
-  type JournalStoreService
+  type JournalRecord
 } from "../../../workflow-journal/store.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   IntegratorCandidateResourceLocator,
@@ -76,21 +79,29 @@ import {
   IntegrationQuarantinedEvent
 } from "./events.js"
 import { deriveIntegrationQuarantineState } from "./state.js"
-import { appendRetryConclusiveIntegrationQuarantine } from "./retry-conclusive.js"
+import {
+  appendRetryConclusiveIntegrationQuarantine,
+  retryConclusiveIntegrationQuarantineIssueFromRecords
+} from "./retry-conclusive.js"
 
 const runId = RunId.make("retry-conclusive-quarantine-run")
 const target = FixtureTarget.make("retry-conclusive-quarantine-target")
 const base = GitCommitSha.make("a".repeat(40))
 const fixedHead = GitCommitSha.make("b".repeat(40))
 const acceptedCommit = GitCommitSha.make("c".repeat(40))
+const taskSpecification = makeTaskWorkSpecification({
+  body: "Exercise conclusive Retry quarantine.",
+  taskId: TaskId.make("retry-conclusive-quarantine-task"),
+  title: "Conclusive Retry quarantine"
+})
 const plannedAttempt = PlannedTaskAttempt.make({
   attemptId: AttemptId.make("retry-conclusive-quarantine-attempt"),
   baseSha: base,
   branch: TaskBranchRef.make("refs/heads/dalph/retry-conclusive-quarantine"),
   executor: TaskExecutorLocator.make("executor:retry-conclusive-quarantine"),
   runId,
-  taskId: TaskId.make("retry-conclusive-quarantine-task"),
-  taskRevision: TaskRevision.make("retry-conclusive-quarantine-revision"),
+  taskId: taskSpecification.taskId,
+  taskRevision: taskSpecification.fingerprint,
   worktree: WorktreeLocator.make("/worktrees/retry-conclusive-quarantine")
 })
 const integrationTarget = IntegrationTarget.make({
@@ -103,8 +114,9 @@ const notPreparedDetail = IntegratorNotPreparedDetail.make("Retry run two return
 const candidateObservation = IntegratorGitObservation.cases.Missing.make({ candidateText })
 
 type History = {
+  readonly acceptedJournalReader: AcceptedJournalReader["Service"]
   readonly input: IntegratorRunProtocolResult
-  readonly journal: JournalStoreService
+  readonly journal: InRunJournal["Service"]
   readonly resultRecord: JournalRecord
   readonly candidateObservationRecord?: JournalRecord
   readonly run: IntegratorRunCorrelation
@@ -112,7 +124,7 @@ type History = {
 }
 
 const appendRecord = Effect.fn("RetryConclusiveTest.appendRecord")(function* (
-  journal: JournalStoreService,
+  journal: InRunJournal["Service"],
   key: JournalRecordKey,
   event: AppendableWorkflowJournalEvent
 ) {
@@ -148,16 +160,24 @@ const makeLineageIntent = (operationId: OperationId) =>
 const appendHistory = Effect.fn("RetryConclusiveTest.appendHistory")(function* (
   kind: "NotPrepared" | "CandidateRejected"
 ) {
-  const journal = yield* JournalStore
-  yield* journal.beginRun(runId, target, InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }))
-
-  const initialLineageOperationId = OperationId.make("retry-conclusive-initial-lineage")
-  yield* appendRecord(journal, intentRecordKey(initialLineageOperationId), makeLineageIntent(initialLineageOperationId))
-  const initialLineage = yield* appendRecord(
-    journal,
-    outcomeRecordKey(initialLineageOperationId),
-    makeTargetLineage(initialLineageOperationId, fixedHead)
-  )
+  const accepted = makeAcceptedIntegrationHistory({
+    acceptedResult,
+    activeClaim: ActiveTaskClaim.make({
+      operationId: OperationId.make("retry-conclusive-claim"),
+      owner: ClaimOwner.make("retry-conclusive-owner"),
+      taskId: plannedAttempt.taskId,
+      token: ClaimToken.make("retry-conclusive-token")
+    }),
+    integrationTarget,
+    initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    plannedAttempt,
+    runId,
+    targetHeadSha: fixedHead,
+    taskSpecification,
+    trackerTarget: target
+  })
+  const context = yield* Layer.build(liveJournalTestLayer({ records: accepted.records, runId, target }))
+  const journal = Context.get(context, InRunJournal)
 
   const session = IntegratorSessionCorrelation.make({
     acceptedResult,
@@ -165,10 +185,10 @@ const appendHistory = Effect.fn("RetryConclusiveTest.appendHistory")(function* (
     expectedTargetHead: fixedHead,
     integrationTarget,
     plannedAttempt,
-    queuedAt: JournalPosition.make(4),
+    queuedAt: accepted.responsibility.queuedAt,
     sessionId: IntegratorSessionId.make("integrator-session:retry-conclusive"),
-    startedAt: JournalPosition.make(5),
-    targetLineageObservedAt: initialLineage.position
+    startedAt: accepted.responsibility.startedAt,
+    targetLineageObservedAt: accepted.targetLineageObservedAt
   })
   yield* appendRecord(
     journal,
@@ -281,6 +301,7 @@ const appendHistory = Effect.fn("RetryConclusiveTest.appendHistory")(function* (
     )
   }
   return {
+    acceptedJournalReader: Context.get(context, AcceptedJournalReader),
     input,
     journal,
     resultRecord,
@@ -290,28 +311,28 @@ const appendHistory = Effect.fn("RetryConclusiveTest.appendHistory")(function* (
   } satisfies History
 })
 
-const provideJournal = (journal: InRunJournal["Service"]) => Effect.provideService(InRunJournal, journal)
+const provideHistory =
+  (history: History, journal: InRunJournal["Service"] = history.journal) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R | AcceptedJournalReader | InRunJournal>) =>
+    effect.pipe(
+      Effect.provideService(InRunJournal, journal),
+      Effect.provideService(AcceptedJournalReader, history.acceptedJournalReader)
+    )
 
-const readWithout = (history: History, omit: (record: JournalRecord) => boolean): InRunJournal["Service"] => ({
-  append: () => Effect.die("invalid history must not append"),
-  read: () => history.journal.read(runId).pipe(Effect.map((records) => records.filter((record) => !omit(record))))
-})
-
-const readWith = (
+const coldIssue = Effect.fn("RetryConclusiveTest.coldIssue")(function* (
   history: History,
-  transform: (records: ReadonlyArray<JournalRecord>) => ReadonlyArray<JournalRecord>
-): InRunJournal["Service"] => ({
-  append: () => Effect.die("invalid history must not append"),
-  read: () => history.journal.read(runId).pipe(Effect.map(transform))
+  transform: (records: ReadonlyArray<JournalRecord>) => ReadonlyArray<JournalRecord>,
+  input: IntegratorRunProtocolResult = history.input
+) {
+  if (input._tag === "PreparedCandidate") return "Retry conclusive quarantine accepts only conclusive results"
+  return retryConclusiveIntegrationQuarantineIssueFromRecords(transform(yield* history.journal.read(runId)), input)
 })
 
 it.effect("records a fresh quarantine after the authorized Retry run ends conclusively", () =>
   Effect.gen(function* () {
     const history = yield* appendHistory("NotPrepared")
-    const first = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(provideJournal(history.journal))
-    const second = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-      provideJournal(history.journal)
-    )
+    const first = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(provideHistory(history))
+    const second = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(provideHistory(history))
 
     expect(second).toEqual(first)
     expect(first.event.basis).toEqual({
@@ -325,15 +346,13 @@ it.effect("records a fresh quarantine after the authorized Retry run ends conclu
     expect(
       records.filter(({ event }) => event._tag === "IntegratorRunStarted" && Number(event.run.ordinal) > 2)
     ).toHaveLength(0)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("records Q2 CandidateRejected only with the exact run-two Git evidence", () =>
   Effect.gen(function* () {
     const history = yield* appendHistory("CandidateRejected")
-    const quarantine = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-      provideJournal(history.journal)
-    )
+    const quarantine = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(provideHistory(history))
     const candidateObservationRecord = history.candidateObservationRecord
     if (candidateObservationRecord === undefined) {
       return yield* Effect.die("candidate rejection lacks its observation record")
@@ -389,13 +408,13 @@ it.effect("records Q2 CandidateRejected only with the exact run-two Git evidence
         : record
     )
     expect(deriveIntegrationQuarantineState(resultAfterRunStart, history.session.sessionId)._tag).toBe("Contradiction")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("reconstructs Q2 only when Retry chronology is authorized and tolerates unrelated run records", () =>
   Effect.gen(function* () {
     const history = yield* appendHistory("NotPrepared")
-    const q2 = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(provideJournal(history.journal))
+    const q2 = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(provideHistory(history))
     const unrelatedAttempt = PlannedTaskAttempt.make({
       ...plannedAttempt,
       attemptId: AttemptId.make("retry-conclusive-unrelated-attempt"),
@@ -417,18 +436,25 @@ it.effect("reconstructs Q2 only when Retry chronology is authorized and tolerate
       ordinal: IntegratorRunOrdinal.make(1),
       session: unrelatedSession
     })
-    yield* history.journal.append(
-      runId,
-      integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(unrelatedSession)),
-      IntegratorSessionFixedEvent.make({ correlation: unrelatedSession, version: workflowJournalEventVersion })
-    )
-    yield* history.journal.append(
-      runId,
-      integratorRunStartedRecordKey(unrelatedRun),
-      IntegratorRunStartedEvent.make({ run: unrelatedRun, version: workflowJournalEventVersion })
-    )
-
-    const records = yield* history.journal.read(runId)
+    const liveRecords = yield* history.journal.read(runId)
+    const records: ReadonlyArray<JournalRecord> = [
+      ...liveRecords,
+      {
+        event: IntegratorSessionFixedEvent.make({
+          correlation: unrelatedSession,
+          version: workflowJournalEventVersion
+        }),
+        key: integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(unrelatedSession)),
+        position: JournalPosition.make(liveRecords.length + 1),
+        runId
+      },
+      {
+        event: IntegratorRunStartedEvent.make({ run: unrelatedRun, version: workflowJournalEventVersion }),
+        key: integratorRunStartedRecordKey(unrelatedRun),
+        position: JournalPosition.make(liveRecords.length + 2),
+        runId
+      }
+    ]
     const reconstructed = deriveIntegrationQuarantineState(records, history.session.sessionId)
     expect(reconstructed._tag).toBe("Quarantined")
     if (reconstructed._tag !== "Quarantined") return
@@ -480,7 +506,7 @@ it.effect("reconstructs Q2 only when Retry chronology is authorized and tolerate
       { ...originalFreshObservation, position: JournalPosition.make(runStart.position + 2) }
     ]
     expect(deriveIntegrationQuarantineState(lineageAfterRunStart, history.session.sessionId)._tag).toBe("Contradiction")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("requires Q1, the winning Retry direction, fresh lineage, and exact run-two chronology", () =>
@@ -495,60 +521,42 @@ it.effect("requires Q1, the winning Retry direction, fresh lineage, and exact ru
       "IntegratorRunResultRecorded"
     ] as const
     for (const tag of requiredTags) {
-      const failure = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-        Effect.provideService(
-          InRunJournal,
-          readWithout(history, (record) => record.event._tag === tag)
-        ),
-        Effect.flip
-      )
-      expect(failure._tag).toBe("IntegratorJournalContradiction")
+      const failure = yield* coldIssue(history, (records) => records.filter((record) => record.event._tag !== tag))
+      expect(failure).toBeDefined()
     }
     const ordinalOne = IntegratorRunProtocolResult.cases.NotPrepared.make({
       detail: notPreparedDetail,
       run: IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session: history.session })
     })
-    const ordinalFailure = yield* appendRetryConclusiveIntegrationQuarantine(ordinalOne).pipe(
-      provideJournal(history.journal),
-      Effect.flip
-    )
-    expect(ordinalFailure._tag).toBe("IntegratorJournalContradiction")
+    const ordinalFailure = yield* coldIssue(history, (records) => records, ordinalOne)
+    expect(ordinalFailure).toBeDefined()
     expect(records.some(({ event }) => event._tag === "IntegratorRunStarted" && event.run.ordinal === 2)).toBe(true)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("rejects a Retry run-two candidate with missing, foreign, or valid Git evidence", () =>
   Effect.gen(function* () {
     const history = yield* appendHistory("CandidateRejected")
-    const missingObservation = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-      Effect.provideService(
-        InRunJournal,
-        readWithout(
-          history,
-          (record) =>
+    const missingObservation = yield* coldIssue(history, (records) =>
+      records.filter(
+        (record) =>
+          !(
             record.event._tag === "IntegratorRunCandidateGitObserved" &&
             record.event.run.ordinal === integratorRetryRunOrdinal
-        )
-      ),
-      Effect.flip
-    )
-    expect(missingObservation._tag).toBe("IntegratorJournalContradiction")
-
-    const foreignObservation = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-      Effect.provideService(
-        InRunJournal,
-        readWith(history, (records) =>
-          records.map((record) =>
-            record.event._tag === "IntegratorRunCandidateGitObserved" &&
-            record.event.run.ordinal === integratorRetryRunOrdinal
-              ? { ...record, key: JournalRecordKey.make("retry-conclusive:foreign-candidate-observation") }
-              : record
           )
-        )
-      ),
-      Effect.flip
+      )
     )
-    expect(foreignObservation._tag).toBe("IntegratorJournalContradiction")
+    expect(missingObservation).toBeDefined()
+
+    const foreignObservation = yield* coldIssue(history, (records) =>
+      records.map((record) =>
+        record.event._tag === "IntegratorRunCandidateGitObserved" &&
+        record.event.run.ordinal === integratorRetryRunOrdinal
+          ? { ...record, key: JournalRecordKey.make("retry-conclusive:foreign-candidate-observation") }
+          : record
+      )
+    )
+    expect(foreignObservation).toBeDefined()
 
     const validParents = IntegratorGitObservation.cases.Commit.make({
       candidateText,
@@ -560,12 +568,9 @@ it.effect("rejects a Retry run-two candidate with missing, foreign, or valid Git
       observation: validParents,
       run: history.run
     })
-    const validFailure = yield* appendRetryConclusiveIntegrationQuarantine(validInput).pipe(
-      provideJournal(history.journal),
-      Effect.flip
-    )
-    expect(validFailure._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+    const validFailure = yield* coldIssue(history, (records) => records, validInput)
+    expect(validFailure).toBeDefined()
+  })
 )
 
 it.effect("rejects duplicate, foreign, and missing exact Retry run evidence", () =>
@@ -582,43 +587,40 @@ it.effect("rejects duplicate, foreign, and missing exact Retry run evidence", ()
     if (runStart === undefined || runResult === undefined) return yield* Effect.die("retry fixture lacks run evidence")
 
     const rejectWith = (transform: (current: ReadonlyArray<JournalRecord>) => ReadonlyArray<JournalRecord>) =>
-      appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-        provideJournal(readWith(history, transform)),
-        Effect.flip
-      )
+      coldIssue(history, transform)
 
     const duplicateStart = yield* rejectWith((current) => [
       ...current,
       { ...runStart, position: JournalPosition.make(runStart.position + 1) }
     ])
-    expect(duplicateStart._tag).toBe("IntegratorJournalContradiction")
+    expect(duplicateStart).toBeDefined()
 
     const foreignStart = yield* rejectWith((current) =>
       current.map((record) =>
         record === runStart ? { ...record, runId: RunId.make("retry-conclusive-foreign-run") } : record
       )
     )
-    expect(foreignStart._tag).toBe("IntegratorJournalContradiction")
+    expect(foreignStart).toBeDefined()
 
     const wronglyKeyedStart = yield* rejectWith((current) =>
       current.map((record) =>
         record === runStart ? { ...record, key: JournalRecordKey.make("retry-conclusive:foreign-start-key") } : record
       )
     )
-    expect(wronglyKeyedStart._tag).toBe("IntegratorJournalContradiction")
+    expect(wronglyKeyedStart).toBeDefined()
 
     const duplicateResult = yield* rejectWith((current) => [
       ...current,
       { ...runResult, position: JournalPosition.make(runResult.position + 1) }
     ])
-    expect(duplicateResult._tag).toBe("IntegratorJournalContradiction")
+    expect(duplicateResult).toBeDefined()
 
     const foreignResult = yield* rejectWith((current) =>
       current.map((record) =>
         record === runResult ? { ...record, runId: RunId.make("retry-conclusive-foreign-result-run") } : record
       )
     )
-    expect(foreignResult._tag).toBe("IntegratorJournalContradiction")
+    expect(foreignResult).toBeDefined()
 
     const foreignResultCorrelation = yield* rejectWith((current) =>
       current.map((record) =>
@@ -642,28 +644,25 @@ it.effect("rejects duplicate, foreign, and missing exact Retry run evidence", ()
           : record
       )
     )
-    expect(foreignResultCorrelation._tag).toBe("IntegratorJournalContradiction")
+    expect(foreignResultCorrelation).toBeDefined()
 
     const wronglyKeyedResult = yield* rejectWith((current) =>
       current.map((record) =>
         record === runResult ? { ...record, key: JournalRecordKey.make("retry-conclusive:foreign-result-key") } : record
       )
     )
-    expect(wronglyKeyedResult._tag).toBe("IntegratorJournalContradiction")
+    expect(wronglyKeyedResult).toBeDefined()
 
-    const missingResult = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-      Effect.provideService(
-        InRunJournal,
-        readWithout(
-          history,
-          (record) =>
+    const missingResult = yield* coldIssue(history, (records) =>
+      records.filter(
+        (record) =>
+          !(
             record.event._tag === "IntegratorRunResultRecorded" &&
             record.event.run.ordinal === integratorRetryRunOrdinal
-        )
-      ),
-      Effect.flip
+          )
+      )
     )
-    expect(missingResult._tag).toBe("IntegratorJournalContradiction")
+    expect(missingResult).toBeDefined()
 
     const contradictoryResult = yield* rejectWith((current) =>
       current.map((record) =>
@@ -681,8 +680,8 @@ it.effect("rejects duplicate, foreign, and missing exact Retry run evidence", ()
           : record
       )
     )
-    expect(contradictoryResult._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+    expect(contradictoryResult).toBeDefined()
+  })
 )
 
 it.effect("rejects candidate evidence with foreign names, keys, or duplicate exact records", () =>
@@ -699,46 +698,43 @@ it.effect("rejects candidate evidence with foreign names, keys, or duplicate exa
       return yield* Effect.die("retry fixture lacks candidate evidence")
 
     const rejectWith = (transform: (current: ReadonlyArray<JournalRecord>) => ReadonlyArray<JournalRecord>) =>
-      appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-        provideJournal(readWith(history, transform)),
-        Effect.flip
-      )
+      coldIssue(history, transform)
 
     const duplicateRead = yield* rejectWith((current) => [
       ...current,
       { ...readIntent, position: JournalPosition.make(readIntent.position + 1) }
     ])
-    expect(duplicateRead._tag).toBe("IntegratorJournalContradiction")
+    expect(duplicateRead).toBeDefined()
 
     const duplicateObservation = yield* rejectWith((current) => [
       ...current,
       { ...observation, position: JournalPosition.make(observation.position + 1) }
     ])
-    expect(duplicateObservation._tag).toBe("IntegratorJournalContradiction")
+    expect(duplicateObservation).toBeDefined()
 
     const wronglyKeyedRead = yield* rejectWith((current) =>
       current.map((record) =>
         record === readIntent ? { ...record, key: JournalRecordKey.make("retry-conclusive:foreign-read-key") } : record
       )
     )
-    expect(wronglyKeyedRead._tag).toBe("IntegratorJournalContradiction")
+    expect(wronglyKeyedRead).toBeDefined()
 
     const foreignCandidate = IntegratorCandidateText.make("refs/heads/retry-conclusive-foreign-candidate")
-    yield* history.journal.append(
-      runId,
-      integratorRunCandidateGitReadIntendedRecordKey(history.run, foreignCandidate),
-      IntegratorRunCandidateGitReadIntendedEvent.make({
-        candidateText: foreignCandidate,
-        run: history.run,
-        version: workflowJournalEventVersion
-      })
-    )
-    const foreignCandidateFailure = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-      provideJournal(history.journal),
-      Effect.flip
-    )
-    expect(foreignCandidateFailure._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+    const foreignCandidateFailure = yield* coldIssue(history, (current) => [
+      ...current,
+      {
+        event: IntegratorRunCandidateGitReadIntendedEvent.make({
+          candidateText: foreignCandidate,
+          run: history.run,
+          version: workflowJournalEventVersion
+        }),
+        key: integratorRunCandidateGitReadIntendedRecordKey(history.run, foreignCandidate),
+        position: JournalPosition.make(current.length + 1),
+        runId
+      }
+    ])
+    expect(foreignCandidateFailure).toBeDefined()
+  })
 )
 
 it.effect("rejects PreparedCandidate input and a changed fresh Retry target head", () =>
@@ -751,113 +747,106 @@ it.effect("rejects PreparedCandidate input and a changed fresh Retry target head
       run: history.run
     })
     const preparedFailure = yield* appendRetryConclusiveIntegrationQuarantine(prepared).pipe(
-      provideJournal(history.journal),
+      provideHistory(history),
       Effect.flip
     )
     expect(preparedFailure._tag).toBe("IntegratorJournalContradiction")
 
-    const changedFreshHead = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-      Effect.provideService(
-        InRunJournal,
-        readWith(history, (records) =>
-          records.map((record) =>
-            record.event._tag === "TargetLineageObserved" &&
-            record.event.operationId === OperationId.make("retry-conclusive-fresh-lineage")
-              ? {
-                  ...record,
-                  event: TargetLineageObservedEvent.make({
-                    ...record.event,
-                    observation: TargetLineageObservation.make({ ...record.event.observation, targetHeadSha: base })
-                  })
-                }
-              : record
-          )
-        )
-      ),
-      Effect.flip
+    const changedFreshHead = yield* coldIssue(history, (records) =>
+      records.map((record) =>
+        record.event._tag === "TargetLineageObserved" &&
+        record.event.operationId === OperationId.make("retry-conclusive-fresh-lineage")
+          ? {
+              ...record,
+              event: TargetLineageObservedEvent.make({
+                ...record.event,
+                observation: TargetLineageObservation.make({ ...record.event.observation, targetHeadSha: base })
+              })
+            }
+          : record
+      )
     )
-    expect(changedFreshHead._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+    expect(changedFreshHead).toBeDefined()
+  })
 )
 
 it.effect("rejects NotPrepared when run-two candidate evidence was also recorded", () =>
   Effect.gen(function* () {
     const history = yield* appendHistory("NotPrepared")
-    yield* history.journal.append(
-      runId,
-      integratorRunCandidateGitReadIntendedRecordKey(history.run, candidateText),
-      IntegratorRunCandidateGitReadIntendedEvent.make({
-        candidateText,
-        run: history.run,
-        version: workflowJournalEventVersion
-      })
-    )
-    const failure = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-      provideJournal(history.journal),
-      Effect.flip
-    )
-    expect(failure._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+    const failure = yield* coldIssue(history, (records) => [
+      ...records,
+      {
+        event: IntegratorRunCandidateGitReadIntendedEvent.make({
+          candidateText,
+          run: history.run,
+          version: workflowJournalEventVersion
+        }),
+        key: integratorRunCandidateGitReadIntendedRecordKey(history.run, candidateText),
+        position: JournalPosition.make(records.length + 1),
+        runId
+      }
+    ])
+    expect(failure).toBeDefined()
+  })
 )
 
 it.effect("fails closed when an ambiguous or successful Q2 append returns a foreign Journal winner", () =>
   Effect.gen(function* () {
     const history = yield* appendHistory("NotPrepared")
-    const expected = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-      provideJournal(history.journal)
-    )
+    const expected = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(provideHistory(history))
     const records = yield* history.journal.read(runId)
-    const recordsBeforeQ2 = records.filter((record) => record.key !== expected.key)
     const foreignKey = JournalRecordKey.make("retry-conclusive:foreign-q2-key")
     const foreignWinner: JournalRecord = { ...expected, key: foreignKey }
-    let appendAttempted = false
+    expect(
+      retryConclusiveIntegrationQuarantineIssueFromRecords(
+        records.map((record) => (record === expected ? foreignWinner : record)),
+        history.input
+      )
+    ).toBeDefined()
 
+    const ambiguousHistory = yield* appendHistory("NotPrepared")
     const ambiguousFailureJournal: InRunJournal["Service"] = {
-      append: (requestedRunId, key) => {
-        appendAttempted = true
-        return Effect.fail(
-          new JournalStoreContradiction({ existingPosition: foreignWinner.position, key, runId: requestedRunId })
-        )
-      },
-      read: () => Effect.succeed(appendAttempted ? [...recordsBeforeQ2, foreignWinner] : recordsBeforeQ2)
+      append: (requestedRunId, key) =>
+        Effect.fail(
+          new JournalStoreContradiction({ existingPosition: JournalPosition.make(50_000), key, runId: requestedRunId })
+        ),
+      read: () => Effect.die("live Retry quarantine recovery must use accepted indexed evidence")
     }
-    const ambiguousFailure = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-      provideJournal(ambiguousFailureJournal),
+    const ambiguousFailure = yield* appendRetryConclusiveIntegrationQuarantine(ambiguousHistory.input).pipe(
+      provideHistory(ambiguousHistory, ambiguousFailureJournal),
       Effect.flip
     )
     expect(ambiguousFailure._tag).toBe("IntegratorJournalContradiction")
 
+    const returnedHistory = yield* appendHistory("NotPrepared")
     const returnedForeignJournal: InRunJournal["Service"] = {
       append: (requestedRunId) => Effect.succeed({ ...expected, key: foreignKey, runId: requestedRunId }),
-      read: () => Effect.succeed(recordsBeforeQ2)
+      read: () => Effect.die("live Retry quarantine recovery must use accepted indexed evidence")
     }
-    const returnedForeign = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-      provideJournal(returnedForeignJournal),
+    const returnedForeign = yield* appendRetryConclusiveIntegrationQuarantine(returnedHistory.input).pipe(
+      provideHistory(returnedHistory, returnedForeignJournal),
       Effect.flip
     )
     expect(returnedForeign._tag).toBe("IntegratorJournalContradiction")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("reconciles an ambiguous Q2 append to the Journal winner", () =>
   Effect.gen(function* () {
     const history = yield* appendHistory("NotPrepared")
-    const records = yield* history.journal.read(runId)
-    let winner: JournalRecord | undefined
     const ambiguousJournal: InRunJournal["Service"] = {
-      append: (requestedRunId, key, event) => {
-        winner = { event, key, position: JournalPosition.make(records.length + 1), runId: requestedRunId }
-        return Effect.fail(
-          new JournalStoreContradiction({ existingPosition: winner.position, key, runId: requestedRunId })
-        )
-      },
-      read: () => (winner === undefined ? Effect.succeed(records) : Effect.succeed([...records, winner]))
+      append: (requestedRunId, key, event) =>
+        Effect.gen(function* () {
+          const winner = yield* history.journal.append(requestedRunId, key, event)
+          return yield* new JournalStoreContradiction({ existingPosition: winner.position, key, runId: requestedRunId })
+        }),
+      read: () => Effect.die("live Retry quarantine recovery must use accepted indexed evidence")
     }
     const reconciled = yield* appendRetryConclusiveIntegrationQuarantine(history.input).pipe(
-      provideJournal(ambiguousJournal)
+      provideHistory(history, ambiguousJournal)
     )
     expect(reconciled.key).toEqual(integrationQuarantinedRecordKey(history.session.sessionId, reconciled.event.basis))
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("strictly rejects excess input fields before any Q2 append", () =>
@@ -865,9 +854,9 @@ it.effect("strictly rejects excess input fields before any Q2 append", () =>
     const history = yield* appendHistory("NotPrepared")
     const malformed = { ...history.input, unexpected: true }
     const failure = yield* appendRetryConclusiveIntegrationQuarantine(malformed).pipe(
-      provideJournal(history.journal),
+      provideHistory(history),
       Effect.flip
     )
     expect(failure).toBeInstanceOf(Schema.SchemaError)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )

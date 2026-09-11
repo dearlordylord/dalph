@@ -326,6 +326,37 @@ const ensureDirectionAvailable = (
     : Effect.void
 }
 
+export type IntegrationQuarantineDirectionPreflight =
+  | { readonly _tag: "DirectionAlreadyRecorded"; readonly result: IntegrationQuarantineDirectionApplicationResult }
+  | { readonly _tag: "DirectionReady" }
+
+const preflightDecodedDirection = Effect.fn("IntegrationQuarantineDirectionControl.preflightDecoded")(function* (
+  records: JournalHistorySource,
+  request: ApplyIntegrationQuarantineDirectionRequest
+) {
+  const runId = request.requestId.runId
+  if (!runHasBegan(records)) return yield* new WorkflowRunNotBegan({ runId })
+  const existingRequest = yield* reconcileExistingRequest(records, request)
+  if (existingRequest !== undefined) return { _tag: "DirectionAlreadyRecorded" as const, result: existingRequest }
+  const quarantine = yield* requireQuarantine(records, request)
+  yield* ensureDirectionAvailable(records, request, quarantine)
+  return { _tag: "DirectionReady" as const }
+})
+
+/**
+ * Validates unaccepted persisted evidence before a live Journal can exist.
+ * This is the explicit cold-corruption diagnostic boundary; runtime direction
+ * application always reads from AcceptedJournalReader instead.
+ */
+export const preflightIntegrationQuarantineDirectionFromRecords = Effect.fn(
+  "IntegrationQuarantineDirectionControl.preflightColdRecords"
+)(function* (records: ReadonlyArray<JournalRecord>, input: unknown) {
+  const request = yield* Schema.decodeUnknownEffect(ApplyIntegrationQuarantineDirectionRequest, {
+    onExcessProperty: "error"
+  })(input)
+  return yield* preflightDecodedDirection(records, request)
+})
+
 /** Builds the narrow Journal-backed control for use both during and between Run activations. */
 export const makeIntegrationQuarantineDirectionControl = Effect.fn("IntegrationQuarantineDirectionControl.make")(
   function* (journal: InRunJournal["Service"]) {
@@ -337,12 +368,8 @@ export const makeIntegrationQuarantineDirectionControl = Effect.fn("IntegrationQ
       })(input)
       const runId = request.requestId.runId
       const records = yield* accepted.readAccepted(runId)
-      if (!runHasBegan(records)) return yield* new WorkflowRunNotBegan({ runId })
-
-      const existingRequest = yield* reconcileExistingRequest(records, request)
-      if (existingRequest !== undefined) return existingRequest
-      const quarantine = yield* requireQuarantine(records, request)
-      yield* ensureDirectionAvailable(records, request, quarantine)
+      const preflight = yield* preflightDecodedDirection(records, request)
+      if (preflight._tag === "DirectionAlreadyRecorded") return preflight.result
 
       const event = IntegrationQuarantineDirectionAppliedEvent.make({
         fingerprint: request.fingerprint,

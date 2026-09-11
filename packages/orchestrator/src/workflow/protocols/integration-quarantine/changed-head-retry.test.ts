@@ -1,8 +1,9 @@
 import { it } from "@effect/vitest"
-import { GitCommitSha, RunId } from "@dalph/contracts"
-import { Effect, Ref, Schema, Stream } from "effect"
+import { GitCommitSha, RunId, makeTaskWorkSpecification } from "@dalph/contracts"
+import { Context, Effect, Layer, Ref, Schema, Stream } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
+import { ActiveTaskClaim } from "../../../authorities/task-tracker/claim-mutation.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
@@ -11,7 +12,10 @@ import { RunnableFrontierTransition } from "../../../coordination/frontier/front
 import { deliveryProposalsOf } from "../../../coordination/delivery/delivery-proposal.js"
 import { executeIntegrationAction } from "../../../coordination/delivery/integration-delivery-action-adapter.js"
 import type { DeliveryActionExecutionLease } from "../../../coordination/delivery/delivery-action-executor.js"
-import type { IdentityFreeDeliveryProposal } from "../../../coordination/delivery/delivery-action-proposal.js"
+import type {
+  DeliveryActionProposal,
+  IdentityFreeDeliveryProposal
+} from "../../../coordination/delivery/delivery-action-proposal.js"
 import { Integrator } from "../integrator/protocol.js"
 import { evaluateIntegratorRetryAuthorization } from "../integrator/retry-authorization.js"
 import {
@@ -23,10 +27,11 @@ import {
   intentRecordKey,
   outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
-import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
-import type { JournalRecord, JournalStoreService } from "../../../workflow-journal/store.js"
-import { InRunJournal, JournalStore, JournalStoreContradiction } from "../../../workflow-journal/store.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { JournalPosition } from "../../../workflow-journal/identity.js"
+import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { InRunJournal, JournalStoreContradiction } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { OperationId } from "../../identity.js"
 import { GitReadIntentRecordedEvent, TargetLineageObservedEvent } from "../../registry/event.js"
@@ -55,6 +60,7 @@ import {
   ChangedHeadRetryQuarantineInput,
   IntegrationChangedHeadRetryQuarantineRejected
 } from "./changed-head-retry.js"
+import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
 
 const baseSession = integrationFinalityFixture.qualifiedCandidate.run.session
 const target = FixtureTarget.make("changed-head-retry-target")
@@ -62,23 +68,29 @@ const fixedHead = baseSession.expectedTargetHead
 const changedHead = GitCommitSha.make("4".repeat(40))
 
 type Scenario = {
+  readonly acceptedJournalReader: AcceptedJournalReader["Service"]
   readonly directionRecord: JournalRecord
   readonly fixedSession: JournalRecord
-  readonly journal: JournalStoreService
+  readonly journal: InRunJournal["Service"]
   readonly lineage: JournalRecord
   readonly prior: JournalRecord
   readonly runId: RunId
   readonly session: IntegratorSessionCorrelation
 }
 
-const sessionFor = (suffix: string): IntegratorSessionCorrelation =>
+const sessionFor = (
+  suffix: string,
+  accepted: ReturnType<typeof makeAcceptedIntegrationHistory>
+): IntegratorSessionCorrelation =>
   IntegratorSessionCorrelation.make({
     ...baseSession,
-    plannedAttempt: { ...baseSession.plannedAttempt, runId: RunId.make(`changed-head-retry-run:${suffix}`) },
-    queuedAt: JournalPosition.make(5),
+    acceptedResult: accepted.responsibility.acceptedResult,
+    integrationTarget: accepted.responsibility.integrationTarget,
+    plannedAttempt: accepted.responsibility.plannedAttempt,
+    queuedAt: accepted.responsibility.queuedAt,
     sessionId: IntegratorSessionId.make(`${baseSession.sessionId}-${suffix}`),
-    startedAt: JournalPosition.make(5),
-    targetLineageObservedAt: JournalPosition.make(3)
+    startedAt: accepted.responsibility.startedAt,
+    targetLineageObservedAt: accepted.targetLineageObservedAt
   })
 
 const lineageOperationFor = (session: IntegratorSessionCorrelation, suffix: string) =>
@@ -90,7 +102,7 @@ const lineageOperationFor = (session: IntegratorSessionCorrelation, suffix: stri
   })
 
 const appendLineage = Effect.fn("ChangedHeadRetryTest.appendLineage")(function* (
-  journal: JournalStoreService,
+  journal: InRunJournal["Service"],
   session: IntegratorSessionCorrelation,
   head: GitCommitSha,
   suffix: string
@@ -126,18 +138,36 @@ const appendLineage = Effect.fn("ChangedHeadRetryTest.appendLineage")(function* 
 const appendScenario = Effect.fn("ChangedHeadRetryTest.appendScenario")(function* (
   suffix: string,
   direction: "Retry" | "FullRerun" = "Retry",
-  freshHead: GitCommitSha = changedHead,
-  includeRunStart = true
+  freshHead: GitCommitSha = changedHead
 ) {
-  const journal = yield* JournalStore
-  const session = sessionFor(suffix)
-  const scenarioRunId = session.plannedAttempt.runId
-  yield* journal.beginRun(
-    scenarioRunId,
-    target,
-    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-  )
-  yield* appendLineage(journal, session, fixedHead, `${suffix}:fixed`)
+  const scenarioRunId = RunId.make(`changed-head-retry-run:${suffix}`)
+  const taskSpecification = makeTaskWorkSpecification({
+    body: `Exercise changed-head Retry quarantine ${suffix}.`,
+    taskId: baseSession.plannedAttempt.taskId,
+    title: `Changed-head Retry ${suffix}`
+  })
+  const plannedAttempt = {
+    ...baseSession.plannedAttempt,
+    runId: scenarioRunId,
+    taskRevision: taskSpecification.fingerprint
+  }
+  const accepted = makeAcceptedIntegrationHistory({
+    acceptedResult: baseSession.acceptedResult,
+    activeClaim: ActiveTaskClaim.make({
+      ...integrationFinalityFixture.activeClaim,
+      operationId: OperationId.make(`changed-head-retry-claim:${suffix}`)
+    }),
+    integrationTarget: baseSession.integrationTarget,
+    initialControlPolicy: InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) }),
+    plannedAttempt,
+    runId: scenarioRunId,
+    targetHeadSha: fixedHead,
+    taskSpecification,
+    trackerTarget: target
+  })
+  const session = sessionFor(suffix, accepted)
+  const live = yield* Layer.build(liveJournalTestLayer({ records: accepted.records, runId: scenarioRunId, target }))
+  const journal = Context.get(live, InRunJournal)
   const fixedSession = yield* journal.append(
     scenarioRunId,
     integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(session)),
@@ -145,13 +175,11 @@ const appendScenario = Effect.fn("ChangedHeadRetryTest.appendScenario")(function
   )
   const absenceDetail = IntegrationQuarantineFailureDetail.make(`provider activity absent: ${suffix}`)
   const run = IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(1), session })
-  if (includeRunStart) {
-    yield* journal.append(
-      scenarioRunId,
-      integratorRunStartedRecordKey(run),
-      IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })
-    )
-  }
+  yield* journal.append(
+    scenarioRunId,
+    integratorRunStartedRecordKey(run),
+    IntegratorRunStartedEvent.make({ run, version: workflowJournalEventVersion })
+  )
   const priorBasis = yield* Effect.gen(function* () {
     const absence = yield* journal.append(
       scenarioRunId,
@@ -198,8 +226,28 @@ const appendScenario = Effect.fn("ChangedHeadRetryTest.appendScenario")(function
     })
   )
   const lineage = yield* appendLineage(journal, session, freshHead, `${suffix}:fresh`)
-  return { directionRecord, fixedSession, journal, lineage, prior, runId: scenarioRunId, session } satisfies Scenario
+  return {
+    acceptedJournalReader: Context.get(live, AcceptedJournalReader),
+    directionRecord,
+    fixedSession,
+    journal: Context.get(live, InRunJournal),
+    lineage,
+    prior,
+    runId: scenarioRunId,
+    session
+  } satisfies Scenario
 })
+
+const provideScenario =
+  (scenario: Scenario) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R | AcceptedJournalReader | InRunJournal>) =>
+    effect.pipe(
+      Effect.provideService(InRunJournal, scenario.journal),
+      Effect.provideService(AcceptedJournalReader, scenario.acceptedJournalReader)
+    )
+
+const isIdentityFreeDeliveryProposal = (proposal: DeliveryActionProposal): proposal is IdentityFreeDeliveryProposal =>
+  proposal.actionIdentity._tag === "NoWorkflowOperationIdentity"
 
 const inputFor = (scenario: Scenario, targetHead: GitCommitSha = changedHead): ChangedHeadRetryQuarantineInput =>
   ChangedHeadRetryQuarantineInput.make({
@@ -218,8 +266,8 @@ it.effect("starts no retry when the session target head has changed", () =>
   Effect.gen(function* () {
     const scenario = yield* appendScenario("changed")
     const input = inputFor(scenario)
-    const first = yield* appendChangedHeadRetryQuarantine(input)
-    const second = yield* appendChangedHeadRetryQuarantine(input)
+    const first = yield* appendChangedHeadRetryQuarantine(input).pipe(provideScenario(scenario))
+    const second = yield* appendChangedHeadRetryQuarantine(input).pipe(provideScenario(scenario))
     expect(second).toEqual(first)
     expect(first.event.basis).toEqual({
       _tag: "RetryTargetHeadChanged",
@@ -243,23 +291,23 @@ it.effect("starts no retry when the session target head has changed", () =>
       _tag: "Rejected",
       detail: "Retry authorization was terminated by a changed-head quarantine"
     })
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("rejects an idempotent replay whose complete lineage facts do not match L", () =>
   Effect.gen(function* () {
     const scenario = yield* appendScenario("invalid-replay")
     const input = inputFor(scenario)
-    const first = yield* appendChangedHeadRetryQuarantine(input)
+    const first = yield* appendChangedHeadRetryQuarantine(input).pipe(provideScenario(scenario))
 
     const foreignBase = yield* appendChangedHeadRetryQuarantine({
       ...input,
       targetLineage: { ...input.targetLineage, plannedBaseSha: GitCommitSha.make("5".repeat(40)) }
-    }).pipe(Effect.flip)
+    }).pipe(provideScenario(scenario), Effect.flip)
     const foreignAncestry = yield* appendChangedHeadRetryQuarantine({
       ...input,
       targetLineage: { ...input.targetLineage, plannedBaseIsAncestorOfTargetHead: false }
-    }).pipe(Effect.flip)
+    }).pipe(provideScenario(scenario), Effect.flip)
 
     expect(foreignBase).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
     expect(foreignAncestry).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
@@ -268,7 +316,7 @@ it.effect("rejects an idempotent replay whose complete lineage facts do not matc
         ({ event }) => event._tag === "IntegrationQuarantined" && event.basis._tag === "RetryTargetHeadChanged"
       )
     ).toEqual([first])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("routes changed-head Retry through delivery once, releases ownership, and never calls Integrator", () =>
@@ -293,10 +341,10 @@ it.effect("routes changed-head Retry through delivery once, releases ownership, 
       transitions: [transition]
     })
     const candidate = [...contributions.ticketDelivery, ...contributions.deliverySettlement][0]
-    if (candidate === undefined || candidate.actionIdentity._tag !== "NoWorkflowOperationIdentity") {
+    if (candidate === undefined || !isIdentityFreeDeliveryProposal(candidate)) {
       return yield* Effect.die("expected one identity-free changed-head disposition proposal")
     }
-    const proposal = candidate as IdentityFreeDeliveryProposal
+    const proposal = candidate
 
     const releases = yield* Ref.make(0)
     const integratorCalls = yield* Ref.make(0)
@@ -329,8 +377,14 @@ it.effect("routes changed-head Retry through delivery once, releases ownership, 
         })
       )
     )
-    expect(yield* run).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
-    expect(yield* run).toMatchObject({ _tag: "ActionCompleted", proposalId: proposal.id })
+    expect(yield* run.pipe(provideScenario(scenario))).toMatchObject({
+      _tag: "ActionCompleted",
+      proposalId: proposal.id
+    })
+    expect(yield* run.pipe(provideScenario(scenario))).toMatchObject({
+      _tag: "ActionCompleted",
+      proposalId: proposal.id
+    })
     expect(yield* Ref.get(releases)).toBe(2)
     expect(yield* Ref.get(integratorCalls)).toBe(0)
     expect(
@@ -347,56 +401,77 @@ it.effect("routes changed-head Retry through delivery once, releases ownership, 
     expect(
       yield* executeIntegrationAction(action, rejectedTransition, lease, target).pipe(
         Effect.provideService(Integrator, Integrator.of({ prepare: () => Effect.die("unexpected Integrator call") })),
+        provideScenario(scenario),
         Effect.flip
       )
     ).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
     expect(yield* Ref.get(releases)).toBe(2)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
 
-it.effect("rejects unchanged, foreign, FullRerun, and duplicate Retry evidence without appending", () =>
+it.effect("rejects unchanged, foreign, and FullRerun evidence without appending", () =>
   Effect.gen(function* () {
     const unchanged = yield* appendScenario("unchanged", "Retry", fixedHead)
-    const unchangedFailure = yield* appendChangedHeadRetryQuarantine(inputFor(unchanged, fixedHead)).pipe(Effect.flip)
+    const unchangedFailure = yield* appendChangedHeadRetryQuarantine(inputFor(unchanged, fixedHead)).pipe(
+      provideScenario(unchanged),
+      Effect.flip
+    )
     expect(unchangedFailure).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
 
     const full = yield* appendScenario("full", "FullRerun")
-    const fullFailure = yield* appendChangedHeadRetryQuarantine(inputFor(full)).pipe(Effect.flip)
+    const fullFailure = yield* appendChangedHeadRetryQuarantine(inputFor(full)).pipe(provideScenario(full), Effect.flip)
     expect(fullFailure).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
 
     const foreign = yield* appendScenario("foreign")
     const foreignFailure = yield* appendChangedHeadRetryQuarantine(
       inputFor({ ...foreign, directionRecord: foreign.lineage })
-    ).pipe(Effect.flip)
+    ).pipe(provideScenario(foreign), Effect.flip)
     expect(foreignFailure).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
 
-    const duplicate = yield* appendScenario("duplicate")
-    yield* duplicate.journal.append(
-      duplicate.runId,
-      JournalRecordKey.make("changed-head-retry:duplicate:second-direction"),
-      IntegrationQuarantineDirectionAppliedEvent.make({
-        fingerprint: IntegrationQuarantineDirectionFingerprint.make({
-          direction: "FullRerun",
-          quarantineAt: duplicate.prior.position,
-          sessionId: duplicate.session.sessionId
-        }),
-        initiatedBy: { _tag: "Operator" },
-        occurrenceClassification: "InitiatedAction",
-        requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "duplicate:full", runId: duplicate.runId }),
-        version: workflowJournalEventVersion
-      })
-    )
-    const duplicateFailure = yield* appendChangedHeadRetryQuarantine(inputFor(duplicate)).pipe(Effect.flip)
-    expect(duplicateFailure).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
-
-    for (const scenario of [unchanged, full, foreign, duplicate]) {
+    for (const scenario of [unchanged, full, foreign]) {
       expect(
         (yield* scenario.journal.read(scenario.runId)).filter(
           ({ event }) => event._tag === "IntegrationQuarantined" && event.basis._tag === "RetryTargetHeadChanged"
         )
       ).toHaveLength(0)
     }
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
+)
+
+it.effect("keeps duplicate Retry directions on the explicit raw diagnostic boundary", () =>
+  Effect.gen(function* () {
+    const scenario = yield* appendScenario("duplicate")
+    const records = yield* scenario.journal.read(scenario.runId)
+    const duplicateEvent = IntegrationQuarantineDirectionAppliedEvent.make({
+      fingerprint: IntegrationQuarantineDirectionFingerprint.make({
+        direction: "FullRerun",
+        quarantineAt: scenario.prior.position,
+        sessionId: scenario.session.sessionId
+      }),
+      initiatedBy: { _tag: "Operator" },
+      occurrenceClassification: "InitiatedAction",
+      requestId: IntegrationQuarantineDirectionRequestId.make({ nonce: "duplicate:full", runId: scenario.runId }),
+      version: workflowJournalEventVersion
+    })
+    const duplicateRecord: JournalRecord = {
+      event: duplicateEvent,
+      key: integrationQuarantineDirectionAppliedRecordKey(
+        IntegrationQuarantineDirectionSubject.make({
+          quarantineAt: scenario.prior.position,
+          sessionId: scenario.session.sessionId
+        })
+      ),
+      position: JournalPosition.make(records.length + 1),
+      runId: scenario.runId
+    }
+    expect(
+      evaluateIntegratorRetryAuthorization(
+        [...records, duplicateRecord],
+        IntegratorRunCorrelation.make({ ordinal: IntegratorRunOrdinal.make(2), session: scenario.session }),
+        { requiredTargetLineageObservedAt: scenario.lineage.position }
+      )
+    ).toMatchObject({ _tag: "Rejected", detail: "Retry authorization requires one exact Journal history for the Run" })
+  })
 )
 
 it.effect("rejects a foreign target-lineage position and strict malformed input", () =>
@@ -404,19 +479,26 @@ it.effect("rejects a foreign target-lineage position and strict malformed input"
     const scenario = yield* appendScenario("lineage-foreign")
     const foreignPositionFailure = yield* appendChangedHeadRetryQuarantine(
       inputFor({ ...scenario, lineage: scenario.fixedSession }, changedHead)
-    ).pipe(Effect.flip)
+    ).pipe(provideScenario(scenario), Effect.flip)
     expect(foreignPositionFailure).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
     const malformedFailure = yield* appendChangedHeadRetryQuarantine({ ...inputFor(scenario), unexpected: true }).pipe(
+      provideScenario(scenario),
       Effect.flip
     )
     expect(malformedFailure).toBeInstanceOf(Schema.SchemaError)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("rejects missing run-start evidence", () =>
   Effect.gen(function* () {
-    const missingStart = yield* appendScenario("missing-start", "Retry", changedHead, false)
-    const missingStartFailure = yield* appendChangedHeadRetryQuarantine(inputFor(missingStart)).pipe(Effect.flip)
+    const missingStart = yield* appendScenario("missing-start")
+    const missingStartFailure = yield* appendChangedHeadRetryQuarantine({
+      ...inputFor(missingStart),
+      session: IntegratorSessionCorrelation.make({
+        ...missingStart.session,
+        startedAt: JournalPosition.make(Number(missingStart.session.startedAt) + 10_000)
+      })
+    }).pipe(provideScenario(missingStart), Effect.flip)
     expect(missingStartFailure).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
 
     expect(
@@ -424,7 +506,7 @@ it.effect("rejects missing run-start evidence", () =>
         ({ event }) => event._tag === "IntegrationQuarantined" && event.basis._tag === "RetryTargetHeadChanged"
       )
     ).toHaveLength(0)
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("recovers the durable ambiguous Q2 winner and rejects missing or returned foreign winners", () =>
@@ -444,6 +526,7 @@ it.effect("recovers the durable ambiguous Q2 winner and rejects missing or retur
     }
     const missingWinner = yield* appendChangedHeadRetryQuarantine(inputFor(scenario)).pipe(
       Effect.provideService(InRunJournal, missingWinnerJournal),
+      Effect.provideService(AcceptedJournalReader, scenario.acceptedJournalReader),
       Effect.flip
     )
     expect(missingWinner).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
@@ -460,6 +543,7 @@ it.effect("recovers the durable ambiguous Q2 winner and rejects missing or retur
     }
     const returnedForeign = yield* appendChangedHeadRetryQuarantine(inputFor(scenario)).pipe(
       Effect.provideService(InRunJournal, returnedForeignJournal),
+      Effect.provideService(AcceptedJournalReader, scenario.acceptedJournalReader),
       Effect.flip
     )
     expect(returnedForeign).toBeInstanceOf(IntegrationChangedHeadRetryQuarantineRejected)
@@ -468,15 +552,14 @@ it.effect("recovers the durable ambiguous Q2 winner and rejects missing or retur
       append: (requestedRunId, key, event) =>
         Effect.gen(function* () {
           const winner = yield* scenario.journal.append(requestedRunId, key, event)
-          return yield* Effect.fail(
-            new JournalStoreContradiction({ existingPosition: winner.position, key, runId: requestedRunId })
-          )
+          return yield* new JournalStoreContradiction({ existingPosition: winner.position, key, runId: requestedRunId })
         }),
       read: () => Effect.die("live changed-head recovery must use accepted indexed evidence")
     }
     const reconciled = yield* appendChangedHeadRetryQuarantine(inputFor(scenario)).pipe(
-      Effect.provideService(InRunJournal, reconciledJournal)
+      Effect.provideService(InRunJournal, reconciledJournal),
+      Effect.provideService(AcceptedJournalReader, scenario.acceptedJournalReader)
     )
     expect(reconciled.event._tag).toBe("IntegrationQuarantined")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
