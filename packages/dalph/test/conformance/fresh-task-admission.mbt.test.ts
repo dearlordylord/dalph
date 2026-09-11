@@ -613,15 +613,13 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
     sequence = Number(records.at(-1)?.position ?? 1)
     visiblePrefixLength = visibility === "Visible" ? records.length : visibleBeforeAppend
     const operation = latestClaimOperationFor(tag)
-    if (operation === undefined) return Effect.runSync(Effect.die(`missing accepted handoff claim for ${tag}`))
+    if (operation === undefined) return yield* Effect.die(`missing accepted handoff claim for ${tag}`)
     if (
       projectFreshTaskCommitments(runId, visibility === "Visible" ? visibleRecords() : records).some(
         ({ commitment }) => commitment.operation.acquisition.operationId === operation.acquisition.operationId
       )
     ) {
-      return Effect.runSync(
-        Effect.die(`accepted handoff did not dispose commitment ${operation.acquisition.operationId}`)
-      )
+      return yield* Effect.die(`accepted handoff did not dispose commitment ${operation.acquisition.operationId}`)
     }
     return acceptedResponsibility
   })
@@ -1066,7 +1064,7 @@ const freshTaskAdmissionDriver = defineDriver(actionNames, () => {
       Effect.gen(function* () {
         const tag = tagged(input)
         const operation = latestClaimOperationFor(tag)
-        if (operation === undefined) return Effect.runSync(Effect.die(`missing accepted handoff claim for ${tag}`))
+        if (operation === undefined) return yield* Effect.die(`missing accepted handoff claim for ${tag}`)
         yield* appendAcceptedResponsibility(tag, "AcceptedUnobserved")
       }),
     loseExecutorResponsibilityAppendResponseFor: (input) =>
