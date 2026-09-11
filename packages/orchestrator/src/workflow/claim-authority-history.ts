@@ -83,10 +83,7 @@ export const causalClaimForAttempt = (
 
 /** Finds the original planned claim or the latest claim authorized by an exact accepted reacquisition direction. */
 type AcquiredClaimEvent = Extract<WorkflowJournalEvent, { readonly _tag: "TaskClaimAcquired" }>
-const authorizedClaimsByPrefix = new WeakMap<
-  JournalHistorySource,
-  Map<AttemptId, AcquiredClaimEvent | undefined>
->()
+const authorizedClaimsByPrefix = new WeakMap<JournalHistorySource, Map<AttemptId, AcquiredClaimEvent | undefined>>()
 
 const deriveAuthorizedClaimForAttempt = (
   records: JournalHistorySource,

@@ -353,9 +353,7 @@ export const validateContinuationWorktreeWitness = (
     )
   }
   if (
-    Array.from(
-      journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptWorktreeObserved")
-    ).some(
+    Array.from(journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptWorktreeObserved")).some(
       ({ event, position }) =>
         position > currentOutcome.position &&
         event._tag === "PlannedAttemptWorktreeObserved" &&

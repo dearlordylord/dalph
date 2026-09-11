@@ -14,10 +14,7 @@ import {
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
-import {
-  journalRecordsForAttempt,
-  type JournalHistorySource
-} from "../../../workflow-journal/record-evidence.js"
+import { journalRecordsForAttempt, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 import {
   PlannedAttemptExecutorBeginReportContradiction,
   PlannedAttemptExecutorInitialReportCausalityContradiction,

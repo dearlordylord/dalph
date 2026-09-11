@@ -1,9 +1,6 @@
 import { type PlannedTaskAttempt, type RunId, plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
-import {
-  intentRecordKey,
-  outcomeRecordKey
-} from "../../../workflow-journal/record-key.js"
+import { intentRecordKey, outcomeRecordKey } from "../../../workflow-journal/record-key.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import {
@@ -69,14 +66,10 @@ const recordedPlanEntriesBefore = (
     const record = journalRecordForOperationId(records, operation.operationId)
     if (record === undefined) return []
     if (record.runId !== runId || (before !== undefined && record.position >= before)) return []
-    if (
-      record.event._tag === "TaskAttemptPlanned"
-    ) {
+    if (record.event._tag === "TaskAttemptPlanned") {
       return [operation]
     }
-    if (
-      record.event._tag === "PlannedAttemptReplaced"
-    ) {
+    if (record.event._tag === "PlannedAttemptReplaced") {
       return [operation]
     }
     return []
