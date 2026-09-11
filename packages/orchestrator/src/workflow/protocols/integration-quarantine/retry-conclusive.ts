@@ -9,6 +9,12 @@ import {
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordByPosition,
+  journalRecordsForIntegratorSession,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { exactJournalRecordAtKey } from "../../../workflow-journal/exact-record.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
@@ -157,7 +163,7 @@ const conclusiveBasisFor = (
   })
 
 const validateRunStart = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   run: IntegratorRunCorrelation
 ): EvidenceValidation<RunStartedRecord> => {
   const key = integratorRunStartedRecordKey(run)
@@ -166,7 +172,7 @@ const validateRunStart = (
   if (atKey._tag === "Found" && !runStartMatches(atKey.record, run)) {
     return invalidEvidence("Retry run-two start key contains foreign evidence")
   }
-  const matching = records.filter(
+  const matching = Array.from(journalRecordsForIntegratorSession(records, run.session.sessionId)).filter(
     (record): record is RunStartedRecord =>
       record.event._tag === "IntegratorRunStarted" &&
       record.runId === runIdFor(run) &&
@@ -184,7 +190,7 @@ const validateRunStart = (
 }
 
 const validateRunResult = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   input: RetryConclusiveIntegrationQuarantineInput,
   start: RunStartedRecord
 ): EvidenceValidation<RunResultRecord> => {
@@ -196,7 +202,7 @@ const validateRunResult = (
   if (atKey._tag === "Found" && !runResultMatches(atKey.record, input, start)) {
     return invalidEvidence("Retry run-two result key contains foreign or contradictory evidence")
   }
-  const matching = records.filter(
+  const matching = Array.from(journalRecordsForIntegratorSession(records, run.session.sessionId)).filter(
     (record): record is RunResultRecord =>
       record.event._tag === "IntegratorRunResultRecorded" &&
       record.runId === runIdFor(run) &&
@@ -255,7 +261,7 @@ interface ExactCandidateEvidence {
 }
 
 const exactCandidateEvidence = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   result: CandidateRejectedInput
 ): EvidenceValidation<ExactCandidateEvidence> => {
   const readIntentLookup = exactJournalRecordAtKey(
@@ -293,7 +299,7 @@ const candidateChronologyIsExact = (
   )
 
 const validateCandidateRejectedEvidence = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   candidateEvents: ReadonlyArray<JournalRecord>,
   result: CandidateRejectedInput,
   resultRecord: RunResultRecord
@@ -319,7 +325,7 @@ const validateCandidateRejectedEvidence = (
 }
 
 const validateHistory = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   result: RetryConclusiveIntegrationQuarantineInput
 ): EvidenceValidation<ConclusiveBasis> => {
   const run = result.run
@@ -339,7 +345,9 @@ const validateHistory = (
 
   const recordedResult = validateRunResult(records, result, start.value)
   if (recordedResult._tag === "Invalid") return recordedResult
-  const candidateEvents = records.filter((record) => sameRunCandidateEvent(record, run))
+  const candidateEvents = Array.from(journalRecordsForIntegratorSession(records, run.session.sessionId)).filter(
+    (record) => sameRunCandidateEvent(record, run)
+  )
   return result._tag === "NotPrepared"
     ? validateNotPreparedEvidence(candidateEvents, result, recordedResult.value)
     : validateCandidateRejectedEvidence(records, candidateEvents, result, recordedResult.value)
@@ -357,7 +365,7 @@ export const appendRetryConclusiveIntegrationQuarantine = Effect.fn(
   const journal = yield* InRunJournal
   const run = result.run
   const runId = runIdFor(run)
-  const records = yield* journal.read(runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(runId)
   const validation = validateHistory(records, result)
   if (validation._tag === "Invalid") return yield* reject(run, validation.detail)
 
@@ -379,7 +387,7 @@ export const appendRetryConclusiveIntegrationQuarantine = Effect.fn(
       : yield* reject(run, "Retry conclusive quarantine key contains a foreign event")
     /* v8 ignore stop -- @preserve */
   }
-  const duplicate = records.filter(
+  const duplicate = Array.from(journalRecordsForIntegratorSession(records, run.session.sessionId)).filter(
     (record) => record.event._tag === "IntegrationQuarantined" && quarantineEventEquivalence(record.event, event)
   )
   /* v8 ignore next -- @preserve exactSessionQuarantines rejects an equivalent Q2 under another key before this duplicate scan. */
@@ -390,8 +398,8 @@ export const appendRetryConclusiveIntegrationQuarantine = Effect.fn(
   const appended = yield* journal.append(runId, key, event).pipe(
     Effect.catchTag("JournalStoreContradiction", ({ existingPosition }) =>
       Effect.gen(function* () {
-        const refreshed = yield* journal.read(runId)
-        const winner = refreshed.find((record) => record.position === existingPosition)
+        const refreshed = yield* (yield* AcceptedJournalReader).readAccepted(runId)
+        const winner = journalRecordByPosition(refreshed, existingPosition)
         if (winner !== undefined && sameExpectedQuarantine(winner, run, key, event)) return winner
         return yield* reject(run, "Retry conclusive quarantine append contradicted existing Journal history")
       })
