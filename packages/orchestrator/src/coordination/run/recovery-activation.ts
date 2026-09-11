@@ -13,10 +13,6 @@ import {
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { InRunJournal, type JournalRecord } from "../../workflow-journal/store.js"
 import { Journal } from "../delivery/journal.js"
-import {
-  journalRecordsAfter,
-  type JournalHistorySource
-} from "../../workflow-journal/record-evidence.js"
 import { workflowJournalTransitionRuleFor } from "../reconstruction/history-transition.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
 import { authorizedClaimForAttempt } from "./recovery-authority.js"
@@ -132,10 +128,13 @@ import {
 } from "../../workflow/protocols/planned-attempt-continuation/tracker-read-freshness.js"
 import { claimReadMatchesTarget, exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
 import {
+  isJournalRecordEvidence,
+  journalRecordsAfter,
   journalRecordsForOperationId,
   journalRecordsOfKind,
   type JournalHistorySource
 } from "../../workflow-journal/record-evidence.js"
+import { journalRecordAt } from "../../workflow-journal/record-sequence.js"
 export { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
 
 const finalRecordOffset = -1
@@ -1996,10 +1995,10 @@ const readRecoveredRunState = Effect.fn("RunRecoveryActivation.readRecoveredRunS
   return reduction.runState
 })
 
-const latestJournalPosition = (
-  records: ReadonlyArray<{ readonly position: JournalPosition }>
-): Option.Option<JournalPosition> =>
-  Option.fromUndefinedOr(records.reduce<JournalPosition | undefined>((_previous, { position }) => position, undefined))
+const latestJournalPosition = (source: JournalHistorySource): Option.Option<JournalPosition> =>
+  Option.fromUndefinedOr(
+    isJournalRecordEvidence(source) ? journalRecordAt(source.records, finalRecordOffset)?.position : source.at(-1)?.position
+  )
 
 const positionIsAfter = (position: JournalPosition, baseline: Option.Option<JournalPosition>): boolean =>
   Option.match(baseline, { onNone: () => true, onSome: (baselinePosition) => position > baselinePosition })
@@ -4386,7 +4385,7 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
   })
   const initialHistory = journalHistoryOf(initialRunState)
   const immutableRunTarget = exactWorkflowRunTargetFor(initialHistory)
-  const activationBaselinePosition = latestJournalPosition(journalRecordsOf(initialHistory))
+  const activationBaselinePosition = latestJournalPosition(initialHistory)
   const reconstructedPlannedAttemptPositions = requiredPlannedAttemptPositionsOf(initialRunState)
   const projectionByRunState = new WeakMap<
     ReconstructedRunState,
