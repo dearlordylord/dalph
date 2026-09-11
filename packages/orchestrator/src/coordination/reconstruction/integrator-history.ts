@@ -2,18 +2,17 @@
 import { plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { HashMap, Option } from "effect"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
-import {
-  journalRecordByPosition,
-  type JournalHistorySource
-} from "../../workflow-journal/record-evidence.js"
+import { journalRecordByPosition, type JournalHistorySource } from "../../workflow-journal/record-evidence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { OperationId } from "../../workflow/identity.js"
-import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
+import type { TargetLineageObservedEvent, WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
 import { integratorSuccessorSessionFixedRecordKey } from "../../workflow-journal/record-key.js"
+import type { IntegrationStartedEvent } from "../../workflow/protocols/integration-admission/events.js"
 import { acceptedResultEquivalence } from "../../workflow/protocols/integration-admission/responsibility.js"
 import type {
   IntegratorSessionCorrelation,
+  IntegratorSessionFixedEvent,
   IntegratorSuccessorSessionFixedEvent
 } from "../../workflow/protocols/integrator/events.js"
 import { integratorCorrelationsEqual } from "../../workflow/protocols/integrator/state.js"
@@ -23,10 +22,7 @@ import { type IntegratorRunHistoryIndexes, validateIntegratorRunHistoryEvent } f
 
 /** Causal indexes owned by the generic outer Integrator history. */
 export interface IntegratorHistoryIndexes extends IntegratorRunHistoryIndexes {
-  readonly integrationStarted: HashMap.HashMap<
-    JournalPosition,
-    Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationStarted" }>
-  >
+  readonly integrationStarted: HashMap.HashMap<JournalPosition, IntegrationStarted>
   readonly targetLineageReadIntents: HashMap.HashMap<
     OperationId,
     {
@@ -34,10 +30,7 @@ export interface IntegratorHistoryIndexes extends IntegratorRunHistoryIndexes {
       readonly position: JournalPosition
     }
   >
-  readonly targetLineageObservations: HashMap.HashMap<
-    JournalPosition,
-    Extract<WorkflowJournalEvent, { readonly _tag: "TargetLineageObserved" }>
-  >
+  readonly targetLineageObservations: HashMap.HashMap<JournalPosition, TargetLineageObserved>
   readonly integratorSessionFixed: HashMap.HashMap<
     JournalPosition,
     Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorSessionFixed" | "IntegratorSuccessorSessionFixed" }>
@@ -57,20 +50,19 @@ interface IntegratorHistoryValidation<Indexes extends IntegratorHistoryIndexes =
   readonly detail: string | undefined
 }
 
-type IntegratorSessionFixed = Extract<WorkflowJournalEvent, { readonly _tag: "IntegratorSessionFixed" }>
+type IntegrationStarted = typeof IntegrationStartedEvent.Type
+type IntegratorSessionFixed = typeof IntegratorSessionFixedEvent.Type
 type IntegratorSuccessorSessionFixed = Extract<
   WorkflowJournalEvent,
   { readonly _tag: "IntegratorSuccessorSessionFixed" }
 >
+type TargetLineageObserved = typeof TargetLineageObservedEvent.Type
 const sameIntegrationTarget = (
   left: IntegratorSessionCorrelation["integrationTarget"],
   right: IntegratorSessionCorrelation["integrationTarget"]
 ): boolean => left.repository === right.repository && left.ref === right.ref
 
-const sessionFactsMatchIntegrationStart = (
-  event: IntegratorSessionFixed,
-  started: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationStarted" }>
-): boolean =>
+const sessionFactsMatchIntegrationStart = (event: IntegratorSessionFixed, started: IntegrationStarted): boolean =>
   started.responsibilityBeganAt === event.correlation.queuedAt &&
   plannedTaskAttemptEquivalence(started.plannedAttempt, event.correlation.plannedAttempt) &&
   acceptedResultEquivalence(started.acceptedResult, event.correlation.acceptedResult) &&
@@ -78,7 +70,7 @@ const sessionFactsMatchIntegrationStart = (
 
 const targetLineageMatchesSession = (
   event: IntegratorSessionFixed,
-  observed: Extract<WorkflowJournalEvent, { readonly _tag: "TargetLineageObserved" }>,
+  observed: TargetLineageObserved,
   observedAt: JournalPosition,
   indexes: IntegratorHistoryIndexes
 ): boolean => {
@@ -99,7 +91,7 @@ const targetLineageMatchesSession = (
 const hasEarlierIntegrationStart = (
   record: JournalRecord,
   event: IntegratorSessionFixed,
-  started: Extract<WorkflowJournalEvent, { readonly _tag: "IntegrationStarted" }> | undefined
+  started: IntegrationStarted | undefined
 ): boolean =>
   started !== undefined &&
   event.correlation.startedAt < record.position &&
@@ -108,7 +100,7 @@ const hasEarlierIntegrationStart = (
 const hasEarlierTargetLineage = (
   record: JournalRecord,
   event: IntegratorSessionFixed,
-  targetLineage: Extract<WorkflowJournalEvent, { readonly _tag: "TargetLineageObserved" }> | undefined,
+  targetLineage: TargetLineageObserved | undefined,
   indexes: IntegratorHistoryIndexes
 ): boolean =>
   targetLineage !== undefined &&
@@ -199,7 +191,7 @@ const successorTargetLineageIntentChronologyMatches = (
 const successorTargetLineageFactsMatch = (
   intent: SuccessorTargetLineageReadIntent,
   event: IntegratorSuccessorSessionFixed,
-  observed: Extract<WorkflowJournalEvent, { readonly _tag: "TargetLineageObserved" }>
+  observed: TargetLineageObserved
 ): boolean =>
   sameIntegrationTarget(intent.operation.integrationTarget, event.successor.integrationTarget) &&
   plannedTaskAttemptEquivalence(intent.operation.plannedAttempt, event.successor.plannedAttempt) &&
@@ -244,7 +236,7 @@ const validSuccessorPredecessorFor = (
 
 const deterministicSuccessorFor = (
   event: IntegratorSuccessorSessionFixed,
-  successorLineage: Extract<WorkflowJournalEvent, { readonly _tag: "TargetLineageObserved" }> | undefined
+  successorLineage: TargetLineageObserved | undefined
 ): IntegratorSessionCorrelation | undefined =>
   successorLineage === undefined
     ? undefined
