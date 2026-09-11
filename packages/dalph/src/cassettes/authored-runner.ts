@@ -1490,6 +1490,16 @@ const runAuthoredScenarioCassetteWith = (request: {
           item._tag === "CassetteOffersRunReactivationHints" ||
           item._tag === "CassettePublishesCurrentTrackerNotification"
       )
+      const firstCoordinatorLifecycleBoundary = cassette.story.find(
+        (item) =>
+          item._tag === "CoordinatorActivationReturned" ||
+          item._tag === "CoordinatorProcessDies" ||
+          item._tag === "CoordinatorProcessDiesAfterJournalEvent"
+      )
+      const currentFirstRunReactivationOwnerStory =
+        runReactivationHintStory &&
+        (firstCoordinatorLifecycleBoundary?._tag === "CoordinatorProcessDies" ||
+          firstCoordinatorLifecycleBoundary?._tag === "CoordinatorProcessDiesAfterJournalEvent")
       const initial = yield* cursor.consumeInitialPolicy
       const command = yield* cursor.consumeRunCoordinator
       const runId = yield* freshWorkflowRunId(command.target)
@@ -3013,6 +3023,12 @@ const runAuthoredScenarioCassetteWith = (request: {
       const runAcrossActivations = Effect.gen(function* () {
         const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
         let applicationProcess = yield* openApplicationProcess
+        const pendingRunReactivationHints: Array<"TrackerNotification" | "Timer"> = []
+        yield* Ref.set(offerRunReactivationHint, (hint) =>
+          Effect.sync(() => {
+            pendingRunReactivationHints.push(hint)
+          })
+        )
         let coordinator = yield* activateRun(firstActivationOrdinal).pipe(
           Effect.provide(applicationProcess.context),
           Effect.forkIn(applicationProcess.scope)
@@ -3037,10 +3053,24 @@ const runAuthoredScenarioCassetteWith = (request: {
           }
           if (yield* cursor.atTerminalAssertions) break
           activationOrdinal = AuthoredRunActivationOrdinal.make(activationOrdinal + 1)
-          coordinator = yield* activateRun(activationOrdinal).pipe(
-            Effect.provide(applicationProcess.context),
-            Effect.forkIn(applicationProcess.scope)
-          )
+          const reactivationHint = pendingRunReactivationHints.shift()
+          coordinator = yield* (reactivationHint === undefined
+            ? activateRun(activationOrdinal)
+            : Ref.set(activeDeliveryActivation, activationOrdinal).pipe(
+                Effect.andThen(
+                  withAuthoredOperatorDriver(
+                    runWorkflowWithControlledDeliveryActionExecutorForActiveWorkAuthorityRefresh(
+                      command.target,
+                      initialControlPolicySource,
+                      runId,
+                      controlledExecutorFactory,
+                      reactivationHint,
+                      false
+                    ).pipe(Effect.provide(planningLayer(activationOrdinal)))
+                  )
+                )
+              )
+          ).pipe(Effect.provide(applicationProcess.context), Effect.forkIn(applicationProcess.scope))
           activationOrdinals.push(activationOrdinal)
         }
         yield* Effect.raceFirst(
@@ -3100,7 +3130,7 @@ const runAuthoredScenarioCassetteWith = (request: {
         return yield* runSingleActivation.pipe(Effect.provide(application))
       })
       const processProvidedCoordinatorExecution = Effect.gen(function* () {
-        if (runReactivationHintStory) return yield* runReactivationOwnerStory
+        if (currentFirstRunReactivationOwnerStory) return yield* runReactivationOwnerStory
         return yield* standardCoordinatorExecution
       })
       const execution = yield* Effect.scoped(
