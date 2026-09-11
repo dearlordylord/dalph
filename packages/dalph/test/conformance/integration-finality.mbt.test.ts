@@ -1,7 +1,7 @@
 import { it } from "@effect/vitest"
 import { defineDriver, ITFBigInt, stateCheck } from "@firfi/quint-connect/effect"
 import { quintIt } from "@firfi/quint-connect/vitest"
-import { AcceptedResultEvidenceManifest, TaskId, TaskRevision } from "@dalph/contracts"
+import { AcceptedResultEvidenceManifest, TaskId, TaskRevision, makeTaskWorkSpecification } from "@dalph/contracts"
 import {
   CompletionClaimBoundary,
   CompletionClaimCleanupReadOrdinal,
@@ -21,7 +21,6 @@ import {
   FocusedTaskCompletionReadRequest,
   FocusedTaskCompletionReadFailure,
   InRunJournal,
-  JournalStoreContradiction,
   JournalStorageUnavailable,
   OperationId,
   TaskLifecycle,
@@ -42,7 +41,6 @@ import {
   runCompletionTaskProtocol,
   taskTrackerReadIntent,
   outcomeRecordKey,
-  targetPromotionObservedSuccessRecordKey,
   makeTrackerGraphObservationOperation,
   workflowJournalEventVersion,
   type WorkflowResponsibilityEntry,
@@ -51,10 +49,15 @@ import {
   type CompletionSuccessObservation,
   type CompletionTaskBoundaryService,
   type JournalRecord,
-  type TaskClaimObservation,
-  WorkflowJournalEvent
+  type TaskClaimObservation
 } from "@dalph/orchestrator"
-import { Deferred, Effect, Fiber, Option, Schema } from "effect"
+import { Context, Deferred, Effect, Fiber, ManagedRuntime, Option, Schema } from "effect"
+import type { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
+import type { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
+import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
+import { makeAcceptedIntegrationHistory } from "../../../orchestrator/test/support/accepted-integration-history.js"
+import { makePromotedIntegrationHistory } from "../../../orchestrator/test/support/promoted-integration-history.js"
+import { integratorCorrelationFor } from "../../../orchestrator/src/workflow/protocols/integrator/session.js"
 import {
   CompletionTaskFocusedReadPurpose,
   CompletionTaskIntendedEvent,
@@ -626,14 +629,39 @@ const normalizedSubject = (subject: Subject | Schema.Schema.Type<typeof SpecSubj
   dependantEligible: subject.dependantEligible
 })
 
-const integrationAttempt = integrationFinalityFixture.plannedAttempt
+const integrationSpecification = makeTaskWorkSpecification({
+  body: "Complete one task only after its exact candidate has been promoted.",
+  taskId: integrationFinalityFixture.taskId,
+  title: "Integration finality conformance"
+})
+const integrationAttempt = {
+  ...integrationFinalityFixture.plannedAttempt,
+  taskRevision: integrationSpecification.fingerprint
+}
+const acceptedIntegrationHistory = makeAcceptedIntegrationHistory({
+  acceptedResult: integrationFinalityFixture.qualifiedCandidate.run.session.acceptedResult,
+  activeClaim: integrationFinalityFixture.activeClaim,
+  integrationTarget: integrationFinalityFixture.integrationTarget,
+  plannedAttempt: integrationAttempt,
+  runId: integrationFinalityFixture.runId,
+  targetHeadSha: integrationFinalityFixture.qualifiedCandidate.run.session.expectedTargetHead,
+  taskSpecification: integrationSpecification,
+  trackerTarget: integrationFinalityFixture.target
+})
+const promotedIntegrationHistory = makePromotedIntegrationHistory({
+  candidateCommit: integrationFinalityFixture.qualifiedCandidate.candidateCommit,
+  candidateText: integrationFinalityFixture.qualifiedCandidate.candidateText,
+  originalClaim: acceptedIntegrationHistory.activeClaim,
+  records: acceptedIntegrationHistory.records,
+  session: integratorCorrelationFor(acceptedIntegrationHistory)
+})
 
 // Promotion and finality consume the outer Integrator's Git-qualified candidate
 // and its derived TargetPromotionCorrelation. The candidate resource/text are
 // retained only inside this correlation; finality rereads accepted-result bytes
 // rather than any target-verification-owned manifests.
-const productionQualifiedCandidate: IntegratorRunQualifiedCandidate = integrationFinalityFixture.qualifiedCandidate
-const productionPromotionCorrelation: TargetPromotionCorrelation = integrationFinalityFixture.promotionCorrelation
+const productionQualifiedCandidate: IntegratorRunQualifiedCandidate = promotedIntegrationHistory.qualifiedCandidate
+const productionPromotionCorrelation: TargetPromotionCorrelation = promotedIntegrationHistory.promotionCorrelation
 
 const integrationResponsibility: WorkflowResponsibilityEntry = {
   _tag: "PlannedAttemptExecutorWorkResponsibility",
@@ -641,7 +669,7 @@ const integrationResponsibility: WorkflowResponsibilityEntry = {
   plannedAttempt: integrationAttempt
 }
 
-const productionClaimIdentity: CompletionTaskClaim = integrationFinalityFixture.claim
+const productionClaimIdentity: CompletionTaskClaim = promotedIntegrationHistory.claim
 const productionCompletionRequest = completionTaskRequestFor(productionClaimIdentity)
 
 const encodeEvidence = (value: unknown): Uint8Array => new TextEncoder().encode(JSON.stringify(value))
@@ -722,22 +750,25 @@ type CompletionMutationDisposition = "Acknowledged" | "DefinitelyRejected" | "Re
 type CompletionLookupDisposition = "Applied" | "NotApplied" | "Unreadable"
 type CompletionAncestryDisposition = "Current" | "NotAncestor" | "Unreadable"
 
-const workflowJournalEventsEqual = (left: WorkflowJournalEvent, right: WorkflowJournalEvent): boolean =>
-  JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(left)) ===
-  JSON.stringify(Schema.encodeUnknownSync(WorkflowJournalEvent)(right))
-
-const promotionRecord = (): JournalRecord => ({
-  event: integrationFinalityFixture.promotionSuccess,
-  key: targetPromotionObservedSuccessRecordKey(productionClaimIdentity.promotionCorrelation.requestId),
-  position: JournalPosition.make(1),
-  runId: productionClaimIdentity.plannedAttempt.runId
-})
+const acquireJournalRuntime = () => {
+  const records = promotedIntegrationHistory.promotedRecords
+  const managed = ManagedRuntime.make(
+    liveJournalTestLayer({
+      records,
+      runId: productionClaimIdentity.plannedAttempt.runId,
+      target: integrationFinalityFixture.target
+    })
+  )
+  const context = managed.runSync(Effect.context<AcceptedJournalReader | InRunJournal | Journal>())
+  return { context, journal: Context.get(context, InRunJournal), managed, records }
+}
 
 // Every model trace owns one deterministic production journal and one tracker
 // boundary. Protocol calls below append their own intents, attempts, outcomes,
 // and settlement records; no finality records are reconstructed from model state.
 const makeProductionState = () => {
-  let records: ReadonlyArray<JournalRecord> = []
+  let journalRuntime = acquireJournalRuntime()
+  let records: ReadonlyArray<JournalRecord> = journalRuntime.records
   let activeClaimObservation: TaskClaimObservation = productionClaimIdentity.originalClaim
   let completionClaimObservation:
     | Extract<CompletionClaimObservation, { readonly _tag: "CompletionTaskClaim" | "ForeignCompletionClaim" }>
@@ -787,26 +818,25 @@ const makeProductionState = () => {
               operation: "JournalStore.append"
             })
           )
-        : Effect.suspend(() => {
-            const existing = records.find((record) => record.runId === runId && record.key === key)
-            if (existing !== undefined) {
-              return workflowJournalEventsEqual(existing.event, event)
-                ? Effect.succeed(existing)
-                : Effect.fail(new JournalStoreContradiction({ existingPosition: existing.position, key, runId }))
-            }
-            const record: JournalRecord = { event, key, position: JournalPosition.make(records.length + 1), runId }
-            records = [...records, record]
-            return pauseCompletionAttemptIntent && event._tag === "CompletionTaskAttemptIntended"
-              ? Effect.gen(function* () {
-                  pauseCompletionAttemptIntent = false
-                  yield* Deferred.succeed(completionAttemptIntentSignal, undefined)
-                  yield* Deferred.await(completionAttemptIntentGate)
-                  return record
-                })
-              : Effect.succeed(record)
-          }),
-    read: (runId) => Effect.sync(() => records.filter((record) => record.runId === runId))
+        : journalRuntime.journal.append(runId, key, event).pipe(
+            Effect.tap(() =>
+              journalRuntime.journal.read(runId).pipe(Effect.tap((current) => Effect.sync(() => (records = current))))
+            ),
+            Effect.tap(() =>
+              pauseCompletionAttemptIntent && event._tag === "CompletionTaskAttemptIntended"
+                ? Effect.gen(function* () {
+                    pauseCompletionAttemptIntent = false
+                    yield* Deferred.succeed(completionAttemptIntentSignal, undefined)
+                    yield* Deferred.await(completionAttemptIntentGate)
+                  })
+                : Effect.void
+            )
+          ),
+    read: (runId) =>
+      journalRuntime.journal.read(runId).pipe(Effect.tap((current) => Effect.sync(() => (records = current))))
   })
+
+  const journalContext = () => journalRuntime.context.pipe(Context.add(InRunJournal, journal))
 
   const boundary = CompletionClaimBoundary.of({
     readCompletionClaimMarker: (request) =>
@@ -942,10 +972,10 @@ const makeProductionState = () => {
   })
 
   const provideCompletionRuntime = <A, E>(
-    effect: Effect.Effect<A, E, InRunJournal | EvidenceStore | TargetPromotionGit>
+    effect: Effect.Effect<A, E, AcceptedJournalReader | InRunJournal | EvidenceStore | TargetPromotionGit>
   ): Effect.Effect<A, E> =>
     effect.pipe(
-      Effect.provideService(InRunJournal, journal),
+      Effect.provide(journalContext()),
       Effect.provideService(EvidenceStore, evidenceStore),
       Effect.provideService(TargetPromotionGit, promotionGit)
     )
@@ -1298,7 +1328,7 @@ const makeProductionState = () => {
         boundary,
         completionClaimReplacementRequestFor(productionClaimIdentity)
       ).pipe(
-        Effect.provideService(InRunJournal, journal),
+        Effect.provide(journalContext()),
         Effect.catchTags({
           "IntegrationFinality.CompletionClaimDidNotConverge": () => Effect.void,
           "IntegrationFinality.CompletionClaimOwnershipConflict": () => Effect.void,
@@ -1321,7 +1351,7 @@ const makeProductionState = () => {
         completionClaimDeletionRequestFor(productionClaimIdentity, successObservation),
         completionClaimReplacementRequestFor(productionClaimIdentity).operationId
       ).pipe(
-        Effect.provideService(InRunJournal, journal),
+        Effect.provide(journalContext()),
         Effect.catchTags({
           "IntegrationFinality.CompletionClaimDeletionFailure": () => Effect.void,
           "IntegrationFinality.CompletionClaimDidNotConverge": () => Effect.void,
@@ -1335,8 +1365,10 @@ const makeProductionState = () => {
     )
   }
 
-  const reset = (): void => {
-    records = [promotionRecord()]
+  const reset = Effect.fn("IntegrationFinalityConformance.reset")(function* () {
+    yield* journalRuntime.managed.disposeEffect
+    journalRuntime = acquireJournalRuntime()
+    records = journalRuntime.records
     activeClaimObservation = productionClaimIdentity.originalClaim
     completionClaimObservation = undefined
     replacementDisposition = "Rejected"
@@ -1354,7 +1386,7 @@ const makeProductionState = () => {
     pendingCompletion = undefined
     completionBoundaryCalls = 0
     completionEvidenceReads = 0
-  }
+  })
 
   const readState = () => deriveIntegrationFinalityStateFor(records, productionClaimIdentity)
 
@@ -1788,9 +1820,9 @@ const integrationFinalityDriver = defineDriver(
     }
     return {
       init: () =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           current = initialState()
-          productionState.reset()
+          yield* productionState.reset()
         }),
       forgeLegacyEvidenceForFinality: () =>
         Effect.sync(() =>
