@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- One chronological adapter owns activation, pause, crash, candidate, and terminal story boundaries. */
 import {
   Cause,
+  Chunk,
   Context,
   type Crypto,
   Deferred,
@@ -150,6 +151,10 @@ import {
 } from "./authored-cursor.js"
 import type { AuthoredAttemptChoiceItem } from "./authored-cursor-items.js"
 import { assertAuthoredExpectedBehavior } from "./authored-outcomes.js"
+import {
+  makeAuthoredRunReactivationHintFifo,
+  type AuthoredRunReactivationHint
+} from "./authored-reactivation-hint-fifo.js"
 import { controlledTrackerAuthorityLayer } from "./authored-tracker-authority.js"
 
 export interface AuthoredScenarioCassetteRun {
@@ -1012,12 +1017,10 @@ const authoredDeliveryFrameOf = (
   consequences: DeliveryConsequences,
   runtime: DeliveryRuntimeEvaluation
 ): AuthoredDeliveryFrame => {
-  const conflictFacts: Array<AuthoredActionPlanningFact> = []
-  if (runtime.proposedActions._tag === "DeliveryProposalOwnershipConflict") {
-    for (const conflict of runtime.proposedActions.conflicts) {
-      conflictFacts.push(authoredActionConflictFactOf(conflict))
-    }
-  }
+  const conflictFacts =
+    runtime.proposedActions._tag === "DeliveryProposalOwnershipConflict"
+      ? runtime.proposedActions.conflicts.map(authoredActionConflictFactOf)
+      : []
   return {
     activationOrdinal: captured.activationOrdinal,
     storyPosition: captured.storyPosition,
@@ -1434,8 +1437,8 @@ const runAuthoredScenarioCassetteWith = (request: {
             AuthoredStoryPosition.make(storyPosition)
           ).pipe(Effect.asVoid)
       })
-      const offerRunReactivationHint = yield* Ref.make<(hint: "TrackerNotification" | "Timer") => Effect.Effect<void>>(
-        () => Effect.die("the authored Run reactivation owner is not active")
+      const offerRunReactivationHint = yield* Ref.make<(hint: AuthoredRunReactivationHint) => Effect.Effect<void>>(() =>
+        Effect.die("the authored Run reactivation owner is not active")
       )
       const capturedDeliveryPublications = yield* Ref.make<ReadonlyArray<AuthoredDeliveryPublication>>([])
       const deliveryPublicationSignals = yield* Queue.unbounded<AuthoredDeliveryPublication>()
@@ -2565,10 +2568,10 @@ const runAuthoredScenarioCassetteWith = (request: {
               /* v8 ignore stop -- @preserve */
             }).pipe(Effect.orDie)
             const drivePauseProgressAwait = Effect.gen(function* () {
-              const expectations: Array<typeof AuthoredCassetteStoryItem.cases.OperatorAwaitsPauseProgress.Type> = []
+              let expectations = Chunk.empty<typeof AuthoredCassetteStoryItem.cases.OperatorAwaitsPauseProgress.Type>()
               let authored = yield* cursor.consumePauseProgressAwait
               while (Option.isSome(authored)) {
-                expectations.push(authored.value)
+                expectations = Chunk.append(expectations, authored.value)
                 authored = yield* cursor.consumePauseProgressAwait
               }
               /* v8 ignore start -- @preserve The exhaustive direct-item dispatcher invokes this driver only while at least one contiguous await is current; closure binds all awaits to the active subject. */
@@ -2576,7 +2579,10 @@ const runAuthoredScenarioCassetteWith = (request: {
               const active = yield* Ref.get(activePauseObservation)
               if (Option.isNone(active)) return yield* Effect.die("no authored Pause observation is active")
               if (
-                expectations.some(({ subject }) => JSON.stringify(subject) !== JSON.stringify(active.value.subject))
+                Chunk.some(
+                  expectations,
+                  ({ subject }) => JSON.stringify(subject) !== JSON.stringify(active.value.subject)
+                )
               ) {
                 return yield* Effect.die("authored Pause result subject does not match the active observation")
               }
@@ -3033,17 +3039,13 @@ const runAuthoredScenarioCassetteWith = (request: {
       const runAcrossActivations = Effect.gen(function* () {
         const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
         let applicationProcess = yield* openApplicationProcess
-        const pendingRunReactivationHints: Array<"TrackerNotification" | "Timer"> = []
-        yield* Ref.set(offerRunReactivationHint, (hint) =>
-          Effect.sync(() => {
-            pendingRunReactivationHints.push(hint)
-          })
-        )
+        const pendingRunReactivationHints = yield* makeAuthoredRunReactivationHintFifo()
+        yield* Ref.set(offerRunReactivationHint, pendingRunReactivationHints.offer)
         let coordinator = yield* activateRun(firstActivationOrdinal).pipe(
           Effect.provide(applicationProcess.context),
           Effect.forkIn(applicationProcess.scope)
         )
-        const activationOrdinals: Array<AuthoredRunActivationOrdinalType> = [firstActivationOrdinal]
+        let activationOrdinals = Chunk.of<AuthoredRunActivationOrdinalType>(firstActivationOrdinal)
         let consumedLifecycleBoundaries = 0
         let activationOrdinal = firstActivationOrdinal
         while (consumedLifecycleBoundaries < coordinatorLifecycleBoundaryCount) {
@@ -3063,7 +3065,7 @@ const runAuthoredScenarioCassetteWith = (request: {
           }
           if (yield* cursor.atTerminalAssertions) break
           activationOrdinal = AuthoredRunActivationOrdinal.make(activationOrdinal + 1)
-          const reactivationHint = pendingRunReactivationHints.shift()
+          const reactivationHint = yield* pendingRunReactivationHints.take
           coordinator = yield* (
             reactivationHint === undefined
               ? activateRun(activationOrdinal)
@@ -3082,7 +3084,7 @@ const runAuthoredScenarioCassetteWith = (request: {
                   )
                 )
           ).pipe(Effect.provide(applicationProcess.context), Effect.forkIn(applicationProcess.scope))
-          activationOrdinals.push(activationOrdinal)
+          activationOrdinals = Chunk.append(activationOrdinals, activationOrdinal)
         }
         yield* Effect.raceFirst(
           cursor.awaitTerminalAssertions,
@@ -3106,7 +3108,11 @@ const runAuthoredScenarioCassetteWith = (request: {
         for (let settleTurn = 0; settleTurn < authoredSettlementYieldTurns; settleTurn += 1) yield* Effect.yieldNow
         const coordinatorExitAtAssertions = coordinator.pollUnsafe()
         yield* Fiber.interrupt(coordinator)
-        return { activationOrdinals, coordinatorExitAtAssertions, records: yield* sharedJournal.read(runId) }
+        return {
+          activationOrdinals: Chunk.toReadonlyArray(activationOrdinals),
+          coordinatorExitAtAssertions,
+          records: yield* sharedJournal.read(runId)
+        }
       })
       const runReactivationOwnerStory = Effect.gen(function* () {
         const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
