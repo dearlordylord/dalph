@@ -27,14 +27,15 @@ import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { makeRunRecoveryProjection } from "./recovery-activation.js"
 import { runTaskClaimReacquisition } from "../../workflow/protocols/task-claim-reacquisition/execute.js"
-import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
   taskClaimReacquisitionDirectedRecordKey
 } from "../../workflow-journal/record-key.js"
-import { JournalStore } from "../../workflow-journal/store.js"
+import { InRunJournal } from "../../workflow-journal/store.js"
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { OperationId } from "../../workflow/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
@@ -186,11 +187,12 @@ it("keeps A's lost worktree responsibility constrained while independent C remai
 
 it.effect(
   "records a safely suspended attempt's exact planned worktree as lost and preserves its responsibilities",
-  () =>
-    Effect.gen(function* () {
-      const runId = RunId.make("lost-worktree-recovery-run")
-      const taskId = TaskId.make("lost-worktree-task-A")
-      const target = FixtureTarget.make("lost-worktree-target")
+  () => {
+    const runId = RunId.make("lost-worktree-recovery-run")
+    const taskId = TaskId.make("lost-worktree-task-A")
+    const target = FixtureTarget.make("lost-worktree-target")
+    const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+    return Effect.gen(function* () {
       const specification = makeTaskWorkSpecification({ body: "Body", taskId, title: "Title" })
       const plannedAttempt = PlannedTaskAttempt.make({
         attemptId: AttemptId.make("lost-worktree-attempt"),
@@ -237,12 +239,7 @@ it.effect(
         plannedAttempt,
         predecessorOperationIds: [plan.operationId]
       })
-      const journal = yield* JournalStore
-      yield* journal.beginRun(
-        runId,
-        target,
-        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-      )
+      const journal = yield* InRunJournal
       yield* journal.append(
         runId,
         intentRecordKey(acquisition.operationId),
@@ -429,7 +426,9 @@ it.effect(
       expect(events).toContainEqual(expect.objectContaining({ _tag: "TaskClaimAcquired" }))
       expect(events).toContainEqual(expect.objectContaining({ _tag: "TaskAttemptPlanned" }))
     }).pipe(
-      Effect.provide(memoryJournalTestLayer),
+      Effect.provide(
+        liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+      ),
       Effect.provide(controlledFakePlannedAttemptExecutorLayer),
       Effect.provideService(
         WorkflowInterpreter,
@@ -447,13 +446,15 @@ it.effect(
       ),
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
     )
+  }
 )
 
-it.effect("reads current claim facts for safely suspended A and exposes its missing-claim constraint", () =>
-  Effect.gen(function* () {
-    const runId = RunId.make("missing-claim-reconciliation-run")
-    const taskId = TaskId.make("missing-claim-task-A")
-    const target = FixtureTarget.make("missing-claim-target")
+it.effect("reads current claim facts for safely suspended A and exposes its missing-claim constraint", () => {
+  const runId = RunId.make("missing-claim-reconciliation-run")
+  const taskId = TaskId.make("missing-claim-task-A")
+  const target = FixtureTarget.make("missing-claim-target")
+  const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  return Effect.gen(function* () {
     const specification = makeTaskWorkSpecification({ body: "Body", taskId, title: "Title" })
     const integrationTarget = IntegrationTarget.make({
       ref: IntegrationTargetRef.make("refs/heads/main"),
@@ -504,12 +505,7 @@ it.effect("reads current claim facts for safely suspended A and exposes its miss
       plannedAttempt,
       predecessorOperationIds: [plan.operationId]
     })
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      target,
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     yield* journal.append(
       runId,
       intentRecordKey(acquisition.operationId),
@@ -913,7 +909,9 @@ it.effect("reads current claim facts for safely suspended A and exposes its miss
       }
     })
   }).pipe(
-    Effect.provide(memoryJournalTestLayer),
+    Effect.provide(
+      liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+    ),
     Effect.provide(controlledFakePlannedAttemptExecutorLayer),
     Effect.provideService(
       WorkflowInterpreter,
@@ -931,4 +929,4 @@ it.effect("reads current claim facts for safely suspended A and exposes its miss
     ),
     Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void }))
   )
-)
+})
