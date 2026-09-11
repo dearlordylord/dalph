@@ -1,6 +1,7 @@
 import { HashMap, Option } from "effect"
 import type { AttemptId, TaskId } from "@dalph/contracts"
 import type { OperationId } from "../workflow/identity.js"
+import type { TargetPromotionRequestId } from "../workflow/protocols/target-promotion/events.js"
 import { workflowOperationId, type WorkflowOperation } from "../workflow/registry/operation.js"
 import { describeJournalEvent } from "../workflow/registry/event-descriptor.js"
 import type { JournalPosition, JournalRecordKey } from "./identity.js"
@@ -43,6 +44,7 @@ interface EvidenceIndexes {
   readonly byTaskKind: HashMap.HashMap<TaskId, HashMap.HashMap<JournalRecord["event"]["_tag"], JournalRecordSequence>>
   readonly operations: HashMap.HashMap<OperationId, JournalRecordSequence>
   readonly recordsByOperation: HashMap.HashMap<OperationId, JournalRecordSequence>
+  readonly byPromotionRequest: HashMap.HashMap<TargetPromotionRequestId, JournalRecordSequence>
 }
 
 const indexesByEvidence = new WeakMap<JournalRecordEvidence, EvidenceIndexes>()
@@ -68,7 +70,8 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
     byTask: HashMap.empty(),
     byTaskKind: HashMap.empty(),
     operations: HashMap.empty(),
-    recordsByOperation: HashMap.empty()
+    recordsByOperation: HashMap.empty(),
+    byPromotionRequest: HashMap.empty()
   })
 
 const operationOf = ({ event }: JournalRecord): WorkflowOperation | undefined =>
@@ -244,6 +247,19 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
       appendJournalRecord(priorOperation, record)
     )
   }
+  const promotionRequestId = "correlation" in record.event && "requestId" in record.event.correlation
+    ? record.event.correlation.requestId
+    : undefined
+  const byPromotionRequest = promotionRequestId === undefined
+    ? indexes.byPromotionRequest
+    : HashMap.set(
+        indexes.byPromotionRequest,
+        promotionRequestId,
+        appendJournalRecord(
+          Option.getOrElse(HashMap.get(indexes.byPromotionRequest, promotionRequestId), emptyJournalRecords),
+          record
+        )
+      )
   return evidence(appendJournalRecord(prior.records, record), {
     byKey: HashMap.has(indexes.byKey, record.key) ? indexes.byKey : HashMap.set(indexes.byKey, record.key, record),
     byKind: HashMap.set(indexes.byKind, record.event._tag, appendJournalRecord(ofKind, record)),
@@ -253,7 +269,8 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     byTask,
     byTaskKind,
     operations: operation === undefined ? indexes.operations : HashMap.set(indexes.operations, workflowOperationId(operation), appendJournalRecord(Option.getOrElse(HashMap.get(indexes.operations, workflowOperationId(operation)), emptyJournalRecords), record)),
-    recordsByOperation
+    recordsByOperation,
+    byPromotionRequest
   })
 }
 
@@ -354,6 +371,22 @@ export const journalRecordsForOperationId = (
         Option.getOrElse(HashMap.get(indexesFor(source).recordsByOperation, operationId), emptyJournalRecords)
       )
     : source.filter((record) => operationIdsOf(record).has(operationId))
+
+export const journalRecordsForPromotionRequest = (
+  source: JournalHistorySource,
+  requestId: TargetPromotionRequestId
+): Iterable<JournalRecord> =>
+  isJournalRecordEvidence(source)
+    ? indexedRecords(
+        source,
+        Option.getOrElse(HashMap.get(indexesFor(source).byPromotionRequest, requestId), emptyJournalRecords)
+      )
+    : source.filter(
+        (record) =>
+          "correlation" in record.event &&
+          "requestId" in record.event.correlation &&
+          record.event.correlation.requestId === requestId
+      )
 
 /** Full accepted prefixes can reuse the exact indexed kind sequence. */
 export const journalEvidenceKindSequence = (source: JournalRecordEvidence, kind: JournalRecord["event"]["_tag"]): JournalRecordSequence => {
@@ -465,6 +498,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     indexes.byTaskKind,
     indexes.operations,
     indexes.recordsByOperation,
+    indexes.byPromotionRequest,
     inspectJournalRecordStorage(source.records),
     ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage),
@@ -479,6 +513,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
       Array.from(HashMap.values(kinds), inspectJournalRecordStorage)
     ),
     ...Array.from(HashMap.values(indexes.operations), inspectJournalRecordStorage),
-    ...Array.from(HashMap.values(indexes.recordsByOperation), inspectJournalRecordStorage)
+    ...Array.from(HashMap.values(indexes.recordsByOperation), inspectJournalRecordStorage),
+    ...Array.from(HashMap.values(indexes.byPromotionRequest), inspectJournalRecordStorage)
   ]
 }
