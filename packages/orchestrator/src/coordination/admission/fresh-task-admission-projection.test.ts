@@ -496,7 +496,7 @@ describe("projectFreshTaskCommitments", () => {
     expect(projectFreshTaskAdmission(runId, records)).toMatchObject({ _tag: "FreshTaskAdmissionProjection" })
   })
 
-  it("does not create handoff release authority from a replayed mismatched record envelope", () => {
+  it("rereads a mutated raw replay instead of reusing its earlier valid reduction", () => {
     const records = [...recordsFrom(prefixRows.flat())]
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
     const responsibilityIndex = records.findIndex(
@@ -504,21 +504,21 @@ describe("projectFreshTaskCommitments", () => {
     )
     if (responsibilityIndex < 0) return expect.fail("missing responsibility record")
 
-    // The reducer cache represents the accepted immutable prefix. Replacing
-    // the row afterwards models a hostile replay envelope and exercises the
-    // projector's fail-safe branch: no exact handoff may be released.
+    // Raw arrays are diagnostic replay input, not immutable accepted evidence.
+    // Replacing a row after one valid reduction must be observed on the next
+    // projection instead of inheriting authority from that earlier result.
     const replayed = records[responsibilityIndex]
     if (replayed === undefined) return expect.fail("missing responsibility row")
     records[responsibilityIndex] = { ...replayed, runId: RunId.make("fresh-admission-replayed-run") }
 
     const projection = projectFreshTaskAdmission(runId, records)
-    expect(projection).toMatchObject({ _tag: "FreshTaskAdmissionProjection" })
-    if (projection._tag !== "FreshTaskAdmissionProjection") return
-    expect(projection.releaseEvidence).toEqual([])
-    expect(projection.commitments).toHaveLength(1)
+    expect(projection).toMatchObject({
+      _tag: "FreshTaskAdmissionProjectionInvalid",
+      issues: [expect.stringContaining("record belongs to run fresh-admission-replayed-run")]
+    })
   })
 
-  it("rejects an unmatched handoff when a replay hides its exact claim intent", () => {
+  it("rereads changing raw claim authority before projecting a handoff", () => {
     const records = [...recordsFrom(prefixRows.flat())]
     expect(reduceWorkflowJournalHistory(runId, records)._tag).toBe("ValidWorkflowJournalHistory")
     const claimIntentIndex = records.findIndex(({ event }) => event._tag === "TaskClaimAcquisitionIntended")
@@ -554,7 +554,10 @@ describe("projectFreshTaskCommitments", () => {
     const projection = projectFreshTaskAdmission(runId, records)
     expect(projection).toMatchObject({
       _tag: "FreshTaskAdmissionProjectionInvalid",
-      issues: [expect.stringContaining("unmatched release key")]
+      issues: [
+        expect.stringContaining("requires exact claim, post-claim graph, and focused specification lineage"),
+        expect.stringContaining("requires its exact accepted worktree-ready lineage")
+      ]
     })
   })
 
