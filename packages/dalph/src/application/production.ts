@@ -69,9 +69,9 @@ import {
   WorktreeCleanupBoundary,
   TaskTrackerMutationThrottled,
   WorkflowRunAlreadyTerminated,
-  defaultJournalMaintenanceObservation
+  defaultJournalMaintenanceObservation,
+  type AcceptedJournalReader
 } from "@dalph/orchestrator"
-import type { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
 import type { FileSystem } from "effect"
 import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect"
 

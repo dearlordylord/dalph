@@ -63,6 +63,7 @@ import {
   WorkflowRunBeganEvent,
   workflowJournalEventVersion,
   type JournalRecord,
+  type JournalStorageBoundary,
   type ApplicationExitTraceEvent
 } from "@dalph/orchestrator"
 import { Effect, Layer, Option, Ref, Result, Schema } from "effect"
@@ -260,11 +261,11 @@ const executingExecutorDrain = (runningInput: RunningHostFixtureInput) =>
     if (initial._tag === "InvalidWorkflowJournalHistory") {
       return yield* Effect.die(`linux host fixture history is invalid: ${JSON.stringify(initial.issues)}`)
     }
-    const stored = yield* Ref.make(fixture.records)
+    const stored = yield* Ref.make<ReadonlyArray<JournalRecord>>(fixture.records)
     const records = yield* Ref.make(fixture.visibleRecords)
     const storageReads = yield* Ref.make(0)
-    const storage = {
-      append: (runId: typeof plannedAttempt.runId, key: JournalRecord["key"], event: JournalRecord["event"]) =>
+    const storage: JournalStorageBoundary = {
+      append: (_runId, key, event) =>
         Ref.modify(stored, (current) => {
           const existing = current.find((candidate) => candidate.key === key)
           if (existing !== undefined) return [existing, current] as const
@@ -315,7 +316,16 @@ const executingExecutorDrain = (runningInput: RunningHostFixtureInput) =>
         return yield* Effect.die("accepted Journal appends must publish without storage reread")
       }
       return result
-    }).pipe(Effect.provide(Layer.mergeAll(journal, executor, plannedAttemptProtocolControllerLayer)))
+    }).pipe(
+      Effect.provide(Layer.mergeAll(journal, executor, plannedAttemptProtocolControllerLayer)),
+      Effect.mapError((error) =>
+        error._tag === "ApplicationExitDrainFailure"
+          ? error
+          : new ApplicationExitDrainFailure({
+              diagnostics: [ApplicationExitDiagnostic.make(`application Exit journal failed: ${error._tag}`)]
+            })
+      )
+    )
     return { drain, records }
   })
 
