@@ -60,6 +60,7 @@ import {
   ForeignWorktreeRegistration,
   FixtureTarget,
   GitWorktreeReadFailure,
+  Journal,
   JournalPosition,
   InRunJournal,
   makeFocusedTaskClaimFactsObserved,
@@ -112,6 +113,7 @@ import {
   type WorkflowOperation,
   workflowJournalEventVersion
 } from "@dalph/orchestrator"
+import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
 
 import {
   assertExactlyOneAuthoredCassetteStoryItemOwner,
@@ -3151,24 +3153,12 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
     if (ancestryTransition?._tag !== "ObservePromotedCandidateAncestryAfterBlockerClear") {
       return yield* Effect.die("missing post-promotion blocker-clear ancestry transition")
     }
+    const clearRunId = plannedAttempt.operation.plannedAttempt.runId
+    const clearBeginning = clearRecords.find(({ event }) => event._tag === "WorkflowRunBegan")?.event
+    if (clearBeginning?._tag !== "WorkflowRunBegan") return yield* Effect.die("missing clear-history Run beginning")
     const readAncestryWith = (disposition: "Current" | "NotInAncestry" | "Unreadable") =>
       Effect.gen(function* () {
-        const recordsRef = yield* Ref.make(clearRecords)
-        const journal = InRunJournal.of({
-          append: (runId, key, event) =>
-            Effect.gen(function* () {
-              const records = yield* Ref.get(recordsRef)
-              const existing = records.find((record) => record.runId === runId && record.key === key)
-              if (existing !== undefined) return existing
-              const record = { event, key, position: JournalPosition.make(records.length + 1), runId }
-              yield* Ref.set(recordsRef, [...records, record])
-              return record
-            }),
-          read: (runId) =>
-            Ref.get(recordsRef).pipe(Effect.map((records) => records.filter((record) => record.runId === runId)))
-        })
         const observation = yield* readPostPromotionBlockerCandidateAncestry(ancestryTransition.authorization).pipe(
-          Effect.provideService(InRunJournal, journal),
           Effect.provideService(
             TargetPromotionGit,
             TargetPromotionGit.of({
@@ -3194,8 +3184,13 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
             })
           )
         )
-        return { observation, records: yield* Ref.get(recordsRef) }
-      })
+        const records = yield* (yield* Journal).read(clearRunId)
+        return { observation, records }
+      }).pipe(
+        Effect.provide(
+          liveJournalTestLayer({ records: clearRecords, runId: clearRunId, target: clearBeginning.target })
+        )
+      )
 
     for (const disposition of ["NotInAncestry", "Unreadable"] as const) {
       const negative = yield* readAncestryWith(disposition)
@@ -3207,35 +3202,28 @@ it.effect("proves promoted ancestry after the blocker clears and completes witho
       )
     }
 
-    const ancestryRecordsRef = yield* Ref.make(clearRecords)
-    const ancestryJournal = InRunJournal.of({
-      append: (runId, key, event) =>
-        Effect.gen(function* () {
-          const records = yield* Ref.get(ancestryRecordsRef)
-          const existing = records.find((record) => record.runId === runId && record.key === key)
-          if (existing !== undefined) return existing
-          const record = { event, key, position: JournalPosition.make(records.length + 1), runId }
-          yield* Ref.set(ancestryRecordsRef, [...records, record])
-          return record
-        }),
-      read: (runId) =>
-        Ref.get(ancestryRecordsRef).pipe(Effect.map((records) => records.filter((record) => record.runId === runId)))
-    })
-    const ancestry = yield* readPostPromotionBlockerCandidateAncestry(ancestryTransition.authorization).pipe(
-      Effect.provideService(InRunJournal, ancestryJournal),
-      Effect.provideService(
-        TargetPromotionGit,
-        TargetPromotionGit.of({
-          compareAndSet: () => Effect.die("post-promotion ancestry cassette must not mutate Git"),
-          read: (request) =>
-            Effect.succeed(
-              TargetPromotionGitReadObservation.cases.CandidateCurrent.make({ currentHeadSha: request.candidateCommit })
-            )
-        })
+    const ancestry = yield* Effect.gen(function* () {
+      const observation = yield* readPostPromotionBlockerCandidateAncestry(ancestryTransition.authorization).pipe(
+        Effect.provideService(
+          TargetPromotionGit,
+          TargetPromotionGit.of({
+            compareAndSet: () => Effect.die("post-promotion ancestry cassette must not mutate Git"),
+            read: (request) =>
+              Effect.succeed(
+                TargetPromotionGitReadObservation.cases.CandidateCurrent.make({
+                  currentHeadSha: request.candidateCommit
+                })
+              )
+          })
+        )
       )
+      const records = yield* (yield* Journal).read(clearRunId)
+      return { observation, records }
+    }).pipe(
+      Effect.provide(liveJournalTestLayer({ records: clearRecords, runId: clearRunId, target: clearBeginning.target }))
     )
     expect(ancestry).toMatchObject({ _tag: "Observed", observation: { _tag: "CandidateCurrent" } })
-    const clearAndAncestryRecords = yield* Ref.get(ancestryRecordsRef)
+    const clearAndAncestryRecords = ancestry.records
     const clearAndAncestryHistory = reduceWorkflowJournalHistory(
       plannedAttempt.operation.plannedAttempt.runId,
       clearAndAncestryRecords
