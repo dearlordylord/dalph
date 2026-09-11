@@ -154,6 +154,9 @@ const operationIdsOf = (record: JournalRecord): ReadonlySet<OperationId> => {
   if ("replacementOperationId" in record.event) ids.add(record.event.replacementOperationId)
   if ("expectedClaim" in record.event) ids.add(record.event.expectedClaim.operationId)
   if ("release" in record.event) ids.add(record.event.release.claim.operationId)
+  if ("operation" in record.event && "release" in record.event.operation) {
+    ids.add(record.event.operation.release.claim.operationId)
+  }
   if (
     "observation" in record.event &&
     "request" in record.event.observation &&

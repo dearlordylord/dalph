@@ -2,11 +2,15 @@ import { expect, it } from "vitest"
 import { RunId, TaskId, makeTaskWorkSpecification } from "@dalph/contracts"
 import { FixtureTarget } from "../authorities/task-tracker/fixture/target.js"
 import { OperationId } from "../workflow/identity.js"
+import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
+import { ActiveTaskClaim, TaskClaimRelease } from "../authorities/task-tracker/claim-mutation.js"
 import {
+  makeTaskClaimReleaseOperation,
   makeTaskWorkSpecificationObservationOperation,
-  makeTrackerGraphObservationOperation
+  makeTrackerGraphObservationOperation,
+  TaskClaimReleaseAuthority
 } from "../workflow/registry/operation.js"
-import { taskTrackerReadIntent } from "../workflow/registry/event.js"
+import { TaskClaimReleaseIntendedEvent, taskTrackerReadIntent } from "../workflow/registry/event.js"
 import {
   TaskTrackerFactsObservedEvent,
   makeFocusedTaskWorkSpecificationFactsObserved
@@ -19,9 +23,41 @@ import {
   journalOperationById,
   journalRecordByPosition,
   journalRestartReadIntents,
+  journalRecordsForOperationId,
   journalRecordsForTask,
   journalRecordsOfKind
 } from "./record-evidence.js"
+
+it("indexes a release intent by its nested claim operation at every safe cutoff", () => {
+  const runId = RunId.make("nested-release-correlation-run")
+  const claimOperationId = OperationId.make("nested-release-claim-operation")
+  const release = TaskClaimRelease.make({
+    claim: ActiveTaskClaim.make({
+      operationId: claimOperationId,
+      owner: ClaimOwner.make("nested-release-owner"),
+      taskId: TaskId.make("nested-release-task"),
+      token: ClaimToken.make("nested-release-token")
+    }),
+    operationId: OperationId.make("nested-release-operation")
+  })
+  const operation = makeTaskClaimReleaseOperation({
+    authority: TaskClaimReleaseAuthority.cases.WorkflowClaimReleaseAuthority.make({}),
+    predecessorOperationIds: [claimOperationId],
+    release
+  })
+  const intent = {
+    event: TaskClaimReleaseIntendedEvent.make({ operation, version: workflowJournalEventVersion }),
+    key: JournalRecordKey.make("nested-release-intent"),
+    position: JournalPosition.make(1),
+    runId
+  }
+  const later = { ...intent, key: JournalRecordKey.make("nested-release-later"), position: JournalPosition.make(2) }
+  const complete = journalEvidenceFrom([intent, later])
+  const earlier = journalEvidenceBefore(complete, JournalPosition.make(2))
+
+  expect(Array.from(journalRecordsForOperationId(earlier, claimOperationId))).toEqual([intent])
+  expect(Array.from(journalRecordsForOperationId(complete, claimOperationId))).toEqual([intent, later])
+})
 
 it("indexes restart read intents by request and phase", () => {
   const operation = makeTrackerGraphObservationOperation(
