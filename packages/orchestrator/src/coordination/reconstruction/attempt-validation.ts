@@ -995,7 +995,7 @@ const freshReplacementTrackerReadIntent = (
   applicationPosition: JournalPosition
 ): ReplacementTrackerReadIntent | undefined =>
   findLast(
-    journalRecordsOfKind(prior, "TaskTrackerReadIntentRecorded"),
+    journalRecordsForOperationId(prior, operationId),
     (record): record is ReplacementTrackerReadIntent =>
       record.position > applicationPosition &&
       record.event._tag === "TaskTrackerReadIntentRecorded" &&
@@ -1008,7 +1008,7 @@ const freshReplacementGitReadIntent = (
   applicationPosition: JournalPosition
 ): ReplacementGitReadIntent | undefined =>
   findLast(
-    journalRecordsOfKind(prior, "GitReadIntentRecorded"),
+    journalRecordsForOperationId(prior, operationId),
     (record): record is ReplacementGitReadIntent =>
       record.position > applicationPosition &&
       record.event._tag === "GitReadIntentRecorded" &&
