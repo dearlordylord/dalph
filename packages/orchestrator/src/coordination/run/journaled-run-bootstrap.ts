@@ -70,6 +70,7 @@ import {
   type JournalAppendError,
   type JournalError,
   type JournalReadError,
+  type JournalRecord,
   JournalStore,
   RunLifecycleJournal,
   WorkflowRunTargetMismatch
@@ -95,7 +96,6 @@ import {
   journalRecordByKey,
   journalRecordsAfter
 } from "../../workflow-journal/record-evidence.js"
-import type { JournalRecord } from "../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   activeWorkAuthorityRefreshForOwner,
@@ -219,25 +219,19 @@ type RuntimeControlState =
 
 type TerminalRunFinalityProof = Extract<RunFinalityProof, { readonly decision: { readonly _tag: "RunMayTerminate" } }>
 
-type TaskTrackerReadIntentEvent = Extract<
-  JournalRecord["event"],
-  { readonly _tag: "TaskTrackerReadIntentRecorded" }
->
+type TaskTrackerReadIntentEvent = Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerReadIntentRecorded" }>
 type TrackerGraphReadOperation = Extract<TaskTrackerReadIntentEvent["operation"], { readonly _tag: "ReadTrackerGraph" }>
 type TrackerGraphReadIntentEvent = Omit<TaskTrackerReadIntentEvent, "operation"> & {
   readonly operation: TrackerGraphReadOperation
 }
 
-const isTrackerGraphReadIntentEvent = (
-  event: JournalRecord["event"]
-): event is TrackerGraphReadIntentEvent =>
+const isTrackerGraphReadIntentEvent = (event: JournalRecord["event"]): event is TrackerGraphReadIntentEvent =>
   event._tag === "TaskTrackerReadIntentRecorded" && event.operation._tag === "ReadTrackerGraph"
 
 const terminalGraphReadFor = (proof: TerminalRunFinalityProof, state: JournalState) => {
   const graph = state.graph
   const operationRecord = journalRecordByKey(state.prefix, intentRecordKey(proof.evidence.operationId))
-  const operation =
-    operationRecord?.event._tag === "TaskTrackerReadIntentRecorded" ? operationRecord.event : undefined
+  const operation = operationRecord?.event._tag === "TaskTrackerReadIntentRecorded" ? operationRecord.event : undefined
   if (graph._tag !== "GraphEstablished") return undefined
   if (operation === undefined) return undefined
   /* v8 ignore next -- @preserve Production terminal evidence is generated only from the exact tracker-graph read operation. */
@@ -845,10 +839,7 @@ export const journaledRunBootstrapLayer = (
             }
             return yield* withRuntimeControls(({ journal, runId }) =>
               Effect.gen(function* () {
-                const existing = firstJournalRecordOfKind(
-                  (yield* journal.state.get).prefix,
-                  "RunCancellationApplied"
-                )
+                const existing = firstJournalRecordOfKind((yield* journal.state.get).prefix, "RunCancellationApplied")
                 if (existing !== undefined) {
                   return AppliedRunCancellation.cases.RunCancellationAlreadyApplied.make({
                     appliedAt: existing.position
