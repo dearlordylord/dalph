@@ -2146,6 +2146,13 @@ const runAuthoredScenarioCassetteWith = (request: {
         ).pipe(Layer.provide(journalLayer), Layer.provide(coordinatorOwnershipLayer), Layer.provide(executorLayer))
         return { application, applicationExit }
       })
+      const openApplicationProcess = Effect.gen(function* () {
+        const scope = yield* Scope.make()
+        yield* Effect.addFinalizer((exit) => Scope.close(scope, exit))
+        const { application } = yield* makeApplicationProcess.pipe(Effect.provideService(Scope.Scope, scope))
+        const context = yield* Layer.build(application).pipe(Effect.provideService(Scope.Scope, scope))
+        return { context, scope }
+      })
       const withAuthoredOperatorDriver = <A, E, R>(program: Effect.Effect<A, E, R>) =>
         Effect.scoped(
           Effect.gen(function* () {
@@ -3005,7 +3012,11 @@ const runAuthoredScenarioCassetteWith = (request: {
       })
       const runAcrossActivations = Effect.gen(function* () {
         const firstActivationOrdinal = AuthoredRunActivationOrdinal.make(1)
-        let coordinator = yield* Effect.forkScoped(activateRun(firstActivationOrdinal))
+        let applicationProcess = yield* openApplicationProcess
+        let coordinator = yield* activateRun(firstActivationOrdinal).pipe(
+          Effect.provide(applicationProcess.context),
+          Effect.forkIn(applicationProcess.scope)
+        )
         const activationOrdinals: Array<AuthoredRunActivationOrdinalType> = [firstActivationOrdinal]
         let consumedLifecycleBoundaries = 0
         let activationOrdinal = firstActivationOrdinal
@@ -3017,14 +3028,19 @@ const runAuthoredScenarioCassetteWith = (request: {
           consumedLifecycleBoundaries += 1
           if (isAuthoredCoordinatorProcessDeath(boundary.exit)) {
             // The exact production action fiber raised the typed cassette
-            // control. Its scoped activation has already unwound; do not
-            // synthesize an interrupt, journal event, or recovery attempt.
+            // control. Close the dead process so the next activation rebuilds
+            // its live Journal from the same durable store.
+            yield* Scope.close(applicationProcess.scope, boundary.exit)
+            applicationProcess = yield* openApplicationProcess
           } else {
             yield* settleCoordinatorActivationReturn(cursor, boundary.exit)
           }
           if (yield* cursor.atTerminalAssertions) break
           activationOrdinal = AuthoredRunActivationOrdinal.make(activationOrdinal + 1)
-          coordinator = yield* activateRun(activationOrdinal).pipe(Effect.forkScoped({ startImmediately: true }))
+          coordinator = yield* activateRun(activationOrdinal).pipe(
+            Effect.provide(applicationProcess.context),
+            Effect.forkIn(applicationProcess.scope)
+          )
           activationOrdinals.push(activationOrdinal)
         }
         yield* Effect.raceFirst(
@@ -3078,13 +3094,10 @@ const runAuthoredScenarioCassetteWith = (request: {
         yield* activateRun(activationOrdinal)
         return { activationOrdinals, coordinatorExitAtAssertions: undefined, records: yield* sharedJournal.read(runId) }
       })
-      const ordinaryCoordinatorExecution = Effect.gen(function* () {
-        if (coordinatorLifecycleBoundaryCount > 0) return yield* runAcrossActivations
-        return yield* runSingleActivation
-      })
       const standardCoordinatorExecution = Effect.gen(function* () {
+        if (coordinatorLifecycleBoundaryCount > 0) return yield* runAcrossActivations
         const { application } = yield* makeApplicationProcess
-        return yield* ordinaryCoordinatorExecution.pipe(Effect.provide(application))
+        return yield* runSingleActivation.pipe(Effect.provide(application))
       })
       const processProvidedCoordinatorExecution = Effect.gen(function* () {
         if (runReactivationHintStory) return yield* runReactivationOwnerStory
