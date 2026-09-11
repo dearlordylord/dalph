@@ -4251,6 +4251,50 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
               transition._tag === "ReleaseStartedIntegrationTarget" &&
               transition.responsibility.queuedAt === responsibility.queuedAt
           )
+        if (
+          targetIsHeld &&
+          claimIsExact &&
+          claimObservedAt !== undefined &&
+          !graphWasCheckedAfterClaim &&
+          targetLineageReadIsRequired &&
+          !integrationResourceSnapshot.activeResponsibilityPositions.has(responsibility.queuedAt) &&
+          !integration.transitions.some(
+            (transition) =>
+              (transition._tag === "ReleaseStartedIntegrationTarget" ||
+                transition._tag === "RunIntegrator" ||
+                transition._tag === "RunTargetPromotion" ||
+                transition._tag === "ReconcileTargetPromotionAttempt") &&
+              transition.responsibility.queuedAt === responsibility.queuedAt
+          )
+        ) {
+          const claimRecord = journalRecordByPosition(journalHistoryOf(runState), claimObservedAt)
+          const claimOperationId =
+            claimRecord?.event._tag === "TaskClaimAcquired"
+              ? claimRecord.event.claim.operationId
+              : claimRecord?.event._tag === "TaskTrackerFactsObserved"
+                ? claimRecord.event.operationId
+                : undefined
+          const planOperationId = plannedAttemptPlanOperationId(
+            journalHistoryOf(runState),
+            responsibility.plannedAttempt
+          )
+          if (claimOperationId !== undefined && planOperationId !== undefined) {
+            return [
+              RunnableFrontierTransition.ObservePlannedAttemptContinuationGraph({
+                operation: makeTrackerGraphObservationOperation(
+                  { _tag: "AttemptContinuation" },
+                  OperationId.make(
+                    `integration-candidate:${responsibility.plannedAttempt.attemptId}:after:${claimObservedAt}:graph`
+                  ),
+                  establishedRunTarget,
+                  [planOperationId, claimOperationId],
+                  [responsibility.plannedAttempt.taskId]
+                ),
+                plannedAttempt: responsibility.plannedAttempt
+              })
+            ]
+          }
+        }
         if (quarantineDirection !== undefined && !targetIsHeld && lineageReadIsReady) {
           return integration.transitions.some(
             (transition) =>
