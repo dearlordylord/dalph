@@ -344,7 +344,8 @@ export const productionRunReactivationLayer = <EInitial, RInitial>(
  * implementation through the ordinary Effect Layer environment.
  */
 type ProductionWorkflowLayer<TrackerError, TrackerRequirements> = Layer.Layer<
-  ApplicationExitRequestBoundary
+  | AcceptedJournalReader
+  | ApplicationExitRequestBoundary
   | ApplicationExitShell
   | JournaledRunBootstrap
   | JournaledRunObservationSource,
@@ -352,12 +353,7 @@ type ProductionWorkflowLayer<TrackerError, TrackerRequirements> = Layer.Layer<
   | JournalStoreError
   | Layer.Error<typeof productionJournalStoreLayer>
   | Layer.Error<ReturnType<typeof productionCoordinatorOwnershipLayer>>,
-  | AcceptedJournalReader
-  | Crypto.Crypto
-  | FileSystem.FileSystem
-  | TrackerGraphReader
-  | TrackerRequirements
-  | WorkflowTrace
+  Crypto.Crypto | FileSystem.FileSystem | TrackerGraphReader | TrackerRequirements | WorkflowTrace
 >
 
 export const productionWorkflowInterpreterLayer = <TrackerError, TrackerRequirements>(
