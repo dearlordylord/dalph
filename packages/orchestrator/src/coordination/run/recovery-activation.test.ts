@@ -165,6 +165,7 @@ import {
   continuationDecisionFor,
   continuationFreshnessBaselineForAttempt,
   deriveJournalResponsibilityFacts,
+  diagnoseColdRunRecoveryProjection,
   filterFrontierForActivePauses,
   frontierForActivationOpportunity,
   makeRunRecoveryProjection,
@@ -774,8 +775,7 @@ const currentProjectionJournal = (
   runId: RunId,
   target: typeof coverageTarget,
   reconstructed: ReconstructedRunState,
-  initialRecords: ReadonlyArray<JournalRecord> = [makeWorkflowRunBeganRecord(runId, target, coveragePolicy)],
-  retainAcceptedPrefix = true
+  initialRecords: ReadonlyArray<JournalRecord> = [makeWorkflowRunBeganRecord(runId, target, coveragePolicy)]
 ) => {
   const began = makeWorkflowRunBeganRecord(runId, target, coveragePolicy)
   const initialReduction = reduceWorkflowJournalHistory(runId, initialRecords)
@@ -788,7 +788,7 @@ const currentProjectionJournal = (
     _tag: "JournalState" as const,
     position: reconstructed.appliedThrough ?? began.position,
     graph: TrackerGraphState.cases.GraphNotEstablished.make({}),
-    reconstructed: retainAcceptedPrefix ? { ...reconstructed, workflowHistory: { evidence: prefix } } : reconstructed,
+    reconstructed: { ...reconstructed, workflowHistory: { evidence: prefix } },
     prefix
   }
   const initialState = {
@@ -4134,7 +4134,7 @@ it("keeps a changed specification constrained when a later Continue supersedes i
   })
 })
 
-it("does not seed a continuation graph read from a foreign immutable Run target", () => {
+it("fails closed on a cold foreign-target shorthand without accepted plan lineage", () => {
   const foreignTarget = FixtureTarget.make("recovery-activation-foreign-target")
   const foreignGraphOperation = makeTrackerGraphObservationOperation(
     { _tag: "WorkflowEstablishment" },
@@ -4163,34 +4163,10 @@ it("does not seed a continuation graph read from a foreign immutable Run target"
     ),
     coverageRecord(6, foreignGraphEvent)
   ]
-  const reconstructed: ReconstructedRunState = {
-    ...coverageRunState(records, [coverageResponsibility]),
-    graphKnowledge: { taskTrackerFacts: [foreignGraphEvent.observation] }
-  }
-
   return Effect.runPromise(
     Effect.gen(function* () {
-      const resources = yield* makeIntegrationTargetResourceController()
-      const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
-        Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, reconstructed, undefined, false))
-      )
-      const projection = yield* recovery.readDeliveryProjection
-      const graphRead = projection.frontier.transitions.find(
-        ({ _tag }) => _tag === "ObservePlannedAttemptContinuationGraph"
-      )
-      expect(graphRead?._tag).toBe("ObservePlannedAttemptContinuationGraph")
-      if (graphRead?._tag === "ObservePlannedAttemptContinuationGraph") {
-        expect(graphRead.operation.target).toEqual(coverageTarget)
-        expect(graphRead.operation.operationId).toContain("continuation:")
-        expect(graphRead.operation.operationId).not.toBe(foreignGraphOperation.operationId)
-      }
-      expect(
-        projection.frontier.transitions.some(
-          (transition) =>
-            transition._tag === "ObservePlannedAttemptContinuationGraph" &&
-            transition.operation.target === foreignTarget
-        )
-      ).toBe(false)
+      const failure = yield* diagnoseColdRunRecoveryProjection(coverageRunId, records).pipe(Effect.flip)
+      expect(failure._tag).toBe("InvalidWorkflowJournalHistory")
     })
   )
 })
@@ -5031,7 +5007,7 @@ it("does not release a cancelled claim from a foreign-target observation", () =>
   }
 })
 
-it("ignores same-target foreign-plan tracker facts and schedules an exact replacement", () => {
+it("fails closed on cold foreign-plan tracker shorthand before replacement selection", () => {
   type Family = "Graph" | "Specification" | "Claim"
   const ready = PlannedWorktreeReady.make({
     baseSha: coverageAttempt.baseSha,
@@ -5137,41 +5113,8 @@ it("ignores same-target foreign-plan tracker facts and schedules an exact replac
     const foreignIntentRecord = coverageRecord(baseRecords.length + 2, taskTrackerReadIntent(foreignOperation))
     const foreignOutcomeRecord = coverageRecord(baseRecords.length + 3, foreignOutcome)
     const records = [...baseRecords, foreignPlanRecord, foreignIntentRecord, foreignOutcomeRecord]
-    const graphObservation = family === "Graph" ? foreignOutcome.observation : coverageGraphEvent.observation
-    const reconstructed: ReconstructedRunState = {
-      ...coverageRunState(records, [coverageResponsibilityAfterBeginning]),
-      graphKnowledge: { taskTrackerFacts: [graphObservation] }
-    }
-
-    const result = Effect.runSync(
-      Effect.gen(function* () {
-        const resources = yield* makeIntegrationTargetResourceController()
-        const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
-          Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, reconstructed, undefined, false))
-        )
-        return yield* recovery.readDeliveryProjection
-      })
-    )
-    const expectedTag =
-      family === "Graph"
-        ? "ObservePlannedAttemptContinuationGraph"
-        : family === "Specification"
-          ? "ObservePlannedAttemptContinuationSpecification"
-          : "ObservePlannedAttemptContinuationClaim"
-    const replacement = result.frontier.transitions.find(({ _tag }) => _tag === expectedTag)
-    expect(replacement?._tag, family).toBe(expectedTag)
-    expect(
-      result.frontier.transitions.some(({ _tag }) => _tag === "ResumePlannedAttemptExecutorWorkAfterCurrentFacts"),
-      family
-    ).toBe(false)
-    if (replacement !== undefined && "operation" in replacement) {
-      const operation = replacement.operation as {
-        readonly operationId: OperationId
-        readonly target: typeof coverageTarget
-      }
-      expect(operation.operationId, family).not.toBe(foreignOperation.operationId)
-      expect(operation.target, family).toEqual(coverageTarget)
-    }
+    const failure = Effect.runSync(diagnoseColdRunRecoveryProjection(coverageRunId, records).pipe(Effect.flip))
+    expect(failure._tag, family).toBe("InvalidWorkflowJournalHistory")
   }
 })
 
@@ -5700,7 +5643,7 @@ it("waits for integration configuration after an applied Continue choice has cur
   })
 })
 
-effectIt.effect("projects a continuation configuration explanation into the public frontier", () =>
+effectIt.effect("fails closed on cold continuation shorthand before configuration projection", () =>
   Effect.gen(function* () {
     const ready = PlannedWorktreeReady.make({
       baseSha: coverageAttempt.baseSha,
@@ -5709,21 +5652,8 @@ effectIt.effect("projects a continuation configuration explanation into the publ
       worktree: coverageAttempt.worktree
     })
     const records = continuationRecords(coverageClaimEvent, ready)
-    const reconstructed: ReconstructedRunState = {
-      ...coverageRunState(records, [coverageResponsibilityAfterBeginning]),
-      graphKnowledge: { taskTrackerFacts: [coverageGraphEvent.observation] }
-    }
-    const resources = yield* makeIntegrationTargetResourceController()
-    const recovery = yield* makeRunRecoveryProjection(coverageRunId, undefined, resources).pipe(
-      Effect.provide(currentProjectionJournal(coverageRunId, coverageTarget, reconstructed, undefined, false))
-    )
-    const projection = yield* recovery.readDeliveryProjection
-    expect(projection.frontier.explanations).toContainEqual(
-      FrontierExplanation.IntegrationConfigurationWait({
-        plannedAttempt: coverageAttempt,
-        wakeCondition: "IntegrationTargetConfigured"
-      })
-    )
+    const failure = yield* diagnoseColdRunRecoveryProjection(coverageRunId, records).pipe(Effect.flip)
+    expect(failure._tag).toBe("InvalidWorkflowJournalHistory")
   })
 )
 
