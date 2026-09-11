@@ -4,6 +4,13 @@ import type { Task } from "../../authorities/task-tracker/task.js"
 import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import {
+  isJournalRecordEvidence,
+  journalRecordsForOperationId,
+  journalRecordsForTask,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 import type { OperationId } from "../../workflow/identity.js"
 import { FreshWorkflowStep, type FreshWorkflowStep as FreshWorkflowStepType } from "../delivery/fresh-workflow-step.js"
 
@@ -41,7 +48,7 @@ const isAcceptedCompleteGraphOutcome = (
 }
 
 const completeGraphWakeFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   after: JournalPosition,
   targetKey: string,
@@ -49,22 +56,32 @@ const completeGraphWakeFor = (
   before?: JournalPosition,
   requiredOperationIds?: ReadonlySet<OperationId>
 ) => {
-  const outcome = records.findLast(
-    (record) =>
+  let outcome: JournalRecord | undefined
+  for (const record of journalRecordsOfKind(records, "TaskTrackerFactsObserved")) {
+    if (
       isWithinWakeWindow(record, runId, after, before) &&
       isAcceptedCompleteGraphOutcome(record, completeGraphObserved, requiredOperationIds)
-  )
+    ) {
+      outcome = record
+    }
+  }
   if (outcome?.event._tag !== "TaskTrackerFactsObserved") return undefined
   const outcomeOperationId = outcome.event.operationId
-  return records.findLast(
-    ({ event, position, runId: recordRunId }) =>
+  let intent: JournalRecord | undefined
+  for (const record of journalRecordsForOperationId(records, outcomeOperationId)) {
+    const { event, position, runId: recordRunId } = record
+    if (
       recordRunId === runId &&
       position < outcome.position &&
       event._tag === "TaskTrackerReadIntentRecorded" &&
       event.operation._tag === "ReadTrackerGraph" &&
       event.operation.operationId === outcomeOperationId &&
       taskTrackerTargetKey(event.operation.target) === targetKey
-  )
+    ) {
+      intent = record
+    }
+  }
+  return intent
 }
 
 type FocusedClaimReadRecord = JournalRecord & {
@@ -99,7 +116,7 @@ type FocusedReadAdvance =
   | { readonly _tag: "WakeAdvanced"; readonly wakeBaseline: JournalPosition }
 
 const advanceFocusedConstraintRead = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   read: FocusedClaimReadRecord,
   runId: RunId,
   wakeBaseline: JournalPosition,
@@ -117,13 +134,17 @@ const advanceFocusedConstraintRead = (
   )
   if (graphWake === undefined) return { _tag: "Ignored" }
   const operationId = read.event.operation.operationId
-  const observation = records.findLast(
-    (record) =>
+  let observation: JournalRecord | undefined
+  for (const record of journalRecordsForOperationId(records, operationId)) {
+    if (
       record.runId === runId &&
       record.position > read.position &&
       record.event._tag === "TaskTrackerFactsObserved" &&
       record.event.operationId === operationId
-  )
+    ) {
+      observation = record
+    }
+  }
   if (observation?.event._tag !== "TaskTrackerFactsObserved") return { _tag: "Retained" }
   const facts = observation.event.observation
   return facts._tag === "FocusedTaskClaimFacts" && facts.observation._tag === "UnclaimedTask"
@@ -132,8 +153,8 @@ const advanceFocusedConstraintRead = (
 }
 
 const advanceFocusedConstraintReads = (
-  records: ReadonlyArray<JournalRecord>,
-  reads: ReadonlyArray<FocusedClaimReadRecord>,
+  records: JournalHistorySource,
+  reads: Iterable<FocusedClaimReadRecord>,
   runId: RunId,
   initialWakeBaseline: JournalPosition,
   targetKey: string,
@@ -161,7 +182,7 @@ const freshSelectionClaimOperationId = (record: JournalRecord): OperationId | un
  * tracker's focused `UnclaimedTask` result clears the constraint.
  */
 export const rejectedFreshTaskClaimDisposition = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   task: Task,
   claimIntent: JournalRecord,
   completeGraphObserved: ReadonlySet<OperationId>,
@@ -170,16 +191,24 @@ export const rejectedFreshTaskClaimDisposition = (
   const claimOperationId = freshSelectionClaimOperationId(claimIntent)
   if (claimOperationId === undefined) return RejectedFreshTaskClaimDisposition.ConstraintAbsent()
   const runId = claimIntent.runId
-  const rejected = records.findLast((record) =>
-    isRejectedClaimOutcome(record, runId, claimIntent.position, claimOperationId)
-  )
+  let rejected: JournalRecord | undefined
+  for (const record of journalRecordsForOperationId(records, claimOperationId)) {
+    if (isRejectedClaimOutcome(record, runId, claimIntent.position, claimOperationId)) rejected = record
+  }
   if (rejected?.event._tag !== "TaskClaimAcquisitionRejected") {
     return RejectedFreshTaskClaimDisposition.ConstraintAbsent()
   }
 
-  const focusedReads = records.filter((record) =>
-    isFocusedConstraintRead(record, runId, rejected.position, task, immutableRunTargetKey, claimOperationId)
-  )
+  const focusedReads = {
+    *[Symbol.iterator]() {
+      const taskRecords = isJournalRecordEvidence(records) ? journalRecordsForTask(records, task.id) : records
+      for (const record of taskRecords) {
+        if (isFocusedConstraintRead(record, runId, rejected.position, task, immutableRunTargetKey, claimOperationId)) {
+          yield record
+        }
+      }
+    }
+  }
   const advancement = advanceFocusedConstraintReads(
     records,
     focusedReads,
