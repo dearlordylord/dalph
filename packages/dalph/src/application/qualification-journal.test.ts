@@ -2,25 +2,25 @@ import { it } from "@effect/vitest"
 import {
   AttemptId,
   GitCommitSha,
+  PlannedAttemptExecutor,
+  PlannedAttemptExecutorReport,
   PlannedTaskAttempt,
   RunId,
   TaskBranchRef,
   TaskExecutorLocator,
   TaskId,
   WorktreeLocator,
-  makeTaskWorkSpecification
+  makeTaskWorkSpecification,
+  plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
 import {
   AcceptedJournalReader,
-  FixtureTarget,
-  InRunJournal,
   JournalDatabaseLocator,
-  OperationId,
-  intentRecordKey,
-  makeTaskWorkSpecificationObservationOperation,
-  taskTrackerReadIntent
+  beginPlannedAttemptExecutorWork,
+  plannedAttemptProtocolControllerLayer
 } from "@dalph/orchestrator"
-import { Effect } from "effect"
+import { NodeServices } from "@effect/platform-node"
+import { Effect, FileSystem, Layer, Ref } from "effect"
 import { describe, expect } from "vitest"
 import { qualificationWorkflowJournalLayer } from "./qualification-journal.js"
 
@@ -39,25 +39,44 @@ const attempt = PlannedTaskAttempt.make({
 })
 
 describe("qualification workflow journal", () => {
-  it.effect("publishes executor-boundary appends through the same accepted SQLite lifecycle", () =>
+  it.effect("begins from the complete accepted plan and cold-imports it exactly once after restart", () =>
     Effect.gen(function* () {
-      const journal = yield* InRunJournal
-      const accepted = yield* AcceptedJournalReader
-      expect((yield* accepted.readAccepted(runId)).lastPosition).toBe(3)
-
-      const operation = makeTaskWorkSpecificationObservationOperation(
-        OperationId.make("qualification-live-follow-up"),
-        FixtureTarget.make("qualification"),
-        taskId,
-        [OperationId.make("qualification-original-specification")]
+      const directory = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
+        prefix: "dalph-qualification-journal-"
+      })
+      const filename = JournalDatabaseLocator.make(`${directory}/qualification.sqlite`)
+      const beginCalls = yield* Ref.make(0)
+      const executing = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+        correlation: plannedAttemptExecutorCorrelation(attempt)
+      })
+      const executor = PlannedAttemptExecutor.of({
+        begin: () => Ref.update(beginCalls, (count) => count + 1).pipe(Effect.as(executing)),
+        observe: () => Effect.die("qualification Begin must not project an unrelated executor"),
+        requestSuspension: () => Effect.die("qualification Begin must not suspend executor work"),
+        resume: () => Effect.die("qualification Begin must not resume executor work")
+      })
+      const live = qualificationWorkflowJournalLayer({ attempt, filename, specification }).pipe(
+        Layer.provideMerge(plannedAttemptProtocolControllerLayer)
       )
-      yield* journal.append(runId, intentRecordKey(operation.operationId), taskTrackerReadIntent(operation))
 
-      expect((yield* accepted.readAccepted(runId)).lastPosition).toBe(4)
-    }).pipe(
-      Effect.provide(
-        qualificationWorkflowJournalLayer({ attempt, filename: JournalDatabaseLocator.make(":memory:"), specification })
+      const crashed = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const accepted = yield* AcceptedJournalReader
+          expect((yield* accepted.readAccepted(runId)).lastPosition).toBe(10)
+          expect(yield* beginPlannedAttemptExecutorWork(attempt, specification)).toEqual(executing)
+          expect((yield* accepted.readAccepted(runId)).lastPosition).toBe(14)
+          return yield* Effect.die("simulated qualification host crash after durable Begin")
+        }).pipe(Effect.provideService(PlannedAttemptExecutor, executor), Effect.provide(live))
+      ).pipe(Effect.exit)
+      expect(crashed._tag).toBe("Failure")
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const accepted = yield* AcceptedJournalReader
+          expect((yield* accepted.readAccepted(runId)).lastPosition).toBe(14)
+        }).pipe(Effect.provide(live))
       )
-    )
+      expect(yield* Ref.get(beginCalls)).toBe(1)
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer))
   )
 })
