@@ -270,6 +270,53 @@ const completedFinalityProof = (
     } as const
   })
 
+it.effect("publishes the terminal cursor only after its termination signal is available", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const target = FixtureTarget.make("terminal-cursor-ordering")
+      const runId = yield* freshWorkflowRunId(target)
+      const storage = Context.get(yield* Layer.build(memoryJournalStoreLayer), JournalStore)
+      const bootstrap = yield* buildBootstrap(runId, storage)
+      const proofReady = yield* Deferred.make<void>()
+      const finish = yield* Deferred.make<void>()
+      const activation = yield* bootstrap
+        .activate(
+          target,
+          Effect.succeed(initialPolicy),
+          runId,
+          Effect.gen(function* () {
+            const proof = yield* completedFinalityProof(runId, target)
+            yield* Deferred.succeed(proofReady, undefined)
+            yield* Deferred.await(finish)
+            return proof
+          })
+        )
+        .pipe(Effect.forkScoped)
+      yield* Deferred.await(proofReady)
+      const subscription = yield* bootstrap.acceptedHistory.attach
+      const before = subscription.current.position
+      const observed = yield* subscription.changes.pipe(
+        Stream.take(1),
+        Stream.mapEffect((cursor) =>
+          bootstrap.runTermination.poll.pipe(Effect.map((termination) => ({ cursor, termination })))
+        ),
+        Stream.runCollect,
+        Effect.forkScoped({ startImmediately: true })
+      )
+      yield* Deferred.succeed(finish, undefined)
+      expect(yield* Fiber.join(activation)).toEqual({ _tag: "RunMayTerminate" })
+      const publications = yield* Fiber.join(observed)
+      expect(publications).toHaveLength(1)
+      const terminal = publications[0]
+      if (terminal === undefined) return yield* Effect.die("terminal cursor was not observed")
+      expect(terminal.cursor.position).toBe(before + 1)
+      expect(Option.isSome(terminal.termination)).toBe(true)
+      expect(yield* bootstrap.acceptedHistory.get).toEqual(terminal.cursor)
+      expect((yield* storage.read(runId)).filter(({ event }) => event._tag === "WorkflowRunTerminated")).toHaveLength(1)
+    })
+  ).pipe(Effect.provide(NodeCrypto.layer))
+)
+
 it.effect("fails closed when a terminal proof does not name its established graph read", () =>
   Effect.scoped(
     Effect.gen(function* () {
