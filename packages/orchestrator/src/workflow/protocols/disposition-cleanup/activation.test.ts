@@ -6,6 +6,7 @@ import { InitialControlPolicy } from "../../../control/policy.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
 import { JournalStore } from "../../../workflow-journal/store.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import {
   branchCleanupObservationIntendedRecordKey,
   plannedAttemptReplacedRecordKey,
@@ -75,6 +76,15 @@ it.effect("derives one abandonment authorization from the latest exact ready-wor
     const derived = deriveCleanupAuthorizations(yield* journal.read(runId)).worktree
     expect(derived).toHaveLength(1)
     expect(derived[0]?.disposition._tag).toBe("Abandoned")
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
+
+it.effect("derives the same cleanup authorization from cold records and indexed accepted evidence", () =>
+  Effect.gen(function* () {
+    const journal = yield* begin("activation-indexed-abandonment-witness")
+    yield* appendAbandonedProvenance(attempt)
+    const records = yield* journal.read(runId)
+    expect(deriveCleanupAuthorizations(journalEvidenceFrom(records))).toEqual(deriveCleanupAuthorizations(records))
   }).pipe(Effect.provide(memoryJournalTestLayer))
 )
 
