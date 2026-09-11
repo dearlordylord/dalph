@@ -32,6 +32,11 @@ type PlannedAttemptExecutorWorkReportedRecord = JournalRecord & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorWorkReported" }>
 }
 
+const isPlannedAttemptExecutorWorkReportedRecord = (
+  record: JournalRecord | undefined
+): record is PlannedAttemptExecutorWorkReportedRecord =>
+  record?.event._tag === "PlannedAttemptExecutorWorkReported"
+
 export const acceptedPlannedAttemptExecutorReportRecords = (
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
@@ -228,7 +233,7 @@ export const plannedAttemptExecutorLifecycleTransitionError = (
     plannedAttempt.attemptId,
     "PlannedAttemptExecutorWorkReported"
   )
-  if (latest?.event._tag !== "PlannedAttemptExecutorWorkReported") {
+  if (!isPlannedAttemptExecutorWorkReportedRecord(latest)) {
     return initialLifecycleReportError(records, plannedAttempt, observed)
   }
   if (

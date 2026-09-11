@@ -4,6 +4,7 @@ import { RunId } from "@dalph/contracts"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { journalEvidenceFrom, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
+import { observeJournalRecordSequenceOperations } from "../../../workflow-journal/record-sequence.js"
 import {
   attemptPlanRecordKey,
   intentRecordKey,
@@ -252,7 +253,7 @@ const validFinalityRecords = (): ReadonlyArray<JournalRecord> => {
     })
   )
   return [
-    record(1, prerequisiteRecordEvents[0]),
+    record(1, prerequisiteRecordEvents[0], outcomeRecordKey(fixture.activeClaim.operationId)),
     record(2, prerequisiteRecordEvents[1]),
     promotion,
     replacementIntent,
@@ -396,6 +397,35 @@ it("accepts one complete promotion, replacement, fresh-success deletion, and set
   const records = validFinalityRecords()
   expect(validationErrors(records)).toEqual([])
   expect(journaledIntegrationEvidenceOf(records).at(-1)?._tag).toBe("IntegrationFinalitySettlement")
+})
+
+it("keeps exact replacement prerequisites bounded after 64 and 256 unrelated accepted records", () => {
+  const visits = [64, 256].map((size) => {
+    const noise = Array.from({ length: size }, (_, index) =>
+      record(index + 1, fixture.graphRecordEvent, `history:replacement-noise:${index}`)
+    )
+    const relevant = validFinalityRecords()
+      .slice(0, 4)
+      .map((current, index) => ({ ...current, position: JournalPosition.make(size + index + 1) }))
+    const intent = relevant.at(-1)
+    if (intent?.event._tag !== "CompletionClaimReplacementIntended") {
+      return expect.fail("fixture must end at replacement intent")
+    }
+    const evidence = journalEvidenceFrom([...noise, ...relevant])
+    const operations: Array<string> = []
+    const stop = observeJournalRecordSequenceOperations((operation) => operations.push(operation._tag))
+    try {
+      expect(invalidIntegrationFinalityHistory(intent, evidence, makeIntegrationFinalityHistoryIndexes()).detail).toBe(
+        undefined
+      )
+    } finally {
+      stop()
+    }
+    expect(operations.every((operation) => operation === "IndexedRecordVisit")).toBe(true)
+    return operations.length
+  })
+  expect(visits[0]).toBeGreaterThan(0)
+  expect(visits[1]).toBe(visits[0])
 })
 
 it("reports identical ordered finality diagnostics from cold records and indexed live evidence", () => {

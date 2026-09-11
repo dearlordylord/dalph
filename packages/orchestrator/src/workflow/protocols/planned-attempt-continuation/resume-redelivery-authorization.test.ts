@@ -32,6 +32,7 @@ import type { ReconstructedRunState } from "../../../coordination/reconstruction
 import { validSnapshot } from "../../../../test/task-dag.js"
 import { taskTrackerGraphFactsObserved } from "../../../../test/task-tracker-facts.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
+import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
 import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
@@ -339,7 +340,7 @@ const fixture = () => {
       entries: [{ _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: responsibility.position, plannedAttempt }]
     },
     runId,
-    workflowHistory: { records }
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
   const facts = deriveJournalResponsibilityFacts(runState).find(
     (candidate) => candidate._tag === "PlannedAttemptExecutorFreshFacts"
