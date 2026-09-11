@@ -1,3 +1,4 @@
+import { RunActivationGraphBaseline } from "./activation-graph-baseline.js"
 import {
   AttemptId,
   type AcceptedResult,
@@ -386,7 +387,8 @@ const makeRuntimeCreatedRelations = Effect.fn("JournaledRunBootstrapTest.makeRun
       readDeliveryProjection: recovery.readDeliveryProjection,
       reconstructedPlannedAttemptPositions: recovery.reconstructedPlannedAttemptPositions
     },
-    resources.integrationTargets
+    resources.integrationTargets,
+    yield* RunActivationGraphBaseline
   )
 })
 
