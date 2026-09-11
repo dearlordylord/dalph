@@ -162,6 +162,12 @@ const taskIdsOf = (record: JournalRecord, indexes?: EvidenceIndexes): ReadonlySe
     if ("taskId" in event.claim) ids.add(event.claim.taskId)
     if ("plannedAttempt" in event.claim) ids.add(event.claim.plannedAttempt.taskId)
   }
+  if ("release" in event) ids.add(event.release.claim.taskId)
+  if ("expectedClaim" in event) ids.add(event.expectedClaim.taskId)
+  if ("request" in event) {
+    if ("taskId" in event.request) ids.add(event.request.taskId)
+    if ("claim" in event.request) ids.add(event.request.claim.plannedAttempt.taskId)
+  }
   if ("operation" in event) {
     const operation = event.operation
     if ("plannedAttempt" in operation) ids.add(operation.plannedAttempt.taskId)
@@ -171,6 +177,10 @@ const taskIdsOf = (record: JournalRecord, indexes?: EvidenceIndexes): ReadonlySe
     }
     if ("acquisition" in operation) ids.add(operation.acquisition.taskId)
     if ("release" in operation) ids.add(operation.release.claim.taskId)
+    if ("request" in operation) {
+      if ("taskId" in operation.request) ids.add(operation.request.taskId)
+      if ("claim" in operation.request) ids.add(operation.request.claim.plannedAttempt.taskId)
+    }
   }
   if (event._tag === "PlannedAttemptReplaced") {
     ids.add(event.subject.plannedAttempt.taskId)
