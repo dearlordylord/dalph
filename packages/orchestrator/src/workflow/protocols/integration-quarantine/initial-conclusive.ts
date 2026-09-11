@@ -352,6 +352,39 @@ const validateModernRunEvidence = (
     : validateCandidateRejectedEvidence(records, candidateEvents, result, recordedResult.value)
 }
 
+/**
+ * Validates unaccepted persisted evidence before a live Journal can exist.
+ * This is the explicit cold-corruption diagnostic boundary; runtime callers use
+ * appendInitialConclusiveIntegrationQuarantine with AcceptedJournalReader.
+ */
+export const initialConclusiveIntegrationQuarantineIssueFromRecords = (
+  records: ReadonlyArray<JournalRecord>,
+  result: InitialConclusiveIntegrationQuarantineInput
+): string | undefined => {
+  const validation = validateModernRunEvidence(records, result)
+  if (validation._tag === "Invalid") return validation.detail
+  const run = result.run
+  const basis = validation.value
+  const key = integrationQuarantinedRecordKey(run.session.sessionId, basis)
+  const event = IntegrationQuarantinedEvent.make({
+    basis,
+    correlation: run.session,
+    occurrenceClassification: "NonActionOccurrence",
+    version: workflowJournalEventVersion
+  })
+  const existingAtKey = exactJournalRecordAtKey(records, key)
+  if (existingAtKey._tag === "Duplicate") return existingAtKey.detail
+  if (existingAtKey._tag === "Found" && !sameExpectedQuarantine(existingAtKey.record, run, key, event)) {
+    return "initial conclusive quarantine key contains a foreign event"
+  }
+  const duplicate = Array.from(journalRecordsForIntegratorSession(records, run.session.sessionId)).filter(
+    (record) => record.event._tag === "IntegrationQuarantined" && quarantineEventEquivalence(record.event, event)
+  )
+  return duplicate.some((record) => record.key !== key)
+    ? "initial conclusive quarantine exists under a foreign key"
+    : undefined
+}
+
 /** Records Q for one exact modern run-1 conclusive result before target ownership is released. */
 export const appendInitialConclusiveIntegrationQuarantine = Effect.fn(
   "IntegrationQuarantine.appendInitialConclusiveIntegrationQuarantine"
