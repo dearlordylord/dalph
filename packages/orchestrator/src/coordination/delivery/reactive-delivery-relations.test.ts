@@ -103,6 +103,8 @@ import { deliveryProposalsOf } from "./delivery-proposal-derivation.js"
 import { makeDeliveryRuntimeAdmissionController } from "./delivery-runtime-admission.js"
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
+import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
+import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import { deliveryRuntimeResourcesLayer } from "./delivery-runtime-resources.js"
 import {
   DeliveryControlPolicyMissing,
@@ -1326,7 +1328,7 @@ it.effect("establishes the current graph before proposing an external-success cl
   )
 )
 
-it.effect("establishes the current graph while a recovered continuation graph read waits for capacity", () =>
+it.effect("establishes the current graph without scanning unrelated history while a recovered continuation waits", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const priorActivationJournal = yield* makeJournalService
@@ -1401,7 +1403,10 @@ it.effect("establishes the current graph while a recovered continuation graph re
       yield* appendDirectExecutorReport(priorActivationJournal, safeReport, 2)
       const storage = yield* JournalStore
       expect(
-        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(yield* storage.read(runId), recoveredAttempt)
+        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(
+          journalEvidenceFrom(yield* storage.read(runId)),
+          recoveredAttempt
+        )
       ).toBe(false)
       const globalOpenGraphOperation = yield* appendRecoveredTaskGraph(
         priorActivationJournal,
@@ -1413,8 +1418,49 @@ it.effect("establishes the current graph while a recovered continuation graph re
       )
       const globallyReopenedRecords = yield* storage.read(runId)
       expect(
-        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(globallyReopenedRecords, recoveredAttempt)
+        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(
+          journalEvidenceFrom(globallyReopenedRecords),
+          recoveredAttempt
+        )
       ).toBe(true)
+      const measureIndexedReopenLookup = (paddingCount: number) => {
+        const start = Number(globallyReopenedRecords.at(-1)?.position ?? 0) + 1
+        const padded = [
+          ...globallyReopenedRecords,
+          ...Array.from({ length: paddingCount }, (_, index) => {
+            const operationId = OperationId.make(`reactive-delivery-unrelated-claim-${paddingCount}-${index}`)
+            return {
+              event: TaskClaimAcquiredEvent.make({
+                claim: ActiveTaskClaim.make({
+                  operationId,
+                  owner: ClaimOwner.make("reactive-delivery-unrelated"),
+                  taskId: TaskId.make(`reactive-delivery-unrelated-task-${index}`),
+                  token: ClaimToken.make(`reactive-delivery-unrelated-token-${index}`)
+                }),
+                version: workflowJournalEventVersion
+              }),
+              key: outcomeRecordKey(operationId),
+              position: JournalPosition.make(start + index),
+              runId
+            }
+          })
+        ]
+        const evidence = journalEvidenceFrom(padded)
+        const operations: Array<string> = []
+        const stop = observeJournalRecordSequenceOperations((operation) => operations.push(operation._tag))
+        try {
+          expect(hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(evidence, recoveredAttempt)).toBe(
+            true
+          )
+        } finally {
+          stop()
+        }
+        return operations
+      }
+      const operationsAt64 = measureIndexedReopenLookup(64)
+      expect(measureIndexedReopenLookup(256)).toEqual(operationsAt64)
+      expect(operationsAt64).toContain("IndexedRecordVisit")
+      expect(operationsAt64).not.toContain("HistoricalMaterialization")
       const authorityIntent = globallyReopenedRecords.find(
         ({ event }) =>
           event._tag === "TaskTrackerReadIntentRecorded" &&
@@ -1500,7 +1546,10 @@ it.effect("establishes the current graph while a recovered continuation graph re
         { name: "duplicate plan", records: duplicatePlan }
       ]) {
         expect(
-          hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(invalidRecords, recoveredAttempt),
+          hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(
+            journalEvidenceFrom(invalidRecords),
+            recoveredAttempt
+          ),
           name
         ).toBe(false)
       }
@@ -1515,7 +1564,7 @@ it.effect("establishes the current graph while a recovered continuation graph re
       })
       expect(
         hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(
-          [
+          journalEvidenceFrom([
             ...globallyReopenedRecords,
             {
               event: resume,
@@ -1523,7 +1572,7 @@ it.effect("establishes the current graph while a recovered continuation graph re
               position: JournalPosition.make(Number(globallyReopenedRecords.at(-1)?.position ?? 0) + 1),
               runId
             }
-          ],
+          ]),
           recoveredAttempt
         )
       ).toBe(false)
@@ -1535,7 +1584,10 @@ it.effect("establishes the current graph while a recovered continuation graph re
         { _tag: "WorkflowEstablishment" }
       )
       expect(
-        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(yield* storage.read(runId), recoveredAttempt)
+        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(
+          journalEvidenceFrom(yield* storage.read(runId)),
+          recoveredAttempt
+        )
       ).toBe(false)
       const continuationOpen = yield* appendRecoveredTaskGraph(
         priorActivationJournal,
@@ -1546,7 +1598,10 @@ it.effect("establishes the current graph while a recovered continuation graph re
         [recoveredAttempt.taskId]
       )
       expect(
-        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(yield* storage.read(runId), recoveredAttempt)
+        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(
+          journalEvidenceFrom(yield* storage.read(runId)),
+          recoveredAttempt
+        )
       ).toBe(false)
       const cCoveredActiveOpen = yield* appendRecoveredTaskGraph(
         priorActivationJournal,
@@ -1557,7 +1612,10 @@ it.effect("establishes the current graph while a recovered continuation graph re
         [recoveredAttempt.taskId]
       )
       expect(
-        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(yield* storage.read(runId), recoveredAttempt)
+        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(
+          journalEvidenceFrom(yield* storage.read(runId)),
+          recoveredAttempt
+        )
       ).toBe(false)
       yield* appendRecoveredTaskGraph(
         priorActivationJournal,
@@ -1566,7 +1624,10 @@ it.effect("establishes the current graph while a recovered continuation graph re
         "TerminalWithoutSuccess"
       )
       expect(
-        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(yield* storage.read(runId), recoveredAttempt)
+        hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck(
+          journalEvidenceFrom(yield* storage.read(runId)),
+          recoveredAttempt
+        )
       ).toBe(false)
 
       const recoveredHistory = reduceWorkflowJournalHistory(runId, globallyReopenedRecords)

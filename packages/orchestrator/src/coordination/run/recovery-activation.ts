@@ -139,6 +139,7 @@ import {
   journalRecordsForPromotionRequest,
   journalRecordsForTask,
   journalRecordsOfKind,
+  type JournalRecordEvidence,
   type JournalHistorySource
 } from "../../workflow-journal/record-evidence.js"
 import { journalRecordAt } from "../../workflow-journal/record-sequence.js"
@@ -147,7 +148,7 @@ export { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
 const finalRecordOffset = -1
 
 /** Live reconstruction retains the accepted indexed prefix; raw arrays exist only in isolated pure fixtures. */
-const journalHistoryOf = (runState: Pick<ReconstructedRunState, "workflowHistory">): JournalHistorySource =>
+const journalHistoryOf = (runState: Pick<ReconstructedRunState, "workflowHistory">): JournalRecordEvidence =>
   runState.workflowHistory.evidence
 
 const journalRecordsForPlannedAttempt = (
@@ -1594,7 +1595,7 @@ export const deriveJournalResponsibilityFacts = (
       responsibility._tag === "TaskClaimResponsibility"
         ? undefined
         : currentTaskClaimAuthority(
-            records,
+            source,
             responsibility.taskId,
             expectedClaim,
             freshnessBaselineForTask(responsibility.taskId),
@@ -2002,7 +2003,7 @@ export const deriveJournalResponsibilityFacts = (
     const facts = { _tag: "PlannedAttemptExecutorFreshFacts" as const, disposition, responsibility }
     if (disposition._tag !== "Ready" || disposition.acceptedProgress._tag !== "ExecutorReportAccepted") return facts
     const safeContinuationRevalidationEligibility = safeContinuationRevalidationEligibilityFromRecoveryHistory(
-      records,
+      source,
       responsibility.plannedAttempt,
       responsibility.beganAt,
       disposition.acceptedProgress,
@@ -4086,7 +4087,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
       return [
         plannedAttempt.attemptId,
         currentTaskClaimAuthority(
-          Array.from(journalRecordsForTask(journalHistoryOf(runState), plannedAttempt.taskId)),
+          journalHistoryOf(runState),
           plannedAttempt.taskId,
           authorizedClaimForAttempt(journalHistoryOf(runState), plannedAttempt)?.claim,
           freshnessBaselineForTask(plannedAttempt.taskId),

@@ -1,8 +1,15 @@
 import { Option } from "effect"
 import type { TaskId } from "@dalph/contracts"
 import { type ActiveTaskClaim, isExactTaskClaim } from "../../authorities/task-tracker/claim-mutation.js"
-import { taskTrackerTargetKey, type TrackerTarget } from "../../authorities/task-tracker/target.js"
+import type { TrackerTarget } from "../../authorities/task-tracker/target.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
+import { outcomeRecordKey } from "../../workflow-journal/record-key.js"
+import {
+  journalLatestTaskObservation,
+  journalRecordByKey,
+  journalRecordsForTaskKind,
+  type JournalRecordEvidence
+} from "../../workflow-journal/record-evidence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 
 /** Current tracker evidence relative to the exact claim that authorizes task work. */
@@ -33,27 +40,52 @@ const classifyObservation = (
  * claim. An observation predating that claim cannot authorize later work.
  */
 export const currentTaskClaimAuthority = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalRecordEvidence,
   taskId: TaskId,
   expectedClaim: ActiveTaskClaim | undefined,
   activationBaselinePosition: Option.Option<JournalPosition>,
   immutableRunTarget?: TrackerTarget
 ): CurrentTaskClaimAuthority => {
   if (expectedClaim === undefined) return { _tag: "Missing" }
-  const expectedAt = records.findLast(
-    ({ event }) => event._tag === "TaskClaimAcquired" && event.claim.operationId === expectedClaim.operationId
-  )?.position
-  const observationRecord = records.findLast(
-    ({ event, position }) =>
-      afterBaseline(position, activationBaselinePosition) &&
-      (expectedAt === undefined || position > expectedAt) &&
-      event._tag === "TaskTrackerFactsObserved" &&
-      (event.observation._tag === "FocusedTaskClaimFacts" ||
-        event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
-      event.observation.coverage.taskId === taskId &&
-      (immutableRunTarget === undefined ||
-        taskTrackerTargetKey(event.observation.target) === taskTrackerTargetKey(immutableRunTarget))
+  const expectedRecord = journalRecordByKey(records, outcomeRecordKey(expectedClaim.operationId))
+  const expectedAt =
+    expectedRecord?.event._tag === "TaskClaimAcquired" &&
+    expectedRecord.event.claim.operationId === expectedClaim.operationId
+      ? expectedRecord.position
+      : undefined
+  let observationRecord: JournalRecord | undefined
+  if (immutableRunTarget !== undefined) {
+    const observed = journalLatestTaskObservation(records, {
+      kind: "FocusedTaskClaimFacts",
+      target: immutableRunTarget,
+      taskId
+    })
+    const unreadable = journalLatestTaskObservation(records, {
+      kind: "FocusedTaskClaimFactsUnreadable",
+      target: immutableRunTarget,
+      taskId
+    })
+    observationRecord =
+      observed === undefined || (unreadable !== undefined && unreadable.position > observed.position)
+        ? unreadable
+        : observed
+  } else {
+    for (const record of journalRecordsForTaskKind(records, taskId, "TaskTrackerFactsObserved")) {
+      if (
+        record.event._tag === "TaskTrackerFactsObserved" &&
+        (record.event.observation._tag === "FocusedTaskClaimFacts" ||
+          record.event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
+        record.event.observation.coverage.taskId === taskId
+      )
+        observationRecord = record
+    }
+  }
+  if (
+    observationRecord !== undefined &&
+    (!afterBaseline(observationRecord.position, activationBaselinePosition) ||
+      (expectedAt !== undefined && observationRecord.position <= expectedAt))
   )
+    observationRecord = undefined
   const observation = observationRecord?.event
   if (
     observation?._tag !== "TaskTrackerFactsObserved" ||
