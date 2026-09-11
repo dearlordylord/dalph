@@ -43,6 +43,7 @@ interface EvidenceIndexes {
   readonly byTaskKind: HashMap.HashMap<TaskId, HashMap.HashMap<JournalRecord["event"]["_tag"], JournalRecordSequence>>
   readonly operations: HashMap.HashMap<OperationId, JournalRecordSequence>
   readonly recordsByOperation: HashMap.HashMap<OperationId, JournalRecordSequence>
+  readonly byRestartRead: HashMap.HashMap<string, JournalRecordSequence>
 }
 
 const indexesByEvidence = new WeakMap<JournalRecordEvidence, EvidenceIndexes>()
@@ -68,7 +69,8 @@ export const emptyJournalEvidence = (): JournalRecordEvidence =>
     byTask: HashMap.empty(),
     byTaskKind: HashMap.empty(),
     operations: HashMap.empty(),
-    recordsByOperation: HashMap.empty()
+    recordsByOperation: HashMap.empty(),
+    byRestartRead: HashMap.empty()
   })
 
 const operationOf = ({ event }: JournalRecord): WorkflowOperation | undefined =>
@@ -100,10 +102,16 @@ const attemptIdsOf = (record: JournalRecord): ReadonlySet<AttemptId> => {
   return ids
 }
 
-const graphObservationTaskIds = (
-  record: JournalRecord,
-  indexes: EvidenceIndexes | undefined
-): ReadonlySet<TaskId> => {
+const restartReadKeyOf = (record: JournalRecord): string | undefined => {
+  const event = record.event
+  if (event._tag !== "TaskTrackerReadIntentRecorded" && event._tag !== "GitReadIntentRecorded") return undefined
+  const matched = /^attempt-restart:([^:]+):(claim|graph|specification|target-lineage|worktree):after:/.exec(
+    event.operation.operationId
+  )
+  return matched === null ? undefined : `${matched[1]}:${matched[2]}`
+}
+
+const graphObservationTaskIds = (record: JournalRecord, indexes: EvidenceIndexes | undefined): ReadonlySet<TaskId> => {
   if (record.event._tag !== "TaskTrackerFactsObserved") return new Set()
   const observation = record.event.observation
   if (observation._tag === "CompleteTaskTrackerFacts") {
@@ -116,12 +124,9 @@ const graphObservationTaskIds = (
   const prior =
     indexes === undefined
       ? undefined
-      : Option.getOrUndefined(
-          HashMap.get(indexes.byKey, outcomeRecordKey(observation.priorFullObservationOperationId))
-        )
+      : Option.getOrUndefined(HashMap.get(indexes.byKey, outcomeRecordKey(observation.priorFullObservationOperationId)))
   const priorTaskIds =
-    prior?.event._tag === "TaskTrackerFactsObserved" &&
-    prior.event.observation._tag === "CompleteTaskTrackerFacts"
+    prior?.event._tag === "TaskTrackerFactsObserved" && prior.event.observation._tag === "CompleteTaskTrackerFacts"
       ? prior.event.observation.factFamilies[0].taskIds
       : []
   return new Set([
@@ -145,10 +150,7 @@ const taskIdsOf = (record: JournalRecord, indexes?: EvidenceIndexes): ReadonlySe
     if (observation._tag === "FocusedTaskWorkSpecificationFacts") {
       ids.add(observation.factFamily.coverage.taskId)
     }
-    if (
-      observation._tag === "FocusedTaskClaimFacts" ||
-      observation._tag === "FocusedTaskClaimFactsUnreadable"
-    ) {
+    if (observation._tag === "FocusedTaskClaimFacts" || observation._tag === "FocusedTaskClaimFactsUnreadable") {
       ids.add(observation.coverage.taskId)
     }
     if (observation._tag === "FocusedTaskCompletionFacts") ids.add(observation.request.taskId)
@@ -210,10 +212,7 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     if ("commandOrdinal" in record.event) {
       const commandKey = `${attemptId}:${record.event.commandOrdinal}`
       const priorCommandKinds = Option.getOrElse(HashMap.get(byAttemptCommandKind, commandKey), HashMap.empty)
-      const priorCommandKind = Option.getOrElse(
-        HashMap.get(priorCommandKinds, record.event._tag),
-        emptyJournalRecords
-      )
+      const priorCommandKind = Option.getOrElse(HashMap.get(priorCommandKinds, record.event._tag), emptyJournalRecords)
       byAttemptCommandKind = HashMap.set(
         byAttemptCommandKind,
         commandKey,
@@ -238,12 +237,20 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
   let recordsByOperation = indexes.recordsByOperation
   for (const operationId of operationIdsOf(record)) {
     const priorOperation = Option.getOrElse(HashMap.get(recordsByOperation, operationId), emptyJournalRecords)
-    recordsByOperation = HashMap.set(
-      recordsByOperation,
-      operationId,
-      appendJournalRecord(priorOperation, record)
-    )
+    recordsByOperation = HashMap.set(recordsByOperation, operationId, appendJournalRecord(priorOperation, record))
   }
+  const restartReadKey = restartReadKeyOf(record)
+  const byRestartRead =
+    restartReadKey === undefined
+      ? indexes.byRestartRead
+      : HashMap.set(
+          indexes.byRestartRead,
+          restartReadKey,
+          appendJournalRecord(
+            Option.getOrElse(HashMap.get(indexes.byRestartRead, restartReadKey), emptyJournalRecords),
+            record
+          )
+        )
   return evidence(appendJournalRecord(prior.records, record), {
     byKey: HashMap.has(indexes.byKey, record.key) ? indexes.byKey : HashMap.set(indexes.byKey, record.key, record),
     byKind: HashMap.set(indexes.byKind, record.event._tag, appendJournalRecord(ofKind, record)),
@@ -252,8 +259,19 @@ export const appendJournalEvidence = (prior: JournalRecordEvidence, record: Jour
     byAttemptCommandKind,
     byTask,
     byTaskKind,
-    operations: operation === undefined ? indexes.operations : HashMap.set(indexes.operations, workflowOperationId(operation), appendJournalRecord(Option.getOrElse(HashMap.get(indexes.operations, workflowOperationId(operation)), emptyJournalRecords), record)),
-    recordsByOperation
+    operations:
+      operation === undefined
+        ? indexes.operations
+        : HashMap.set(
+            indexes.operations,
+            workflowOperationId(operation),
+            appendJournalRecord(
+              Option.getOrElse(HashMap.get(indexes.operations, workflowOperationId(operation)), emptyJournalRecords),
+              record
+            )
+          ),
+    recordsByOperation,
+    byRestartRead
   })
 }
 
@@ -262,8 +280,10 @@ export const journalEvidenceFrom = (records: ReadonlyArray<JournalRecord>): Jour
   records.reduce(appendJournalEvidence, emptyJournalEvidence())
 
 /** A historical evidence window, not a new semantic acceptance certificate. */
-export const journalEvidenceBefore = (source: JournalRecordEvidence, exclusivePosition: number): JournalRecordEvidence =>
-  evidence(journalRecordsBefore(source.records, exclusivePosition - 1), indexesFor(source))
+export const journalEvidenceBefore = (
+  source: JournalRecordEvidence,
+  exclusivePosition: number
+): JournalRecordEvidence => evidence(journalRecordsBefore(source.records, exclusivePosition - 1), indexesFor(source))
 
 /** Copies only the opaque evidence shell when the semantic validator certifies it. */
 export const retainJournalEvidence = <A extends JournalRecordEvidence>(source: JournalRecordEvidence, value: A): A => {
@@ -274,13 +294,23 @@ export const retainJournalEvidence = <A extends JournalRecordEvidence>(source: J
 const visible = (source: JournalRecordEvidence, record: JournalRecord | undefined): JournalRecord | undefined =>
   record !== undefined && record.position <= source.records.length ? record : undefined
 
-export const journalRecordByPosition = (source: JournalHistorySource, position: JournalPosition): JournalRecord | undefined =>
-  isJournalRecordEvidence(source) ? journalRecordAt(source.records, position - 1) : source.find((record) => record.position === position)
+export const journalRecordByPosition = (
+  source: JournalHistorySource,
+  position: JournalPosition
+): JournalRecord | undefined =>
+  isJournalRecordEvidence(source)
+    ? journalRecordAt(source.records, position - 1)
+    : source.find((record) => record.position === position)
 
 export const journalRecordByKey = (source: JournalHistorySource, key: JournalRecordKey): JournalRecord | undefined =>
-  isJournalRecordEvidence(source) ? visible(source, Option.getOrUndefined(HashMap.get(indexesFor(source).byKey, key))) : source.find((record) => record.key === key)
+  isJournalRecordEvidence(source)
+    ? visible(source, Option.getOrUndefined(HashMap.get(indexesFor(source).byKey, key)))
+    : source.find((record) => record.key === key)
 
-function* indexedRecords(source: JournalRecordEvidence, records: JournalRecordSequence): IterableIterator<JournalRecord> {
+function* indexedRecords(
+  source: JournalRecordEvidence,
+  records: JournalRecordSequence
+): IterableIterator<JournalRecord> {
   for (let index = 0; index < records.length; index += 1) {
     const record = journalRecordAt(records, index)
     if (record === undefined || record.position > source.records.length) return
@@ -288,23 +318,38 @@ function* indexedRecords(source: JournalRecordEvidence, records: JournalRecordSe
   }
 }
 
-export const journalRecordsOfKind = (source: JournalHistorySource, kind: JournalRecord["event"]["_tag"]): Iterable<JournalRecord> =>
+export const journalRecordsOfKind = (
+  source: JournalHistorySource,
+  kind: JournalRecord["event"]["_tag"]
+): Iterable<JournalRecord> =>
   isJournalRecordEvidence(source)
     ? indexedRecords(source, Option.getOrElse(HashMap.get(indexesFor(source).byKind, kind), emptyJournalRecords))
     : source.filter((record) => record.event._tag === kind)
 
-export const firstJournalRecordOfKind = (source: JournalHistorySource, kind: JournalRecord["event"]["_tag"]): JournalRecord | undefined => {
+export const firstJournalRecordOfKind = (
+  source: JournalHistorySource,
+  kind: JournalRecord["event"]["_tag"]
+): JournalRecord | undefined => {
   if (!isJournalRecordEvidence(source)) return source.find((record) => record.event._tag === kind)
-  return visible(source, journalRecordAt(Option.getOrElse(HashMap.get(indexesFor(source).byKind, kind), emptyJournalRecords), 0))
+  return visible(
+    source,
+    journalRecordAt(Option.getOrElse(HashMap.get(indexesFor(source).byKind, kind), emptyJournalRecords), 0)
+  )
 }
 
-export const lastJournalRecordOfKind = (source: JournalHistorySource, kind: JournalRecord["event"]["_tag"]): JournalRecord | undefined => {
+export const lastJournalRecordOfKind = (
+  source: JournalHistorySource,
+  kind: JournalRecord["event"]["_tag"]
+): JournalRecord | undefined => {
   if (!isJournalRecordEvidence(source)) return source.findLast((record) => record.event._tag === kind)
   const records = Option.getOrElse(HashMap.get(indexesFor(source).byKind, kind), emptyJournalRecords)
   return lastVisibleRecord(source, records)
 }
 
-const lastVisibleRecord = (source: JournalRecordEvidence, records: JournalRecordSequence): JournalRecord | undefined => {
+const lastVisibleRecord = (
+  source: JournalRecordEvidence,
+  records: JournalRecordSequence
+): JournalRecord | undefined => {
   const length = visibleRecordCount(source, records)
   return length === 0 ? undefined : journalRecordAt(records, length - 1)
 }
@@ -321,9 +366,18 @@ const visibleRecordCount = (source: JournalRecordEvidence, records: JournalRecor
   return low
 }
 
-export const journalOperationById = (source: JournalHistorySource, operationId: OperationId): WorkflowOperation | undefined => {
-  if (!isJournalRecordEvidence(source)) return source.map(operationOf).findLast((operation) => operation !== undefined && workflowOperationId(operation) === operationId)
-  const found = lastVisibleRecord(source, Option.getOrElse(HashMap.get(indexesFor(source).operations, operationId), emptyJournalRecords))
+export const journalOperationById = (
+  source: JournalHistorySource,
+  operationId: OperationId
+): WorkflowOperation | undefined => {
+  if (!isJournalRecordEvidence(source))
+    return source
+      .map(operationOf)
+      .findLast((operation) => operation !== undefined && workflowOperationId(operation) === operationId)
+  const found = lastVisibleRecord(
+    source,
+    Option.getOrElse(HashMap.get(indexesFor(source).operations, operationId), emptyJournalRecords)
+  )
   return found === undefined ? undefined : operationOf(found)
 }
 
@@ -355,8 +409,21 @@ export const journalRecordsForOperationId = (
       )
     : source.filter((record) => operationIdsOf(record).has(operationId))
 
+export const journalRestartReadIntents = (
+  source: JournalHistorySource,
+  nonce: string,
+  phase: "claim" | "graph" | "specification" | "target-lineage" | "worktree"
+): Iterable<JournalRecord> => {
+  const key = `${encodeURIComponent(nonce)}:${phase}`
+  return isJournalRecordEvidence(source)
+    ? indexedRecords(source, Option.getOrElse(HashMap.get(indexesFor(source).byRestartRead, key), emptyJournalRecords))
+    : source.filter((record) => restartReadKeyOf(record) === key)
+}
 /** Full accepted prefixes can reuse the exact indexed kind sequence. */
-export const journalEvidenceKindSequence = (source: JournalRecordEvidence, kind: JournalRecord["event"]["_tag"]): JournalRecordSequence => {
+export const journalEvidenceKindSequence = (
+  source: JournalRecordEvidence,
+  kind: JournalRecord["event"]["_tag"]
+): JournalRecordSequence => {
   const records = Option.getOrElse(HashMap.get(indexesFor(source).byKind, kind), emptyJournalRecords)
   let low = 0
   let high = records.length
@@ -369,9 +436,15 @@ export const journalEvidenceKindSequence = (source: JournalRecordEvidence, kind:
   return low === records.length ? records : journalRecordsBefore(records, low)
 }
 
-export const journalRecordsForAttempt = (source: JournalHistorySource, attemptId: AttemptId): Iterable<JournalRecord> =>
+export const journalRecordsForAttempt = (
+  source: JournalHistorySource,
+  attemptId: AttemptId
+): Iterable<JournalRecord> =>
   isJournalRecordEvidence(source)
-    ? indexedRecords(source, Option.getOrElse(HashMap.get(indexesFor(source).byAttempt, attemptId), emptyJournalRecords))
+    ? indexedRecords(
+        source,
+        Option.getOrElse(HashMap.get(indexesFor(source).byAttempt, attemptId), emptyJournalRecords)
+      )
     : source.filter((record) => attemptIdsOf(record).has(attemptId))
 
 const attemptKindRecords = (
@@ -465,6 +538,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
     indexes.byTaskKind,
     indexes.operations,
     indexes.recordsByOperation,
+    indexes.byRestartRead,
     inspectJournalRecordStorage(source.records),
     ...Array.from(HashMap.values(indexes.byKind), inspectJournalRecordStorage),
     ...Array.from(HashMap.values(indexes.byAttempt), inspectJournalRecordStorage),
@@ -479,6 +553,7 @@ export const inspectJournalEvidenceStorage = (source: JournalRecordEvidence): Re
       Array.from(HashMap.values(kinds), inspectJournalRecordStorage)
     ),
     ...Array.from(HashMap.values(indexes.operations), inspectJournalRecordStorage),
-    ...Array.from(HashMap.values(indexes.recordsByOperation), inspectJournalRecordStorage)
+    ...Array.from(HashMap.values(indexes.recordsByOperation), inspectJournalRecordStorage),
+    ...Array.from(HashMap.values(indexes.byRestartRead), inspectJournalRecordStorage)
   ]
 }
