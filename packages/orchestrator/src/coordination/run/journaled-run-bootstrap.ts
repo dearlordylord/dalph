@@ -10,6 +10,7 @@ import {
   PubSub,
   Ref,
   Schema,
+  Scope,
   Semaphore,
   Stream,
   SubscriptionRef
@@ -36,11 +37,18 @@ import { TaskClaimReacquisitionControl } from "../../workflow/protocols/task-cla
 import { AttemptChoiceControl } from "../../workflow/protocols/attempt-choice/control.js"
 import {
   type IntegrationQuarantineDirectionControlService,
+  IntegrationQuarantineDirectionResultNotFound,
   makeIntegrationQuarantineDirectionControl
 } from "../../workflow/protocols/integration-quarantine/control.js"
 import { ApplyIntegrationQuarantineDirectionRequest } from "../../workflow/protocols/integration-quarantine/events.js"
 import { ReadIntegrationQuarantineDirectionRequest } from "../../workflow/protocols/integration-quarantine/request.js"
-import { Journal, journalLayer, type JournalState } from "../delivery/journal.js"
+import {
+  Journal,
+  type JournalInitialHistoryInvalid,
+  journalLayer,
+  type JournalState,
+  type JournalStorageBoundary
+} from "../delivery/journal.js"
 import { DeliveryRelationPublicationObserver } from "../delivery/delivery-publication-observer.js"
 import {
   DeliveryRuntimeResources,
@@ -73,6 +81,8 @@ import {
   type JournalRecord,
   JournalStore,
   RunLifecycleJournal,
+  WorkflowRunAlreadyTerminated,
+  WorkflowRunNotBegan,
   WorkflowRunTargetMismatch
 } from "../../workflow-journal/store.js"
 import {
@@ -97,7 +107,6 @@ import {
   journalWorkflowFinalityPremiseChangeAt,
   lastJournalRecordOfKind
 } from "../../workflow-journal/record-evidence.js"
-import { journalRecordAt } from "../../workflow-journal/record-sequence.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
   activeWorkAuthorityRefreshForOwner,
@@ -124,6 +133,7 @@ import { TraceCursor } from "../../presentation/trace-reader.js"
 import type { DeliveryRuntimeObservationState } from "../delivery/delivery-runtime-observation.js"
 import { currentSignalFromCurrentFirstStream, type CurrentSignal } from "../delivery/relations.js"
 import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import { exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
 
 /** A journal prefix has acknowledged the exact beginning before delivery can call the tracker. */
 export const JournaledRunEstablished = Schema.Struct({
@@ -161,21 +171,20 @@ export class JournaledRunObservationSource extends Context.Service<
   JournaledRunObservationSourceService
 >()("@dalph/JournaledRunObservationSource") {}
 
-const latestJournalRecordOffset = -1
-
 export interface JournaledRuntimeLayerInput {
   readonly runId: RunId
   readonly opportunity: RunActivationOpportunity
 }
 
 export type JournaledRuntimeLayer = Layer.Layer<
-  Exclude<JournaledRunServices, Journal | JournaledRunProcessServices>,
+  Exclude<JournaledRunServices, AcceptedJournalReader | Journal | JournaledRunProcessServices>,
   | InvalidWorkflowJournalHistory
   | JournalAppendError
   | JournalReadError
   | StartupRecoveryBlocked
   | IntegratorCandidateCleanupEvidenceReadFailure,
   | ApplicationExitAdmission
+  | AcceptedJournalReader
   | CoordinatorOwnership
   | InRunJournal
   | JournaledRunProcessServices
@@ -217,6 +226,20 @@ type RuntimeControlState =
       readonly activeLeases: number
       readonly controls: RuntimeControls
       readonly drained: Deferred.Deferred<void>
+    }
+
+type ProcessJournalContext = Context.Context<Journal | AcceptedJournalReader | InRunJournal>
+
+type ProcessJournalHolder =
+  | { readonly _tag: "NotEstablished" }
+  | { readonly _tag: "Failed"; readonly failure: JournalInitialHistoryInvalid }
+  | {
+      readonly _tag: "Established"
+      readonly context: ProcessJournalContext
+      readonly controlDirection: ControlDirectionApplication["Service"]
+      readonly integrationQuarantineDirection: IntegrationQuarantineDirectionControlService
+      readonly journal: Journal["Service"]
+      readonly target: TrackerTarget
     }
 
 type TerminalRunFinalityProof = Extract<RunFinalityProof, { readonly decision: { readonly _tag: "RunMayTerminate" } }>
@@ -293,6 +316,7 @@ export const journaledRunBootstrapLayer = (
 ) =>
   Layer.effectContext(
     Effect.gen(function* () {
+      const bootstrapScope = yield* Scope.Scope
       const ownership = yield* CoordinatorOwnership
       const storage = yield* JournalStore
       const lifecycle = yield* RunLifecycleJournal
@@ -341,22 +365,106 @@ export const journaledRunBootstrapLayer = (
           Stream.map((cursor) => cursor.value)
         )
       )
-      const exitAwareStorage = JournalStore.of({
-        ...storage,
-        append: (...input) => observeProducedWrite(`append:${input[1]}`, "append", storage.append(...input))
+      const exitAwareStorage: JournalStorageBoundary = {
+        append: (...input) => observeProducedWrite(`append:${input[1]}`, "append", storage.append(...input)),
+        read: storage.read,
+        terminateRun: (...input) =>
+          observeProducedWrite(`terminate:${input[0]}`, "terminate", lifecycle.terminateRun(...input))
+      }
+      const processJournal = yield* Ref.make<ProcessJournalHolder>({ _tag: "NotEstablished" })
+      const processAcceptedJournalReader = AcceptedJournalReader.of({
+        readAccepted: (runId) =>
+          Ref.get(processJournal).pipe(
+            Effect.flatMap((holder) =>
+              holder._tag === "Established"
+                ? holder.journal.readAccepted(runId)
+                : Effect.die("accepted history was requested before this process established its Journal")
+            )
+          )
       })
-      const inRunJournal = InRunJournal.of({
-        append: (...input) =>
-          exitAwareStorage
-            .append(...input)
-            .pipe(Effect.tap((record) => publishAcceptedHistory(record.runId, record.position))),
-        read: exitAwareStorage.read
-      })
-      const integrationQuarantineDirection = yield* makeIntegrationQuarantineDirectionControl(inRunJournal)
-      const inactiveControlContext = yield* Layer.build(
-        controlDirectionApplicationLayer.pipe(Layer.provide(Layer.succeed(InRunJournal, inRunJournal)))
-      )
-      const inactiveControlDirection = Context.get(inactiveControlContext, ControlDirectionApplication)
+      const journalEstablishment = yield* Semaphore.make(1)
+
+      const installJournalUnlocked = (target: TrackerTarget, initial: ValidWorkflowJournalHistory) =>
+        Effect.gen(function* () {
+          const current = yield* Ref.get(processJournal)
+          if (current._tag === "Failed") return yield* current.failure
+          if (current._tag === "Established") {
+            if (taskTrackerTargetKey(current.target) !== taskTrackerTargetKey(target)) {
+              return yield* new WorkflowRunTargetMismatch({
+                recordedTarget: current.target,
+                requestedTarget: target,
+                runId: expectedRunId
+              })
+            }
+            return current
+          }
+          const built = yield* Layer.build(
+            journalLayer(expectedRunId, target, initial, exitAwareStorage, (record) =>
+              publishAcceptedHistory(record.runId, record.position)
+            )
+          ).pipe(Scope.provide(bootstrapScope), Effect.exit)
+          if (built._tag === "Failure") {
+            const failure = yield* Effect.failCause(built.cause).pipe(Effect.flip)
+            yield* Ref.set(processJournal, { _tag: "Failed", failure })
+            return yield* failure
+          }
+          const context = built.value
+          const journal = Context.get(context, Journal)
+          const accepted = Context.get(context, AcceptedJournalReader)
+          const inRun = Context.get(context, InRunJournal)
+          const controlContext = yield* Layer.build(
+            controlDirectionApplicationLayer.pipe(
+              Layer.provide(Layer.succeed(AcceptedJournalReader, accepted)),
+              Layer.provide(Layer.succeed(InRunJournal, inRun))
+            )
+          ).pipe(Scope.provide(bootstrapScope))
+          const establishedJournal: Extract<ProcessJournalHolder, { readonly _tag: "Established" }> = {
+            _tag: "Established",
+            context,
+            controlDirection: Context.get(controlContext, ControlDirectionApplication),
+            integrationQuarantineDirection: yield* makeIntegrationQuarantineDirectionControl(inRun).pipe(
+              Effect.provideService(AcceptedJournalReader, accepted)
+            ),
+            journal,
+            target
+          }
+          yield* Ref.set(processJournal, establishedJournal)
+          return establishedJournal
+        })
+
+      const establishStoredJournal = (requestedTarget?: TrackerTarget) =>
+        journalEstablishment.withPermit(
+          Effect.gen(function* () {
+            const current = yield* Ref.get(processJournal)
+            if (current._tag === "Failed") return yield* current.failure
+            if (current._tag === "Established") {
+              if (
+                requestedTarget !== undefined &&
+                taskTrackerTargetKey(current.target) !== taskTrackerTargetKey(requestedTarget)
+              ) {
+                return yield* new WorkflowRunTargetMismatch({
+                  recordedTarget: current.target,
+                  requestedTarget,
+                  runId: expectedRunId
+                })
+              }
+              return Option.some(current)
+            }
+            const records = yield* lifecycle.read(expectedRunId)
+            if (records.length === 0) return Option.none()
+            const initial = yield* validateRun(expectedRunId, records)
+            const recordedTarget = exactWorkflowRunTargetFor(initial.prefix)
+            /* v8 ignore next -- validation accepts a non-empty workflow history only after WorkflowRunBegan. */
+            if (recordedTarget === undefined) return yield* Effect.die("validated Run has no established target")
+            if (
+              requestedTarget !== undefined &&
+              taskTrackerTargetKey(recordedTarget) !== taskTrackerTargetKey(requestedTarget)
+            ) {
+              return yield* new WorkflowRunTargetMismatch({ recordedTarget, requestedTarget, runId: expectedRunId })
+            }
+            return Option.some(yield* installJournalUnlocked(recordedTarget, initial))
+          })
+        )
       const acceptedRunReactivationObservers = yield* Ref.make<Option.Option<AcceptedRunReactivationObservers>>(
         Option.none()
       )
@@ -417,19 +525,31 @@ export const journaledRunBootstrapLayer = (
           (owner) => owner.release
         )
 
-      const withPublishedOrStoredQuarantineControl = <A, E>(
-        use: (control: IntegrationQuarantineDirectionControlService) => Effect.Effect<A, E>
-      ) =>
-        withRuntimeControls(({ integrationQuarantineDirection }) => use(integrationQuarantineDirection)).pipe(
-          Effect.catchTag("JournaledRunNotActive", () => withJournalControl(use(integrationQuarantineDirection)))
-        )
-
       const withPassivePublicationJournal = <A, E>(
-        use: (journal: InRunJournal["Service"], publishStoredFactHint: boolean) => Effect.Effect<A, E>
+        use: (
+          holder: Extract<ProcessJournalHolder, { readonly _tag: "Established" }>,
+          publishStoredFactHint: boolean
+        ) => Effect.Effect<A, E>
       ) =>
-        withRuntimeControls(({ journal }) =>
-          use(InRunJournal.of({ append: journal.append, read: journal.read }), false)
-        ).pipe(Effect.catchTag("JournaledRunNotActive", () => withJournalControl(use(inRunJournal, true))))
+        withRuntimeControls(() =>
+          Ref.get(processJournal).pipe(
+            Effect.flatMap((holder) =>
+              holder._tag === "Established"
+                ? use(holder, false)
+                : Effect.die("active runtime has no established process Journal")
+            )
+          )
+        ).pipe(
+          Effect.catchTag("JournaledRunNotActive", () =>
+            Ref.get(processJournal).pipe(
+              Effect.flatMap((holder) =>
+                holder._tag === "Established"
+                  ? withJournalControl(use(holder, true))
+                  : Effect.die("passive publication arrived before this process established its Journal")
+              )
+            )
+          )
+        )
 
       const withActivePassivePublicationJournal = <A, E>(
         use: (journal: InRunJournal["Service"]) => Effect.Effect<A, E>
@@ -449,11 +569,11 @@ export const journaledRunBootstrapLayer = (
 
       const passiveProjectionPublication: PassivePlannedAttemptProjectionPublicationService = {
         publish: (plannedAttempt, projection) =>
-          withPassivePublicationJournal((journal, publishStoredFactHint) =>
+          withPassivePublicationJournal((holder, publishStoredFactHint) =>
             processPlannedAttemptProtocolController
               .withPermit(plannedAttemptExecutorCorrelation(plannedAttempt), (permit) =>
                 publishPlannedAttemptExecutorProjectionResultWithPermit(permit, plannedAttempt, projection).pipe(
-                  Effect.provideService(InRunJournal, journal)
+                  Effect.provide(holder.context)
                 )
               )
               .pipe(
@@ -475,9 +595,15 @@ export const journaledRunBootstrapLayer = (
               )
           ),
         publishWithPermit: (permit, plannedAttempt, projection) =>
-          withActivePassivePublicationJournal((journal) =>
-            publishPlannedAttemptExecutorProjectionResultWithPermit(permit, plannedAttempt, projection).pipe(
-              Effect.provideService(InRunJournal, journal)
+          withActivePassivePublicationJournal(() =>
+            Ref.get(processJournal).pipe(
+              Effect.flatMap((holder) =>
+                holder._tag === "Established"
+                  ? publishPlannedAttemptExecutorProjectionResultWithPermit(permit, plannedAttempt, projection).pipe(
+                      Effect.provide(holder.context)
+                    )
+                  : Effect.die("active executor publication has no established process Journal")
+              )
             )
           )
       }
@@ -506,7 +632,8 @@ export const journaledRunBootstrapLayer = (
       const runWithJournal = <E, R>(
         runId: RunId,
         target: Parameters<JournaledRunBootstrapService["activate"]>[0],
-        initial: ValidWorkflowJournalHistory,
+        processJournal: Extract<ProcessJournalHolder, { readonly _tag: "Established" }>,
+        initialState: JournalState,
         program: Effect.Effect<RunFinalityProof, E, R>,
         opportunity: RunActivationOpportunity
       ) =>
@@ -514,9 +641,7 @@ export const journaledRunBootstrapLayer = (
           Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
               const reactivationObservers = yield* Ref.get(acceptedRunReactivationObservers)
-              const acceptedPublicationWatermark = yield* Ref.make(
-                journalRecordAt(initial.prefix.records, latestJournalRecordOffset)?.position ?? null
-              )
+              const acceptedPublicationWatermark = yield* Ref.make<JournalPosition | null>(initialState.position)
               const ambientPublicationObserver = yield* DeliveryRelationPublicationObserver
               const publicationObserver = DeliveryRelationPublicationObserver.of({
                 observe: (bundle) =>
@@ -541,33 +666,10 @@ export const journaledRunBootstrapLayer = (
                 Layer.provide(Layer.succeed(ApplicationExitAdmission, admission)),
                 Layer.provide(Layer.succeed(CoordinatorOwnership, ownership))
               )
-              const runtimeJournalLayer = Layer.effectContext(
-                Effect.gen(function* () {
-                  const journal = yield* Journal
-                  const acceptedJournalReader = yield* AcceptedJournalReader
-                  const acceptedJournal = Journal.of({
-                    ...journal,
-                    append: (...input) =>
-                      journal
-                        .append(...input)
-                        .pipe(Effect.tap((record) => publishAcceptedHistory(record.runId, record.position)))
-                  })
-                  return Context.empty().pipe(
-                    Context.add(Journal, acceptedJournal),
-                    Context.add(AcceptedJournalReader, acceptedJournalReader),
-                    Context.add(
-                      InRunJournal,
-                      InRunJournal.of({ append: acceptedJournal.append, read: acceptedJournal.read })
-                    )
-                  )
-                })
-              ).pipe(Layer.provide(journalLayer(runId, target, initial, exitAwareStorage)))
+              const runtimeJournalLayer = Layer.succeedContext(processJournal.context)
               const runtime = downstream.pipe(Layer.provideMerge(runtimeJournalLayer))
               const context = yield* Layer.build(runtime)
-              const journal = Context.get(context, Journal)
-              const publishedIntegrationQuarantineDirection = yield* makeIntegrationQuarantineDirectionControl(
-                InRunJournal.of({ append: journal.append, read: journal.read })
-              )
+              const journal = processJournal.journal
               yield* applicationExit.registerExecutorDrain({
                 suspendExecutingExecutorWork: suspendExecutingExecutorWorkForApplicationExit().pipe(
                   Effect.provide(context)
@@ -577,7 +679,7 @@ export const journaledRunBootstrapLayer = (
                 attemptChoice: Context.get(context, AttemptChoiceControl),
                 controlDirection: Context.get(context, ControlDirectionApplication),
                 deliveryRuntimeResources: Context.get(context, DeliveryRuntimeResources),
-                integrationQuarantineDirection: publishedIntegrationQuarantineDirection,
+                integrationQuarantineDirection: processJournal.integrationQuarantineDirection,
                 journal,
                 operationIdAllocator: Context.get(context, OperationIdAllocator),
                 runId,
@@ -621,6 +723,7 @@ export const journaledRunBootstrapLayer = (
       const finish = Effect.fn("JournaledRunBootstrap.finish")(function* (
         runId: RunId,
         target: TrackerTarget,
+        journal: Journal["Service"],
         result: { readonly proof: RunFinalityProof; readonly state?: JournalState }
       ) {
         const { proof, state } = result
@@ -643,11 +746,12 @@ export const journaledRunBootstrapLayer = (
         if (Option.isNone(owner)) {
           return RunFinalityDecision.RunMustRemainActive({ reason: "UnsettledResponsibility" })
         }
-        const termination = yield* observeProducedWrite(
-          `terminate:${runId}`,
-          "terminate",
-          lifecycle.terminateRun(runId, terminalProof.disposition, terminalProof.evidence)
-        ).pipe(Effect.ensuring(owner.value.release))
+        const termination = yield* journal
+          .terminate(terminalProof.disposition, terminalProof.evidence)
+          .pipe(Effect.ensuring(owner.value.release))
+        yield* Ref.update(unresolvedProducedWrites, (current) => {
+          return new Map([...current].filter(([key]) => key !== `terminate:${runId}`))
+        })
         /* v8 ignore next -- @preserve RunLifecycleJournal.terminateRun returns the acknowledged terminal record. */
         if (termination.event._tag !== "WorkflowRunTerminated") {
           return yield* Effect.die(new Error("Run termination did not return its terminal Journal record"))
@@ -663,7 +767,6 @@ export const journaledRunBootstrapLayer = (
             terminatedAt: TraceCursor.make({ position: termination.position, runId: termination.runId })
           })
         )
-        yield* publishAcceptedHistory(termination.runId, termination.position)
         const shouldAttemptRetirement = yield* Ref.modify(startupRetirementAttempts, (attempted) => {
           /* v8 ignore next -- @preserve lifecycle.terminateRun accepts one terminal append per Run; a second finish for the same Run is rejected before this guard. */
           if (attempted.has(runId)) return [false, attempted] as const
@@ -699,7 +802,7 @@ export const journaledRunBootstrapLayer = (
         initialControlPolicySource: Effect.Effect<InitialControlPolicy, EInitial, RInitial>,
         runId: AllocatedWorkflowRunId,
         program: ActivationProgram<E, R>,
-        opportunityFor: (initial: ValidWorkflowJournalHistory) => RunActivationOpportunity
+        opportunityFor: (state: JournalState) => RunActivationOpportunity
       ) =>
         activation.withPermit(
           Effect.acquireUseRelease(
@@ -709,50 +812,89 @@ export const journaledRunBootstrapLayer = (
                 if (runId !== expectedRunId) {
                   return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: runId })
                 }
-                const current = yield* inspectStartupRecovery(
-                  runId,
-                  lifecycle,
-                  maintenanceObservation,
-                  startupRetirementAttempts
-                )
-                if (current === undefined) {
-                  const initialControlPolicy = yield* initialControlPolicySource
-                  yield* observeProducedWrite(
-                    `begin:${runId}`,
-                    "begin",
-                    lifecycle.beginRun(runId, target, initialControlPolicy)
-                  ).pipe(
-                    Effect.catch((beginFailure) =>
-                      lifecycle.readRunForRecovery(runId, target).pipe(
-                        Effect.tap(() =>
-                          Ref.update(unresolvedProducedWrites, (current) => {
-                            return new Map([...current].filter(([key]) => key !== `begin:${runId}`))
-                          })
-                        ),
-                        Effect.asVoid,
-                        Effect.mapError((reconciliationFailure) =>
-                          reconciliationFailure._tag === "WorkflowRunTargetMismatch" ||
-                          reconciliationFailure._tag === "WorkflowRunAlreadyTerminated"
-                            ? reconciliationFailure
-                            : beginFailure
+                const process = yield* journalEstablishment.withPermit(
+                  Effect.gen(function* () {
+                    const cached = yield* Ref.get(processJournal)
+                    if (cached._tag === "Failed") return yield* cached.failure
+                    if (cached._tag === "Established") {
+                      if (taskTrackerTargetKey(cached.target) !== taskTrackerTargetKey(target)) {
+                        return yield* new WorkflowRunTargetMismatch({
+                          recordedTarget: cached.target,
+                          requestedTarget: target,
+                          runId
+                        })
+                      }
+                      return cached
+                    }
+                    const initial = yield* inspectStartupRecovery(
+                      runId,
+                      lifecycle,
+                      maintenanceObservation,
+                      startupRetirementAttempts
+                    )
+                    if (initial === undefined) {
+                      const initialControlPolicy = yield* initialControlPolicySource
+                      yield* observeProducedWrite(
+                        `begin:${runId}`,
+                        "begin",
+                        lifecycle.beginRun(runId, target, initialControlPolicy)
+                      ).pipe(
+                        Effect.catch((beginFailure) =>
+                          lifecycle.readRunForRecovery(runId, target).pipe(
+                            Effect.tap(() =>
+                              Ref.update(unresolvedProducedWrites, (current) => {
+                                return new Map([...current].filter(([key]) => key !== `begin:${runId}`))
+                              })
+                            ),
+                            Effect.asVoid,
+                            Effect.mapError((reconciliationFailure) =>
+                              reconciliationFailure._tag === "WorkflowRunTargetMismatch" ||
+                              reconciliationFailure._tag === "WorkflowRunAlreadyTerminated"
+                                ? reconciliationFailure
+                                : beginFailure
+                            )
+                          )
                         )
                       )
-                    )
-                  )
+                      yield* lifecycle.readRunForRecovery(runId, target)
+                      return yield* installJournalUnlocked(
+                        target,
+                        yield* validateRun(runId, yield* lifecycle.read(runId))
+                      )
+                    }
+                    /* v8 ignore next -- inspectStartupRecovery rejects every invalid reduction before selecting this Run. */
+                    if (initial._tag !== "ValidWorkflowJournalHistory") {
+                      return yield* Effect.die("startup inspection returned invalid selected history")
+                    }
+                    const terminated = lastJournalRecordOfKind(initial.prefix, "WorkflowRunTerminated")
+                    if (terminated !== undefined) {
+                      return yield* new WorkflowRunAlreadyTerminated({ runId, terminatedAt: terminated.position })
+                    }
+                    const recordedTarget = exactWorkflowRunTargetFor(initial.prefix)
+                    /* v8 ignore next -- startup validation requires WorkflowRunBegan for every non-empty valid history. */
+                    if (recordedTarget === undefined)
+                      return yield* Effect.die("validated Run has no established target")
+                    if (taskTrackerTargetKey(recordedTarget) !== taskTrackerTargetKey(target)) {
+                      return yield* new WorkflowRunTargetMismatch({ recordedTarget, requestedTarget: target, runId })
+                    }
+                    return yield* installJournalUnlocked(target, initial)
+                  })
+                )
+                const state = yield* process.journal.state.get
+                const terminal = lastJournalRecordOfKind(state.prefix, "WorkflowRunTerminated")
+                if (terminal !== undefined) {
+                  return yield* new WorkflowRunAlreadyTerminated({ runId, terminatedAt: terminal.position })
                 }
-                yield* lifecycle.readRunForRecovery(runId, target)
-                const initial = yield* validateRun(runId, yield* lifecycle.read(runId))
-                const acceptedAt = journalRecordAt(initial.prefix.records, latestJournalRecordOffset)?.position
-                /* v8 ignore next -- successful recovery validation requires a non-empty Run history. */
-                if (acceptedAt === undefined) return yield* Effect.die("established Run has no accepted record")
+                const acceptedAt = state.position
                 yield* publishAcceptedHistory(runId, acceptedAt)
                 yield* Deferred.succeed(established, JournaledRunEstablished.make({ acceptedAt, runId, target }))
-                const opportunity = opportunityFor(initial)
+                const opportunity = opportunityFor(state)
                 const activationProgram = program(opportunity)
                 return yield* finish(
                   runId,
                   target,
-                  yield* runWithJournal(runId, target, initial, activationProgram, opportunity)
+                  process.journal,
+                  yield* runWithJournal(runId, target, process, state, activationProgram, opportunity)
                 )
               }),
             (activationOwner) => activationOwner.release
@@ -781,8 +923,8 @@ export const journaledRunBootstrapLayer = (
         program,
         source
       ) =>
-        activateWithOpportunity(target, initialControlPolicySource, runId, program, (initial) =>
-          activeWorkAuthorityRefreshForOwner(source, activeWorkAuthorityRefreshSubjectsForRunState(initial.runState))
+        activateWithOpportunity(target, initialControlPolicySource, runId, program, (state) =>
+          activeWorkAuthorityRefreshForOwner(source, activeWorkAuthorityRefreshSubjectsForRunState(state.reconstructed))
         )
 
       const readRunReactivationControl: JournaledRunBootstrapService["readRunReactivationControl"] = (target, runId) =>
@@ -790,27 +932,13 @@ export const journaledRunBootstrapLayer = (
           if (runId !== expectedRunId) {
             return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: runId })
           }
-          const records = yield* lifecycle.read(runId)
-          // A not-yet-established Run has no pause fact. The ordinary first
-          // activation is therefore eligible to establish it.
-          if (records.length === 0) return "RunUnpaused" as const
-          const began = records.find(({ event }) => event._tag === "WorkflowRunBegan")
-          /* v8 ignore next -- @preserve JournalStore cannot return a non-empty accepted Run history without its validated beginning; malformed raw histories fail in store/reconstruction tests. */
-          if (began === undefined || began.event._tag !== "WorkflowRunBegan") {
-            return yield* validateRun(runId, records).pipe(Effect.as("RunUnpaused" as const))
-          }
-          if (taskTrackerTargetKey(began.event.target) !== taskTrackerTargetKey(target)) {
-            return yield* new WorkflowRunTargetMismatch({
-              recordedTarget: began.event.target,
-              requestedTarget: target,
-              runId
-            })
-          }
-          const reduction = yield* validateRun(runId, records)
-          if (lastJournalRecordOfKind(reduction.prefix, "WorkflowRunTerminated") !== undefined) {
+          const establishedJournal = yield* establishStoredJournal(target)
+          if (Option.isNone(establishedJournal)) return "RunUnpaused" as const
+          const state = yield* establishedJournal.value.journal.state.get
+          if (lastJournalRecordOfKind(state.prefix, "WorkflowRunTerminated") !== undefined) {
             return "RunTerminated" as const
           }
-          return reduction.runState.pause.run._tag === "RunPaused" ? ("RunPaused" as const) : ("RunUnpaused" as const)
+          return state.reconstructed.pause.run._tag === "RunPaused" ? ("RunPaused" as const) : ("RunUnpaused" as const)
         })
 
       const registerAcceptedRunReactivationObservers: JournaledRunBootstrapService["registerAcceptedRunReactivationObservers"] =
@@ -827,6 +955,45 @@ export const journaledRunBootstrapLayer = (
             )
           )
 
+      const applyRunCancellationTo = (journal: Journal["Service"], runId: RunId) =>
+        Effect.gen(function* () {
+          const state = yield* journal.state.get
+          const terminated = lastJournalRecordOfKind(state.prefix, "WorkflowRunTerminated")
+          if (terminated?.event._tag === "WorkflowRunTerminated") {
+            return AppliedRunCancellation.cases.RunCancellationRunTerminated.make({
+              disposition: terminated.event.disposition,
+              terminatedAt: terminated.position
+            })
+          }
+          const existing = firstJournalRecordOfKind(state.prefix, "RunCancellationApplied")
+          if (existing !== undefined) {
+            return AppliedRunCancellation.cases.RunCancellationAlreadyApplied.make({ appliedAt: existing.position })
+          }
+          const applied = yield* journal.append(
+            runId,
+            runCancellationAppliedRecordKey,
+            RunCancellationAppliedEvent.make({
+              initiatedBy: { _tag: "Operator" },
+              occurrenceClassification: "InitiatedAction",
+              version: workflowJournalEventVersion
+            })
+          )
+          return AppliedRunCancellation.cases.RunCancellationApplied.make({ appliedAt: applied.position })
+        })
+
+      const readInactiveRunCancellationFrom = (journal: Journal["Service"]) =>
+        Effect.gen(function* () {
+          const state = yield* journal.state.get
+          const terminated = lastJournalRecordOfKind(state.prefix, "WorkflowRunTerminated")
+          if (terminated?.event._tag === "WorkflowRunTerminated") {
+            return AppliedRunCancellation.cases.RunCancellationRunTerminated.make({
+              disposition: terminated.event.disposition,
+              terminatedAt: terminated.position
+            })
+          }
+          return yield* new JournaledRunNotActive()
+        })
+
       const operatorControl: JournaledRunBootstrapService["operatorControl"] = {
         applyRunCancellation: (input) =>
           Effect.gen(function* () {
@@ -836,41 +1003,13 @@ export const journaledRunBootstrapLayer = (
             if (request.runId !== expectedRunId) {
               return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: request.runId })
             }
-            return yield* withRuntimeControls(({ journal, runId }) =>
-              Effect.gen(function* () {
-                const existing = firstJournalRecordOfKind((yield* journal.state.get).prefix, "RunCancellationApplied")
-                if (existing !== undefined) {
-                  return AppliedRunCancellation.cases.RunCancellationAlreadyApplied.make({
-                    appliedAt: existing.position
-                  })
-                }
-                const applied = yield* journal.append(
-                  runId,
-                  runCancellationAppliedRecordKey,
-                  RunCancellationAppliedEvent.make({
-                    initiatedBy: { _tag: "Operator" },
-                    occurrenceClassification: "InitiatedAction",
-                    version: workflowJournalEventVersion
-                  })
-                )
-                return AppliedRunCancellation.cases.RunCancellationApplied.make({ appliedAt: applied.position })
-              })
-            ).pipe(
+            return yield* withRuntimeControls(({ journal, runId }) => applyRunCancellationTo(journal, runId)).pipe(
               Effect.catchTag("JournaledRunNotActive", () =>
-                lifecycle.read(expectedRunId).pipe(
-                  Effect.flatMap((records) => {
-                    const terminated = records.find(({ event }) => event._tag === "WorkflowRunTerminated")
-                    /* v8 ignore next -- @preserve The find predicate admits only WorkflowRunTerminated records. */
-                    return terminated?.event._tag === "WorkflowRunTerminated"
-                      ? Effect.succeed(
-                          AppliedRunCancellation.cases.RunCancellationRunTerminated.make({
-                            disposition: terminated.event.disposition,
-                            terminatedAt: terminated.position
-                          })
-                        )
-                      : Effect.fail(new JournaledRunNotActive())
-                  })
-                )
+                Effect.gen(function* () {
+                  const holder = yield* establishStoredJournal()
+                  if (Option.isNone(holder)) return yield* new JournaledRunNotActive()
+                  return yield* withJournalControl(readInactiveRunCancellationFrom(holder.value.journal))
+                })
               )
             )
           }),
@@ -882,7 +1021,17 @@ export const journaledRunBootstrapLayer = (
             if (request.requestId.runId !== expectedRunId) {
               return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: request.requestId.runId })
             }
-            return yield* withPublishedOrStoredQuarantineControl((control) => control.apply(request))
+            return yield* withRuntimeControls(({ integrationQuarantineDirection }) =>
+              integrationQuarantineDirection.apply(request)
+            ).pipe(
+              Effect.catchTag("JournaledRunNotActive", () =>
+                Effect.gen(function* () {
+                  const holder = yield* establishStoredJournal()
+                  if (Option.isNone(holder)) return yield* new WorkflowRunNotBegan({ runId: expectedRunId })
+                  return yield* withJournalControl(holder.value.integrationQuarantineDirection.apply(request))
+                })
+              )
+            )
           }),
         applyAttemptChoice: (input) => withRuntimeControls(({ attemptChoice }) => attemptChoice.apply(input)),
         applyControlDirection: (input) =>
@@ -914,9 +1063,13 @@ export const journaledRunBootstrapLayer = (
                       }).pipe(Effect.tap(() => publishAcceptedRunControl))
                   ).pipe(
                     Effect.catchTag("JournaledRunNotActive", () =>
-                      withJournalControl(
-                        inactiveControlDirection.apply(request).pipe(Effect.tap(() => publishAcceptedRunControl))
-                      )
+                      Effect.gen(function* () {
+                        const holder = yield* establishStoredJournal()
+                        if (Option.isNone(holder)) return yield* new WorkflowRunNotBegan({ runId: expectedRunId })
+                        return yield* withJournalControl(
+                          holder.value.controlDirection.apply(request).pipe(Effect.tap(() => publishAcceptedRunControl))
+                        )
+                      })
                     )
                   )
                 : withRuntimeControls(
@@ -942,7 +1095,19 @@ export const journaledRunBootstrapLayer = (
             if (request.requestId.runId !== expectedRunId) {
               return yield* new JournaledRunIdentityMismatch({ expectedRunId, requestedRunId: request.requestId.runId })
             }
-            return yield* withPublishedOrStoredQuarantineControl((control) => control.read(request))
+            return yield* withRuntimeControls(({ integrationQuarantineDirection }) =>
+              integrationQuarantineDirection.read(request)
+            ).pipe(
+              Effect.catchTag("JournaledRunNotActive", () =>
+                Effect.gen(function* () {
+                  const holder = yield* establishStoredJournal()
+                  if (Option.isNone(holder)) {
+                    return yield* new IntegrationQuarantineDirectionResultNotFound({ requestId: request.requestId })
+                  }
+                  return yield* withJournalControl(holder.value.integrationQuarantineDirection.read(request))
+                })
+              )
+            )
           }),
         readTaskWorkCapacity: (runId) => withRuntimeControls(({ taskWorkCapacity }) => taskWorkCapacity.read(runId)),
         observePause: (input) =>
@@ -982,6 +1147,7 @@ export const journaledRunBootstrapLayer = (
         }
       })
       return Context.empty().pipe(
+        Context.add(AcceptedJournalReader, processAcceptedJournalReader),
         Context.add(JournaledRunBootstrap, bootstrap),
         Context.add(JournaledRunObservationSource, observation)
       )

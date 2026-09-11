@@ -913,6 +913,16 @@ promotion remain independently queryable at earlier journal cutoffs; this
 in-memory evidence is not another persisted authority record.
 _Avoid_: Current completion claim, promotion success, tracker fingerprint
 
+**Completion read-cycle evidence**:
+The immutable journal-derived chronology of focused authorization or
+confirmation reads for one exact completion request and numbered mutation
+attempt. It retains intent counts, observed ordinals, exact unresolved reads,
+and latest outcomes at each journal cutoff. An outcome does not authorize a
+mutation by itself; the completion protocol still checks its current facts.
+This process-local evidence neither assumes contiguous read ordinals nor
+persists another authority record.
+_Avoid_: Completion authorization, retry permission, tracker snapshot
+
 **Completion-claim cleanup disposition**:
 The recoverable, task-local removal of the two tracker records retained after
 fresh focused task success. Dalph first confirms that the exact completion

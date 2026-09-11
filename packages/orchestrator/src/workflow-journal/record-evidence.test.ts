@@ -1,5 +1,9 @@
 import { expect, it } from "vitest"
 import {
+  completionTaskCandidateAncestryReadOperationIdFor,
+  completionTaskRequestLookupOperationIdFor
+} from "../workflow/protocols/integration-finality/completion-task-operation-identity.js"
+import {
   AttemptId,
   GitCommitSha,
   PlannedTaskAttempt,
@@ -51,7 +55,9 @@ import {
   journalRecordByPosition,
   journalRestartReadIntents,
   journalRecordsForOperationId,
+  journalRecordsForOperationIdKind,
   journalRecordsForTask,
+  journalRecordsForTaskKind,
   journalRecordsOfKind
 } from "./record-evidence.js"
 import { observeRetainedExecutorResponsibilityProjection } from "./retained-executor-responsibility.js"
@@ -105,6 +111,24 @@ it("indexes a completion tracker read by its exact nested request operation with
 
   expect(visits[0]).toEqual(visits[1])
   expect(visits[0]).toEqual([{ _tag: "IndexedRecordVisit" }])
+
+  const ancestryOperationId = completionTaskCandidateAncestryReadOperationIdFor(request, purpose)
+  const indexed = journalEvidenceFrom([focusedRecord(1)])
+  expect(
+    Array.from(journalRecordsForOperationIdKind(indexed, ancestryOperationId, "TaskTrackerReadIntentRecorded"))
+  ).toEqual([focusedRecord(1)])
+  expect(
+    Array.from(journalRecordsForOperationIdKind(indexed, ancestryOperationId, "TaskTrackerFactsObserved"))
+  ).toEqual([])
+  expect(
+    Array.from(
+      journalRecordsForOperationIdKind(
+        indexed,
+        completionTaskRequestLookupOperationIdFor(request, CompletionTaskRequestOrdinal.make(1)),
+        "TaskTrackerReadIntentRecorded"
+      )
+    )
+  ).toEqual([])
 })
 
 it("keeps nested completion request correlations exact across malformed identities, collisions, and duplicate keys", () => {
@@ -167,6 +191,23 @@ it("keeps nested completion request correlations exact across malformed identiti
     records[0],
     records[1]
   ])
+  for (const operationId of [request.operationId, malformedRequestOperationId, exactOperation.operationId]) {
+    expect(Array.from(journalRecordsForOperationIdKind(indexed, operationId, "TaskTrackerReadIntentRecorded"))).toEqual(
+      Array.from(journalRecordsForOperationIdKind(records, operationId, "TaskTrackerReadIntentRecorded"))
+    )
+  }
+  expect(
+    Array.from(journalRecordsForOperationIdKind(indexed, request.operationId, "TaskTrackerFactsObserved"))
+  ).toEqual([])
+  expect(
+    Array.from(
+      journalRecordsForOperationIdKind(
+        indexed,
+        completionTaskCandidateAncestryReadOperationIdFor(request, purpose),
+        "TaskTrackerReadIntentRecorded"
+      )
+    )
+  ).toEqual([records[0]])
 })
 
 it("indexes a release intent by its nested claim operation at every safe cutoff", () => {
@@ -198,6 +239,58 @@ it("indexes a release intent by its nested claim operation at every safe cutoff"
 
   expect(Array.from(journalRecordsForOperationId(earlier, claimOperationId))).toEqual([intent])
   expect(Array.from(journalRecordsForOperationId(complete, claimOperationId))).toEqual([intent, later])
+})
+
+it("indexes promotion success by its nested planned-attempt task with constant exact lookup work", () => {
+  const success = integrationFinalityFixture.promotionSuccess
+  const exactTaskId = success.correlation.qualifiedCandidate.run.session.plannedAttempt.taskId
+  const promotionFor = (taskId: TaskId, position: number, key: JournalRecordKey): JournalRecord => ({
+    event: {
+      ...success,
+      correlation: {
+        ...success.correlation,
+        qualifiedCandidate: {
+          ...success.correlation.qualifiedCandidate,
+          run: {
+            ...success.correlation.qualifiedCandidate.run,
+            session: {
+              ...success.correlation.qualifiedCandidate.run.session,
+              plannedAttempt: { ...success.correlation.qualifiedCandidate.run.session.plannedAttempt, taskId }
+            }
+          }
+        }
+      }
+    },
+    key,
+    position: JournalPosition.make(position),
+    runId: integrationFinalityFixture.runId
+  })
+  const visits = [64, 256].map((size) => {
+    const duplicateKey = JournalRecordKey.make(`nested-promotion-task-key:${size}`)
+    const records = [
+      ...Array.from({ length: size }, (_, index) =>
+        promotionFor(TaskId.make(`nested-promotion-foreign-task:${index}`), index + 1, duplicateKey)
+      ),
+      promotionFor(exactTaskId, size + 1, duplicateKey)
+    ]
+    const indexed = journalEvidenceFrom(records)
+    expect(Array.from(journalRecordsForTaskKind(indexed, exactTaskId, "TargetPromotionObservedSuccess"))).toEqual(
+      Array.from(journalRecordsForTaskKind(records, exactTaskId, "TargetPromotionObservedSuccess"))
+    )
+    const operations: Array<string> = []
+    const stop = observeJournalRecordSequenceOperations((operation) => operations.push(operation._tag))
+    try {
+      expect(Array.from(journalRecordsForTaskKind(indexed, exactTaskId, "TargetPromotionObservedSuccess"))).toEqual([
+        records.at(-1)
+      ])
+    } finally {
+      stop()
+    }
+    return operations
+  })
+
+  expect(visits[0]).toEqual(visits[1])
+  expect(visits[0]).toEqual(["IndexedRecordVisit"])
 })
 
 it("indexes restart read intents by request and phase", () => {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { GitCommitSha, RunId, TaskId } from "@dalph/contracts"
+import { GitCommitSha, RunId, TaskId, makeTaskWorkSpecification } from "@dalph/contracts"
+import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
+import { makePromotedIntegrationHistory } from "../../../../test/support/promoted-integration-history.js"
 import { projectTrackerSnapshot } from "../../../authorities/task-tracker/graph.js"
 import { TaskLifecycle, TrackerRevision } from "../../../authorities/task-tracker/task.js"
 import { TaskWorkCapacity } from "../../../coordination/admission/capacity.js"
@@ -13,7 +15,8 @@ import {
 import { makeTaskTrackerFactsObservedFromRead } from "../task-tracker-read/protocol.js"
 import { TrackerAdapterReadFailureReason } from "../../../authorities/task-tracker/graph-reader.js"
 import { makeTrackerGraphObservationOperation } from "../../registry/operation.js"
-import { WorkflowRunBeganEvent } from "../../registry/event.js"
+import { WorkflowRunBeganEvent, taskTrackerReadIntent } from "../../registry/event.js"
+import { describeJournalEvent } from "../../registry/event-descriptor.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
@@ -38,6 +41,7 @@ import {
   readPostPromotionBlockerCandidateAncestry
 } from "./post-promotion-blocker-ancestry.js"
 import { integrationFinalityFixture as fixture } from "./fixtures.js"
+import { integratorCorrelationFor } from "../integrator/session.js"
 
 const blocker = TaskId.make("post-promotion-blocker")
 
@@ -281,23 +285,101 @@ describe("post-promotion blocker ancestry chronology", () => {
       compareAndSet: () => Effect.die("cached outcome should avoid Git"),
       read: () => Effect.die("cached outcome should avoid Git")
     })
+    const specification = makeTaskWorkSpecification({
+      body: "Exercise a cached post-promotion blocker ancestry read.",
+      taskId: fixture.taskId,
+      title: "Post-promotion blocker ancestry"
+    })
+    const accepted = makeAcceptedIntegrationHistory({
+      acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult,
+      activeClaim: fixture.activeClaim,
+      integrationTarget: fixture.integrationTarget,
+      plannedAttempt: { ...fixture.plannedAttempt, taskRevision: specification.fingerprint },
+      runId: fixture.runId,
+      targetHeadSha: fixture.qualifiedCandidate.run.session.expectedTargetHead,
+      taskSpecification: specification,
+      trackerTarget: fixture.target
+    })
+    const promoted = makePromotedIntegrationHistory({
+      candidateCommit: fixture.qualifiedCandidate.candidateCommit,
+      candidateText: fixture.qualifiedCandidate.candidateText,
+      originalClaim: accepted.activeClaim,
+      records: accepted.records,
+      session: integratorCorrelationFor(accepted)
+    })
+    let boundaryRecords = promoted.promotedRecords
+    const appendBoundary = (event: JournalRecord["event"]): JournalRecord => {
+      const appended: JournalRecord = {
+        event,
+        key: describeJournalEvent(event).expectedKey,
+        position: JournalPosition.make(boundaryRecords.length + 1),
+        runId: fixture.runId
+      }
+      boundaryRecords = [...boundaryRecords, appended]
+      return appended
+    }
+    const appendGraph = (
+      name: string,
+      lifecycle: TaskLifecycle,
+      predecessorOperationIds: ReadonlyArray<OperationId>
+    ) => {
+      const operation = makeTrackerGraphObservationOperation(
+        { _tag: "WorkflowEstablishment" },
+        OperationId.make(name),
+        fixture.target,
+        predecessorOperationIds,
+        [blocker, fixture.taskId]
+      )
+      appendBoundary(taskTrackerReadIntent(operation))
+      appendBoundary(
+        TaskTrackerFactsObservedEvent.make({
+          observation: makeCompleteTaskTrackerFactsObserved(operation, snapshotFor(`${name}-revision`, lifecycle)),
+          operationId: operation.operationId,
+          version: workflowJournalEventVersion
+        })
+      )
+      return operation.operationId
+    }
+    const blockedOperationId = appendGraph("accepted-post-promotion-blocked", TaskLifecycle.cases.Open.make({}), [
+      accepted.graphOperation.operationId
+    ])
+    appendGraph("accepted-post-promotion-cleared", TaskLifecycle.cases.CompletedSuccessfully.make({}), [
+      blockedOperationId
+    ])
+    const boundaryAuthorization = postPromotionBlockerClearAuthorizationFor(boundaryRecords, promoted.claim)
+    if (boundaryAuthorization === undefined) expect.fail("accepted fixture lacks blocker-clear authorization")
+    const boundaryOperationId = postPromotionBlockerAncestryOperationIdFor(boundaryAuthorization)
+    appendBoundary(
+      PostPromotionBlockerCandidateAncestryReadIntendedEvent.make({
+        authorization: boundaryAuthorization,
+        operationId: boundaryOperationId,
+        version: workflowJournalEventVersion
+      })
+    )
+    const boundaryOutcome = PostPromotionBlockerCandidateAncestryObservedEvent.make({
+      authorization: boundaryAuthorization,
+      observation: outcomeEvent.observation,
+      operationId: boundaryOperationId,
+      version: workflowJournalEventVersion
+    })
+    appendBoundary(boundaryOutcome)
     expect(
       await Effect.runPromise(
         Effect.gen(function* () {
           const journal = yield* JournalStore
-          const began = beginning()
-          if (began.event._tag !== "WorkflowRunBegan") return yield* Effect.die("fixture lacks Run beginning")
+          const began = boundaryRecords[0]
+          if (began?.event._tag !== "WorkflowRunBegan") return yield* Effect.die("fixture lacks Run beginning")
           yield* journal.beginRun(fixture.runId, fixture.target, began.event.initialControlPolicy)
-          for (const record of records.slice(1)) {
+          for (const record of boundaryRecords.slice(1)) {
             if (record.event._tag === "WorkflowRunBegan" || record.event._tag === "WorkflowRunTerminated") {
               return yield* Effect.die("fixture contains an unexpected Run lifecycle record")
             }
             yield* journal.append(fixture.runId, record.key, record.event)
           }
-          return yield* readPostPromotionBlockerCandidateAncestry(authorization)
+          return yield* readPostPromotionBlockerCandidateAncestry(boundaryAuthorization)
         }).pipe(Effect.provideService(TargetPromotionGit, unusedGit), Effect.provide(memoryJournalTestLayer))
       )
-    ).toEqual(outcomeEvent.observation)
+    ).toEqual(boundaryOutcome.observation)
 
     const missingIntent = invalidPostPromotionBlockerAncestryHistory(chronology(), outcomeRecord, fixture.runId)
     expect(missingIntent).toMatchObject({ kind: "Semantic" })
