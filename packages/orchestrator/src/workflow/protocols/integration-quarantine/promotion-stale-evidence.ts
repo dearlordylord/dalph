@@ -10,6 +10,12 @@ import {
   targetPromotionStaleRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import {
+  isJournalRecordEvidence,
+  journalRecordByPosition,
+  journalRecordsForPromotionRequest,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { integratorSessionCorrelationsEqual } from "../integrator/events.js"
 import type { IntegrationQuarantinedEvent } from "./events.js"
 
@@ -20,6 +26,9 @@ type PromotionStaleRecord = JournalRecord & {
 type PromotionStaleQuarantineRecord = JournalRecord & {
   readonly event: IntegrationQuarantinedEvent & { readonly basis: { readonly _tag: "PromotionStale" } }
 }
+
+const isPromotionAttemptRecord = (record: JournalRecord): record is PromotionAttemptRecord =>
+  record.event._tag === "TargetPromotionAttemptIntended"
 
 const isPromotionStaleRecord = (record: JournalRecord): record is PromotionStaleRecord =>
   record.event._tag === "TargetPromotionStale"
@@ -32,7 +41,7 @@ const isPromotionStaleQuarantineRecord = (record: JournalRecord): record is Prom
  * the expected-head boundary for the same promotion.
  */
 export const promotionStaleQuarantineEvidenceIssue = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   stale: JournalRecord
 ): string | undefined => {
   if (stale.event._tag !== "TargetPromotionStale") return "evidence is not a target-promotion stale event"
@@ -50,16 +59,21 @@ export const promotionStaleQuarantineEvidenceIssue = (
   }
   const { attemptOrdinal } = stale.event.basis
   const staleCorrelation = stale.event.correlation
-  const attempts = records.filter(
-    (record): record is PromotionAttemptRecord =>
+  let attempt: PromotionAttemptRecord | undefined
+  let attemptCount = 0
+  for (const record of journalRecordsForPromotionRequest(records, staleCorrelation.requestId)) {
+    if (!isPromotionAttemptRecord(record)) continue
+    if (
       record.position < stale.position &&
       record.runId === stale.runId &&
-      record.event._tag === "TargetPromotionAttemptIntended" &&
       record.event.attemptOrdinal === attemptOrdinal &&
       targetPromotionCorrelationEquals(record.event.correlation, staleCorrelation)
-  )
-  const attempt = attempts.length === 1 ? attempts[0] : undefined
-  return attempt !== undefined &&
+    ) {
+      attemptCount += 1
+      attempt = record
+    }
+  }
+  return attemptCount === 1 && attempt !== undefined &&
     attempt.key === targetPromotionAttemptIntentRecordKey(staleCorrelation.requestId, attemptOrdinal)
     ? undefined
     : "promotion-stale quarantine requires one exact earlier correlated compare-and-set attempt intent"
@@ -74,7 +88,7 @@ type PromotionStaleQuarantineEvidenceValidation =
  * state reconstruction, FullRerun authorization, and cleanup provenance.
  */
 export const validatePromotionStaleQuarantineEvidence = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   quarantine: JournalRecord
 ): PromotionStaleQuarantineEvidenceValidation => {
   if (!isPromotionStaleQuarantineRecord(quarantine)) {
@@ -87,7 +101,11 @@ export const validatePromotionStaleQuarantineEvidence = (
   if (quarantine.key !== integrationQuarantinedRecordKey(correlation.sessionId, basis)) {
     return { _tag: "Invalid", detail: "promotion-stale quarantine has a foreign Journal key" }
   }
-  const staleMatches = records.filter(({ position }) => position === basis.targetPromotionStaleAt)
+  const staleMatches = isJournalRecordEvidence(records)
+    ? [journalRecordByPosition(records, basis.targetPromotionStaleAt)].filter(
+        (record): record is JournalRecord => record !== undefined
+      )
+    : records.filter(({ position }) => position === basis.targetPromotionStaleAt)
   const stale = staleMatches.length === 1 ? staleMatches[0] : undefined
   if (stale === undefined || !isPromotionStaleRecord(stale)) {
     return { _tag: "Invalid", detail: "promotion-stale quarantine lacks one exact stale record" }
