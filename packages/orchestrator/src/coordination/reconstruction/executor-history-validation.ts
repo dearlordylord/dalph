@@ -120,11 +120,22 @@ const validateExecutorBeginUniqueness = (
   event: ExecutorCommandIntentEvent,
   record: JournalRecord,
   runId: RunId,
+  records: JournalHistorySource,
   indexes: FoldIndexes,
   issues: Array<WorkflowJournalHistoryIssue>
 ): void => {
   if (event.command !== "Begin") return
-  if ((mapGet(indexes.executorCommandCountsSinceSafeSuspension, `${event.plannedAttempt.attemptId}:Begin`) ?? 0) > 0) {
+  // Raw cold diagnostics retain malformed duplicate-key candidates that are intentionally absent from accepted indexes.
+  const priorBeginExists = isJournalRecordEvidence(records)
+    ? (mapGet(indexes.executorCommandCountsSinceSafeSuspension, `${event.plannedAttempt.attemptId}:Begin`) ?? 0) > 0
+    : records.some(
+        (candidate) =>
+          candidate.position < record.position &&
+          candidate.event._tag === "PlannedAttemptExecutorCommandIntended" &&
+          candidate.event.command === "Begin" &&
+          candidate.event.plannedAttempt.attemptId === event.plannedAttempt.attemptId
+      )
+  if (priorBeginExists) {
     semanticIssue(
       issues,
       runId,
@@ -225,7 +236,7 @@ const validateExecutorCommandIntent = (
   const event = record.event
   const withIdentity = validateExecutorCommandIdentityAndOrdinal(event, record, runId, indexes, issues)
   const withCount = recordExecutorCommandCount(event, record, runId, withIdentity, issues)
-  validateExecutorBeginUniqueness(event, record, runId, indexes, issues)
+  validateExecutorBeginUniqueness(event, record, runId, records, indexes, issues)
   validateExecutorResumeAuthority(event, record, runId, records, issues)
   validateExecutorSuspendAuthority(event, record, runId, records, issues)
   return recordUnsettledExecutorCommand(event, record, runId, withCount, issues)
@@ -566,13 +577,18 @@ const validateSafeToExecutingCausality = (
   if (!isSafeToExecutingTransition(priorAccepted, event)) return
   const commandOrdinal = causalExecutorCommandOrdinal(latestUnacceptedEvidence)
   const evidencePosition = latestUnacceptedEvidence?.position ?? record.position
+  // Accepted evidence has unique keys; raw cold diagnostics must still select the last malformed duplicate.
   const resumeCommand =
     commandOrdinal === undefined
       ? undefined
-      : journalRecordByKey(
-          records,
-          plannedAttemptExecutorCommandIntendedRecordKey(event.report.correlation.attemptId, commandOrdinal)
-        )
+      : isJournalRecordEvidence(records)
+        ? journalRecordByKey(
+            records,
+            plannedAttemptExecutorCommandIntendedRecordKey(event.report.correlation.attemptId, commandOrdinal)
+          )
+        : records.findLast((candidate) =>
+            isMatchingCausalResume(candidate, evidencePosition, priorAccepted.position, event, commandOrdinal)
+          )
   const matchingResume =
     commandOrdinal !== undefined &&
     resumeCommand !== undefined &&
