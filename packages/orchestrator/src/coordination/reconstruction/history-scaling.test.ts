@@ -1,5 +1,7 @@
 import { expect, it } from "vitest"
-import { RunId } from "@dalph/contracts"
+import { AttemptId, RunId, makeTaskWorkSpecification } from "@dalph/contracts"
+import { makeExecutingAttemptHistory } from "../../../test/support/executing-attempt-history.js"
+import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { InitialControlPolicy, RunPolicyRevision } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
@@ -12,9 +14,119 @@ import {
   advanceWorkflowJournalHistory,
   reduceWorkflowJournalHistory,
   inspectWorkflowJournalHistoryValidationPath,
-  observeWorkflowJournalValidationSteps
+  observeWorkflowJournalValidationSteps,
+  reduceUnindexedWorkflowJournalHistoryForTesting
 } from "./history.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
+import { integrationFinalityFixture } from "../../workflow/protocols/integration-finality/fixtures.js"
+import {
+  TargetPromotionIntendedEvent,
+  targetPromotionCorrelationFor
+} from "../../workflow/protocols/target-promotion/events.js"
+import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
+import type { JournalRecord } from "../../workflow-journal/store.js"
+
+it("orders a rejected second executor responsibility after its record issues without changing the accepted predecessor", () => {
+  const fixture = integrationFinalityFixture
+  const specification = makeTaskWorkSpecification({
+    body: "successor diagnostics",
+    title: "Successor diagnostics",
+    taskId: fixture.taskId
+  })
+  const { records } = makeExecutingAttemptHistory({
+    activeClaim: fixture.activeClaim,
+    plannedAttempt: { ...fixture.plannedAttempt, taskRevision: specification.fingerprint },
+    runId: fixture.runId,
+    trackerTarget: fixture.target,
+    taskSpecification: specification
+  })
+  const prior = reduceWorkflowJournalHistory(fixture.runId, records)
+  if (prior._tag !== "ValidWorkflowJournalHistory") return expect.fail("prefix must validate")
+  const event = PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
+    plannedAttempt: { ...fixture.plannedAttempt, attemptId: AttemptId.make("second-unplanned-attempt") },
+    version: workflowJournalEventVersion
+  })
+  const record = {
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(records.length + 1),
+    runId: fixture.runId
+  }
+  const raw = reduceUnindexedWorkflowJournalHistoryForTesting(fixture.runId, [...records, record])
+  const rejected = advanceWorkflowJournalHistory(prior, record)
+  if (raw._tag !== "InvalidWorkflowJournalHistory" || rejected._tag !== "InvalidWorkflowJournalHistory")
+    return expect.fail("both reject")
+  expect(rejected.issues).toEqual(raw.issues)
+  expect(rejected.issues.at(-1)?._tag).toBe("DuplicateUnfinishedTaskAttemptIssue")
+  expect(prior.prefix.records.length).toBe(records.length)
+})
+
+it.each([64, 256])(
+  "rejects an unqualified promotion after %i accepted records without replaying the prefix",
+  (size) => {
+    const { qualifiedCandidate, runId, target } = integrationFinalityFixture
+    const records: Array<JournalRecord> = [
+      makeWorkflowRunBeganRecord(
+        runId,
+        target,
+        InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+      )
+    ]
+    for (let position = 2; position <= size; position += 1) {
+      const event = TaskWorkCapacityChangedEvent.make({
+        capacity: TaskWorkCapacity.make(1),
+        initiatedBy: { _tag: "Operator" },
+        occurrenceClassification: "InitiatedAction",
+        previousRevision: RunPolicyRevision.make(position - 1),
+        revision: RunPolicyRevision.make(position),
+        version: workflowJournalEventVersion
+      })
+      records.push({
+        event,
+        key: describeJournalEvent(event).expectedKey,
+        position: JournalPosition.make(position),
+        runId
+      })
+    }
+    const prior = reduceWorkflowJournalHistory(runId, records)
+    if (prior._tag !== "ValidWorkflowJournalHistory") return expect.fail("prefix must be accepted")
+    const event = TargetPromotionIntendedEvent.make({
+      correlation: targetPromotionCorrelationFor(qualifiedCandidate),
+      version: workflowJournalEventVersion
+    })
+    const successor = {
+      event,
+      key: describeJournalEvent(event).expectedKey,
+      position: JournalPosition.make(size + 1),
+      runId
+    }
+    const oracle = reduceUnindexedWorkflowJournalHistoryForTesting(runId, [...records, successor])
+    if (oracle._tag !== "InvalidWorkflowJournalHistory") return expect.fail("missing qualification must reject")
+    let steps = 0
+    let materializations = 0
+    let visits = 0
+    const stopSteps = observeWorkflowJournalValidationSteps(() => {
+      steps += 1
+    })
+    const stop = observeJournalRecordSequenceOperations((operation) => {
+      if (operation._tag === "HistoricalMaterialization") materializations += 1
+      else visits += 1
+    })
+    try {
+      const rejected = advanceWorkflowJournalHistory(prior, successor)
+      if (rejected._tag !== "InvalidWorkflowJournalHistory") return expect.fail("missing qualification must reject")
+      expect(rejected.issues).toEqual(oracle.issues)
+      expect("records" in rejected).toBe(false)
+      expect(inspectWorkflowJournalHistoryValidationPath(rejected)).toBe("IndexedSuccessorRejected")
+    } finally {
+      stop()
+      stopSteps()
+    }
+    expect(materializations).toBe(0)
+    expect(steps).toBe(1)
+    expect(visits).toBeLessThanOrEqual(24)
+  }
+)
 
 it("exposes accepted reconstruction only as indexed evidence, with no implicit record export", () => {
   const runId = RunId.make("explicit-history-export")

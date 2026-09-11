@@ -30,6 +30,7 @@ import { journalRecordAt, materializeJournalRecords } from "../../workflow-journ
 import {
   duplicateUnfinishedTaskAttemptIssue,
   type InvalidWorkflowJournalHistory,
+  type InvalidWorkflowJournalSuccessor,
   type WorkflowJournalHistoryIssue,
   type WorkflowJournalHistorySemanticIssue,
   type ValidWorkflowJournalHistory
@@ -79,7 +80,10 @@ const keyedCandidates = (records: JournalHistorySource, key: JournalRecordKey): 
   return record === undefined ? [] : [record]
 }
 
-const validationPathByHistory = new WeakMap<object, "IndexedCold" | "RawDiagnostic" | "IndexedSuccessor">()
+const validationPathByHistory = new WeakMap<
+  object,
+  "IndexedCold" | "RawDiagnostic" | "IndexedSuccessor" | "IndexedSuccessorRejected"
+>()
 
 /** Test-only path evidence: valid canonical histories must not take raw diagnostic replay. */
 export const inspectWorkflowJournalHistoryValidationPath = (history: object) => validationPathByHistory.get(history)
@@ -1009,7 +1013,7 @@ export const reduceWorkflowJournalHistory = (
 export const advanceWorkflowJournalHistory = (
   prior: ValidWorkflowJournalHistory,
   record: JournalRecord
-): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory => {
+): ValidWorkflowJournalHistory | InvalidWorkflowJournalHistory | InvalidWorkflowJournalSuccessor => {
   const kernel = Option.getOrElse(Option.fromUndefinedOr(prior[ValidatedKernelStateTypeId]), () =>
     Effect.runSync(
       Effect.die(
@@ -1018,8 +1022,17 @@ export const advanceWorkflowJournalHistory = (
     )
   )
   const { indexes, unfinished } = kernel
-  const replay = () =>
-    reduceWorkflowJournalHistory(prior.runId, [...materializeJournalRecords(prior.prefix.records), record])
+  // Direct callers may deliberately supply nonchronological raw envelopes. Their
+  // array-order diagnostics belong to the explicit raw boundary, not live append.
+  // Journal publication has already checked the exact next-position envelope.
+  if (
+    record.position !== prior.prefix.records.length + 1 ||
+    record.runId !== prior.runId ||
+    record.key !== describeJournalEvent(record.event).expectedKey ||
+    HashSet.has(indexes.seenKeys, record.key)
+  ) {
+    return reduceRawDiagnosticHistory(prior.runId, [...materializeJournalRecords(prior.prefix.records), record])
+  }
 
   /*
    * Fork the immutable index roots for this successor. Effect HashMap and
@@ -1030,10 +1043,41 @@ export const advanceWorkflowJournalHistory = (
   const candidate = appendJournalEvidence(prior.prefix, record)
   const advancedIndexes = validateRecord(record, prior.prefix.records.length, prior.runId, candidate, indexes, issues)
   const advancedUnfinished = advanceUnfinishedTasks(unfinished, advancedIndexes, record)
+  if (advancedUnfinished === undefined && record.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+    const existing = mapGet(unfinished, record.event.plannedAttempt.taskId)
+    if (existing !== undefined) {
+      issues.push(
+        duplicateUnfinishedTaskAttemptIssue(
+          prior.runId,
+          existing.plannedAttempt,
+          existing.position,
+          record.event.plannedAttempt,
+          record.position
+        )
+      )
+    }
+  }
   validateRunLifecycle(prior.runId, candidate, issues)
-  // The cold reducer retains the exact ordered diagnostics for malformed input;
-  // failed candidates never receive acceptance or alter their predecessor.
-  if (issues.length > 0 || advancedUnfinished === undefined) return replay()
+  if (issues.length > 0) {
+    const rejected: InvalidWorkflowJournalSuccessor = {
+      _tag: "InvalidWorkflowJournalHistory",
+      issues,
+      prior: prior.prefix,
+      record,
+      runId: prior.runId
+    }
+    validationPathByHistory.set(rejected, "IndexedSuccessorRejected")
+    return rejected
+  }
+  if (advancedUnfinished === undefined) {
+    return Effect.runSync(
+      Effect.die(
+        new JournalKernelInvariantDefect({
+          detail: "successor changed unfinished responsibility without its acquisition occurrence"
+        })
+      )
+    )
+  }
   const prefix = appendValidatedJournalRecord(prior.prefix, record)
   const history = acceptedWorkflowHistory(prefix)
   const advanced = acceptedHistoryResult(prefix, advanceReconstructedRunState(prior.runState, record, history), {

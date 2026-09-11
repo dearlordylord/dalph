@@ -38,6 +38,17 @@ import { completedRunFinalityFixture } from "../../../test/run-finality.js"
 
 const safeSegment = fc.stringMatching(/^[a-z][a-z0-9-]{0,12}$/)
 
+const expectSameRejectedIssues = (
+  successor: ReturnType<typeof advanceWorkflowJournalHistory>,
+  replay: ReturnType<typeof reduceWorkflowJournalHistory>
+) => {
+  expect(successor._tag).toBe("InvalidWorkflowJournalHistory")
+  expect(replay._tag).toBe("InvalidWorkflowJournalHistory")
+  if (successor._tag !== "InvalidWorkflowJournalHistory" || replay._tag !== "InvalidWorkflowJournalHistory") return
+  expect(successor.runId).toBe(replay.runId)
+  expect(successor.issues).toEqual(replay.issues)
+}
+
 const generatedValidHistory = (segments: ReadonlyArray<string>, terminated = false) => {
   const runId = RunId.make(`incremental-${segments.join("-")}`)
   const target = FixtureTarget.make(`run-target-${segments.join("-")}`)
@@ -336,7 +347,7 @@ it("rejects generated malformed successors with the same issues as complete repl
                   : validNext
         const incremental = advanceWorkflowJournalHistory(prior, malformed)
         const replay = reduceWorkflowJournalHistory(runId, [...records, malformed])
-        expect(incremental).toEqual(replay)
+        expectSameRejectedIssues(incremental, replay)
         expect(incremental._tag).toBe("InvalidWorkflowJournalHistory")
         if (mutation !== "afterTermination") {
           const recovered = advanceWorkflowJournalHistory(prior, validNext)
@@ -374,7 +385,7 @@ it("isolates a semantically rejected predecessor index from immutable sibling br
       }
       const malformedIncremental = advanceWorkflowJournalHistory(prior, malformed)
       const malformedReplay = reduceWorkflowJournalHistory(runId, [...records, malformed])
-      expect(malformedIncremental).toEqual(malformedReplay)
+      expectSameRejectedIssues(malformedIncremental, malformedReplay)
       expect(malformedIncremental._tag).toBe("InvalidWorkflowJournalHistory")
 
       const branchOperation = makeTrackerGraphObservationOperation(
@@ -391,7 +402,7 @@ it("isolates a semantically rejected predecessor index from immutable sibling br
       }
       const branchIncremental = advanceWorkflowJournalHistory(prior, branch)
       const branchReplay = reduceWorkflowJournalHistory(runId, [...records, branch])
-      expect(branchIncremental).toEqual(branchReplay)
+      expectSameRejectedIssues(branchIncremental, branchReplay)
       expect(branchIncremental._tag).toBe("InvalidWorkflowJournalHistory")
     }),
     { numRuns: 100, seed: 221 }

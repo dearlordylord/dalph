@@ -6,12 +6,15 @@ import {
   GitRepositoryLocator,
   IntegrationTarget,
   IntegrationTargetRef,
-  TaskRevision
+  TaskRevision,
+  makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { FixtureTarget } from "../../../authorities/task-tracker/fixture/target.js"
 import { defaultTaskWorkCapacity } from "../../../coordination/admission/capacity.js"
 import { InitialControlPolicy } from "../../../control/policy.js"
-import { memoryJournalTestLayer } from "../../../workflow-journal/adapters/memory-store.js"
+import { liveJournalTestLayer } from "../../../coordination/delivery/live-journal-test-layer.js"
+import { makeWorkflowRunBeganRecord } from "../../../workflow-journal/run-lifecycle.js"
+import { makeAcceptedIntegrationHistory } from "../../../../test/support/accepted-integration-history.js"
 import { integrationFinalityFixture } from "../integration-finality/fixtures.js"
 import {
   AcceptedResultEvidenceUnavailable,
@@ -43,79 +46,42 @@ import {
   PlannedAttemptExecutorWorkResponsibilityBeganEvent
 } from "../planned-attempt-executor-work/events.js"
 import { AttemptChoiceAppliedEvent, AttemptChoiceRequestId } from "../attempt-choice/events.js"
-import { EvidenceStore } from "../evidence-store.js"
+import { EvidenceStore, EvidenceStoreFailure } from "../evidence-store.js"
 import { JournalPosition, JournalRecordKey } from "../../../workflow-journal/identity.js"
 import { journalEvidenceFrom } from "../../../workflow-journal/record-evidence.js"
-import {
-  InRunJournal,
-  JournalStore,
-  JournalRecord,
-  type JournalRecord as JournalRecordType
-} from "../../../workflow-journal/store.js"
+import { JournalRecord, type JournalRecord as JournalRecordType } from "../../../workflow-journal/store.js"
 import { OperationId } from "../../identity.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { acceptedResultEquivalence } from "./responsibility.js"
-import {
-  attemptPlanRecordKey,
-  plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey
-} from "../../../workflow-journal/record-key.js"
-import { TaskAttemptPlannedEvent } from "../../registry/event.js"
-import { makeTaskAttemptPlanOperation } from "../../registry/operation.js"
 
 const fixture = integrationFinalityFixture
-
-const journalWith = (records: ReadonlyArray<JournalRecordType>): InRunJournal["Service"] => ({
-  append: (_runId, _key, event) =>
-    Effect.succeed({
-      event,
-      key: JournalRecordKey.make("appended"),
-      position: JournalPosition.make(records.length + 1),
-      runId: fixture.runId
-    }),
-  read: (_runId) => Effect.succeed(records)
+const trackerTarget = FixtureTarget.make("integration-admission-target")
+const initialPolicy = InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity })
+const admissionSpecification = makeTaskWorkSpecification({
+  body: "Queue the exact accepted executor result for integration.",
+  taskId: fixture.plannedAttempt.taskId,
+  title: "Integration admission"
 })
-
-const beginAcceptedResultRun = Effect.gen(function* () {
-  const journal = yield* JournalStore
-  yield* journal.beginRun(
-    fixture.runId,
-    FixtureTarget.make("integration-admission-target"),
-    InitialControlPolicy.make({ taskExecutionCapacity: defaultTaskWorkCapacity })
-  )
+const admissionAttempt = { ...fixture.plannedAttempt, taskRevision: admissionSpecification.fingerprint }
+const begunJournalLayer = liveJournalTestLayer({
+  records: [makeWorkflowRunBeganRecord(fixture.runId, trackerTarget, initialPolicy)],
+  runId: fixture.runId,
+  target: trackerTarget
 })
-
-const appendDurableAcceptedResult = Effect.gen(function* () {
-  yield* beginAcceptedResultRun
-  const journal = yield* JournalStore
-  yield* journal.append(
-    fixture.runId,
-    attemptPlanRecordKey(fixture.plannedAttempt.attemptId),
-    TaskAttemptPlannedEvent.make({
-      operation: makeTaskAttemptPlanOperation({
-        operationId: OperationId.make("integration-admission-plan"),
-        plannedAttempt: fixture.plannedAttempt,
-        predecessorOperationIds: []
-      }),
-      version: workflowJournalEventVersion
-    })
-  )
-  yield* journal.append(
-    fixture.runId,
-    plannedAttemptExecutorWorkResponsibilityBeganRecordKey(fixture.plannedAttempt.attemptId),
-    PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-      plannedAttempt: fixture.plannedAttempt,
-      version: workflowJournalEventVersion
-    })
-  )
-  yield* journal.append(
-    fixture.runId,
-    plannedAttemptExecutorWorkReportedRecordKey(
-      fixture.plannedAttempt.attemptId,
-      PlannedAttemptExecutorReportOrdinal.make(1)
-    ),
-    acceptedReportAt(1).event as typeof PlannedAttemptExecutorWorkReportedEvent.Type
-  )
+const acceptedHistory = makeAcceptedIntegrationHistory({
+  acceptedResult: fixture.qualifiedCandidate.run.session.acceptedResult,
+  activeClaim: fixture.activeClaim,
+  integrationTarget: fixture.integrationTarget,
+  plannedAttempt: admissionAttempt,
+  runId: fixture.runId,
+  targetHeadSha: fixture.qualifiedCandidate.run.session.expectedTargetHead,
+  taskSpecification: admissionSpecification,
+  trackerTarget
+})
+const acceptedJournalLayer = liveJournalTestLayer({
+  records: acceptedHistory.records,
+  runId: fixture.runId,
+  target: trackerTarget
 })
 
 const queued = (queuedAt: number): QueuedIntegrationResponsibility =>
@@ -246,7 +212,6 @@ it.effect("provides the exact configured integration target to the settlement ru
 
 it.effect("rejects queue admission until the exact accepted executor result is durable", () =>
   Effect.gen(function* () {
-    yield* beginAcceptedResultRun
     const failure = yield* queueAcceptedResultIntegrationResponsibility(
       fixture.plannedAttempt,
       fixture.qualifiedCandidate.run.session.acceptedResult,
@@ -256,15 +221,23 @@ it.effect("rejects queue admission until the exact accepted executor result is d
     expect(failure).toEqual(
       new AcceptedResultNotDurable({ attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId })
     )
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(begunJournalLayer))
 )
 
 it.effect("crosses the integration cutoff once for an exact queued responsibility", () =>
   Effect.gen(function* () {
-    const responsibility = queued(4)
-    const started = yield* startQueuedIntegration(responsibility).pipe(
-      Effect.provideService(InRunJournal, journalWith([]))
-    )
+    const responsibility = QueuedIntegrationResponsibility.make({
+      acceptedResult: acceptedHistory.acceptedResult,
+      integrationTarget: acceptedHistory.integrationTarget,
+      plannedAttempt: acceptedHistory.plannedAttempt,
+      preIntegrationCancellation: {
+        attemptId: acceptedHistory.plannedAttempt.attemptId,
+        queuedAt: acceptedHistory.responsibility.queuedAt,
+        runId: acceptedHistory.runId
+      },
+      queuedAt: acceptedHistory.responsibility.queuedAt
+    })
+    const started = yield* startQueuedIntegration(responsibility)
 
     expect(started).toEqual(
       StartedIntegrationResponsibility.make({
@@ -272,10 +245,18 @@ it.effect("crosses the integration cutoff once for an exact queued responsibilit
         integrationTarget: responsibility.integrationTarget,
         plannedAttempt: responsibility.plannedAttempt,
         queuedAt: responsibility.queuedAt,
-        startedAt: JournalPosition.make(1)
+        startedAt: JournalPosition.make(responsibility.queuedAt + 1)
       })
     )
-  })
+  }).pipe(
+    Effect.provide(
+      liveJournalTestLayer({
+        records: acceptedHistory.records.slice(0, acceptedHistory.responsibility.queuedAt),
+        runId: acceptedHistory.runId,
+        target: trackerTarget
+      })
+    )
+  )
 )
 
 it("selects only the first queued responsibility for each integration target", () => {
@@ -489,15 +470,10 @@ it.effect("queues only a durable accepted result after evidence checks", () =>
     const acceptedResult = fixture.qualifiedCandidate.run.session.acceptedResult
     const afterRestart = [responsibilityRecordAt(1), restartChoiceAt(2), acceptedReportAt(3)]
     const evidenceFailure = yield* Effect.gen(function* () {
-      yield* appendDurableAcceptedResult
       return yield* Effect.flip(
-        queueAcceptedResultIntegrationResponsibility(
-          fixture.plannedAttempt,
-          acceptedResult,
-          fixture.integrationTarget
-        )
+        queueAcceptedResultIntegrationResponsibility(admissionAttempt, acceptedResult, fixture.integrationTarget)
       )
-    }).pipe(Effect.provide(memoryJournalTestLayer))
+    }).pipe(Effect.provide(acceptedJournalLayer))
     expect(evidenceFailure).toBeInstanceOf(AcceptedResultEvidenceUnavailable)
 
     const manifest = AcceptedResultEvidenceManifest.make({
@@ -508,14 +484,13 @@ it.effect("queues only a durable accepted result after evidence checks", () =>
       predecessor: null
     })
     const queuedResult = yield* Effect.gen(function* () {
-      yield* appendDurableAcceptedResult
       return yield* queueAcceptedResultIntegrationResponsibility(
-        fixture.plannedAttempt,
+        admissionAttempt,
         acceptedResult,
         fixture.integrationTarget
       )
     }).pipe(
-      Effect.provide(memoryJournalTestLayer),
+      Effect.provide(acceptedJournalLayer),
       Effect.provideService(
         EvidenceStore,
         EvidenceStore.of({
@@ -531,15 +506,10 @@ it.effect("queues only a durable accepted result after evidence checks", () =>
     expect(deriveUnqueuedAcceptedResults(journalEvidenceFrom(afterRestart))).toHaveLength(1)
 
     const notDurable = yield* Effect.gen(function* () {
-      yield* beginAcceptedResultRun
       return yield* Effect.flip(
-        queueAcceptedResultIntegrationResponsibility(
-          fixture.plannedAttempt,
-          acceptedResult,
-          fixture.integrationTarget
-        )
+        queueAcceptedResultIntegrationResponsibility(fixture.plannedAttempt, acceptedResult, fixture.integrationTarget)
       )
-    }).pipe(Effect.provide(memoryJournalTestLayer))
+    }).pipe(Effect.provide(begunJournalLayer))
     expect(notDurable).toEqual(
       new AcceptedResultNotDurable({ attemptId: fixture.plannedAttempt.attemptId, runId: fixture.runId })
     )
@@ -554,7 +524,10 @@ it.effect("reports a non-store evidence read failure as unavailable", () =>
           EvidenceStore,
           EvidenceStore.of({
             put: () => Effect.die("unused"),
-            read: () => Effect.fail("coverage evidence read failed") as never
+            read: () =>
+              Effect.fail(
+                new EvidenceStoreFailure({ detail: "coverage evidence read failed", operation: "EvidenceStore.read" })
+              )
           })
         )
       )
