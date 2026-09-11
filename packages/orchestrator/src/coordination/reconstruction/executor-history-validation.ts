@@ -31,8 +31,14 @@ import { defaultPlannedAttemptExecutorSuspensionLimit } from "../../workflow/pro
 import { appliedTerminalChoiceFor } from "../../workflow/protocols/attempt-choice/terminal-choice-authority.js"
 import { plannedAttemptExecutorLifecycleTransitionError } from "../../workflow/protocols/planned-attempt-executor-work/report-acceptance.js"
 import { acceptedFreshAttemptLineage } from "../admission/fresh-attempt-lineage.js"
-import { type FoldIndexes, identityIssue, mapGet, semanticIssue } from "./history-kernel-state.js"
-import { duplicateUnfinishedTaskAttemptIssue, type WorkflowJournalHistoryIssue } from "./history-result.js"
+import {
+  type FoldIndexes,
+  identityIssue,
+  mapGet,
+  semanticIssue,
+  type WorkflowJournalHistoryIssueReporter
+} from "./history-kernel-state.js"
+import { duplicateUnfinishedTaskAttemptIssue } from "./history-result.js"
 
 type ExecutorCommandIntentEvent = Extract<
   WorkflowJournalEvent,
@@ -61,7 +67,7 @@ const validateExecutorCommandIdentityAndOrdinal = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   const attemptId = event.plannedAttempt.attemptId
   const responsibility = mapGet(indexes.executorResponsibilitiesBegan, attemptId)
@@ -93,7 +99,7 @@ const recordExecutorCommandCount = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   const attemptId = event.plannedAttempt.attemptId
   const commandCountKey = `${attemptId}:${event.command}`
@@ -122,7 +128,7 @@ const validateExecutorBeginUniqueness = (
   runId: RunId,
   records: JournalHistorySource,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (event.command !== "Begin") return
   // Raw cold diagnostics retain malformed duplicate-key candidates that are intentionally absent from accepted indexes.
@@ -150,7 +156,7 @@ const validateExecutorResumeAuthority = (
   record: JournalRecord,
   runId: RunId,
   records: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (event.command !== "Resume") return
   const attemptId = event.plannedAttempt.attemptId
@@ -179,7 +185,7 @@ const validateExecutorSuspendAuthority = (
   record: JournalRecord,
   runId: RunId,
   records: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (event.command !== "Suspend") return
   const priorRecords = historyBefore(records, record.position)
@@ -200,7 +206,7 @@ const recordUnsettledExecutorCommand = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   const attemptId = event.plannedAttempt.attemptId
   if (HashMap.has(indexes.unsettledExecutorCommands, attemptId)) {
@@ -230,7 +236,7 @@ const validateExecutorCommandIntent = (
   runId: RunId,
   records: JournalHistorySource,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   if (record.event._tag !== "PlannedAttemptExecutorCommandIntended") return indexes
   const event = record.event
@@ -247,7 +253,7 @@ const validateExecutorResumeRedeliveryIntent = (
   runId: RunId,
   records: JournalHistorySource,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   const event = record.event
   if (event._tag !== "PlannedAttemptExecutorResumeRedeliveryIntended") return indexes
@@ -325,7 +331,7 @@ const validateExecutorLifecycleContradictionCorrelations = (
   event: ExecutorStateObservedEvent,
   record: JournalRecord,
   runId: RunId,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (
     executorReportMatchesAttempt(observation.accepted, event) &&
@@ -347,7 +353,7 @@ const validateExecutorLifecycleContradictionLatestAccepted = (
   record: JournalRecord,
   runId: RunId,
   records: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   const latestAccepted = lastJournalRecordForAttemptKind(
     historyBefore(records, record.position),
@@ -373,7 +379,7 @@ const validateExecutorLifecycleContradictionShape = (
   event: ExecutorStateObservedEvent,
   record: JournalRecord,
   runId: RunId,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (isRecognizedExecutorLifecycleContradiction(observation)) return
   semanticIssue(
@@ -389,7 +395,7 @@ const validateExecutorLifecycleTransitionContradiction = (
   record: JournalRecord,
   runId: RunId,
   records: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (event.observation._tag !== "ExecutorLifecycleTransitionContradiction") return
   const observation = event.observation
@@ -403,7 +409,7 @@ const validateExecutorInitialReportCausalityContradiction = (
   record: JournalRecord,
   runId: RunId,
   records: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (event.observation._tag !== "ExecutorInitialReportCausalityContradiction") return
   const observation = event.observation
@@ -436,7 +442,7 @@ const validateExactExecutorStateObservation = (
   record: JournalRecord,
   runId: RunId,
   records: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (event.observation._tag !== "ExactExecutorReport") return
   const priorRecords = historyBefore(records, record.position)
@@ -492,7 +498,7 @@ const validateExecutorWorkReportIdentityAndOrdinal = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   const attemptId = event.report.correlation.attemptId
   const responsibility = mapGet(indexes.executorResponsibilitiesBegan, attemptId)
@@ -521,7 +527,7 @@ const validateExecutorWorkReportEvidence = (
   record: JournalRecord,
   runId: RunId,
   latestUnacceptedEvidence: JournalRecord | undefined,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   const evidenceReport = executorReportFromEvidenceRecord(latestUnacceptedEvidence)
   if (evidenceReport === undefined || !samePlannedAttemptExecutorReport(evidenceReport, event.report)) {
@@ -572,7 +578,7 @@ const validateSafeToExecutingCausality = (
   records: JournalHistorySource,
   priorAccepted: JournalRecord | undefined,
   latestUnacceptedEvidence: JournalRecord | undefined,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (!isSafeToExecutingTransition(priorAccepted, event)) return
   const commandOrdinal = causalExecutorCommandOrdinal(latestUnacceptedEvidence)
@@ -609,7 +615,7 @@ const validateExecutorLifecycleAcceptance = (
   runId: RunId,
   records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt | undefined,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (plannedAttempt === undefined) return
   const priorRecords = historyBefore(records, record.position)
@@ -629,7 +635,7 @@ const validateExecutorReportFinality = (
   runId: RunId,
   priorAccepted: JournalRecord | undefined,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   const attemptId = event.report.correlation.attemptId
   if (
@@ -684,7 +690,7 @@ const validateExecutorWorkReport = (
   runId: RunId,
   records: JournalHistorySource,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   if (record.event._tag !== "PlannedAttemptExecutorWorkReported") return indexes
   const event = record.event
@@ -714,7 +720,7 @@ export const validateExecutorEvent = (
   runId: RunId,
   records: JournalHistorySource,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   let next = indexes
   const event = record.event
@@ -771,7 +777,7 @@ export const validateExecutorEvent = (
       }
       const priorResponsibility = mapGet(next.executorResponsibilitiesBegan, attemptId)
       if (priorResponsibility !== undefined) {
-        issues.push(
+        issues(
           duplicateUnfinishedTaskAttemptIssue(
             runId,
             priorResponsibility.plannedAttempt,

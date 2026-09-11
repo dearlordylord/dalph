@@ -1,5 +1,6 @@
 /* eslint-disable max-lines -- The closed proposal relation keeps every transition-to-admission mapping exhaustive. */
 import { plannedAttemptExecutorCorrelation, plannedTaskAttemptEquivalence } from "@dalph/contracts"
+import { HashSet } from "effect"
 import type { OperationId } from "../../workflow/identity.js"
 import type { JournalPosition } from "../../workflow-journal/identity.js"
 import type {
@@ -505,8 +506,8 @@ const recoveredRouteProposalOf = (
 }
 
 const recoveredProposalOf = (
-  acceptedOperationIds: ReadonlySet<OperationId>,
-  pendingReadOperationIds: ReadonlySet<OperationId>,
+  acceptedOperationIds: DeliveryProposalsInput["acceptedOperationIds"],
+  pendingReadOperationIds: NonNullable<DeliveryProposalsInput["pendingReadOperationIds"]>,
   context: ProposalContext,
   transition: RunnableFrontierTransition
 ): DerivedProposal => {
@@ -516,18 +517,20 @@ const recoveredProposalOf = (
     /* v8 ignore start -- every accepted-operation transition carries its identity in one closed typed location. */
     if (operationId === undefined) return routePolicyContradiction(transition)
     /* v8 ignore stop */
-    return acceptedOperationIds.has(operationId)
+    return HashSet.has(acceptedOperationIds, operationId)
       ? recoveredRouteProposalOf(context, undefined, operationId, transition)
       : missingAcceptedOperation(operationId, transition)
   }
   const operationId = operationIdOf(transition)
   const isAcceptedOperation =
-    operationId !== undefined && acceptedOperationIds.has(operationId) && !pendingReadOperationIds.has(operationId)
+    operationId !== undefined &&
+    HashSet.has(acceptedOperationIds, operationId) &&
+    !HashSet.has(pendingReadOperationIds, operationId)
   const newAction = isAcceptedOperation ? undefined : newRecoveredActionOf(transition)
   return recoveredRouteProposalOf(
     context,
     newAction,
-    operationId !== undefined && (newAction === undefined || pendingReadOperationIds.has(operationId))
+    operationId !== undefined && (newAction === undefined || HashSet.has(pendingReadOperationIds, operationId))
       ? operationId
       : undefined,
     transition
@@ -554,7 +557,7 @@ interface DeliveryProposalDerivationFrame {
   readonly acceptedOperationIds: DeliveryProposalsInput["acceptedOperationIds"]
   readonly freshByTransition: ReadonlyMap<string, FreshContinuationDecision>
   readonly integrationResponsibilities: ReadonlyArray<IntegrationResponsibility>
-  readonly pendingReadOperationIds: ReadonlySet<OperationId>
+  readonly pendingReadOperationIds: NonNullable<DeliveryProposalsInput["pendingReadOperationIds"]>
   readonly responsibilities: ReadonlyArray<WorkflowResponsibilityEntry>
   readonly runId: DeliveryProposalsInput["runId"]
   readonly safeContinuationRevalidations: ReadonlyArray<SafeContinuationRevalidationEligibility>
@@ -638,7 +641,7 @@ export const deliveryProposalsOf = (input: DeliveryProposalsInput): DeliveryProp
       input.fresh.map((decision) => [freshDecisionKey(input.runId, decision), decision] as const)
     ),
     integrationResponsibilities: input.integrationResponsibilities ?? [],
-    pendingReadOperationIds: input.pendingReadOperationIds ?? new Set(),
+    pendingReadOperationIds: input.pendingReadOperationIds ?? HashSet.empty(),
     responsibilities: input.responsibilities ?? [],
     runId: input.runId,
     safeContinuationRevalidations: input.safeContinuationRevalidations ?? []

@@ -15,6 +15,7 @@ import { intentRecordKey } from "./record-key.js"
 /** The immutable tracker target recorded by exactly one valid Run beginning. */
 export const exactWorkflowRunTargetFor = (records: JournalHistorySource): TrackerTarget | undefined => {
   const first = firstJournalRecordOfKind(records, "WorkflowRunBegan")
+  if (first === undefined) return undefined
   const beginning = first === lastJournalRecordOfKind(records, "WorkflowRunBegan") ? first : undefined
   return beginning?.event._tag === "WorkflowRunBegan" ? beginning.event.target : undefined
 }

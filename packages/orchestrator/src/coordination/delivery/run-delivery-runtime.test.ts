@@ -18,7 +18,7 @@ import {
   makeTaskWorkSpecification,
   plannedAttemptExecutorCorrelation
 } from "@dalph/contracts"
-import { Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Result, Stream, SubscriptionRef } from "effect"
+import { HashSet, Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Result, Stream, SubscriptionRef } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot, taskRevisionFor } from "../../authorities/task-tracker/graph.js"
@@ -318,7 +318,7 @@ const handoffProposal = (): DeliveryActionProposal => ({
 
 const recoveredProposalFor = (
   transition: RunnableFrontierTransition,
-  acceptedOperationIds = new Set<OperationId>(),
+  acceptedOperationIds = HashSet.empty<OperationId>(),
   attempt = plannedAttempt
 ) => {
   const proposals = deliveryProposalsOf({
@@ -1107,7 +1107,7 @@ it.effect("does not start a causal successor before its accepted operation owner
     const ownedOperationId = OperationId.make("accepted-owned-operation")
     const parent = recoveredProposalFor(
       RunnableFrontierTransition.CheckTaskClaim({ operationId: ownedOperationId, taskId: plannedAttempt.taskId }),
-      new Set([ownedOperationId])
+      HashSet.make(ownedOperationId)
     )
     const successor = { ...proposal(1, TaskId.make("B")), waitsForLiveOperationId: ownedOperationId }
     const initial = withProposals(yield* baseEvaluation, [parent, successor])
@@ -1222,7 +1222,7 @@ it.effect("admits independent D while recovered A and C perform read-only restar
       runId
     })
     const proposals = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: [],
       responsibilities: [
         {
@@ -1372,7 +1372,7 @@ it.effect("gives retained B1 the released position before D and rejects uncorrel
     const replacementB = freshClaim(taskB)
     const freshCandidates = yield* freshTaskCandidateFrontierOf({ decisions: [freshD, replacementB], runId })
     const proposals = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: [],
       responsibilities: [
         {
@@ -1595,7 +1595,7 @@ it.effect("does not repeat one started-integration lineage read after only its c
         plannedAttempt
       })
       const proposals = deliveryProposalsOf({
-        acceptedOperationIds: new Set(),
+        acceptedOperationIds: HashSet.empty(),
         fresh: [],
         integrationResponsibilities: [responsibility],
         runId,
@@ -1644,7 +1644,7 @@ it.effect("admits bounded fresh claims while an unrelated integration lineage re
       plannedAttempt
     })
     const integrationProposal = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: [],
       integrationResponsibilities: [responsibility],
       runId,
@@ -2065,7 +2065,7 @@ it.effect("admits an independently proposed suspension after one unchanged passi
       RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt })
     ] as const
     const proposals = deliveryProposalsOf({
-      acceptedOperationIds: new Set<OperationId>(),
+      acceptedOperationIds: HashSet.empty<OperationId>(),
       fresh: [],
       integrationResponsibilities: [],
       responsibilities: [
@@ -2476,7 +2476,7 @@ it.effect("materializes accepted and source-derived operation identities only af
     const acceptedOperationId = OperationId.make("runtime-accepted-operation")
     const accepted = recoveredProposalFor(
       RunnableFrontierTransition.CheckTaskClaim({ operationId: acceptedOperationId, taskId: plannedAttempt.taskId }),
-      new Set([acceptedOperationId])
+      HashSet.make(acceptedOperationId)
     )
     const initial = withProposals(yield* baseEvaluation, [reacquisition, externalRelease, accepted], 1)
     const relation = yield* dynamicEvaluationSignal(initial)
@@ -3027,9 +3027,9 @@ it.effect("keeps a same-position worktree completion pending until its lineage s
         transition: typeof worktreeTransition | typeof lineageTransition
       ): ReadonlyArray<DeliveryActionProposal> =>
         deliveryProposalsOf({
-          acceptedOperationIds: new Set(),
+          acceptedOperationIds: HashSet.empty(),
           fresh: [],
-          pendingReadOperationIds: new Set([transition.operation.operationId, claimOperation.operationId]),
+          pendingReadOperationIds: HashSet.make(transition.operation.operationId, claimOperation.operationId),
           runId,
           transitions: [transition, claimTransition]
         }).ticketDelivery
@@ -3766,7 +3766,7 @@ it.effect("retains exact G2 and accepts Pause after capacity-stalled phase two w
           acceptedProgress: bFacts.disposition.acceptedProgress,
           plannedAttempt: independentPlannedAttempt
         }),
-        new Set(),
+        HashSet.empty(),
         independentPlannedAttempt
       )
       const graphProjection = projectTrackerSnapshot({
@@ -3900,7 +3900,7 @@ it.effect("holds old-graph admission until G2 after direct safe or terminal sett
           acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
           plannedAttempt: independentPlannedAttempt
         }),
-        new Set(),
+        HashSet.empty(),
         independentPlannedAttempt
       )
       const initial = {
@@ -4438,7 +4438,7 @@ it.effect(
               },
               plannedAttempt: attempt
             }),
-            new Set(),
+            HashSet.empty(),
             attempt
           )
         )
@@ -4454,7 +4454,7 @@ it.effect(
             operation: independentClaimOperation,
             taskId: independentClaimTaskId
           }),
-          new Set([independentClaimOperation.operationId]),
+          HashSet.make(independentClaimOperation.operationId),
           a.attempt
         )
         const claimRecord = (position: number, event: JournalRecord["event"]): JournalRecord => ({
@@ -4645,7 +4645,7 @@ const freshExecutingObservePair = (name: string) => {
   })
   const observeFor = (task: Task) =>
     deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: Result.getOrThrow(
         freshContinuationDecisionsOf(
           [
@@ -4748,7 +4748,7 @@ it.effect("keeps three publication-through passive attachments across a post-com
           plannedAttempt: fixture.attempt
         })
         return deliveryProposalsOf({
-          acceptedOperationIds: new Set(),
+          acceptedOperationIds: HashSet.empty(),
           fresh: Result.getOrThrow(
             freshContinuationDecisionsOf(
               [
@@ -4934,7 +4934,7 @@ it.effect("moves a passive-attachment marker across an in-flight route refresh a
       })
       const observeFor = (task: Task) =>
         deliveryProposalsOf({
-          acceptedOperationIds: new Set(),
+          acceptedOperationIds: HashSet.empty(),
           fresh: Result.getOrThrow(
             freshContinuationDecisionsOf(
               [
@@ -5191,7 +5191,7 @@ it.effect("waits for changed accepted facts after unchanged reconciliation inste
       const fixture = preparedAttemptFixture("unchanged-reconciliation")
       const reconcile = recoveredProposalFor(
         RunnableFrontierTransition.ReconcilePlannedAttemptExecutorWork({ plannedAttempt: fixture.attempt }),
-        new Set(),
+        HashSet.empty(),
         fixture.attempt
       )
       const keeper = trackerGraphReadProposalOf({
@@ -5539,7 +5539,7 @@ const exactHeldPositionReuse = (afterG2: boolean) =>
           acceptedProgress: { _tag: "ExecutorResponsibilityBegan", acceptedAt: JournalPosition.make(1) },
           plannedAttempt: retained.attempt
         }),
-        new Set(),
+        HashSet.empty(),
         retained.attempt
       )
       const initial = {

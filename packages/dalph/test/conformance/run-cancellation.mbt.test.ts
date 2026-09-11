@@ -23,7 +23,7 @@ import {
   plannedAttemptExecutorCorrelation,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Queue, Schema, Scope, Stream } from "effect"
+import { HashSet, Context, Deferred, Effect, Exit, Fiber, Layer, Queue, Schema, Scope, Stream } from "effect"
 import { expect } from "vitest"
 import { PlannedWorktreeReady } from "../../../orchestrator/src/authorities/git/worktree.js"
 import { InitialControlPolicy } from "../../../orchestrator/src/control/policy.js"
@@ -502,7 +502,7 @@ const identityFreeIntegrationActionFor = (
   responsibility: StartedIntegrationResponsibility
 ): { readonly _tag: "IdentityFreeAction"; readonly proposal: IdentityFreeDeliveryProposal } => {
   const derived = deliveryProposalsOf({
-    acceptedOperationIds: new Set(),
+    acceptedOperationIds: HashSet.empty(),
     fresh: [],
     integrationResponsibilities: [responsibility],
     responsibilities: [],
@@ -655,7 +655,7 @@ const identityFreeActionFor = (
   transition: SettlementPlannedTransition
 ): { readonly _tag: "IdentityFreeAction"; readonly proposal: IdentityFreeDeliveryProposal } => {
   const derived = deliveryProposalsOf({
-    acceptedOperationIds: new Set(),
+    acceptedOperationIds: HashSet.empty(),
     fresh: [],
     integrationResponsibilities: [],
     responsibilities: [

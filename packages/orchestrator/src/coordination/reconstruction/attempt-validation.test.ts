@@ -129,7 +129,7 @@ it.each([64, 256])("bounds Stop disposition validation after %i unrelated same-t
   }
   // This pure validator seam deliberately diagnoses an incomplete chronology; it does not manufacture Accepted.
   const expected = new Array<WorkflowJournalHistoryIssue>()
-  validateAttemptStop(candidate, runId, records, emptyIndexes(), expected)
+  validateAttemptStop(candidate, runId, records, emptyIndexes(), (issue) => expected.push(issue))
   const evidence = journalEvidenceFrom(records)
   const actual = new Array<WorkflowJournalHistoryIssue>()
   let visits = 0
@@ -138,7 +138,7 @@ it.each([64, 256])("bounds Stop disposition validation after %i unrelated same-t
     visits += 1
   })
   try {
-    validateAttemptStop(candidate, runId, evidence, emptyIndexes(), actual)
+    validateAttemptStop(candidate, runId, evidence, emptyIndexes(), (issue) => actual.push(issue))
   } finally {
     stop()
   }
@@ -176,7 +176,7 @@ it.each([64, 256])("bounds checking a new direction after %i same-attempt Contin
     visits += 1
   })
   try {
-    validateAttemptChoice(candidate, runId, evidence, emptyIndexes(), [])
+    validateAttemptChoice(candidate, runId, evidence, emptyIndexes(), () => undefined)
   } finally {
     stop()
   }
@@ -228,7 +228,7 @@ it.each([64, 256])("bounds exact abandoned-claim lookup after %i unrelated same-
     visits += 1
   })
   try {
-    validateAttemptStop(candidate, runId, evidence, emptyIndexes(), issues)
+    validateAttemptStop(candidate, runId, evidence, emptyIndexes(), (issue) => issues.push(issue))
   } finally {
     stop()
   }
@@ -255,8 +255,10 @@ it.each([64, 256])("bounds exact abandoned-claim lookup after %i unrelated same-
   const afterAbandonment = { ...candidate, position: JournalPosition.make(size + 2) }
   const coldIssues = new Array<WorkflowJournalHistoryIssue>()
   const indexedIssues = new Array<WorkflowJournalHistoryIssue>()
-  validateAttemptStop(afterAbandonment, runId, withOwnAbandonment, emptyIndexes(), coldIssues)
-  validateAttemptStop(afterAbandonment, runId, journalEvidenceFrom(withOwnAbandonment), emptyIndexes(), indexedIssues)
+  validateAttemptStop(afterAbandonment, runId, withOwnAbandonment, emptyIndexes(), (issue) => coldIssues.push(issue))
+  validateAttemptStop(afterAbandonment, runId, journalEvidenceFrom(withOwnAbandonment), emptyIndexes(), (issue) =>
+    indexedIssues.push(issue)
+  )
   expect(indexedIssues).toEqual(coldIssues)
   expect(indexedIssues.map((issue) => ("detail" in issue ? issue.detail : issue._tag))).toEqual([
     "an abandoned attempt claim release requires explicit stopped-attempt authority"
@@ -265,7 +267,7 @@ it.each([64, 256])("bounds exact abandoned-claim lookup after %i unrelated same-
 
 const validate = (source: JournalHistorySource): ReadonlyArray<WorkflowJournalHistoryIssue> => {
   const issues = new Array<WorkflowJournalHistoryIssue>()
-  validateAttemptChoice(record, runId, source, emptyIndexes(), issues)
+  validateAttemptChoice(record, runId, source, emptyIndexes(), (issue) => issues.push(issue))
   return issues
 }
 
@@ -372,7 +374,7 @@ it("rejects the same Stop intent without its applied operator choice from cold r
   }
   const validateStop = (source: JournalHistorySource): ReadonlyArray<WorkflowJournalHistoryIssue> => {
     const issues = new Array<WorkflowJournalHistoryIssue>()
-    validateAttemptStop(stoppage, runId, source, emptyIndexes(), issues)
+    validateAttemptStop(stoppage, runId, source, emptyIndexes(), (issue) => issues.push(issue))
     return issues
   }
   const records = [stoppage]

@@ -1,3 +1,4 @@
+import { HashSet } from "effect"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { OperationId } from "../../workflow/identity.js"
 import { acceptedOperationIdOf } from "../../workflow/registry/event-descriptor.js"
@@ -18,6 +19,8 @@ import type { CurrentDeliveryFrame } from "../run/current-delivery-frame.js"
 import type { ExactTicketDeliveryEvidence, TicketDeliveryEvidence } from "./relations.js"
 import {
   isJournalRecordEvidence,
+  journalAcceptedOperationIds,
+  journalPendingReadOperationIds,
   journalRecordsForOperationId,
   journalRecordsOfKind,
   type JournalHistorySource
@@ -86,66 +89,39 @@ const integrationEvidenceOf = (
   ]
 }
 
-const initiatingOperationKinds = [
-  "PlannedAttemptReplaced",
-  "TaskTrackerReadIntentRecorded",
-  "GitReadIntentRecorded",
-  "TaskClaimAcquisitionIntended",
-  "TaskClaimReleaseIntended",
-  "TaskAttemptPlanned",
-  "TaskWorktreeReconciliationIntended"
-] as const
-
 /** Every operation identity whose initiating journal fact is available to delivery proposal derivation. */
-const acceptedOperationIdsByPrefix = new WeakMap<object, ReadonlySet<OperationId>>()
-
-export const acceptedOperationIdsOf = (records: JournalHistorySource): ReadonlySet<OperationId> => {
-  const cached = acceptedOperationIdsByPrefix.get(records)
-  if (cached !== undefined) return cached
-  const operationIds = new Set<OperationId>()
-  for (const kind of initiatingOperationKinds) {
-    for (const { event } of journalRecordsOfKind(records, kind)) {
-      const accepted = acceptedOperationIdOf(event)
-      if (accepted !== undefined) operationIds.add(accepted)
-    }
+export const acceptedOperationIdsOf = (records: JournalHistorySource): HashSet.HashSet<OperationId> => {
+  if (isJournalRecordEvidence(records)) return journalAcceptedOperationIds(records)
+  let operationIds = HashSet.empty<OperationId>()
+  for (const { event } of records) {
+    const accepted = acceptedOperationIdOf(event)
+    if (accepted !== undefined) operationIds = HashSet.add(operationIds, accepted)
   }
-  acceptedOperationIdsByPrefix.set(records, operationIds)
   return operationIds
 }
 
 /** Ordinary tracker or Git read identities whose journal-first intent has no typed outcome yet. */
-export const pendingReadOperationIdsOf = (records: JournalHistorySource): ReadonlySet<OperationId> => {
-  const completed = new Set(
-    [
-      ...journalRecordsOfKind(records, "TaskTrackerFactsObserved"),
-      ...journalRecordsOfKind(records, "PlannedAttemptWorktreeObserved"),
-      ...journalRecordsOfKind(records, "TargetLineageObserved"),
-      ...journalRecordsOfKind(records, "AttemptRestartAuthorityReadFailed")
-    ].flatMap(({ event }) => {
-      if (event._tag === "TaskTrackerFactsObserved") return [event.operationId]
-      if (event._tag === "PlannedAttemptWorktreeObserved" || event._tag === "TargetLineageObserved") {
-        return [event.operationId]
+export const pendingReadOperationIdsOf = (records: JournalHistorySource): HashSet.HashSet<OperationId> => {
+  if (isJournalRecordEvidence(records)) return journalPendingReadOperationIds(records)
+  let completed = HashSet.empty<OperationId>()
+  let pending = HashSet.empty<OperationId>()
+  for (const { event } of records) {
+    if (event._tag === "GitReadIntentRecorded" || event._tag === "TaskTrackerReadIntentRecorded") {
+      if (!HashSet.has(completed, event.operation.operationId)) {
+        pending = HashSet.add(pending, event.operation.operationId)
       }
-      if (
-        event._tag === "AttemptRestartAuthorityReadFailed" &&
-        event.failure._tag !== "AttemptRestartTaskFactsReadFailure"
-      ) {
-        return [event.operationId]
-      }
-      return []
-    })
-  )
-  return new Set(
-    [
-      ...journalRecordsOfKind(records, "GitReadIntentRecorded"),
-      ...journalRecordsOfKind(records, "TaskTrackerReadIntentRecorded")
-    ].flatMap(({ event }) =>
-      (event._tag === "GitReadIntentRecorded" || event._tag === "TaskTrackerReadIntentRecorded") &&
-      !completed.has(event.operation.operationId)
-        ? [event.operation.operationId]
-        : []
-    )
-  )
+    } else if (
+      event._tag === "TaskTrackerFactsObserved" ||
+      event._tag === "PlannedAttemptWorktreeObserved" ||
+      event._tag === "TargetLineageObserved" ||
+      (event._tag === "AttemptRestartAuthorityReadFailed" &&
+        event.failure._tag !== "AttemptRestartTaskFactsReadFailure")
+    ) {
+      completed = HashSet.add(completed, event.operationId)
+      pending = HashSet.remove(pending, event.operationId)
+    }
+  }
+  return pending
 }
 
 const journaledIntegrationEvidenceByPrefix = new WeakMap<object, ReadonlyArray<ExactTicketDeliveryEvidence>>()

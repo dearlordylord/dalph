@@ -1,4 +1,4 @@
-import { HashMap, HashSet, Option } from "effect"
+import { Chunk, HashMap, HashSet, Option } from "effect"
 import type { AttemptId, PlannedTaskAttempt, RunId } from "@dalph/contracts"
 import type { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import type { OperationId } from "../../workflow/identity.js"
@@ -55,22 +55,48 @@ export interface FoldIndexes extends IntegrationHistoryIndexes {
 export const mapGet = <Key, Value>(map: HashMap.HashMap<Key, Value>, key: Key): Value | undefined =>
   Option.getOrUndefined(HashMap.get(map, key))
 
+export type WorkflowJournalHistoryIssueReporter<I extends WorkflowJournalHistoryIssue = WorkflowJournalHistoryIssue> = (
+  issue: I
+) => void
+
+export interface WorkflowJournalHistoryIssueCollector<
+  I extends WorkflowJournalHistoryIssue = WorkflowJournalHistoryIssue
+> {
+  readonly isEmpty: () => boolean
+  readonly report: WorkflowJournalHistoryIssueReporter<I>
+  readonly toReadonlyArray: () => ReadonlyArray<I>
+}
+
+/** Ordered process-local diagnostics backed by a persistent Chunk rather than a shared mutable Array. */
+export const makeWorkflowJournalHistoryIssueCollector = <
+  I extends WorkflowJournalHistoryIssue
+>(): WorkflowJournalHistoryIssueCollector<I> => {
+  let collected = Chunk.empty<I>()
+  return {
+    isEmpty: (): boolean => Chunk.isEmpty(collected),
+    report: (issue: I): void => {
+      collected = Chunk.append(collected, issue)
+    },
+    toReadonlyArray: (): ReadonlyArray<I> => Chunk.toReadonlyArray(collected)
+  }
+}
+
 export const identityIssue = (
-  issues: Array<WorkflowJournalHistoryIssue>,
+  report: WorkflowJournalHistoryIssueReporter<WorkflowJournalHistoryIdentityIssue>,
   runId: RunId,
   position: JournalPosition,
   detail: string
 ): void => {
-  issues.push(new WorkflowJournalHistoryIdentityIssue({ detail, position, runId }))
+  report(new WorkflowJournalHistoryIdentityIssue({ detail, position, runId }))
 }
 
 export const semanticIssue = (
-  issues: Array<WorkflowJournalHistoryIssue> | Array<WorkflowJournalHistorySemanticIssue>,
+  report: WorkflowJournalHistoryIssueReporter<WorkflowJournalHistorySemanticIssue>,
   runId: RunId,
   position: JournalPosition,
   detail: string
 ): void => {
-  issues.push(new WorkflowJournalHistorySemanticIssue({ detail, position, runId }))
+  report(new WorkflowJournalHistorySemanticIssue({ detail, position, runId }))
 }
 
 export const emptyIndexes = (): FoldIndexes => ({

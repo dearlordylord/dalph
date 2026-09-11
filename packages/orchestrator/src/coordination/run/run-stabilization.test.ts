@@ -15,7 +15,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Ref, SubscriptionRef } from "effect"
+import { HashSet, Deferred, Effect, Fiber, Layer, Ref, SubscriptionRef } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { projectTrackerSnapshot, type TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -354,7 +354,7 @@ const activeVerticalSuspensionProposal = () => {
   })
   const proposal = deliveryProposalsOf({
     acceptedAt: JournalPosition.make(1),
-    acceptedOperationIds: new Set(),
+    acceptedOperationIds: HashSet.empty(),
     fresh: [],
     responsibilities: [
       {

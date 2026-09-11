@@ -14,7 +14,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { Deferred, Effect, Fiber, Layer, Queue, Semaphore, Stream, SubscriptionRef } from "effect"
+import { HashSet, Deferred, Effect, Fiber, Layer, Queue, Semaphore, Stream, SubscriptionRef } from "effect"
 import { readFileSync } from "node:fs"
 import { fileURLToPath } from "node:url"
 import { expect } from "vitest"
@@ -102,9 +102,9 @@ const samePositionProposals = (
   aTransition: typeof samePositionWorktreeTransition | typeof samePositionLineageTransition
 ): ReadonlyArray<DeliveryActionProposal> =>
   deliveryProposalsOf({
-    acceptedOperationIds: new Set(),
+    acceptedOperationIds: HashSet.empty(),
     fresh: [],
-    pendingReadOperationIds: new Set([aTransition.operation.operationId, samePositionClaimOperation.operationId]),
+    pendingReadOperationIds: HashSet.make(aTransition.operation.operationId, samePositionClaimOperation.operationId),
     runId,
     transitions: [aTransition, samePositionClaimTransition]
   }).ticketDelivery

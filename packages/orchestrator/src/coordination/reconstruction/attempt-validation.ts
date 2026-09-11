@@ -12,8 +12,16 @@ import type { OperationId } from "../../workflow/identity.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import type { WorkflowOperation } from "../../workflow/registry/operation.js"
-import type { WorkflowJournalHistoryIssue, WorkflowJournalHistorySemanticIssue } from "./history-result.js"
-import { emptyIndexes, identityIssue, mapGet, semanticIssue, type FoldIndexes } from "./history-kernel-state.js"
+import type { WorkflowJournalHistoryIdentityIssue, WorkflowJournalHistorySemanticIssue } from "./history-result.js"
+import {
+  emptyIndexes,
+  identityIssue,
+  makeWorkflowJournalHistoryIssueCollector,
+  mapGet,
+  semanticIssue,
+  type FoldIndexes,
+  type WorkflowJournalHistoryIssueReporter
+} from "./history-kernel-state.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../../workflow/protocols/planned-attempt-worktree-observation/protocol.js"
 import { evaluatePlannedAttemptContinuationAuthorization } from "../../workflow/protocols/planned-attempt-continuation/protocol.js"
 import {
@@ -98,7 +106,7 @@ const validateAttemptChoiceAuthority = (
   record: AttemptChoiceRecord,
   runId: RunId,
   prior: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   const { subject } = record.event
   const bindsRun = () => record.event.requestId.runId === runId && subject.plannedAttempt.runId === runId
@@ -164,7 +172,7 @@ export const validateAttemptChoice = (
   runId: RunId,
   records: JournalHistorySource,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   if (record.event._tag !== "AttemptChoiceApplied") return indexes
   const { subject } = record.event
@@ -466,7 +474,7 @@ export const validateAttemptStop = (
   runId: RunId,
   records: JournalHistorySource,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter<WorkflowJournalHistoryIdentityIssue | WorkflowJournalHistorySemanticIssue>
 ): FoldIndexes => {
   const event = record.event
   const prior = historyBefore(records, record.position)
@@ -798,20 +806,22 @@ export const validateAttemptStop = (
 export const validateAttemptStopHistory = (
   runId: RunId,
   records: ReadonlyArray<JournalRecord>
-): ReadonlyArray<WorkflowJournalHistorySemanticIssue> => {
-  const issues = new Array<WorkflowJournalHistorySemanticIssue>()
+): ReadonlyArray<WorkflowJournalHistoryIdentityIssue | WorkflowJournalHistorySemanticIssue> => {
+  const collector = makeWorkflowJournalHistoryIssueCollector<
+    WorkflowJournalHistoryIdentityIssue | WorkflowJournalHistorySemanticIssue
+  >()
   let indexes = emptyIndexes()
   for (const record of records) {
-    indexes = validateAttemptStop(record, runId, records, indexes, issues)
+    indexes = validateAttemptStop(record, runId, records, indexes, collector.report)
   }
-  return issues
+  return collector.toReadonlyArray()
 }
 
 export const validateOperationEvent = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   const next = recordGitReadIntent(record, indexes)
   validateWorktreeObservationIntent(record, runId, indexes, issues)
@@ -824,7 +834,7 @@ export const validateContinuationAuthorization = (
   record: JournalRecord,
   runId: RunId,
   records: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (record.event._tag !== "PlannedAttemptContinuationAuthorized") return
   const event = record.event
@@ -837,7 +847,7 @@ export const validateContinuationAuthorization = (
     semanticIssue(issues, runId, record.position, evaluation.detail)
   }
 }
-export const recordGitReadIntent = (record: JournalRecord, indexes: FoldIndexes): FoldIndexes => {
+const recordGitReadIntent = (record: JournalRecord, indexes: FoldIndexes): FoldIndexes => {
   if (record.event._tag !== "GitReadIntentRecorded") return indexes
   return {
     ...indexes,
@@ -852,11 +862,11 @@ const gitReadOperationForObservation = (
   return mapGet(indexes.gitReadIntents, operationId)
 }
 
-export const validateWorktreeObservationIntent = (
+const validateWorktreeObservationIntent = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (record.event._tag === "PlannedAttemptWorktreeObserved") {
     const intent = gitReadOperationForObservation(indexes, record.event.operationId)
@@ -874,11 +884,11 @@ export const validateWorktreeObservationIntent = (
   }
 }
 
-export const validateTargetLineageObservationIntent = (
+const validateTargetLineageObservationIntent = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (record.event._tag === "TargetLineageObserved") {
     const intent = gitReadOperationForObservation(indexes, record.event.operationId)
@@ -915,7 +925,7 @@ export const validateAttemptRestartAuthorityReadFailure = (
   record: JournalRecord,
   runId: RunId,
   records: JournalHistorySource,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): void => {
   if (record.event._tag !== "AttemptRestartAuthorityReadFailed") return
   const event = record.event
@@ -961,11 +971,11 @@ export const validateAttemptRestartAuthorityReadFailure = (
   }
 }
 
-export const validateOperationDescriptor = (
+const validateOperationDescriptor = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   const descriptor = describeJournalEvent(record.event)
   if (descriptor._tag !== "OperationEventDescriptor") return indexes
@@ -993,7 +1003,7 @@ const validateRequiredOperationIds = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>,
+  issues: WorkflowJournalHistoryIssueReporter,
   descriptor: OperationEventDescriptor
 ): void => {
   for (const requiredOperationId of descriptor.requiredOperationIds) {
@@ -1012,7 +1022,7 @@ const validateRequiredPredecessorKinds = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>,
+  issues: WorkflowJournalHistoryIssueReporter,
   descriptor: OperationEventDescriptor
 ): void => {
   for (const requiredKind of descriptor.requiredPredecessorKinds) {
@@ -1043,7 +1053,7 @@ const validateRequiredRecordPredecessor = (
   record: JournalRecord,
   runId: RunId,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>,
+  issues: WorkflowJournalHistoryIssueReporter,
   descriptor: OperationEventDescriptor
 ): void => {
   if (
@@ -1611,7 +1621,7 @@ export const validatePlannedAttemptReplacement = (
   runId: RunId,
   records: JournalHistorySource,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   if (record.event._tag !== "PlannedAttemptReplaced") return indexes
   const event = record.event
@@ -1670,7 +1680,7 @@ export const validatePlan = (
   runId: RunId,
   recordsThroughPlan: JournalHistorySource,
   indexes: FoldIndexes,
-  issues: Array<WorkflowJournalHistoryIssue>
+  issues: WorkflowJournalHistoryIssueReporter
 ): FoldIndexes => {
   if (record.event._tag !== "TaskAttemptPlanned" && record.event._tag !== "PlannedAttemptReplaced") return indexes
   const plannedAttempt =

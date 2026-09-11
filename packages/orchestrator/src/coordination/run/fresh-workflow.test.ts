@@ -12,7 +12,7 @@ import {
   WorktreeLocator,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
-import { Effect, Layer, Option, Result } from "effect"
+import { HashSet, Effect, Layer, Option, Result } from "effect"
 import { expect } from "vitest"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
 import { taskTrackerTargetKey } from "../../authorities/task-tracker/target.js"
@@ -400,7 +400,7 @@ it.effect("continues a valid restarted replacement successor without resurrectin
     expect(beginContinuations.success).toHaveLength(1)
     const beginProposal = deliveryProposalsOf({
       acceptedAt: successorReduction.runState.appliedThrough,
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: beginContinuations.success,
       runId: replacementRunId,
       transitions: beginDecisions.map(({ transition }) => transition)

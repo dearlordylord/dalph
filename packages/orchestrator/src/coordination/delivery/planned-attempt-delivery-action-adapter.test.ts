@@ -12,7 +12,7 @@ import {
   makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { Effect, Result, Stream } from "effect"
+import { HashSet, Effect, Result, Stream } from "effect"
 import { expect } from "vitest"
 import { TaskLifecycle, type Task } from "../../authorities/task-tracker/task.js"
 import type { IntegrationTargetResourceController } from "../admission/integration-target-resource.js"
@@ -105,7 +105,7 @@ it.effect("does not bind or enter the executor when responsibility append fails"
       task
     })
     const [proposal] = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [commitment])),
       runId,
       transitions: [transition]
@@ -171,7 +171,7 @@ it.effect("does not enter the executor when binding follows a successful respons
       task
     })
     const [proposal] = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [commitment])),
       runId,
       transitions: [transition]

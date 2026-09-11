@@ -26,7 +26,7 @@ import {
 } from "@dalph/contracts"
 import { describe, expect, expectTypeOf, it } from "vitest"
 import { it as effectIt } from "@effect/vitest"
-import { Context, Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Result, Stream } from "effect"
+import { HashSet, Context, Deferred, Effect, Fiber, Layer, Option, Queue, Ref, Result, Stream } from "effect"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
 import { GraphProjectionError, projectTrackerSnapshot } from "../../authorities/task-tracker/graph.js"
@@ -444,7 +444,7 @@ type FreshTrackerGraphProposal = Extract<
 const isFreshTrackerGraphProposal = (proposal: TrackerGraphActionProposal): proposal is FreshTrackerGraphProposal =>
   proposal.actionIdentity._tag === "FreshOperationIdRequired"
 
-const proposalsFor = (transition: Transition, acceptedOperationIds: ReadonlySet<OperationId> = new Set()) => {
+const proposalsFor = (transition: Transition, acceptedOperationIds: HashSet.HashSet<OperationId> = HashSet.empty()) => {
   const result = deliveryProposalsOf({
     acceptedOperationIds,
     fresh: [],
@@ -1282,7 +1282,7 @@ describe("delivery proposal route matrix", () => {
     ]
 
     for (const transition of transitions) {
-      expect(proposalsFor(transition, new Set([operationId]))).toMatchObject({
+      expect(proposalsFor(transition, HashSet.make(operationId))).toMatchObject({
         issues: [],
         proposals: [
           {
@@ -1320,7 +1320,7 @@ describe("delivery proposal route matrix", () => {
       subject: { observedTaskRevision: TaskRevision.make("retry-stopped-release-F2"), plannedAttempt }
     })
 
-    expect(proposalsFor(transition, new Set([operationId]))).toMatchObject({
+    expect(proposalsFor(transition, HashSet.make(operationId))).toMatchObject({
       issues: [],
       proposals: [
         { actionIdentity: { _tag: "ExistingOperationId" }, route: { _tag: "AcceptedWorkflowRoute", transition } }
@@ -1396,10 +1396,10 @@ describe("delivery proposal route matrix", () => {
 
     for (const { actionTag, operationId, transition } of observations) {
       const fresh = proposalsFor(transition)
-      const accepted = proposalsFor(transition, new Set([operationId]))
+      const accepted = proposalsFor(transition, HashSet.make(operationId))
 
       expect(proposalsFor(transition)).toEqual(fresh)
-      expect(proposalsFor(transition, new Set([operationId]))).toEqual(accepted)
+      expect(proposalsFor(transition, HashSet.make(operationId))).toEqual(accepted)
       expect(fresh).toMatchObject({
         issues: [],
         proposals: [
@@ -1436,7 +1436,7 @@ describe("delivery proposal route matrix", () => {
         }
       ]
     })
-    expect(proposalsFor(claimTransition, new Set([responsibleClaimOperation.operationId]))).toMatchObject({
+    expect(proposalsFor(claimTransition, HashSet.make(responsibleClaimOperation.operationId))).toMatchObject({
       issues: [],
       proposals: [{ actionIdentity: { _tag: "ExistingOperationId" } }]
     })
@@ -1688,7 +1688,7 @@ describe("delivery proposal route matrix", () => {
       task
     })
     const [proposal] = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: Result.getOrThrow(
         freshContinuationDecisionsOf(
           [{ step, transition: beginTransition }],
@@ -3178,7 +3178,7 @@ describe("delivery proposal route matrix", () => {
         taskId
       })
       const proposal = deliveryProposalsOf({
-        acceptedOperationIds: new Set<OperationId>(),
+        acceptedOperationIds: HashSet.empty<OperationId>(),
         fresh: Result.getOrThrow(
           freshContinuationDecisionsOf(
             [{ step, transition }],
@@ -3245,7 +3245,7 @@ describe("delivery proposal route matrix", () => {
         taskId
       })
       const proposal = deliveryProposalsOf({
-        acceptedOperationIds: new Set<OperationId>(),
+        acceptedOperationIds: HashSet.empty<OperationId>(),
         fresh: Result.getOrThrow(freshContinuationDecisionsOf([{ step, transition }], [])),
         runId,
         transitions: [transition]
@@ -5438,7 +5438,7 @@ describe("delivery proposal route matrix", () => {
       }
 
       const acceptedTransition = RunnableFrontierTransition.CheckTaskClaim({ operationId: recoveryOperationId, taskId })
-      const acceptedProposal = proposalsFor(acceptedTransition, new Set([recoveryOperationId])).proposals[0]
+      const acceptedProposal = proposalsFor(acceptedTransition, HashSet.make(recoveryOperationId)).proposals[0]
       if (acceptedProposal === undefined || !isAcceptedIdentityProposal(acceptedProposal)) {
         return yield* Effect.die("missing accepted live-dispatch proposal")
       }

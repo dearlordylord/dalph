@@ -1,5 +1,5 @@
 import { it } from "@effect/vitest"
-import { Effect, Ref, Stream } from "effect"
+import { HashSet, Effect, Ref, Stream } from "effect"
 import { expect } from "vitest"
 import { TaskRevision } from "@dalph/contracts"
 import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
@@ -37,7 +37,7 @@ const isIdentityFreeProposal = (proposal: DeliveryActionProposal): proposal is I
 
 const proposalFor = (transition: Transition): IdentityFreeDeliveryProposal | undefined => {
   const proposals = deliveryProposalsOf({
-    acceptedOperationIds: new Set(),
+    acceptedOperationIds: HashSet.empty(),
     fresh: [],
     integrationResponsibilities: [responsibility],
     responsibilities: [],

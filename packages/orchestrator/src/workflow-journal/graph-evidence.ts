@@ -94,15 +94,15 @@ const correlatedPlans = (
     const predecessor = lookup(id)
     return predecessor?._tag === "RecordTaskAttemptPlan" ? [predecessor] : []
   })
-  const unique = new Map<string, PlannedTaskAttempt>()
+  let unique = HashMap.empty<string, PlannedTaskAttempt>()
   for (const plan of namedPlans) {
     if (
       operation.readShape.explicitlyCoveredTaskIds.includes(plan.plannedAttempt.taskId) &&
       continuationReadNamesExactPlan(operation, namedPlans, plan.plannedAttempt)
     )
-      unique.set(planKey(plan.plannedAttempt), plan.plannedAttempt)
+      unique = HashMap.set(unique, planKey(plan.plannedAttempt), plan.plannedAttempt)
   }
-  return [...unique.values()]
+  return Array.from(HashMap.values(unique))
 }
 
 /** Shares persistent observation indexes; only a new complete payload is projected, exact reconfirmations reuse its snapshot. */

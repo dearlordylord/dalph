@@ -10,7 +10,7 @@ import {
   WorktreeLocator
 } from "@dalph/contracts"
 import { it } from "@effect/vitest"
-import { Effect, Option, Ref, Semaphore } from "effect"
+import { HashSet, Effect, Option, Ref, Semaphore } from "effect"
 import { expect } from "vitest"
 import { TaskLifecycle } from "../../authorities/task-tracker/task.js"
 import { taskRevisionFor } from "../../authorities/task-tracker/graph.js"
@@ -45,7 +45,7 @@ it.effect("does not admit a fresh candidate after a ready existing responsibilit
       plannedAttempt
     })
     const existing = deliveryProposalsOf({
-      acceptedOperationIds: new Set(),
+      acceptedOperationIds: HashSet.empty(),
       fresh: [],
       responsibilities: [
         { _tag: "PlannedAttemptExecutorWorkResponsibility", beganAt: JournalPosition.make(1), plannedAttempt }

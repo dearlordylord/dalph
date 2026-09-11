@@ -20,7 +20,20 @@ import {
 } from "@dalph/contracts"
 import { NodeCrypto } from "@effect/platform-node"
 import { it } from "@effect/vitest"
-import { Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Ref, Scope, Stream, SubscriptionRef } from "effect"
+import {
+  HashSet,
+  Clock,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Ref,
+  Scope,
+  Stream,
+  SubscriptionRef
+} from "effect"
 import { expect } from "vitest"
 import { makeApplicationExitShell } from "../application-exit/application-shell.js"
 import { CoordinatorOwnership } from "../../authorities/coordinator-ownership/ownership.js"
@@ -394,7 +407,7 @@ const suspensionProposal = (runId: RunId, taskId: TaskId, acceptedAt: JournalPos
   const facts = executorFacts(runId, taskId, ResponsibilityDisposition.PlannedAttemptExecutorSuspensionRequested())
   const proposal = deliveryProposalsOf({
     acceptedAt,
-    acceptedOperationIds: new Set(),
+    acceptedOperationIds: HashSet.empty(),
     fresh: [],
     responsibilities: [facts.responsibility],
     runId,
@@ -1379,7 +1392,7 @@ it.effect("Alice disconnects while Run R reaches its existing planned-worktree s
       const transition = RunnableFrontierTransition.ReconcileTaskWorktree({ operationId, taskId: attempt.taskId })
       const proposal = deliveryProposalsOf({
         acceptedAt,
-        acceptedOperationIds: new Set([operationId]),
+        acceptedOperationIds: HashSet.make(operationId),
         fresh: [],
         responsibilities: [responsibility],
         runId,

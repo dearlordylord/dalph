@@ -1,4 +1,4 @@
-import { HashMap, Option, Schema } from "effect"
+import { HashMap, HashSet, Option, Schema } from "effect"
 import { CompletionTaskClaim, completionTaskClaimEquals } from "../workflow/protocols/integration-finality/events.js"
 import type { JournalRecord } from "./store.js"
 
@@ -29,7 +29,7 @@ const isReplacementOutcome = (record: JournalRecord): record is ReplacementOutco
   record.event._tag === "CompletionClaimReplaced"
 
 /** Exact chronological pair, including an arbitrary recorded replacement operation identity. */
-export interface SettledCompletionClaimReplacement {
+interface SettledCompletionClaimReplacement {
   readonly intent: ReplacementIntent
   readonly outcome: ReplacementOutcome
 }
@@ -87,12 +87,12 @@ export const appendSettledCompletionClaimReplacementEvidence = (
   return retain({ ...roots, settled: HashMap.set(roots.settled, key, { intent, outcome }) })
 }
 
-const observers = new Set<(event: "SettlementLookup") => void>()
+let observers = HashSet.empty<(event: "SettlementLookup") => void>()
 /** Test-only deterministic lookup observer; never exported from the production barrel. */
 export const observeSettledCompletionClaimReplacementLookup = (observer: (event: "SettlementLookup") => void) => {
-  observers.add(observer)
+  observers = HashSet.add(observers, observer)
   return () => {
-    observers.delete(observer)
+    observers = HashSet.remove(observers, observer)
   }
 }
 

@@ -76,7 +76,10 @@ const records: ReadonlyArray<JournalRecord> = [
 
 const validate = (source: JournalHistorySource): ReadonlyArray<string> => {
   const issues: Array<WorkflowJournalHistoryIssue> = []
-  records.reduce((indexes, record) => validateExecutorEvent(record, runId, source, indexes, issues), emptyIndexes())
+  records.reduce(
+    (indexes, record) => validateExecutorEvent(record, runId, source, indexes, (issue) => issues.push(issue)),
+    emptyIndexes()
+  )
   return issues.map(workflowJournalHistoryIssueDetail)
 }
 
@@ -96,11 +99,15 @@ it("keeps a malformed duplicate-key Begin visible to later cold diagnostics", ()
   const laterBegin = command(2, "Begin", 4)
   const coldRecords = [responsibility, resume, skippedDuplicateBegin, laterBegin]
   const setupIssues: Array<WorkflowJournalHistoryIssue> = []
-  const afterResponsibility = validateExecutorEvent(responsibility, runId, coldRecords, emptyIndexes(), setupIssues)
-  const afterResume = validateExecutorEvent(resume, runId, coldRecords, afterResponsibility, setupIssues)
+  const afterResponsibility = validateExecutorEvent(responsibility, runId, coldRecords, emptyIndexes(), (issue) =>
+    setupIssues.push(issue)
+  )
+  const afterResume = validateExecutorEvent(resume, runId, coldRecords, afterResponsibility, (issue) =>
+    setupIssues.push(issue)
+  )
   const issues: Array<WorkflowJournalHistoryIssue> = []
 
-  validateExecutorEvent(laterBegin, runId, coldRecords, afterResume, issues)
+  validateExecutorEvent(laterBegin, runId, coldRecords, afterResume, (issue) => issues.push(issue))
 
   expect(issues.map(workflowJournalHistoryIssueDetail)).toContain(
     `executor begin for attempt ${plannedAttempt.attemptId} follows a prior begin intent`
