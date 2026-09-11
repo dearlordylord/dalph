@@ -539,11 +539,7 @@ export const reconcileProviderRunFailureQuarantine = Effect.fn(
   const run = input.run
   const runId = runIdFor(run)
   const records = yield* accepted.readAccepted(runId)
-  const predecessors = validateProviderRunPredecessors(
-    records,
-    run,
-    JournalPosition.make(records.records.length + 1)
-  )
+  const predecessors = validateProviderRunPredecessors(records, run, JournalPosition.make(records.records.length + 1))
   if (predecessors._tag === "Invalid") return yield* reject(run, predecessors.detail)
 
   const detail = input.detail

@@ -161,7 +161,8 @@ const hasMatchingRunStart = (records: JournalHistorySource, record: IntegratorRe
       candidate.event._tag === "IntegratorRunStarted" &&
       (run.ordinal !== integratorRetryRunOrdinal || candidate.key === integratorRunStartedRecordKey(run)) &&
       integratorRunCorrelationsEqual(candidate.event.run, run)
-    ) return true
+    )
+      return true
   }
   return false
 }
@@ -264,10 +265,7 @@ const invalidCandidateEvidenceMatchesRecords = (
     cause
   )
 
-const conclusiveEvidenceMatchesRecords = (
-  records: JournalHistorySource,
-  quarantine: QuarantineRecord
-): boolean => {
+const conclusiveEvidenceMatchesRecords = (records: JournalHistorySource, quarantine: QuarantineRecord): boolean => {
   /* v8 ignore next -- @preserve this helper is called only after quarantineEvidenceMatchesRecords narrows the basis to ConclusiveResult. */
   if (quarantine.event.basis._tag !== "ConclusiveResult") return false
   const { cause, evidence } = quarantine.event.basis
@@ -338,10 +336,7 @@ const retryEvidencePositionsAreCausal = (
   direction.position < observationRecord.position &&
   observationRecord.position < quarantine.position
 
-function retryTargetHeadEvidenceMatchesRecords(
-  records: JournalHistorySource,
-  quarantine: QuarantineRecord
-): boolean {
+function retryTargetHeadEvidenceMatchesRecords(records: JournalHistorySource, quarantine: QuarantineRecord): boolean {
   /* v8 ignore next -- @preserve quarantineEvidenceMatchesRecords dispatches here only for RetryTargetHeadChanged bases. */
   if (quarantine.event.basis._tag !== "RetryTargetHeadChanged") return false
   const { basis, correlation } = quarantine.event
@@ -356,15 +351,10 @@ function retryTargetHeadEvidenceMatchesRecords(
   )
 }
 
-const promotionStaleEvidenceMatchesRecords = (
-  records: JournalHistorySource,
-  quarantine: QuarantineRecord
-): boolean => validatePromotionStaleQuarantineEvidence(records, quarantine)._tag === "Valid"
+const promotionStaleEvidenceMatchesRecords = (records: JournalHistorySource, quarantine: QuarantineRecord): boolean =>
+  validatePromotionStaleQuarantineEvidence(records, quarantine)._tag === "Valid"
 
-function quarantineEvidenceMatchesRecords(
-  records: JournalHistorySource,
-  quarantine: QuarantineRecord
-): boolean {
+function quarantineEvidenceMatchesRecords(records: JournalHistorySource, quarantine: QuarantineRecord): boolean {
   const { basis } = quarantine.event
   if (basis._tag === "ConclusiveResult") return conclusiveEvidenceMatchesRecords(records, quarantine)
   if (basis._tag === "ProviderRunFailure") return providerFailureEvidenceMatchesRecords(records, quarantine, basis)

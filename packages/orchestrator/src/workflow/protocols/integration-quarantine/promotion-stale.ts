@@ -113,7 +113,10 @@ export const pendingPromotionStaleIntegrationQuarantineFor = (
   const input = PromotionStaleIntegrationQuarantineInput.make({ correlation, targetPromotionStaleAt: stale.position })
   const basis = basisFor(input, stale)
   return sameEvidence(
-    journalRecordByKey(records, integrationQuarantinedRecordKey(correlation.qualifiedCandidate.run.session.sessionId, basis)),
+    journalRecordByKey(
+      records,
+      integrationQuarantinedRecordKey(correlation.qualifiedCandidate.run.session.sessionId, basis)
+    ),
     input,
     basis
   )

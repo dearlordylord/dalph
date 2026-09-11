@@ -1,9 +1,5 @@
 import type { JournalRecord } from "./store.js"
-import {
-  isJournalRecordEvidence,
-  journalRecordByKey,
-  type JournalHistorySource
-} from "./record-evidence.js"
+import { isJournalRecordEvidence, journalRecordByKey, type JournalHistorySource } from "./record-evidence.js"
 
 /** Total lookup result for one journal key; duplicate history is not absence. */
 type ExactJournalRecordAtKey =

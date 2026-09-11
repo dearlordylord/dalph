@@ -88,9 +88,7 @@ const isCompletionTaskRequestLookupRecord = (record: JournalRecord): record is C
 const latestCompletionTaskLookupFor = (
   records: JournalHistorySource,
   request: CompletionTaskRequest
-):
-  | CompletionTaskRequestLookupRecord
-  | undefined => {
+): CompletionTaskRequestLookupRecord | undefined => {
   let latest: CompletionTaskRequestLookupRecord | undefined
   for (const record of journalRecordsForOperationId(records, request.operationId)) {
     if (isCompletionTaskRequestLookupRecord(record)) latest = record
@@ -389,7 +387,10 @@ const focusedSuccessWaitReasonFor = (
   const request = completionTaskRequestFor(claim)
   let focusedObservation: JournalRecord | undefined
   for (const record of journalRecordsForOperationId(records, request.operationId)) {
-    if (record.event._tag === "TaskTrackerFactsObserved" && record.event.observation._tag === "FocusedTaskCompletionFacts") {
+    if (
+      record.event._tag === "TaskTrackerFactsObserved" &&
+      record.event.observation._tag === "FocusedTaskCompletionFacts"
+    ) {
       focusedObservation = record
     }
   }

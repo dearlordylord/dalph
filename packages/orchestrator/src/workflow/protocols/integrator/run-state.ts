@@ -23,10 +23,7 @@ import {
 import type { WorkflowJournalEvent } from "../../registry/event.js"
 
 interface IntegratorRunStateDependencies {
-  readonly findEventAtKey: (
-    records: JournalHistorySource,
-    key: JournalRecord["key"]
-  ) => JournalRecord | undefined
+  readonly findEventAtKey: (records: JournalHistorySource, key: JournalRecord["key"]) => JournalRecord | undefined
   readonly responsibilityFactsFromCorrelation: (
     correlation: IntegratorSessionCorrelation
   ) => IntegratorResponsibilityFacts
@@ -217,8 +214,7 @@ const runStateWithoutStarted = (
       ? IntegratorRunState.cases.RunUnfinished.make({ run })
       : runContradictionState("run result or Git record exists without IntegratorRunStarted")
   }
-  if (!isEmpty(runRelated))
-    return runContradictionState("run result or Git record exists without IntegratorRunStarted")
+  if (!isEmpty(runRelated)) return runContradictionState("run result or Git record exists without IntegratorRunStarted")
   return session === undefined || run.ordinal !== 1
     ? IntegratorRunState.cases.Absent.make({ run })
     : IntegratorRunState.cases.RunUnfinished.make({ run })

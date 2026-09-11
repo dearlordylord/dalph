@@ -120,7 +120,9 @@ export const appendGraphEvidence = (
   let snapshot: Option.Option<TaskDagSnapshot>
   if (observation._tag === "CompleteTaskTrackerFacts") {
     // Decoded evidence is indexed before semantic validation; malformed full payloads must reach ordered diagnostics.
-    snapshot = Schema.is(CompleteTaskTrackerFactsObserved)(observation) ? projectCompleteTaskGraph(observation) : Option.none()
+    snapshot = Schema.is(CompleteTaskTrackerFactsObserved)(observation)
+      ? projectCompleteTaskGraph(observation)
+      : Option.none()
     if (!HashMap.has(completeByOperation, observation.operationId))
       completeByOperation = HashMap.set(completeByOperation, observation.operationId, {
         observation,

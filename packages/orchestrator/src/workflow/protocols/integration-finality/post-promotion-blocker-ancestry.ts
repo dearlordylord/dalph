@@ -54,7 +54,8 @@ const promotionSucceededAt = (
     if (
       event._tag === "TargetPromotionObservedSuccess" &&
       targetPromotionCorrelationEquals(event.correlation, claim.promotionCorrelation)
-    ) position = candidatePosition
+    )
+      position = candidatePosition
   }
   return position
 }
@@ -93,9 +94,7 @@ export const postPromotionBlockerClearAuthorizationFor = (
       target: began.event.target,
       taskId: claim.plannedAttempt.taskId
     })
-    return episode === undefined
-      ? undefined
-      : PostPromotionBlockerClearAuthorization.make({ ...episode, claim })
+    return episode === undefined ? undefined : PostPromotionBlockerClearAuthorization.make({ ...episode, claim })
   }
   const runTargetKey = taskTrackerTargetKey(began.event.target)
   const graphRecords = records.filter(
@@ -178,7 +177,8 @@ const invalidPostPromotionBlockerAncestryOutcome = (
       position < record.position &&
       candidate._tag === "PostPromotionBlockerCandidateAncestryReadIntended" &&
       candidate.operationId === event.operationId
-    ) intent = candidate
+    )
+      intent = candidate
   }
   return intent !== undefined && authorizationEquals(intent.authorization, event.authorization)
     ? undefined

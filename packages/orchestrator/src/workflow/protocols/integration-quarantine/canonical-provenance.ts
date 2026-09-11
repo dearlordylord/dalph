@@ -379,7 +379,10 @@ const validateIndexedProviderRunActivityAbsent = (
     return { _tag: "Invalid", detail: "provider-activity absence has a foreign key or Journal Run" }
   }
   for (const candidate of journalRecordsOfKind(records, "IntegratorRunResultRecorded")) {
-    if (candidate.event._tag === "IntegratorRunResultRecorded" && integratorRunCorrelationsEqual(candidate.event.run, run)) {
+    if (
+      candidate.event._tag === "IntegratorRunResultRecorded" &&
+      integratorRunCorrelationsEqual(candidate.event.run, run)
+    ) {
       return { _tag: "Invalid", detail: "provider-activity absence contradicts exact run evidence" }
     }
   }
@@ -418,9 +421,10 @@ export const validateProviderRunPredecessors = (
       if ("run" in candidate.event && integratorRunCorrelationsEqual(candidate.event.run, run)) {
         return {
           _tag: "Invalid",
-          detail: kind === "IntegratorRunResultRecorded"
-            ? "provider-run absence contradicts an already recorded Integrator result"
-            : "provider-run absence contradicts run-bound candidate evidence"
+          detail:
+            kind === "IntegratorRunResultRecorded"
+              ? "provider-run absence contradicts an already recorded Integrator result"
+              : "provider-run absence contradicts run-bound candidate evidence"
         }
       }
     }

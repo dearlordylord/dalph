@@ -189,10 +189,7 @@ const previousRunFor = (run: IntegratorRunCorrelation): IntegratorRunCorrelation
         session: run.session
       })
 
-const previousRunHasDurableResult = (
-  records: JournalHistorySource,
-  previous: IntegratorRunCorrelation
-): boolean => {
+const previousRunHasDurableResult = (records: JournalHistorySource, previous: IntegratorRunCorrelation): boolean => {
   const previousStart = integratorFindEventAtKey(records, integratorRunStartedRecordKey(previous))
   const previousResult = integratorFindEventAtKey(records, integratorRunResultRecordedRecordKey(previous))
   if (
@@ -206,10 +203,7 @@ const previousRunHasDurableResult = (
   )
 }
 
-const previousRunIsDurablyConclusive = (
-  records: JournalHistorySource,
-  run: IntegratorRunCorrelation
-): boolean => {
+const previousRunIsDurablyConclusive = (records: JournalHistorySource, run: IntegratorRunCorrelation): boolean => {
   const previous = previousRunFor(run)
   if (previous === undefined) return true
   return previousRunHasDurableResult(records, previous)

@@ -13,7 +13,11 @@ import {
 } from "@dalph/contracts"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { attemptChoiceAppliedRecordKey, attemptStoppageIntentRecordKey } from "../../workflow-journal/record-key.js"
-import { journalEvidenceBefore, journalEvidenceFrom, type JournalHistorySource } from "../../workflow-journal/record-evidence.js"
+import {
+  journalEvidenceBefore,
+  journalEvidenceFrom,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
@@ -24,7 +28,12 @@ import {
 } from "../../workflow/protocols/attempt-choice/events.js"
 import { emptyIndexes } from "./history-kernel-state.js"
 import type { WorkflowJournalHistoryIssue } from "./history-result.js"
-import { acceptedExecutorProofEvidenceFor, replacementPreservesPriorResources, validateAttemptChoice, validateAttemptStop } from "./attempt-validation.js"
+import {
+  acceptedExecutorProofEvidenceFor,
+  replacementPreservesPriorResources,
+  validateAttemptChoice,
+  validateAttemptStop
+} from "./attempt-validation.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { InitialControlPolicy } from "../../control/policy.js"
@@ -36,7 +45,10 @@ import { OperationId } from "../../workflow/identity.js"
 import { makeTaskClaimReleaseOperation } from "../../workflow/registry/operation.js"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import { TaskClaimReleaseIntendedEvent, TaskClaimReleasedEvent } from "../../workflow/registry/event.js"
-import { PlannedAttemptExecutorReportOrdinal, PlannedAttemptExecutorWorkReportedEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent
+} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 
 const runId = RunId.make("attempt-validation-hot-cold")
 const plannedAttempt = PlannedTaskAttempt.make({
@@ -72,18 +84,19 @@ it.each([64, 256])("bounds Stop disposition validation after %i unrelated same-t
     taskId: plannedAttempt.taskId,
     token: ClaimToken.make("stop-original-token")
   })
-  const releaseIntent = (nonce: string) => TaskClaimReleaseIntendedEvent.make({
-    operation: makeTaskClaimReleaseOperation({
-      release: { claim, operationId: OperationId.make(`alternate-release-${nonce}`) },
-      predecessorOperationIds: [claim.operationId, OperationId.make("missing-focused-read")],
-      authority: {
-        _tag: "StoppedAttemptClaimReleaseAuthority",
-        observationOperationId: OperationId.make("missing-focused-read"),
-        requestId: AttemptChoiceRequestId.make({ runId, nonce })
-      }
-    }),
-    version: workflowJournalEventVersion
-  })
+  const releaseIntent = (nonce: string) =>
+    TaskClaimReleaseIntendedEvent.make({
+      operation: makeTaskClaimReleaseOperation({
+        release: { claim, operationId: OperationId.make(`alternate-release-${nonce}`) },
+        predecessorOperationIds: [claim.operationId, OperationId.make("missing-focused-read")],
+        authority: {
+          _tag: "StoppedAttemptClaimReleaseAuthority",
+          observationOperationId: OperationId.make("missing-focused-read"),
+          requestId: AttemptChoiceRequestId.make({ runId, nonce })
+        }
+      }),
+      version: workflowJournalEventVersion
+    })
   const ownIntent = releaseIntent(requestId.nonce)
   const events = [
     AttemptChoiceAppliedEvent.make({ ...choice, choice: "StopTaskImplementation" }),
@@ -100,9 +113,14 @@ it.each([64, 256])("bounds Stop disposition validation after %i unrelated same-t
     ownIntent,
     TaskClaimReleasedEvent.make({ release: ownIntent.operation.release, version: workflowJournalEventVersion })
   ]
-  const records = events.map((event, offset): JournalRecord => ({
-    event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(offset + 1), runId
-  }))
+  const records = events.map(
+    (event, offset): JournalRecord => ({
+      event,
+      key: describeJournalEvent(event).expectedKey,
+      position: JournalPosition.make(offset + 1),
+      runId
+    })
+  )
   const candidate: JournalRecord = {
     event: ownIntent,
     key: describeJournalEvent(ownIntent).expectedKey,
@@ -125,7 +143,7 @@ it.each([64, 256])("bounds Stop disposition validation after %i unrelated same-t
     stop()
   }
   expect(actual).toEqual(expected)
-  expect(actual.map((issue) => "detail" in issue ? issue.detail : issue._tag)).toContain(
+  expect(actual.map((issue) => ("detail" in issue ? issue.detail : issue._tag))).toContain(
     "stopped-attempt claim disposition is already terminal"
   )
   expect(visits).toBeLessThanOrEqual(16)
@@ -197,7 +215,10 @@ it.each([64, 256])("bounds exact abandoned-claim lookup after %i unrelated same-
     version: workflowJournalEventVersion
   })
   const candidate: JournalRecord = {
-    event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(size + 1), runId
+    event,
+    key: describeJournalEvent(event).expectedKey,
+    position: JournalPosition.make(size + 1),
+    runId
   }
   const evidence = journalEvidenceFrom(records)
   const issues = new Array<WorkflowJournalHistoryIssue>()
@@ -222,19 +243,22 @@ it.each([64, 256])("bounds exact abandoned-claim lookup after %i unrelated same-
     subject: choice.subject,
     version: workflowJournalEventVersion
   })
-  const withOwnAbandonment = [...records, {
-    event: abandonment,
-    key: describeJournalEvent(abandonment).expectedKey,
-    position: JournalPosition.make(size + 1),
-    runId
-  }]
+  const withOwnAbandonment = [
+    ...records,
+    {
+      event: abandonment,
+      key: describeJournalEvent(abandonment).expectedKey,
+      position: JournalPosition.make(size + 1),
+      runId
+    }
+  ]
   const afterAbandonment = { ...candidate, position: JournalPosition.make(size + 2) }
   const coldIssues = new Array<WorkflowJournalHistoryIssue>()
   const indexedIssues = new Array<WorkflowJournalHistoryIssue>()
   validateAttemptStop(afterAbandonment, runId, withOwnAbandonment, emptyIndexes(), coldIssues)
   validateAttemptStop(afterAbandonment, runId, journalEvidenceFrom(withOwnAbandonment), emptyIndexes(), indexedIssues)
   expect(indexedIssues).toEqual(coldIssues)
-  expect(indexedIssues.map((issue) => "detail" in issue ? issue.detail : issue._tag)).toEqual([
+  expect(indexedIssues.map((issue) => ("detail" in issue ? issue.detail : issue._tag))).toEqual([
     "an abandoned attempt claim release requires explicit stopped-attempt authority"
   ])
 })
@@ -279,11 +303,14 @@ it.each([64, 256])("bounds replacement claim preservation after %i unrelated sam
     token: ClaimToken.make("replacement-retained-token")
   })
   const records = Array.from({ length: size + 1 }, (_, offset): JournalRecord => {
-    const claim = offset === size ? expectedClaim : ActiveTaskClaim.make({
-      ...expectedClaim,
-      operationId: OperationId.make(`unrelated-acquisition-${offset}`),
-      token: ClaimToken.make(`unrelated-acquisition-token-${offset}`)
-    })
+    const claim =
+      offset === size
+        ? expectedClaim
+        : ActiveTaskClaim.make({
+            ...expectedClaim,
+            operationId: OperationId.make(`unrelated-acquisition-${offset}`),
+            token: ClaimToken.make(`unrelated-acquisition-token-${offset}`)
+          })
     const event = TaskClaimReleaseIntendedEvent.make({
       operation: makeTaskClaimReleaseOperation({
         release: { claim, operationId: OperationId.make(`arbitrary-release-operation-${offset}`) },
@@ -303,13 +330,17 @@ it.each([64, 256])("bounds replacement claim preservation after %i unrelated sam
     visits += 1
   })
   try {
-    expect(replacementPreservesPriorResources(beforeOwnRelease, plannedAttempt, witness, JournalPosition.make(1))).toBe(true)
+    expect(replacementPreservesPriorResources(beforeOwnRelease, plannedAttempt, witness, JournalPosition.make(1))).toBe(
+      true
+    )
     expect(replacementPreservesPriorResources(evidence, plannedAttempt, witness, JournalPosition.make(1))).toBe(false)
   } finally {
     stop()
   }
   expect(visits).toBeLessThanOrEqual(8)
-  expect(replacementPreservesPriorResources(records.slice(0, size), plannedAttempt, witness, JournalPosition.make(1))).toBe(true)
+  expect(
+    replacementPreservesPriorResources(records.slice(0, size), plannedAttempt, witness, JournalPosition.make(1))
+  ).toBe(true)
   expect(replacementPreservesPriorResources(records, plannedAttempt, witness, JournalPosition.make(1))).toBe(false)
 })
 

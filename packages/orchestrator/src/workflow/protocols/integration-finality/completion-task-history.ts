@@ -431,10 +431,12 @@ const attemptResultIssue = (
       }
     }
   } else {
-    priorResult = findFirst(accepted, ({ event: candidate }) =>
-      isCompletionTaskAttemptResult(candidate) &&
-      candidate.attemptOrdinal === event.attemptOrdinal &&
-      completionTaskRequestEquals(candidate.request, event.request)
+    priorResult = findFirst(
+      accepted,
+      ({ event: candidate }) =>
+        isCompletionTaskAttemptResult(candidate) &&
+        candidate.attemptOrdinal === event.attemptOrdinal &&
+        completionTaskRequestEquals(candidate.request, event.request)
     )
   }
   if (priorResult !== undefined) {

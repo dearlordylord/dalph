@@ -189,11 +189,13 @@ const hasForeignRunRecord = (records: JournalHistorySource, run: IntegratorRunCo
   isJournalRecordEvidence(records) ? false : records.some((record) => record.runId !== runIdFor(run))
 
 const hasDuplicateRecordIdentity = (records: JournalHistorySource): boolean =>
-  isJournalRecordEvidence(records) ? false : records.some(
-    (record, index) =>
-      records.findIndex((candidate) => candidate.position === record.position) !== index ||
-      records.findIndex((candidate) => candidate.key === record.key) !== index
-  )
+  isJournalRecordEvidence(records)
+    ? false
+    : records.some(
+        (record, index) =>
+          records.findIndex((candidate) => candidate.position === record.position) !== index ||
+          records.findIndex((candidate) => candidate.key === record.key) !== index
+      )
 
 const exactSessionRecord = (
   records: JournalHistorySource,
@@ -202,7 +204,9 @@ const exactSessionRecord = (
   predecessorSession: IntegratorRunCorrelation["session"]
 ): CanonicalSessionRecord | undefined => {
   if (direction === "FullRerun") {
-    const successors = matchingOfKind<SuccessorSessionRecord>(records, "IntegratorSuccessorSessionFixed",
+    const successors = matchingOfKind<SuccessorSessionRecord>(
+      records,
+      "IntegratorSuccessorSessionFixed",
       (record): record is SuccessorSessionRecord =>
         record.event._tag === "IntegratorSuccessorSessionFixed" &&
         record.runId === session.plannedAttempt.runId &&
@@ -220,7 +224,9 @@ const exactSessionRecord = (
     return successors.count === 1 ? successors.first : undefined
   }
   const key = integratorSessionFixedRecordKey(integratorResponsibilityFactsFromCorrelation(session))
-  const matches = matchingOfKind<SessionRecord>(records, "IntegratorSessionFixed",
+  const matches = matchingOfKind<SessionRecord>(
+    records,
+    "IntegratorSessionFixed",
     (record): record is SessionRecord =>
       isSessionRecord(record) &&
       record.runId === session.plannedAttempt.runId &&
@@ -237,7 +243,9 @@ const exactRunStart = (
   sessionRecord: CanonicalSessionRecord,
   beforePosition: JournalPosition
 ): RunStartedRecord | undefined => {
-  const matches = matchingOfKind<RunStartedRecord>(records, "IntegratorRunStarted",
+  const matches = matchingOfKind<RunStartedRecord>(
+    records,
+    "IntegratorRunStarted",
     (record): record is RunStartedRecord =>
       isRunStartedRecord(record) &&
       record.runId === runIdFor(run) &&
@@ -407,7 +415,9 @@ const promotionStaleEvidence = (
   ) {
     return undefined
   }
-  const results = matchingOfKind<RunResultRecord>(records, "IntegratorRunResultRecorded",
+  const results = matchingOfKind<RunResultRecord>(
+    records,
+    "IntegratorRunResultRecorded",
     (record): record is RunResultRecord =>
       runResultMatches(record, run, start, stale.position) &&
       record.event.result._tag === "PreparedCandidate" &&
@@ -493,16 +503,22 @@ const exactDirectionAndQuarantine = (
   authoritySession: IntegratorRunCorrelation["session"]
 ): { readonly direction: DirectionRecord; readonly quarantine: QuarantineRecord } | string => {
   const runId = runIdFor(run)
-  const foreignDirection = someOfKind(records, "IntegrationQuarantineDirectionApplied", (record) =>
-      isDirectionRecord(record) && record.event.fingerprint.sessionId === authoritySession.sessionId
-      && record.key !== integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(record.event.fingerprint)))
+  const foreignDirection = someOfKind(
+    records,
+    "IntegrationQuarantineDirectionApplied",
+    (record) =>
+      isDirectionRecord(record) &&
+      record.event.fingerprint.sessionId === authoritySession.sessionId &&
+      record.key !==
+        integrationQuarantineDirectionAppliedRecordKey(integrationQuarantineDirectionSubject(record.event.fingerprint))
+  )
   /* v8 ignore next -- @preserve retryPreflightIssue rejects every foreign or wrongly keyed session direction before this helper is reached. */
-  if (
-    foreignDirection
-  ) {
+  if (foreignDirection) {
     return "Retry history contains a foreign or wrongly keyed direction"
   }
-  const retryDirections = matchingOfKind<DirectionRecord>(records, "IntegrationQuarantineDirectionApplied",
+  const retryDirections = matchingOfKind<DirectionRecord>(
+    records,
+    "IntegrationQuarantineDirectionApplied",
     (record): record is DirectionRecord =>
       isDirectionRecord(record) &&
       record.runId === runId &&
@@ -528,7 +544,9 @@ const hasUniqueDirectionSubject = (
   direction: DirectionRecord,
   authoritySession: IntegratorRunCorrelation["session"]
 ): boolean =>
-  matchingOfKind<DirectionRecord>(records, "IntegrationQuarantineDirectionApplied",
+  matchingOfKind<DirectionRecord>(
+    records,
+    "IntegrationQuarantineDirectionApplied",
     (record): record is DirectionRecord =>
       isDirectionRecord(record) &&
       record.event.fingerprint.sessionId === authoritySession.sessionId &&
@@ -619,7 +637,9 @@ const exactSessionQuarantines = (
   run: IntegratorRunCorrelation,
   authoritySession: IntegratorRunCorrelation["session"]
 ): boolean =>
-  everyOfKind(records, "IntegrationQuarantined",
+  everyOfKind(
+    records,
+    "IntegrationQuarantined",
     (record) =>
       !isQuarantineRecord(record) ||
       record.event.correlation.sessionId !== authoritySession.sessionId ||
@@ -632,7 +652,9 @@ const exactSessionDirections = (
   records: JournalHistorySource,
   authoritySession: IntegratorRunCorrelation["session"]
 ): boolean =>
-  everyOfKind(records, "IntegrationQuarantineDirectionApplied",
+  everyOfKind(
+    records,
+    "IntegrationQuarantineDirectionApplied",
     (record) =>
       !isDirectionRecord(record) ||
       record.event.fingerprint.sessionId !== authoritySession.sessionId ||
@@ -672,7 +694,9 @@ export const evaluateIntegratorFullRerunAuthorization = (
     return rejected("FullRerun authorization applies only to run ordinal two")
   const preflightIssue = retryPreflightIssue(records, run, predecessorSession)
   if (preflightIssue !== undefined) return rejected(preflightIssue)
-  const candidates = matchingOfKind<SuccessorSessionRecord>(records, "IntegratorSuccessorSessionFixed",
+  const candidates = matchingOfKind<SuccessorSessionRecord>(
+    records,
+    "IntegratorSuccessorSessionFixed",
     (record): record is SuccessorSessionRecord =>
       record.event._tag === "IntegratorSuccessorSessionFixed" &&
       integratorCorrelationsEqual(record.event.successor, run.session) &&
@@ -714,7 +738,9 @@ const retryPreflightIssue = (
     return "Retry authorization requires one exact Journal history for the Run"
   }
   if (
-    someOfKind(records, "IntegrationQuarantined",
+    someOfKind(
+      records,
+      "IntegrationQuarantined",
       (record) =>
         isQuarantineRecord(record) &&
         record.event.basis._tag === "RetryTargetHeadChanged" &&
@@ -791,7 +817,9 @@ export const integratorRetryAuthorizationIssue = (
   records: JournalHistorySource,
   request: IntegratorRunPreparationInput
 ): string | undefined => {
-  const existingRunStarts = matchingOfKind<RunStartedRecord>(records, "IntegratorRunStarted",
+  const existingRunStarts = matchingOfKind<RunStartedRecord>(
+    records,
+    "IntegratorRunStarted",
     (record): record is RunStartedRecord =>
       isRunStartedRecord(record) &&
       record.event.run.ordinal === integratorRetryRunOrdinal &&

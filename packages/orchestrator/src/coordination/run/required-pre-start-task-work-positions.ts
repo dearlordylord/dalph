@@ -146,17 +146,9 @@ const claimOutcomeFor = (
   return undefined
 }
 
-const executorBeganFor = (
-  records: JournalHistorySource,
-  runId: RunId,
-  plannedAttempt: PlannedTaskAttempt
-): boolean =>
+const executorBeganFor = (records: JournalHistorySource, runId: RunId, plannedAttempt: PlannedTaskAttempt): boolean =>
   Array.from(
-    journalRecordsForAttemptKind(
-      records,
-      plannedAttempt.attemptId,
-      "PlannedAttemptExecutorWorkResponsibilityBegan"
-    )
+    journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptExecutorWorkResponsibilityBegan")
   ).some(
     ({ event, runId: recordRunId }) =>
       recordRunId === runId &&

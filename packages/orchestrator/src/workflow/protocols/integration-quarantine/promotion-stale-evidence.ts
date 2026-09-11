@@ -73,7 +73,8 @@ export const promotionStaleQuarantineEvidenceIssue = (
       attempt = record
     }
   }
-  return attemptCount === 1 && attempt !== undefined &&
+  return attemptCount === 1 &&
+    attempt !== undefined &&
     attempt.key === targetPromotionAttemptIntentRecordKey(staleCorrelation.requestId, attemptOrdinal)
     ? undefined
     : "promotion-stale quarantine requires one exact earlier correlated compare-and-set attempt intent"

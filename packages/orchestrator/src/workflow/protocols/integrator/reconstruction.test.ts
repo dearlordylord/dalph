@@ -1230,7 +1230,9 @@ describe("Integrator journal-record reconciliation", () => {
         ]).pipe(Effect.flip)
       ).toBeInstanceOf(IntegratorJournalContradiction)
       const runTwo = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(2))
-      expect(integratorRetryAuthorizationIssue(yield* Ref.get(records), { preparation: input, run: runTwo })).toBeDefined()
+      expect(
+        integratorRetryAuthorizationIssue(yield* Ref.get(records), { preparation: input, run: runTwo })
+      ).toBeDefined()
       yield* appendIntegratorRunStartedIfNeeded(journal, runOne, yield* Ref.get(records))
       expect(yield* readRecordedRunResult(yield* Ref.get(records), runOne)).toEqual(Option.none())
       const withPreviousRun = [
