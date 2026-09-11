@@ -357,6 +357,22 @@ it.effect("continues a valid restarted replacement successor without resurrectin
       continuation.step.predecessorOperationId
     )
     if (replacementAuthority === undefined) return yield* Effect.die("replacement authority was absent")
+    expect(
+      replacementContinuationAuthorityFrom(
+        journalEvidenceFrom(successorRecords),
+        replacementRunId,
+        replacementSuccessorAttempt,
+        continuation.step.predecessorOperationId
+      )
+    ).toBeDefined()
+    expect(
+      replacementContinuationAuthorityFrom(
+        journalEvidenceFrom(successorRecords),
+        replacementRunId,
+        replacementSuccessorAttempt,
+        OperationId.make("mismatched-successor-plan-record")
+      )
+    ).toBeUndefined()
     const causalClaimMissingRecords = successorRecords.map((record): JournalRecord => {
       if (record.event._tag !== "PlannedAttemptReplaced") return record
       const event = structuredClone(record.event)
