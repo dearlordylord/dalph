@@ -7,7 +7,7 @@ import {
   firstJournalRecordOfKind,
   isJournalRecordEvidence,
   journalEvidenceBefore,
-  journalRecordsForOperationId,
+  journalRecordsForOperationIdKind,
   journalSettledCompletionClaimReplacement,
   type JournalHistorySource
 } from "../../../workflow-journal/record-evidence.js"
@@ -128,7 +128,7 @@ const requestIntentIssue = (
   records: JournalHistorySource
 ): CompletionTaskHistoryIssue | undefined => {
   const duplicate = findFirst(
-    journalRecordsForOperationId(prior(records, record), event.request.operationId),
+    journalRecordsForOperationIdKind(prior(records, record), event.request.operationId, "CompletionTaskIntended"),
     ({ event: candidate }) =>
       candidate._tag === "CompletionTaskIntended" && candidate.request.operationId === event.request.operationId
   )
@@ -162,11 +162,14 @@ const focusedOutcomeIssue = (
 ): CompletionTaskHistoryIssue | undefined => {
   const accepted = prior(records, record)
   const intent = findLast(
-    journalRecordsForOperationId(accepted, event.operationId),
+    journalRecordsForOperationIdKind(accepted, event.operationId, "TaskTrackerReadIntentRecorded"),
     ({ event: candidate }) =>
       candidate._tag === "TaskTrackerReadIntentRecorded" && candidate.operation.operationId === event.operationId
   )?.event
-  const runBeginning = firstJournalRecordOfKind(accepted, "WorkflowRunBegan")?.event
+  const runBeginning = firstJournalRecordOfKind(
+    isJournalRecordEvidence(records) ? accepted : records,
+    "WorkflowRunBegan"
+  )?.event
   const exact =
     focusedCompletionIntentMatchesOutcome(intent, event) &&
     focusedFactsMatchOutcome(event) &&
@@ -180,9 +183,8 @@ const ancestryIntentIssue = (
   records: JournalHistorySource
 ): CompletionTaskHistoryIssue | undefined => {
   const accepted = prior(records, record)
-  const requestRecords = journalRecordsForOperationId(accepted, event.request.operationId)
   const matchingFocusedIntent = findLast(
-    requestRecords,
+    journalRecordsForOperationIdKind(accepted, event.operationId, "TaskTrackerReadIntentRecorded"),
     ({ event: candidate }) =>
       candidate._tag === "TaskTrackerReadIntentRecorded" &&
       candidate.operation._tag === "ReadCompletionTaskFacts" &&
@@ -201,10 +203,11 @@ const ancestryIntentIssue = (
     return semantic(`completion ancestry read ${event.operationId} lacks its exact replacement-bound identity`)
   }
   const matchingFocusedOutcome = findLast(
-    journalRecordsForOperationId(accepted, event.request.operationId),
+    journalRecordsForOperationIdKind(accepted, event.operationId, "TaskTrackerFactsObserved"),
     ({ event: candidate, position }) =>
       position > matchingFocusedIntent.position &&
       isFocusedCompletionFactsObserved(candidate) &&
+      candidate.operationId === focusedIntent.operation.operationId &&
       focusedCompletionIntentMatchesOutcome(focusedIntent, candidate)
   )
   return matchingFocusedOutcome !== undefined && exactReplacementPrior(records, record, event.request)
@@ -218,7 +221,11 @@ const ancestryOutcomeIssue = (
   records: JournalHistorySource
 ): CompletionTaskHistoryIssue | undefined => {
   const intent = findLast(
-    journalRecordsForOperationId(prior(records, record), event.operationId),
+    journalRecordsForOperationIdKind(
+      prior(records, record),
+      event.operationId,
+      "CompletionTaskCandidateAncestryReadIntended"
+    ),
     ({ event: candidate }) =>
       candidate._tag === "CompletionTaskCandidateAncestryReadIntended" && candidate.operationId === event.operationId
   )?.event
@@ -260,7 +267,7 @@ const requestIntentForAttempt = (
   event: CompletionAttemptIntended
 ): JournalRecord | undefined =>
   findLast(
-    journalRecordsForOperationId(accepted, event.request.operationId),
+    journalRecordsForOperationIdKind(accepted, event.request.operationId, "CompletionTaskIntended"),
     ({ event: candidate }) =>
       candidate._tag === "CompletionTaskIntended" && completionTaskRequestEquals(candidate.request, event.request)
   )
@@ -270,7 +277,7 @@ const focusedFactsForAttempt = (
   event: CompletionAttemptIntended
 ): WorkflowJournalEvent | undefined =>
   findLast(
-    journalRecordsForOperationId(accepted, event.focusedFactsOperationId),
+    journalRecordsForOperationIdKind(accepted, event.focusedFactsOperationId, "TaskTrackerFactsObserved"),
     ({ event: candidate }) =>
       candidate._tag === "TaskTrackerFactsObserved" && candidate.operationId === event.focusedFactsOperationId
   )?.event
@@ -280,14 +287,14 @@ const ancestryForAttempt = (
   event: CompletionAttemptIntended
 ): WorkflowJournalEvent | undefined =>
   findLast(
-    journalRecordsForOperationId(accepted, event.gitReadOperationId),
+    journalRecordsForOperationIdKind(accepted, event.gitReadOperationId, "CompletionTaskCandidateAncestryObserved"),
     ({ event: candidate }) =>
       candidate._tag === "CompletionTaskCandidateAncestryObserved" && candidate.operationId === event.gitReadOperationId
   )?.event
 
 const completionAttemptCountForRequest = (accepted: JournalHistorySource, event: CompletionAttemptIntended): number =>
   countMatching(
-    journalRecordsForOperationId(accepted, event.request.operationId),
+    journalRecordsForOperationIdKind(accepted, event.request.operationId, "CompletionTaskAttemptIntended"),
     ({ event: candidate }) =>
       candidate._tag === "CompletionTaskAttemptIntended" && candidate.request.operationId === event.request.operationId
   )
@@ -299,26 +306,28 @@ const previousNotAppliedLookupPrecedesAuthorization = (
   const ordinal = Number(event.attemptOrdinal)
   if (ordinal === 1) return true
   const previousOrdinal = ordinal - 1
-  const requestRecords = journalRecordsForOperationId(accepted, event.request.operationId)
+  const previousLookupOperationId = completionTaskRequestLookupOperationIdFor(
+    event.request,
+    CompletionTaskRequestOrdinal.make(previousOrdinal)
+  )
   const lookup = findLast(
-    requestRecords,
+    journalRecordsForOperationIdKind(accepted, previousLookupOperationId, "CompletionTaskRequestLookupObserved"),
     ({ event: candidate }) =>
       candidate._tag === "CompletionTaskRequestLookupObserved" &&
       Number(candidate.attemptOrdinal) === previousOrdinal &&
-      candidate.operationId ===
-        completionTaskRequestLookupOperationIdFor(event.request, CompletionTaskRequestOrdinal.make(previousOrdinal)) &&
+      candidate.operationId === previousLookupOperationId &&
       completionTaskRequestEquals(candidate.request, event.request) &&
       candidate.lookup._tag === "NotApplied" &&
       completionTaskRequestEquals(candidate.lookup.request, event.request)
   )
   const focusedIntent = findLast(
-    journalRecordsForOperationId(accepted, event.focusedFactsOperationId),
+    journalRecordsForOperationIdKind(accepted, event.focusedFactsOperationId, "TaskTrackerReadIntentRecorded"),
     ({ event: candidate }) =>
       candidate._tag === "TaskTrackerReadIntentRecorded" &&
       candidate.operation.operationId === event.focusedFactsOperationId
   )
   const ancestryIntent = findLast(
-    journalRecordsForOperationId(accepted, event.gitReadOperationId),
+    journalRecordsForOperationIdKind(accepted, event.gitReadOperationId, "CompletionTaskCandidateAncestryReadIntended"),
     ({ event: candidate }) =>
       candidate._tag === "CompletionTaskCandidateAncestryReadIntended" &&
       candidate.operationId === event.gitReadOperationId
@@ -378,20 +387,31 @@ const attemptResultIssue = (
 ): CompletionTaskHistoryIssue | undefined => {
   const accepted = prior(records, record)
   const attempt = findLast(
-    journalRecordsForOperationId(accepted, event.request.operationId),
+    journalRecordsForOperationIdKind(
+      accepted,
+      completionTaskRequestLookupOperationIdFor(event.request, event.attemptOrdinal),
+      "CompletionTaskAttemptIntended"
+    ),
     ({ event: candidate }) =>
       candidate._tag === "CompletionTaskAttemptIntended" &&
       candidate.attemptOrdinal === event.attemptOrdinal &&
       completionTaskRequestEquals(candidate.request, event.request)
   )
   if (attempt === undefined) return semantic(`${event._tag} lacks its exact prior numbered call intent`)
-  const priorResult = findFirst(
-    journalRecordsForOperationId(accepted, event.request.operationId),
-    ({ event: candidate }) =>
-      isCompletionTaskAttemptResult(candidate) &&
-      candidate.attemptOrdinal === event.attemptOrdinal &&
-      completionTaskRequestEquals(candidate.request, event.request)
-  )
+  const resultOperationId = completionTaskRequestLookupOperationIdFor(event.request, event.attemptOrdinal)
+  let priorResult: JournalRecord | undefined
+  for (const kind of completionTaskAttemptResultTagValues) {
+    const candidate = findFirst(
+      journalRecordsForOperationIdKind(accepted, resultOperationId, kind),
+      ({ event: candidate }) =>
+        isCompletionTaskAttemptResult(candidate) &&
+        candidate.attemptOrdinal === event.attemptOrdinal &&
+        completionTaskRequestEquals(candidate.request, event.request)
+    )
+    if (candidate !== undefined && (priorResult === undefined || candidate.position < priorResult.position)) {
+      priorResult = candidate
+    }
+  }
   if (priorResult !== undefined) {
     return semantic(
       `completion call ${event.attemptOrdinal} has mutually exclusive ${priorResult.event._tag} and ${event._tag} outcomes`
@@ -423,16 +443,15 @@ const lookupIntentIssue = (
   records: JournalHistorySource
 ): CompletionTaskHistoryIssue | undefined => {
   const accepted = prior(records, record)
-  const requestRecords = journalRecordsForOperationId(accepted, event.request.operationId)
   const lost = findLast(
-    requestRecords,
+    journalRecordsForOperationIdKind(accepted, event.operationId, "CompletionTaskResponseLost"),
     ({ event: candidate }) =>
       candidate._tag === "CompletionTaskResponseLost" &&
       candidate.attemptOrdinal === event.attemptOrdinal &&
       completionTaskRequestEquals(candidate.request, event.request)
   )
   const confirmation = findLast(
-    journalRecordsForOperationId(accepted, event.request.operationId),
+    journalRecordsForOperationIdKind(accepted, event.operationId, "TaskTrackerFactsObserved"),
     ({ event: candidate }) =>
       candidate._tag === "TaskTrackerFactsObserved" &&
       candidate.observation._tag === "FocusedTaskCompletionFacts" &&
@@ -457,7 +476,7 @@ const lookupOutcomeIssue = (
   records: JournalHistorySource
 ): CompletionTaskHistoryIssue | undefined => {
   const intent = findLast(
-    journalRecordsForOperationId(prior(records, record), event.operationId),
+    journalRecordsForOperationIdKind(prior(records, record), event.operationId, "CompletionTaskRequestLookupIntended"),
     ({ event: candidate }) =>
       candidate._tag === "CompletionTaskRequestLookupIntended" && candidate.operationId === event.operationId
   )?.event
