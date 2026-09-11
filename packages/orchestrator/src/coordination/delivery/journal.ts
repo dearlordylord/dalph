@@ -3,7 +3,7 @@ import { Context, Effect, Layer, Option, PubSub, Schema, Semaphore, Stream, Subs
 import type { TaskDagSnapshot } from "../../authorities/task-tracker/graph.js"
 import { advanceWorkflowJournalHistory } from "../reconstruction/history.js"
 import type { ValidWorkflowJournalHistory } from "../reconstruction/history-result.js"
-import type { ReconstructedRunState } from "../reconstruction/state.js"
+import type { AcceptedReconstructedRunState } from "../reconstruction/state.js"
 import { JournalPosition, type JournalRecordKey } from "../../workflow-journal/identity.js"
 import type {
   AppendableWorkflowJournalEvent,
@@ -58,7 +58,7 @@ export interface JournalState {
   readonly _tag: "JournalState"
   readonly position: JournalPosition
   readonly graph: TrackerGraphState
-  readonly reconstructed: ReconstructedRunState
+  readonly reconstructed: AcceptedReconstructedRunState
   readonly prefix: AcceptedJournalPrefix
 }
 

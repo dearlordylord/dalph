@@ -90,8 +90,12 @@ import { makeIntegrationTargetResourceController } from "../admission/integratio
 import { RunnableFrontierTransition } from "../frontier/frontier.js"
 import { hasUnconsumedAcceptedSafeTaskReopenFromExecutingWorkAuthorityCheck } from "../frontier/safe-continuation-revalidation-eligibility.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
-import type { InvalidWorkflowJournalHistory } from "../reconstruction/history-result.js"
-import { makeRunRecoveryProjection, readDeliveryProjectionFrom } from "../run/recovery-activation.js"
+import {
+  makeRunRecoveryProjection,
+  readDeliveryProjectionFrom,
+  RunRecoveryProjectionRunMismatch,
+  type RunRecoveryProjectionSource
+} from "../run/recovery-activation.js"
 import { type JournalState, makeJournal } from "./journal.js"
 import { delivery } from "./delivery.js"
 import { DeliveryAcceptedFactPublication } from "./delivery-accepted-fact-publication.js"
@@ -104,7 +108,10 @@ import { makeDeliveryRuntimeAdmissionController } from "./delivery-runtime-admis
 import { makeApplicationExitLifecycle } from "../application-exit/lifecycle.js"
 import { deliveryRuntime } from "./delivery-runtime-adapter.js"
 import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
-import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
+import {
+  materializeJournalRecords,
+  observeJournalRecordSequenceOperations
+} from "../../workflow-journal/record-sequence.js"
 import { deliveryRuntimeResourcesLayer } from "./delivery-runtime-resources.js"
 import {
   DeliveryControlPolicyMissing,
@@ -712,7 +719,7 @@ it.effect("reconstructs the exact position when the process stops after responsi
       const journal = yield* makeJournalService
       yield* appendExecutorResponsibility(journal)
 
-      const records = (yield* journal.state.get).records
+      const records = materializeJournalRecords((yield* journal.state.get).prefix.records)
       expect(records.some(({ event }) => event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan")).toBe(true)
       expect(records.some(({ event }) => event._tag === "PlannedAttemptExecutorCommandIntended")).toBe(false)
 
@@ -929,7 +936,7 @@ it.effect("waits for the accepted journal position to reach delivery planning be
       const refreshStarted = yield* Deferred.make<void>()
       const projectionReads = yield* Ref.make(0)
       const baseProjection = currentProjection(journal.state.get.pipe(Effect.orDie))
-      const recovery = {
+      const recovery: RunRecoveryProjectionSource = {
         ...baseProjection,
         readDeliveryProjection: Ref.getAndUpdate(projectionReads, (count) => count + 1).pipe(
           Effect.flatMap((read) =>
@@ -977,7 +984,7 @@ it.effect("removes an interrupted accepted-fact waiter before the next publicati
       const refreshStarted = yield* Deferred.make<void>()
       const projectionReads = yield* Ref.make(0)
       const baseProjection = currentProjection(journal.state.get.pipe(Effect.orDie))
-      const recovery = {
+      const recovery: RunRecoveryProjectionSource = {
         ...baseProjection,
         readDeliveryProjection: Ref.getAndUpdate(projectionReads, (count) => count + 1).pipe(
           Effect.flatMap((read) =>
@@ -1125,10 +1132,10 @@ it.effect("retries reconstruction when a journal append lands during recovery pr
       const firstProjectionRead = yield* Deferred.make<void>()
       const permitFirstProjection = yield* Deferred.make<void>()
       const projectionReads = yield* Ref.make(0)
-      const recovery = {
+      const recovery: RunRecoveryProjectionSource = {
         readDeliveryProjection: Effect.gen(function* () {
           const readNumber = yield* Ref.updateAndGet(projectionReads, (count) => count + 1)
-          const journalState = yield* journal.state.get
+          const journalState = yield* journal.state.get.pipe(Effect.orDie)
           if (readNumber === 1) {
             yield* Deferred.succeed(firstProjectionRead, undefined)
             yield* Deferred.await(permitFirstProjection)
@@ -1206,8 +1213,9 @@ it.effect("does not turn an accepted Running report into tracker graph-read auth
         acceptedProgress: { _tag: "ExecutorReportAccepted", ordinal: PlannedAttemptExecutorReportOrdinal.make(1) },
         plannedAttempt: recoveredAttempt
       })
-      const recovery = {
+      const recovery: RunRecoveryProjectionSource = {
         readDeliveryProjection: journal.state.get.pipe(
+          Effect.orDie,
           Effect.map((journalState) => ({
             evidence: {
               _tag: "AvailableDeliveryProjectionEvidence" as const,
@@ -1243,9 +1251,9 @@ it.effect("does not propose the initial graph read while recovered boundary work
       const recoveredTransitions = yield* Ref.make<ReadonlyArray<RunnableFrontierTransition>>([
         RunnableFrontierTransition.SuspendPlannedAttemptExecutorWork({ plannedAttempt: recoveredAttempt })
       ])
-      const recovery = {
+      const recovery: RunRecoveryProjectionSource = {
         readDeliveryProjection: Effect.all({
-          journalState: journal.state.get,
+          journalState: journal.state.get.pipe(Effect.orDie),
           transitions: Ref.get(recoveredTransitions)
         }).pipe(
           Effect.map(({ journalState, transitions }) => ({
@@ -1291,8 +1299,9 @@ it.effect("establishes the current graph before proposing an external-success cl
         predecessorOperationIds: [claimOperationId],
         release: { claim, operationId: OperationId.make("stale-external-success-release-placeholder") }
       })
-      const recovery = {
+      const recovery: RunRecoveryProjectionSource = {
         readDeliveryProjection: journal.state.get.pipe(
+          Effect.orDie,
           Effect.map((journalState) => ({
             evidence: {
               _tag: "AvailableDeliveryProjectionEvidence" as const,
@@ -1696,13 +1705,11 @@ it.effect("publishes a typed relation failure when a later recovery projection f
     Effect.gen(function* () {
       const journal = yield* makeJournalService
       const failProjection = yield* Ref.make(false)
-      const recoveryFailure: InvalidWorkflowJournalHistory = {
-        _tag: "InvalidWorkflowJournalHistory",
-        issues: [],
-        records: [],
-        runId
-      }
-      const recovery = {
+      const recoveryFailure = new RunRecoveryProjectionRunMismatch({
+        expectedRunId: runId,
+        receivedRunId: RunId.make("projection-failure-other-run")
+      })
+      const recovery: RunRecoveryProjectionSource = {
         ...currentProjection(journal.state.get.pipe(Effect.orDie)),
         readDeliveryProjection: Ref.get(failProjection).pipe(
           Effect.flatMap((failed) =>
