@@ -89,6 +89,9 @@ const operationIdsOf = (record: JournalRecord): ReadonlySet<OperationId> => {
   if (operation !== undefined) ids.add(workflowOperationId(operation))
   if ("operationId" in record.event) ids.add(record.event.operationId)
   if ("request" in record.event && "operationId" in record.event.request) ids.add(record.event.request.operationId)
+  if ("authorization" in record.event && "operationId" in record.event.authorization) {
+    ids.add(record.event.authorization.operationId)
+  }
   return ids
 }
 
