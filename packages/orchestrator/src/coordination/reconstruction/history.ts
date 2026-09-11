@@ -35,7 +35,7 @@ import {
   type ValidWorkflowJournalHistory
 } from "./history-result.js"
 import { advanceReconstructedRunState, reconstructValidatedRunState } from "./reduce.js"
-import type { ReconstructedRunState, ReconstructedWorkflowHistory } from "./state.js"
+import type { AcceptedReconstructedRunState, AcceptedReconstructedWorkflowHistory } from "./state.js"
 import { runGraphTaskFactsOutcome } from "../frontier/run-finality.js"
 import { invalidTaskTrackerReconfirmationReference } from "../../workflow/task-tracker-facts/reconfirmation.js"
 import { taskTrackerObservationMatchesRead } from "../../workflow/task-tracker-facts/observation-match.js"
@@ -105,37 +105,26 @@ interface ValidatedKernelState {
 export interface KernelValidatedWorkflowJournalHistory {
   readonly [ValidatedKernelStateTypeId]: ValidatedKernelState
   readonly _tag: "ValidWorkflowJournalHistory"
-  readonly runState: ReconstructedRunState
-  readonly records: ReadonlyArray<JournalRecord>
+  readonly runState: AcceptedReconstructedRunState
   readonly runId: RunId
   readonly prefix: AcceptedJournalPrefix
 }
 /** An internal caller bypassed nominal construction; replay must not conceal the programming defect. */
 class JournalKernelInvariantDefect extends Error {}
 
-/** The export closure captures only this prefix, never the predecessor history. */
-const acceptedWorkflowHistory = (prefix: AcceptedJournalPrefix): ReconstructedWorkflowHistory => {
-  let exported: ReadonlyArray<JournalRecord> | undefined
-  return {
-    prefix,
-    get records() {
-      return (exported ??= materializeJournalRecords(prefix.records))
-    }
-  }
-}
+const acceptedWorkflowHistory = (prefix: AcceptedJournalPrefix): AcceptedReconstructedWorkflowHistory => ({
+  evidence: prefix
+})
 
 const acceptedHistoryResult = (
   prefix: AcceptedJournalPrefix,
-  runState: ReconstructedRunState,
+  runState: AcceptedReconstructedRunState,
   kernel: ValidatedKernelState
 ): ValidWorkflowJournalHistory => ({
   [ValidatedKernelStateTypeId]: kernel,
   _tag: "ValidWorkflowJournalHistory",
   prefix,
   runId: prefix.runId,
-  get records() {
-    return runState.workflowHistory.records
-  },
   runState
 })
 
@@ -952,12 +941,11 @@ const finishValidation = (
     evidence === undefined
       ? acceptedJournalPrefixFromValidatedHistory(runId, records)
       : acceptedJournalPrefixFromValidatedEvidence(runId, evidence)
-  const state = reconstructValidatedRunState(runId, records)
+  const state = reconstructValidatedRunState(runId, records, prefix)
   const valid: ValidWorkflowJournalHistory = {
     [ValidatedKernelStateTypeId]: { indexes, unfinished: unfinishedTasksFrom(indexes) },
     _tag: "ValidWorkflowJournalHistory",
-    runState: { ...state, workflowHistory: { ...state.workflowHistory, prefix } },
-    records,
+    runState: state,
     runId,
     prefix
   }

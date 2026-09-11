@@ -16,6 +16,20 @@ import {
 } from "./history.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 
+it("exposes accepted reconstruction only as indexed evidence, with no implicit record export", () => {
+  const runId = RunId.make("explicit-history-export")
+  const began = makeWorkflowRunBeganRecord(
+    runId,
+    FixtureTarget.make("explicit-history-export"),
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  )
+  const valid = reduceWorkflowJournalHistory(runId, [began])
+  if (valid._tag !== "ValidWorkflowJournalHistory") return expect.fail("fixture must validate")
+  expect("records" in valid).toBe(false)
+  expect("records" in valid.runState.workflowHistory).toBe(false)
+  expect("prefix" in valid.runState.workflowHistory).toBe(false)
+})
+
 it("rejects a fabricated valid-history shape without replaying its accepted prefix", () => {
   const runId = RunId.make("fabricated-history")
   const began = makeWorkflowRunBeganRecord(
@@ -25,7 +39,7 @@ it("rejects a fabricated valid-history shape without replaying its accepted pref
   )
   const valid = reduceWorkflowJournalHistory(runId, [began])
   if (valid._tag !== "ValidWorkflowJournalHistory") return expect.fail("fixture prefix must validate")
-  const fabricated = { _tag: valid._tag, records: valid.records, runId, prefix: valid.prefix, runState: valid.runState }
+  const fabricated = { _tag: valid._tag, runId, prefix: valid.prefix, runState: valid.runState }
   let visits = 0
   const stop = observeJournalRecordSequenceOperations(() => {
     visits += 1

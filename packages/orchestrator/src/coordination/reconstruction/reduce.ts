@@ -3,6 +3,9 @@ import { HashMap, HashSet, Option } from "effect"
 import { type AttemptId, type RunId, type TaskId } from "@dalph/contracts"
 import { describeJournalEvent } from "../../workflow/registry/event-descriptor.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import type { AcceptedJournalPrefix } from "../../workflow-journal/accepted-prefix.js"
+import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
+import { materializeJournalRecords } from "../../workflow-journal/record-sequence.js"
 import { advanceDurableGraphKnowledge, initializeDurableGraphKnowledge } from "./graph-knowledge.js"
 import { workflowJournalTransitionRuleFor } from "./history-transition.js"
 import {
@@ -10,6 +13,9 @@ import {
   ReconstructedRunInvariantIssue,
   type ReconstructedRunResult,
   type ReconstructedRunState,
+  type AcceptedReconstructedRunState,
+  type AcceptedReconstructedWorkflowHistory,
+  rawDiagnosticReconstructedRun,
   ReconstructedPauseState,
   ReconstructedRunCancellationState,
   ReconstructedRunPauseState,
@@ -88,8 +94,9 @@ const reduceWorkflowResponsibility = (records: ReadonlyArray<JournalRecord>): Wo
   return state
 }
 
-/** Pure workflow-history reducer; it retains every exact decoded record. */
-const reduceWorkflowHistory = (records: ReadonlyArray<JournalRecord>): ReconstructedWorkflowHistory => ({ records })
+/** Explicit historical/export boundary. Live reconstruction never exports arrays by property access. */
+export const exportWorkflowHistoryRecords = (history: ReconstructedWorkflowHistory): ReadonlyArray<JournalRecord> =>
+  materializeJournalRecords(history.evidence.records)
 
 const appendGraphKnowledge = (
   prior: BestAvailableDurableGraphKnowledge,
@@ -214,10 +221,10 @@ const appendCancellationState = (
 
 /** Advances one already-validated prefix after its exact successor record has passed history validation. */
 export const advanceReconstructedRunState = (
-  prior: ReconstructedRunState,
+  prior: AcceptedReconstructedRunState,
   record: JournalRecord,
-  history: ReconstructedWorkflowHistory
-): ReconstructedRunState => {
+  history: AcceptedReconstructedWorkflowHistory
+): AcceptedReconstructedRunState => {
   return {
     appliedThrough: record.position,
     controlPolicy: appendControlPolicy(prior.controlPolicy, record),
@@ -330,9 +337,10 @@ const validateResponsibility = (
   responsibility.entries.flatMap((entry) => validateResponsibilityEntry(entry, records))
 
 /** Composes the distinct reducers for records already accepted as valid workflow-journal history. */
-export const reconstructValidatedRunState = (
+const reconstructDerivedRunState = (
   runId: RunId,
-  records: ReadonlyArray<JournalRecord>
+  records: ReadonlyArray<JournalRecord>,
+  history: ReconstructedWorkflowHistory
 ): ReconstructedRunState => {
   const graphKnowledge = reduceGraphKnowledge(records)
   const responsibility = reduceWorkflowResponsibility(records)
@@ -347,15 +355,25 @@ export const reconstructValidatedRunState = (
     ),
     responsibility,
     runId,
-    workflowHistory: reduceWorkflowHistory(records)
+    workflowHistory: history
   }
+}
+
+/** Only the workflow-history validator supplies this accepted prefix. Cold composition reuses its already indexed evidence. */
+export const reconstructValidatedRunState = (
+  runId: RunId,
+  records: ReadonlyArray<JournalRecord>,
+  prefix: AcceptedJournalPrefix
+): AcceptedReconstructedRunState => {
+  const workflowHistory: AcceptedReconstructedWorkflowHistory = { evidence: prefix }
+  return { ...reconstructDerivedRunState(runId, records, workflowHistory), workflowHistory }
 }
 
 /** Reconstructs arbitrary records and reports broken history-to-state invariants. */
 export const reconstructRunState = (runId: RunId, records: ReadonlyArray<JournalRecord>): ReconstructedRunResult => {
-  const state = reconstructValidatedRunState(runId, records)
+  const state = reconstructDerivedRunState(runId, records, { evidence: journalEvidenceFrom(records) })
   const issues = [...validateGraphKnowledge(records), ...validateResponsibility(state.responsibility, records)]
-  if (issues.length === 0) return { _tag: "ValidReconstructedRun", state }
+  if (issues.length === 0) return { _tag: "ValidReconstructedRun", state: rawDiagnosticReconstructedRun(state) }
   return {
     _tag: "InvalidReconstructedRun",
     issues: [Option.getOrThrow(Option.fromUndefinedOr(issues[0])), ...issues.slice(1)]

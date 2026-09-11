@@ -9,8 +9,8 @@ import {
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { OperationId } from "../../workflow/identity.js"
 import { type RunId } from "@dalph/contracts"
-import type { JournalRecord } from "../../workflow-journal/store.js"
 import type { AcceptedJournalPrefix } from "../../workflow-journal/accepted-prefix.js"
+import type { JournalRecordEvidence } from "../../workflow-journal/record-evidence.js"
 import { TaskClaimAcquisition } from "../../authorities/task-tracker/claim-mutation.js"
 import { WorkflowOperation } from "../../workflow/registry/operation.js"
 import { TaskTrackerFactsObservation } from "../../workflow/task-tracker-facts/observation.js"
@@ -112,9 +112,12 @@ export const reconstructedTaskIsPaused = (
     ))
 
 export interface ReconstructedWorkflowHistory {
-  readonly records: ReadonlyArray<JournalRecord>
-  /** Present only after semantic validation; raw reconstruction cannot certify it. */
-  readonly prefix?: AcceptedJournalPrefix
+  readonly evidence: JournalRecordEvidence
+}
+
+/** Live reconstruction carries accepted journal evidence; a decoded diagnostic view cannot satisfy this boundary. */
+export interface AcceptedReconstructedWorkflowHistory extends ReconstructedWorkflowHistory {
+  readonly evidence: AcceptedJournalPrefix
 }
 
 /** Validated process-local composition; never persisted frontier or capacity. */
@@ -130,6 +133,20 @@ export interface ReconstructedRunState {
   readonly workflowHistory: ReconstructedWorkflowHistory
 }
 
+export interface AcceptedReconstructedRunState extends ReconstructedRunState {
+  readonly workflowHistory: AcceptedReconstructedWorkflowHistory
+}
+
+const RawDiagnosticRunTypeId: unique symbol = Symbol("RawDiagnosticReconstructedRun")
+/** Pure state-consistency diagnostics may reconstruct partial/orphan records, but never certify accepted workflow history. */
+export interface RawDiagnosticReconstructedRun extends ReconstructedRunState {
+  readonly [RawDiagnosticRunTypeId]: true
+}
+export const rawDiagnosticReconstructedRun = (state: ReconstructedRunState): RawDiagnosticReconstructedRun => ({
+  ...state,
+  [RawDiagnosticRunTypeId]: true
+})
+
 export const ReconstructedRunInvariantIssue = Schema.TaggedUnion({
   GraphKnowledgeHistoryMismatch: { operationId: OperationId, position: JournalPosition },
   ResponsibilityHistoryMismatch: { operationId: OperationId, position: JournalPosition },
@@ -138,7 +155,7 @@ export const ReconstructedRunInvariantIssue = Schema.TaggedUnion({
 export type ReconstructedRunInvariantIssue = typeof ReconstructedRunInvariantIssue.Type
 
 export type ReconstructedRunResult =
-  | { readonly _tag: "ValidReconstructedRun"; readonly state: ReconstructedRunState }
+  | { readonly _tag: "ValidReconstructedRun"; readonly state: RawDiagnosticReconstructedRun }
   | {
       readonly _tag: "InvalidReconstructedRun"
       readonly issues: readonly [ReconstructedRunInvariantIssue, ...ReadonlyArray<ReconstructedRunInvariantIssue>]
