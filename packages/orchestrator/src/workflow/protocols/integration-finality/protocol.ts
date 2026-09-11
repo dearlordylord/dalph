@@ -5,6 +5,12 @@ import {
   type AppendableWorkflowJournalEvent,
   type JournalRecord
 } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordsForOperationId,
+  journalRecordsForTaskKind,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import {
   completionClaimDeletionAttemptIntentRecordKey,
   completionClaimDeletionIntentRecordKey,
@@ -118,11 +124,11 @@ const completionClaimCleanupIntent = (
   })
 
 const latestAttemptOrdinal = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operationId: OperationId,
   tag: "CompletionClaimReplacementAttemptIntended" | "CompletionClaimDeletionAttemptIntended"
 ): number =>
-  records.reduce(
+  Array.from(journalRecordsForOperationId(records, operationId)).reduce(
     (latest, record) =>
       record.event._tag === tag && record.event.operationId === operationId
         ? Math.max(latest, Number(record.event.attemptOrdinal))
@@ -131,13 +137,13 @@ const latestAttemptOrdinal = (
   )
 
 const nextCleanupReadOrdinal = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operationId: OperationId,
   purposeTag: CompletionClaimDeletionReadPurpose["_tag"],
   attemptOrdinal: CompletionClaimRequestOrdinal
 ): CompletionClaimCleanupReadOrdinal =>
   CompletionClaimCleanupReadOrdinal.make(
-    records.filter(
+    Array.from(journalRecordsForOperationId(records, operationId)).filter(
       ({ event }) =>
         event._tag === "CompletionClaimDeletionReadObserved" &&
         event.request.operationId === operationId &&
@@ -148,11 +154,11 @@ const nextCleanupReadOrdinal = (
   )
 
 const nextOriginalClaimReadOrdinal = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operationId: OperationId
 ): CompletionClaimCleanupReadOrdinal =>
   CompletionClaimCleanupReadOrdinal.make(
-    records.filter(
+    Array.from(journalRecordsForOperationId(records, operationId)).filter(
       ({ event }) =>
         event._tag === "CompletionClaimDeletionReadObserved" &&
         event.request.operationId === operationId &&
@@ -161,10 +167,10 @@ const nextOriginalClaimReadOrdinal = (
   )
 
 const replacementIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operationId: OperationId
 ): Extract<JournalRecord["event"], { readonly _tag: "CompletionClaimReplacementIntended" }> | undefined =>
-  records.find(
+  Array.from(journalRecordsForOperationId(records, operationId)).find(
     (
       record
     ): record is JournalRecord & {
@@ -173,12 +179,12 @@ const replacementIntent = (
   )?.event
 
 const replacementOutcomeRecord = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operationId: OperationId
 ):
   | (JournalRecord & { readonly event: Extract<JournalRecord["event"], { readonly _tag: "CompletionClaimReplaced" }> })
   | undefined =>
-  records.find(
+  Array.from(journalRecordsForOperationId(records, operationId)).find(
     (
       record
     ): record is JournalRecord & {
@@ -187,16 +193,16 @@ const replacementOutcomeRecord = (
   )
 
 const replacementOutcome = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operationId: OperationId
 ): Extract<JournalRecord["event"], { readonly _tag: "CompletionClaimReplaced" }> | undefined =>
   replacementOutcomeRecord(records, operationId)?.event
 
 const deletionIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operationId: OperationId
 ): Extract<JournalRecord["event"], { readonly _tag: "CompletionClaimDeletionIntended" }> | undefined =>
-  records.find(
+  Array.from(journalRecordsForOperationId(records, operationId)).find(
     (
       record
     ): record is JournalRecord & {
@@ -205,10 +211,10 @@ const deletionIntent = (
   )?.event
 
 const deletionOutcome = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operationId: OperationId
 ): Extract<JournalRecord["event"], { readonly _tag: "CompletionClaimDeleted" }> | undefined =>
-  records.find(
+  Array.from(journalRecordsForOperationId(records, operationId)).find(
     (
       record
     ): record is JournalRecord & {
@@ -217,10 +223,10 @@ const deletionOutcome = (
   )?.event
 
 const settlementOutcome = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   deletionOperationId: OperationId
 ): Extract<JournalRecord["event"], { readonly _tag: "IntegrationFinalitySettled" }> | undefined =>
-  records.find(
+  Array.from(journalRecordsForOperationId(records, deletionOperationId)).find(
     (
       record
     ): record is JournalRecord & {
@@ -237,15 +243,15 @@ const append = Effect.fn("IntegrationFinality.appendEvent")(function* (
   return yield* journal.append(runId, key, event)
 })
 
-const exactPromotionWasObserved = (records: ReadonlyArray<JournalRecord>, claim: CompletionTaskClaim): boolean =>
-  records.some(
+const exactPromotionWasObserved = (records: JournalHistorySource, claim: CompletionTaskClaim): boolean =>
+  Array.from(journalRecordsForTaskKind(records, claim.plannedAttempt.taskId, "TargetPromotionObservedSuccess")).some(
     ({ event }) =>
       event._tag === "TargetPromotionObservedSuccess" &&
       targetPromotionCorrelationEquals(event.correlation, claim.promotionCorrelation)
   )
 
 const freshSuccessWasObserved = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   observation: CompletionSuccessObservation,
   claim: CompletionTaskClaim,
   replacementOperationId: OperationId
@@ -266,7 +272,7 @@ const freshSuccessWasObserved = (
 
 const ensureReplacementIntent = Effect.fn("IntegrationFinality.ensureReplacementIntent")(function* (
   request: CompletionClaimReplacementRequest,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const existing = replacementIntent(records, request.operationId)
   /* v8 ignore start -- @preserve Accepted history binds a stable operation id to one immutable claim; this defends direct protocol replay over a hostile journal. */
@@ -304,7 +310,7 @@ const isExactClaimForReplacement = (
 
 const existingReplacementOutcome = Effect.fn("IntegrationFinality.existingReplacementOutcome")(function* (
   request: CompletionClaimReplacementRequest,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const existing = replacementOutcome(records, request.operationId)
   if (existing === undefined) return undefined
@@ -359,8 +365,7 @@ const runReplacementAttempt = Effect.fn("IntegrationFinality.runReplacementAttem
   request: CompletionClaimReplacementRequest,
   attemptOrdinal: CompletionClaimRequestOrdinal
 ) {
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(request.claim.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
   const priorOutcome = yield* existingReplacementOutcome(request, records)
   /* v8 ignore next -- @preserve The serialized action owner cannot publish an outcome concurrently with its own attempt; restart returns before entering this helper. */
   if (priorOutcome !== undefined) return priorOutcome
@@ -428,8 +433,7 @@ const reconcileExhaustedReplacement = Effect.fn("IntegrationFinality.reconcileEx
 export const runCompletionClaimReplacementProtocol = Effect.fn(
   "IntegrationFinality.runCompletionClaimReplacementProtocol"
 )(function* (tracker: CompletionClaimBoundaryService, request: CompletionClaimReplacementRequest) {
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(request.claim.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
   if (!exactPromotionWasObserved(records, request.claim)) {
     return yield* new CompletionClaimPromotionRequired({ claim: request.claim })
   }
@@ -447,7 +451,7 @@ export const runCompletionClaimReplacementProtocol = Effect.fn(
 
 const ensureDeletionIntent = Effect.fn("IntegrationFinality.ensureDeletionIntent")(function* (
   request: CompletionClaimDeletionRequest,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   replacementOperationId: OperationId
 ) {
   const existing = deletionIntent(records, request.operationId)
@@ -543,7 +547,7 @@ type DeletionOutcomeEvent = Extract<JournalRecord["event"], { readonly _tag: "Co
 
 /* v8 ignore start -- @preserve Accepted history validates these exact premises before delivery; the comparisons defend direct replay over a hostile journal. */
 const settlementMatchesRequest = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   settled: IntegrationFinalityResult,
   request: CompletionClaimDeletionRequest,
   replacementOperationId: OperationId
@@ -556,7 +560,7 @@ const settlementMatchesRequest = (
   ].every(Boolean)
 
 const deletionOutcomeMatchesRequest = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   deleted: DeletionOutcomeEvent,
   request: CompletionClaimDeletionRequest,
   replacementOperationId: OperationId
@@ -596,7 +600,7 @@ const appendSettlementAndResult = Effect.fn("IntegrationFinality.appendSettlemen
 const validateDeletionPremise = Effect.fn("IntegrationFinality.validateDeletionPremise")(function* (
   request: CompletionClaimDeletionRequest,
   replacementOperationId: OperationId,
-  records: ReadonlyArray<JournalRecord>
+  records: JournalHistorySource
 ) {
   const priorReplacement = replacementOutcome(records, replacementOperationId)
   /* v8 ignore start -- @preserve Delivery derives deletion only after the exact accepted replacement; these branches fail closed for hostile direct calls. */
@@ -636,12 +640,9 @@ const originalClaimReleaseOperationFor = (request: CompletionClaimDeletionReques
     release: completionOriginalTaskClaimReleaseFor(request.claim)
   })
 
-const originalClaimWasReleased = (
-  records: ReadonlyArray<JournalRecord>,
-  request: CompletionClaimDeletionRequest
-): boolean => {
+const originalClaimWasReleased = (records: JournalHistorySource, request: CompletionClaimDeletionRequest): boolean => {
   const release = completionOriginalTaskClaimReleaseFor(request.claim)
-  return records.some(
+  return Array.from(journalRecordsForOperationId(records, release.operationId)).some(
     ({ event }) =>
       event._tag === "TaskClaimReleased" &&
       event.release.operationId === release.operationId &&
@@ -656,8 +657,7 @@ const confirmOriginalClaimReleased = Effect.fn("IntegrationFinality.confirmOrigi
   attemptOrdinal: CompletionClaimRequestOrdinal,
   execution?: InterruptibleWorkflowBoundaryExecution
 ) {
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(request.claim.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
   const readOrdinal = nextCleanupReadOrdinal(
     records,
     request.operationId,
@@ -752,8 +752,7 @@ const releaseOriginalClaimBeforeCompletionMarkerDeletion = Effect.fn(
   replacementOperationId: OperationId,
   execution?: InterruptibleWorkflowBoundaryExecution
 ) {
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(request.claim.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
   const releaseWasRecorded = originalClaimWasReleased(records, request)
   if (!releaseWasRecorded) {
     const readOrdinal = nextOriginalClaimReadOrdinal(records, request.operationId)
@@ -820,8 +819,7 @@ const runDeletionAttempt = Effect.fn("IntegrationFinality.runDeletionAttempt")(f
   attemptOrdinal: CompletionClaimRequestOrdinal,
   execution?: InterruptibleWorkflowBoundaryExecution
 ) {
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(request.claim.plannedAttempt.runId)
+  const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
   const currentDeleted = deletionOutcome(records, request.operationId)
   /* v8 ignore start -- @preserve The serialized action cannot publish deletion concurrently with itself; restart is handled before this attempt helper. */
   if (currentDeleted !== undefined) {
@@ -961,8 +959,7 @@ export const runCompletionClaimDeletionProtocol = Effect.fn("IntegrationFinality
     replacementOperationId: OperationId,
     execution?: InterruptibleWorkflowBoundaryExecution
   ) {
-    const journal = yield* InRunJournal
-    const records = yield* journal.read(request.claim.plannedAttempt.runId)
+    const records = yield* (yield* AcceptedJournalReader).readAccepted(request.claim.plannedAttempt.runId)
     const priorResult = yield* validateDeletionPremise(request, replacementOperationId, records)
     if (priorResult !== undefined) return priorResult
     yield* ensureDeletionIntent(request, records, replacementOperationId)
