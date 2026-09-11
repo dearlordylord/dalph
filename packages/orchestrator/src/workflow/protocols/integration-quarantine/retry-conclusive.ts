@@ -363,7 +363,27 @@ export const retryConclusiveIntegrationQuarantineIssueFromRecords = (
   result: RetryConclusiveIntegrationQuarantineInput
 ): string | undefined => {
   const validation = validateHistory(records, result)
-  return validation._tag === "Invalid" ? validation.detail : undefined
+  if (validation._tag === "Invalid") return validation.detail
+  const run = result.run
+  const basis = validation.value
+  const key = integrationQuarantinedRecordKey(run.session.sessionId, basis)
+  const event = IntegrationQuarantinedEvent.make({
+    basis,
+    correlation: run.session,
+    occurrenceClassification: "NonActionOccurrence",
+    version: workflowJournalEventVersion
+  })
+  const existingAtKey = exactJournalRecordAtKey(records, key)
+  if (existingAtKey._tag === "Duplicate") return existingAtKey.detail
+  if (existingAtKey._tag === "Found" && !sameExpectedQuarantine(existingAtKey.record, run, key, event)) {
+    return "Retry conclusive quarantine key contains a foreign event"
+  }
+  const duplicate = Array.from(journalRecordsForIntegratorSession(records, run.session.sessionId)).filter(
+    (record) => record.event._tag === "IntegrationQuarantined" && quarantineEventEquivalence(record.event, event)
+  )
+  return duplicate.some((record) => record.key !== key)
+    ? "Retry conclusive quarantine exists under a foreign key"
+    : undefined
 }
 
 /** Records Q2 for one exact Retry run-two conclusive result before ownership is released. */
