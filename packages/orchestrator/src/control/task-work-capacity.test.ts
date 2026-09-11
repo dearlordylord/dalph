@@ -31,6 +31,7 @@ import { reduceWorkflowJournalHistory } from "../coordination/reconstruction/his
 import { memoryJournalTestLayer } from "../workflow-journal/adapters/memory-store.js"
 import { InRunJournal, JournalStore } from "../workflow-journal/store.js"
 import { JournalPosition } from "../workflow-journal/identity.js"
+import { journalEvidenceFrom } from "../workflow-journal/record-evidence.js"
 import { OperationId } from "../workflow/identity.js"
 import {
   TaskAttemptPlannedEvent,
@@ -131,7 +132,7 @@ it.effect(
         revision: RunPolicyRevision.make(2),
         taskExecutionCapacity: TaskWorkCapacity.make(1)
       })
-      expect(reduced.records.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan", "TaskWorkCapacityChanged"])
+      expect(records.map(({ event }) => event._tag)).toEqual(["WorkflowRunBegan", "TaskWorkCapacityChanged"])
       expect((yield* projectWorkflowOccurrences(records)).occurrences).toEqual([
         {
           _tag: "AppliedTaskWorkCapacity",
@@ -575,14 +576,14 @@ it.effect("restart holds the task-work position until an exact Safe or Terminal 
       const positions = requiredPlannedAttemptPositionsOf({
         responsibility: { entries: [responsibility] },
         workflowHistory: {
-          records: [
+          evidence: journalEvidenceFrom([
             {
               event,
               key: plannedAttemptExecutorStateObservedRecordKey(plannedAttempt.attemptId, ordinal),
               position: JournalPosition.make(2),
               runId
             }
-          ]
+          ])
         }
       })
 
@@ -636,7 +637,7 @@ it.effect("restart releases the task-work position after an unchanged accepted S
       const positions = requiredPlannedAttemptPositionsOf({
         responsibility: { entries: [responsibility] },
         workflowHistory: {
-          records: [
+          evidence: journalEvidenceFrom([
             {
               event: accepted,
               key: plannedAttemptExecutorWorkReportedRecordKey(plannedAttempt.attemptId, reportOrdinal),
@@ -649,7 +650,7 @@ it.effect("restart releases the task-work position after an unchanged accepted S
               position: JournalPosition.make(3),
               runId
             }
-          ]
+          ])
         }
       })
 
