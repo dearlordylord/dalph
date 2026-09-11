@@ -12,6 +12,13 @@ import { JournalPosition } from "../../../workflow-journal/identity.js"
 import { integrationQuarantinedRecordKey, targetPromotionStaleRecordKey } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordByKey,
+  journalRecordByPosition,
+  journalRecordsForPromotionRequest,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { IntegrationQuarantineBasis, IntegrationQuarantinedEvent } from "./events.js"
 import { integratorCorrelationsEqual } from "../integrator/state.js"
@@ -65,12 +72,13 @@ const basisFor = (
   })
 
 const sameEvidence = (
-  record: JournalRecord,
+  record: JournalRecord | undefined,
   input: PromotionStaleIntegrationQuarantineInput,
   basis: Extract<IntegrationQuarantineBasis, { readonly _tag: "PromotionStale" }>
 ): record is QuarantineRecord => {
   const session = input.correlation.qualifiedCandidate.run.session
   return (
+    record !== undefined &&
     record.runId === runIdFor(input.correlation) &&
     record.key === integrationQuarantinedRecordKey(session.sessionId, basis) &&
     record.event._tag === "IntegrationQuarantined" &&
@@ -87,18 +95,28 @@ const sameEvidence = (
  * result. An existing equivalent quarantine makes the work complete.
  */
 export const pendingPromotionStaleIntegrationQuarantineFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   correlation: TargetPromotionCorrelation
 ): PromotionStaleIntegrationQuarantineInput | undefined => {
-  const stale = records.findLast(
-    (record): record is PromotionStaleRecord =>
+  let stale: PromotionStaleRecord | undefined
+  for (const record of journalRecordsForPromotionRequest(records, correlation.requestId)) {
+    if (
       record.event._tag === "TargetPromotionStale" &&
       targetPromotionCorrelationEquals(record.event.correlation, correlation)
-  )
+    ) {
+      stale = record
+    }
+  }
   if (stale === undefined || promotionStaleQuarantineEvidenceIssue(records, stale) !== undefined) return undefined
   const input = PromotionStaleIntegrationQuarantineInput.make({ correlation, targetPromotionStaleAt: stale.position })
   const basis = basisFor(input, stale)
-  return records.some((record) => sameEvidence(record, input, basis)) ? undefined : input
+  return sameEvidence(
+    journalRecordByKey(records, integrationQuarantinedRecordKey(correlation.qualifiedCandidate.run.session.sessionId, basis)),
+    input,
+    basis
+  )
+    ? undefined
+    : input
 }
 
 /**
@@ -114,9 +132,10 @@ export const appendPromotionStaleIntegrationQuarantine = Effect.fn(
     onExcessProperty: "error"
   })(input)
   const journal = yield* InRunJournal
+  const accepted = yield* AcceptedJournalReader
   const runId = runIdFor(request.correlation)
-  const records = yield* journal.read(runId)
-  const stale = records.find((record) => record.position === request.targetPromotionStaleAt)
+  const records = yield* accepted.readAccepted(runId)
+  const stale = journalRecordByPosition(records, request.targetPromotionStaleAt)
   if (!staleRecordMatches(stale, request)) {
     return yield* reject(
       request.correlation,
@@ -129,7 +148,7 @@ export const appendPromotionStaleIntegrationQuarantine = Effect.fn(
   }
   const basis = basisFor(request, stale)
   const key = integrationQuarantinedRecordKey(request.correlation.qualifiedCandidate.run.session.sessionId, basis)
-  const existing = records.find((record) => record.key === key)
+  const existing = journalRecordByKey(records, key)
   if (existing !== undefined) {
     return sameEvidence(existing, request, basis)
       ? existing
@@ -144,8 +163,8 @@ export const appendPromotionStaleIntegrationQuarantine = Effect.fn(
   const appended = yield* journal.append(runId, key, event).pipe(
     Effect.catchTag("JournalStoreContradiction", ({ existingPosition }) =>
       Effect.gen(function* () {
-        const refreshed = yield* journal.read(runId)
-        const winner = refreshed.find((record) => record.position === existingPosition)
+        const refreshed = yield* accepted.readAccepted(runId)
+        const winner = journalRecordByPosition(refreshed, existingPosition)
         if (winner !== undefined && sameEvidence(winner, request, basis)) return winner
         return yield* reject(
           request.correlation,
