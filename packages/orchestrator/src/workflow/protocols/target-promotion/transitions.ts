@@ -157,7 +157,7 @@ const mintIntendedAttempt = (authorization: TargetPromotionAttemptAuthorization)
 const mintObservedAttempt = (
   intended: TargetPromotionIntendedAttempt,
   result: TargetPromotionCompareAndSetResult
-): TargetPromotionObservedAttempt => {
+): TargetPromotionAttemptBoundaryResult => {
   const observed = Object.freeze({
     _tag: "TargetPromotionAttemptObserved" as const,
     [observedAttemptBrand]: true as const,
@@ -411,7 +411,6 @@ export const makeTargetPromotionTransitions = <E, R>(readEvidence: CurrentTarget
         }
       : mintObservedAttempt(attempt, result.success)
   })
-
   /** Appends the terminal interpretation of one already-observed compare-and-set response. */
   const settleTargetPromotionAttempt = Effect.fn("TargetPromotion.settleAttempt")(function* (
     attempt: TargetPromotionSettlementClaim
