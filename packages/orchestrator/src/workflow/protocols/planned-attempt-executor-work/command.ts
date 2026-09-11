@@ -18,6 +18,12 @@ import {
   plannedAttemptExecutorCommandResponseObservedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import { InRunJournal, type JournalRecord } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import {
+  journalRecordCountForAttemptKind,
+  journalRecordsForAttemptKind,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import {
   PlannedAttemptExecutorCommandIntendedEvent,
   PlannedAttemptExecutorCommandOrdinal,
@@ -64,7 +70,7 @@ export const reconcileUnsettledPlannedAttemptExecutorCommand = Effect.fn(
   "PlannedAttemptExecutorWorkflow.reconcileUnsettledCommand"
 )(function* (
   permit: PlannedAttemptProtocolPermit,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   intent: Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorCommandIntended" }>
 ) {
@@ -72,7 +78,7 @@ export const reconcileUnsettledPlannedAttemptExecutorCommand = Effect.fn(
   const executor = yield* PlannedAttemptExecutor
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
   const projectionOrdinal = PlannedAttemptExecutorCommandProjectionOrdinal.make(
-    records.filter(
+    Array.from(journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptExecutorCommandProjectionObserved")).filter(
       ({ event }) =>
         event._tag === "PlannedAttemptExecutorCommandProjectionObserved" &&
         event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
@@ -177,14 +183,16 @@ const commandLimitError = (
 type PlannedAttemptExecutorCommand = "Begin" | "Resume" | "Suspend"
 
 const commandCountSinceLatestSafeSuspension = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   candidate: PlannedAttemptExecutorCommand
 ): number => {
   const latestSafeSuspensionPosition = plannedAttemptExecutorEvidence(records, plannedAttempt).findLast(
     ({ report, source }) => source._tag === "AcceptedReport" && report._tag === "ExecutorWorkSafelySuspended"
   )?.observedAt
-  return records.filter(
+  return Array.from(
+    journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptExecutorCommandIntended")
+  ).filter(
     ({ event, position }) =>
       (latestSafeSuspensionPosition === undefined || position > latestSafeSuspensionPosition) &&
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
@@ -195,7 +203,7 @@ const commandCountSinceLatestSafeSuspension = (
 }
 
 const initialResumeAuthorityError = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   command: PlannedAttemptExecutorCommand,
   correlation: PlannedAttemptExecutorCorrelation
@@ -208,7 +216,7 @@ const initialResumeAuthorityError = (
 }
 
 const terminalCommandAuthorityError = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   correlation: PlannedAttemptExecutorCorrelation
 ): PlannedAttemptExecutorWorkAlreadyTerminal | undefined => {
@@ -222,13 +230,15 @@ const terminalCommandAuthorityError = (
 }
 
 const repeatedBeginCommandError = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   command: PlannedAttemptExecutorCommand,
   correlation: PlannedAttemptExecutorCorrelation
 ): PlannedAttemptExecutorAlreadyBegan | undefined =>
   command === "Begin" &&
-  records.some(
+  Array.from(
+    journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptExecutorCommandIntended")
+  ).some(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorCommandIntended" &&
       event.command === "Begin" &&
@@ -238,7 +248,7 @@ const repeatedBeginCommandError = (
     : undefined
 
 const resumeCommandAuthorityError = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   command: PlannedAttemptExecutorCommand,
   correlation: PlannedAttemptExecutorCorrelation
@@ -248,7 +258,7 @@ const resumeCommandAuthorityError = (
     : undefined
 
 const suspendCommandAuthorityError = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   command: PlannedAttemptExecutorCommand,
   correlation: PlannedAttemptExecutorCorrelation
@@ -262,7 +272,7 @@ const suspendCommandAuthorityError = (
 }
 
 const settledCommandAuthorityError = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   command: PlannedAttemptExecutorCommand,
   correlation: PlannedAttemptExecutorCorrelation,
@@ -280,15 +290,11 @@ const settledCommandAuthorityError = (
   )
 
 const nextCommandOrdinal = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): PlannedAttemptExecutorCommandOrdinal =>
   PlannedAttemptExecutorCommandOrdinal.make(
-    records.filter(
-      ({ event }) =>
-        event._tag === "PlannedAttemptExecutorCommandIntended" &&
-        event.plannedAttempt.attemptId === plannedAttempt.attemptId
-    ).length + 1
+    journalRecordCountForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptExecutorCommandIntended") + 1
   )
 
 const appendPlannedAttemptExecutorCommandIntent = Effect.fn("PlannedAttemptExecutorWorkflow.appendCommandIntent")(
@@ -297,10 +303,10 @@ const appendPlannedAttemptExecutorCommandIntent = Effect.fn("PlannedAttemptExecu
     command: PlannedAttemptExecutorCommand,
     commandOrdinal: PlannedAttemptExecutorCommandOrdinal
   ) {
-    const journal = yield* InRunJournal
+    const acceptedJournal = yield* AcceptedJournalReader
     const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
     if (command === "Resume") {
-      const currentRecords = yield* journal.read(plannedAttempt.runId)
+      const currentRecords = yield* acceptedJournal.readAccepted(plannedAttempt.runId)
       const currentTerminalChoice = appliedTerminalChoiceFor(currentRecords, plannedAttempt)
       if (currentTerminalChoice !== undefined) {
         return yield* new PlannedAttemptExecutorResumeInvalidatedByTerminalChoice({
@@ -388,10 +394,10 @@ export const runPlannedAttemptExecutorCommand = Effect.fn("PlannedAttemptExecuto
   selectedSpecification?: TaskWorkSpecification,
   onIntentAccepted: (receipt: AcceptedExecutorCommandDelivery) => Effect.Effect<void> = () => Effect.void
 ) {
-  const journal = yield* InRunJournal
+  const acceptedJournal = yield* AcceptedJournalReader
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
   yield* beginPlannedAttemptExecutorResponsibility(plannedAttempt)
-  const records = yield* journal.read(plannedAttempt.runId)
+  const records = yield* acceptedJournal.readAccepted(plannedAttempt.runId)
   const initialResumeError = initialResumeAuthorityError(records, plannedAttempt, command, correlation)
   if (initialResumeError !== undefined) return yield* initialResumeError
   const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)

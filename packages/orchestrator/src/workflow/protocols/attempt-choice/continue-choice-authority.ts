@@ -1,6 +1,7 @@
 import { plannedTaskAttemptEquivalence, type PlannedTaskAttempt } from "@dalph/contracts"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { journalRecordsForAttemptKind, type JournalHistorySource } from "../../../workflow-journal/record-evidence.js"
 
 /** Durable Operator authority to keep one immutable plan while accepting one exact changed authored revision. */
 type AppliedContinueAttemptChoice = Omit<JournalRecord, "event"> & {
@@ -11,10 +12,10 @@ type AppliedContinueAttemptChoice = Omit<JournalRecord, "event"> & {
 
 /** Returns the latest Continue authority for one immutable planned attempt, regardless of changed revision. */
 const latestAppliedContinueChoiceForAttempt = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): AppliedContinueAttemptChoice | undefined =>
-  records.findLast(
+  Array.from(journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "AttemptChoiceApplied")).findLast(
     (record): record is AppliedContinueAttemptChoice =>
       record.event._tag === "AttemptChoiceApplied" &&
       record.event.choice === "ContinueExistingAttempt" &&
@@ -23,7 +24,7 @@ const latestAppliedContinueChoiceForAttempt = (
 
 /** Returns the latest Continue authority for one immutable attempt and one exact changed authored revision. */
 export const appliedContinueChoiceForExactRevision = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   observedTaskRevision: PlannedTaskAttempt["taskRevision"]
 ): AppliedContinueAttemptChoice | undefined => {
@@ -33,13 +34,13 @@ export const appliedContinueChoiceForExactRevision = (
 
 /** Returns where the latest Continue authority for this attempt was durably recorded. */
 export const latestAppliedContinueChoicePositionForAttempt = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): JournalPosition | undefined => latestAppliedContinueChoiceForAttempt(records, plannedAttempt)?.position
 
 /** Returns where the exact attempt/revision Continue authority was durably recorded. */
 export const appliedContinueChoicePositionForExactRevision = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   observedTaskRevision: PlannedTaskAttempt["taskRevision"]
 ): JournalPosition | undefined =>

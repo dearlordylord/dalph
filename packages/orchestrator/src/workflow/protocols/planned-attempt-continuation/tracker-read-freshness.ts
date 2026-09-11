@@ -1,13 +1,19 @@
 import { type PlannedTaskAttempt, type RunId, plannedTaskAttemptEquivalence } from "@dalph/contracts"
 import { taskTrackerTargetKey } from "../../../authorities/task-tracker/target.js"
 import {
-  attemptPlanRecordKey,
   intentRecordKey,
-  outcomeRecordKey,
-  plannedAttemptReplacedRecordKey
+  outcomeRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import {
+  isJournalRecordEvidence,
+  journalEvidenceBefore,
+  journalRecordByKey,
+  journalRecordForOperationId,
+  journalRecordsForTask,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import type { WorkflowOperation } from "../../registry/operation.js"
 import { recordedTaskAttemptPlans } from "../task-attempt-planning/journal-evidence.js"
 import { currentAcceptedPlannedAttemptExecutorLifecycleFor } from "../planned-attempt-executor-work/evidence.js"
@@ -41,7 +47,7 @@ const operationNamesTask = (
  * from a planned attempt (the attempt deliberately has no tracker target).
  */
 const continuationTrackerReadMatchesTask = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operation: ContinuationTrackerReadOperation,
   target: ContinuationTrackerReadOperation["target"],
   taskId: PlannedTaskAttempt["taskId"],
@@ -55,24 +61,23 @@ const continuationTrackerReadMatchesTask = (
 type RecordedTaskAttemptPlan = typeof WorkflowOperation.cases.RecordTaskAttemptPlan.Type
 
 const recordedPlanEntriesBefore = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   before?: JournalPosition
 ): ReadonlyArray<RecordedTaskAttemptPlan> =>
-  records.flatMap((record) => {
+  recordedTaskAttemptPlans(records).flatMap((operation) => {
+    const record = journalRecordForOperationId(records, operation.operationId)
+    if (record === undefined) return []
     if (record.runId !== runId || (before !== undefined && record.position >= before)) return []
     if (
-      record.event._tag === "TaskAttemptPlanned" &&
-      record.key === attemptPlanRecordKey(record.event.operation.plannedAttempt.attemptId)
+      record.event._tag === "TaskAttemptPlanned"
     ) {
-      return [record.event.operation]
+      return [operation]
     }
     if (
-      record.event._tag === "PlannedAttemptReplaced" &&
-      record.event.subject.plannedAttempt.runId === runId &&
-      record.key === plannedAttemptReplacedRecordKey(record.event.subject.plannedAttempt.attemptId)
+      record.event._tag === "PlannedAttemptReplaced"
     ) {
-      return [record.event.successorPlan]
+      return [operation]
     }
     return []
   })
@@ -83,7 +88,7 @@ const recordedPlanEntriesBefore = (
  * competing plans fail closed instead of shrinking the causal predecessor set.
  */
 export const exactAcceptedExecutingPlansBefore = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   plannedAttempts: ReadonlyArray<PlannedTaskAttempt>,
   before?: JournalPosition
@@ -95,9 +100,12 @@ export const exactAcceptedExecutingPlansBefore = (
   ) {
     return undefined
   }
-  const prefix = records.filter(
-    (record) => record.runId === runId && (before === undefined || record.position < before)
-  )
+  const prefix =
+    before === undefined
+      ? records
+      : isJournalRecordEvidence(records)
+        ? journalEvidenceBefore(records, before)
+        : records.filter((record) => record.runId === runId && record.position < before)
   const planEntries = recordedPlanEntriesBefore(records, runId, before)
   const resolved = plannedAttempts.map((plannedAttempt) =>
     planEntries.filter(
@@ -123,7 +131,7 @@ export const exactAcceptedExecutingPlansBefore = (
  * every named attempt had accepted Executing authority before the intent.
  */
 export const acceptedExecutingAttemptsForAuthorityCheckIntent = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   intent: JournalRecord
 ): ReadonlyArray<PlannedTaskAttempt> | undefined => {
   if (intent.event._tag !== "TaskTrackerReadIntentRecorded" || intent.event.operation._tag !== "ReadTrackerGraph") {
@@ -165,7 +173,7 @@ export const acceptedExecutingAttemptsForAuthorityCheckIntent = (
  * predecessors fails closed as well.
  */
 export const continuationTrackerReadHasExactPlanPredecessor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   operation: ContinuationTrackerReadOperation,
   plannedAttempt: PlannedTaskAttempt
 ): boolean => {
@@ -244,14 +252,14 @@ export type ContinuationTrackerReadStatus =
     }
 
 export const latestContinuationTrackerReadStatusAfter = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   after: JournalPosition,
   family: ContinuationTrackerReadOperation["_tag"],
   target: ContinuationTrackerReadOperation["target"],
   taskId: PlannedTaskAttempt["taskId"],
   plannedAttempt?: PlannedTaskAttempt
 ): ContinuationTrackerReadStatus | undefined => {
-  const intent = records.findLast(
+  const intent = Array.from(journalRecordsForTask(records, taskId)).findLast(
     (record): record is ContinuationTrackerReadIntent =>
       record.position > after &&
       record.event._tag === "TaskTrackerReadIntentRecorded" &&
@@ -263,7 +271,7 @@ export const latestContinuationTrackerReadStatusAfter = (
   if (intent === undefined) return undefined
 
   const operationId = intent.event.operation.operationId
-  const outcome = records.findLast((record) => isContinuationTrackerReadOutcome(record, operationId))
+  const outcome = journalRecordByKey(records, outcomeRecordKey(operationId))
   if (outcome === undefined) return { _tag: "Pending", intent }
   if (outcome.position <= intent.position || !continuationTrackerOutcomeIsReadable(intent.event.operation, outcome)) {
     return { _tag: "Unreadable", intent, outcome }

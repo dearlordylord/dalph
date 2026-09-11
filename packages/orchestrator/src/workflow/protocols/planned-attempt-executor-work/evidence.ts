@@ -26,7 +26,9 @@ import type {
 import {
   journalRecordsForAttempt,
   journalRecordsOfKind,
-  type JournalHistorySource,type JournalRecordEvidence
+  lastJournalRecordForAttemptKind,
+  type JournalHistorySource,
+  type JournalRecordEvidence
 } from "../../../workflow-journal/record-evidence.js"
 
 const latestElementOffset = -1
@@ -301,6 +303,60 @@ const deriveLatestExecutorEvidence = (
   return issue === undefined || latestExact.observedAt > issue.observedAt ? evidence : undefined
 }
 
+const indexedEvidenceCandidate = (
+  records: JournalRecordEvidence,
+  plannedAttempt: PlannedTaskAttempt,
+  kind:
+    | "PlannedAttemptExecutorWorkReported"
+    | "PlannedAttemptExecutorCommandResponseObserved"
+    | "PlannedAttemptExecutorCommandProjectionObserved"
+    | "PlannedAttemptExecutorStateObserved",
+  after?: JournalPosition
+): PlannedAttemptExecutorEvidence | undefined => {
+  const record = lastJournalRecordForAttemptKind(records, plannedAttempt.attemptId, kind)
+  if (record === undefined || (after !== undefined && record.position <= after)) return undefined
+  return evidenceFromRecord(record, plannedAttempt)[0]
+}
+
+const deriveLatestIndexedExecutorEvidence = (
+  records: JournalRecordEvidence,
+  plannedAttempt: PlannedTaskAttempt,
+  after?: JournalPosition
+): PlannedAttemptExecutorEvidence | undefined => {
+  const accepted = indexedEvidenceCandidate(records, plannedAttempt, "PlannedAttemptExecutorWorkReported", after)
+  const observedCandidates = [
+    indexedEvidenceCandidate(records, plannedAttempt, "PlannedAttemptExecutorCommandResponseObserved", after),
+    indexedEvidenceCandidate(records, plannedAttempt, "PlannedAttemptExecutorCommandProjectionObserved", after),
+    indexedEvidenceCandidate(records, plannedAttempt, "PlannedAttemptExecutorStateObserved", after)
+  ].filter((candidate): candidate is PlannedAttemptExecutorEvidence => candidate !== undefined)
+  const observed = observedCandidates.toSorted((left, right) => left.observedAt - right.observedAt).at(-1)
+  const latestExact = [accepted, ...observedCandidates]
+    .filter((candidate): candidate is PlannedAttemptExecutorEvidence => candidate !== undefined)
+    .toSorted((left, right) => left.observedAt - right.observedAt)
+    .at(-1)
+  const latestIssue = ([
+    "PlannedAttemptExecutorCommandProjectionObserved",
+    "PlannedAttemptExecutorStateObserved"
+  ] as const)
+    .flatMap((kind) => {
+      const record = lastJournalRecordForAttemptKind(records, plannedAttempt.attemptId, kind)
+      if (record === undefined || (after !== undefined && record.position <= after)) return []
+      if (
+        record.event._tag !== "PlannedAttemptExecutorCommandProjectionObserved" &&
+        record.event._tag !== "PlannedAttemptExecutorStateObserved"
+      ) {
+        return []
+      }
+      const reason = projectionIssueReason(record.event.observation)
+      return reason === undefined ? [] : [{ observedAt: record.position, reason }]
+    })
+    .toSorted((left, right) => left.observedAt - right.observedAt)
+    .at(-1)
+  const preferred = preferredExactExecutorEvidence(accepted, observed)
+  if (preferred === undefined || latestExact === undefined) return undefined
+  return latestIssue === undefined || latestExact.observedAt > latestIssue.observedAt ? preferred : undefined
+}
+
 /**
  * Returns the newest exact executor authority that remains current.
  * A later non-exact projection invalidates the report as authority without
@@ -314,7 +370,9 @@ export const latestPlannedAttemptExecutorEvidence = (
   const key = `${plannedAttempt.attemptId}:after:${after ?? "beginning"}`
   const cachedByAttempt = latestExecutorEvidenceByPrefix.get(records)
   if (cachedByAttempt?.has(key) === true) return cachedByAttempt.get(key)
-  const latest = deriveLatestExecutorEvidence(records, plannedAttempt, after)
+  const latest = isIndexedExecutorHistory(records)
+    ? deriveLatestIndexedExecutorEvidence(records, plannedAttempt, after)
+    : deriveLatestExecutorEvidence(records, plannedAttempt, after)
   const cache = cachedByAttempt ?? new Map<string, PlannedAttemptExecutorEvidence | undefined>()
   cache.set(key, latest)
   latestExecutorEvidenceByPrefix.set(records, cache)

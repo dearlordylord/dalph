@@ -4,8 +4,13 @@ import { type PlannedTaskAttempt, plannedTaskAttemptEquivalence, type TaskRevisi
 import { taskTrackerTargetKey, type TrackerTarget } from "../../../authorities/task-tracker/target.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import { intentRecordKey, outcomeRecordKey } from "../../../workflow-journal/record-key.js"
+import {
+  journalRecordByKey,
+  journalRecordsForAttemptKind,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { authorizedClaimForAttempt } from "../../claim-authority-history.js"
-import type { WorkflowJournalEvent } from "../../registry/event.js"
 import { plannedAttemptWorktreeObservationMatchesPlan } from "../planned-attempt-worktree-observation/protocol.js"
 import { graphKeepsTaskEligible } from "./authorization-graph.js"
 import {
@@ -52,23 +57,15 @@ const trackerOutcomeTargetMatchesRun = (record: JournalRecord, immutableRunTarge
 
 // eslint-disable-next-line complexity -- The exact graph witness gate must reject every stale, foreign, and malformed read state.
 export const validateContinuationGraphWitness = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   witness: PlannedAttemptContinuationWitness,
   freshnessBaseline: JournalPosition,
   immutableRunTarget: TrackerTarget
 ): WitnessValidation => {
   const observation = witness.activeTaskContinuationRead
-  const intent = records.findLast(
-    ({ event }) =>
-      event._tag === "TaskTrackerReadIntentRecorded" &&
-      event.operation._tag === "ReadTrackerGraph" &&
-      event.operation.operationId === observation.graphObservationOperationId
-  )
-  const outcome = records.findLast(
-    ({ event }) =>
-      event._tag === "TaskTrackerFactsObserved" && event.operationId === observation.graphObservationOperationId
-  )
+  const intent = journalRecordByKey(records, intentRecordKey(observation.graphObservationOperationId))
+  const outcome = journalRecordByKey(records, outcomeRecordKey(observation.graphObservationOperationId))
   const pair = presentWitnessPair(intent, outcome)
   if (pair === undefined) {
     return reject(
@@ -150,7 +147,7 @@ export const validateContinuationGraphWitness = (
 
 // eslint-disable-next-line complexity -- The exact specification witness gate must reject every stale or malformed read state.
 export const validateContinuationSpecificationWitness = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   witness: PlannedAttemptContinuationWitness,
   after: JournalPosition,
@@ -159,15 +156,8 @@ export const validateContinuationSpecificationWitness = (
   immutableRunTarget: TrackerTarget
 ): WitnessValidation => {
   const operationId = witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId
-  const intent = records.findLast(
-    ({ event }) =>
-      event._tag === "TaskTrackerReadIntentRecorded" &&
-      event.operation._tag === "ReadTaskWorkSpecification" &&
-      event.operation.operationId === operationId
-  )
-  const outcome = records.findLast(
-    ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operationId
-  )
+  const intent = journalRecordByKey(records, intentRecordKey(operationId))
+  const outcome = journalRecordByKey(records, outcomeRecordKey(operationId))
   const pair = presentWitnessPair(intent, outcome)
   if (pair === undefined) {
     return reject(
@@ -242,7 +232,7 @@ export const validateContinuationSpecificationWitness = (
 
 // eslint-disable-next-line complexity -- The exact claim witness gate must reject every stale or malformed read state.
 export const validateContinuationClaimWitness = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   witness: PlannedAttemptContinuationWitness,
   after: JournalPosition,
@@ -250,15 +240,8 @@ export const validateContinuationClaimWitness = (
   immutableRunTarget: TrackerTarget
 ): WitnessValidation => {
   const operationId = witness.activeTaskContinuationRead.taskClaimObservationOperationId
-  const intent = records.findLast(
-    ({ event }) =>
-      event._tag === "TaskTrackerReadIntentRecorded" &&
-      event.operation._tag === "ReadTaskClaim" &&
-      event.operation.operationId === operationId
-  )
-  const outcome = records.findLast(
-    ({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operationId
-  )
+  const intent = journalRecordByKey(records, intentRecordKey(operationId))
+  const outcome = journalRecordByKey(records, outcomeRecordKey(operationId))
   const authorizedClaim = authorizedClaimForAttempt(records, plannedAttempt)
   const pair = presentWitnessPair(intent, outcome)
   if (pair === undefined || authorizedClaim === undefined) {
@@ -330,26 +313,15 @@ export const validateContinuationClaimWitness = (
 }
 
 export const validateContinuationWorktreeWitness = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   witness: PlannedAttemptContinuationWitness,
   after: JournalPosition,
   freshnessBaseline: JournalPosition
 ): WitnessValidation => {
   const operationId = witness.worktreeObservationOperationId
-  const intent = records.findLast(
-    ({ event }) =>
-      event._tag === "GitReadIntentRecorded" &&
-      event.operation._tag === "ReadTaskWorktree" &&
-      event.operation.operationId === operationId
-  )
-  const outcome = records.findLast(
-    (
-      record
-    ): record is JournalRecord & {
-      readonly event: Extract<WorkflowJournalEvent, { readonly _tag: "PlannedAttemptWorktreeObserved" }>
-    } => record.event._tag === "PlannedAttemptWorktreeObserved" && record.event.operationId === operationId
-  )
+  const intent = journalRecordByKey(records, intentRecordKey(operationId))
+  const outcome = journalRecordByKey(records, outcomeRecordKey(operationId))
   const pair = presentWitnessPair(intent, outcome)
   if (pair === undefined) {
     return reject(
@@ -381,7 +353,9 @@ export const validateContinuationWorktreeWitness = (
     )
   }
   if (
-    records.some(
+    Array.from(
+      journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptWorktreeObserved")
+    ).some(
       ({ event, position }) =>
         position > currentOutcome.position &&
         event._tag === "PlannedAttemptWorktreeObserved" &&
@@ -398,22 +372,15 @@ export const validateContinuationWorktreeWitness = (
 }
 
 export const validateContinuationTargetLineageWitness = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   witness: PlannedAttemptContinuationWitness,
   after: JournalPosition,
   freshnessBaseline: JournalPosition
 ): WitnessValidation => {
   const operationId = witness.targetLineageObservationOperationId
-  const intent = records.findLast(
-    ({ event }) =>
-      event._tag === "GitReadIntentRecorded" &&
-      event.operation._tag === "ReadTargetLineage" &&
-      event.operation.operationId === operationId
-  )
-  const outcome = records.findLast(
-    ({ event }) => event._tag === "TargetLineageObserved" && event.operationId === operationId
-  )
+  const intent = journalRecordByKey(records, intentRecordKey(operationId))
+  const outcome = journalRecordByKey(records, outcomeRecordKey(operationId))
   const pair = presentWitnessPair(intent, outcome)
   if (pair === undefined) {
     return reject(
@@ -448,7 +415,7 @@ export const validateContinuationTargetLineageWitness = (
     )
   }
   if (
-    records.some(
+    Array.from(journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "TargetLineageObserved")).some(
       ({ event, position }) =>
         position > currentOutcome.position &&
         event._tag === "TargetLineageObserved" &&

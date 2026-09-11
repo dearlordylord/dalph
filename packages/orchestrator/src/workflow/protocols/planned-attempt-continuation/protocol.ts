@@ -1,6 +1,8 @@
 import { plannedAttemptExecutorCorrelation, PlannedTaskAttempt } from "@dalph/contracts"
 import { Effect, Schema } from "effect"
 import { InRunJournal } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { journalRecordByKey } from "../../../workflow-journal/record-evidence.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { PlannedAttemptContinuationAuthorizedEvent, type PlannedAttemptContinuationWitness } from "./events.js"
 import { plannedAttemptContinuationAuthorizedRecordKey } from "../../../workflow-journal/record-key.js"
@@ -55,7 +57,8 @@ const authorizePlannedAttemptContinuationUnderPermit = Effect.fn("PlannedAttempt
     witness: PlannedAttemptContinuationWitness
   ) {
     const journal = yield* InRunJournal
-    const records = yield* journal.read(plannedAttempt.runId)
+    const acceptedJournal = yield* AcceptedJournalReader
+    const records = yield* acceptedJournal.readAccepted(plannedAttempt.runId)
     const evaluation = evaluatePlannedAttemptContinuationAuthorization(records, plannedAttempt, witness)
     if (evaluation._tag === "Rejected") {
       return yield* new PlannedAttemptContinuationAuthorizationRejected({
@@ -66,11 +69,11 @@ const authorizePlannedAttemptContinuationUnderPermit = Effect.fn("PlannedAttempt
       })
     }
     const key = plannedAttemptContinuationAuthorizedRecordKey(plannedAttempt.attemptId, witness)
-    const existing = records.find(({ key: recordKey }) => recordKey === key)
+    const existing = journalRecordByKey(records, key)
     if (existing !== undefined) return existing
     return yield* permit.recordFact(
       Effect.gen(function* () {
-        const currentRecords = yield* journal.read(plannedAttempt.runId)
+        const currentRecords = yield* acceptedJournal.readAccepted(plannedAttempt.runId)
         const currentEvaluation = evaluatePlannedAttemptContinuationAuthorization(
           currentRecords,
           plannedAttempt,
@@ -84,7 +87,7 @@ const authorizePlannedAttemptContinuationUnderPermit = Effect.fn("PlannedAttempt
             witness: currentEvaluation.witness
           })
         }
-        const currentExisting = currentRecords.find(({ key: recordKey }) => recordKey === key)
+        const currentExisting = journalRecordByKey(currentRecords, key)
         if (currentExisting !== undefined) return currentExisting
         return yield* journal.append(
           plannedAttempt.runId,

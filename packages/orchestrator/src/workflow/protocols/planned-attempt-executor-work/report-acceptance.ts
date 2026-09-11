@@ -6,6 +6,7 @@ import {
 import { Effect } from "effect"
 import { plannedAttemptExecutorWorkReportedRecordKey } from "../../../workflow-journal/record-key.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { latestUnacceptedPlannedAttemptExecutorReport } from "./evidence.js"
 import { PlannedAttemptExecutorReportOrdinal, PlannedAttemptExecutorWorkReportedEvent } from "./events.js"
@@ -26,7 +27,8 @@ export const acceptDistinctPlannedAttemptExecutorReport = Effect.fn(
   "PlannedAttemptExecutorWorkflow.acceptDistinctReport"
 )(function* (plannedAttempt: PlannedTaskAttempt, report: PlannedAttemptExecutorReport) {
   const journal = yield* InRunJournal
-  const records = yield* journal.read(plannedAttempt.runId)
+  const acceptedJournal = yield* AcceptedJournalReader
+  const records = yield* acceptedJournal.readAccepted(plannedAttempt.runId)
   const accepted = acceptedPlannedAttemptExecutorReportRecords(records, plannedAttempt)
   const latest = accepted.at(lastElementOffset)
   if (
@@ -50,8 +52,8 @@ export const acceptDistinctPlannedAttemptExecutorReport = Effect.fn(
 export const acceptPendingPlannedAttemptExecutorReport = Effect.fn(
   "PlannedAttemptExecutorWorkflow.acceptPendingReport"
 )(function* (plannedAttempt: PlannedTaskAttempt) {
-  const journal = yield* InRunJournal
-  const records = yield* journal.read(plannedAttempt.runId)
+  const acceptedJournal = yield* AcceptedJournalReader
+  const records = yield* acceptedJournal.readAccepted(plannedAttempt.runId)
   const pending = latestUnacceptedPlannedAttemptExecutorReport(records, plannedAttempt)
   if (pending === undefined) return undefined
   yield* acceptDistinctPlannedAttemptExecutorReport(plannedAttempt, pending.report)

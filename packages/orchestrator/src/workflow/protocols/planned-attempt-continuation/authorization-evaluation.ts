@@ -1,6 +1,11 @@
 import { type PlannedTaskAttempt, plannedTaskAttemptEquivalence } from "@dalph/contracts"
-import type { JournalRecord } from "../../../workflow-journal/store.js"
 import type { JournalPosition } from "../../../workflow-journal/identity.js"
+import { outcomeRecordKey } from "../../../workflow-journal/record-key.js"
+import {
+  journalRecordByKey,
+  journalRecordsForAttemptKind,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { exactWorkflowRunTargetForRun } from "../../../workflow-journal/run-target.js"
 import { appliedTerminalChoiceFor } from "../attempt-choice/terminal-choice-authority.js"
 import { appliedContinueChoiceForExactRevision } from "../attempt-choice/continue-choice-authority.js"
@@ -38,18 +43,13 @@ type ValidExecutorAuthority = { readonly _tag: "ValidExecutorAuthority"; readonl
 
 /** Shared task-revision authority for first Resume and exact Resume redelivery. */
 export const continuationTaskAuthorityFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   witness: PlannedAttemptContinuationWitness,
   executorObservedAt: JournalPosition
 ) => {
   const operationId = witness.activeTaskContinuationRead.taskWorkSpecificationObservationOperationId
-  const witnessedSpecification = records.findLast(
-    ({ event }) =>
-      event._tag === "TaskTrackerFactsObserved" &&
-      event.operationId === operationId &&
-      event.observation._tag === "FocusedTaskWorkSpecificationFacts"
-  )
+  const witnessedSpecification = journalRecordByKey(records, outcomeRecordKey(operationId))
   const currentTaskRevision =
     witnessedSpecification?.event._tag === "TaskTrackerFactsObserved" &&
     witnessedSpecification.event.observation._tag === "FocusedTaskWorkSpecificationFacts"
@@ -69,10 +69,12 @@ export const continuationTaskAuthorityFor = (
 }
 
 const validateExecutorAuthority = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): PlannedAttemptContinuationAuthorizationEvaluation | ValidExecutorAuthority => {
-  const hasResponsibility = records.some(
+  const hasResponsibility = Array.from(
+    journalRecordsForAttemptKind(records, plannedAttempt.attemptId, "PlannedAttemptExecutorWorkResponsibilityBegan")
+  ).some(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
       exactAttempt(event.plannedAttempt, plannedAttempt)
@@ -121,7 +123,7 @@ const validateExecutorAuthority = (
 }
 
 export const evaluatePlannedAttemptContinuationAuthorization = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
   witness: PlannedAttemptContinuationWitness
 ): PlannedAttemptContinuationAuthorizationEvaluation => {
