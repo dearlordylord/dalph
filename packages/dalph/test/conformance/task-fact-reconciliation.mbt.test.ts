@@ -94,6 +94,7 @@ import { journaledWorkflowInterpreterLayer } from "../../../orchestrator/src/wor
 import { InRunJournal, type JournalRecord } from "../../../orchestrator/src/workflow-journal/store.js"
 import { AcceptedJournalReader } from "../../../orchestrator/src/workflow-journal/accepted-reader.js"
 import { liveJournalTestLayer } from "../../../orchestrator/src/coordination/delivery/live-journal-test-layer.js"
+import { Journal } from "../../../orchestrator/src/coordination/delivery/journal.js"
 import {
   attemptPlanRecordKey,
   plannedAttemptExecutorCommandIntendedRecordKey,
@@ -609,7 +610,11 @@ const makeTaskFactAcceptedSeed = (): ReadonlyArray<JournalRecord> => {
 const makeTaskFactRuntime = (records: ReadonlyArray<JournalRecord>) =>
   Effect.gen(function* () {
     const context = yield* Layer.build(liveJournalTestLayer({ records, runId, target }))
-    return { accepted: Context.get(context, AcceptedJournalReader), journal: Context.get(context, InRunJournal) }
+    return {
+      accepted: Context.get(context, AcceptedJournalReader),
+      journal: Context.get(context, InRunJournal),
+      liveJournal: Context.get(context, Journal)
+    }
   })
 
 type TaskFactRuntime = Effect.Success<ReturnType<typeof makeTaskFactRuntime>>
@@ -966,6 +971,7 @@ const makeTaskFactReconciliationDriver = (runtime: ScopedRef.ScopedRef<TaskFactR
           : effect.pipe(
               Effect.provide(acceptanceEvidenceLayer),
               Effect.provideService(InRunJournal, journal),
+              Effect.provideService(Journal, production().liveJournal),
               Effect.provideService(AcceptedJournalReader, production().accepted),
               Effect.provideService(PlannedAttemptProtocolController, protocolController),
               Effect.provideService(PlannedAttemptExecutor, executor)
@@ -2851,6 +2857,22 @@ it.effect("imports task-fact history once, preserves it across recovery, and res
       expect(yield* reset.journal.read(runId)).toEqual(seed)
     })
   )
+)
+
+it.effect("a cached live activation sees a newly recorded closed lifecycle before selecting suspension", () =>
+  Effect.gen(function* () {
+    const driver = yield* taskFactReconciliationDriver.create()
+    for (const name of [
+      "init",
+      "establishRunningAttemptForActiveRefresh",
+      "offerActiveWorkAuthorityRefreshFromTimer",
+      "observeLifecycleClosure"
+    ]) {
+      const action = driver.actions[name]
+      if (action === undefined) return yield* Effect.die(`missing scenario action ${name}`)
+      yield* action.handler({})
+    }
+  })
 )
 
 it.effect(

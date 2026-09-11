@@ -22,6 +22,7 @@ import { Context, Effect, Layer, Option, Ref, Schema, Scope, ScopedRef } from "e
 import { ActiveTaskClaim } from "../../../orchestrator/src/authorities/task-tracker/claim-mutation.js"
 import { ClaimOwner, ClaimToken } from "../../../orchestrator/src/authorities/task-tracker/claim.js"
 import { makeAcceptedIntegrationHistory } from "../../../orchestrator/test/support/accepted-integration-history.js"
+import { observeWorkflowJournalValidationSteps } from "../../../orchestrator/src/coordination/reconstruction/history.js"
 import {
   decideResultCommitQualification,
   decideGitFactPreservation,
@@ -815,21 +816,21 @@ const gitReconciliationDriver = {
 it.effect("imports the Git driver journal once on first init", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      let imports = 0
-      const runtime = yield* ScopedRef.fromAcquire(Effect.succeed(Option.none<ProductionReconciliationTrace>()))
-      expect(imports).toBe(0)
-      yield* ScopedRef.set(
-        runtime,
-        makeProductionReconciliationTrace.pipe(
-          Effect.tap(() =>
-            Effect.sync(() => {
-              imports += 1
-            })
-          ),
-          Effect.map(Option.some)
-        )
-      )
-      expect(imports).toBe(1)
+      let validationSteps = 0
+      const stop = observeWorkflowJournalValidationSteps(() => {
+        validationSteps += 1
+      })
+      yield* Effect.addFinalizer(() => Effect.sync(stop))
+      yield* makeProductionReconciliationTrace
+      const oneAcquisitionSteps = validationSteps
+      expect(oneAcquisitionSteps).toBeGreaterThan(0)
+      validationSteps = 0
+      const driver = yield* gitReconciliationDriver.create()
+      expect(validationSteps).toBe(0)
+      const init = driver.actions["init"]
+      if (init === undefined) return yield* Effect.die("Git driver must expose init")
+      yield* init.handler({})
+      expect(validationSteps).toBe(oneAcquisitionSteps)
     })
   )
 )

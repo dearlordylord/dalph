@@ -286,7 +286,10 @@ type ExecutorResponsibilityBeganJournalEvent = Extract<
   JournalRecord["event"],
   { readonly _tag: "PlannedAttemptExecutorWorkResponsibilityBegan" }
 >
-type ExecutorWorkReportedEvent = Extract<JournalRecord["event"], { readonly _tag: "PlannedAttemptExecutorWorkReported" }>
+type ExecutorWorkReportedEvent = Extract<
+  JournalRecord["event"],
+  { readonly _tag: "PlannedAttemptExecutorWorkReported" }
+>
 
 const advanceExecutorResponsibility = (
   prior: IntegrationAdmissionPrefixIndexes,
@@ -336,8 +339,6 @@ const advanceIntegrationAdmissionPrefixIndexes = (
   return isClaimFinalityEvent(event) ? updateFinalityFacts(prior, event) : prior
 }
 
-const admissionIndexesByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, IntegrationAdmissionPrefixIndexes>()
-
 const replayIntegrationAdmissionPrefixIndexes = (
   records: ReadonlyArray<JournalRecord>
 ): IntegrationAdmissionPrefixIndexes => {
@@ -350,17 +351,6 @@ const replayIntegrationAdmissionPrefixIndexes = (
     if (isClaimFinalityEvent(record.event)) next = updateFinalityFacts(next, record.event)
   }
   return next
-}
-
-const integrationAdmissionPrefixIndexesFor = (
-  records: ReadonlyArray<JournalRecord>
-): IntegrationAdmissionPrefixIndexes => {
-  const cached = admissionIndexesByPrefix.get(records)
-  if (cached !== undefined) return cached
-
-  const indexes = replayIntegrationAdmissionPrefixIndexes(records)
-  admissionIndexesByPrefix.set(records, indexes)
-  return indexes
 }
 
 const acceptedResultIsDurableIn = (
@@ -530,14 +520,7 @@ const settledFor = (
   )
 
 /** Finds accepted terminal facts that still need their exact durable integration responsibility. */
-const unqueuedAcceptedResultsByPrefix = new WeakMap<
-  ReadonlyArray<JournalRecord>,
-  ReadonlyArray<UnqueuedAcceptedResult>
->()
-
-export const deriveUnqueuedAcceptedResults = (
-  records: JournalHistorySource
-): ReadonlyArray<UnqueuedAcceptedResult> => {
+export const deriveUnqueuedAcceptedResults = (records: JournalHistorySource): ReadonlyArray<UnqueuedAcceptedResult> => {
   if (isJournalRecordEvidence(records)) {
     const queuedAttemptIds = new Set(
       Array.from(journalRecordsOfKind(records, "IntegrationResponsibilityBegan"), (record) =>
@@ -567,16 +550,17 @@ export const deriveUnqueuedAcceptedResults = (
       }
       if (plannedAttempt !== undefined) {
         results.push(
-          UnqueuedAcceptedResult.make({ acceptedResult: report.result.acceptedResult, plannedAttempt, terminalAt: record.position })
+          UnqueuedAcceptedResult.make({
+            acceptedResult: report.result.acceptedResult,
+            plannedAttempt,
+            terminalAt: record.position
+          })
         )
       }
     }
     return results
   }
-  const cached = unqueuedAcceptedResultsByPrefix.get(records)
-  if (cached !== undefined) return cached
-
-  const indexes = integrationAdmissionPrefixIndexesFor(records)
+  const indexes = replayIntegrationAdmissionPrefixIndexes(records)
   const results = records.flatMap((record) => {
     const event = record.event
     if (
@@ -598,13 +582,10 @@ export const deriveUnqueuedAcceptedResults = (
           })
         ]
   })
-  unqueuedAcceptedResultsByPrefix.set(records, results)
   return results
 }
 
 /** Reconstructs FIFO and cutoff state solely from immutable journal records. */
-const integrationAdmissionByPrefix = new WeakMap<ReadonlyArray<JournalRecord>, IntegrationAdmission>()
-
 export const deriveIntegrationAdmission = (records: JournalHistorySource): IntegrationAdmission => {
   if (isJournalRecordEvidence(records)) {
     const responsibilities: Array<IntegrationResponsibility> = []
@@ -637,10 +618,7 @@ export const deriveIntegrationAdmission = (records: JournalHistorySource): Integ
     }
     return { responsibilities }
   }
-  const cached = integrationAdmissionByPrefix.get(records)
-  if (cached !== undefined) return cached
-
-  const indexes = integrationAdmissionPrefixIndexesFor(records)
+  const indexes = replayIntegrationAdmissionPrefixIndexes(records)
 
   const admission: IntegrationAdmission = {
     responsibilities: records
@@ -673,7 +651,6 @@ export const deriveIntegrationAdmission = (records: JournalHistorySource): Integ
             })
       })
   }
-  integrationAdmissionByPrefix.set(records, admission)
   return admission
 }
 
