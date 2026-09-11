@@ -12,6 +12,8 @@ import {
   TaskRevision,
   WorktreeLocator,
   PlannedAttemptExecutor,
+  PlannedAttemptExecutorReport,
+  plannedAttemptExecutorCorrelation,
   makeTaskWorkSpecification
 } from "@dalph/contracts"
 import { PlannedWorktreeReady } from "../../authorities/git/worktree.js"
@@ -26,8 +28,11 @@ import {
   attemptPlanRecordKey,
   intentRecordKey,
   outcomeRecordKey,
+  plannedAttemptExecutorWorkReportedRecordKey,
   plannedAttemptExecutorWorkResponsibilityBeganRecordKey
 } from "../../workflow-journal/record-key.js"
+import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
+import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import { InRunJournal, JournalRecord, JournalStore } from "../../workflow-journal/store.js"
 import {
   TaskAttemptPlannedEvent,
@@ -37,7 +42,11 @@ import {
   TaskWorktreeReconciliationIntendedEvent,
   taskTrackerReadIntent
 } from "../../workflow/registry/event.js"
-import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
+import {
+  PlannedAttemptExecutorReportOrdinal,
+  PlannedAttemptExecutorWorkReportedEvent,
+  PlannedAttemptExecutorWorkResponsibilityBeganEvent
+} from "../../workflow/protocols/planned-attempt-executor-work/events.js"
 import {
   makeTaskAttemptPlanOperation,
   makeTaskClaimAcquisitionOperation,
@@ -52,7 +61,7 @@ import {
 } from "../../workflow/task-tracker-facts/observation.js"
 import { WorkflowInterpreter, WorkflowTrace } from "../../workflow/interpretation/interpreter.js"
 import { sqliteJournalTestLayer } from "../../workflow-journal/adapters/sqlite-store.js"
-import { causalClaimForAttempt } from "./recovery-authority.js"
+import { authorizedClaimForAttempt, causalClaimForAttempt } from "./recovery-authority.js"
 import { makeRunRecoveryProjection } from "./recovery-activation.js"
 
 const runId = RunId.make("duplicate-attempt-production-recovery")
@@ -284,6 +293,40 @@ it("requires one exact run-bound claim intent and outcome for the attempt plan",
       firstAttempt.attemptId
     )
   ).toBeUndefined()
+})
+
+it("keeps causal claim lookup bounded after 64 and 256 executor reports for the attempt", () => {
+  const visits = [64, 256].map((size) => {
+    const records = planAndStart(firstAttempt, 1)
+    const report = PlannedAttemptExecutorReport.cases.ExecutorWorkExecuting.make({
+      correlation: plannedAttemptExecutorCorrelation(firstAttempt)
+    })
+    const reports = Array.from({ length: size }, (_, offset): JournalRecord => {
+      const ordinal = PlannedAttemptExecutorReportOrdinal.make(offset + 1)
+      return {
+        event: PlannedAttemptExecutorWorkReportedEvent.make({ ordinal, report, version: workflowJournalEventVersion }),
+        key: plannedAttemptExecutorWorkReportedRecordKey(firstAttempt.attemptId, ordinal),
+        position: JournalPosition.make(records.length + offset + 1),
+        runId
+      }
+    })
+    const evidence = journalEvidenceFrom([...records, ...reports])
+    let count = 0
+    const stop = observeJournalRecordSequenceOperations((operation) => {
+      expect(operation._tag).toBe("IndexedRecordVisit")
+      count += 1
+    })
+    try {
+      const expectedClaimOperationId = OperationId.make(`claim-${firstAttempt.attemptId}`)
+      expect(causalClaimForAttempt(evidence, firstAttempt.attemptId)?.claim.operationId).toBe(expectedClaimOperationId)
+      expect(authorizedClaimForAttempt(evidence, firstAttempt)?.claim.operationId).toBe(expectedClaimOperationId)
+    } finally {
+      stop()
+    }
+    return count
+  })
+  expect(visits[0]).toBeGreaterThan(0)
+  expect(visits[1]).toBe(visits[0])
 })
 
 const failIfCalled = (boundary: string) =>
