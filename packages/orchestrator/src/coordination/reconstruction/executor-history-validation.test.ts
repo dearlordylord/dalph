@@ -39,11 +39,15 @@ const plannedAttempt = PlannedTaskAttempt.make({
   worktree: WorktreeLocator.make("/worktrees/executor-validator-indexed")
 })
 
-const command = (ordinal: number): JournalRecord => {
+const command = (
+  ordinal: number,
+  kind: "Begin" | "Resume" | "Suspend" = "Begin",
+  position = ordinal + 1
+): JournalRecord => {
   const brandedOrdinal = PlannedAttemptExecutorCommandOrdinal.make(ordinal)
   return {
     event: PlannedAttemptExecutorCommandIntendedEvent.make({
-      command: "Begin",
+      command: kind,
       initiatedBy: { _tag: "DalphCoordinator" },
       occurrenceClassification: "InitiatedAction",
       ordinal: brandedOrdinal,
@@ -51,7 +55,7 @@ const command = (ordinal: number): JournalRecord => {
       version: workflowJournalEventVersion
     }),
     key: plannedAttemptExecutorCommandIntendedRecordKey(plannedAttempt.attemptId, brandedOrdinal),
-    position: JournalPosition.make(ordinal + 1),
+    position: JournalPosition.make(position),
     runId
   }
 }
@@ -82,4 +86,23 @@ it("keeps executor issue ordering identical for cold arrays and indexed evidence
 
   expect(indexedIssues).toEqual(coldIssues)
   expect(indexedIssues).toContain(`executor begin for attempt ${plannedAttempt.attemptId} follows a prior begin intent`)
+})
+
+it("keeps a malformed duplicate-key Begin visible to later cold diagnostics", () => {
+  const responsibility = records[0]
+  if (responsibility === undefined) return
+  const resume = command(1, "Resume", 2)
+  const skippedDuplicateBegin = command(1, "Begin", 3)
+  const laterBegin = command(2, "Begin", 4)
+  const coldRecords = [responsibility, resume, skippedDuplicateBegin, laterBegin]
+  const setupIssues: Array<WorkflowJournalHistoryIssue> = []
+  const afterResponsibility = validateExecutorEvent(responsibility, runId, coldRecords, emptyIndexes(), setupIssues)
+  const afterResume = validateExecutorEvent(resume, runId, coldRecords, afterResponsibility, setupIssues)
+  const issues: Array<WorkflowJournalHistoryIssue> = []
+
+  validateExecutorEvent(laterBegin, runId, coldRecords, afterResume, issues)
+
+  expect(issues.map(workflowJournalHistoryIssueDetail)).toContain(
+    `executor begin for attempt ${plannedAttempt.attemptId} follows a prior begin intent`
+  )
 })
