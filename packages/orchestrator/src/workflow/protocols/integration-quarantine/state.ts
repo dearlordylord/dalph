@@ -9,6 +9,11 @@ import {
   integratorRunStartedRecordKey
 } from "../../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../../workflow-journal/store.js"
+import {
+  isJournalRecordEvidence,
+  journalRecordsForIntegratorSession,
+  type JournalHistorySource
+} from "../../../workflow-journal/record-evidence.js"
 import { JournalPosition } from "../../../workflow-journal/identity.js"
 import {
   IntegrationQuarantineDirectionAppliedEvent,
@@ -421,9 +426,12 @@ const latestQuarantineState = (
 
 /** Reconstructs the latest quarantine and its first direction directly from Journal records. */
 export const deriveIntegrationQuarantineState = (
-  records: ReadonlyArray<JournalRecord>,
+  source: JournalHistorySource,
   sessionId: IntegratorSessionId
 ): IntegrationQuarantineState => {
+  const records = isJournalRecordEvidence(source)
+    ? Array.from(journalRecordsForIntegratorSession(source, sessionId))
+    : source
   const quarantines = quarantineRecordsFor(records, sessionId)
   const latest = quarantines.at(lastArrayElement)
   if (latest === undefined) return IntegrationQuarantineState.cases.NoQuarantine.make({ sessionId })
@@ -437,10 +445,13 @@ export const deriveIntegrationQuarantineState = (
 
 /** Returns the exact quarantine occurrence named by a direction fingerprint. */
 export const quarantineRecordForFingerprint = (
-  records: ReadonlyArray<JournalRecord>,
+  source: JournalHistorySource,
   fingerprint: IntegrationQuarantineDirectionFingerprint
-): QuarantineRecord | undefined =>
-  records.find(
+): QuarantineRecord | undefined => {
+  const records = isJournalRecordEvidence(source)
+    ? Array.from(journalRecordsForIntegratorSession(source, fingerprint.sessionId))
+    : source
+  return records.find(
     (record): record is QuarantineRecord =>
       isQuarantineRecord(record) &&
       record.position === fingerprint.quarantineAt &&
@@ -448,6 +459,7 @@ export const quarantineRecordForFingerprint = (
       quarantineRecordHasCanonicalKey(record) &&
       quarantineEvidenceMatchesRecords(records, record)
   )
+}
 
 /** Exposes the narrowed Journal event type for adjacent registry projections. */
 export const isIntegrationQuarantineEvent = (

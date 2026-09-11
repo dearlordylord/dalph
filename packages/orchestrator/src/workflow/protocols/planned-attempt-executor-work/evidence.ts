@@ -1,4 +1,4 @@
-/* eslint-disable functional/immutable-data -- Process-local memo indexes mutate only private maps; executor evidence stays journal-derived. */
+/* eslint-disable functional/immutable-data, max-lines -- Process-local memo indexes and their exact evidence projections stay co-located for auditability. */
 import { Effect } from "effect"
 import {
   PlannedAttemptExecutorRequest,
@@ -31,6 +31,8 @@ import {
   type JournalRecordEvidence
 } from "../../../workflow-journal/record-evidence.js"
 
+const lastArrayElement = -1
+
 const latestElementOffset = -1
 
 type ExecutorJournalOccurrence = Pick<JournalRecord, "event" | "position">
@@ -42,9 +44,7 @@ const executorRecordsForAttempt = (
   source: ExecutorHistorySource,
   attemptId: PlannedTaskAttempt["attemptId"]
 ): ReadonlyArray<ExecutorJournalOccurrence> =>
-  isIndexedExecutorHistory(source)
-    ? Array.from(journalRecordsForAttempt(source, attemptId))
-    : source
+  isIndexedExecutorHistory(source) ? Array.from(journalRecordsForAttempt(source, attemptId)) : source
 
 /** Builds the exact executor request from fresh selection or accepted recovery evidence. */
 export const plannedAttemptExecutorRequestFor = (
@@ -99,18 +99,18 @@ const plannedAttemptExecutorTaskWorkSpecifications = (
   const cached = taskWorkSpecificationsByPrefix.get(records)
   if (cached !== undefined) return cached
   const specifications = Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved")).flatMap(({ event }) => {
-      if (event._tag !== "TaskTrackerFactsObserved" || event.observation._tag !== "FocusedTaskWorkSpecificationFacts") {
-        return []
-      }
-      return [
-        TaskWorkSpecification.make({
-          body: event.observation.factFamily.body,
-          fingerprint: event.observation.factFamily.fingerprint,
-          taskId: event.observation.factFamily.taskId,
-          title: event.observation.factFamily.title
-        })
-      ]
-    })
+    if (event._tag !== "TaskTrackerFactsObserved" || event.observation._tag !== "FocusedTaskWorkSpecificationFacts") {
+      return []
+    }
+    return [
+      TaskWorkSpecification.make({
+        body: event.observation.factFamily.body,
+        fingerprint: event.observation.factFamily.fingerprint,
+        taskId: event.observation.factFamily.taskId,
+        title: event.observation.factFamily.title
+      })
+    ]
+  })
   taskWorkSpecificationsByPrefix.set(records, specifications)
   return specifications
 }
@@ -329,15 +329,14 @@ const deriveLatestIndexedExecutorEvidence = (
     indexedEvidenceCandidate(records, plannedAttempt, "PlannedAttemptExecutorCommandProjectionObserved", after),
     indexedEvidenceCandidate(records, plannedAttempt, "PlannedAttemptExecutorStateObserved", after)
   ].filter((candidate): candidate is PlannedAttemptExecutorEvidence => candidate !== undefined)
-  const observed = observedCandidates.toSorted((left, right) => left.observedAt - right.observedAt).at(-1)
+  const observed = observedCandidates.toSorted((left, right) => left.observedAt - right.observedAt).at(lastArrayElement)
   const latestExact = [accepted, ...observedCandidates]
     .filter((candidate): candidate is PlannedAttemptExecutorEvidence => candidate !== undefined)
     .toSorted((left, right) => left.observedAt - right.observedAt)
-    .at(-1)
-  const latestIssue = ([
-    "PlannedAttemptExecutorCommandProjectionObserved",
-    "PlannedAttemptExecutorStateObserved"
-  ] as const)
+    .at(lastArrayElement)
+  const latestIssue = (
+    ["PlannedAttemptExecutorCommandProjectionObserved", "PlannedAttemptExecutorStateObserved"] as const
+  )
     .flatMap((kind) => {
       const record = lastJournalRecordForAttemptKind(records, plannedAttempt.attemptId, kind)
       if (record === undefined || (after !== undefined && record.position <= after)) return []
@@ -351,7 +350,7 @@ const deriveLatestIndexedExecutorEvidence = (
       return reason === undefined ? [] : [{ observedAt: record.position, reason }]
     })
     .toSorted((left, right) => left.observedAt - right.observedAt)
-    .at(-1)
+    .at(lastArrayElement)
   const preferred = preferredExactExecutorEvidence(accepted, observed)
   if (preferred === undefined || latestExact === undefined) return undefined
   return latestIssue === undefined || latestExact.observedAt > latestIssue.observedAt ? preferred : undefined
