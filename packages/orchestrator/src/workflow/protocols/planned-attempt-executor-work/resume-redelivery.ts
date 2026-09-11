@@ -1,7 +1,8 @@
 import { Effect, Schema } from "effect"
 import type { PlannedTaskAttempt } from "@dalph/contracts"
 import type { SafeContinuationRevalidationEligibility } from "../../../coordination/frontier/fresh-facts.js"
-import { InRunJournal } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { journalRecordCountForAttemptCommandKind } from "../../../workflow-journal/record-evidence.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import { evaluatePlannedAttemptResumeRedeliveryAuthorization } from "../planned-attempt-continuation/resume-redelivery-authorization.js"
 import type { PlannedAttemptContinuationWitness } from "../planned-attempt-continuation/events.js"
@@ -29,13 +30,13 @@ export const runPlannedAttemptExecutorResumeRedelivery = Effect.fn("PlannedAttem
     witness: PlannedAttemptContinuationWitness,
     onIntentAccepted: (receipt: AcceptedExecutorCommandDelivery) => Effect.Effect<void>
   ) {
-    const journal = yield* InRunJournal
-    const records = yield* journal.read(plannedAttempt.runId)
+    const acceptedJournal = yield* AcceptedJournalReader
+    const records = yield* acceptedJournal.readAccepted(plannedAttempt.runId)
     const request = yield* plannedAttemptExecutorRequestFor(records, plannedAttempt)
     const intended = yield* Effect.uninterruptibleMask((restore) =>
       permit.commitIntent(
         Effect.gen(function* () {
-          const current = yield* journal.read(plannedAttempt.runId)
+          const current = yield* acceptedJournal.readAccepted(plannedAttempt.runId)
           const evaluation = evaluatePlannedAttemptResumeRedeliveryAuthorization(
             current,
             plannedAttempt,
@@ -47,13 +48,12 @@ export const runPlannedAttemptExecutorResumeRedelivery = Effect.fn("PlannedAttem
           }
           const authorization = evaluation.authorization
           const redeliveryOrdinal = PlannedAttemptExecutorResumeRedeliveryOrdinal.make(
-            current.filter(
-              ({ event }) =>
-                event._tag === "PlannedAttemptExecutorResumeRedeliveryIntended" &&
-                event.plannedAttempt.runId === plannedAttempt.runId &&
-                event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
-                event.commandOrdinal === authorization.resumeCommandOrdinal
-            ).length + 1
+            journalRecordCountForAttemptCommandKind(
+              current,
+              plannedAttempt.attemptId,
+              authorization.resumeCommandOrdinal,
+              "PlannedAttemptExecutorResumeRedeliveryIntended"
+            ) + 1
           )
           const receipt = yield* restore(
             appendExecutorCommandDeliveryIntent(

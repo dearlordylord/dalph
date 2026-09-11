@@ -5,7 +5,7 @@ import {
 } from "@dalph/contracts"
 import { Effect } from "effect"
 import type { AcceptedExecutorCommandDelivery } from "./command-delivery.js"
-import { InRunJournal } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
 import { defaultPlannedAttemptExecutorSuspensionLimit, type PlannedAttemptExecutorSuspensionLimit } from "./events.js"
 import { latestUnsettledPlannedAttemptExecutorCommand } from "./evidence.js"
 import { runPlannedAttemptExecutorCommand } from "./command.js"
@@ -65,8 +65,8 @@ export const requestPlannedAttemptExecutorSuspensionWithoutReconciliationWithPer
     permit,
     plannedAttemptExecutorCorrelation(plannedAttempt),
     Effect.gen(function* () {
-      const journal = yield* InRunJournal
-      const records = yield* journal.read(plannedAttempt.runId)
+      const acceptedJournal = yield* AcceptedJournalReader
+      const records = yield* acceptedJournal.readAccepted(plannedAttempt.runId)
       const unsettledCommand = latestUnsettledPlannedAttemptExecutorCommand(records, plannedAttempt)
       if (unsettledCommand !== undefined) {
         return yield* new PlannedAttemptExecutorCommandReconciliationRequired({

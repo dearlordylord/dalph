@@ -6,6 +6,8 @@ import {
 import { Effect } from "effect"
 import { plannedAttemptExecutorWorkResponsibilityBeganRecordKey } from "../../../workflow-journal/record-key.js"
 import { InRunJournal } from "../../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../../workflow-journal/accepted-reader.js"
+import { journalRecordsForAttempt } from "../../../workflow-journal/record-evidence.js"
 import { workflowJournalEventVersion } from "../../kernel/event.js"
 import {
   PlannedAttemptExecutorResponsibilityAbandoned,
@@ -52,10 +54,12 @@ export const beginPlannedAttemptExecutorResponsibility = Effect.fn(
   "PlannedAttemptExecutorWorkflow.beginResponsibility"
 )(function* (plannedAttempt: PlannedTaskAttempt) {
   const journal = yield* InRunJournal
+  const acceptedJournal = yield* AcceptedJournalReader
   const correlation = plannedAttemptExecutorCorrelation(plannedAttempt)
-  const records = yield* journal.read(plannedAttempt.runId)
+  const records = yield* acceptedJournal.readAccepted(plannedAttempt.runId)
+  const attemptRecords = Array.from(journalRecordsForAttempt(records, plannedAttempt.attemptId))
   if (
-    records.some(
+    attemptRecords.some(
       ({ event }) =>
         event._tag === "AttemptImplementationAbandoned" &&
         event.subject.plannedAttempt.runId === plannedAttempt.runId &&
@@ -64,7 +68,7 @@ export const beginPlannedAttemptExecutorResponsibility = Effect.fn(
   ) {
     return yield* new PlannedAttemptExecutorResponsibilityAbandoned({ correlation })
   }
-  const responsibilityBegan = records.find(
+  const responsibilityBegan = attemptRecords.find(
     ({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
       event.plannedAttempt.attemptId === plannedAttempt.attemptId
@@ -78,7 +82,7 @@ export const beginPlannedAttemptExecutorResponsibility = Effect.fn(
     }
     return acceptedResponsibility(responsibilityBegan.position, responsibilityBegan.event.plannedAttempt)
   } else {
-    const ordinaryPlanWasAccepted = records.some(
+    const ordinaryPlanWasAccepted = attemptRecords.some(
       ({ event }) =>
         event._tag === "TaskAttemptPlanned" &&
         plannedTaskAttemptEquivalence(event.operation.plannedAttempt, plannedAttempt)
