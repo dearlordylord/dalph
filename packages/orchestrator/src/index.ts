@@ -436,7 +436,7 @@ export * from "./workflow/protocols/integration-quarantine/initial-conclusive.js
 export * from "./coordination/run/recovery-authority.js"
 export * from "./coordination/frontier/frontier.js"
 export * from "./coordination/frontier/run-finality.js"
-export { reconstructRunState } from "./coordination/reconstruction/reduce.js"
+export { reconstructRunState, exportWorkflowHistoryRecords } from "./coordination/reconstruction/reduce.js"
 export { latestReconstructedTaskGraph } from "./coordination/reconstruction/graph-knowledge.js"
 export {
   journalDatabaseLocatorConfig,
