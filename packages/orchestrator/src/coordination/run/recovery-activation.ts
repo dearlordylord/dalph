@@ -126,6 +126,11 @@ import {
   type ContinuationTrackerReadStatus
 } from "../../workflow/protocols/planned-attempt-continuation/tracker-read-freshness.js"
 import { claimReadMatchesTarget, exactWorkflowRunTargetFor } from "../../workflow-journal/run-target.js"
+import {
+  journalRecordsForOperationId,
+  journalRecordsOfKind,
+  type JournalHistorySource
+} from "../../workflow-journal/record-evidence.js"
 export { deriveIntegrationFrontier } from "../frontier/integration-frontier.js"
 
 const finalRecordOffset = -1
@@ -2691,8 +2696,12 @@ type TrackerGraphReadIntentRecord = Omit<JournalRecord, "event"> & {
 const sameStringSequence = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
   left.length === right.length && left.every((operationId, index) => operationId === right[index])
 
-const trackerGraphReadHasOutcome = (records: ReadonlyArray<JournalRecord>, operationId: OperationId): boolean =>
-  records.some(({ event }) => event._tag === "TaskTrackerFactsObserved" && event.operationId === operationId)
+const trackerGraphReadHasOutcome = (records: JournalHistorySource, operationId: OperationId): boolean => {
+  for (const { event } of journalRecordsForOperationId(records, operationId)) {
+    if (event._tag === "TaskTrackerFactsObserved" && event.operationId === operationId) return true
+  }
+  return false
+}
 
 /**
  * Finds the one complete graph read that stabilization started after its
@@ -2703,44 +2712,42 @@ const trackerGraphReadHasOutcome = (records: ReadonlyArray<JournalRecord>, opera
  * settles it and therefore forces a new operation on a later activation.
  */
 export const pendingActiveRefreshG2OperationFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   target: NonNullable<ReturnType<typeof exactWorkflowRunTargetFor>>,
   currentGraph: { readonly operationId: OperationId; readonly recordedAt: JournalPosition }
-): TrackerGraphObservationOperation | undefined =>
-  records.findLast((record): record is TrackerGraphReadIntentRecord => {
+): TrackerGraphObservationOperation | undefined => {
+  const targetKey = taskTrackerTargetKey(target)
+  const graphOperationIdsBeforeIntent = new Set<OperationId>()
+  let pending: TrackerGraphObservationOperation | undefined
+  for (const record of journalRecordsOfKind(records, "TaskTrackerReadIntentRecorded")) {
     const { event } = record
     if (
       record.runId !== runId ||
       event._tag !== "TaskTrackerReadIntentRecorded" ||
       event.operation._tag !== "ReadTrackerGraph" ||
+      taskTrackerTargetKey(event.operation.target) !== targetKey
+    ) {
+      continue
+    }
+    const expectedPredecessors = [...new Set([...graphOperationIdsBeforeIntent, currentGraph.operationId])].toSorted()
+    graphOperationIdsBeforeIntent.add(event.operation.operationId)
+    if (
       event.operation.cause._tag !== "PostQuiescenceReconfirmation" ||
       event.operation.cause.quiescentGraphOperationId !== currentGraph.operationId ||
       record.position <= currentGraph.recordedAt ||
-      taskTrackerTargetKey(event.operation.target) !== taskTrackerTargetKey(target) ||
       event.operation.readShape.explicitlyCoveredTaskIds.length !== 0 ||
       !event.operation.predecessorOperationIds.includes(currentGraph.operationId) ||
       trackerGraphReadHasOutcome(records, event.operation.operationId)
     ) {
-      return false
+      continue
     }
-    const graphPredecessorsBeforeIntent = records
-      .filter(
-        ({ event: candidate, position, runId: recordRunId }) =>
-          recordRunId === runId &&
-          position < record.position &&
-          candidate._tag === "TaskTrackerReadIntentRecorded" &&
-          candidate.operation._tag === "ReadTrackerGraph" &&
-          taskTrackerTargetKey(candidate.operation.target) === taskTrackerTargetKey(target)
-      )
-      .flatMap(({ event: candidate }) =>
-        candidate._tag === "TaskTrackerReadIntentRecorded" && candidate.operation._tag === "ReadTrackerGraph"
-          ? [candidate.operation.operationId]
-          : []
-      )
-    const expectedPredecessors = [...new Set([...graphPredecessorsBeforeIntent, currentGraph.operationId])].toSorted()
-    return sameStringSequence([...event.operation.predecessorOperationIds].toSorted(), expectedPredecessors)
-  })?.event.operation
+    if (sameStringSequence([...event.operation.predecessorOperationIds].toSorted(), expectedPredecessors)) {
+      pending = event.operation
+    }
+  }
+  return pending
+}
 
 /**
  * Reuses the exact ordinary authority-check graph operation that survived a
