@@ -48,6 +48,8 @@ import {
   TaskWorktreeReconciliationIntendedEvent
 } from "../../workflow/registry/event.js"
 import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { liveJournalTestLayer } from "../delivery/live-journal-test-layer.js"
+import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { makeRunRecoveryProjection, RunRecoveryProjection } from "../run/recovery-activation.js"
 import {
   recoverTaskClaimOperation,
@@ -115,6 +117,8 @@ const unused = () => Effect.die("empty history must not invoke an interpreter")
 it.effect("replays only the exact recorded claim-release intent", () => {
   const runId = RunId.make("runnable-transition-routing")
   const taskId = TaskId.make("runnable-transition-task")
+  const target = FixtureTarget.make("runnable-transition-target")
+  const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
   return Effect.gen(function* () {
     const claim = ActiveTaskClaim.make({
       operationId: OperationId.make("runnable-transition-claim"),
@@ -127,7 +131,18 @@ it.effect("replays only the exact recorded claim-release intent", () => {
       predecessorOperationIds: [claim.operationId],
       release: { claim, operationId: OperationId.make("runnable-transition-release") }
     })
-    const journal = yield* JournalStore
+    const acquisition = makeTaskClaimAcquisitionOperation({ acquisition: claim, predecessorOperationIds: [] })
+    const journal = yield* InRunJournal
+    yield* journal.append(
+      runId,
+      intentRecordKey(claim.operationId),
+      TaskClaimAcquisitionIntendedEvent.make({ operation: acquisition, version: workflowJournalEventVersion })
+    )
+    yield* journal.append(
+      runId,
+      outcomeRecordKey(claim.operationId),
+      TaskClaimAcquiredEvent.make({ claim, version: workflowJournalEventVersion })
+    )
     yield* journal.append(
       runId,
       intentRecordKey(release.release.operationId),
@@ -157,13 +172,19 @@ it.effect("replays only the exact recorded claim-release intent", () => {
       controlledRecoveryLease
     ).pipe(Effect.provideService(WorkflowInterpreter, interpreter))
     expect(yield* Ref.get(released)).toEqual([release.release.operationId])
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(
+    Effect.provide(
+      liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+    )
+  )
 })
 
-it.effect("settles a recovered generic claim through run recovery activation", () =>
-  Effect.gen(function* () {
-    const runId = RunId.make("recovered-generic-recovery")
-    const taskId = TaskId.make("recovered-generic-task")
+it.effect("settles a recovered generic claim through run recovery activation", () => {
+  const runId = RunId.make("recovered-generic-recovery")
+  const taskId = TaskId.make("recovered-generic-task")
+  const target = FixtureTarget.make("recovered-generic-target")
+  const policy = InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  return Effect.gen(function* () {
     const claim = makeTaskClaimAcquisitionOperation({
       acquisition: {
         operationId: OperationId.make("recovered-generic-claim"),
@@ -173,12 +194,7 @@ it.effect("settles a recovered generic claim through run recovery activation", (
       },
       predecessorOperationIds: []
     })
-    const journal = yield* JournalStore
-    yield* journal.beginRun(
-      runId,
-      FixtureTarget.make("recovered-generic-target"),
-      InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
-    )
+    const journal = yield* InRunJournal
     yield* journal.append(
       runId,
       intentRecordKey(claim.acquisition.operationId),
@@ -222,8 +238,12 @@ it.effect("settles a recovered generic claim through run recovery activation", (
       Effect.provideService(WorkflowTrace, WorkflowTrace.of({ emit: () => Effect.void })),
       Effect.provide(controlledFakePlannedAttemptExecutorLayer)
     )
-  }).pipe(Effect.provide(memoryJournalTestLayer))
-)
+  }).pipe(
+    Effect.provide(
+      liveJournalTestLayer({ records: [makeWorkflowRunBeganRecord(runId, target, policy)], runId, target })
+    )
+  )
+})
 
 it.effect("keeps recovered executor work stopped when no tracker target can authorize a fresh read", () =>
   Effect.gen(function* () {
