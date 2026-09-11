@@ -112,7 +112,8 @@ import {
   makeTaskWorktreeObservationOperation,
   makeTaskWorkSpecificationObservationOperation,
   makeTrackerGraphObservationOperation,
-  TaskClaimReleaseAuthority
+  TaskClaimReleaseAuthority,
+  workflowOperationId
 } from "../../workflow/registry/operation.js"
 import { currentTaskClaimAuthority } from "../frontier/task-claim-authority.js"
 import { decideTargetLineage } from "../../workflow/protocols/git-reconciliation/decision.js"
@@ -131,9 +132,10 @@ import {
   isJournalRecordEvidence,
   journalGraphObservationAt,
   journalGraphSnapshotForObservation,
-  journalRecordsAfter,
+  journalRecordsForAttempt,
   journalRecordsForIntegratorSession,
   journalRecordsForOperationId,
+  journalRecordsForPromotionRequest,
   journalRecordsForTask,
   journalRecordsOfKind,
   type JournalHistorySource
@@ -147,18 +149,28 @@ const finalRecordOffset = -1
 const journalHistoryOf = (runState: Pick<ReconstructedRunState, "workflowHistory">): JournalHistorySource =>
   runState.workflowHistory.prefix ?? runState.workflowHistory.records
 
-const journalRecordsOf = (source: JournalHistorySource): ReadonlyArray<JournalRecord> =>
-  Array.from(journalRecordsAfter(source, null))
-
 const journalRecordsForPlannedAttempt = (
   source: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt
 ): ReadonlyArray<JournalRecord> => {
   if (!isJournalRecordEvidence(source)) return source
+  const taskRecords = Array.from(journalRecordsForTask(source, plannedAttempt.taskId))
+  const attemptRecords = Array.from(journalRecordsForAttempt(source, plannedAttempt.attemptId))
+  const operationRecords = taskRecords.flatMap(({ event }) =>
+    "operation" in event ? Array.from(journalRecordsForOperationId(source, workflowOperationId(event.operation))) : []
+  )
   const byKey = new Map(
-    [...journalRecordsOfKind(source, "WorkflowRunBegan"), ...journalRecordsForTask(source, plannedAttempt.taskId)].map(
-      (record) => [record.key, record] as const
-    )
+    [
+      ...journalRecordsOfKind(source, "WorkflowRunBegan"),
+      ...journalRecordsOfKind(source, "RunCancellationApplied"),
+      ...journalRecordsOfKind(source, "IntegrationFinalitySettled"),
+      ...journalRecordsOfKind(source, "IntegratorSessionFixed"),
+      ...journalRecordsOfKind(source, "IntegrationQuarantined"),
+      ...journalRecordsOfKind(source, "IntegrationQuarantineDirectionApplied"),
+      ...taskRecords,
+      ...attemptRecords,
+      ...operationRecords
+    ].map((record) => [record.key, record] as const)
   )
   return [...byKey.values()].toSorted((left, right) => left.position - right.position)
 }
@@ -1432,14 +1444,14 @@ export const deriveJournalResponsibilityFacts = (
   immutableRunTarget: TrackerTarget | undefined = exactWorkflowRunTargetFor(journalHistoryOf(runState)),
   opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
 ): ReadonlyArray<ResponsibilityFreshFacts> => {
-  const records = journalRecordsOf(journalHistoryOf(runState))
+  const source = journalHistoryOf(runState)
   const historicalTaskGraph =
     immutableRunTarget === undefined
       ? Option.none<TaskDagSnapshot>()
       : reconstructedTaskGraphFor(runState.graphKnowledge, immutableRunTarget)
   const activeRefreshGraphObservation =
     opportunity._tag === "ActiveWorkAuthorityRefresh" && Option.isSome(activationBaselinePosition)
-      ? currentCompleteGraphObservationAfter(records, activationBaselinePosition, immutableRunTarget)
+      ? currentCompleteGraphObservationAfter(source, activationBaselinePosition, immutableRunTarget)
       : undefined
   /**
    * An active refresh may only interpret graph membership and lifecycle after
@@ -1502,6 +1514,7 @@ export const deriveJournalResponsibilityFacts = (
           .toSorted((left, right) => left.localeCompare(right))
   const changedTaskSpecification = (plannedAttempt: PlannedTaskAttempt) => {
     const attempt = attemptOpportunity(plannedAttempt)
+    const records = Array.from(journalRecordsForTask(source, plannedAttempt.taskId))
     const activeSpecificationRecord =
       attempt._tag === "ActiveWorkAuthorityRefresh"
         ? records.findLast(
@@ -1530,16 +1543,25 @@ export const deriveJournalResponsibilityFacts = (
           : reconstructedTaskWorkSpecificationFor(runState.graphKnowledge, plannedAttempt.taskId, immutableRunTarget)
     return Option.filter(specification, ({ fingerprint }) => fingerprint !== plannedAttempt.taskRevision)
   }
-  const settledOperationIds = new Set(
-    records.flatMap(({ event }) => {
+  const operationWasSettled = (records: ReadonlyArray<JournalRecord>, operationId: OperationId): boolean =>
+    records.some(({ event }) => {
       const transition = workflowJournalTransitionRuleFor(event)
       const descriptor = describeJournalEvent(event)
-      return transition?._tag === "Outcome" && descriptor._tag === "OperationEventDescriptor"
-        ? [descriptor.operationId]
-        : []
+      return (
+        transition?._tag === "Outcome" &&
+        descriptor._tag === "OperationEventDescriptor" &&
+        descriptor.operationId === operationId
+      )
     })
-  )
   const workflowOperationFreshFacts = (responsibility: WorkflowOperationResponsibility): ResponsibilityFreshFacts => {
+    const records = [
+      ...new Map(
+        [
+          ...journalRecordsForTask(source, responsibility.taskId),
+          ...journalRecordsForOperationId(source, workflowResponsibilityOperationId(responsibility))
+        ].map((record) => [record.key, record] as const)
+      ).values()
+    ].toSorted((left, right) => left.position - right.position)
     const stoppedNoReleaseSettles = (): boolean =>
       responsibility._tag === "TaskClaimReleaseResponsibility" &&
       records.some(({ event, position }) => {
@@ -1560,7 +1582,7 @@ export const deriveJournalResponsibilityFacts = (
         )
       })
     const settled =
-      settledOperationIds.has(workflowResponsibilityOperationId(responsibility)) || stoppedNoReleaseSettles()
+      operationWasSettled(records, workflowResponsibilityOperationId(responsibility)) || stoppedNoReleaseSettles()
     const expectedClaim =
       responsibility._tag === "TaskClaimReleaseResponsibility"
         ? responsibility.operation.release.claim
@@ -1606,6 +1628,7 @@ export const deriveJournalResponsibilityFacts = (
     if (responsibility._tag !== "PlannedAttemptExecutorWorkResponsibility") {
       return workflowOperationFreshFacts(responsibility)
     }
+    const records = journalRecordsForPlannedAttempt(source, responsibility.plannedAttempt)
     const report = latestAcceptedPlannedAttemptExecutorEvidence(records, responsibility.plannedAttempt)
     const projectionIssue = latestPlannedAttemptExecutorProjectionIssue(records, responsibility.plannedAttempt)
     const projectionWait =
@@ -1842,7 +1865,7 @@ export const deriveJournalResponsibilityFacts = (
           event.operation.release.operationId === externalSuccessRelease.release.operationId
       )
     const externalSuccessReleaseSettled = () =>
-      externalSuccessRelease === undefined || settledOperationIds.has(externalSuccessRelease.release.operationId)
+      externalSuccessRelease === undefined || operationWasSettled(records, externalSuccessRelease.release.operationId)
     const claimCanBeReacquired = () =>
       currentClaimFacts?._tag === "TaskTrackerFactsObserved" &&
       currentClaimFacts.observation._tag === "FocusedTaskClaimFacts" &&
@@ -2000,15 +2023,6 @@ export const hasUnfinishedRunResponsibility = (runState: ReconstructedRunState):
       disposition._tag !== "CancelledAttemptSettled"
   )
 
-const readRecoveredRunState = Effect.fn("RunRecoveryActivation.readRecoveredRunState")(function* (runId: RunId) {
-  const journal = yield* InRunJournal
-  const reduction = reduceWorkflowJournalHistory(runId, yield* journal.read(runId))
-  if (reduction._tag === "InvalidWorkflowJournalHistory") {
-    return yield* Effect.fail(reduction)
-  }
-  return reduction.runState
-})
-
 const latestJournalPosition = (source: JournalHistorySource): Option.Option<JournalPosition> =>
   Option.fromUndefinedOr(
     isJournalRecordEvidence(source)
@@ -2047,13 +2061,14 @@ export const latestIntegrationClaimObservationPosition = (
 
 const latestCompletedRunPauseCyclePosition = (runState: ReconstructedRunState): JournalPosition | undefined => {
   if (runState.pause.run._tag === "RunPaused") return undefined
-  const wasPaused = journalRecordsOf(journalHistoryOf(runState)).some(
+  const controlDirections = Array.from(journalRecordsOfKind(journalHistoryOf(runState), "ControlDirectionApplied"))
+  const wasPaused = controlDirections.some(
     ({ event }) =>
       event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
   )
   if (!wasPaused) return undefined
   /* v8 ignore next -- A valid unpaused history that previously applied Run Pause necessarily contains a later Run Unpause. */
-  return journalRecordsOf(journalHistoryOf(runState)).findLast(
+  return controlDirections.findLast(
     ({ event }) =>
       event._tag === "ControlDirectionApplied" && event.direction === "Unpause" && event.subject._tag === "Run"
   )?.position
@@ -2067,7 +2082,7 @@ const completedTaskPauseCyclesByRecords = new WeakMap<
 const completedTaskPauseCycles = (
   runState: ReconstructedRunState
 ): ReadonlyArray<{ readonly position: JournalPosition; readonly taskId: TaskId }> => {
-  const records = journalRecordsOf(journalHistoryOf(runState))
+  const records = Array.from(journalRecordsOfKind(journalHistoryOf(runState), "ControlDirectionApplied"))
   const cached = completedTaskPauseCyclesByRecords.get(records)
   if (cached !== undefined) return cached
   const cycles = records.flatMap(({ event, position }) => {
@@ -2322,30 +2337,32 @@ const isPausedIntegrationReconciliation = (
 /** A crashed integration request may finish only when its exact intent predates the active Run Pause. */
 const startedIntegrationIntentMayReconcileBeforePause = (
   transition: RunnableFrontierTransition,
-  records: ReadonlyArray<JournalRecord>,
+  source: JournalHistorySource,
   pausePosition: JournalPosition | undefined
 ): boolean => {
   if (pausePosition === undefined || !isPausedIntegrationReconciliation(transition)) return false
   return Match.valueTags(transition, {
-    RunTargetPromotion: (transition) =>
-      recordBeforePause(
+    RunTargetPromotion: (transition) => {
+      const requestId = targetPromotionRequestIdForCandidate(transition.candidate)
+      const records = Array.from(journalRecordsForPromotionRequest(source, requestId))
+      return recordBeforePause(
         records,
         pausePosition,
-        ({ event }) =>
-          event._tag === "TargetPromotionIntended" &&
-          event.correlation.requestId === targetPromotionRequestIdForCandidate(transition.candidate)
-      ),
-    ReconcileTargetPromotionAttempt: (transition) =>
-      recordBeforePause(
+        ({ event }) => event._tag === "TargetPromotionIntended" && event.correlation.requestId === requestId
+      )
+    },
+    ReconcileTargetPromotionAttempt: (transition) => {
+      const requestId = targetPromotionRequestIdForCandidate(transition.candidate)
+      const records = Array.from(journalRecordsForPromotionRequest(source, requestId))
+      return recordBeforePause(
         records,
         pausePosition,
-        ({ event }) =>
-          event._tag === "TargetPromotionIntended" &&
-          event.correlation.requestId === targetPromotionRequestIdForCandidate(transition.candidate)
-      ),
+        ({ event }) => event._tag === "TargetPromotionIntended" && event.correlation.requestId === requestId
+      )
+    },
     AcquireStartedIntegrationTarget: ({ responsibility }) =>
       recordBeforePause(
-        records,
+        journalRecordsForPlannedAttempt(source, responsibility.plannedAttempt),
         pausePosition,
         ({ event, position }) =>
           position === responsibility.startedAt &&
@@ -2361,7 +2378,7 @@ const activeTaskPausePosition = (
   currentGraph: TaskDagSnapshot | undefined
 ): JournalPosition | undefined => {
   if (runState.pause.tasks._tag === "NoTaskPauses") return undefined
-  return journalRecordsOf(journalHistoryOf(runState)).findLast(
+  return Array.from(journalRecordsOfKind(journalHistoryOf(runState), "ControlDirectionApplied")).findLast(
     ({ event }) =>
       event._tag === "ControlDirectionApplied" &&
       event.direction === "Pause" &&
@@ -2380,7 +2397,9 @@ export const filterFrontierForActivePauses = (
   pendingGitReadReconciliations: ReadonlySet<RunnableFrontierTransition>,
   heldIntegrationTaskIds: ReadonlySet<TaskId>
 ): RunnableFrontier => {
-  const historicalRunPausePosition = journalRecordsOf(journalHistoryOf(runState)).findLast(
+  const historicalRunPausePosition = Array.from(
+    journalRecordsOfKind(journalHistoryOf(runState), "ControlDirectionApplied")
+  ).findLast(
     ({ event }) =>
       event._tag === "ControlDirectionApplied" && event.direction === "Pause" && event.subject._tag === "Run"
   )?.position
@@ -2406,7 +2425,7 @@ export const filterFrontierForActivePauses = (
       pendingGitReadReconciliations.has(transition) ||
       startedIntegrationIntentMayReconcileBeforePause(
         transition,
-        journalRecordsOf(journalHistoryOf(runState)),
+        journalHistoryOf(runState),
         pausePosition
       )
     )
@@ -2421,7 +2440,7 @@ export const filterFrontierForActivePauses = (
           pendingGitReadReconciliations.has(transition) ||
           startedIntegrationIntentMayReconcileBeforePause(
             transition,
-            journalRecordsOf(journalHistoryOf(runState)),
+            journalHistoryOf(runState),
             runPausePosition
           )
       )
@@ -2834,12 +2853,13 @@ export const pendingActiveRefreshG2OperationFor = (
  * post-quiescence reads.
  */
 export const pendingActiveRefreshGraphReadFor = (
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   runId: RunId,
   target: NonNullable<ReturnType<typeof exactWorkflowRunTargetFor>>,
   activeAttempts: ReadonlyArray<PlannedTaskAttempt>
 ): TrackerGraphObservationOperation | undefined => {
-  return records.findLast((record): record is TrackerGraphReadIntentRecord => {
+  return Array.from(journalRecordsOfKind(records, "TaskTrackerReadIntentRecorded")).findLast(
+    (record): record is TrackerGraphReadIntentRecord => {
     const { event } = record
     if (event._tag !== "TaskTrackerReadIntentRecorded" || event.operation._tag !== "ReadTrackerGraph") return false
     if (record.runId !== runId) return false
@@ -2850,7 +2870,8 @@ export const pendingActiveRefreshGraphReadFor = (
     return activeAttempts.every((plannedAttempt) =>
       authorizedAttempts.some((candidate) => plannedTaskAttemptEquivalence(candidate, plannedAttempt))
     )
-  })?.event.operation
+    }
+  )?.event.operation
 }
 
 /**
@@ -2874,7 +2895,7 @@ const activeRefreshGraphReadSelectionFor = (
   opportunity: RunActivationOpportunity
 ): ActiveRefreshGraphReadSelection | undefined => {
   if (opportunity._tag !== "ActiveWorkAuthorityRefresh" || Option.isNone(activationBaselinePosition)) return undefined
-  const records = journalRecordsOf(journalHistoryOf(runState))
+  const records = journalHistoryOf(runState)
   const target = exactWorkflowRunTargetFor(records)
   if (target === undefined) return undefined
   const activeAttempts = runState.responsibility.entries
@@ -3343,13 +3364,14 @@ const plannedAttemptOfTransition = (transition: RunnableFrontierTransition): Pla
  */
 const belongsToActiveRefreshBoundary = (
   transition: RunnableFrontierTransition,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   boundary: ActiveRefreshRuntimeBoundary
 ): boolean => {
   const plannedAttempt = plannedAttemptOfTransition(transition)
   if (plannedAttempt !== undefined) return activeRefreshBoundaryContainsAttempt(boundary, plannedAttempt)
+  const transitionTaskId = runnableTransitionTaskId(transition)
   const boundaryTaskIds = new Set(
-    records.flatMap(({ event }) =>
+    Array.from(journalRecordsForTask(records, transitionTaskId)).flatMap(({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
       activeRefreshBoundaryContainsAttempt(boundary, event.plannedAttempt)
         ? [event.plannedAttempt.taskId]
@@ -3365,14 +3387,14 @@ const activeRefreshRuntimeBoundaryFor = (
   opportunity: RunActivationOpportunity
 ): ActiveRefreshRuntimeBoundary | undefined => {
   if (opportunity._tag !== "ActiveWorkAuthorityRefresh") return undefined
-  const records = journalRecordsOf(journalHistoryOf(runState))
+  const source = journalHistoryOf(runState)
   /**
    * The immutable opportunity can retain an exact subject after Safe or
    * Terminal changes its current executor disposition. Reconstruct only
    * attempts with durable responsibility history; unrelated historical plans
    * never become boundary subjects.
    */
-  const activeAttempts = records
+  const activeAttempts = Array.from(journalRecordsOfKind(source, "PlannedAttemptExecutorWorkResponsibilityBegan"))
     .flatMap(({ event }) =>
       event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan" &&
       isActiveRefreshSubject(runState.runId, event.plannedAttempt, opportunity)
@@ -3383,16 +3405,16 @@ const activeRefreshRuntimeBoundaryFor = (
       (plannedAttempt, index, all) =>
         all.findIndex((candidate) => plannedTaskAttemptEquivalence(candidate, plannedAttempt)) === index
     )
-  const currentGraph = currentCompleteGraphObservationAfter(records, Option.none())
+  const currentGraph = currentCompleteGraphObservationAfter(source, Option.none())
   const pendingG2Operation =
     currentGraph === undefined
       ? undefined
-      : pendingActiveRefreshG2OperationFor(records, runState.runId, currentGraph.event.observation.target, {
+      : pendingActiveRefreshG2OperationFor(source, runState.runId, currentGraph.event.observation.target, {
           operationId: currentGraph.event.operationId,
           recordedAt: currentGraph.position
         })
   const reconciledAttempts = activeAttempts.filter((plannedAttempt) =>
-    suspensionWasReconciledDuringActiveRefresh(records, plannedAttempt, baseline)
+    suspensionWasReconciledDuringActiveRefresh(journalRecordsForPlannedAttempt(source, plannedAttempt), plannedAttempt, baseline)
   )
   const boundaryAttempts = pendingG2Operation === undefined ? reconciledAttempts : activeAttempts
   const runId = boundaryAttempts[0]?.runId
@@ -3548,8 +3570,8 @@ export const continuationDecisionFor = (
   opportunity: RunActivationOpportunity = RunActivationOpportunity.OrdinaryRunEntry()
 ): ContinuationDecision => {
   const plannedAttempt = plannedAttemptOfTransition(transition)
-  const records =
-    plannedAttempt === undefined ? journalRecordsOf(source) : journalRecordsForPlannedAttempt(source, plannedAttempt)
+  if (plannedAttempt === undefined) return { transition }
+  const records = journalRecordsForPlannedAttempt(source, plannedAttempt)
   const unsettledPlannedAttempt = unsettledExecutorCommandFor(transition, records)
   if (unsettledPlannedAttempt !== undefined) {
     return {
@@ -3839,14 +3861,17 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
     activationBaselinePosition,
     opportunity
   )
-  const recoveryRecords = journalRecordsOf(journalHistoryOf(runState))
-  const pendingContinuationGitReadIntents = recoveryRecords
+  const recoverySource = journalHistoryOf(runState)
+  const pendingContinuationGitReadIntents = Array.from(journalRecordsOfKind(recoverySource, "GitReadIntentRecorded"))
     .filter(
       (record): record is JournalRecord & { readonly event: ContinuationGitReadIntentEvent } =>
         record.event._tag === "GitReadIntentRecorded" &&
         !positionIsAfter(record.position, activationBaselinePosition) &&
-        !gitReadIntentHasOutcome(journalHistoryOf(runState), record.event.operation.operationId) &&
-        continuationGitReadIntentHasExactCausalOwner(recoveryRecords, record.event)
+        !gitReadIntentHasOutcome(recoverySource, record.event.operation.operationId) &&
+        continuationGitReadIntentHasExactCausalOwner(
+          journalRecordsForPlannedAttempt(recoverySource, record.event.operation.plannedAttempt),
+          record.event
+        )
     )
     .filter(
       (record, index, pending) =>
@@ -4013,7 +4038,9 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
           ]
     })
   )
-  const activationTargetLineage = journalRecordsOf(journalHistoryOf(runState)).flatMap(({ event, position }) => {
+  const activationTargetLineage = Array.from(
+    journalRecordsOfKind(journalHistoryOf(runState), "TargetLineageObserved")
+  ).flatMap(({ event, position }) => {
     if (event._tag !== "TargetLineageObserved") return []
     const taskBaseline = freshnessBaselineForTask(event.plannedAttempt.taskId)
     const directionLineage = directionLineageByAttemptId.get(event.plannedAttempt.attemptId)
@@ -4029,7 +4056,9 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
   const targetLineageRefreshRequiredAttemptIds = new Set([
     ...recordedTaskAttemptPlans(journalHistoryOf(runState)).flatMap(({ plannedAttempt }) => {
       const graphObservedAt = currentGraphObservationForTask(plannedAttempt.taskId)?.position
-      const lineageObservedAt = journalRecordsOf(journalHistoryOf(runState)).findLast(
+      const lineageObservedAt = Array.from(
+        journalRecordsForPlannedAttempt(journalHistoryOf(runState), plannedAttempt)
+      ).findLast(
         ({ event }) =>
           event._tag === "TargetLineageObserved" &&
           event.plannedAttempt.attemptId === plannedAttempt.attemptId &&
@@ -4122,7 +4151,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
         const directionLineageWasObserved =
           quarantineDirection !== undefined &&
           directionLineageOperationId !== undefined &&
-          journalRecordsOf(journalHistoryOf(runState)).some(
+          Array.from(journalRecordsForOperationId(journalHistoryOf(runState), directionLineageOperationId)).some(
             ({ event, position }) =>
               position > quarantineDirection.directionAt &&
               event._tag === "TargetLineageObserved" &&
@@ -4266,7 +4295,7 @@ const projectRecoveredRunState = Effect.fn("RunRecoveryActivation.projectRecover
 
 export const frontierForActivationOpportunity = (
   frontier: RunnableFrontier,
-  records: ReadonlyArray<JournalRecord>,
+  records: JournalHistorySource,
   baseline: Option.Option<JournalPosition>,
   opportunity: RunActivationOpportunity,
   activeRefreshBoundary?: ActiveRefreshRuntimeBoundary
@@ -4293,13 +4322,14 @@ export const frontierForActivationOpportunity = (
     ...frontier,
     transitions: frontier.transitions.filter((transition) => {
       if (transition._tag !== "SuspendPlannedAttemptExecutorWork") return true
+      const attemptRecords = journalRecordsForPlannedAttempt(records, transition.plannedAttempt)
       if (
-        latestPlannedAttemptExecutorEvidence(records, transition.plannedAttempt)?.report._tag !==
+        latestPlannedAttemptExecutorEvidence(attemptRecords, transition.plannedAttempt)?.report._tag !==
         "ExecutorWorkExecuting"
       ) {
         return true
       }
-      const currentClaim = records.findLast(
+      const currentClaim = attemptRecords.findLast(
         ({ event, position }) =>
           positionIsAfter(position, baseline) &&
           event._tag === "TaskTrackerFactsObserved" &&
@@ -4314,42 +4344,6 @@ export const frontierForActivationOpportunity = (
     })
   }
 }
-
-const readRecoveredProjection = Effect.fn("RunRecoveryActivation.readRecoveredProjection")(function* (
-  runId: RunId,
-  integrationResources: IntegrationTargetResourceController,
-  integrationTarget: Option.Option<IntegrationTarget>,
-  activationBaselinePosition: Option.Option<JournalPosition>,
-  targetPromotionConfigured: boolean,
-  integrationFinalityConfigured: boolean,
-  completionTaskConfigured: boolean,
-  opportunity: RunActivationOpportunity,
-  immutableRunTarget: TrackerTarget | undefined
-) {
-  const runState = yield* readRecoveredRunState(runId)
-  const projection = yield* projectRecoveredRunState(
-    runState,
-    integrationResources,
-    integrationTarget,
-    activationBaselinePosition,
-    targetPromotionConfigured,
-    integrationFinalityConfigured,
-    completionTaskConfigured,
-    opportunity,
-    undefined,
-    immutableRunTarget
-  )
-  return {
-    ...projection,
-    frontier: frontierForActivationOpportunity(
-      projection.frontier,
-      journalRecordsOf(journalHistoryOf(runState)),
-      activationBaselinePosition,
-      opportunity,
-      projection.activeRefreshBoundary
-    )
-  }
-})
 
 /** One reconstruction turn; process-local integration state is sampled exactly once. */
 export interface RunRecoveryProjectionSnapshot {
@@ -4366,7 +4360,7 @@ export class RunRecoveryProjectionRunMismatch extends Schema.TaggedError<RunReco
 ) {}
 
 export type RunRecoveryProjectionError =
-  | Effect.Error<ReturnType<typeof readRecoveredProjection>>
+  | Effect.Error<ReturnType<typeof projectRecoveredRunState>>
   | RunRecoveryProjectionRunMismatch
 
 /** Read-only reconstructed evidence consumed by delivery. */
@@ -4410,7 +4404,7 @@ export class RunRecoveryProjection extends Context.Service<RunRecoveryProjection
 ) {}
 
 const recoveryProjectionSnapshot = (
-  projection: Effect.Success<ReturnType<typeof readRecoveredProjection>>,
+  projection: Effect.Success<ReturnType<typeof projectRecoveredRunState>>,
   frontier: RunnableFrontier = projection.frontier
 ): RunRecoveryProjectionSnapshot => ({
   evidence: {
@@ -4486,7 +4480,7 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
       projection,
       frontierForActivationOpportunity(
         projection.frontier,
-        journalRecordsOf(journalHistoryOf(runState)),
+        journalHistoryOf(runState),
         activationBaselinePosition,
         opportunity,
         projection.activeRefreshBoundary
@@ -4497,18 +4491,7 @@ const makeRunRecoveryProjectionEffect = Effect.fn("RunRecoveryProjection.makeAut
     return snapshot
   })
   const projection = Option.match(sharedJournal, {
-    onNone: () =>
-      readRecoveredProjection(
-        runId,
-        integrationResources,
-        integrationTarget,
-        activationBaselinePosition,
-        targetPromotionConfigured,
-        integrationFinalityConfigured,
-        completionTaskConfigured,
-        opportunity,
-        immutableRunTarget
-      ).pipe(Effect.map(recoveryProjectionSnapshot), Effect.provideService(InRunJournal, journal)),
+    onNone: () => projectDeliveryFrom(initialRunState),
     onSome: ({ state }) =>
       state.get.pipe(
         Effect.flatMap(({ reconstructed }) =>
