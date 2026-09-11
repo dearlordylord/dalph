@@ -151,8 +151,10 @@ const durableTargetLineageFor = (
     : undefined
 }
 
-const nextJournalPositionFor = (runState: ReconstructedRunState): JournalPosition =>
-  JournalPosition.make(runState.workflowHistory.evidence.records.length + 1)
+const nextJournalPositionFor = (runState: ReconstructedRunState): JournalPosition => {
+  const { lastPosition } = runState.workflowHistory.evidence
+  return JournalPosition.make(lastPosition === null ? 1 : lastPosition + 1)
+}
 
 const runBoundIntegratorStateFor = (
   state: CurrentIntegratorState
