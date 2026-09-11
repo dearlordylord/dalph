@@ -38,11 +38,11 @@ const makeTargetPromotionEngineImplementation = <E, R>(readEvidence: CurrentTarg
 type TargetPromotionEngineImplementation<E, R> = ReturnType<typeof makeTargetPromotionEngineImplementation<E, R>>
 
 /** The complete outer protocol surface without exposing process-local capability brands. */
-export interface TargetPromotionEngine<E, R> extends ReturnType<typeof makeTargetPromotionTransitions<E, R>> {
+interface TargetPromotionEngine<E, R> extends ReturnType<typeof makeTargetPromotionTransitions<E, R>> {
   readonly reconcileTargetPromotionAttempt: TargetPromotionEngineImplementation<E, R>["reconcileTargetPromotionAttempt"]
   readonly runTargetPromotion: TargetPromotionEngineImplementation<E, R>["runTargetPromotion"]
 }
 
-export const makeTargetPromotionEngine = <E, R>(
+export const makeTargetPromotionEngine: <E, R>(
   readEvidence: CurrentTargetPromotionEvidence<E, R>
-): TargetPromotionEngine<E, R> => makeTargetPromotionEngineImplementation(readEvidence)
+) => TargetPromotionEngine<E, R> = makeTargetPromotionEngineImplementation

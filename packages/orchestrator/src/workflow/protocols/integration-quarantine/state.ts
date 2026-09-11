@@ -116,8 +116,7 @@ const directionRecordsFor = (
   }
 }
 
-const recordAt = (records: JournalHistorySource, position: JournalPosition): JournalRecord | undefined =>
-  journalRecordByPosition(records, position)
+const recordAt = journalRecordByPosition
 
 const providerActivityAbsenceMatches = (
   records: JournalHistorySource,

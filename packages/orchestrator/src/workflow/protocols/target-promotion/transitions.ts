@@ -455,7 +455,6 @@ export const makeTargetPromotionTransitions = <E, R>(readEvidence: CurrentTarget
 }
 
 export const {
-  authorizeOrRecordTargetPromotionProgress,
   authorizeTargetPromotionProgress,
   observeTargetPromotionRead,
   recordTargetPromotionAttemptIntent,

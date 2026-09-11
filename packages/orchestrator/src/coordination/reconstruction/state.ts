@@ -139,7 +139,7 @@ export interface AcceptedReconstructedRunState extends ReconstructedRunState {
 
 const RawDiagnosticRunTypeId: unique symbol = Symbol("RawDiagnosticReconstructedRun")
 /** Pure state-consistency diagnostics may reconstruct partial/orphan records, but never certify accepted workflow history. */
-export interface RawDiagnosticReconstructedRun extends ReconstructedRunState {
+interface RawDiagnosticReconstructedRun extends ReconstructedRunState {
   readonly [RawDiagnosticRunTypeId]: true
 }
 export const rawDiagnosticReconstructedRun = (state: ReconstructedRunState): RawDiagnosticReconstructedRun => ({

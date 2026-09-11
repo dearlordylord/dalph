@@ -61,8 +61,7 @@ const reject = (
 const sameTarget = (left: IntegrationTarget, right: IntegrationTarget): boolean =>
   left.repository === right.repository && left.ref === right.ref
 
-const exactRecordAt = (records: JournalHistorySource, position: JournalPosition): JournalRecord | undefined =>
-  journalRecordByPosition(records, position)
+const exactRecordAt = journalRecordByPosition
 
 type TargetLineageObservedEvent = Extract<JournalRecord["event"], { readonly _tag: "TargetLineageObserved" }>
 
