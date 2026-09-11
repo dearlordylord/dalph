@@ -54,6 +54,8 @@ import {
   journalRecordsOfKind,
   journalRecordByKey,
   journalStopRequestDispositionAt,
+  lastJournalRecordForAttemptKind,
+  lastJournalRecordForTaskKind,
   type JournalRecordEvidence,
   type JournalHistorySource
 } from "../../workflow-journal/record-evidence.js"
@@ -1362,7 +1364,7 @@ const replacementClaimIsExact = (
 export const replacementResourceConflict = (
   event: WorkflowJournalEvent,
   plannedAttempt: PlannedTaskAttempt,
-  witness: PlannedAttemptReplacementRecord["event"]["witness"]
+  witness: Pick<PlannedAttemptReplacementRecord["event"]["witness"], "expectedClaim">
 ): boolean => {
   if (event._tag === "TaskClaimReacquisitionDirected") {
     return event.subject.runId === plannedAttempt.runId && event.subject.taskId === plannedAttempt.taskId
@@ -1382,16 +1384,28 @@ export const replacementResourceConflict = (
   )
 }
 
-const replacementPreservesPriorResources = (
+export const replacementPreservesPriorResources = (
   prior: JournalHistorySource,
   plannedAttempt: PlannedTaskAttempt,
-  witness: PlannedAttemptReplacementRecord["event"]["witness"],
+  witness: Pick<PlannedAttemptReplacementRecord["event"]["witness"], "expectedClaim">,
   applicationPosition: JournalPosition
-): boolean =>
-  !hasMatching(journalRecordsForTask(prior, plannedAttempt.taskId), ({ event, position }) => {
+): boolean => {
+  const conflicts = ({ event, position }: JournalRecord) => {
     if (position <= applicationPosition) return false
     return replacementResourceConflict(event, plannedAttempt, witness)
-  })
+  }
+  if (!isJournalRecordEvidence(prior)) return !hasMatching(journalRecordsForTask(prior, plannedAttempt.taskId), conflicts)
+  // Every accepted occurrence of these kinds belongs to the exact run/task or immutable attempt.
+  // The last occurrence therefore answers whether any such mutation followed the Restart application.
+  const latestMutations = [
+    lastJournalRecordForTaskKind(prior, plannedAttempt.taskId, "TaskClaimReacquisitionDirected"),
+    lastJournalRecordForTaskKind(prior, plannedAttempt.taskId, "TaskClaimAcquisitionIntended"),
+    lastJournalRecordForAttemptKind(prior, plannedAttempt.attemptId, "TaskWorktreeReconciliationIntended")
+  ]
+  if (latestMutations.some((record) => record !== undefined && conflicts(record))) return false
+  // Exact acquisition identity, not a generated release-operation name, correlates the retained claim's disposition.
+  return !hasMatching(journalRecordsForOperationId(prior, witness.expectedClaim.operationId), conflicts)
+}
 
 const replacementWorktreeIsExact = (
   prior: JournalHistorySource,

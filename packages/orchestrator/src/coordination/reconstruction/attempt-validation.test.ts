@@ -12,7 +12,7 @@ import {
 } from "@dalph/contracts"
 import { JournalPosition } from "../../workflow-journal/identity.js"
 import { attemptChoiceAppliedRecordKey, attemptStoppageIntentRecordKey } from "../../workflow-journal/record-key.js"
-import { journalEvidenceFrom, type JournalHistorySource } from "../../workflow-journal/record-evidence.js"
+import { journalEvidenceBefore, journalEvidenceFrom, type JournalHistorySource } from "../../workflow-journal/record-evidence.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import {
@@ -23,7 +23,7 @@ import {
 } from "../../workflow/protocols/attempt-choice/events.js"
 import { emptyIndexes } from "./history-kernel-state.js"
 import type { WorkflowJournalHistoryIssue } from "./history-result.js"
-import { validateAttemptChoice, validateAttemptStop } from "./attempt-validation.js"
+import { replacementPreservesPriorResources, validateAttemptChoice, validateAttemptStop } from "./attempt-validation.js"
 import { observeJournalRecordSequenceOperations } from "../../workflow-journal/record-sequence.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
 import { InitialControlPolicy } from "../../control/policy.js"
@@ -243,6 +243,48 @@ const validate = (source: JournalHistorySource): ReadonlyArray<WorkflowJournalHi
   validateAttemptChoice(record, runId, source, emptyIndexes(), issues)
   return issues
 }
+
+it.each([64, 256])("bounds replacement claim preservation after %i unrelated same-task releases", (size) => {
+  const expectedClaim = ActiveTaskClaim.make({
+    operationId: OperationId.make("replacement-retained-claim"),
+    owner: ClaimOwner.make("dalph"),
+    taskId: plannedAttempt.taskId,
+    token: ClaimToken.make("replacement-retained-token")
+  })
+  const records = Array.from({ length: size + 1 }, (_, offset): JournalRecord => {
+    const claim = offset === size ? expectedClaim : ActiveTaskClaim.make({
+      ...expectedClaim,
+      operationId: OperationId.make(`unrelated-acquisition-${offset}`),
+      token: ClaimToken.make(`unrelated-acquisition-token-${offset}`)
+    })
+    const event = TaskClaimReleaseIntendedEvent.make({
+      operation: makeTaskClaimReleaseOperation({
+        release: { claim, operationId: OperationId.make(`arbitrary-release-operation-${offset}`) },
+        predecessorOperationIds: [claim.operationId],
+        authority: { _tag: "WorkflowClaimReleaseAuthority" }
+      }),
+      version: workflowJournalEventVersion
+    })
+    return { event, key: describeJournalEvent(event).expectedKey, position: JournalPosition.make(offset + 1), runId }
+  })
+  const evidence = journalEvidenceFrom(records)
+  const beforeOwnRelease = journalEvidenceBefore(evidence, size + 1)
+  const witness = { expectedClaim }
+  let visits = 0
+  const stop = observeJournalRecordSequenceOperations((operation) => {
+    expect(operation._tag).toBe("IndexedRecordVisit")
+    visits += 1
+  })
+  try {
+    expect(replacementPreservesPriorResources(beforeOwnRelease, plannedAttempt, witness, JournalPosition.make(1))).toBe(true)
+    expect(replacementPreservesPriorResources(evidence, plannedAttempt, witness, JournalPosition.make(1))).toBe(false)
+  } finally {
+    stop()
+  }
+  expect(visits).toBeLessThanOrEqual(8)
+  expect(replacementPreservesPriorResources(records.slice(0, size), plannedAttempt, witness, JournalPosition.make(1))).toBe(true)
+  expect(replacementPreservesPriorResources(records, plannedAttempt, witness, JournalPosition.make(1))).toBe(false)
+})
 
 it("reports the same ordered attempt-choice authority issues from cold records and indexed live evidence", () => {
   const records = [record]
