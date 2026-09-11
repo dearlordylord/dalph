@@ -1745,16 +1745,16 @@ durableJournalStoreContract(
               yield* withSqliteClient(filename, (sql) =>
                 Effect.gen(function* () {
                   const queries = makeSqliteJournalQueries(sql, undefined)
-                  const rowFailure = yield* queries
-                    .loadPartitionRecords("Hot", rowRun, "JournalStore.read")
-                    .pipe(Effect.flip)
+                  const rowFailure = yield* queries.loadRunSnapshot(rowRun, "JournalStore.read").pipe(Effect.flip)
                   const existingRowFailure = yield* queries
-                    .findExistingRecord(existingRowRun, JournalRecordKey.make("operation:existing:intent"))
+                    .loadRunSnapshot(existingRowRun, "JournalStore.append")
                     .pipe(Effect.flip)
                   const payloadFailure = yield* queries
-                    .findExistingRecord(payloadRun, JournalRecordKey.make("operation:payload:intent"))
+                    .loadRunSnapshot(payloadRun, "JournalStore.append")
                     .pipe(Effect.flip)
-                  const positionFailure = yield* queries.nextPosition(positionRun).pipe(Effect.flip)
+                  const positionFailure = yield* queries
+                    .loadRunSnapshot(positionRun, "JournalStore.append")
+                    .pipe(Effect.flip)
 
                   expect(rowFailure).toMatchObject({
                     _tag: "JournalHistoryCorruption",

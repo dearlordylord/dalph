@@ -1,10 +1,9 @@
 /* eslint-disable functional/immutable-data -- Scan accumulation is private adapter scratch and never becomes journal authority. */
 import type * as SqliteClient from "@effect/sql-sqlite-node/SqliteClient"
-import { Effect, Result, Schema } from "effect"
+import { Effect, HashMap, Result, Schema } from "effect"
 import type * as SqlError from "effect/unstable/sql/SqlError"
 import { RunId } from "@dalph/contracts"
 import { JournalEventKind, JournalEventVersion } from "../../workflow/kernel/event.js"
-import type { WorkflowJournalEvent } from "../../workflow/registry/event.js"
 import { decodeJournalEvent, encodeJournalEvent } from "../event-codec.js"
 import { type JournalPartition, JournalPosition, JournalRecordKey } from "../identity.js"
 import { decideJournalPartitionHistory } from "../partition-history.js"
@@ -16,6 +15,7 @@ import {
   type JournalStoreError
 } from "../store.js"
 import { classifyJournalStorageFailure, decodeBoundary, type StoreOperation } from "./sqlite-store-errors.js"
+import type { SqlitePartitionSnapshot } from "./sqlite-storage-checkpoint.js"
 
 const PersistedJournalRow = Schema.Struct({
   event_kind: JournalEventKind,
@@ -29,15 +29,7 @@ type PersistedJournalRow = typeof PersistedJournalRow.Type
 
 const PersistedJournalRows = Schema.Array(PersistedJournalRow)
 const PersistedRunIdentity = Schema.Struct({ run_id: RunId })
-const ExistingRecordRows = Schema.Array(
-  Schema.Struct({
-    position: JournalPosition,
-    event_kind: JournalEventKind,
-    event_version: JournalEventVersion,
-    payload_json: Schema.String
-  })
-)
-const NextPositionRows = Schema.Tuple([Schema.Struct({ next_position: JournalPosition })])
+const lastRecordIndex = -1
 
 const historyCorruption = (partition: JournalPartition, runId: RunId, operation: StoreOperation, detail: string) =>
   new JournalHistoryCorruption({ detail, operation, partition, runId })
@@ -136,13 +128,6 @@ interface SqlitePartitionScan {
 }
 
 export interface SqliteJournalQueries {
-  readonly findExistingRecord: (
-    runId: RunId,
-    key: JournalRecordKey
-  ) => Effect.Effect<
-    { readonly event: WorkflowJournalEvent; readonly position: JournalPosition } | undefined,
-    JournalHistoryCorruption | SqlError.SqlError
-  >
   readonly hasPartitionRows: (
     partition: JournalPartition,
     runId: RunId,
@@ -154,11 +139,23 @@ export interface SqliteJournalQueries {
     runId: RunId,
     operation: StoreOperation
   ) => Effect.Effect<ReadonlyArray<JournalRecord>, JournalStoreError>
+  readonly locateRunPartition: (
+    runId: RunId,
+    operation: StoreOperation
+  ) => Effect.Effect<JournalPartition, JournalStoreError>
   readonly loadRunRecords: (
     runId: RunId,
     operation: StoreOperation
   ) => Effect.Effect<ReadonlyArray<JournalRecord>, JournalStoreError>
-  readonly nextPosition: (runId: RunId) => Effect.Effect<JournalPosition, JournalHistoryCorruption | SqlError.SqlError>
+  readonly loadRunSnapshot: (
+    runId: RunId,
+    operation: StoreOperation
+  ) => Effect.Effect<SqlitePartitionSnapshot, JournalStoreError>
+  readonly loadRunSnapshotForPartition: (
+    partition: JournalPartition,
+    runId: RunId,
+    operation: StoreOperation
+  ) => Effect.Effect<SqlitePartitionSnapshot, JournalStoreError>
   readonly scanPartition: (
     partition: JournalPartition,
     operation: "JournalStore.scanHot" | "JournalStore.auditAll"
@@ -167,9 +164,10 @@ export interface SqliteJournalQueries {
 
 export const makeSqliteJournalQueries = (
   sql: SqliteClient.SqliteClient,
-  beforeReadLoad: (() => Effect.Effect<void>) | undefined
+  beforeReadLoad: (() => Effect.Effect<void>) | undefined,
+  onPartitionRowsQueried?: (partition: JournalPartition, runId: RunId, rowCount: number) => Effect.Effect<void>
 ): SqliteJournalQueries => {
-  const loadPartitionRecords = Effect.fn("JournalStore.Sqlite.loadPartitionRecords")(function* (
+  const loadPartitionEvidence = Effect.fn("JournalStore.Sqlite.loadPartitionEvidence")(function* (
     partition: JournalPartition,
     runId: RunId,
     operation: StoreOperation
@@ -188,14 +186,49 @@ export const makeSqliteJournalQueries = (
     const rows = yield* decodeBoundary(PersistedJournalRows, input, operation).pipe(
       Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
     )
-    return yield* Effect.forEach(rows, (row) =>
+    if (onPartitionRowsQueried !== undefined) yield* onPartitionRowsQueried(partition, runId, rows.length)
+    const decodedRows = yield* Effect.forEach(rows, (row) =>
       parseEvent(row, operation).pipe(
-        Effect.map(
-          (event): JournalRecord => ({ event, key: row.record_key, position: row.position, runId: row.run_id })
-        ),
+        Effect.map((event) => ({
+          evidence: { event, position: row.position },
+          record: { event, key: row.record_key, position: row.position, runId: row.run_id } satisfies JournalRecord
+        })),
         Effect.mapError((cause) => historyCorruption(partition, runId, operation, cause.detail))
       )
     )
+    const records = decodedRows.map(({ record }) => record)
+    const observedKeys = new Set<JournalRecordKey>()
+    for (const [index, record] of records.entries()) {
+      if (record.position !== index + 1) {
+        return yield* historyCorruption(
+          partition,
+          runId,
+          operation,
+          `expected contiguous position ${index + 1}, found ${record.position}`
+        )
+      }
+      if (observedKeys.has(record.key)) {
+        return yield* historyCorruption(partition, runId, operation, `duplicate record key ${record.key}`)
+      }
+      observedKeys.add(record.key)
+    }
+    const recordsByKey = HashMap.fromIterable(
+      decodedRows.map(({ evidence, record }) => [record.key, evidence] as const)
+    )
+    return {
+      decodedThrough: records.at(lastRecordIndex)?.position,
+      records,
+      recordsByKey,
+      terminalPosition: records.find(({ event }) => event._tag === "WorkflowRunTerminated")?.position
+    }
+  })
+
+  const loadPartitionRecords = Effect.fn("JournalStore.Sqlite.loadPartitionRecords")(function* (
+    partition: JournalPartition,
+    runId: RunId,
+    operation: StoreOperation
+  ) {
+    return (yield* loadPartitionEvidence(partition, runId, operation)).records
   })
 
   const hasPartitionRows = Effect.fn("JournalStore.Sqlite.hasPartitionRows")(function* (
@@ -214,7 +247,7 @@ export const makeSqliteJournalQueries = (
     return rows.length > 0
   })
 
-  const loadRunRecords = Effect.fn("JournalStore.Sqlite.loadRunRecords")(function* (
+  const locateRunPartition = Effect.fn("JournalStore.Sqlite.locateRunPartition")(function* (
     runId: RunId,
     operation: StoreOperation
   ) {
@@ -222,14 +255,52 @@ export const makeSqliteJournalQueries = (
     const cold = yield* hasPartitionRows("Cold", runId, operation)
     if (hot && cold) return yield* new JournalPartitionContradiction({ runId })
     if (operation === "JournalStore.read" && beforeReadLoad !== undefined) yield* beforeReadLoad()
-    const partition = cold ? "Cold" : "Hot"
-    const records = yield* loadPartitionRecords(partition, runId, operation)
-    if (!cold) return records
-    const decision = decideJournalPartitionHistory("Cold", runId, records)
+    return cold ? "Cold" : "Hot"
+  })
+
+  const loadRunSnapshotForPartition = Effect.fn("JournalStore.Sqlite.loadRunSnapshotForPartition")(function* (
+    partition: JournalPartition,
+    runId: RunId,
+    operation: StoreOperation
+  ) {
+    const evidence = yield* loadPartitionEvidence(partition, runId, operation)
+    if (partition === "Hot") {
+      return {
+        checkpoint: { ...evidence, partition, runId },
+        records: evidence.records
+      } satisfies SqlitePartitionSnapshot
+    }
+    const decision = decideJournalPartitionHistory("Cold", runId, evidence.records)
     if (decision._tag === "InvalidPartitionHistory") {
       return yield* historyCorruption(partition, runId, operation, decision.issue.detail)
     }
-    return records
+    if (evidence.decodedThrough === undefined || evidence.terminalPosition === undefined) {
+      return yield* historyCorruption(partition, runId, operation, "valid Cold history requires a terminal record")
+    }
+    return {
+      checkpoint: {
+        ...evidence,
+        decodedThrough: evidence.decodedThrough,
+        partition,
+        runId,
+        terminalPosition: evidence.terminalPosition
+      },
+      records: evidence.records
+    } satisfies SqlitePartitionSnapshot
+  })
+
+  const loadRunSnapshot = Effect.fn("JournalStore.Sqlite.loadRunSnapshot")(function* (
+    runId: RunId,
+    operation: StoreOperation
+  ) {
+    return yield* loadRunSnapshotForPartition(yield* locateRunPartition(runId, operation), runId, operation)
+  })
+
+  const loadRunRecords = Effect.fn("JournalStore.Sqlite.loadRunRecords")(function* (
+    runId: RunId,
+    operation: StoreOperation
+  ) {
+    return (yield* loadRunSnapshot(runId, operation)).records
   })
 
   const insertLifecycleRecord = Effect.fn("JournalStore.Sqlite.insertLifecycleRecord")(function* (
@@ -243,38 +314,6 @@ export const makeSqliteJournalQueries = (
         ${record.runId}, ${record.position}, ${record.key}, ${encoded.kind}, ${encoded.version}, ${encoded.payloadJson}
       )
     `
-  })
-
-  const findExistingRecord = Effect.fn("JournalStore.Sqlite.findExistingRecord")(function* (
-    runId: RunId,
-    key: JournalRecordKey
-  ) {
-    const input = yield* sql`
-      SELECT position, event_kind, event_version, payload_json
-      FROM journal_records
-      WHERE run_id = ${runId} AND record_key = ${key}
-    `
-    const rows = yield* decodeBoundary(ExistingRecordRows, input, "JournalStore.append").pipe(
-      Effect.mapError((cause) => historyCorruption("Hot", runId, "JournalStore.append", cause.detail))
-    )
-    const existing = rows[0]
-    if (existing === undefined) return undefined
-    const event = yield* parseEvent(existing, "JournalStore.append").pipe(
-      Effect.mapError((cause) => historyCorruption("Hot", runId, "JournalStore.append", cause.detail))
-    )
-    return { event, position: existing.position }
-  })
-
-  const nextPosition = Effect.fn("JournalStore.Sqlite.nextPosition")(function* (runId: RunId) {
-    const input = yield* sql`
-      SELECT COALESCE(MAX(position), 0) + 1 AS next_position
-      FROM journal_records
-      WHERE run_id = ${runId}
-    `
-    const positions = yield* decodeBoundary(NextPositionRows, input, "JournalStore.append").pipe(
-      Effect.mapError((cause) => historyCorruption("Hot", runId, "JournalStore.append", cause.detail))
-    )
-    return positions[0].next_position
   })
 
   const scanPartition = Effect.fn("JournalStore.Sqlite.scanPartition")(function* (
@@ -306,12 +345,13 @@ export const makeSqliteJournalQueries = (
   })
 
   return {
-    findExistingRecord,
     hasPartitionRows,
     insertLifecycleRecord,
     loadPartitionRecords,
+    locateRunPartition,
     loadRunRecords,
-    nextPosition,
+    loadRunSnapshot,
+    loadRunSnapshotForPartition,
     scanPartition
   }
 }
