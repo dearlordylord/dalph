@@ -28,6 +28,7 @@ import {
 } from "../../workflow-journal/record-key.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
 import { makeWorkflowRunBeganRecord } from "../../workflow-journal/run-lifecycle.js"
+import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
 import { OperationId } from "../../workflow/identity.js"
 import { workflowJournalEventVersion } from "../../workflow/kernel/event.js"
 import { PlannedAttemptExecutorWorkResponsibilityBeganEvent } from "../../workflow/protocols/planned-attempt-executor-work/events.js"
@@ -263,6 +264,7 @@ describe("projectFreshTaskCommitments", () => {
           : { _tag: "ExactAttemptHeld", plannedAttempt }
       )
       expect(projectFreshTaskCommitments(runId, records)).toEqual(projection.commitments)
+      expect(projectFreshTaskCommitments(runId, journalEvidenceFrom(records))).toEqual(projection.commitments)
     }
   )
 
