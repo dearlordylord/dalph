@@ -92,27 +92,55 @@ const decisionFor = (step: FreshWorkflowStepType): FreshWorkflowDecision => ({
         : continued(step.task.id, step.predecessorOperationId)
 })
 
-const observedOperationIds = (records: JournalHistorySource): ReadonlySet<OperationId> =>
-  new Set([
-    ...Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved")).flatMap(({ event }) =>
-      event._tag === "TaskTrackerFactsObserved" ? [event.operationId] : []
-    ),
-    ...Array.from(journalRecordsOfKind(records, "TaskWorktreeReady")).flatMap(({ event }) =>
-      event._tag === "TaskWorktreeReady" ? [event.operationId] : []
-    )
-  ])
+const observedOperationIdsByPrefix = new WeakMap<object, ReadonlySet<OperationId>>()
+const completeGraphObservationIdsByPrefix = new WeakMap<object, ReadonlySet<OperationId>>()
+
+function* observedOperationIdValues(records: JournalHistorySource): Iterable<OperationId> {
+  for (const { event } of journalRecordsOfKind(records, "TaskTrackerFactsObserved")) {
+    if (event._tag === "TaskTrackerFactsObserved") yield event.operationId
+  }
+  for (const { event } of journalRecordsOfKind(records, "TaskWorktreeReady")) {
+    if (event._tag === "TaskWorktreeReady") yield event.operationId
+  }
+}
+
+const deriveObservedOperationIds = (records: JournalHistorySource): ReadonlySet<OperationId> =>
+  new Set(observedOperationIdValues(records))
+
+const observedOperationIds = (records: JournalHistorySource): ReadonlySet<OperationId> => {
+  if (!isJournalRecordEvidence(records)) return deriveObservedOperationIds(records)
+  const cached = observedOperationIdsByPrefix.get(records)
+  if (cached !== undefined) return cached
+  const observed = deriveObservedOperationIds(records)
+  observedOperationIdsByPrefix.set(records, observed)
+  return observed
+}
 
 /** Only a complete current graph outcome can authorize a claim; a typed read failure merely settles its read. */
-const completeGraphObservationIds = (records: JournalHistorySource): ReadonlySet<OperationId> =>
-  new Set(
-    Array.from(journalRecordsOfKind(records, "TaskTrackerFactsObserved")).flatMap(({ event }) =>
+function* completeGraphObservationIdValues(records: JournalHistorySource): Iterable<OperationId> {
+  for (const { event } of journalRecordsOfKind(records, "TaskTrackerFactsObserved")) {
+    if (
       event._tag === "TaskTrackerFactsObserved" &&
       (event.observation._tag === "CompleteTaskTrackerFacts" ||
         event.observation._tag === "UnchangedTaskTrackerFactsReconfirmed")
-        ? [event.operationId]
-        : []
-    )
-  )
+    ) {
+      yield event.operationId
+    }
+  }
+}
+
+const deriveCompleteGraphObservationIds = (records: JournalHistorySource): ReadonlySet<OperationId> =>
+  new Set(completeGraphObservationIdValues(records))
+
+/** Immutable accepted evidence is safe to memoize; mutable diagnostic arrays are deliberately recomputed. */
+const completeGraphObservationIds = (records: JournalHistorySource): ReadonlySet<OperationId> => {
+  if (!isJournalRecordEvidence(records)) return deriveCompleteGraphObservationIds(records)
+  const cached = completeGraphObservationIdsByPrefix.get(records)
+  if (cached !== undefined) return cached
+  const observed = deriveCompleteGraphObservationIds(records)
+  completeGraphObservationIdsByPrefix.set(records, observed)
+  return observed
+}
 
 const plannedSpecificationFor = (
   records: JournalHistorySource,

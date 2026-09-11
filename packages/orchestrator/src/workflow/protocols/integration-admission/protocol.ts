@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Admission reconstruction and its process-local prefix indexes stay co-located for chronology auditability. */
-import { Chunk, Context, Effect, HashMap, HashSet, Layer, Option, Schema } from "effect"
+import { Chunk, Context, Effect, HashMap, HashSet, Iterable, Layer, Option, Result, Schema } from "effect"
 import {
   AcceptedResult,
   AcceptedResultEvidenceManifest,
@@ -523,40 +523,49 @@ const settledFor = (
 export const deriveUnqueuedAcceptedResults = (records: JournalHistorySource): ReadonlyArray<UnqueuedAcceptedResult> => {
   if (isJournalRecordEvidence(records)) {
     const queuedAttemptIds = HashSet.fromIterable(
-      Array.from(journalRecordsOfKind(records, "IntegrationResponsibilityBegan"), (record) =>
-        record.event._tag === "IntegrationResponsibilityBegan" ? record.event.plannedAttempt.attemptId : undefined
-      ).filter((attemptId) => attemptId !== undefined)
+      Iterable.map(
+        Iterable.filter(
+          journalRecordsOfKind(records, "IntegrationResponsibilityBegan"),
+          (record): record is JournalRecord & { readonly event: typeof IntegrationResponsibilityBeganEvent.Type } =>
+            record.event._tag === "IntegrationResponsibilityBegan"
+        ),
+        (record) => record.event.plannedAttempt.attemptId
+      )
     )
-    return Array.from(journalRecordsOfKind(records, "PlannedAttemptExecutorWorkReported")).flatMap((record) => {
-      if (record.event._tag !== "PlannedAttemptExecutorWorkReported") return []
-      const report = record.event.report
-      if (
-        report._tag !== "ExecutorWorkTerminal" ||
-        report.result._tag !== "Accepted" ||
-        HashSet.has(queuedAttemptIds, report.correlation.attemptId)
-      ) {
-        return []
-      }
-      let plannedAttempt: PlannedTaskAttempt | undefined
-      for (const responsibility of journalRecordsForAttemptKind(
-        records,
-        report.correlation.attemptId,
-        "PlannedAttemptExecutorWorkResponsibilityBegan"
-      )) {
-        if (responsibility.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
-          plannedAttempt = responsibility.event.plannedAttempt
+    const acceptedResults = Iterable.filterMap(
+      journalRecordsOfKind(records, "PlannedAttemptExecutorWorkReported"),
+      (record) => {
+        if (record.event._tag !== "PlannedAttemptExecutorWorkReported") return Result.failVoid
+        const report = record.event.report
+        if (
+          report._tag !== "ExecutorWorkTerminal" ||
+          report.result._tag !== "Accepted" ||
+          HashSet.has(queuedAttemptIds, report.correlation.attemptId)
+        ) {
+          return Result.failVoid
         }
+        let plannedAttempt: PlannedTaskAttempt | undefined
+        for (const responsibility of journalRecordsForAttemptKind(
+          records,
+          report.correlation.attemptId,
+          "PlannedAttemptExecutorWorkResponsibilityBegan"
+        )) {
+          if (responsibility.event._tag === "PlannedAttemptExecutorWorkResponsibilityBegan") {
+            plannedAttempt = responsibility.event.plannedAttempt
+          }
+        }
+        return plannedAttempt === undefined
+          ? Result.failVoid
+          : Result.succeed(
+              UnqueuedAcceptedResult.make({
+                acceptedResult: report.result.acceptedResult,
+                plannedAttempt,
+                terminalAt: record.position
+              })
+            )
       }
-      return plannedAttempt === undefined
-        ? []
-        : [
-            UnqueuedAcceptedResult.make({
-              acceptedResult: report.result.acceptedResult,
-              plannedAttempt,
-              terminalAt: record.position
-            })
-          ]
-    })
+    )
+    return Array.from(acceptedResults)
   }
   const indexes = replayIntegrationAdmissionPrefixIndexes(records)
   const results = records.flatMap((record) => {
@@ -586,13 +595,13 @@ export const deriveUnqueuedAcceptedResults = (records: JournalHistorySource): Re
 /** Reconstructs FIFO and cutoff state solely from immutable journal records. */
 export const deriveIntegrationAdmission = (records: JournalHistorySource): IntegrationAdmission => {
   if (isJournalRecordEvidence(records)) {
-    const responsibilities = Array.from(journalRecordsOfKind(records, "IntegrationResponsibilityBegan")).flatMap(
-      (record): ReadonlyArray<IntegrationResponsibility> => {
-        if (record.event._tag !== "IntegrationResponsibilityBegan") return []
+    const responsibilities = Array.from(
+      Iterable.filterMap(journalRecordsOfKind(records, "IntegrationResponsibilityBegan"), (record) => {
+        if (record.event._tag !== "IntegrationResponsibilityBegan") return Result.failVoid
         const queued = { ...record, event: record.event }
-        if (settledForEvidence(records, queued)) return []
+        if (settledForEvidence(records, queued)) return Result.failVoid
         const started = startedForEvidence(records, queued)
-        return [
+        return Result.succeed(
           started === undefined
             ? QueuedIntegrationResponsibility.make({
                 acceptedResult: queued.event.acceptedResult,
@@ -612,8 +621,8 @@ export const deriveIntegrationAdmission = (records: JournalHistorySource): Integ
                 queuedAt: queued.position,
                 startedAt: started.position
               })
-        ]
-      }
+        )
+      })
     )
     return { responsibilities }
   }

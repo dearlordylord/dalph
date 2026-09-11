@@ -1,5 +1,5 @@
 /* eslint-disable max-lines -- Exact history reconstruction spans every delivery authority boundary. */
-import { Context, Effect, HashSet, Match, Option, Schema } from "effect"
+import { Context, Effect, HashSet, Iterable, Match, Option, Schema } from "effect"
 import {
   TaskWorkSpecification,
   type IntegrationTarget,
@@ -1360,14 +1360,15 @@ const taskPauseCoverageBoundaries = (
   if (pause.subject.taskId === plannedAttempt.taskId) return [pausePosition]
   const unpausePosition = taskUnpausePositionFor(source, pause, pausePosition)
   const graphObservations = Array.from(
-    journalRecordsForTaskKind(source, plannedAttempt.taskId, "TaskTrackerFactsObserved")
-  ).filter(
-    (record): record is GraphObservationRecord =>
-      isGraphObservationRecord(record) &&
-      (immutableRunTarget === undefined ||
-        taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)) &&
-      (record.position < pausePosition ||
-        (record.position > pausePosition && (unpausePosition === undefined || record.position < unpausePosition)))
+    Iterable.filter(
+      journalRecordsForTaskKind(source, plannedAttempt.taskId, "TaskTrackerFactsObserved"),
+      (record): record is GraphObservationRecord =>
+        isGraphObservationRecord(record) &&
+        (immutableRunTarget === undefined ||
+          taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)) &&
+        (record.position < pausePosition ||
+          (record.position > pausePosition && (unpausePosition === undefined || record.position < unpausePosition)))
+    )
   )
   const graphBeforePause = graphObservations.findLast(({ position }) => position < pausePosition)
   const graphsWhilePaused = graphObservations.filter(({ position }) => position > pausePosition)
