@@ -1,6 +1,7 @@
 import { Effect } from "effect"
+import { it } from "@effect/vitest"
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
-import { expect, it } from "vitest"
+import { expect } from "vitest"
 import {
   AttemptId,
   GitCommitSha,
@@ -15,7 +16,14 @@ import {
   TaskRevision,
   WorktreeLocator
 } from "@dalph/contracts"
-import { InRunJournal } from "../../workflow-journal/store.js"
+import { InRunJournal, JournalStore } from "../../workflow-journal/store.js"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
+import { memoryJournalTestLayer } from "../../workflow-journal/adapters/memory-store.js"
+import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
+import { makeJournal } from "../delivery/journal.js"
+import { FixtureTarget } from "../../authorities/task-tracker/fixture/target.js"
+import { InitialControlPolicy } from "../../control/policy.js"
+import { TaskWorkCapacity } from "../admission/capacity.js"
 import {
   AcceptedResultNotDurable,
   AcceptedResultEvidenceUnavailable,
@@ -41,6 +49,21 @@ const integrationTarget = IntegrationTarget.make({
   ref: IntegrationTargetRef.make("refs/heads/master")
 })
 
+const makeIntegrationJournal = Effect.fn("IntegrationStageContextTest.makeJournal")(function* (
+  plannedAttempt: PlannedTaskAttempt
+) {
+  const storage = yield* JournalStore
+  const target = FixtureTarget.make(`${plannedAttempt.runId}-target`)
+  yield* storage.beginRun(
+    plannedAttempt.runId,
+    target,
+    InitialControlPolicy.make({ taskExecutionCapacity: TaskWorkCapacity.make(1) })
+  )
+  const initial = reduceWorkflowJournalHistory(plannedAttempt.runId, yield* storage.read(plannedAttempt.runId))
+  if (initial._tag !== "ValidWorkflowJournalHistory") return yield* Effect.die(initial)
+  return yield* makeJournal(plannedAttempt.runId, target, initial, storage)
+})
+
 it("fails with a typed error when a fresh accepted result has no ambient journal", async () => {
   const plannedAttempt = plannedAttemptFixture("missing-integration-journal")
   const context = await Effect.runPromise(makeIntegrationStageContext())
@@ -61,69 +84,48 @@ it("fails with a typed error when a fresh accepted result has no ambient journal
   )
 })
 
-it("uses the ambient journal when a fresh accepted result is queued", async () => {
-  const plannedAttempt = plannedAttemptFixture("available-integration-journal")
-  const context = await Effect.runPromise(
-    makeIntegrationStageContext().pipe(
-      Effect.provideService(
-        InRunJournal,
-        InRunJournal.of({
-          append: () => Effect.die("append is unreachable without a durable accepted result"),
-          read: () => Effect.succeed([])
-        })
-      )
+it.effect("uses the ambient journal when a fresh accepted result is queued", () =>
+  Effect.gen(function* () {
+    const plannedAttempt = plannedAttemptFixture("available-integration-journal")
+    const journal = yield* makeIntegrationJournal(plannedAttempt)
+    const context = yield* makeIntegrationStageContext().pipe(
+      Effect.provideService(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read })),
+      Effect.provideService(AcceptedJournalReader, AcceptedJournalReader.of({ readAccepted: journal.readAccepted }))
     )
-  )
-  const failure = await Effect.runPromise(
-    Effect.flip(
-      Effect.gen(function* () {
-        yield* context.queueAcceptedResult(
-          plannedAttempt,
-          acceptedResultFixture(GitCommitSha.make("a".repeat(40))),
-          integrationTarget
-        )
+    const failure = yield* context
+      .queueAcceptedResult(plannedAttempt, acceptedResultFixture(GitCommitSha.make("a".repeat(40))), integrationTarget)
+      .pipe(Effect.flip)
+
+    expect(failure).toEqual(
+      new AcceptedResultEvidenceUnavailable({
+        attemptId: plannedAttempt.attemptId,
+        detail: "acceptance evidence store is not configured for this run activation",
+        reference: acceptedResultFixture(GitCommitSha.make("a".repeat(40))).evidenceManifest,
+        runId: plannedAttempt.runId
       })
     )
-  )
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)
 
-  expect(failure).toEqual(
-    new AcceptedResultEvidenceUnavailable({
-      attemptId: plannedAttempt.attemptId,
-      detail: "acceptance evidence store is not configured for this run activation",
-      reference: acceptedResultFixture(GitCommitSha.make("a".repeat(40))).evidenceManifest,
-      runId: plannedAttempt.runId
-    })
-  )
-})
-
-it("uses both ambient boundaries before delegating accepted-result admission", async () => {
-  const plannedAttempt = plannedAttemptFixture("available-integration-boundaries")
-  const context = await Effect.runPromise(
-    makeIntegrationStageContext().pipe(
-      Effect.provideService(
-        InRunJournal,
-        InRunJournal.of({ append: () => Effect.die("append is unreachable"), read: () => Effect.succeed([]) })
-      ),
+it.effect("uses both ambient boundaries before delegating accepted-result admission", () =>
+  Effect.gen(function* () {
+    const plannedAttempt = plannedAttemptFixture("available-integration-boundaries")
+    const journal = yield* makeIntegrationJournal(plannedAttempt)
+    const context = yield* makeIntegrationStageContext().pipe(
+      Effect.provideService(InRunJournal, InRunJournal.of({ append: journal.append, read: journal.read })),
+      Effect.provideService(AcceptedJournalReader, AcceptedJournalReader.of({ readAccepted: journal.readAccepted })),
       Effect.provideService(
         EvidenceStore,
         EvidenceStore.of({ put: () => Effect.die("put is unreachable"), read: () => Effect.die("read is unreachable") })
       )
     )
-  )
 
-  const failure = await Effect.runPromise(
-    Effect.flip(
-      Effect.gen(function* () {
-        yield* context.queueAcceptedResult(
-          plannedAttempt,
-          acceptedResultFixture(GitCommitSha.make("a".repeat(40))),
-          integrationTarget
-        )
-      })
+    const failure = yield* context
+      .queueAcceptedResult(plannedAttempt, acceptedResultFixture(GitCommitSha.make("a".repeat(40))), integrationTarget)
+      .pipe(Effect.flip)
+
+    expect(failure).toEqual(
+      new AcceptedResultNotDurable({ attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId })
     )
-  )
-
-  expect(failure).toEqual(
-    new AcceptedResultNotDurable({ attemptId: plannedAttempt.attemptId, runId: plannedAttempt.runId })
-  )
-})
+  }).pipe(Effect.provide(memoryJournalTestLayer))
+)

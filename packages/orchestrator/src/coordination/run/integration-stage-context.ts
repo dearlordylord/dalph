@@ -1,4 +1,5 @@
 import { Context, Effect, Option } from "effect"
+import { AcceptedJournalReader } from "../../workflow-journal/accepted-reader.js"
 import { InRunJournal } from "../../workflow-journal/store.js"
 import {
   AcceptedResultEvidenceUnavailable,
@@ -13,11 +14,13 @@ export const makeIntegrationStageContext = Effect.fn("Workflow.makeIntegrationSt
   const ambient = yield* Effect.context<never>()
   const integrationTarget = Context.getOption(ambient, IntegrationTargetSelection)
   const integrationJournal = Context.getOption(ambient, InRunJournal)
+  const acceptedJournal = Context.getOption(ambient, AcceptedJournalReader)
   const acceptanceEvidenceStore = Context.getOption(ambient, EvidenceStore)
   const queueAcceptedResult = (...args: Parameters<typeof queueAcceptedResultIntegrationResponsibility>) => {
     const journal = Option.getOrUndefined(integrationJournal)
+    const accepted = Option.getOrUndefined(acceptedJournal)
     const evidenceStore = Option.getOrUndefined(acceptanceEvidenceStore)
-    return journal === undefined
+    return journal === undefined || accepted === undefined
       ? Effect.fail(new IntegrationJournalUnavailable({ attemptId: args[0].attemptId, runId: args[0].runId }))
       : evidenceStore === undefined
         ? Effect.fail(
@@ -29,6 +32,7 @@ export const makeIntegrationStageContext = Effect.fn("Workflow.makeIntegrationSt
             })
           )
         : queueAcceptedResultIntegrationResponsibility(...args).pipe(
+            Effect.provideService(AcceptedJournalReader, accepted),
             Effect.provideService(InRunJournal, journal),
             Effect.provideService(EvidenceStore, evidenceStore),
             Effect.asVoid
