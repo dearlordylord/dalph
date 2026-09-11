@@ -26,16 +26,18 @@ import { ClaimOwner, ClaimToken } from "../authorities/task-tracker/claim.js"
 import { InitialControlPolicy } from "../control/policy.js"
 import { TaskWorkCapacity } from "../coordination/admission/capacity.js"
 import { JournalDatabaseLocator, JournalPosition } from "../workflow-journal/identity.js"
-import { memoryJournalStoreLayer, memoryJournalTestLayer } from "../workflow-journal/adapters/memory-store.js"
-import { sqliteJournalStoreLayer, sqliteJournalTestLayer } from "../workflow-journal/adapters/sqlite-store.js"
-import { JournalStore } from "../workflow-journal/store.js"
+import { memoryJournalStoreLayer } from "../workflow-journal/adapters/memory-store.js"
+import { sqliteJournalStoreLayer } from "../workflow-journal/adapters/sqlite-store.js"
+import { InRunJournal, JournalStore } from "../workflow-journal/store.js"
 import type { JournalRecord } from "../workflow-journal/store.js"
 import { WorkflowActor } from "../workflow/registry/actor.js"
 import {
   ControlDirectionAppliedEvent,
-  ControlDirectionApplicationOrdinal
+  ControlDirectionApplicationOrdinal,
+  ControlDirectionSubject
 } from "../workflow/protocols/control-direction-application/events.js"
 import {
+  AttemptImplementationAbandonedEvent,
   AttemptChoiceAppliedEvent,
   AttemptChoiceRequestId,
   AttemptChoiceSubject,
@@ -110,18 +112,16 @@ import {
   appendReplacementProvenance
 } from "../workflow/protocols/disposition-cleanup/provenance-fixtures.js"
 import {
+  dispositionCleanupLiveJournalTestLayer,
+  dispositionCleanupSqliteLiveJournalTestLayer
+} from "../workflow/protocols/disposition-cleanup/live-journal-test.js"
+import {
   attempt,
   authorization as worktreeAuthorization,
   runId as cleanupRunId,
   successor as worktreeSuccessor
 } from "../workflow/protocols/disposition-cleanup/fixtures.js"
-import {
-  branchCleanupAuthorizedRecordKey,
-  plannedAttemptExecutorCommandIntendedRecordKey,
-  plannedAttemptExecutorWorkReportedRecordKey,
-  plannedAttemptExecutorWorkResponsibilityBeganRecordKey,
-  worktreeCleanupAuthorizedRecordKey
-} from "../workflow-journal/record-key.js"
+import { worktreeCleanupAuthorizedRecordKey } from "../workflow-journal/record-key.js"
 import {
   makeTraceReader,
   TraceAtCursor,
@@ -159,29 +159,29 @@ const candidatePredecessor = IntegratorSessionCorrelation.make({
   expectedTargetHead: attempt.baseSha,
   integrationTarget: candidateTarget,
   plannedAttempt: attempt,
-  queuedAt: JournalPosition.make(5),
+  queuedAt: JournalPosition.make(17),
   sessionId: IntegratorSessionId.make("session:issue-83-predecessor"),
-  startedAt: JournalPosition.make(6),
-  targetLineageObservedAt: JournalPosition.make(8)
+  startedAt: JournalPosition.make(18),
+  targetLineageObservedAt: JournalPosition.make(20)
 })
 const candidateSuccessor = integratorSuccessorCorrelationFor(
   IntegratorSuccessorPreparationInput.make({
-    directionAppliedAt: JournalPosition.make(13),
+    directionAppliedAt: JournalPosition.make(25),
     predecessor: candidatePredecessor,
-    quarantineAt: JournalPosition.make(12),
+    quarantineAt: JournalPosition.make(24),
     targetLineage: {
       plannedBaseIsAncestorOfTargetHead: true,
       plannedBaseSha: attempt.baseSha,
       targetHeadSha: attempt.baseSha
     },
-    targetLineageObservedAt: JournalPosition.make(15)
+    targetLineageObservedAt: JournalPosition.make(27)
   })
 )
 const candidateCleanupAuthorization = IntegratorCandidateCleanupAuthorization.make({
   causalPredecessors: [OperationId.make("issue-83-candidate-full-rerun")],
   disposition: IntegratorCandidateCleanupDisposition.make({
-    directionAppliedAt: JournalPosition.make(13),
-    dispositionAt: JournalPosition.make(12),
+    directionAppliedAt: JournalPosition.make(25),
+    dispositionAt: JournalPosition.make(24),
     predecessor: candidatePredecessor,
     successor: candidateSuccessor
   }),
@@ -236,8 +236,8 @@ const runBeginningFor = (recordRunId: RunId, recordTarget: typeof target): Journ
   )
 
 const controlRecords = (recordRunId: RunId = runId): ReadonlyArray<JournalRecord> => {
-  const subjectRun = { _tag: "Run" as const, runId: recordRunId }
-  const subjectTask = { _tag: "Task" as const, runId: recordRunId, taskId: controlAttempt.taskId }
+  const subjectRun = ControlDirectionSubject.cases.Run.make({ runId: recordRunId })
+  const subjectTask = ControlDirectionSubject.cases.Task.make({ runId: recordRunId, taskId: controlAttempt.taskId })
   const requestId = AttemptChoiceRequestId.make({ nonce: "issue-83-choice", runId: recordRunId })
   const subject = AttemptChoiceSubject.make({
     observedTaskRevision: TaskRevision.make("issue-83-observed-revision"),
@@ -411,42 +411,6 @@ const appendRecords = Effect.fn("TraceReaderControlDispositionTest.appendRecords
 
 const establishCandidateCleanupPrefix = Effect.fn("TraceReaderControlDispositionTest.establishCandidateCleanupPrefix")(
   function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(cleanupRunId, FixtureTarget.make("issue-83-candidate-target"), initialPolicy)
-    const commandOrdinal = PlannedAttemptExecutorCommandOrdinal.make(1)
-    const reportOrdinal = PlannedAttemptExecutorReportOrdinal.make(1)
-    yield* journal.append(
-      cleanupRunId,
-      plannedAttemptExecutorWorkResponsibilityBeganRecordKey(attempt.attemptId),
-      PlannedAttemptExecutorWorkResponsibilityBeganEvent.make({
-        plannedAttempt: attempt,
-        version: workflowJournalEventVersion
-      })
-    )
-    yield* journal.append(
-      cleanupRunId,
-      plannedAttemptExecutorCommandIntendedRecordKey(attempt.attemptId, commandOrdinal),
-      PlannedAttemptExecutorCommandIntendedEvent.make({
-        command: "Begin",
-        initiatedBy: WorkflowActor.cases.DalphCoordinator.make({}),
-        occurrenceClassification: "InitiatedAction",
-        ordinal: commandOrdinal,
-        plannedAttempt: attempt,
-        version: workflowJournalEventVersion
-      })
-    )
-    yield* journal.append(
-      cleanupRunId,
-      plannedAttemptExecutorWorkReportedRecordKey(attempt.attemptId, reportOrdinal),
-      PlannedAttemptExecutorWorkReportedEvent.make({
-        ordinal: reportOrdinal,
-        report: PlannedAttemptExecutorReport.cases.ExecutorWorkTerminal.make({
-          correlation: { attemptId: attempt.attemptId, runId: cleanupRunId },
-          result: { _tag: "Accepted", acceptedResult: candidateAcceptedResult }
-        }),
-        version: workflowJournalEventVersion
-      })
-    )
     yield* appendCandidateProvenance(
       candidatePredecessor,
       candidateSuccessor,
@@ -457,7 +421,7 @@ const establishCandidateCleanupPrefix = Effect.fn("TraceReaderControlDisposition
 )
 
 const candidateCleanupRecords = Effect.fn("TraceReaderControlDispositionTest.candidateCleanupRecords")(function* () {
-  const journal = yield* JournalStore
+  const journal = yield* InRunJournal
   yield* establishCandidateCleanupPrefix()
   const outcome = yield* runIntegratorCandidateCleanup(candidateCleanupAuthorization)
   if (outcome._tag !== "Settled") return yield* Effect.die("candidate cleanup fixture did not settle")
@@ -717,8 +681,7 @@ it.effect(
 
 it.effect("fails closed for malformed Stop abandonment and stopped-claim prefixes", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(cleanupRunId, FixtureTarget.make("issue-83-stop-validation-target"), initialPolicy)
+    const journal = yield* InRunJournal
     yield* appendAbandonedProvenance(attempt)
     const records = yield* journal.read(cleanupRunId)
     const abandonment = records.find(({ event }) => event._tag === "AttemptImplementationAbandoned")
@@ -743,15 +706,15 @@ it.effect("fails closed for malformed Stop abandonment and stopped-claim prefixe
               ? item
               : {
                   ...item,
-                  event: {
+                  event: AttemptImplementationAbandonedEvent.make({
                     ...item.event,
                     proof: {
-                      _tag: "AcceptedReport" as const,
+                      _tag: "AcceptedReport",
                       reportOrdinal: PlannedAttemptExecutorReportOrdinal.make(
                         Number(item.event.proof.reportOrdinal) + 1
                       )
                     }
-                  }
+                  })
                 }
           )
         )
@@ -807,7 +770,7 @@ it.effect("fails closed for malformed Stop abandonment and stopped-claim prefixe
       if (failure._tag !== "TraceProjectionInvalid") continue
       expect(failure.detail).toContain(variant.detail)
     }
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("fails closed for duplicate applied cancellation history", () =>
@@ -831,8 +794,7 @@ it.effect("fails closed for duplicate applied cancellation history", () =>
 
 it.effect("rejects cleanup contradiction without its ordered observation prefix", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(cleanupRunId, FixtureTarget.make("issue-83-contradiction-prefix-target"), initialPolicy)
+    const journal = yield* InRunJournal
     const authorization = yield* appendAbandonedProvenance(attempt)
     const authorized = WorktreeCleanupAuthorizedEvent.make({
       authorization,
@@ -867,7 +829,7 @@ it.effect("rejects cleanup contradiction without its ordered observation prefix"
     expect(failure).toBeInstanceOf(TraceProjectionInvalid)
     if (failure._tag !== "TraceProjectionInvalid") return
     expect(failure.detail).toContain("cleanup contradiction requires its exact preceding observation intent and result")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("rejects worktree cleanup authorization without its exact disposition provenance", () =>
@@ -893,14 +855,16 @@ it.effect("rejects worktree cleanup authorization without its exact disposition 
     expect(failure).toBeInstanceOf(TraceProjectionInvalid)
     if (failure._tag !== "TraceProjectionInvalid") return
     expect(failure.detail).toContain("Worktree cleanup provenance")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
 it.effect("rejects branch cleanup authorization before the exact worktree cleanup has settled", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(cleanupRunId, FixtureTarget.make("issue-83-unsettled-worktree-target"), initialPolicy)
-    yield* appendReplacementProvenance(attempt, worktreeSuccessor)
+    const records = yield* Effect.gen(function* () {
+      const journal = yield* InRunJournal
+      yield* appendReplacementProvenance(attempt, worktreeSuccessor, "StartupValid")
+      return yield* journal.read(cleanupRunId)
+    }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
     const branchAuthorization = BranchCleanupAuthorization.make({
       causalPredecessors: [worktreeAuthorization.operationId, ...worktreeAuthorization.causalPredecessors],
       disposition: worktreeAuthorization.disposition,
@@ -920,13 +884,10 @@ it.effect("rejects branch cleanup authorization before the exact worktree cleanu
       occurrenceClassification: "InitiatedAction",
       version: workflowJournalEventVersion
     })
-    const appended = yield* journal.append(
-      cleanupRunId,
-      branchCleanupAuthorizedRecordKey(branchAuthorization.operationId),
-      authorized
-    )
+    const appended = record(records.length + 1, authorized, cleanupRunId)
+    const malformed = [...records, appended]
     const failure = yield* Effect.flip(
-      makeTraceReader({ read: journal.read }).readAt(
+      makeTraceReader({ read: () => Effect.succeed(malformed) }).readAt(
         TraceCursor.make({ position: appended.position, runId: cleanupRunId })
       )
     )
@@ -934,13 +895,12 @@ it.effect("rejects branch cleanup authorization before the exact worktree cleanu
     if (failure._tag !== "TraceProjectionInvalid") return
     expect(failure.detail).toContain("Branch cleanup provenance")
     expect(failure.detail).toContain("settled worktree")
-  }).pipe(Effect.provide(memoryJournalTestLayer))
+  })
 )
 
 it.effect("keeps abandonment and authorized worktree cleanup distinct with exact source identities", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(cleanupRunId, FixtureTarget.make("issue-83-cleanup-target"), initialPolicy)
+    const journal = yield* InRunJournal
     const authorization = yield* appendAbandonedProvenance(attempt)
     const authorized = WorktreeCleanupAuthorizedEvent.make({
       authorization,
@@ -953,7 +913,8 @@ it.effect("keeps abandonment and authorized worktree cleanup distinct with exact
       worktreeCleanupAuthorizedRecordKey(authorization.operationId),
       authorized
     )
-    const view = yield* makeTraceReader({ read: journal.read }).readAt(
+    const records = yield* journal.read(cleanupRunId)
+    const view = yield* makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
       TraceCursor.make({ position: appended.position, runId: cleanupRunId })
     )
     expect(view.facets.controlDisposition.dispositions.map(({ _tag }) => _tag)).toContain("AttemptAbandoned")
@@ -965,14 +926,13 @@ it.effect("keeps abandonment and authorized worktree cleanup distinct with exact
     expect(cleanup.status.source.position).toBe(appended.position)
     expect(cleanup.steps).toHaveLength(1)
     expect(cleanup.steps[0]?.source.position).toBe(appended.position)
-  }).pipe(Effect.provide(memoryJournalStoreLayer))
+  }).pipe(Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("keeps every settled branch cleanup step separate after its settled worktree predecessor", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(cleanupRunId, FixtureTarget.make("issue-83-branch-target"), initialPolicy)
-    yield* appendReplacementProvenance(attempt, worktreeSuccessor)
+    const journal = yield* InRunJournal
+    yield* appendReplacementProvenance(attempt, worktreeSuccessor, "StartupValid")
     const worktree = yield* runWorktreeCleanup(worktreeAuthorization)
     if (worktree._tag !== "Settled") return yield* Effect.die("worktree cleanup fixture did not settle")
     const branchAuthorization = deriveCleanupAuthorizations(yield* journal.read(cleanupRunId)).branch[0]
@@ -982,7 +942,7 @@ it.effect("keeps every settled branch cleanup step separate after its settled wo
     const records = yield* journal.read(cleanupRunId)
     const settled = records.find(({ event }) => event._tag === "BranchCleanupSettled")
     if (settled === undefined) return yield* Effect.die("branch cleanup fixture did not record settlement")
-    const view = yield* makeTraceReader({ read: journal.read }).readAt(
+    const view = yield* makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
       TraceCursor.make({ position: settled.position, runId: cleanupRunId })
     )
     expect(view.facets.controlDisposition.cleanup.map(({ _tag }) => _tag)).toEqual(["Worktree", "Branch"])
@@ -1050,15 +1010,14 @@ it.effect("keeps every settled branch cleanup step separate after its settled wo
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
 it.effect("projects a contradictory branch observation without merging it into worktree cleanup", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(cleanupRunId, FixtureTarget.make("issue-83-branch-contradiction-target"), initialPolicy)
-    yield* appendReplacementProvenance(attempt, worktreeSuccessor)
+    const journal = yield* InRunJournal
+    yield* appendReplacementProvenance(attempt, worktreeSuccessor, "StartupValid")
     const worktree = yield* runWorktreeCleanup(worktreeAuthorization)
     if (worktree._tag !== "Settled") return yield* Effect.die("worktree cleanup fixture did not settle")
     const branchAuthorization = deriveCleanupAuthorizations(yield* journal.read(cleanupRunId)).branch[0]
@@ -1068,7 +1027,7 @@ it.effect("projects a contradictory branch observation without merging it into w
     const records = yield* journal.read(cleanupRunId)
     const contradicted = records.find(({ event }) => event._tag === "BranchCleanupContradicted")
     if (contradicted === undefined) return yield* Effect.die("branch contradiction fixture did not record its result")
-    const view = yield* makeTraceReader({ read: journal.read }).readAt(
+    const view = yield* makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
       TraceCursor.make({ position: contradicted.position, runId: cleanupRunId })
     )
     expect(view.facets.controlDisposition.cleanup.map(({ _tag }) => _tag)).toEqual(["Worktree", "Branch"])
@@ -1114,7 +1073,7 @@ it.effect("projects a contradictory branch observation without merging it into w
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
@@ -1204,12 +1163,12 @@ it.effect("projects Integrator candidate cleanup progress at each committed inte
       "IntegratorCandidateCleanupSettled"
     ])
     expect(settledCleanup.steps.map(({ source }) => source.runId)).toEqual(settledCleanup.steps.map(() => cleanupRunId))
-  }).pipe(Effect.provide(candidateCleanupBoundaryLayer()), Effect.provide(memoryJournalTestLayer))
+  }).pipe(Effect.provide(candidateCleanupBoundaryLayer()), Effect.provide(dispositionCleanupLiveJournalTestLayer()))
 )
 
 it.effect("projects a contradictory Integrator candidate observation at its exact source", () =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
+    const journal = yield* InRunJournal
     yield* establishCandidateCleanupPrefix()
     const outcome = yield* runIntegratorCandidateCleanup(candidateCleanupAuthorization)
     if (outcome._tag !== "Preserved") return yield* Effect.die("candidate contradiction fixture was not preserved")
@@ -1217,7 +1176,7 @@ it.effect("projects a contradictory Integrator candidate observation at its exac
     const contradicted = records.find(({ event }) => event._tag === "IntegratorCandidateCleanupContradicted")
     if (contradicted === undefined)
       return yield* Effect.die("candidate contradiction fixture did not record its result")
-    const view = yield* makeTraceReader({ read: journal.read }).readAt(
+    const view = yield* makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
       TraceCursor.make({ position: contradicted.position, runId: cleanupRunId })
     )
     const cleanup = view.facets.controlDisposition.cleanup[0]
@@ -1238,7 +1197,7 @@ it.effect("projects a contradictory Integrator candidate observation at its exac
         ]
       })
     ),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 )
 
@@ -1253,13 +1212,16 @@ it.effect("reopens the exact candidate disposition and cleanup facet through mem
       }
       const memory = yield* Effect.scoped(
         Effect.gen(function* () {
-          const journal = yield* JournalStore
           const records = yield* candidateCleanupRecords()
           const cursor = yield* settledCursorFor(records)
-          const first = yield* makeTraceReader({ read: journal.read }).readAt(cursor)
-          const reopened = yield* makeTraceReader({ read: journal.read }).readAt(cursor)
+          const source = { read: () => Effect.succeed(records) }
+          const first = yield* makeTraceReader(source).readAt(cursor)
+          const reopened = yield* makeTraceReader(source).readAt(cursor)
           return { first, reopened }
-        }).pipe(Effect.provide(candidateCleanupBoundaryLayer()), Effect.provide(memoryJournalTestLayer))
+        }).pipe(
+          Effect.provide(candidateCleanupBoundaryLayer()),
+          Effect.provide(dispositionCleanupLiveJournalTestLayer())
+        )
       )
       expect(memory.reopened).toEqual(memory.first)
       expect(memory.reopened.facets.controlDisposition.cleanup).toEqual(memory.first.facets.controlDisposition.cleanup)
@@ -1268,19 +1230,21 @@ it.effect("reopens the exact candidate disposition and cleanup facet through mem
       const path = yield* Path.Path
       const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "dalph-trace-issue-83-candidate-" })
       const filename = JournalDatabaseLocator.make(path.join(directory, "journal.sqlite"))
-      const sqliteLayer = sqliteJournalTestLayer({ filename })
+      const sqliteLayer = dispositionCleanupSqliteLiveJournalTestLayer(filename)
       const firstSqlite = yield* Effect.scoped(
         Effect.gen(function* () {
-          const journal = yield* JournalStore
           const records = yield* candidateCleanupRecords()
-          return yield* makeTraceReader({ read: journal.read }).readAt(yield* settledCursorFor(records))
+          return yield* makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
+            yield* settledCursorFor(records)
+          )
         }).pipe(Effect.provide(candidateCleanupBoundaryLayer()), Effect.provide(sqliteLayer))
       )
       const reopenedSqlite = yield* Effect.scoped(
         Effect.gen(function* () {
           const journal = yield* JournalStore
-          return yield* makeTraceReader({ read: journal.read }).readAt(
-            TraceCursor.make({ position: JournalPosition.make(25), runId: cleanupRunId })
+          const records = yield* journal.read(cleanupRunId)
+          return yield* makeTraceReader({ read: () => Effect.succeed(records) }).readAt(
+            yield* settledCursorFor(records)
           )
         }).pipe(Effect.provide(sqliteJournalStoreLayer({ filename })))
       )
@@ -1292,9 +1256,8 @@ it.effect("reopens the exact candidate disposition and cleanup facet through mem
 
 const worktreeContradictionView = (observation: WorktreeCleanupObservation) =>
   Effect.gen(function* () {
-    const journal = yield* JournalStore
-    yield* journal.beginRun(cleanupRunId, FixtureTarget.make("issue-83-contradiction-target"), initialPolicy)
-    yield* appendReplacementProvenance(attempt, worktreeSuccessor)
+    const journal = yield* InRunJournal
+    yield* appendReplacementProvenance(attempt, worktreeSuccessor, "StartupValid")
     const outcome = yield* runWorktreeCleanup(worktreeAuthorization)
     if (outcome._tag !== "Preserved") return yield* Effect.die("contradiction fixture did not preserve the worktree")
     const records = yield* journal.read(cleanupRunId)
@@ -1312,7 +1275,7 @@ const worktreeContradictionView = (observation: WorktreeCleanupObservation) =>
     }
   }).pipe(
     Effect.provide(worktreeCleanupTestLayer({ observations: [observation] })),
-    Effect.provide(memoryJournalTestLayer)
+    Effect.provide(dispositionCleanupLiveJournalTestLayer())
   )
 
 it.effect("preserves a contradictory worktree cleanup with its exact source identity", () =>
