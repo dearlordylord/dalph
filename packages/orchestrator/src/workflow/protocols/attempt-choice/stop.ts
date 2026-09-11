@@ -93,17 +93,26 @@ type AttemptAbandonmentRecord = Omit<JournalRecord, "event"> & {
   readonly event: Extract<JournalRecord["event"], { readonly _tag: "AttemptImplementationAbandoned" }>
 }
 
+const isAttemptAbandonmentRecord = (
+  record: JournalRecord,
+  requestId: AttemptChoiceRequestId,
+  subject: AttemptChoiceSubject
+): record is AttemptAbandonmentRecord => {
+  const { event } = record
+  return (
+    event._tag === "AttemptImplementationAbandoned" &&
+    sameAttemptChoiceRequestId(event.requestId, requestId) &&
+    sameAttemptChoiceSubject(event.subject, subject)
+  )
+}
+
 const exactAbandonment = (
   records: JournalHistorySource,
   requestId: AttemptChoiceRequestId,
   subject: AttemptChoiceSubject
-) => {
+): AttemptAbandonmentRecord | undefined => {
   const record = journalRecordByKey(records, attemptImplementationAbandonedRecordKey(requestId))
-  return record?.event._tag === "AttemptImplementationAbandoned" &&
-    sameAttemptChoiceRequestId(record.event.requestId, requestId) &&
-    sameAttemptChoiceSubject(record.event.subject, subject)
-    ? (record as AttemptAbandonmentRecord)
-    : undefined
+  return record !== undefined && isAttemptAbandonmentRecord(record, requestId, subject) ? record : undefined
 }
 
 const evidenceProof = (evidence: AcceptedPlannedAttemptExecutorEvidence): AttemptQuiescenceProof =>
@@ -262,12 +271,23 @@ export const observeAttemptStoppageExecutor = Effect.fn("AttemptStop.observeExec
 })
 
 type FocusedClaimObservationRecord = Omit<JournalRecord, "event"> & {
-  readonly event: Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }> & {
+  readonly event: Omit<
+    Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>,
+    "observation"
+  > & {
     readonly observation: Extract<
       Extract<JournalRecord["event"], { readonly _tag: "TaskTrackerFactsObserved" }>["observation"],
       { readonly _tag: "FocusedTaskClaimFacts" | "FocusedTaskClaimFactsUnreadable" }
     >
   }
+}
+
+const isFocusedClaimObservationRecord = (record: JournalRecord): record is FocusedClaimObservationRecord => {
+  const { event } = record
+  return (
+    event._tag === "TaskTrackerFactsObserved" &&
+    (event.observation._tag === "FocusedTaskClaimFacts" || event.observation._tag === "FocusedTaskClaimFactsUnreadable")
+  )
 }
 
 const latestStoppedReleaseIntent = (
@@ -298,16 +318,14 @@ const latestFocusedClaimObservation = (
 ) => {
   let found: FocusedClaimObservationRecord | undefined
   for (const record of journalRecordsForTask(records, subject.plannedAttempt.taskId)) {
+    if (record.position <= observationBaseline || immutableRunTarget === undefined) continue
+    if (!isFocusedClaimObservationRecord(record)) continue
+    const { observation } = record.event
     if (
-      record.position > observationBaseline &&
-      immutableRunTarget !== undefined &&
-      record.event._tag === "TaskTrackerFactsObserved" &&
-      (record.event.observation._tag === "FocusedTaskClaimFacts" ||
-        record.event.observation._tag === "FocusedTaskClaimFactsUnreadable") &&
-      record.event.observation.coverage.taskId === subject.plannedAttempt.taskId &&
-      taskTrackerTargetKey(record.event.observation.target) === taskTrackerTargetKey(immutableRunTarget)
+      observation.coverage.taskId === subject.plannedAttempt.taskId &&
+      taskTrackerTargetKey(observation.target) === taskTrackerTargetKey(immutableRunTarget)
     )
-      found = record as FocusedClaimObservationRecord
+      found = record
   }
   return found
 }
