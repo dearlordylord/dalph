@@ -8,6 +8,7 @@ import { TrackerRevision } from "../../authorities/task-tracker/task.js"
 import { InitialControlPolicy } from "../../control/policy.js"
 import { TaskWorkCapacity } from "../admission/capacity.js"
 import { reduceWorkflowJournalHistory } from "../reconstruction/history.js"
+import { exportWorkflowHistoryRecords } from "../reconstruction/reduce.js"
 import { OperationId } from "../../workflow/identity.js"
 import { taskTrackerReadIntent } from "../../workflow/registry/event.js"
 import {
@@ -407,7 +408,7 @@ it.effect("skips accepted focused facts while retaining the latest graph observa
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 
-it.effect("rejects an empty, unbegun, or different-Run initial history at the journal seam", () =>
+it.effect("rejects empty or different-Run accepted history while raw malformed history stops at validation", () =>
   Effect.gen(function* () {
     const storage = yield* JournalStore
     const empty = reduceWorkflowJournalHistory(runId, [])
@@ -418,29 +419,22 @@ it.effect("rejects an empty, unbegun, or different-Run initial history at the jo
     yield* storage.beginRun(runId, target, initialPolicy)
     const begun = reduceWorkflowJournalHistory(runId, yield* storage.read(runId))
     if (begun._tag === "InvalidWorkflowJournalHistory") return yield* Effect.die(begun)
-    const [runBeginning] = begun.records
+    const begunRecords = exportWorkflowHistoryRecords(begun.runState.workflowHistory)
+    const [runBeginning] = begunRecords
     if (runBeginning === undefined) return yield* Effect.die("begun history must contain its run beginning")
-    const unbegunFailure = yield* makeJournal(
-      runId,
-      target,
+    const unbegun = reduceWorkflowJournalHistory(runId, [
       {
-        ...begun,
-        records: [
-          {
-            ...runBeginning,
-            event: taskTrackerReadIntent(
-              makeTrackerGraphObservationOperation(
-                { _tag: "WorkflowEstablishment" },
-                OperationId.make("not-a-beginning"),
-                target
-              )
-            )
-          }
-        ]
-      },
-      storage
-    ).pipe(Effect.flip)
-    expect(unbegunFailure).toMatchObject({ _tag: "JournalInitialHistoryInvalid", reason: "MissingRunBeginning" })
+        ...runBeginning,
+        event: taskTrackerReadIntent(
+          makeTrackerGraphObservationOperation(
+            { _tag: "WorkflowEstablishment" },
+            OperationId.make("not-a-beginning"),
+            target
+          )
+        )
+      }
+    ])
+    expect(unbegun._tag).toBe("InvalidWorkflowJournalHistory")
 
     const otherRunId = RunId.make("journal-other-initial-run")
     const identityFailure = yield* makeJournal(otherRunId, target, begun, storage).pipe(Effect.flip)
@@ -452,14 +446,12 @@ it.effect("rejects an empty, unbegun, or different-Run initial history at the jo
       })
     )
 
-    const began = Option.getOrThrow(Option.fromUndefinedOr(begun.records[0]))
-    const invalidFailure = yield* makeJournal(
-      runId,
-      target,
-      { ...begun, records: [...begun.records, { ...began, position: JournalPosition.make(2), runId: otherRunId }] },
-      storage
-    ).pipe(Effect.flip)
-    expect(invalidFailure).toMatchObject({ _tag: "JournalInitialHistoryInvalid", reason: "InvalidHistory" })
+    const began = Option.getOrThrow(Option.fromUndefinedOr(begunRecords[0]))
+    const invalid = reduceWorkflowJournalHistory(runId, [
+      ...begunRecords,
+      { ...began, position: JournalPosition.make(2), runId: otherRunId }
+    ])
+    expect(invalid._tag).toBe("InvalidWorkflowJournalHistory")
   }).pipe(Effect.provide(memoryJournalStoreLayer))
 )
 

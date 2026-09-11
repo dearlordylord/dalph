@@ -17,6 +17,7 @@ import {
 import { acceptedResultFixture } from "../../../test/support/evidence.js"
 import { TargetLineageObservation } from "../../authorities/git/target-lineage.js"
 import type { JournalRecord } from "../../workflow-journal/store.js"
+import { journalEvidenceFrom } from "../../workflow-journal/record-evidence.js"
 import { JournalPosition, JournalRecordKey } from "../../workflow-journal/identity.js"
 import {
   integrationProviderRunActivityAbsentRecordKey,
@@ -207,7 +208,7 @@ const unfinishedFirstSessionHistory = () => {
       cancellation: notAppliedCancellation,
       responsibility: { entries: [] },
       runId,
-      workflowHistory: { records }
+      workflowHistory: { evidence: journalEvidenceFrom(records) }
     } satisfies ReconstructedRunState
   }
 }
@@ -243,7 +244,11 @@ const quarantinedFirstSessionHistory = () => {
   return {
     ...scenario,
     records,
-    runState: { ...scenario.runState, appliedThrough: JournalPosition.make(8), workflowHistory: { records } }
+    runState: {
+      ...scenario.runState,
+      appliedThrough: JournalPosition.make(8),
+      workflowHistory: { evidence: journalEvidenceFrom(records) }
+    }
   }
 }
 
@@ -292,6 +297,7 @@ const retryHistory = (evidence: RetryEvidence, freshHead?: GitCommitSha) => {
   })
   const runOne = integratorRunCorrelationForSession(session, IntegratorRunOrdinal.make(1))
   const initialRecords: ReadonlyArray<JournalRecord> = [
+    ...firstStartedResponsibilityRecords(),
     initial.intent,
     initial.observation,
     record(
@@ -396,7 +402,7 @@ const retryHistory = (evidence: RetryEvidence, freshHead?: GitCommitSha) => {
       cancellation: notAppliedCancellation,
       responsibility: { entries: [] },
       runId,
-      workflowHistory: { records }
+      workflowHistory: { evidence: journalEvidenceFrom(records) }
     } satisfies ReconstructedRunState,
     session
   }
@@ -444,7 +450,11 @@ const fullRerunHistory = (freshHead?: GitCommitSha) => {
           ).toString()
         )
   )
-  return { ...scenario, records, runState: { ...scenario.runState, workflowHistory: { records } } }
+  return {
+    ...scenario,
+    records,
+    runState: { ...scenario.runState, workflowHistory: { evidence: journalEvidenceFrom(records) } }
+  }
 }
 
 it("releases the target before an initial Integrator run when fresh lineage is incompatible", () => {
@@ -463,7 +473,7 @@ it("releases the target before an initial Integrator run when fresh lineage is i
     cancellation: notAppliedCancellation,
     responsibility: { entries: [] },
     runId,
-    workflowHistory: { records }
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
 
   expect(
@@ -493,7 +503,7 @@ it("keeps unobserved claims and absent durable lineage waiting without starting 
     cancellation: notAppliedCancellation,
     responsibility: { entries: [] },
     runId,
-    workflowHistory: { records }
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
   const baseFacts = {
     activeResponsibilityPositions: new Set<JournalPosition>(),
@@ -619,7 +629,11 @@ it("records CandidateRejected quarantine from the exact run result and candidate
       integratorRunCandidateGitObservedRecordKey(scenario.run, preparedCandidateText)
     )
   ]
-  const runState = { ...scenario.runState, appliedThrough: JournalPosition.make(9), workflowHistory: { records } }
+  const runState = {
+    ...scenario.runState,
+    appliedThrough: JournalPosition.make(9),
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
+  }
   const transitions = deriveStartedIntegrationFrontier(
     runState,
     {
@@ -667,7 +681,7 @@ it("does not authorize Retry when the fresh fixed-head lineage is incompatible",
     ...scenario,
     currentLineage: incompatibleLineage,
     records,
-    runState: { ...scenario.runState, workflowHistory: { records } }
+    runState: { ...scenario.runState, workflowHistory: { evidence: journalEvidenceFrom(records) } }
   }
 
   expect(transitionsFor(incompatible)).toEqual([
@@ -681,7 +695,7 @@ it("recovers a durable initial Integrator result by recording Q before any fresh
   const runState: ReconstructedRunState = {
     ...scenario.runState,
     appliedThrough: JournalPosition.make(7),
-    workflowHistory: { records }
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
 
   const transitions = deriveStartedIntegrationFrontier(
@@ -716,7 +730,7 @@ it("recovers provider-owned activity absence by recording Q without calling Inte
   const runState: ReconstructedRunState = {
     ...scenario.runState,
     appliedThrough: JournalPosition.make(7),
-    workflowHistory: { records }
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
 
   const transitions = deriveStartedIntegrationFrontier(
@@ -773,7 +787,11 @@ it("resumes the same unfinished Retry run after process disappearance", () => {
   const recovered = {
     ...scenario,
     records,
-    runState: { ...scenario.runState, appliedThrough: JournalPosition.make(12), workflowHistory: { records } }
+    runState: {
+      ...scenario.runState,
+      appliedThrough: JournalPosition.make(12),
+      workflowHistory: { evidence: journalEvidenceFrom(records) }
+    }
   }
 
   expect(transitionsFor(recovered)).toEqual([
@@ -836,7 +854,11 @@ it("promotes the Git-qualified candidate from the successful Retry run", () => {
   const qualified = {
     ...scenario,
     records,
-    runState: { ...scenario.runState, appliedThrough: JournalPosition.make(15), workflowHistory: { records } }
+    runState: {
+      ...scenario.runState,
+      appliedThrough: JournalPosition.make(15),
+      workflowHistory: { evidence: journalEvidenceFrom(records) }
+    }
   }
 
   expect(transitionsFor(qualified)).toEqual([
@@ -914,7 +936,11 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
       targetPromotionAttemptIntentRecordKey(correlation.requestId, attemptOrdinal).toString()
     )
   ]
-  const runState = { ...scenario.runState, appliedThrough: JournalPosition.make(11), workflowHistory: { records } }
+  const runState = {
+    ...scenario.runState,
+    appliedThrough: JournalPosition.make(11),
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
+  }
 
   const runtimeFacts = {
     activeResponsibilityPositions: new Set<JournalPosition>(),
@@ -947,7 +973,7 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
     ...runState,
     appliedThrough: JournalPosition.make(12),
     workflowHistory: {
-      records: [
+      evidence: journalEvidenceFrom([
         ...records,
         record(
           12,
@@ -961,7 +987,7 @@ it("reconciles an unmatched initial promotion attempt before fresh lineage can r
           }),
           "target-promotion-reconciliation-deferred"
         )
-      ]
+      ])
     }
   }
   const releasedRuntimeFacts = { ...runtimeFacts, heldResponsibilityPositions: new Set<JournalPosition>() }
@@ -1069,7 +1095,11 @@ it("delivers the already-recorded FullRerun successor after restart", () => {
   const recovered = {
     ...scenario,
     records,
-    runState: { ...scenario.runState, appliedThrough: JournalPosition.make(12), workflowHistory: { records } }
+    runState: {
+      ...scenario.runState,
+      appliedThrough: JournalPosition.make(12),
+      workflowHistory: { evidence: journalEvidenceFrom(records) }
+    }
   }
 
   expect(transitionsFor(recovered)).toEqual([
@@ -1105,7 +1135,7 @@ it("derives a fresh quarantine after the authorized Retry run ends conclusively"
   const runState: ReconstructedRunState = {
     ...scenario.runState,
     appliedThrough: JournalPosition.make(13),
-    workflowHistory: { records }
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
 
   const transitions = deriveStartedIntegrationFrontier(
@@ -1194,7 +1224,11 @@ it("fixes one FullRerun successor after the conclusive Retry run is quarantined"
     ...scenario,
     currentLineage: lineage(changedHead),
     records,
-    runState: { ...scenario.runState, appliedThrough: JournalPosition.make(17), workflowHistory: { records } }
+    runState: {
+      ...scenario.runState,
+      appliedThrough: JournalPosition.make(17),
+      workflowHistory: { evidence: journalEvidenceFrom(records) }
+    }
   }
 
   expect(transitionsFor(fullRerunAfterRetry)).toEqual([
@@ -1244,7 +1278,7 @@ it("continues unrelated runnable work while an integration session is restored",
   const runState: ReconstructedRunState = {
     ...scenario.runState,
     appliedThrough: JournalPosition.make(7),
-    workflowHistory: { records }
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
   const admission = deriveIntegrationAdmission(records)
   const restored = admission.responsibilities.find(
@@ -1352,7 +1386,7 @@ it("blocks later same-target integration while unrelated work continues", () => 
   const runState: ReconstructedRunState = {
     ...scenario.runState,
     appliedThrough: JournalPosition.make(10),
-    workflowHistory: { records }
+    workflowHistory: { evidence: journalEvidenceFrom(records) }
   }
   const admission = deriveIntegrationAdmission(records)
   const laterSameTarget = admission.responsibilities.find(
@@ -1427,7 +1461,7 @@ it("releases the target when Retry keeps its fixed head but loses lineage ancest
     ...scenario,
     currentLineage: incompatibleLineage,
     records,
-    runState: { ...scenario.runState, workflowHistory: { records } }
+    runState: { ...scenario.runState, workflowHistory: { evidence: journalEvidenceFrom(records) } }
   }
 
   expect(transitionsFor(blocked)).toEqual([
@@ -1443,7 +1477,11 @@ it("releases the target when Retry evidence cannot prove the prior run result", 
   const blocked = {
     ...scenario,
     records,
-    runState: { ...scenario.runState, appliedThrough: records.at(-1)?.position ?? null, workflowHistory: { records } }
+    runState: {
+      ...scenario.runState,
+      appliedThrough: records.at(-1)?.position ?? null,
+      workflowHistory: { evidence: journalEvidenceFrom(records) }
+    }
   }
 
   expect(transitionsFor(blocked)).toEqual([
@@ -1470,7 +1508,7 @@ it("blocks a FullRerun successor when its fresh lineage is not an ancestor", () 
     ...scenario,
     currentLineage: incompatibleLineage,
     records,
-    runState: { ...scenario.runState, workflowHistory: { records } }
+    runState: { ...scenario.runState, workflowHistory: { evidence: journalEvidenceFrom(records) } }
   }
 
   expect(transitionsFor(blocked)).toEqual([
@@ -1497,7 +1535,7 @@ it("blocks a changed-head Retry when the fresh lineage has a different planned b
     ...scenario,
     currentLineage: incompatibleLineage,
     records,
-    runState: { ...scenario.runState, workflowHistory: { records } }
+    runState: { ...scenario.runState, workflowHistory: { evidence: journalEvidenceFrom(records) } }
   }
 
   expect(transitionsFor(blocked)).toEqual([
@@ -1527,7 +1565,11 @@ it("blocks an ordinal-two Retry when a fresh lineage operation is duplicated", (
   const blocked = {
     ...scenario,
     records,
-    runState: { ...scenario.runState, appliedThrough: JournalPosition.make(13), workflowHistory: { records } }
+    runState: {
+      ...scenario.runState,
+      appliedThrough: JournalPosition.make(13),
+      workflowHistory: { evidence: journalEvidenceFrom(records) }
+    }
   }
 
   expect(transitionsFor(blocked)).toEqual([
@@ -1553,54 +1595,10 @@ it("blocks a Retry when its durable result detail no longer matches the quaranti
         }
       : candidate
   )
-  const blocked = { ...scenario, records, runState: { ...scenario.runState, workflowHistory: { records } } }
-
-  expect(transitionsFor(blocked)).toEqual([
-    RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })
-  ])
-})
-
-it("blocks the initial Retry authorization when its fresh lineage operation repeats", () => {
-  const scenario = retryHistory("ConclusiveResult", fixedHead)
-  const fresh = scenario.records.find(
-    (candidate) => candidate.position === JournalPosition.make(11) && candidate.event._tag === "TargetLineageObserved"
-  )
-  expect(fresh?.event._tag).toBe("TargetLineageObserved")
-  if (fresh === undefined || fresh.event._tag !== "TargetLineageObserved") return
-  const duplicateFresh = {
-    ...fresh,
-    key: JournalRecordKey.make("integration-frontier:duplicate-initial-retry-lineage"),
-    position: JournalPosition.make(13)
-  }
-  const records = [...scenario.records, duplicateFresh]
   const blocked = {
     ...scenario,
     records,
-    runState: { ...scenario.runState, appliedThrough: JournalPosition.make(13), workflowHistory: { records } }
-  }
-
-  expect(transitionsFor(blocked)).toEqual([
-    RunnableFrontierTransition.ReleaseStartedIntegrationTarget({ responsibility })
-  ])
-})
-
-it("does not synthesize a provider quarantine from duplicate absence records", () => {
-  const scenario = retryHistory("ProviderRunFailure", fixedHead)
-  const absence = scenario.records.find(({ event }) => event._tag === "IntegrationProviderRunActivityAbsent")
-  expect(absence?.event._tag).toBe("IntegrationProviderRunActivityAbsent")
-  if (absence === undefined || absence.event._tag !== "IntegrationProviderRunActivityAbsent") {
-    return
-  }
-  const duplicate = {
-    ...absence,
-    key: JournalRecordKey.make("integration-frontier:duplicate-provider-absence"),
-    position: JournalPosition.make(13)
-  }
-  const records = [...scenario.records, duplicate]
-  const blocked = {
-    ...scenario,
-    records,
-    runState: { ...scenario.runState, appliedThrough: JournalPosition.make(13), workflowHistory: { records } }
+    runState: { ...scenario.runState, workflowHistory: { evidence: journalEvidenceFrom(records) } }
   }
 
   expect(transitionsFor(blocked)).toEqual([

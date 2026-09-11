@@ -115,8 +115,7 @@ const targetLineageEqual = (left: TargetLineageObservation, right: TargetLineage
   left.plannedBaseSha === right.plannedBaseSha &&
   left.targetHeadSha === right.targetHeadSha
 
-const workflowHistorySource = (runState: ReconstructedRunState) =>
-  runState.workflowHistory.prefix ?? runState.workflowHistory.records
+const workflowHistorySource = (runState: ReconstructedRunState) => runState.workflowHistory.evidence
 
 const durableTargetLineageFor = (
   runState: ReconstructedRunState,
@@ -146,7 +145,7 @@ const durableTargetLineageFor = (
 }
 
 const nextJournalPositionFor = (runState: ReconstructedRunState): JournalPosition =>
-  JournalPosition.make(runState.workflowHistory.records.length + 1)
+  JournalPosition.make(runState.workflowHistory.evidence.records.length + 1)
 
 const runBoundIntegratorStateFor = (
   state: CurrentIntegratorState

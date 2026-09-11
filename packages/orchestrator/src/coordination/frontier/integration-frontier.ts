@@ -50,8 +50,8 @@ export const deriveIntegrationFrontier = (
   runState: ReconstructedRunState,
   runtimeFacts: IntegrationFrontierRuntimeFacts = emptyRuntimeFacts
 ): RunnableFrontier => {
-  const responsibilities = deriveIntegrationAdmission(runState.workflowHistory.records).responsibilities
-  const unqueuedAccepted = deriveUnqueuedAcceptedResults(runState.workflowHistory.records)
+  const responsibilities = deriveIntegrationAdmission(runState.workflowHistory.evidence).responsibilities
+  const unqueuedAccepted = deriveUnqueuedAcceptedResults(runState.workflowHistory.evidence)
   const started = responsibilities.filter(
     (responsibility): responsibility is StartedIntegrationResponsibility =>
       responsibility._tag === "StartedIntegrationResponsibility"
